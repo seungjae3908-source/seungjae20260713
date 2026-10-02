@@ -1,6 +1,7 @@
 import './decision-quality-view.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { acceptAiChatSelectionReply, aiChatSelectionContext, aiChatSelectionKey } from './ai-chat-selection';
 import {
   normalizeAnalysisSelection,
   selectionFromSearch,
@@ -77,6 +78,7 @@ test('analysis selection URL contains identity fields but not plan or free-form 
   const restored = selectionFromSearch(query);
   assert.equal(restored?.ticker, 'NVDA');
   assert.equal(restored?.searchRunId, 'scan:US:1D:1');
+  assert.equal(restored?.action, 'BUY');
   assert.ok(restored?.selectedAt);
 });
 
@@ -106,4 +108,30 @@ test('analysis selection rejects future freshness timestamps', () => {
   });
 
   assert.equal(selection, null);
+});
+
+test('AI Chat serializes shared selection identity and partitions every selection scope', () => {
+  const selected = normalizeAnalysisSelection({ market: 'BITGET', ticker: 'BTCUSDT', timeframe: '15m', action: 'SHORT', selectedAt: '2026-09-01T00:00:00.000Z' });
+  assert.ok(selected);
+  const context = aiChatSelectionContext(selected)!;
+  assert.equal(context.timeframe, '15m'); assert.equal(context.action, 'SHORT');
+  for (const [field, value] of [['market', 'KR'], ['symbol', 'ETHUSDT'], ['ticker', 'ETHUSDT'], ['timeframe', '4H'], ['action', 'LONG'], ['selectedAt', '2026-09-02T00:00:00.000Z']] as const) {
+    const changed = { ...selected, [field]: value };
+    assert.notEqual(aiChatSelectionKey(changed), aiChatSelectionKey(selected), field);
+    assert.equal(acceptAiChatSelectionReply({ ...context, [field]: value }, context, new AbortController().signal), false, field);
+  }
+  assert.equal(acceptAiChatSelectionReply(context, context, new AbortController().signal), true);
+  assert.equal(acceptAiChatSelectionReply(undefined, context, new AbortController().signal), false);
+});
+
+test('AI Chat refuses late cancelled responses even with matching selection echo', () => {
+  const selected = normalizeAnalysisSelection({ market: 'US', ticker: 'AAPL', timeframe: '1D', selectedAt: '2026-09-01T00:00:00.000Z' });
+  assert.ok(selected);
+  const context = aiChatSelectionContext(selected);
+  assert.equal(context?.action, null);
+  const controller = new AbortController(); controller.abort();
+  assert.equal(acceptAiChatSelectionReply(context, context, controller.signal), false);
+  assert.equal(aiChatSelectionContext(null), undefined);
+  assert.equal(acceptAiChatSelectionReply({}, undefined, new AbortController().signal), true);
+  assert.equal(acceptAiChatSelectionReply(context, undefined, new AbortController().signal), false);
 });

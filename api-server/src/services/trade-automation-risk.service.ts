@@ -82,20 +82,34 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     crypto_spot: clampNumber(classLimits?.crypto_spot, 5_000, totalCapitalKrw, totalCapitalKrw),
     crypto_futures: clampNumber(classLimits?.crypto_futures, 5_000, totalCapitalKrw, totalCapitalKrw),
   };
+  const marketEnabled: Record<TradingAssetClass, boolean> = {
+    domestic_stock: input.marketEnabled?.domestic_stock ?? DEFAULT_TRADING_POLICY.marketEnabled.domestic_stock,
+    us_stock: input.marketEnabled?.us_stock ?? DEFAULT_TRADING_POLICY.marketEnabled.us_stock,
+    crypto_spot: input.marketEnabled?.crypto_spot ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_spot,
+    crypto_futures: input.marketEnabled?.crypto_futures ?? DEFAULT_TRADING_POLICY.marketEnabled.crypto_futures,
+  };
+  const stockBrokerByMarket = {
+    domestic_stock: input.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
+    us_stock: input.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' as const : 'kiwoom' as const,
+  };
   return {
     mode: input.mode === 'automatic' ? 'automatic' : 'approval',
     automaticEnabled: input.automaticEnabled === true,
     emergencyStopped: input.emergencyStopped === true,
     newEntriesStopped: input.newEntriesStopped === true,
+    marketEnabled,
+    stockBrokerByMarket,
     exchangeEnabled: {
-      bitget: input.exchangeEnabled?.bitget === true,
-      upbit: input.exchangeEnabled?.upbit === true,
-      kiwoom: input.exchangeEnabled?.kiwoom === true,
+      bitget: input.exchangeEnabled?.bitget ?? DEFAULT_TRADING_POLICY.exchangeEnabled.bitget,
+      upbit: input.exchangeEnabled?.upbit ?? DEFAULT_TRADING_POLICY.exchangeEnabled.upbit,
+      kiwoom: input.exchangeEnabled?.kiwoom ?? DEFAULT_TRADING_POLICY.exchangeEnabled.kiwoom,
+      toss: input.exchangeEnabled?.toss ?? DEFAULT_TRADING_POLICY.exchangeEnabled.toss,
     },
     enabledAssets: {
       bitget: normalizedList(input.enabledAssets?.bitget, 100).map((item) => item.toUpperCase()),
       upbit: normalizedList(input.enabledAssets?.upbit, 100).map((item) => item.toUpperCase().replace(/^KRW-/, '')),
       kiwoom: normalizedList(input.enabledAssets?.kiwoom, 100).map((item) => item.toUpperCase()),
+      toss: normalizedList(input.enabledAssets?.toss, 100).map((item) => item.toUpperCase()),
     },
     enabledStrategies: normalizedList(input.enabledStrategies, 30),
     totalCapitalKrw,
@@ -115,6 +129,7 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
       bitget: clampNumber(input.riskPerTradePercent?.bitget, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
       upbit: clampNumber(input.riskPerTradePercent?.upbit, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
       kiwoom: clampNumber(input.riskPerTradePercent?.kiwoom, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+      toss: clampNumber(input.riskPerTradePercent?.toss, 0.01, 1, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
     },
     totalDailyLossLimitPercent: clampNumber(input.totalDailyLossLimitPercent, 0.1, 2, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
     minExpectedValueR: clampNumber(input.minExpectedValueR, 0, 2, DEFAULT_TRADING_POLICY.minExpectedValueR),
@@ -226,12 +241,22 @@ export function evaluateTradingPlan(
     && snapshot.availableLiquidityKrw < plan.estimatedKrw) add(blockCodes, 'LIQUIDITY_LIMIT');
   if (!plan.strategyId.trim() || !plan.signalId.trim()) add(blockCodes, 'SIGNAL_ID_REQUIRED');
 
-  if (policy.mode === 'automatic') {
-    if (!policy.automaticEnabled) add(blockCodes, 'AUTOMATIC_MODE_NOT_CONFIRMED');
+  if (policy.mode === 'automatic' && policy.automaticEnabled) {
+    const assetClass = assetClassForPlan(plan);
+    if (!policy.marketEnabled[assetClass]) add(blockCodes, 'MARKET_NOT_ENABLED');
+    if (assetClass === 'domestic_stock' || assetClass === 'us_stock') {
+      const selectedBroker = policy.stockBrokerByMarket?.[assetClass] ?? 'kiwoom';
+      const planBroker = plan.stockBroker ?? (plan.exchange === 'toss' ? 'toss' : 'kiwoom');
+      if (planBroker !== selectedBroker) add(blockCodes, 'STOCK_BROKER_MISMATCH');
+      if (plan.exchange !== planBroker) add(blockCodes, 'STOCK_EXECUTION_PROVIDER_MISMATCH');
+    } else if (plan.stockBroker != null) {
+      add(blockCodes, 'STOCK_BROKER_NOT_APPLICABLE');
+    }
     if (!policy.exchangeEnabled[plan.exchange]) add(blockCodes, 'EXCHANGE_NOT_ENABLED');
     const normalizedSymbol = plan.exchange === 'upbit' ? plan.symbol.toUpperCase().replace(/^KRW-/, '') : plan.symbol.toUpperCase();
-    if (!policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
-    if (!policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
+    if (policy.enabledAssets[plan.exchange].length > 0 && !policy.enabledAssets[plan.exchange].includes(normalizedSymbol)) add(blockCodes, 'ASSET_NOT_ENABLED');
+    if (policy.enabledStrategies.length > 0 && !policy.enabledStrategies.includes(plan.strategyId)) add(blockCodes, 'STRATEGY_NOT_ENABLED');
+    if (plan.accountMode !== 'paper' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
   }
   if (plan.accountMode === 'live' && !options.serverLiveEnabled) add(blockCodes, 'LIVE_EXECUTION_DISABLED');
 
@@ -253,8 +278,25 @@ export function evaluateTradingPlan(
     if (plan.orderType === 'limit' && finitePositive(plan.limitPrice) && !isAlignedToStep(plan.limitPrice, upbitKrwPriceStep(plan.limitPrice))) add(blockCodes, 'UPBIT_PRICE_TICK');
   }
   if (plan.exchange === 'kiwoom') {
-    if (plan.market !== 'KR' || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'KIWOOM_DOMESTIC_ONLY');
+    const stockMarketAllowed = plan.market === 'KR' || plan.market === 'US';
+    if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
     if (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0) add(blockCodes, 'KIWOOM_QUANTITY_INVALID');
+    if (plan.market === 'US' && !['NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.stockExchange ?? ''))) {
+      add(blockCodes, 'KIWOOM_US_EXCHANGE_REQUIRED');
+    }
+  }
+  if (plan.exchange === 'toss') {
+    const stockMarketAllowed = plan.market === 'KR' || plan.market === 'US';
+    if (!stockMarketAllowed || (plan.side !== 'buy' && plan.side !== 'sell')) add(blockCodes, 'STOCK_MARKET_NOT_SUPPORTED');
+    if (plan.market === 'KR' && (!Number.isSafeInteger(plan.quantity) || Number(plan.quantity) <= 0)) {
+      add(blockCodes, 'TOSS_KR_QUANTITY_INVALID');
+    }
+    if (plan.market === 'US' && plan.quantity != null && !finitePositive(plan.quantity)) add(blockCodes, 'TOSS_US_QUANTITY_INVALID');
+    if (plan.quoteAmount != null && (plan.market !== 'US' || plan.side !== 'buy' || plan.orderType !== 'market')) {
+      add(blockCodes, 'TOSS_AMOUNT_ORDER_US_MARKET_BUY_ONLY');
+    }
+    if (plan.quantity == null && plan.quoteAmount == null) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_REQUIRED');
+    if (plan.quantity != null && plan.quoteAmount != null) add(blockCodes, 'TOSS_QUANTITY_OR_AMOUNT_EXCLUSIVE');
   }
   if (snapshot.availableBalance < plan.estimatedKrw && plan.exchange !== 'bitget') add(blockCodes, 'INSUFFICIENT_BALANCE');
   try {

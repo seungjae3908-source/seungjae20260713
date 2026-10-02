@@ -55,6 +55,14 @@ assert(
   deployScript.includes('pm2 logs "$STAGING_PM2_NAME" --lines 120 --nostream'),
   'failed live verification must expose bounded PM2 diagnostics without printing environment values',
 );
+assert(
+  deployScript.includes("printf 'BACKGROUND_WORKERS_ENABLED=false\\n'"),
+  'the isolated staging runtime must disable background workers during release validation',
+);
+assert(
+  deployScript.includes('BACKGROUND_WORKERS_ENABLED=false \\\n'),
+  'the isolated staging canary must disable background workers during release validation',
+);
 
 assert(
   deployScript.includes('STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="${STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"'),

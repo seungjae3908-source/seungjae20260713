@@ -62,6 +62,11 @@ function finite(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+function sameNumber(left: number, right: number): boolean {
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= Number.EPSILON * 16 * scale;
+}
+
 function cleanText(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -135,8 +140,18 @@ function parsePayload(value: unknown): Payload {
     throw new Error('ORDERBOOK_LEVELS_CORRUPT');
   }
 
-  const bestAsk = finite(row.bestAsk) ?? asks[0]?.price ?? null;
-  const bestBid = finite(row.bestBid) ?? bids[0]?.price ?? null;
+  const declaredBestAsk = finite(row.bestAsk);
+  const declaredBestBid = finite(row.bestBid);
+  const levelBestAsk = asks[0]?.price ?? null;
+  const levelBestBid = bids[0]?.price ?? null;
+  if (
+    (declaredBestAsk != null && (levelBestAsk == null || !sameNumber(declaredBestAsk, levelBestAsk)))
+    || (declaredBestBid != null && (levelBestBid == null || !sameNumber(declaredBestBid, levelBestBid)))
+  ) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const bestAsk = levelBestAsk ?? declaredBestAsk;
+  const bestBid = levelBestBid ?? declaredBestBid;
   const warnings = Array.isArray(row.warnings)
     ? row.warnings.filter((item): item is string => typeof item === 'string').slice(0, 20)
     : [];
@@ -153,6 +168,13 @@ function parsePayload(value: unknown): Payload {
     };
   }
 
+  const derivedSpread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
+  const declaredSpread = finite(row.spread);
+  if (declaredSpread != null && (derivedSpread == null || !sameNumber(declaredSpread, derivedSpread))) {
+    throw new Error('ORDERBOOK_LEVELS_CORRUPT');
+  }
+  const spread = derivedSpread ?? declaredSpread;
+
   const provider: Provider = row.provider === 'kiwoom' || row.provider === 'upbit' || row.provider === 'bitget'
     ? row.provider
     : null;
@@ -166,7 +188,7 @@ function parsePayload(value: unknown): Payload {
     receivedAt: receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : '',
     freshness,
     asks, bids, bestAsk, bestBid,
-    spread: finite(row.spread),
+    spread,
     spreadPct: finite(row.spreadPct),
     imbalance: finite(row.imbalance),
     warnings,
@@ -448,6 +470,7 @@ export function InstrumentOrderbookDock({
 
   const currency = data?.currency ?? (market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW');
   const imbalance = useMemo(() => data?.imbalance == null ? '-' : `${(data.imbalance * 100).toFixed(1)}%`, [data?.imbalance]);
+  const diagnostic = error ?? (data?.status === 'invalid' ? data.reason : null);
 
   return (
     <>
@@ -505,10 +528,10 @@ export function InstrumentOrderbookDock({
                 <span className="text-right">Depth imbalance: {imbalance}</span>
               </div>
 
-              {error ? (
+              {diagnostic ? (
                 <div className="flex items-start gap-2 border-b border-border bg-amber-500/10 px-3 py-2 text-xs" role="status">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  <span>{error}</span>
+                  <span>{diagnostic}</span>
                 </div>
               ) : null}
 

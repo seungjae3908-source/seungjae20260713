@@ -17,10 +17,45 @@ SPLIT_KEYS = (
     'VALIDATION', 'VALIDATION_BUY', 'VALIDATION_SELL',
     'OOS', 'OOS_BUY', 'OOS_SELL',
 )
+MULTI_LANE_POLICY_VERSION = 'public-forward-liquidity-multi-lane-prospective-policy-v1'
+MULTI_LANE_MAX_CREDIT_PER_LANE_PER_SLOT = 1
+MULTI_LANE_MAX_TOTAL_CREDIT_PER_SLOT = 2
+MULTI_LANE_MAX_CREDIT_PER_DEPENDENCY_COMPONENT = 1
 
 
 def nonnegative_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def multi_lane_credit_capacity_valid(value, genuine_scheduled_slot_n, effective_independent_n):
+    version = value.get('multiLanePolicyVersion')
+    if version is None:
+        return genuine_scheduled_slot_n >= effective_independent_n
+    if version != MULTI_LANE_POLICY_VERSION:
+        return False
+    for field in ('multiLanePolicyDigest', 'laneRegistryDigest', 'dependencyPolicyDigest', 'balancingPolicyDigest'):
+        item = value.get(field)
+        if not isinstance(item, str) or not DIGEST_RE.fullmatch(item):
+            return False
+    max_lane = value.get('maxCreditPerLanePerSlot')
+    max_slot = value.get('maxTotalCreditPerSlot')
+    max_dependency = value.get('maxCreditPerDependencyComponent')
+    pre_cap = value.get('preCapIndependentN')
+    lane_rejected = value.get('laneSlotCapRejectedN')
+    global_rejected = value.get('globalSlotCapRejectedN')
+    if (
+        max_lane != MULTI_LANE_MAX_CREDIT_PER_LANE_PER_SLOT
+        or max_slot != MULTI_LANE_MAX_TOTAL_CREDIT_PER_SLOT
+        or max_dependency != MULTI_LANE_MAX_CREDIT_PER_DEPENDENCY_COMPONENT
+        or not nonnegative_int(pre_cap)
+        or pre_cap < effective_independent_n
+        or not nonnegative_int(lane_rejected)
+        or not nonnegative_int(global_rejected)
+        or value.get('utc27AdditionalIndependentCredit') != 0
+        or value.get('retroactiveMultiLaneCreditAllowed') is not False
+    ):
+        return False
+    return effective_independent_n <= genuine_scheduled_slot_n * max_slot
 
 
 def parse_proc_env(pid):
@@ -114,7 +149,7 @@ def validate_v3(value):
         and value.get('frozenV3SplitIndexPresent') is True
         and value.get('v2SplitReceiptPresent') is False
         and numeric['rawAcceptedN'] >= numeric['effectiveIndependentN']
-        and numeric['genuineScheduledSlotN'] >= numeric['effectiveIndependentN']
+        and multi_lane_credit_capacity_valid(value, numeric['genuineScheduledSlotN'], numeric['effectiveIndependentN'])
         and numeric['effectiveIndependentN'] == numeric['independentBuyN'] + numeric['independentSellN']
         and counts['TRAIN'] == counts['TRAIN_BUY'] + counts['TRAIN_SELL']
         and counts['VALIDATION'] == counts['VALIDATION_BUY'] + counts['VALIDATION_SELL']

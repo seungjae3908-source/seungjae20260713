@@ -7,6 +7,7 @@ from unittest.mock import patch
 from scripts import agent_hub_rollover_v2 as rollover
 from scripts.agent_hub_processor_window_recovery_v1 import (
     BoundedCommentWindow,
+    MAX_CONTINUITY_ANCHOR_LOOKBACK_COMMENTS,
     MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS,
     ProcessorWindowRecoveryError,
     augment_successor_body,
@@ -17,6 +18,7 @@ from scripts.agent_hub_processor_window_recovery_v1 import (
     latest_complete_ledger,
     read_bounded_comment_window,
     resolve_complete_ledger_anchor,
+    resolve_continuity_anchors,
     validate_continuity_anchors,
 )
 
@@ -172,6 +174,62 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ProcessorWindowRecoveryError, "WATCH_EVENT"):
             validate_continuity_anchors(window)
+
+    def test_tail_continuity_anchors_use_no_older_lookup(self) -> None:
+        github = FakeGitHub({})
+        window = BoundedCommentWindow(
+            comments=(comment(101, "[PIPELINE_SNAPSHOT]"), comment(102, "[LEASE]"), comment(103, "[WATCH_EVENT]")),
+            source_total_comments=1100, comments_examined=1000, processor_window=1000,
+        )
+        anchors, examined = resolve_continuity_anchors(github, 660, window, ledger_id=95)
+        self.assertEqual(anchors["[WATCH_EVENT]"], 103)
+        self.assertEqual(anchors["[PERSISTENT_TASK_LEDGER]"], 95)
+        self.assertEqual(examined, 0)
+        self.assertEqual(github.requests, [])
+
+    def test_continuity_anchor_resolves_from_bounded_older_prefix(self) -> None:
+        older = [comment(cid, "x") for cid in range(1, 101)]
+        older[94] = comment(95, "[WATCH_EVENT]")
+        github = FakeGitHub({1: older})
+        tail = [comment(cid, "tail") for cid in range(101, 1101)]
+        tail[-2] = comment(1099, "[PIPELINE_SNAPSHOT]")
+        tail[-1] = comment(1100, "[LEASE]")
+        window = BoundedCommentWindow(
+            comments=tuple(tail), source_total_comments=1100, comments_examined=1000, processor_window=1000,
+        )
+        anchors, examined = resolve_continuity_anchors(github, 660, window, ledger_id=90)
+        self.assertEqual(anchors["[WATCH_EVENT]"], 95)
+        self.assertEqual((anchors["[PIPELINE_SNAPSHOT]"], anchors["[LEASE]"]), (1099, 1100))
+        self.assertEqual(examined, 100)
+        self.assertEqual(len(github.requests), 1)
+
+    def test_continuity_anchor_lookup_budget_exhaustion_fails_before_fetch(self) -> None:
+        github = FakeGitHub({})
+        tail = [comment(cid, "tail") for cid in range(1502, 2502)]
+        tail[-2] = comment(2500, "[PIPELINE_SNAPSHOT]")
+        tail[-1] = comment(2501, "[LEASE]")
+        window = BoundedCommentWindow(
+            comments=tuple(tail), source_total_comments=2501, comments_examined=1000, processor_window=1000,
+        )
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "lookback budget"):
+            resolve_continuity_anchors(
+                github,
+                660,
+                window,
+                ledger_id=1490,
+                max_lookback_comments=MAX_CONTINUITY_ANCHOR_LOOKBACK_COMMENTS,
+            )
+        self.assertEqual(github.requests, [])
+
+    def test_continuity_anchor_lookup_malformed_page_fails_closed(self) -> None:
+        tail = [comment(cid, "tail") for cid in range(101, 1101)]
+        tail[-2] = comment(1099, "[PIPELINE_SNAPSHOT]")
+        tail[-1] = comment(1100, "[LEASE]")
+        window = BoundedCommentWindow(
+            comments=tuple(tail), source_total_comments=1100, comments_examined=1000, processor_window=1000,
+        )
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "not a list"):
+            resolve_continuity_anchors(FakeGitHub({1: "not-a-list"}), 660, window, ledger_id=90)
 
     def test_explicitly_closed_ledger_is_preserved(self) -> None:
         ledger_id, block = latest_complete_ledger((
@@ -367,8 +425,33 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
             plan = build_recovery_plan(github, 660)
         self.assertEqual(plan["anchors"]["[PERSISTENT_TASK_LEDGER]"], 95)
         self.assertEqual(plan["ledger_anchor_lookup_comments_examined"], 100)
+        self.assertEqual(plan["continuity_anchor_lookup_comments_examined"], 0)
         self.assertEqual([row["id"] for row in pending.call_args.args[0]], list(range(101, 1101)))
         self.assertIn("full_history_validated: `false`", plan["successor_body"])
+
+    def test_recovery_plan_older_watch_event_lookup_does_not_expand_control_set(self) -> None:
+        pages = {p: [comment(cid, "x") for cid in range((p - 1) * 100 + 1, p * 100 + 1)] for p in range(1, 12)}
+        pages[1][94] = comment(95, "[WATCH_EVENT]")
+        pages[1][95] = worker_report(96, "ai-chart")
+        pages[11][-4:] = [
+            comment(1097, "[PERSISTENT_TASK_LEDGER]\nvalid\n[/PERSISTENT_TASK_LEDGER]"),
+            comment(1098, "[PIPELINE_SNAPSHOT]"),
+            comment(1099, "[LEASE]"),
+            comment(1100, "tail"),
+        ]
+        github = FakeGitHub(pages)
+        github.issue = lambda number: {"comments": 1100, "body": "source", "labels": []}
+        github.branch_sha = lambda branch: "a" * 40
+        github.commit_status = lambda sha: {name: "success" for name in rollover.REQUIRED_STATUS_CONTEXTS}
+        github.open_pulls = lambda: []
+        with patch.object(rollover, "resolve_active_issue", return_value=660), \
+             patch.object(rollover, "_append_successor_marker"), \
+             patch.object(rollover, "build_successor_body", return_value="standard"), \
+             patch.object(rollover, "unresolved_control_work", wraps=rollover.unresolved_control_work) as pending:
+            plan = build_recovery_plan(github, 660)
+        self.assertEqual(plan["anchors"]["[WATCH_EVENT]"], 95)
+        self.assertEqual(plan["continuity_anchor_lookup_comments_examined"], 100)
+        self.assertEqual([row["id"] for row in pending.call_args.args[0]], list(range(101, 1101)))
 
     def test_resolved_older_ledger_id_does_not_expand_tail_control_set(self) -> None:
         window = BoundedCommentWindow(
@@ -400,16 +483,20 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
             ledger_block="[PERSISTENT_TASK_LEDGER]\n- keep-me\n[/PERSISTENT_TASK_LEDGER]",
             sanitizer=lambda value: value,
             ledger_anchor_lookup_comments_examined=94,
+            continuity_anchor_lookup_comments_examined=50,
         )
         self.assertIn("history_validation_mode: `bounded_overflow_recovery`", body)
         self.assertIn("full_history_validated: `false`", body)
         self.assertIn("source_total_comments: `1094`", body)
         self.assertIn("processor_window_comments_examined: `994`", body)
         self.assertIn("ledger_anchor_lookup_comments_examined: `94`", body)
+        self.assertIn("continuity_anchor_lookup_comments_examined: `50`", body)
         self.assertIn("processor_tail_comment_range: `[101, 1094]`", body)
         self.assertIn("ledger_anchor_lookup_comment_range: `[7, 100]`", body)
+        self.assertIn("continuity_anchor_lookup_comment_range: `[51, 100]`", body)
         self.assertIn("ledger_source_comment_id: `13`", body)
         self.assertIn("continuity-only older-prefix lookup", body)
+        self.assertIn("required marker aged out", body)
         self.assertIn("explicit close marker or next canonical top-level section marker", body)
         self.assertIn("executable pending-control validation remains", body)
         self.assertIn("- keep-me", body)

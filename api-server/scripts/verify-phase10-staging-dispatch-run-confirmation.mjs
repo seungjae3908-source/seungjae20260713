@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { waitForDispatchedAccountRun } from '../../.github/scripts/wait-for-dispatched-account-run.mjs';
+import assertNode from 'node:assert/strict';
 
 const cwd = process.cwd();
 const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
@@ -48,3 +50,19 @@ assert(documentation.includes('exact current `main` SHA'), 'documentation must s
 assert(documentation.includes('does not create a duplicate'), 'documentation must describe active-run deduplication');
 
 console.log('[phase10-staging-dispatch-run-confirmation] deploy commands require full validation; exact current main, direct Run ID confirmation, and active-run deduplication are enforced');
+
+const expectedRun = { id: 123, head_sha: 'a'.repeat(40), display_title: 'exact source-comment-456' };
+const matches = (run) => run.id === expectedRun.id && run.head_sha === expectedRun.head_sha && run.display_title === expectedRun.display_title;
+let reads = 0;
+assertNode.equal(await waitForDispatchedAccountRun({
+  readRun: async () => ++reads === 1 ? { ...expectedRun, display_title: '' } : expectedRun,
+  matches, delay: async () => {},
+}), expectedRun);
+assertNode.equal(reads, 2);
+reads = 0;
+await assertNode.rejects(waitForDispatchedAccountRun({
+  readRun: async () => { reads += 1; return { ...expectedRun, head_sha: 'b'.repeat(40) }; },
+  matches, delay: async () => {},
+}), /ACCOUNT_DISPATCH_EXACT_RUN_IDENTITY_NOT_CONFIRMED/);
+assertNode.equal(reads, 8);
+assertNode.ok(workflow.includes('run.id === runId') && workflow.includes('run.workflow_id === workflow.data.id'));

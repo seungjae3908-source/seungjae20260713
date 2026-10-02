@@ -11,7 +11,7 @@ import {
 } from './toss';
 import type { CatalogEntry } from '../data/catalog';
 import BaseMarketDataService from '../services/market-data.base.service';
-import { MarketDataService } from '../services/market-data.service';
+import { APP_KR_INTRADAY_DEADLINE_MS, MarketDataService } from '../services/market-data.service';
 
 const originalFetch = globalThis.fetch;
 const originalNow = Date.now;
@@ -344,4 +344,122 @@ test('market-data candle fallback preserves Toss provider metadata', async () =>
   const result = await MarketDataService.getCandlesMeta('AAPL', '1D');
   assert.equal(result.provider, 'toss');
   assert.equal(result.candles.length, 30);
+});
+
+
+test('market-data bounded KR 1m uses the existing Toss read-only hedge before returning empty', async () => {
+  const kiwoomKeys = ['KIWOOM_APP_KEY', 'KIWOOM_APP_SECRET', 'KIWOOM_PROXY_KEY', 'KIWOOM_MODE'] as const;
+  const savedKiwoom = Object.fromEntries(kiwoomKeys.map((key) => [key, process.env[key]]));
+  for (const key of kiwoomKeys) delete process.env[key];
+
+  setFakeConfig();
+  BaseMarketDataService.getCatalogEntry = async () => samsung;
+
+  let tossCandleCalls = 0;
+  let yahooCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+
+    if (url.hostname === 'toss-openapi.test' && url.pathname === '/oauth2/token') {
+      return response({ access_token: 'token-safe', expires_in: 3600 });
+    }
+
+    if (url.hostname === 'toss-openapi.test' && url.pathname === '/api/v1/candles') {
+      tossCandleCalls += 1;
+      assert.equal(url.searchParams.get('symbol'), '005930');
+      assert.equal(url.searchParams.get('interval'), '1m');
+      return response({ result: { candles: [
+        {
+          timestamp: '2026-09-21T15:29:00+09:00',
+          openPrice: '83100', highPrice: '83200', lowPrice: '83000', closePrice: '83150',
+          volume: '1500', currency: 'KRW',
+        },
+        {
+          timestamp: '2026-09-21T15:30:00+09:00',
+          openPrice: '83150', highPrice: '83300', lowPrice: '83100', closePrice: '83250',
+          volume: '1800', currency: 'KRW',
+        },
+      ] } });
+    }
+
+    if (url.hostname.includes('finance.yahoo.com')) {
+      yahooCalls += 1;
+      throw new Error('yahoo unavailable in bounded hedge test');
+    }
+
+    throw new Error(`unexpected test URL: ${url.toString()}`);
+  };
+
+  try {
+    const result = await MarketDataService.getCandlesMeta('005930', '1m');
+    assert.equal(result.provider, 'toss');
+    assert.equal(result.candles.length, 2);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+    assert.equal(tossCandleCalls, 1);
+    assert.ok(yahooCalls >= 0);
+  } finally {
+    for (const key of kiwoomKeys) {
+      const value = savedKiwoom[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('bounded KR fallback reuses a genuine completed Toss candle read across delayed candle/chart requests', async () => {
+  const kiwoomKeys = ['KIWOOM_APP_KEY', 'KIWOOM_APP_SECRET', 'KIWOOM_PROXY_KEY', 'KIWOOM_MODE'] as const;
+  const savedKiwoom = Object.fromEntries(kiwoomKeys.map((key) => [key, process.env[key]]));
+  for (const key of kiwoomKeys) delete process.env[key];
+
+  setFakeConfig();
+  BaseMarketDataService.getCatalogEntry = async () => samsung;
+
+  let tossCandleCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'toss-openapi.test' && url.pathname === '/oauth2/token') {
+      return response({ access_token: 'token-safe', expires_in: 3600 });
+    }
+    if (url.hostname === 'toss-openapi.test' && url.pathname === '/api/v1/candles') {
+      tossCandleCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, APP_KR_INTRADAY_DEADLINE_MS + 200));
+      return response({ result: { candles: [
+        {
+          timestamp: '2026-09-21T15:29:00+09:00',
+          openPrice: '83100', highPrice: '83200', lowPrice: '83000', closePrice: '83150',
+          volume: '1500', currency: 'KRW',
+        },
+        {
+          timestamp: '2026-09-21T15:30:00+09:00',
+          openPrice: '83150', highPrice: '83300', lowPrice: '83100', closePrice: '83250',
+          volume: '1800', currency: 'KRW',
+        },
+      ] } });
+    }
+    if (url.hostname.includes('finance.yahoo.com')) {
+      throw new Error('yahoo unavailable in in-flight sharing test');
+    }
+    throw new Error(`unexpected test URL: ${url.toString()}`);
+  };
+
+  try {
+    const first = await MarketDataService.getCandlesMeta('005931', '1m');
+    assert.equal(first.provider, 'none');
+    assert.equal(first.candles.length, 0);
+
+    // Let the genuine provider read settle and leave the in-flight map before
+    // the UI fallback endpoint arrives. Its short success tail must remain
+    // available without starting another cold token+candle request.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const second = await MarketDataService.getCandlesMeta('005931', '1m');
+    assert.equal(second.provider, 'toss');
+    assert.equal(second.candles.length, 2);
+    assert.equal(tossCandleCalls, 1);
+  } finally {
+    for (const key of kiwoomKeys) {
+      const value = savedKiwoom[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

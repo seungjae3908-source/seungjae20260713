@@ -6,15 +6,18 @@ import express from 'express';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { createPaperTradingRouter } from './paper-trading';
 import { createPaperTradingState } from '../services/paper-trading-engine.service';
+import { manualCanonicalFixture } from '../services/manual-paper-canonical-contract.fixture';
+import { manualPaperEvidenceSha256 } from '../services/manual-paper-canonical-contract.service';
 import {
   PAPER_STATE_RUNTIME_BINDING_VERSION,
   publishAuthenticatedPaperTradingState,
 } from '../services/paper-trading-state-publisher.service';
-import { validateImmutablePaperTradingStateSnapshot } from '../services/paper-trading-state-snapshot.service';
+import { createImmutablePaperTradingStateSnapshot, validateImmutablePaperTradingStateSnapshot } from '../services/paper-trading-state-snapshot.service';
 
 const NOW = new Date('2026-08-02T02:30:00.000Z');
 const DEPLOY_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -53,6 +56,97 @@ const action = {
   price: 101,
   at: NOW.toISOString(),
 };
+
+test('actual evaluate route rejects client receipt/canonical claims when server owner source is absent', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  const { server, baseUrl } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state, now: f.now.toISOString(), canonicalEvidence: f.evidence,
+        action: { type: 'place_order', eventId: 'client-claim', request: { canonicalIdentity: f.canonicalIdentity } } }) });
+    const body = await safeJson(response);
+    assert.equal(response.status, 400);
+    assert.equal(body.code, 'SERVER_OWNED_CANONICAL_PAPER_EVIDENCE_REQUIRED');
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+  } finally { await new Promise<void>(resolve => server.close(resolve)); }
+});
+
+test('actual authenticated route passes owner-resolved evidence to manual action/order/position and settlement journal', async () => {
+  // Real existing writer/reader, isolated local file; fixture is not issuer proof.
+  const root = await mkdtemp(join(tmpdir(), 'paper-canonical-settlement-roundtrip-'));
+  const snapshotPath = join(root, 'paper-state.json');
+  const env = Object.freeze({ PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: snapshotPath,
+    PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: PUBLISHER_ACCOUNT_ID_SHA256 });
+  const state = createPaperTradingState(10_000, NOW);
+  const f = await manualCanonicalFixture(state);
+  let reads = 0;
+  let ownerState = state;
+  let ownerNow = f.now;
+  const { server, baseUrl } = await startServer({
+    canonicalClock: () => ownerNow,
+    async canonicalEvidenceSource(input) {
+      reads += 1;
+      assert.equal(input.authenticatedAccountId, PUBLISHER_ACCOUNT_ID);
+      assert.equal(input.nowMs, ownerNow.getTime());
+      assert.equal(input.candidateId, f.canonicalIdentity.candidateId);
+      return { ...(input.action.type === 'close_position' ? f.exitEvidence : f.evidence), authenticatedAccountId: input.authenticatedAccountId,
+        paperStateSha256: manualPaperEvidenceSha256(ownerState) };
+    },
+    publishState: input => publishAuthenticatedPaperTradingState({ ...input, sourceSha: DEPLOY_SHA }, { env }),
+  });
+  const evaluate = async (currentState, currentAction, now) => {
+    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ state: currentState, action: currentAction, now: NOW.toISOString() }) });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.result.orderSubmitted, false);
+    assert.equal(body.result.exchangeRequestSent, false);
+    return body.result;
+  };
+  try {
+    const opened = await evaluate(state, { type: 'place_order', eventId: 'route-canonical-entry',
+      request: { symbol: f.canonicalIdentity.symbol, side: 'long', leverage: f.canonicalIdentity.leverage,
+        stopLossPrice: f.evidence.candidate.signal.learningSnapshot.stopLoss, orderType: 'market', canonicalIdentity: f.canonicalIdentity },
+      market: { warnings: [] }, contractRules: { warnings: [] }, riskInput: {} }, f.now);
+    assert.deepEqual(opened.position.canonicalPaper.identity, f.canonicalIdentity);
+    ownerState = opened.state;
+    ownerNow = f.exitNow;
+    const settled = await evaluate(opened.state, { type: 'close_position', eventId: 'route-canonical-exit',
+      positionId: opened.position.id, market: { symbol: f.canonicalIdentity.symbol, status: 'live',
+        bidPrice: 105, updatedAt: f.exitNow.toISOString(), warnings: [] } }, f.exitNow);
+    const journal = settled.state.journal[0];
+    assert.deepEqual(journal.canonicalPaper.identity, f.canonicalIdentity);
+    assert.deepEqual(journal.canonicalPaper.validationReceipt.receipt, f.evidence.validationReceipt);
+    assert.equal(journal.netPnl, journal.canonicalPaper.settlement.netPnl);
+    assert.equal(journal.canonicalPaper.fullCost.fullCostReady, true);
+    assert.equal(journal.canonicalPaper.naturalSampleCredit, 0);
+    assert.equal(reads, 2);
+    // Load the existing ESM reader as ESM: the API test runner bundles tests
+    // as CJS, while the runtime package legitimately uses import.meta.url.
+    const readerModuleUrl = pathToFileURL(resolve(process.cwd(), 'market-prediction-lab/src/authoritative-paper-runtime-package-v1.js')).href;
+    const { createLosslessPaperStateSnapshotFileOwner } = await import(readerModuleUrl);
+    const reader = createLosslessPaperStateSnapshotFileOwner({ snapshotPath,
+      expectedPublisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+      runtimePackage: { createImmutablePaperTradingStateSnapshot, validateImmutablePaperTradingStateSnapshot },
+      now: () => ownerNow.getTime() });
+    const readback = await reader.paperStateForCard();
+    for (const record of [readback.positions[0], readback.fills.at(-1), readback.journal[0]]) {
+      assert.deepEqual(record.canonicalPaper.settlement, journal.canonicalPaper.settlement);
+      assert.deepEqual(record.canonicalPaper.identity, f.canonicalIdentity);
+      assert.deepEqual(record.canonicalPaper.fullCost, journal.canonicalPaper.fullCost);
+    }
+    assert.equal(readback.journal[0].netPnl, journal.netPnl);
+    assert.match(readback.journal[0].canonicalPaper.settlement.settlementId, /^[0-9a-f]{64}$/);
+    assert.equal(reader.executionAuthority, 'NONE');
+    assert.equal(reader.privateApiAllowed, false);
+    assert.equal(reader.liveTrading, false);
+  } finally {
+    await new Promise<void>(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('paper evaluate returns simulation-only safety contract', async () => {
   const { server, baseUrl } = await startServer();
@@ -318,6 +412,157 @@ test('paper evaluate never performs an outbound exchange request', async () => {
     assert.equal(outboundCalls, 0);
   } finally {
     globalThis.fetch = nativeFetch;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+
+test('accepted Backtest reference is server-bound and injected into canonical Paper execution', async () => {
+  const state = createPaperTradingState(10_000, NOW);
+  const candidate = Object.freeze({
+    schemaVersion: 'backtest-paper-reference-v1',
+    source: 'backtest-result',
+    status: 'REFERENCE_ONLY',
+    candidateId: `paper-candidate-v1:${'1'.repeat(64)}`,
+    strategyId: 'BACKTEST_ENGINE:breakout',
+    parameterHash: '2'.repeat(64),
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    timeframe: '15m',
+    side: 'LONG',
+    leverage: 2,
+    riskPolicyRef: `backtest-risk-v1:${'3'.repeat(64)}`,
+    costPolicyRef: `backtest-cost-v1:${'4'.repeat(64)}`,
+    exitPolicyRef: `backtest-exit-v1:${'5'.repeat(64)}`,
+    blockers: ['NATURAL_PAPER_EVIDENCE_NOT_PROVEN'],
+    executionAuthority: 'NONE',
+    evidenceCredit: 0,
+    orderSubmitted: false,
+    privateTradingApiAllowed: false,
+  });
+  const strategyIdentityInput = Object.freeze({
+    strategyId: candidate.strategyId,
+    strategyFamily: 'BACKTEST_ENGINE',
+    strategyVersion: 'phase5-backtest-v1',
+    market: candidate.market,
+    direction: candidate.side,
+    timeframe: candidate.timeframe,
+    parameterHash: candidate.parameterHash,
+    researchCodeSha: DEPLOY_SHA,
+    formulaIdentity: { strategy: 'breakout', parameters: { lookback: 20 } },
+    datasetId: 'backtest-candles:test-fixture',
+    datasetDigest: '6'.repeat(64),
+    datasetStart: '2026-01-01T00:00:00.000Z',
+    datasetEnd: '2026-01-02T00:00:00.000Z',
+    costPolicyVersion: candidate.costPolicyRef,
+    riskPolicyVersion: candidate.riskPolicyRef,
+    evidenceSchemaVersion: candidate.schemaVersion,
+  });
+  let sourceReads = 0;
+  let ownerReads = 0;
+  let injected = null;
+  const { server, baseUrl } = await startServer({
+    researchCodeSha: () => DEPLOY_SHA,
+    sourceRegistry: {
+      resolveBacktest(accountId, value, currentSha) {
+        sourceReads += 1;
+        assert.equal(accountId, PUBLISHER_ACCOUNT_ID);
+        assert.equal(currentSha, DEPLOY_SHA);
+        assert.equal(value.mode, 'approval');
+        assert.equal(value.accountMode, 'paper');
+        assert.equal(value.adapter, 'paper');
+        assert.equal(value.backtestRunId, '11111111-1111-1111-1111-111111111111');
+        assert.deepEqual(value.backtestCandidate, candidate);
+        return { sourceSha: DEPLOY_SHA, handoff: candidate, strategyIdentityInput };
+      },
+    },
+    async canonicalEvidenceSource(input) {
+      ownerReads += 1;
+      assert.equal(input.candidateId, candidate.candidateId);
+      return { authenticatedAccountId: input.authenticatedAccountId };
+    },
+    evaluate(currentState, currentAction) {
+      assert.equal(currentAction.type, 'place_order');
+      injected = currentAction.request.backtestCandidate;
+      assert.deepEqual(injected, {
+        candidateId: candidate.candidateId,
+        strategyId: candidate.strategyId,
+        parameterHash: candidate.parameterHash,
+        market: candidate.market,
+        symbol: candidate.symbol,
+        timeframe: candidate.timeframe,
+        side: candidate.side,
+        leverage: candidate.leverage,
+        riskPolicyRef: candidate.riskPolicyRef,
+        costPolicyRef: candidate.costPolicyRef,
+        exitPolicyRef: candidate.exitPolicyRef,
+      });
+      return {
+        ok: true,
+        mode: 'paper-only',
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+        state: currentState,
+        order: { backtestCandidate: injected },
+        position: { backtestCandidate: injected },
+        fills: [],
+        warnings: [],
+        duplicateEvent: false,
+      };
+    },
+  });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'approval',
+        accountMode: 'paper',
+        adapter: 'paper',
+        backtestRunId: '11111111-1111-1111-1111-111111111111',
+        backtestCandidate: candidate,
+        state,
+        now: NOW.toISOString(),
+        action: {
+          type: 'place_order',
+          eventId: 'backtest-canonical-entry',
+          request: { symbol: 'BTCUSDT', side: 'long', leverage: 2, stopLossPrice: 95, orderType: 'market' },
+          market: { warnings: [] },
+          contractRules: { warnings: [] },
+          riskInput: {},
+        },
+      }),
+    });
+    const body = await safeJson(response);
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(sourceReads, 1);
+    assert.equal(ownerReads, 1);
+    assert.deepEqual(body.result.position.backtestCandidate, injected);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+
+    const forged = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        state,
+        action: {
+          type: 'place_order',
+          eventId: 'forged-backtest-lineage',
+          request: {
+            symbol: 'BTCUSDT', side: 'long', leverage: 2, stopLossPrice: 95, orderType: 'market',
+            backtestCandidate: injected,
+          },
+          market: { warnings: [] },
+          contractRules: { warnings: [] },
+          riskInput: {},
+        },
+      }),
+    });
+    const forgedBody = await safeJson(forged);
+    assert.equal(forged.status, 400);
+    assert.equal(forgedBody.code, 'CLIENT_BACKTEST_PAPER_AUTHORITY_FORBIDDEN');
+  } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

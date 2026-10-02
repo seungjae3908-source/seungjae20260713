@@ -7,6 +7,9 @@ const workflow = readFileSync(path.join(root, '.github/workflows/telegram-produc
 const migrator = readFileSync(path.join(root, 'ops/apply-production-personal-telegram-storage.mjs'), 'utf8');
 const cleanup = readFileSync(path.join(root, 'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql'), 'utf8');
 const genericOutbox = readFileSync(path.join(root, 'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql'), 'utf8');
+const followupLedger = readFileSync(path.join(root, 'api-server/supabase/migrations/2026082702_telegram_signal_followup_ledger.sql'), 'utf8');
+const digestOutbox = readFileSync(path.join(root, 'api-server/supabase/migrations/2026082703_personal_telegram_digest_outbox.sql'), 'utf8');
+const messageEditState = readFileSync(path.join(root, 'api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql'), 'utf8');
 
 function fail(message) {
   console.error(`[production-personal-telegram-storage-contract] ${message}`);
@@ -30,8 +33,8 @@ function verifyStatic() {
   ]) assert(workflow.includes(marker), `workflow is missing ${marker}`);
 
   const migrationIndex = workflow.indexOf('Apply and verify Production personal Telegram storage atomically');
-  const deployIndex = workflow.indexOf('Dispatch existing Production Deploy and require exact-run success');
-  assert(migrationIndex >= 0 && deployIndex > migrationIndex, 'storage migration must finish before Production deployment dispatch');
+  const deployEvidenceIndex = workflow.indexOf('Require already-successful exact-SHA Production Deploy evidence');
+  assert(migrationIndex >= 0 && deployEvidenceIndex > migrationIndex, 'storage migration must finish before Production deployment evidence validation');
   assert(!/PROD_DATABASE_URL=%q/.test(workflow), 'database secret must not be embedded in the remote command line');
   assert(!/printf\s+'?%q'?\s+"?\$PROD_DATABASE_URL"?/.test(workflow), 'database secret must not be shell-escaped into argv');
   assert(!/echo\s+"?\$PROD_DATABASE_URL"?/.test(workflow), 'database secret must never be echoed');
@@ -58,14 +61,21 @@ function verifyStatic() {
     '2026081501_personal_telegram_storage.sql',
     '2026081502_personal_telegram_policy_cleanup.sql',
     '2026082701_personal_telegram_generic_outbox.sql',
+    '2026082702_telegram_signal_followup_ledger.sql',
+    '2026082703_personal_telegram_digest_outbox.sql',
+    '2026092503_telegram_signal_message_edit_state.sql',
     "array['member_id', 'enabled_types']",
     "array['delivery_kind', 'payload']",
     "column_name = 'event_id'",
     "event_id_nullable is distinct from 'YES'",
     'notification_deliveries_kind_check',
     'notification_deliveries_payload_contract_check',
-    "'migrations_applied', 3",
+    "'migrations_applied', 6",
+    "'tables_verified', 5",
     "'generic_outbox_verified', true",
+    "'signal_followup_verified', true",
+    "'message_edit_state_verified', true",
+    "'digest_outbox_verified', true",
     "qual <> 'false'",
     "with_check <> 'false'",
     "privilege.grantee in ('PUBLIC', 'anon', 'authenticated')",
@@ -88,6 +98,17 @@ function verifyStatic() {
     'grant all privileges on table public.notification_deliveries to service_role',
   ]) assert(genericOutbox.includes(marker), `generic outbox migration is missing ${marker}`);
 
+  assert(followupLedger.includes('create table if not exists public.telegram_signal_followup_ledger'),
+    'followup ledger migration must create the durable public signal lifecycle table');
+  assert(followupLedger.includes('revoke all privileges on table public.telegram_signal_followup_ledger from public, anon, authenticated'),
+    'followup ledger must remain server-only');
+  assert(digestOutbox.includes('create or replace function public.append_personal_telegram_digest_item'),
+    'digest migration must provide the durable append function');
+  for (const marker of ['telegram_message_id', 'telegram_message_kind', 'base_message_text']) {
+    assert(messageEditState.includes(marker), `message edit migration is missing ${marker}`);
+  }
+  assert(!/\b(user_id|member_id|chat_id|account_id)\b/i.test(messageEditState),
+    'message edit state migration must not add member, chat, or account identity');
   assert(!/\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?public\.(?:telegram_)?(?:alert_)?(?:outbox|delivery_queue)\b/i.test(genericOutbox),
     'generic outbox migration must reuse notification_deliveries instead of creating a competing queue');
   assert(!/\beval\s*\(/.test(migrator), 'migrator must not eval server env files');
@@ -108,9 +129,12 @@ function verifyArtifact(file, expectedTargetSha, expectedActiveSha) {
     && value?.expected_active_sha === expectedActiveSha
     && value?.production_project_match === true
     && value?.atomic_transaction === true
-    && value?.migrations_applied === 3
-    && value?.tables_verified === 4
+    && value?.migrations_applied === 6
+    && value?.tables_verified === 5
     && value?.generic_outbox_verified === true
+    && value?.signal_followup_verified === true
+    && value?.message_edit_state_verified === true
+    && value?.digest_outbox_verified === true
     && value?.canonical_preferences_verified === true
     && value?.api_roles_revoked === true
     && value?.policies_fail_closed === true

@@ -4,11 +4,11 @@ const NOW = '2026-08-17T08:30:00.000Z';
 const USER_ID = '88888888-8888-4888-8888-888888888888';
 const AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
-function fulfill(route: Route, body: unknown, status = 200) {
-  return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
+function fulfill(route: Route, body: unknown, status = 200, headers: Record<string, string> = {}) {
+  return route.fulfill({ status, contentType: 'application/json; charset=utf-8', headers, body: JSON.stringify(body) });
 }
 
-function emptySnapshot(provider: 'toss' | 'upbit' | 'bitget', overrides: Record<string, unknown> = {}) {
+function emptySnapshot(provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget', overrides: Record<string, unknown> = {}) {
   return {
     provider, readOnly: true, connected: false, status: 'NOT_CONFIGURED', accounts: null, balances: null, positions: null, openOrders: null,
     checkedAt: NOW, lastGoodAt: null, stale: false, errorCode: 'ACCOUNT_NOT_CONFIGURED',
@@ -46,11 +46,11 @@ async function installRegular(page: Page) {
 
   return {
     diagnostics,
-    assertClean() {
+    assertClean(expectedTradeConnectionCalls = 0) {
       expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
       expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
       expect(diagnostics.forbiddenTradeMutations, diagnostics.forbiddenTradeMutations.join('\n')).toEqual([]);
-      expect(diagnostics.legacyConnectionCalls, diagnostics.legacyConnectionCalls.join('\n')).toEqual([]);
+      expect(diagnostics.legacyConnectionCalls.length, diagnostics.legacyConnectionCalls.join('\n')).toBe(expectedTradeConnectionCalls);
     },
   };
 }
@@ -71,8 +71,10 @@ test('regular user sees only Toss Upbit Bitget account linking and Kiwoom is hid
   await expect(page.getByTestId('connection-toss')).toBeVisible();
   await expect(page.getByTestId('connection-upbit')).toBeVisible();
   await expect(page.getByTestId('connection-bitget')).toBeVisible();
-  await expect(page.locator('body')).not.toContainText('Kiwoom');
-  await expect(page.locator('body')).not.toContainText('키움');
+  const readonlyPanel = page.getByTestId('brokerage-account-connections');
+  await expect(readonlyPanel).not.toContainText('Kiwoom');
+  await expect(readonlyPanel).not.toContainText('키움');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
   assertClean();
 });
 
@@ -89,6 +91,10 @@ test('regular user saves Upbit credentials only through canonical account-readon
       savedBody = route.request().postDataJSON() as Record<string, unknown>; configured = true;
       return fulfill(route, { ok: true, provider: 'upbit', configured: true, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
     }
+    if (path === '/api/accounts/read-only/credentials/upbit' && route.request().method() === 'DELETE') {
+      configured = false;
+      return fulfill(route, { ok: true, provider: 'upbit', configured: false, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
+    }
     if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
     return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
@@ -103,7 +109,11 @@ test('regular user saves Upbit credentials only through canonical account-readon
   await expect(upbit).not.toContainText('보유 자산 0개');
   await expect(upbit).not.toContainText('미연결');
   expect(savedBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { accessKey, secretKey } });
-  expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey); assertClean();
+  expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey);
+  await upbit.getByRole('button', { name: '조회 연결 해제' }).click();
+  await expect(page.getByRole('status')).toContainText('연결 해제 완료 · Upbit 조회 키를 삭제했습니다.');
+  await expect(upbit).toContainText('미연결');
+  assertClean();
 });
 
 test('Toss credential form is read-only, Account Seq is optional, and mobile dialogs stay in viewport', async ({ page }) => {
@@ -125,7 +135,10 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
   await page.getByTestId('toss-credential-primary').fill('TOSS_CLIENT_TEST_ONLY'); await page.getByTestId('toss-credential-secret').fill('TOSS_SECRET_TEST_ONLY'); await page.getByTestId('toss-save-connection').click();
   expect(tossBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { clientId: 'TOSS_CLIENT_TEST_ONLY', clientSecret: 'TOSS_SECRET_TEST_ONLY' } });
   await page.getByRole('button', { name: 'Bitget 조회 연결 설정' }).click(); const bitgetBox = await page.getByRole('dialog').boundingBox(); expect(bitgetBox).not.toBeNull(); expect(bitgetBox!.x + bitgetBox!.width).toBeLessThanOrEqual(361);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361); await expect(page.locator('body')).not.toContainText('Kiwoom'); assertClean();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361);
+  await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  assertClean();
 });
 
 test('account metrics distinguish real zero from missing, stale, and unavailable evidence', async ({ page }) => {
@@ -172,6 +185,318 @@ test('account metrics distinguish real zero from missing, stale, and unavailable
   await expect(bitget).toContainText('조회 불가');
   await expect(bitget).toContainText('사용 불가');
 
-  await expect(page.locator('body')).not.toContainText('Kiwoom');
+  await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
+  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
   assertClean();
 });
+
+
+test('server-declared Kiwoom capability exposes a read-only setup card and saves only App Key/App Secret', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  let savedBody: Record<string, unknown> | null = null;
+  let configured = false;
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === '/api/accounts/read-only/credentials/status') {
+      return fulfill(route, {
+        ok: true,
+        encryptionConfigured: true,
+        supportedProviders: ['toss', 'kiwoom', 'upbit', 'bitget'],
+        hiddenProviders: [],
+        credentialsReturned: false,
+        privateProviderRequests: 0,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        liveTradingEnabled: false,
+        autoTradingEnabled: false,
+      });
+    }
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+    if (path === '/api/accounts/read-only/kiwoom') return fulfill(route, emptySnapshot('kiwoom', configured ? { status: 'CONFIGURED_UNVERIFIED', errorCode: 'ACCOUNT_READ_DISABLED' } : {}));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (path === '/api/accounts/read-only/credentials/kiwoom' && method === 'PUT') {
+      savedBody = route.request().postDataJSON() as Record<string, unknown>;
+      configured = true;
+      return fulfill(route, {
+        ok: true,
+        provider: 'kiwoom',
+        configured: true,
+        purpose: 'read_only',
+        credentialsReturned: false,
+        privateProviderRequests: 0,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        liveTradingEnabled: false,
+        autoTradingEnabled: false,
+      });
+    }
+    if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const kiwoom = page.getByTestId('connection-kiwoom');
+  await expect(kiwoom).toBeVisible();
+  await expect(kiwoom).toContainText('공식 REST KR/US 잔고·미체결 조회');
+  await page.getByRole('button', { name: 'Kiwoom 조회 연결 설정' }).click();
+
+  const appKey = 'KIWOOM_APP_E2E_TEST_ONLY';
+  const appSecret = 'KIWOOM_SECRET_E2E_TEST_ONLY';
+  await page.getByTestId('kiwoom-credential-primary').fill(appKey);
+  await page.getByTestId('kiwoom-credential-secret').fill(appSecret);
+  await page.getByTestId('kiwoom-save-connection').click();
+
+  expect(savedBody).toEqual({
+    purpose: 'read_only',
+    permissions: ['read'],
+    credentials: { appKey, appSecret },
+  });
+  await expect(page.getByRole('status')).toContainText('저장 완료 · Kiwoom 조회 전용 키를 암호화 Vault에 저장했습니다.');
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain(appKey);
+  expect(body).not.toContain(appSecret);
+  assertClean();
+});
+
+
+test('live Upbit trading key is saved separately with read+orders only and does not activate live execution', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  let savedBody: Record<string, unknown> | null = null;
+  let configured = false;
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === '/api/accounts/read-only/credentials/status') {
+      return fulfill(route, {
+        ok: true,
+        encryptionConfigured: true,
+        supportedProviders: ['toss', 'upbit', 'bitget'],
+        hiddenProviders: ['kiwoom'],
+        credentialsReturned: false,
+      });
+    }
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (path === '/api/trade-automation/status') {
+      return fulfill(route, {
+        ok: true,
+        policy: {
+          mode: 'approval',
+          automaticEnabled: false,
+          emergencyStopped: false,
+          marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+          stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+          exchangeEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
+          enabledAssets: { toss: [], kiwoom: [], upbit: [], bitget: [] },
+          enabledStrategies: [],
+          totalCapitalKrw: 1_000_000,
+          maxOrderKrw: 100_000,
+          dailyLossLimitPercent: 5,
+          maxAssetPercent: 30,
+          maxOpenPositions: 5,
+          maxDailyOrders: 10,
+          maxConsecutiveLosses: 3,
+          bitgetLeverage: 2,
+        },
+        connections: configured ? [{
+          exchange: 'upbit',
+          accountMode: 'live',
+          configured: true,
+          lastVerifiedAt: null,
+          lastErrorCode: 'LIVE_EXECUTION_NOT_VERIFIED',
+          credentialsExposed: false,
+        }] : [],
+        emergencyStopped: false,
+        credentialVault: { encryptionConfigured: true, keyValueExposed: false },
+        liveExecutionServerEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
+        lastOrder: null,
+      });
+    }
+    if (path === '/api/trade-automation/connections/upbit' && method === 'PUT') {
+      savedBody = route.request().postDataJSON() as Record<string, unknown>;
+      configured = true;
+      return fulfill(route, {
+        ok: true,
+        exchange: 'upbit',
+        accountMode: 'live',
+        configured: true,
+        credentialsReturned: false,
+        liveExecutionActivated: false,
+        providerMutationRequests: 0,
+      });
+    }
+    if (path === '/api/user-integrations') {
+      return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    }
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const panel = page.getByTestId('trade-execution-connections');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/거래키\s*미연결/);
+
+  await page.getByTestId('live-connection-upbit').getByRole('button', { name: '거래키 연결' }).click();
+  const dialog = page.getByRole('dialog', { name: '실주문 거래키 연결' });
+  await expect(dialog).toBeVisible();
+
+  const accessKey = 'UPBIT_LIVE_ACCESS_TEST_ONLY';
+  const secretKey = 'UPBIT_LIVE_SECRET_TEST_ONLY';
+  await dialog.getByLabel('Access Key').fill(accessKey);
+  await dialog.getByLabel('Secret Key').fill(secretKey);
+  await dialog.getByRole('checkbox').check();
+  await dialog.getByRole('button', { name: '실주문 거래키 저장' }).click();
+
+  expect(savedBody).toEqual({
+    accountMode: 'live',
+    purpose: 'live_execution',
+    permissions: ['read', 'orders'],
+    credentials: { accessKey, secretKey },
+  });
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/거래키\s*저장됨/);
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/수동 실주문\s*OFF/);
+  await expect(page.getByTestId('live-connection-upbit')).toContainText(/자동 실주문\s*OFF/);
+  await expect(page.getByRole('status')).toContainText('저장만으로 주문은 실행되지 않습니다.');
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain(accessKey);
+  expect(body).not.toContain(secretKey);
+  assertClean(1);
+});
+
+test('account refresh displays only allowlisted Toss and Bitget authentication diagnostics', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  let bitgetConnected = false;
+  const forbidden = [
+    'BITGET_UI_KEY_MUST_NOT_LEAK',
+    'BITGET_UI_SECRET_MUST_NOT_LEAK',
+    'BITGET_UI_PASSPHRASE_MUST_NOT_LEAK',
+    'BITGET_UI_SIGNATURE_MUST_NOT_LEAK',
+    'BITGET_UI_AUTHORIZATION_MUST_NOT_LEAK',
+    'BITGET_UI_CIPHERTEXT_MUST_NOT_LEAK',
+    'BITGET_UI_ACCOUNT_MUST_NOT_LEAK',
+  ];
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss', {
+      status: 'AUTH_FAILED', errorCode: 'TOSS_AUTH_FAILED',
+    }));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') {
+      if (bitgetConnected) return fulfill(route, emptySnapshot('bitget', {
+        connected: true, status: 'CONNECTED', errorCode: null, lastGoodAt: NOW, accounts: [], balances: [], positions: [], openOrders: [],
+      }));
+      return fulfill(route, emptySnapshot('bitget', {
+        status: 'AUTH_FAILED', errorCode: 'BITGET_AUTH_FAILED',
+      }), 200, {
+        'X-Account-Readonly-Bitget-Diagnostic': JSON.stringify({
+          provider: 'bitget',
+          requestMethod: 'GET',
+          requestPath: '/api/v2/mix/account/accounts',
+          endpointFamily: 'CLASSIC',
+          probe: 'ASSETS',
+          httpStatus: 400,
+          applicationCode: '40012',
+          sanitizedClassification: 'BITGET_AUTH_FAILED',
+          fallbackAttempted: true,
+          timestampRejected: false,
+          productionHost: true,
+          credentialPresence: { key: true, secret: true, passphrase: true },
+          apiKey: forbidden[0],
+          secretKey: forbidden[1],
+          passphrase: forbidden[2],
+          signature: forbidden[3],
+          authorization: forbidden[4],
+          encryptedCredentials: forbidden[5],
+          accountUid: forbidden[6],
+        }),
+      });
+    }
+    if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const toss = page.getByTestId('connection-toss');
+  await expect(toss).toContainText('Toss Client ID / Client Secret 인증을 확인해 주세요.');
+  await expect(toss).toContainText('TOSS_AUTH_FAILED');
+  await expect(toss.getByTestId('account-readonly-metadata-toss')).toContainText('조회 키 저장됨');
+  await expect(toss.getByTestId('account-readonly-metadata-toss')).toContainText('최근 오류 TOSS_AUTH_FAILED');
+
+  const bitget = page.getByTestId('connection-bitget');
+  const diagnostic = bitget.getByTestId('bitget-readonly-diagnostic');
+  await expect(diagnostic).toContainText('HTTP 400');
+  await expect(diagnostic).toContainText('code 40012');
+  await expect(diagnostic).toContainText('Classic');
+  await expect(diagnostic).toContainText('ASSETS');
+  await expect(diagnostic).toContainText('fallback=true');
+  await expect(diagnostic).toContainText('BITGET_AUTH_FAILED');
+  for (const value of forbidden) await expect(page.locator('body')).not.toContainText(value);
+
+  bitgetConnected = true;
+  await page.getByRole('button', { name: '계좌 연결 새로고침' }).click();
+  await expect(bitget).toContainText('연결됨');
+  await expect(bitget.getByTestId('bitget-readonly-diagnostic')).toHaveCount(0);
+  assertClean();
+});
+
+test('saving Toss read-only credentials immediately refreshes its snapshot without a workflow or mutation', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  const clientId = 'TOSS_SAVE_REFRESH_CLIENT_TEST_ONLY';
+  const clientSecret = 'TOSS_SAVE_REFRESH_SECRET_TEST_ONLY';
+  let configured = false;
+  let tossSnapshots = 0;
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === '/api/accounts/read-only/toss') {
+      tossSnapshots += 1;
+      return fulfill(route, emptySnapshot('toss', configured
+        ? { status: 'AUTH_FAILED', errorCode: 'TOSS_IP_NOT_ALLOWED' }
+        : {}));
+    }
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (path === '/api/accounts/read-only/credentials/toss' && method === 'PUT') {
+      configured = true;
+      return fulfill(route, { ok: true, provider: 'toss', configured: true, purpose: 'read_only', credentialsReturned: false });
+    }
+    if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Toss 조회 연결 설정' }).click();
+  await page.getByTestId('toss-credential-primary').fill(clientId);
+  await page.getByTestId('toss-credential-secret').fill(clientSecret);
+  await page.getByTestId('toss-save-connection').click();
+
+  const toss = page.getByTestId('connection-toss');
+  await expect(page.getByRole('status')).toContainText('저장 완료 · Toss 조회 전용 키를 암호화 Vault에 저장했습니다.');
+  await expect(toss).toContainText('Toss Open API 허용 IP를 확인해 주세요.');
+  await expect(toss).toContainText('TOSS_IP_NOT_ALLOWED');
+  expect(tossSnapshots).toBeGreaterThanOrEqual(2);
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain(clientId);
+  expect(body).not.toContain(clientSecret);
+  assertClean();
+});
+

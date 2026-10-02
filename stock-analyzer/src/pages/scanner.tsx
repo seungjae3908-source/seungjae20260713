@@ -537,7 +537,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
   const assetMode = useAssetMode();
   const analysisSelection = useAnalysisSelection();
   // 최초 진입 시에는 항상 가장 왼쪽 탭(조건검색)이 선택된다.
-  // 자동매매 설정·후보 화면은 사용자가 '자동매매' 버튼을 직접 눌렀을 때만 표시한다.
+  // 자동매매는 단일 canonical /auto-trading 화면에서 관리한다.
   const [viewMode, setViewMode] = useState<ScannerViewMode>("condition");
   const [market, setMarket] = useState<MarketFilter>(DEFAULT_MARKET);
   const [timeframe, setTimeframe] = useState<ScannerTimeframe>("1D");
@@ -1141,13 +1141,8 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
           </button>
           <button
             type="button"
-            onClick={() => setViewMode("auto")}
-            className={cn(
-              "inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-sm font-extrabold",
-              viewMode === "auto"
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-card-border bg-card text-muted-foreground",
-            )}
+            onClick={() => navigate("/auto-trading")}
+            className="inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border border-card-border bg-card px-2 py-2 text-sm font-extrabold text-muted-foreground"
           >
             자동매매
           </button>

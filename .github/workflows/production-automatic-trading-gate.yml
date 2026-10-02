@@ -1,0 +1,689 @@
+name: Production Automatic Trading Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/production-automatic-trading-gate.yml
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/spot-live-limited-capability.service.ts
+      - api-server/src/services/futures-live-limited-capability.service.ts
+      - .github/workflows/production-live-trading-gate.yml
+      - .github/workflows/production-futures-live-trading-gate.yml
+      - ops/deploy-production.sh
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'issue_comment'
+        && github.event.issue.number == 23
+        && github.event.comment.user.login == 'seungjae3908-source'
+        && github.event.comment.author_association == 'OWNER'
+        && (startsWith(github.event.comment.body, '/activate-production-auto-trading ')
+            || startsWith(github.event.comment.body, '/disable-production-auto-trading '))
+        && 'production-automatic-trading-gate'
+        || format('production-automatic-trading-validation-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    name: Validate Production automatic-trading gate contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
+
+  activate:
+    name: Owner-approved four-market Production automatic-trading activation
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-production-auto-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      statuses: read
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/activate-production-auto-trading ([0-9a-f]{40}) all4$/u.exec(body);
+          if (!match) throw new Error('Expected /activate-production-auto-trading <40-char-current-main-sha> all4');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+
+      - name: Require exact release, all-provider QA, and both manual live receipts
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = String(process.env.TARGET_SHA || '');
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha;
+            if (main !== target) {
+              core.setFailed('AUTOMATIC_TRADING_MAIN_SHA_MISMATCH:target=' + target + ':main=' + main);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            statuses.sort((a, b) => Number(b.id) - Number(a.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed('AUTOMATIC_TRADING_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
+              return;
+            }
+            const runIds = new Set(required.map((name) => {
+              const match = String(latest.get(name)?.target_url || '').match(/\/actions\/runs\/(\d+)/);
+              return match ? Number(match[1]) : null;
+            }));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('AUTOMATIC_TRADING_REQUIRED_CI_NOT_COHERENT');
+              return;
+            }
+            const ciRunId = [...runIds][0];
+            const ciRun = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: ciRunId,
+            })).data;
+            if (ciRun.name !== 'Application CI'
+              || ciRun.path !== '.github/workflows/futures-public-network-smoke.yml'
+              || ciRun.head_sha !== target
+              || ciRun.head_branch !== 'main'
+              || !['push', 'workflow_dispatch'].includes(ciRun.event)
+              || ciRun.status !== 'completed'
+              || ciRun.conclusion !== 'success') {
+              core.setFailed('AUTOMATIC_TRADING_REQUIRED_CI_PROVENANCE_REJECTED:' + ciRunId);
+              return;
+            }
+
+            const productionRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              head_sha: target, branch: 'main', event: 'workflow_dispatch',
+              status: 'completed', per_page: 100,
+            });
+            const production = productionRuns
+              .filter((run) => run.name === 'Production Deploy'
+                && run.path === '.github/workflows/production-deploy.yml'
+                && run.head_sha === target
+                && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.updated_at || b.created_at) - Date.parse(a.updated_at || a.created_at))[0];
+            if (!production) {
+              core.setFailed('AUTOMATIC_TRADING_EXACT_PRODUCTION_DEPLOY_REQUIRED:' + target);
+              return;
+            }
+            const productionCompletedAt = Date.parse(production.updated_at || '');
+            if (!Number.isFinite(productionCompletedAt)) {
+              core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
+              return;
+            }
+
+            const requireQa = async (workflowId, workflowName, artifactName, errorCode) => {
+              const qaRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner, repo: context.repo.repo,
+                workflow_id: workflowId, branch: 'main',
+                event: 'workflow_dispatch', status: 'completed', per_page: 100,
+              });
+              const run = qaRuns
+                .filter((candidate) => candidate.name === workflowName
+                  && candidate.path === '.github/workflows/' + workflowId
+                  && candidate.head_sha === target
+                  && candidate.head_branch === 'main'
+                  && candidate.conclusion === 'success'
+                  && Date.parse(candidate.run_started_at || candidate.created_at) >= productionCompletedAt)
+                .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+              if (!run) {
+                core.setFailed(errorCode + ':' + target);
+                return null;
+              }
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
+              });
+              const artifact = artifacts.find((candidate) =>
+                candidate.name === artifactName(run)
+                && candidate.expired !== true
+                && Number(candidate.size_in_bytes) > 0);
+              if (!artifact) {
+                core.setFailed(errorCode + '_ARTIFACT_MISSING:' + run.id);
+                return null;
+              }
+              return run;
+            };
+
+            const comprehensive = await requireQa(
+              'production-comprehensive-readonly-qa.yml',
+              'Production Comprehensive Read-Only QA',
+              (run) => 'production-comprehensive-readonly-' + run.id,
+              'AUTOMATIC_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED',
+            );
+            if (!comprehensive) return;
+
+            const account = await requireQa(
+              'production-account-readonly-live-qa.yml',
+              'Production Account Read-only Live QA',
+              () => 'production-account-readonly-live-' + target,
+              'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED',
+            );
+            if (!account) return;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+            });
+            const postDeploy = comments.filter((comment) =>
+              Date.parse(comment.created_at || '') >= productionCompletedAt);
+
+            const spotReceipt = [...postDeploy].reverse().find((comment) => {
+              const body = String(comment.body || '');
+              return body.includes('[PRODUCTION_LIVE_TRADING_GATE]')
+                && body.includes('status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL')
+                && body.includes('target_sha: ' + target)
+                && body.includes('providers: kiwoom,toss,upbit')
+                && body.includes('AUTO_TRADING=false')
+                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
+                && body.includes('executionAuthority=SPOT_LIVE_LIMITED')
+                && body.includes('REAL_ORDER_SUBMITTED=false');
+            });
+            if (!spotReceipt) {
+              core.setFailed('AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED:' + target);
+              return;
+            }
+
+            const futuresReceipt = [...postDeploy].reverse().find((comment) => {
+              const body = String(comment.body || '');
+              return body.includes('[PRODUCTION_FUTURES_LIVE_TRADING_GATE]')
+                && body.includes('status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL')
+                && body.includes('target_sha: ' + target)
+                && body.includes('provider: bitget')
+                && /max_leverage:\s*(2|3)/u.test(body)
+                && body.includes('margin_mode: isolated')
+                && body.includes('FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED')
+                && body.includes('AUTO_TRADING=false')
+                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
+                && body.includes('REAL_ORDER_SUBMITTED=false');
+            });
+            if (!futuresReceipt) {
+              core.setFailed('AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED:' + target);
+              return;
+            }
+            const leverage = /max_leverage:\s*(2|3)/u.exec(String(futuresReceipt.body || ''))?.[1];
+            if (!leverage) {
+              core.setFailed('AUTOMATIC_TRADING_FUTURES_LEVERAGE_RECEIPT_INVALID');
+              return;
+            }
+
+            core.setOutput('ci_run_id', String(ciRunId));
+            core.setOutput('production_run_id', String(production.id));
+            core.setOutput('comprehensive_run_id', String(comprehensive.id));
+            core.setOutput('account_run_id', String(account.id));
+            core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
+            core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
+            core.setOutput('futures_max_leverage', leverage);
+
+      - name: Download exact-SHA four-provider Account QA evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/production-account-readonly-live-qa
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.gate.outputs.account_run_id }}
+
+      - name: Require all four providers connected, fresh, and reconciled
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          ACCOUNT_QA_EVIDENCE: ${{ runner.temp }}/production-account-readonly-live-qa/production-account-readonly-live-qa.json
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const target = String(process.env.TARGET_SHA || '');
+          const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
+          const evidence = JSON.parse(fs.readFileSync(process.env.ACCOUNT_QA_EVIDENCE, 'utf8'));
+
+          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+            || evidence?.targetSha !== target
+            || evidence?.orderRequests !== 0
+            || evidence?.cancelRequests !== 0
+            || evidence?.amendRequests !== 0
+            || evidence?.transferRequests !== 0
+            || evidence?.withdrawalRequests !== 0
+            || evidence?.blockedMutationRequests !== 0
+            || evidence?.observedAppMutationRequests !== 0
+            || evidence?.liveTradingAuthorityGranted !== false
+            || evidence?.autoTradingAuthorityGranted !== false) {
+            throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_SAFETY_INVALID');
+          }
+          const testedProviders = Array.isArray(evidence?.testedProviders) ? evidence.testedProviders : [];
+          const rows = Array.isArray(evidence?.providers) ? evidence.providers : [];
+          for (const provider of requiredProviders) {
+            if (!testedProviders.includes(provider)) {
+              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_TESTED:' + provider);
+            }
+            const row = rows.find((candidate) => candidate?.provider === provider);
+            if (!row
+              || row.connected !== true
+              || row.status !== 'CONNECTED'
+              || row.stale !== false
+              || row.fresh !== true
+              || row.errorCode !== null
+              || row.checkedAtPresent !== true
+              || row.lastGoodAtPresent !== true
+              || row.reconciliation !== 'PASS'
+              || row.reconciliationPassed !== true) {
+              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_READY:' + provider);
+            }
+          }
+          NODE
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Activate automatic execution across all four markets
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+
+          const target = String(process.env.TARGET_SHA || '');
+          const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
+          const pm2Name = 'stock-app';
+          if (!['2', '3'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
+          const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
+          if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
+
+          const bool = (env, key) => {
+            const value = env[key];
+            if (value === true || value === 'true') return true;
+            if (value === false || value === 'false' || value === undefined) return false;
+            throw new Error('AUTOMATIC_TRADING_FLAG_MALFORMED:' + key);
+          };
+          const csv = (value) => new Set(String(value || '').split(',').map((v) => v.trim().toUpperCase()).filter(Boolean));
+          const snapshot = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1) throw new Error('AUTOMATIC_TRADING_PM2_AMBIGUOUS');
+            const env = matches[0]?.pm2_env;
+            if (!env || env.status !== 'online' || String(env.DEPLOY_SHA || '') !== target) {
+              throw new Error('AUTOMATIC_TRADING_PM2_IDENTITY_INVALID');
+            }
+            return env;
+          };
+          const manualState = (env) => ({
+            live: bool(env, 'LIVE_TRADING'),
+            real: bool(env, 'REAL_ORDER_ENABLED'),
+            privateApi: bool(env, 'PRIVATE_TRADING_API_ALLOWED'),
+            orderExecution: bool(env, 'ORDER_EXECUTION_ENABLED'),
+            liveApproved: bool(env, 'LIVE_TRADING_ACTIVATION_APPROVED'),
+            spotApproved: bool(env, 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            toss: bool(env, 'TOSS_LIVE_ORDER_ENABLED'),
+            kiwoom: bool(env, 'KIWOOM_LIVE_ORDER_ENABLED'),
+            upbit: bool(env, 'UPBIT_LIVE_ORDER_ENABLED'),
+            spotAuthority: String(env.executionAuthority || 'NONE').toUpperCase(),
+            spotCapabilities: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST || ''),
+            spotMarkets: String(env.SPOT_LIVE_MARKET_ALLOWLIST || ''),
+            futuresApproved: bool(env, 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            bitgetFutures: bool(env, 'BITGET_FUTURES_LIVE_ORDER_ENABLED'),
+            futuresAuthority: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY || 'NONE').toUpperCase(),
+            futuresCapabilities: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST || ''),
+            futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
+            futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
+            futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || '').toLowerCase(),
+          });
+          const assertAllFourManual = (env, expectedAuto) => {
+            const manual = manualState(env);
+            if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
+              throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
+            }
+            if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
+              || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
+              throw new Error('AUTOMATIC_TRADING_SPOT_THREE_MARKETS_NOT_READY');
+            }
+            const spotCaps = csv(manual.spotCapabilities);
+            const spotMarkets = csv(manual.spotMarkets);
+            for (const capability of ['BALANCE_READ','POSITION_READ','OPEN_ORDER_READ','ORDER_CREATE','ORDER_CANCEL','ORDER_AMEND']) {
+              if (!spotCaps.has(capability)) throw new Error('AUTOMATIC_TRADING_SPOT_CAPABILITY_MISSING:' + capability);
+            }
+            for (const market of ['KR_STOCK','US_STOCK','CRYPTO_SPOT']) {
+              if (!spotMarkets.has(market)) throw new Error('AUTOMATIC_TRADING_SPOT_MARKET_MISSING:' + market);
+            }
+            if (spotMarkets.size !== 3) throw new Error('AUTOMATIC_TRADING_SPOT_MARKET_SCOPE_TOO_WIDE');
+
+            if (!manual.futuresApproved || !manual.bitgetFutures
+              || manual.futuresAuthority !== 'FUTURES_LIVE_LIMITED'
+              || manual.futuresMarkets !== 'CRYPTO_FUTURES'
+              || manual.futuresMarginMode !== 'isolated'
+              || manual.futuresMaxLeverage !== expectedLeverage) {
+              throw new Error('AUTOMATIC_TRADING_FUTURES_MARKET_NOT_READY');
+            }
+            const futuresCaps = csv(manual.futuresCapabilities);
+            for (const capability of ['BALANCE_READ','POSITION_READ','OPEN_ORDER_READ','ORDER_CREATE','ORDER_CANCEL','ORDER_AMEND']) {
+              if (!futuresCaps.has(capability)) throw new Error('AUTOMATIC_TRADING_FUTURES_CAPABILITY_MISSING:' + capability);
+            }
+            if (bool(env, 'AUTO_TRADING') !== expectedAuto
+              || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto) {
+              throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
+            }
+          };
+          const restartAutomatic = (enabled) => {
+            execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
+              stdio: 'inherit',
+              env: {
+                ...process.env,
+                AUTO_TRADING: enabled ? 'true' : 'false',
+                LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
+                DEPLOY_SHA: target,
+              },
+            });
+            execFileSync('pm2', ['save'], { stdio: 'inherit' });
+          };
+
+          const before = snapshot();
+          assertAllFourManual(before, false);
+          const preserved = manualState(before);
+          let mutated = false;
+          try {
+            restartAutomatic(true);
+            mutated = true;
+            const after = snapshot();
+            assertAllFourManual(after, true);
+            if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
+              throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
+            }
+            console.log(JSON.stringify({
+              status: 'ACTIVATED_ALL4',
+              targetSha: target,
+              markets: ['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'],
+              providers: ['toss','kiwoom','upbit','bitget'],
+              AUTO_TRADING: true,
+              LIVE_AUTOMATIC_TRADING_ENABLED: true,
+              REAL_ORDER_SUBMITTED: false,
+            }));
+          } catch (cause) {
+            if (mutated) {
+              try {
+                restartAutomatic(false);
+                const rolledBack = snapshot();
+                assertAllFourManual(rolledBack, false);
+                if (JSON.stringify(manualState(rolledBack)) !== JSON.stringify(preserved)) {
+                  throw new Error('AUTOMATIC_TRADING_ROLLBACK_CHANGED_MANUAL_AUTHORITY');
+                }
+                console.error('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK');
+              } catch {
+                console.error('AUTOMATIC_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED');
+              }
+            }
+            throw cause;
+          }
+          NODE
+
+      - name: Record sanitized four-market automatic activation receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          CI_RUN_ID: ${{ steps.gate.outputs.ci_run_id }}
+          PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
+          COMPREHENSIVE_RUN_ID: ${{ steps.gate.outputs.comprehensive_run_id }}
+          ACCOUNT_RUN_ID: ${{ steps.gate.outputs.account_run_id }}
+          SPOT_RECEIPT_ID: ${{ steps.gate.outputs.spot_receipt_comment_id }}
+          FUTURES_RECEIPT_ID: ${{ steps.gate.outputs.futures_receipt_comment_id }}
+          FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
+                'status: ACTIVATED_ALL4_AUTO',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'markets: KR_STOCK,US_STOCK,CRYPTO_SPOT,CRYPTO_FUTURES',
+                'providers: toss,kiwoom,upbit,bitget',
+                'required_ci_run: ' + process.env.CI_RUN_ID,
+                'production_deploy_run: ' + process.env.PRODUCTION_RUN_ID,
+                'production_comprehensive_qa_run: ' + process.env.COMPREHENSIVE_RUN_ID,
+                'production_account_qa_run: ' + process.env.ACCOUNT_RUN_ID,
+                'spot_manual_receipt_comment: ' + process.env.SPOT_RECEIPT_ID,
+                'futures_manual_receipt_comment: ' + process.env.FUTURES_RECEIPT_ID,
+                'futures_max_leverage: ' + process.env.FUTURES_MAX_LEVERAGE,
+                'futures_margin_mode: isolated',
+                'AUTO_TRADING=true',
+                'LIVE_AUTOMATIC_TRADING_ENABLED=true',
+                'spot_executionAuthority=SPOT_LIVE_LIMITED',
+                'futures_executionAuthority=FUTURES_LIVE_LIMITED',
+                'transfer_withdrawal_authority=false',
+                'REAL_ORDER_SUBMITTED=false',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
+
+  disable:
+    name: Owner-approved four-market automatic disable preserving manual live authority
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/disable-production-auto-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Parse exact disable command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY || '').trim();
+          const match = /^\/disable-production-auto-trading ([0-9a-f]{40})$/u.exec(body);
+          if (!match) throw new Error('Expected /disable-production-auto-trading <40-char-deployed-sha>');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Disable only automatic flags and preserve all four manual market gates
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+
+          const target = String(process.env.TARGET_SHA || '');
+          const pm2Name = 'stock-app';
+          if (readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim() !== target) {
+            throw new Error('AUTOMATIC_TRADING_DISABLE_DEPLOY_SHA_MISMATCH');
+          }
+          const bool = (env, key) => {
+            const value = env[key];
+            if (value === true || value === 'true') return true;
+            if (value === false || value === 'false' || value === undefined) return false;
+            throw new Error('AUTOMATIC_TRADING_DISABLE_FLAG_MALFORMED:' + key);
+          };
+          const readEnv = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1 || matches[0]?.pm2_env?.status !== 'online'
+              || String(matches[0].pm2_env.DEPLOY_SHA || '') !== target) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_PM2_INVALID');
+            }
+            return matches[0].pm2_env;
+          };
+          const manual = (env) => ({
+            live: bool(env, 'LIVE_TRADING'),
+            real: bool(env, 'REAL_ORDER_ENABLED'),
+            privateApi: bool(env, 'PRIVATE_TRADING_API_ALLOWED'),
+            orderExecution: bool(env, 'ORDER_EXECUTION_ENABLED'),
+            liveApproved: bool(env, 'LIVE_TRADING_ACTIVATION_APPROVED'),
+            spotApproved: bool(env, 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            toss: bool(env, 'TOSS_LIVE_ORDER_ENABLED'),
+            kiwoom: bool(env, 'KIWOOM_LIVE_ORDER_ENABLED'),
+            upbit: bool(env, 'UPBIT_LIVE_ORDER_ENABLED'),
+            spotAuthority: String(env.executionAuthority || 'NONE'),
+            spotCaps: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST || ''),
+            spotMarkets: String(env.SPOT_LIVE_MARKET_ALLOWLIST || ''),
+            futuresApproved: bool(env, 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            bitgetFutures: bool(env, 'BITGET_FUTURES_LIVE_ORDER_ENABLED'),
+            futuresAuthority: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY || ''),
+            futuresCaps: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST || ''),
+            futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
+            futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
+            futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || ''),
+          });
+
+          const before = readEnv();
+          const preserved = manual(before);
+          execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
+            stdio: 'inherit',
+            env: {
+              ...process.env,
+              AUTO_TRADING: 'false',
+              LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              DEPLOY_SHA: target,
+            },
+          });
+          execFileSync('pm2', ['save'], { stdio: 'inherit' });
+
+          const after = readEnv();
+          if (bool(after, 'AUTO_TRADING') || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')) {
+            throw new Error('AUTOMATIC_TRADING_DISABLE_POSTCHECK_FAILED');
+          }
+          if (JSON.stringify(manual(after)) !== JSON.stringify(preserved)) {
+            throw new Error('AUTOMATIC_TRADING_DISABLE_CHANGED_MANUAL_LIVE_AUTHORITY');
+          }
+          console.log('AUTOMATIC_TRADING_DISABLED_ALL4_MANUAL_LIVE_PRESERVED');
+          console.log('REAL_ORDER_SUBMITTED=false');
+          NODE
+
+      - name: Record sanitized disable receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
+                'status: DISABLED_ALL4_MANUAL_LIVE_PRESERVED',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'AUTO_TRADING=false',
+                'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'manual_spot_and_futures_authority_preserved=true',
+                'REAL_ORDER_SUBMITTED=false',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });

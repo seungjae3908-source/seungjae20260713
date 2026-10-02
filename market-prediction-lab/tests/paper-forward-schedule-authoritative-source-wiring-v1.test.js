@@ -70,6 +70,12 @@ function runtimePackageFixture() {
       authoritativePaperRuntime.createImmutablePaperTradingStateSnapshot,
     validateImmutablePaperTradingStateSnapshot:
       authoritativePaperRuntime.validateImmutablePaperTradingStateSnapshot,
+    buildPaperSimulatedExecutionEvidence:
+      authoritativePaperRuntime.buildPaperSimulatedExecutionEvidence,
+    collectAuthoritativePaperLatencyCostEvidence:
+      authoritativePaperRuntime.collectAuthoritativePaperLatencyCostEvidence,
+    readBitgetPublicLatencyMidpointQuote:
+      authoritativePaperRuntime.readBitgetPublicLatencyMidpointQuote,
     executionAuthority: "NONE",
     privateApiAllowed: false,
     liveTrading: false,
@@ -258,6 +264,7 @@ test("Research Production recurring CLI injects the audited authoritative source
   assert.equal(typeof dependenciesInput.sourceWiring.createPaperAdmissionEvidenceProducer, "function");
   assert.equal(dependenciesInput.providerOptions.env.RESEARCH_PRODUCTION, "true");
   assert.equal(typeof invocation.publicEvidenceProvider.collectPublicEvidence, "function");
+  assert.equal(typeof invocation.settlementCostProducer, "function");
   assert.equal(invocation.outcomeAccumulationEnabled, true);
   assert.equal(output.authoritativeSourceWiringStatus, "CALLBACKS_CONNECTED_BLOCKED_DATA");
   assert.equal(output.firstZeroStage, "UNKNOWN");

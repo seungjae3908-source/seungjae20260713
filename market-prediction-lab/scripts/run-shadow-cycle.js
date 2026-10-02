@@ -75,6 +75,40 @@ function serializeError(error) {
   };
 }
 
+function shadowInferenceBlocker({ candidate, reference, symbol, config }) {
+  const candidateEvaluation = candidate?.inferenceEvaluation;
+  const referenceEvaluation = reference?.inferenceEvaluation;
+  const blocked = [
+    ["candidate", candidateEvaluation],
+    ["reference", referenceEvaluation],
+  ].filter(([, evaluation]) => evaluation?.status === "NOT_EVALUABLE");
+  if (blocked.length === 0) return null;
+
+  const missingRequiredFeatures = [...new Set(
+    blocked.flatMap(([, evaluation]) => Array.isArray(evaluation?.missingRequiredFeatures)
+      ? evaluation.missingRequiredFeatures
+      : []),
+  )].sort();
+  const error = new Error("Shadow inference blocked by missing required evidence");
+  error.name = "ShadowDataBlockedError";
+  error.code = "SHADOW_INFERENCE_NOT_EVALUABLE";
+  error.details = Object.freeze({
+    status: "BLOCKED_DATA",
+    reason: "MISSING_REQUIRED_INFERENCE_EVIDENCE",
+    group: config.group,
+    symbol,
+    candidateStatus: candidateEvaluation?.status ?? "UNKNOWN",
+    referenceStatus: referenceEvaluation?.status ?? "UNKNOWN",
+    candidateMissingRequiredFeatures: Object.freeze([...(candidateEvaluation?.missingRequiredFeatures ?? [])]),
+    referenceMissingRequiredFeatures: Object.freeze([...(referenceEvaluation?.missingRequiredFeatures ?? [])]),
+    missingRequiredFeatures: Object.freeze(missingRequiredFeatures),
+    evidenceSourcePolicy: "EXISTING_TEMPORAL_EVIDENCE_ONLY",
+    defaultFeatureFallbackAllowed: false,
+    syntheticFeatureFallbackAllowed: false,
+  });
+  return error;
+}
+
 async function loadCanonicalEvidenceContext(referenceEvidenceRoot, group, cycleTime) {
   if (!referenceEvidenceRoot) return Object.freeze({ valid: false, status: "MISSING_EVIDENCE", reason: "PRODUCER_REFERENCE_ROOT_NOT_PROVIDED" });
   const packageRoot = resolve(referenceEvidenceRoot, group);
@@ -379,6 +413,8 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
     };
     const candidate = analyzeMarket(commonInput, { model: selection.candidate });
     const reference = analyzeMarket(commonInput, { model: selection.reference });
+    const inferenceBlocker = shadowInferenceBlocker({ candidate, reference, symbol, config });
+    if (inferenceBlocker) throw inferenceBlocker;
     const record = createShadowPrediction({
       modelGroup: config.group,
       modelId: selection.candidate.id,
@@ -718,8 +754,30 @@ for (const config of GROUPS) {
     nextSummary.groups[config.group] = { status: "pass", ...result.summary };
   } catch (error) {
     nextState.groups[config.group] = previous.groups?.[config.group] ?? { records: [], openInterestSnapshots: [] };
-    nextSummary.groups[config.group] = { status: "fail", error: serializeError(error) };
-    nextSummary.status = "fail";
+    if (error?.code === "SHADOW_INFERENCE_NOT_EVALUABLE") {
+      const details = error.details ?? {};
+      nextSummary.groups[config.group] = {
+        status: "blocked_data",
+        blocker: "SHADOW_INFERENCE_NOT_EVALUABLE",
+        reason: "MISSING_REQUIRED_INFERENCE_EVIDENCE",
+        symbol: details.symbol ?? null,
+        missingRequiredFeatures: [...(details.missingRequiredFeatures ?? [])],
+        candidateMissingRequiredFeatures: [...(details.candidateMissingRequiredFeatures ?? [])],
+        referenceMissingRequiredFeatures: [...(details.referenceMissingRequiredFeatures ?? [])],
+        evidenceSourcePolicy: "EXISTING_TEMPORAL_EVIDENCE_ONLY",
+        safety: {
+          stateCarriedForwardWithoutMutation: true,
+          defaultFeatureFallbackAllowed: false,
+          syntheticFeatureFallbackAllowed: false,
+          profitabilityProven: false,
+          forwardEvidenceSufficient: false,
+        },
+      };
+      if (nextSummary.status === "pass") nextSummary.status = "blocked_data";
+    } else {
+      nextSummary.groups[config.group] = { status: "fail", error: serializeError(error) };
+      nextSummary.status = "fail";
+    }
   }
 }
 
@@ -777,4 +835,5 @@ try {
 await writeJsonAtomically(statePath, nextState);
 await writeJsonAtomically(summaryPath, nextSummary);
 console.log(JSON.stringify(nextSummary, null, 2));
-if (nextSummary.status !== "pass") process.exitCode = 1;
+if (nextSummary.status === "blocked_data") process.exitCode = 2;
+else if (nextSummary.status !== "pass") process.exitCode = 1;

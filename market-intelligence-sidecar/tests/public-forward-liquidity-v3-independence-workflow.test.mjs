@@ -14,6 +14,8 @@ const required = [
   'github.event.issue.number == 838',
   'github.event.comment.user.login == github.repository_owner',
   "github.event.comment.author_association == 'OWNER'",
+  "github.event.workflow_run.event == 'workflow_run'",
+  "github.event.workflow_run.event == 'issue_comment'",
   "run.name === 'Public Forward Liquidity V3 Canonical Ingest'",
   "['workflow_run', 'issue_comment'].includes(run.event)",
   'Number(run.run_attempt) === 1',
@@ -48,6 +50,11 @@ const required = [
   'frozenV3SplitIndexPresent: true',
   'v2SplitReceiptPresent: false',
   'Upload immutable V3 independence evidence',
+  'UPSTREAM_V3_INGEST_ZERO_CREDIT_NOOP',
+  'UPSTREAM_V3_INGEST_ZERO_ARTIFACT_NOT_PROVEN_NOOP',
+  '/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100',
+  'source_artifact_ready=false',
+  "if: steps.artifact.outputs.source_artifact_ready == 'true'",
   'STATE_ROOT: /tmp/v3-authoritative-liquidity-ingest-${{ github.run_id }}-${{ github.run_attempt }}',
 ];
 for (const token of required) {
@@ -76,12 +83,36 @@ for (const forbidden of [
 
 assert.ok(!/^\s*schedule\s*:/m.test(workflow), 'V3 independence consumer must not create its own schedule');
 assert.ok(workflow.includes("github.event.workflow_run.run_attempt == 1"), 'automatic consume must reject upstream reruns');
+assert.ok(workflow.includes("github.event.workflow_run.event == 'workflow_run'"), 'automatic consume must bind genuine workflow-run provenance before starting the consumer');
+assert.ok(workflow.includes("github.event.workflow_run.event == 'issue_comment'"), 'automatic consume must preserve explicitly approved issue-comment provenance');
 assert.ok(workflow.includes("artifact.expired !== true"), 'upstream ingest artifact must be non-expired');
 assert.ok(workflow.includes("/^sha256:[a-f0-9]{64}$/u"), 'upstream artifact digest must be exact sha256');
 assert.ok(workflow.includes("inventory.inventoryDigest !== digest(inventoryBody)"), 'inventory digest must be independently recomputed');
 assert.ok(workflow.includes("result.audit.counts.RAW_ACCEPTED_N !== inventory.acceptedN"), 'independence raw count must bind to V3 inventory');
 assert.ok(workflow.includes("result.audit.counts.INDEPENDENT_N !== index.preCapIndependentN"), 'pre-cap independence count must bind to the canonical audit');
 assert.ok(workflow.includes('effectiveIndependentN: index.effectiveIndependentN'), 'effective count must reflect hard lane and global caps');
+
+for (const stepName of [
+  'Download exact V3 cumulative ingest evidence',
+  'Validate V3 inventory provenance and build source manifest',
+  'Execute receipt-bound effective-independence audit',
+  'Propagate immutable V3 frozen slot split to effective-independent observations',
+  'Assert V3 independence truth boundary and write immutable summary',
+  'Upload immutable V3 independence evidence',
+]) {
+  const start = workflow.indexOf(`      - name: ${stepName}\n`);
+  assert.ok(start >= 0, `missing downstream step: ${stepName}`);
+  const next = workflow.indexOf('\n      - name:', start + 1);
+  const section = workflow.slice(start, next >= 0 ? next : workflow.length);
+  assert.ok(
+    section.includes("if: steps.artifact.outputs.source_artifact_ready == 'true'"),
+    `zero-artifact no-op must skip downstream step: ${stepName}`,
+  );
+}
+assert.ok(
+  workflow.includes("if (matches.length !== 1) throw new Error(`UPSTREAM_V3_INGEST_ARTIFACT_CARDINALITY_INVALID:${matches.length}`);"),
+  'duplicate or otherwise non-canonical upstream artifacts must remain fail-closed',
+);
 
 const upstreamBindingStart = workflow.indexOf("await writeFile(join(root, 'v3-upstream-binding.json')");
 const upstreamBindingEnd = workflow.indexOf('      - name: Execute receipt-bound effective-independence audit');

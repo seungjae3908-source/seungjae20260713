@@ -8,7 +8,7 @@ import {
 
 export type ForwardCanonicalMetadataLane = Readonly<{
   market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
-  timeframe: '60m';
+  timeframe: '60m' | '4H';
 }>;
 
 export type ForwardCanonicalPaperCandidate = Readonly<{
@@ -17,7 +17,7 @@ export type ForwardCanonicalPaperCandidate = Readonly<{
     signalId: string;
     market: ForwardCanonicalMetadataLane['market'];
     symbol: string;
-    timeframe: '60m';
+    timeframe: '60m' | '4H';
     horizon: number;
     direction: StrategyDirection;
     signalDirection: StrategyDirection;

@@ -40,7 +40,9 @@ const usApple = {
   dataAsOf: now,
 } as const;
 
-type SearchRequest = { q: string; asset: string | null; market: string | null };
+type SearchRequest = { q: string; asset: string | null; market: string | null; authorization: string | undefined };
+
+const expectedAuthorization = 'Bearer stocks-canonical-search-e2e-access-token';
 
 function successfulResponse(q: string, market: string | null, results: readonly unknown[]) {
   const dataAsOf = new Date().toISOString();
@@ -74,6 +76,7 @@ async function expectRequestStarted(requests: SearchRequest[], expected: SearchR
     request.q === expected.q
       && request.asset === expected.asset
       && request.market === expected.market
+      && request.authorization === expected.authorization
   ))).toBe(true);
 }
 
@@ -177,6 +180,7 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
       q: url.searchParams.get('q') ?? '',
       asset: url.searchParams.get('asset'),
       market: url.searchParams.get('market'),
+      authorization: route.request().headers().authorization,
     };
     requests.push(request);
     const results = request.market === 'KR' && (request.q === '삼성전자' || request.q === '005930')
@@ -195,11 +199,12 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
   const input = page.getByRole('combobox', { name: '통합 자산 검색' });
 
   await input.fill('삼성전자');
-  await expectLatestRequest(requests, { q: '삼성전자', asset: 'stock', market: 'KR' });
+  await expectLatestRequest(requests, { q: '삼성전자', asset: 'stock', market: 'KR', authorization: expectedAuthorization });
   await expect(page.getByRole('option', { name: /삼성전자.*005930/ })).toBeVisible();
 
   await input.fill('005930');
-  await expectLatestRequest(requests, { q: '005930', asset: 'stock', market: 'KR' });
+  await expectLatestRequest(requests, { q: '005930', asset: 'stock', market: 'KR', authorization: expectedAuthorization });
+  await expect.poll(() => requests.filter((request) => request.q === '005930' && request.market === 'KR').length).toBe(1);
   await expect(page.getByRole('option', { name: /삼성전자.*005930/ })).toBeVisible();
   await page.getByRole('option', { name: /삼성전자.*005930/ }).click();
   await expect(page).toHaveURL(/\/stock-info\/analysis\?back=%2Fmarket-browser&asset=stock&market=KR&ticker=005930$/);
@@ -209,7 +214,7 @@ test('StocksPage uses canonical KR/US search and never calls legacy search/quote
   await page.getByRole('button', { name: '해외', exact: true }).click();
   const usInput = page.getByRole('combobox', { name: '통합 자산 검색' });
   await usInput.fill('AAPL');
-  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
+  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US', authorization: expectedAuthorization });
   await expect(page.getByRole('option', { name: /애플.*AAPL/ })).toBeVisible();
   await page.getByRole('option', { name: /애플.*AAPL/ }).click();
   await expect(page).toHaveURL(/\/stock-info\/analysis\?back=%2Fmarket-browser&asset=stock&market=US&ticker=AAPL$/);
@@ -228,6 +233,7 @@ test('rapid input and market switch never allow an older stock result to overwri
       q: url.searchParams.get('q') ?? '',
       asset: url.searchParams.get('asset'),
       market: url.searchParams.get('market'),
+      authorization: route.request().headers().authorization,
     };
     requests.push(request);
 
@@ -265,32 +271,32 @@ test('rapid input and market switch never allow an older stock result to overwri
   const input = page.getByRole('combobox', { name: '통합 자산 검색' });
 
   await input.fill('A');
-  await expectRequestStarted(requests, { q: 'A', asset: 'stock', market: 'KR' });
+  await expectRequestStarted(requests, { q: 'A', asset: 'stock', market: 'KR', authorization: expectedAuthorization });
   await input.fill('AA');
   await input.fill('AAP');
   await input.fill('AAPL');
   await page.getByRole('button', { name: '해외', exact: true }).click();
   await input.fill('AAPL');
-  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
+  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US', authorization: expectedAuthorization });
   await expect(page.getByRole('option', { name: /애플.*AAPL/ })).toBeVisible();
   await expect.poll(() => delayedKrACompleted).toBe(true);
   await expect(page.getByRole('option', { name: /삼성전자/ })).toHaveCount(0);
-  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
+  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US', authorization: expectedAuthorization });
 
   // A visible US popup must not block a normal pointer click back to KR.
   await page.getByRole('button', { name: '국내', exact: true }).click();
   await expect(page.getByRole('option', { name: /애플/ })).toHaveCount(0);
   await input.fill('005930');
-  await expectRequestStarted(requests, { q: '005930', asset: 'stock', market: 'KR' });
+  await expectRequestStarted(requests, { q: '005930', asset: 'stock', market: 'KR', authorization: expectedAuthorization });
 
   // Switch again while the KR response is still pending. The late KR result must never contaminate US.
   await page.getByRole('button', { name: '해외', exact: true }).click();
   await input.fill('AAPL');
-  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
+  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US', authorization: expectedAuthorization });
   await expect(page.getByRole('option', { name: /애플.*AAPL/ })).toBeVisible();
   await expect.poll(() => delayedKrCodeCompleted).toBe(true);
   await expect(page.getByRole('option', { name: /삼성전자/ })).toHaveCount(0);
-  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US' });
+  await expectLatestRequest(requests, { q: 'AAPL', asset: 'stock', market: 'US', authorization: expectedAuthorization });
 });
 
 test('zero results, provider failure, and identity-only results remain truthfully distinct', async ({ page }) => {

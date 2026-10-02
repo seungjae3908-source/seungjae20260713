@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
 
 export const NATURAL_PAPER_PUBLIC_POSITION_OBSERVATION_VERSION =
   "natural-paper-public-position-observation-v1";
@@ -146,7 +147,9 @@ function positionIdentity(position) {
     identity.costPolicyVersion,
     identity.accountMode,
   ].some((value) => !nonEmpty(value)) || identity.parameterDigest !== identity.parameterHash
-    || identity.accountMode !== "PAPER" || !/^paper-candidate-v1:[0-9a-f]{64}$/u.test(identity.candidateId)
+    || identity.accountMode !== "PAPER"
+    || (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(identity.candidateId)
+      && !isAdaptiveMultiEvidenceV2FrozenCandidateId(identity.candidateId))
     || !exactSha(identity.researchCodeSha)
     || !nonEmpty(identity.signalTimeframe) || !Number.isSafeInteger(identity.horizon) || identity.horizon <= 0) return null;
   return Object.freeze({

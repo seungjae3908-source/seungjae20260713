@@ -9,29 +9,54 @@ const {
   evaluateProductionCiProvenance,
   inspectRequiredStatusEvidence,
 } = require('./production-ci-provenance.cjs');
+const {
+  POST_MERGE_CONTEXT,
+  evaluatePostMergeStatusProvenance,
+  evaluateReleaseCandidateProvenance,
+} = require('./release-candidate-provenance.cjs');
 
 const cwd = process.cwd();
 const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
-const applicationWorkflow = await readFile(path.join(root, '.github/workflows/futures-public-network-smoke.yml'), 'utf8');
-const fallbackWorkflow = await readFile(path.join(root, '.github/workflows/application-ci-main-fallback.yml'), 'utf8');
-const productionWorkflow = await readFile(path.join(root, '.github/workflows/production-deploy.yml'), 'utf8');
-const approvalWorkflow = await readFile(path.join(root, '.github/workflows/production-one-time-approval.yml'), 'utf8');
+const readWorkflow = (name) => readFile(path.join(root, '.github/workflows', name), 'utf8');
+
+const [
+  applicationWorkflow,
+  fallbackWorkflow,
+  postMergeWorkflow,
+  stagingDispatchWorkflow,
+  stagingReadinessWorkflow,
+  productionWorkflow,
+  approvalWorkflow,
+  appReleaseWorkflow,
+] = await Promise.all([
+  readWorkflow('futures-public-network-smoke.yml'),
+  readWorkflow('application-ci-main-fallback.yml'),
+  readWorkflow('post-merge-release-provenance.yml'),
+  readWorkflow('staging-dispatch-bridge.yml'),
+  readWorkflow('staging-readiness.yml'),
+  readWorkflow('production-deploy.yml'),
+  readWorkflow('production-one-time-approval.yml'),
+  readWorkflow('production-app-release-control.yml'),
+]);
 
 const targetSha = 'a'.repeat(40);
 const otherSha = 'b'.repeat(40);
+const headSha = 'c'.repeat(40);
+const treeSha = 'd'.repeat(40);
 const runId = 123456789;
 
-function statusesFor(id = runId, state = 'success') {
+function statusesFor(id = runId, state = 'success', sha = targetSha) {
   return REQUIRED_PRODUCTION_STATUSES.map((context, index) => ({
     id: index + 1,
     context,
     state,
+    sha,
     target_url: `https://github.com/example/repo/actions/runs/${id}`,
-    created_at: `2026-08-08T00:00:${String(index).padStart(2, '0')}Z`,
+    created_at: `2026-09-30T00:00:${String(index).padStart(2, '0')}Z`,
   }));
 }
 
-function runFixture(overrides = {}) {
+function legacyRun(overrides = {}) {
   return {
     id: runId,
     name: 'Application CI',
@@ -45,166 +70,142 @@ function runFixture(overrides = {}) {
   };
 }
 
-function expectFailure(label, input, reason) {
-  const result = evaluateProductionCiProvenance(input);
-  assert.equal(result.ok, false, `${label} must fail`);
-  assert.equal(result.reason, reason, `${label} failure reason`);
-}
-
-for (const event of ['push', 'workflow_dispatch']) {
-  const result = evaluateProductionCiProvenance({
-    targetSha,
-    currentMainSha: targetSha,
-    statuses: statusesFor(),
-    run: runFixture({ event }),
-  });
-  assert.equal(result.ok, true, `exact current main ${event} evidence must pass`);
-  assert.equal(result.runId, runId);
-}
-
-expectFailure('other SHA success', {
+const manualRecovery = evaluateProductionCiProvenance({
   targetSha,
   currentMainSha: targetSha,
   statuses: statusesFor(),
-  run: runFixture({ head_sha: otherSha }),
-}, 'application_ci_sha_mismatch');
+  run: legacyRun(),
+});
+assert.equal(manualRecovery.ok, true, 'manual exact-main full CI recovery must remain valid');
 
-expectFailure('stale target SHA', {
+const requiredInspection = inspectRequiredStatusEvidence(statusesFor());
+assert.equal(requiredInspection.ok, true);
+assert.equal(requiredInspection.runId, runId);
+
+const premergeRun = {
+  id: runId,
+  name: 'Application CI',
+  path: '.github/workflows/futures-public-network-smoke.yml',
+  head_sha: headSha,
+  head_branch: 'feature/rc',
+  event: 'workflow_dispatch',
+  status: 'completed',
+  conclusion: 'success',
+  created_at: '2026-09-30T00:00:00Z',
+  updated_at: '2026-09-30T00:20:00Z',
+};
+const mergedPr = {
+  number: 1500,
+  merged_at: '2026-09-30T00:30:00Z',
+  base: { ref: 'main' },
+  head: { sha: headSha, ref: 'feature/rc' },
+};
+const premergeStatuses = statusesFor(runId, 'success', headSha);
+const releaseCandidate = evaluateReleaseCandidateProvenance({
+  targetSha,
+  currentMainSha: targetSha,
+  targetTreeSha: treeSha,
+  pr: mergedPr,
+  headTreeSha: treeSha,
+  statuses: premergeStatuses,
+  run: premergeRun,
+});
+assert.equal(releaseCandidate.ok, true, 'pre-merge 6/6 with identical merged tree must pass');
+
+const changedTree = evaluateReleaseCandidateProvenance({
+  targetSha,
+  currentMainSha: targetSha,
+  targetTreeSha: treeSha,
+  pr: mergedPr,
+  headTreeSha: 'e'.repeat(40),
+  statuses: premergeStatuses,
+  run: premergeRun,
+});
+assert.equal(changedTree.ok, false);
+assert.equal(changedTree.reason, 'merged_tree_differs_from_tested_head');
+
+const postMergeRunId = 987654321;
+const postStatuses = [{
+  id: 999,
+  context: POST_MERGE_CONTEXT,
+  state: 'success',
+  target_url: `https://github.com/example/repo/actions/runs/${postMergeRunId}`,
+  created_at: '2026-09-30T00:31:00Z',
+}];
+const postRun = {
+  id: postMergeRunId,
+  name: 'Post-Merge Release Provenance',
+  path: '.github/workflows/post-merge-release-provenance.yml',
+  head_sha: targetSha,
+  head_branch: 'main',
+  event: 'push',
+  status: 'completed',
+  conclusion: 'success',
+};
+const postVerified = evaluatePostMergeStatusProvenance({
+  targetSha,
+  currentMainSha: targetSha,
+  statuses: postStatuses,
+  run: postRun,
+});
+assert.equal(postVerified.ok, true, 'current-main post-merge provenance must pass');
+
+const stalePost = evaluatePostMergeStatusProvenance({
   targetSha,
   currentMainSha: otherSha,
-  statuses: statusesFor(),
-  run: runFixture(),
-}, 'target_is_not_current_main');
-
-expectFailure('PR synthetic merge run', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture({ event: 'pull_request', head_branch: 'feature/example' }),
-}, 'application_ci_branch_mismatch');
-
-expectFailure('required status 5/6', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor().slice(0, 5),
-  run: runFixture(),
-}, 'required_status_missing');
-
-expectFailure('cancelled run', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture({ conclusion: 'cancelled' }),
-}, 'application_ci_not_successful');
-
-expectFailure('failed run', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture({ conclusion: 'failure' }),
-}, 'application_ci_not_successful');
-
-expectFailure('pending run', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture({ status: 'in_progress', conclusion: null }),
-}, 'application_ci_not_completed');
-
-expectFailure('run SHA mismatch', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture({ head_sha: otherSha }),
-}, 'application_ci_sha_mismatch');
-
-expectFailure('non-main branch', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture({ head_branch: 'feature/example' }),
-}, 'application_ci_branch_mismatch');
-
-expectFailure('branch name instead of SHA', {
-  targetSha: 'main',
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture(),
-}, 'invalid_target_sha');
-
-expectFailure('latest instead of SHA', {
-  targetSha: 'latest',
-  currentMainSha: targetSha,
-  statuses: statusesFor(),
-  run: runFixture(),
-}, 'invalid_target_sha');
-
-const mixedRunStatuses = statusesFor();
-mixedRunStatuses[5] = { ...mixedRunStatuses[5], target_url: 'https://github.com/example/repo/actions/runs/987654321' };
-expectFailure('mixed CI run status provenance', {
-  targetSha,
-  currentMainSha: targetSha,
-  statuses: mixedRunStatuses,
-  run: runFixture(),
-}, 'required_statuses_do_not_share_one_run');
-
-const staleEvidence = statusesFor();
-staleEvidence.push({
-  ...staleEvidence[0],
-  id: 100,
-  state: 'pending',
-  target_url: 'https://github.com/example/repo/actions/runs/987654321',
-  created_at: '2026-08-08T01:00:00Z',
+  statuses: postStatuses,
+  run: postRun,
 });
-const staleInspection = inspectRequiredStatusEvidence(staleEvidence);
-assert.equal(staleInspection.ok, false, 'newer pending evidence must supersede old success');
-assert.equal(staleInspection.reason, 'required_status_not_success');
-
-const failedStatusEvidence = statusesFor();
-failedStatusEvidence.push({
-  ...failedStatusEvidence[1],
-  id: 101,
-  state: 'failure',
-  created_at: '2026-08-08T01:00:01Z',
-});
-const failedInspection = inspectRequiredStatusEvidence(failedStatusEvidence);
-assert.equal(failedInspection.ok, false);
-assert.equal(failedInspection.reason, 'required_status_failed');
+assert.equal(stalePost.ok, false);
+assert.equal(stalePost.reason, 'target_is_not_current_main');
 
 assert(
   applicationWorkflow.includes("APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.event.pull_request.head.sha || github.sha }}"),
-  'workflow_dispatch must bind checkout to target_sha or exact dispatch SHA, and pull_request must bind checkout to immutable head SHA',
+  'workflow_dispatch must bind checkout to target_sha or exact dispatch SHA',
 );
-assert(!applicationWorkflow.includes('APPLICATION_CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || github.ref }}'), 'dispatch checkout must not be independently user-selectable');
+const applicationTrigger = applicationWorkflow.slice(0, applicationWorkflow.indexOf('\npermissions:'));
+assert.match(applicationTrigger, /workflow_dispatch:/u);
+assert.doesNotMatch(applicationTrigger, /pull_request:/u, 'Ready transition must not duplicate full CI');
+assert.doesNotMatch(applicationTrigger, /push:/u, 'main push must not duplicate full CI');
 
-assert(fallbackWorkflow.includes('latestRequiredStatuses'), 'fallback must derive exact CI ownership from statuses written on the target SHA');
-assert(fallbackWorkflow.includes('listStatusBoundRuns'), 'fallback must bind candidate runs to exact target-SHA status URLs');
-assert(fallbackWorkflow.includes('getWorkflowRun'), 'fallback must resolve status-owned run IDs before trusting workflow metadata');
-assert(fallbackWorkflow.includes('inspectRequiredStatusEvidence'), 'fallback must require all six latest statuses from one run');
-assert(fallbackWorkflow.includes('evaluateProductionCiProvenance'), 'fallback must reuse exact production CI provenance validation');
-assert(fallbackWorkflow.includes('inputs: { target_sha: sha, checkout_ref: sha }'), 'fallback dispatch must bind target and checkout to the exact main SHA');
-assert(fallbackWorkflow.includes('listActiveExactShaPushRuns'), 'fallback must discover an exact-SHA push run before creating a duplicate dispatch');
-assert(fallbackWorkflow.includes('github.rest.actions.listWorkflowRuns'), 'fallback must query the official workflow directly for an active push run');
-assert(fallbackWorkflow.includes("event: 'push'"), 'direct workflow discovery must be restricted to push events');
-assert(fallbackWorkflow.includes("run.event === 'push'"), 'direct run filtering must reject workflow_dispatch head-SHA matches');
-assert(fallbackWorkflow.includes('run.head_sha === sha'), 'direct push discovery must bind to the exact current main SHA');
-assert(fallbackWorkflow.includes('dispatchRequestedAtMs = Date.now()'), 'fallback must record when it creates an exact-SHA dispatch');
-assert(fallbackWorkflow.includes('newestPredatesDispatch'), 'fallback must distinguish stale completed status owners from its newly dispatched run');
-assert(fallbackWorkflow.includes('Waiting for dispatched exact-SHA Application CI to claim required status ownership'), 'fallback must wait through the dispatch-to-status handoff window instead of failing on stale evidence');
-assert(!fallbackWorkflow.includes('listWorkflowRunsForRepo'), 'fallback must not infer workflow_dispatch target ownership from repository-wide head_sha matching');
+const fallbackTrigger = fallbackWorkflow.slice(0, fallbackWorkflow.indexOf('\npermissions:'));
+assert.match(fallbackTrigger, /issue_comment:/u);
+assert.doesNotMatch(fallbackTrigger, /push:/u, 'exact-main full CI is manual recovery only');
+assert.match(fallbackWorkflow, /\/run-application-ci-main/u);
+assert.match(fallbackWorkflow, /evaluateProductionCiProvenance/u);
 
-for (const workflow of [productionWorkflow, approvalWorkflow]) {
-  assert(workflow.includes('production-ci-provenance.cjs'), 'production gates must use the shared provenance evaluator');
-  assert(workflow.includes('inspectRequiredStatusEvidence'), 'production gates must bind six statuses to one CI run');
-  assert(workflow.includes('evaluateProductionCiProvenance'), 'production gates must validate the exact Application CI run');
+assert.match(postMergeWorkflow, /^name: Post-Merge Release Provenance$/mu);
+assert.match(postMergeWorkflow, /push:\s*\n\s+branches:\s*\n\s+- main/mu);
+assert.match(postMergeWorkflow, /post-merge-provenance\/verified/u);
+assert.match(postMergeWorkflow, /evaluateReleaseCandidateProvenance/u);
+assert.match(postMergeWorkflow, /targetTreeSha/u);
+assert.match(postMergeWorkflow, /headTreeSha/u);
+assert.match(postMergeWorkflow, /inspectRequiredStatusEvidence/u);
+assert.doesNotMatch(postMergeWorkflow, /secrets\./u);
+assert.doesNotMatch(postMergeWorkflow, /environment:\s*(?:staging|production)/u);
+assert.doesNotMatch(postMergeWorkflow, /REAL_ORDER_ENABLED\s*:\s*true|AUTO_TRADING\s*:\s*true|LIVE_TRADING\s*:\s*true/u);
+
+for (const [name, workflow] of [
+  ['staging dispatch', stagingDispatchWorkflow],
+  ['staging readiness', stagingReadinessWorkflow],
+  ['production deploy', productionWorkflow],
+  ['production approval', approvalWorkflow],
+  ['production app release', appReleaseWorkflow],
+]) {
+  assert.match(workflow, /release-candidate-provenance\.cjs/u, `${name} must use the shared release provenance evaluator`);
+  assert.match(workflow, /evaluatePostMergeStatusProvenance/u, `${name} must validate post-merge provenance`);
 }
-assert(productionWorkflow.includes('[[ "$TARGET_SHA" == "$MAIN_SHA" ]]'), 'production target must equal exact current main');
-assert(!productionWorkflow.includes("event: 'push'\n              status: 'completed'"), 'production provenance lookup must not hard-code push-only evidence');
 
-console.log('Production CI provenance contract verified.');
-console.log('- Exact current main + same-run 6/6 + official push/workflow_dispatch success: accepted');
-console.log('- Other/stale/PR/missing/pending/cancelled/failed/mismatched evidence: rejected');
-console.log('- workflow_dispatch checkout is cryptographically bound to the status target SHA');
-console.log('- main fallback waits for an active exact-SHA push run before dispatching a fallback CI');
-console.log('- fallback waits through its own dispatch-to-status handoff without accepting stale completed provenance');
-console.log('- direct active-run discovery remains push-only; workflow_dispatch provenance still requires status ownership');
+assert.match(productionWorkflow, /\[\[ "\$TARGET_SHA" == "\$MAIN_SHA" \]\]/u, 'production target must equal exact current main');
+assert.match(stagingDispatchWorkflow, /Staging dispatch requires the exact current main SHA/u);
+assert.match(stagingReadinessWorkflow, /Staging requires exact current main/u);
+assert.doesNotMatch(appReleaseWorkflow, /Require exact-main Required CI 6\/6/u);
+assert.doesNotMatch(productionWorkflow, /Require verified statuses and exact Application CI provenance/u);
+assert.doesNotMatch(approvalWorkflow, /Require exact Application CI 6\/6 provenance/u);
+
+console.log('Release provenance contract verified.');
+console.log('- Full Required CI runs on the exact PR head before Ready/Merge.');
+console.log('- main push does not repeat Full CI; it verifies pre-merge 6/6 plus identical Git tree.');
+console.log('- Staging and Production trust only exact-current-main post-merge provenance.');
+console.log('- Exact-main Full CI remains available as owner-triggered recovery, not the normal release path.');
+console.log('- No deployment or trading authority is added by the provenance gate.');

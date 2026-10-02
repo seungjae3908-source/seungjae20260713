@@ -178,7 +178,7 @@ button[aria-label="종목 목록으로 돌아가기"] {
   padding-bottom: 0 !important;
 }
 
-[data-testid="paper-trading-shell"] > [data-testid="paper-trading-page"] {
+[data-testid="paper-trading-shell"] > main {
   height: auto !important;
   min-height: 0 !important;
   flex: 1 1 0% !important;

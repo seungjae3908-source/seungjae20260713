@@ -1,154 +1,27 @@
-const statusRows = [
-  ['Video discovery', '수동 / 비활성'],
-  ['Provider', 'PROVIDER_NOT_CONFIGURED'],
-  ['Transcript access', '승인된 입력만 허용'],
-  ['Economic Evidence', '0'],
-  ['Profitability Credit', '0'],
-  ['Execution Authority', 'NONE'],
-] as const;
+import { useState } from 'react';
+import { ResearchVideoPanel as ResearchVideoSourcePanel } from './research-video-source-panel';
+import { ResearchWorkspacePanel } from './research-workspace-panel';
 
-const truthBadges = [
-  ['FACT', '확인된 원문/메타데이터'],
-  ['CREATOR CLAIM', '출처의 주장'],
-  ['AI INFERENCE', '추론 — 사실 아님'],
-  ['UNKNOWN', '정보 부족'],
-  ['CONTRADICTED', '상충 근거 존재'],
-] as const;
-
-const phase2Sections = [
-  {
-    title: 'Discovery',
-    testId: 'video-discovery-state',
-    rows: [
-      ['검색 경로', 'YouTube Data API 공식/public metadata'],
-      ['Provider 상태', 'PROVIDER_NOT_CONFIGURED'],
-      ['자동 수집', 'OFF'],
-      ['Schedule', 'INACTIVE'],
-      ['Quota', 'UNKNOWN — provider 미설정'],
-    ],
-  },
-  {
-    title: 'Transcript',
-    testId: 'video-transcript-state',
-    rows: [
-      ['상태', 'NOT_PROVIDED'],
-      ['권한', '승인된 transcript만 ingest'],
-      ['Segment', '0'],
-      ['Timestamp coverage', 'UNKNOWN_TIMESTAMP'],
-      ['우회 다운로드', 'DISABLED'],
-    ],
-  },
-  {
-    title: 'Strategy',
-    testId: 'video-strategy-state',
-    rows: [
-      ['Strategy family', 'UNKNOWN'],
-      ['Market / Side / Timeframe', 'UNSPECIFIED'],
-      ['Entry / Exit', 'UNSPECIFIED'],
-      ['SL / TP', 'UNSPECIFIED'],
-      ['Testability', 'NON_TESTABLE until explicit rules exist'],
-    ],
-  },
-  {
-    title: 'Evidence',
-    testId: 'video-evidence-state',
-    rows: [
-      ['Video sources', '0'],
-      ['Independent sources', '0 — economic N 아님'],
-      ['Academic / official', 'NOT_CHECKED'],
-      ['Contradictions', 'UNKNOWN'],
-      ['Source authority', 'UNKNOWN'],
-    ],
-  },
-  {
-    title: 'Validation',
-    testId: 'video-validation-state',
-    rows: [
-      ['Cross-validation', 'NOT_CHECKED'],
-      ['Compiler', 'COMPILER_BLOCKED until TESTABLE'],
-      ['Backtester candidate', 'NOT_EVALUATED'],
-      ['Economic Evidence', '0'],
-      ['Profitability Credit', '0'],
-    ],
-  },
-] as const;
-
+/** Preserve current app navigation and compact source view; show actual evidence on demand. */
 export function ResearchVideoPanel() {
-  return (
-    <section className="h-full overflow-y-auto bg-background px-3 py-4 sm:px-4" data-testid="research-video-panel">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
-        <header className="rounded-2xl border border-card-border bg-card p-4 sm:p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-lg font-bold sm:text-xl">영상 연구</h1>
-            <span className="rounded-full border px-2 py-1 text-[11px] font-semibold text-muted-foreground">Research Source Only</span>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            공식/public metadata와 승인된 transcript만 연구 입력으로 사용합니다. 영상·강의의 주장은 아이디어 소스이며 수익성·OOS·Forward·Paper 증거로 승격되지 않습니다.
-          </p>
+  const [section,setSection] = useState<'sources'|'results'>('sources');
+  return <div className="flex h-full min-h-0 flex-col" data-testid="research-video-workspace">
+    <nav className="flex shrink-0 flex-wrap gap-2 border-b border-card-border px-3 py-2" aria-label="영상 연구 세부 화면">
+      {([{key:'sources',label:'영상 자료'},{key:'results',label:'전략·백테스트'}] as const).map(t=><button key={t.key} type="button"
+        aria-pressed={section===t.key} onClick={()=>setSection(t.key)}
+        className={`min-h-11 rounded-xl border border-card-border px-3 py-2 text-sm font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${section===t.key?'bg-primary text-primary-foreground':'bg-card'}`}>{t.label}</button>)}
+    </nav>
+    <div className="min-h-0 flex-1 overflow-hidden">{section==='sources'?
+      <section className="h-full overflow-y-auto bg-background p-3 sm:p-4">
+        <header className="mx-auto max-w-6xl rounded-2xl border border-card-border bg-card p-4">
+          <h2 className="text-xl font-black">영상 연구</h2>
+          <p className="mt-2 text-sm text-muted-foreground">연구 참고용 · 수익성 증거 아님</p>
+          <p className="mt-2 text-sm text-muted-foreground">영상 자료와 분석 근거는 별도로 확인합니다. 자료가 없으면 미확인 상태로 남깁니다.</p>
         </header>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" data-testid="research-video-safety-grid">
-          {statusRows.map(([label, value]) => (
-            <div key={label} className="min-w-0 rounded-2xl border border-card-border bg-card p-3">
-              <div className="text-xs text-muted-foreground">{label}</div>
-              <div className="mt-1 break-words text-sm font-semibold">{value}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="rounded-2xl border border-card-border bg-card p-4" data-testid="video-truth-legend">
-          <h2 className="font-semibold">Fact / Inference / Unknown</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {truthBadges.map(([label, description]) => (
-              <span key={label} className="max-w-full rounded-full border border-card-border bg-muted px-3 py-1 text-xs">
-                <strong>{label}</strong> · {description}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3" data-testid="research-video-phase2-grid">
-          {phase2Sections.map((section) => (
-            <article key={section.title} className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid={section.testId}>
-              <h2 className="font-semibold">{section.title}</h2>
-              <dl className="mt-3 space-y-2 text-sm">
-                {section.rows.map(([label, value]) => (
-                  <div key={label} className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)] sm:gap-3">
-                    <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="min-w-0 break-words font-medium">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </article>
-          ))}
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-detail-empty-state">
-            <h2 className="font-semibold">Video detail</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              아직 승인된 실제 영상 연구 레코드가 없습니다. 수집 후 Metadata → Transcript → Timeline → Claims → Strategy → Missing rules → Cross-validation → Compiler 상태 순서로 원본 provenance와 함께 표시됩니다.
-            </p>
-            <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
-              Transcript unavailable은 빈 문자열이 아니라 UNAVAILABLE / NOT_AUTHORIZED / NOT_PROVIDED 등 명시 상태로 유지합니다.
-            </div>
-          </article>
-
-          <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-cluster-empty-state">
-            <h2 className="font-semibold">Strategy cluster</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              아직 cluster가 없습니다. 향후 Video count, Independent source count, Supporting / Contradicting source count, Common / Conflicting / Missing rules를 분리해 표시합니다.
-            </p>
-            <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
-              Independent source count는 경제적 표본 N이 아닙니다. Economic Evidence Credit = 0을 유지합니다.
-            </div>
-          </article>
-        </div>
-
-        <footer className="rounded-2xl border border-card-border bg-card p-4 text-xs leading-5 text-muted-foreground" data-testid="video-phase2-safety-footer">
-          Paid provider OFF · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Execution Authority NONE
-        </footer>
-      </div>
-    </section>
-  );
+        <details className="mx-auto mt-3 max-w-6xl rounded-2xl border border-card-border bg-card">
+          <summary className="min-h-12 cursor-pointer px-4 py-3 text-sm font-bold">기술 상태 자세히 보기</summary>
+          <ResearchVideoSourcePanel/>
+        </details>
+      </section>:<ResearchWorkspacePanel/>}</div>
+  </div>;
 }

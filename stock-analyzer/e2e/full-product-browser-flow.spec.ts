@@ -99,7 +99,7 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(samsung).toBeVisible();
   await expect(samsung).toContainText('005930');
 
-  await openMenuItem(page, '기술', 'AI 차트');
+  await openMenuItem(page, '기술', 'AI차트');
   await expect(page).toHaveURL(/\/ai-chart/u);
   await expect(page.getByTestId('ai-chart-empty-selection')).toBeVisible();
   await expect(page.getByTestId('ai-chart-empty-selection')).toContainText('분석할 종목이 선택되지 않았습니다.');
@@ -124,14 +124,19 @@ test('real user path stays coherent from login through session expiry', async ({
 
   await openMenuItem(page, '정보', '연구센터');
   await expect(page).toHaveURL(/\/research-center$/u);
+  await expect(page.getByRole('button', { name: '요약', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('research-general-view')).toBeVisible();
+  await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
+
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toBeVisible();
   await expect(page.getByTestId('research-overview-tab')).toBeVisible();
-  await expect(page.getByText('수익성 검증', { exact: true })).toBeVisible();
-  await expect(page.getByText('미검증', { exact: true })).toBeVisible();
 
   await page.reload();
   await expect(page).toHaveURL(/\/research-center$/u);
-  await expect(page.getByTestId('research-overview-tab')).toBeVisible();
+  await expect(page.getByRole('button', { name: '요약', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('research-general-view')).toBeVisible();
 
   await openMenuItem(page, '정보', '포트폴리오');
   await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toBeVisible();

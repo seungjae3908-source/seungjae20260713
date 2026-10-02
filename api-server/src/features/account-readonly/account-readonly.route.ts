@@ -10,12 +10,14 @@ import {
   type AccountReadonlyCredentialRepository,
   type ReadonlyCredentialProvider,
 } from './account-readonly.repository';
+import { serializeBitgetReadonlyDiagnostic } from './account-readonly.errors';
 import { AccountReadonlyService } from './account-readonly.service';
 
-const PROVIDERS = new Set<AccountProvider>(['toss', 'upbit', 'bitget']);
-const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'upbit', 'bitget']);
+const PROVIDERS = new Set<AccountProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
+const CREDENTIAL_PROVIDERS = new Set<ReadonlyCredentialProvider>(['toss', 'kiwoom', 'upbit', 'bitget']);
 const CREDENTIAL_FIELDS: Record<ReadonlyCredentialProvider, { required: readonly string[]; optional: readonly string[] }> = {
   toss: { required: ['clientId', 'clientSecret'], optional: ['accountSeq'] },
+  kiwoom: { required: ['appKey', 'appSecret'], optional: [] },
   upbit: { required: ['accessKey', 'secretKey'], optional: [] },
   bitget: { required: ['apiKey', 'secretKey', 'passphrase'], optional: [] },
 };
@@ -40,6 +42,7 @@ export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: C
 export function accountReadFlags(environment: NodeJS.ProcessEnv = process.env) {
   return {
     toss: environment.TOSS_ACCOUNT_READ_ENABLED === 'true',
+    kiwoom: environment.KIWOOM_ACCOUNT_READ_ENABLED === 'true',
     upbit: environment.UPBIT_ACCOUNT_READ_ENABLED === 'true',
     bitget: environment.BITGET_ACCOUNT_READ_ENABLED === 'true',
   } as const;
@@ -76,7 +79,7 @@ export function readonlyProviderCapability(provider: unknown) {
   const normalized = String(provider ?? '').trim().toLowerCase();
   if (normalized === 'bitget') return 'canAccessFutures' as const;
   if (normalized === 'upbit') return 'canAccessSpot' as const;
-  if (normalized === 'toss') return 'canAccessBasicInfo' as const;
+  if (normalized === 'toss' || normalized === 'kiwoom') return 'canAccessBasicInfo' as const;
   return null;
 }
 
@@ -170,11 +173,12 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     const { userId, accessToken } = authScope(req);
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
     const vault = credentialConfigurationStatus();
+    const flags = accountReadFlags();
     return res.json({
       ok: true,
       encryptionConfigured: vault.encryptionConfigured,
-      supportedProviders: ['toss', 'upbit', 'bitget'],
-      hiddenProviders: ['kiwoom'],
+      supportedProviders: ['toss', ...(flags.kiwoom ? ['kiwoom'] : []), 'upbit', 'bitget'],
+      hiddenProviders: flags.kiwoom ? [] : ['kiwoom'],
       storage: 'user_scoped_account_readonly_encrypted_vault',
       ...safetyCounters(),
     });
@@ -214,6 +218,31 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     }
   });
 
+  router.delete('/credentials/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const { userId, accessToken } = authScope(req);
+    if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
+
+    const provider = String(req.params.provider ?? '').toLowerCase() as ReadonlyCredentialProvider;
+    if (!CREDENTIAL_PROVIDERS.has(provider)) {
+      return res.status(404).json(deniedResponse('READONLY_CREDENTIAL_PROVIDER_NOT_SUPPORTED'));
+    }
+
+    try {
+      await credentialRepository(userId).remove(userId, provider);
+      return res.json({
+        ok: true,
+        provider,
+        configured: false,
+        purpose: 'read_only',
+        ...safetyCounters(),
+      });
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message.split(':')[0] : 'READONLY_CREDENTIAL_DELETE_FAILED';
+      return res.status(credentialErrorStatus(errorCode)).json(deniedResponse(errorCode));
+    }
+  });
+
   router.get('/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const provider = String(req.params.provider ?? '').toLowerCase() as AccountProvider;
@@ -228,6 +257,10 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     const cleanupDisconnectAbort = bindAccountReadonlyDisconnectAbort(req, res, controller);
     try {
       const snapshot = await service.read({ userId, accessToken }, provider, controller.signal);
+      const bitgetDiagnostic = service.bitgetDiagnosticFor(snapshot);
+      if (bitgetDiagnostic) {
+        res.setHeader('X-Account-Readonly-Bitget-Diagnostic', serializeBitgetReadonlyDiagnostic(bitgetDiagnostic));
+      }
       if (!res.writableEnded) return res.json(snapshot);
     } finally {
       cleanupDisconnectAbort();

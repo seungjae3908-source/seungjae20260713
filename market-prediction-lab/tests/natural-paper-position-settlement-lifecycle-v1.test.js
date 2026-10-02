@@ -17,6 +17,7 @@ import { createNaturalPaperPublicPositionObservationProducer } from "../src/natu
 import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "../src/paper-public-provider-authority-v1.js";
 import {
   AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION,
+  bindNaturalPaperTriggerBoundSettlementEvidence,
   createNaturalPaperTriggerBoundSettlementCostProducer,
 } from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 
@@ -890,33 +891,69 @@ test("pending exit with no settlementInput remains blocked instead of throwing",
 });
 
 test("recurring caller freezes a new trigger before invoking the canonical cost producer", async () => {
-  const h = harness();
-  const opened = await open(h, "same-cycle-producer");
-  const position = opened.state.positions[0];
-  const complete = observation(position, "same-cycle-trigger", T0 + 1_000,
-    { open: 100, high: 106, low: 99, close: 105 });
+  const { h, state } = await naturalFixture();
+  const cycleId = "same-cycle-trigger";
+  const evaluatedAtMs = T0 + FOUR_HOURS;
+  const position = state.positions[0];
+  const complete = boundNaturalObservation(
+    state,
+    cycleId,
+    "same-cycle-trigger-observation",
+    evaluatedAtMs,
+    { open: 100, high: 106, low: 99, close: 105 },
+  );
   const raw = structuredClone(complete);
   raw.settlementCostEvidence = null;
   let collectedTrigger = null;
   const settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
-    async collectAuthoritativeEvidence({ position: pendingPosition, exitTrigger, evaluatedAtMs }) {
+    async collectAuthoritativeEvidence({ position: pendingPosition, exitTrigger, evaluatedAtMs: ownerAtMs }) {
       collectedTrigger = exitTrigger;
-      return authoritativeTriggerSettlementEvidence(pendingPosition, exitTrigger, complete, evaluatedAtMs);
+      return authoritativeTriggerSettlementEvidence(pendingPosition, exitTrigger, complete, ownerAtMs);
     },
   });
   const result = await run(h, {
-    state: opened.state,
-    cycle: cycle("same-cycle-trigger", T0 + 1_000),
+    state,
+    cycle: cycle(cycleId, evaluatedAtMs),
     positionObservations: [raw],
     settlementCostProducer,
   });
   assert.equal(result.state.positions.length, 0);
   assert.equal(result.state.settlements.length, 1);
   assert.equal(result.state.settlements[0].exitReason, "TAKE_PROFIT");
-  assert.equal(result.state.settlements[0].settledAtMs, T0 + 1_000);
+  assert.equal(result.state.settlements[0].settledAtMs, evaluatedAtMs);
   assert.equal(collectedTrigger.exitTriggerId, result.state.settlements[0].lifecycleEvidence.exitTriggerId);
   assert.equal(result.state.settlements[0].exitExecutionId, result.state.settlements[0].lifecycleEvidence.exitExecutionId);
   assert.equal(result.state.settlements[0].settlementId, sha256(stableJson(result.state.settlements[0].settlementIdentity)));
+  const ownerPacket = result.state.settlements[0].canonicalOwnerEvidence;
+  assert.equal(ownerPacket.schemaVersion, "canonical-natural-settlement-owner-evidence-v1");
+  assert.equal(ownerPacket.positionId, result.state.settlements[0].positionId);
+  assert.equal(ownerPacket.exitTriggerId, result.state.settlements[0].exitTriggerId);
+  assert.equal(ownerPacket.exitExecutionId, result.state.settlements[0].exitExecutionId);
+  assert.match(ownerPacket.evidenceDigest, /^[0-9a-f]{64}$/);
+  assert.match(result.state.settlements[0].canonicalOwnerEvidenceBindingDigest, /^[0-9a-f]{64}$/);
+  assert.equal(ownerPacket.executionAuthority, "NONE");
+  assert.equal(ownerPacket.privateTradingApiAllowed, false);
+  assert.equal(ownerPacket.liveOrderAllowed, false);
+  assert.equal(ownerPacket.orderSubmitted, false);
+  assert.equal(ownerPacket.exchangeRequestSent, false);
+
+  const restored = restoreRecurringPaperLoopState(
+    serializeRecurringPaperLoopState(result.state),
+    identity,
+  );
+  const restoredPacket = restored.settlements[0].canonicalOwnerEvidence;
+  const rebound = bindNaturalPaperTriggerBoundSettlementEvidence({
+    position: restoredPacket.position,
+    observation: restoredPacket.sourceObservation,
+    authoritativeEvidence: restoredPacket.authoritativeEvidence,
+    evaluatedAtMs: restoredPacket.evaluatedAtMs,
+  });
+  assert.equal(rebound.status, "PRESENT");
+  assert.equal(rebound.fullCostReady, true);
+  assert.equal(rebound.evidenceDigest, restoredPacket.bindingEvidenceDigest);
+  assert.equal(rebound.exitTriggerId, restoredPacket.exitTriggerId);
+  assert.equal(rebound.exitExecutionId, restoredPacket.exitExecutionId);
+  assert.deepEqual(restoredPacket.trigger, restoredPacket.position.lifecycle.pendingExit);
   assert.equal(h.getSettlementMutations(), 1);
 });
 

@@ -5,6 +5,7 @@ import {
   buildChartAnalysis,
   chartAnalysisTimelineKey,
   createStableAnalysisId,
+  isChartAnalysisDataStatusActionable,
   shouldAppendTimeline,
   type ChartAnalysisInput,
 } from './chart-analysis';
@@ -39,6 +40,99 @@ test('an open candle never creates a confirmed analysis', () => {
 test('a completed candle can confirm only with sufficient confidence', () => {
   assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true }).status, 'confirmed');
   assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true, confidence: 55 }).status, 'weakened');
+});
+
+test('unsafe chart data status expires analysis before signal semantics can confirm it', () => {
+  for (const dataStatus of ['stale', 'future', 'insufficient', 'unavailable']) {
+    const result = buildChartAnalysis({
+      ...input,
+      isClosedCandle: true,
+      signal: 'ENTER',
+      confidence: 95,
+      dataStatus,
+    });
+    assert.equal(result.status, 'expired', dataStatus);
+    assert.ok(result.expiredAt, dataStatus);
+    assert.equal(result.endTime, input.latestTime, dataStatus);
+    assert.ok(result.reasons.includes(`데이터 상태: ${dataStatus}`), dataStatus);
+  }
+});
+
+test('normal and delayed chart data remain actionable while unsafe states fail closed', () => {
+  assert.equal(isChartAnalysisDataStatusActionable(undefined), true);
+  assert.equal(isChartAnalysisDataStatusActionable('ok'), true);
+  assert.equal(isChartAnalysisDataStatusActionable('delayed'), true);
+  assert.equal(isChartAnalysisDataStatusActionable(' STALE '), false);
+  assert.equal(isChartAnalysisDataStatusActionable('FUTURE'), false);
+  assert.equal(isChartAnalysisDataStatusActionable('insufficient'), false);
+  assert.equal(isChartAnalysisDataStatusActionable('unavailable'), false);
+  assert.equal(buildChartAnalysis({ ...input, isClosedCandle: true, dataStatus: 'delayed' }).status, 'confirmed');
+});
+
+test('unknown and malformed chart data status fail closed instead of confirming analysis', () => {
+  for (const dataStatus of ['', '   ', 'unknown', 'error', 'okay']) {
+    assert.equal(isChartAnalysisDataStatusActionable(dataStatus), false, JSON.stringify(dataStatus));
+    const result = buildChartAnalysis({
+      ...input,
+      isClosedCandle: true,
+      signal: 'ENTER',
+      confidence: 95,
+      dataStatus,
+    });
+    assert.equal(result.status, 'expired', JSON.stringify(dataStatus));
+    assert.ok(result.expiredAt, JSON.stringify(dataStatus));
+    assert.equal(result.endTime, input.latestTime, JSON.stringify(dataStatus));
+  }
+});
+
+test('invalid core chart values fail closed instead of creating a confirmed analysis', () => {
+  const invalidCases: Array<Partial<ChartAnalysisInput>> = [
+    { currentPrice: Number.NaN },
+    { previousClose: Number.POSITIVE_INFINITY },
+    { support: 0 },
+    { resistance: Number.NaN },
+    { latestTime: Number.NaN },
+  ];
+
+  for (const invalid of invalidCases) {
+    const result = buildChartAnalysis({
+      ...input,
+      ...invalid,
+      dataStatus: 'ok',
+      isClosedCandle: true,
+      signal: 'ENTER',
+      confidence: 95,
+    });
+    assert.equal(result.status, 'expired', JSON.stringify(invalid));
+    assert.ok(result.expiredAt, JSON.stringify(invalid));
+    assert.ok(result.reasons.includes('핵심 가격/시간 데이터: unavailable'), JSON.stringify(invalid));
+  }
+});
+
+test('invalid core values do not leak non-finite chart geometry or fabricated price levels', () => {
+  const invalidPrice = buildChartAnalysis({
+    ...input,
+    dataStatus: 'ok',
+    isClosedCandle: true,
+    currentPrice: Number.NaN,
+    support: Number.NaN,
+  });
+  assert.equal(invalidPrice.status, 'expired');
+  assert.equal(invalidPrice.points.length, 0);
+  assert.equal(invalidPrice.priceLevels.some((level) => !Number.isFinite(level.price) || level.price <= 0), false);
+  assert.equal(invalidPrice.relatedIndicators.currentPrice, null);
+
+  const invalidTime = buildChartAnalysis({
+    ...input,
+    dataStatus: 'ok',
+    isClosedCandle: true,
+    latestTime: Number.NaN,
+    anchorTimes: [],
+  });
+  assert.equal(invalidTime.status, 'expired');
+  assert.equal(invalidTime.startTime, undefined);
+  assert.equal(invalidTime.endTime, undefined);
+  assert.equal(invalidTime.points.length, 0);
 });
 
 test('exit invalidates a completed generic analysis and keeps bearish bias', () => {

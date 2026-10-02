@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type APIResponse, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -15,6 +15,7 @@ const productionQaEnabled = Boolean(
   && qaPassword
   && process.env.PRODUCTION_READONLY_E2E === 'true',
 );
+const telegramQaEnabled = process.env.PRODUCTION_QA_INCLUDE_TELEGRAM === 'true';
 const productionOrigin = baseUrl ? new URL(baseUrl).origin : 'http://production-qa-disabled.invalid';
 
 const ARTIFACT_DIR = path.resolve('production-comprehensive-artifacts');
@@ -25,7 +26,7 @@ const FULL_ROUTES = [
   '/market-overview', '/market-rankings', '/market-browser', '/scanner', '/ai-chart',
   '/ai-chat', '/themes', '/news-information', '/learn', '/watchlist', '/alerts',
   '/portfolio', '/position', '/strategy-promotion', '/recommendations', '/backtests',
-  '/paper-trading', '/account', '/more', '/settings',
+  '/auto-trading', '/paper-trading', '/account', '/more', '/settings',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',
   '/stock-info/analysis?asset=stock&market=US&ticker=AAPL',
   '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
@@ -33,7 +34,7 @@ const FULL_ROUTES = [
 ] as const;
 
 const CRITICAL_ROUTES = [
-  '/', '/stocks', '/scanner', '/ai-chart', '/paper-trading', '/portfolio', '/account',
+  '/', '/stocks', '/scanner', '/ai-chart', '/auto-trading', '/paper-trading', '/portfolio', '/account',
   '/stock-info/analysis?asset=stock&market=KR&ticker=005930',
 ] as const;
 
@@ -54,6 +55,13 @@ const SEARCH_MATRIX: Record<'국내' | '미국' | '코인 현물' | '코인 선�
     'BTCUSDT','ETHUSDT','XRPUSDT','SOLUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','LINKUSDT','DOTUSDT','BCHUSDT',
     'ETCUSDT','XLMUSDT','SUIUSDT','NEARUSDT','APTUSDT','ARBUSDT','OPUSDT','STXUSDT','SEIUSDT','AAVEUSDT',
   ],
+};
+
+const SEARCH_MARKET_PARAMS: Record<keyof typeof SEARCH_MATRIX, 'KR' | 'US' | 'spot' | 'futures'> = {
+  '국내': 'KR',
+  '미국': 'US',
+  '코인 현물': 'spot',
+  '코인 선물': 'futures',
 };
 
 const TIMEFRAMES = ['1m','3m','5m','15m','30m','1H','4H','1D'] as const;
@@ -79,13 +87,24 @@ type RouteAudit = {
 };
 
 type SearchAudit = {
-  market: string;
+  market: keyof typeof SEARCH_MATRIX;
   query: string;
   durationMs: number;
   resultCount: number;
   matched: boolean;
   outcome: string | null;
   sample: string[];
+  requests: SearchRequestAudit[];
+};
+
+type SearchRequestAudit = {
+  endpoint: string;
+  query: string | null;
+  market: string | null;
+  startedAfterInputMs: number;
+  responseLatencyMs: number | null;
+  status: number | null;
+  failure: string | null;
 };
 
 type ChartAudit = {
@@ -111,6 +130,14 @@ function currentPath(page: Page) {
 
 function requestPath(rawUrl: string) {
   try { return new URL(rawUrl).pathname; } catch { return 'unknown'; }
+}
+
+function sanitizeLoginDiagnostics(items: Diagnostic[]) {
+  return items.map((item) => ({
+    ...item,
+    path: item.path.split('?')[0].slice(0, 300),
+    detail: item.detail.slice(0, 300),
+  }));
 }
 
 function attachDiagnostics(page: Page, diagnostics: Diagnostic[]) {
@@ -147,13 +174,230 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
   });
 }
 
-async function login(page: Page) {
-  await page.goto('/login', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
-  await page.getByLabel('아이디').fill(qaLogin, { timeout: 3_000 });
-  await page.getByLabel('비밀번호').fill(qaPassword, { timeout: 3_000 });
-  await page.getByRole('button', { name: '로그인', exact: true }).click({ timeout: 3_000 });
-  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+const LOGIN_READY_BUDGET_MS = 15_000;
+const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
+const LOGIN_INTERACTIVE_COLD_RETRIES = 1;
+const CACHED_AUTH_TIMEOUT_RETRIES = 1;
+type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
+const authStateByViewport = new Map<string, CachedAuthState>();
+
+function authCacheKey(page: Page) {
+  const viewport = page.viewportSize();
+  return viewport ? `${viewport.width}x${viewport.height}` : 'default';
+}
+
+function isPlaywrightTimeout(error: unknown) {
+  return error instanceof Error
+    && (error.name === 'TimeoutError' || /Timeout \d+ms exceeded/i.test(error.message));
+}
+
+async function gotoLoginWithTimeoutRetry(page: Page) {
+  for (let attempt = 0; attempt <= LOGIN_NAVIGATION_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      await page.goto('/login', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS });
+      return;
+    } catch (error) {
+      if (!isPlaywrightTimeout(error) || attempt >= LOGIN_NAVIGATION_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  throw new Error('PRODUCTION_QA_LOGIN_NAVIGATION_UNAVAILABLE');
+}
+
+async function restoreCachedAuthState(page: Page, state: CachedAuthState) {
+  if (state.cookies.length > 0) {
+    await page.context().addCookies(state.cookies);
+  }
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  const localStorageEntries = originState?.localStorage ?? [];
+  if (localStorageEntries.length > 0) {
+    await page.addInitScript(({ origin, entries }) => {
+      if (window.location.origin !== origin) return;
+      for (const entry of entries) {
+        window.localStorage.setItem(entry.name, entry.value);
+      }
+    }, { origin: productionOrigin, entries: localStorageEntries });
+  }
+}
+
+function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const token = accessTokenFromUnknown(item, depth + 1);
+      if (token) return token;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.access_token === 'string' && record.access_token.length > 20) return record.access_token;
+  for (const item of Object.values(record)) {
+    const token = accessTokenFromUnknown(item, depth + 1);
+    if (token) return token;
+  }
+  return null;
+}
+
+function accessTokenFromStorageState(state: CachedAuthState) {
+  const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+  for (const entry of originState?.localStorage ?? []) {
+    try {
+      const token = accessTokenFromUnknown(JSON.parse(entry.value));
+      if (token) return token;
+    } catch {
+      // Non-JSON localStorage entries are unrelated to Supabase auth.
+    }
+  }
+  throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
+}
+
+async function validateCachedAuthState(page: Page, state: CachedAuthState) {
+  const token = accessTokenFromStorageState(state);
+  let response: APIResponse | null = null;
+  for (let attempt = 0; attempt <= CACHED_AUTH_TIMEOUT_RETRIES; attempt += 1) {
+    try {
+      response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        timeout: LOGIN_READY_BUDGET_MS,
+        failOnStatusCode: false,
+      });
+      break;
+    } catch (error) {
+      const timeoutOnly = isPlaywrightTimeout(error);
+      if (!timeoutOnly || attempt >= CACHED_AUTH_TIMEOUT_RETRIES) throw error;
+    }
+  }
+  if (!response) throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_UNAVAILABLE');
+  if (response.status() !== 200) {
+    throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
+  }
+  const payload = await response.json().catch(() => null);
+  if (!payload || typeof payload !== 'object' || typeof (payload as Record<string, unknown>).id !== 'string') {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  }
+}
+
+async function login(
+  page: Page,
+  testInfo: TestInfo,
+  diagnostics: Diagnostic[],
+  blocked: Diagnostic[],
+  evidenceName: string,
+) {
+  const startedAt = Date.now();
+  const diagnosticStart = diagnostics.length;
+  const blockedStart = blocked.length;
+  const cacheKey = authCacheKey(page);
+  try {
+    const cached = authStateByViewport.get(cacheKey);
+    if (cached) {
+      // Validate the real password-login path once per viewport, then reuse the
+      // exact in-memory authenticated browser state for later read-only tests.
+      // Cached-session auth/status failures remain fail-closed. Only a transport
+      // timeout gets one bounded repeat of the same read-only profile proof.
+      await restoreCachedAuthState(page, cached);
+      // Do not add a second root-page navigation before every read-only test.
+      // The first test in each viewport proves the real password-login path;
+      // later tests restore that exact state and let their target route prove
+      // whether the session is still accepted. This remains fail-closed while
+      // avoiding a redundant / navigation that previously timed out under load.
+      await validateCachedAuthState(page, cached);
+      // The new page is still about:blank here. restoreCachedAuthState installs
+      // the Production-origin localStorage seed for the next navigation, but it
+      // has not materialized that origin yet. Recapturing storageState now can
+      // therefore replace the valid cache with a tokenless state and make the
+      // following read-only test fail before navigation. The exact cached token
+      // was just proven by the profile GET, so preserve that verified state.
+      return;
+    }
+
+    const loginId = page.getByLabel('아이디');
+    const loginPassword = page.getByLabel('비밀번호');
+    const loginButton = page.getByRole('button', { name: '로그인', exact: true });
+
+    // Keep the 15s interactive criterion strict. A page that is still the
+    // diagnostic-free /login fallback after that full budget gets one fresh
+    // cold-start attempt; status, auth, browser, and mutation failures remain
+    // fail-closed and are never retried.
+    for (let attempt = 0; attempt <= LOGIN_INTERACTIVE_COLD_RETRIES; attempt += 1) {
+      await gotoLoginWithTimeoutRetry(page);
+      const readinessStartedAt = Date.now();
+      const remainingReadinessMs = () =>
+        Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt));
+      try {
+        await expect.poll(async () => {
+          const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+            loginId.isVisible({ timeout: 250 }).catch(() => false),
+            loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+            loginButton.isVisible({ timeout: 250 }).catch(() => false),
+            page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+          ]);
+          return idVisible && passwordVisible && buttonVisible && !fallbackVisible ? 'READY' : 'PENDING';
+        }, {
+          timeout: remainingReadinessMs(),
+          intervals: [100, 200, 400, 800],
+        }).toBe('READY');
+        break;
+      } catch (error) {
+        const [idVisible, passwordVisible, buttonVisible, fallbackVisible] = await Promise.all([
+          loginId.isVisible({ timeout: 250 }).catch(() => false),
+          loginPassword.isVisible({ timeout: 250 }).catch(() => false),
+          loginButton.isVisible({ timeout: 250 }).catch(() => false),
+          page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+        ]);
+        const diagnosticFreeColdFallback = currentPath(page) === '/login'
+          && fallbackVisible
+          && !idVisible
+          && !passwordVisible
+          && !buttonVisible
+          && diagnostics.length === diagnosticStart
+          && blocked.length === blockedStart;
+        if (!diagnosticFreeColdFallback || attempt >= LOGIN_INTERACTIVE_COLD_RETRIES) throw error;
+      }
+    }
+
+    await loginId.fill(qaLogin, { timeout: 3_000 });
+    await loginPassword.fill(qaPassword, { timeout: 3_000 });
+    await loginButton.click({ timeout: 3_000 });
+    await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
+
+    const state = await page.context().storageState();
+    const originState = state.origins.find((entry) => entry.origin === productionOrigin);
+    if (state.cookies.length === 0 && (originState?.localStorage.length ?? 0) === 0) {
+      throw new Error('Authenticated Production QA session produced no reusable browser state');
+    }
+    authStateByViewport.set(cacheKey, state);
+  } catch (error) {
+    const finalPath = currentPath(page);
+    const loginDiagnostics = sanitizeLoginDiagnostics(diagnostics.slice(diagnosticStart));
+    const loginBlocked = sanitizeLoginDiagnostics(blocked.slice(blockedStart));
+    const [loginSurfaceVisible, membershipVisible, fallbackVisible] = page.isClosed()
+      ? [false, false, false]
+      : await Promise.all([
+        page.getByRole('button', { name: '로그인', exact: true }).isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('membership-label').isVisible({ timeout: 250 }).catch(() => false),
+        page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false),
+      ]);
+    writeJson(`${slug(testInfo.project.name)}-${slug(evidenceName)}-login-failure.json`, {
+      project: testInfo.project.name,
+      evidenceName,
+      authenticated: false,
+      durationMs: Date.now() - startedAt,
+      finalPath,
+      ui: { loginSurfaceVisible, membershipVisible, fallbackVisible },
+      diagnostics: loginDiagnostics,
+      blocked: loginBlocked,
+      complete: true,
+    });
+    const summary = loginDiagnostics.slice(-8)
+      .map((item) => `${item.kind}:${item.status ?? '-'}:${item.path}:${item.detail}`)
+      .join(' | ') || 'NO_CAPTURED_DIAGNOSTIC';
+    const original = error instanceof Error ? error.message.split('\n')[0].slice(0, 160) : 'login assertion failed';
+    throw new Error(`[PRODUCTION_QA_AUTH_NOT_ESTABLISHED] finalPath=${finalPath}; diagnostics=${summary}; original=${original}`);
+  }
 }
 
 async function auditLayout(page: Page) {
@@ -299,24 +543,53 @@ async function exerciseVisibleTabs(page: Page) {
   return failures;
 }
 
+async function navigateInMountedApp(page: Page, route: string) {
+  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 1_000 });
+  const target = new URL(route, baseUrl);
+  const targetPath = `${target.pathname}${target.search}${target.hash}`;
+  const current = new URL(page.url());
+  const resetPath = current.pathname === target.pathname
+    && `${current.search}${current.hash}` !== `${target.search}${target.hash}`
+    ? (target.pathname === '/' ? '/stocks' : '/')
+    : null;
+  await page.evaluate(async ({ nextPath, intermediatePath }) => {
+    const transition = (path: string) => {
+      window.history.pushState({}, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+    };
+    if (intermediatePath) {
+      transition(intermediatePath);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
+    transition(nextPath);
+  }, { nextPath: targetPath, intermediatePath: resetPath });
+  await expect.poll(() => {
+    const current = new URL(page.url());
+    return `${current.pathname}${current.search}${current.hash}`;
+  }, { timeout: 1_000, intervals: [50, 100, 200] }).toBe(targetPath);
+}
+
 async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promise<RouteAudit> {
   const started = Date.now();
   let navigationError: string | null = null;
   let fallbackTimedOut = false;
-  await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch((error) => {
+  await navigateInMountedApp(page, route).catch((error) => {
     navigationError = String(error).slice(0, 240);
   });
   if (!page.isClosed()) {
     try {
-      await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 });
+      await expect.poll(async () => {
+        const shellVisible = await page.getByTestId('app-shell').isVisible({ timeout: 250 }).catch(() => false);
+        if (!shellVisible) return 'APP_SHELL_PENDING';
+        const fallbackVisible = await page.getByTestId('page-fallback').isVisible({ timeout: 250 }).catch(() => false);
+        const visibleBusy = await page.locator('[aria-busy="true"]:visible').count().catch(() => -1);
+        return !fallbackVisible && visibleBusy === 0 ? 'READY' : 'LOADING';
+      }, { timeout: 5_000, intervals: [100, 200, 400, 800] }).toBe('READY');
     } catch {
       fallbackTimedOut = true;
     }
   }
   const busy = page.locator('[aria-busy="true"]:visible');
-  if (!page.isClosed() && await busy.count()) {
-    await expect(busy).toHaveCount(0, { timeout: 5_000 }).catch(() => undefined);
-  }
   const busyAfter5s = page.isClosed() ? -1 : await busy.count().catch(() => -1);
   const layout = page.isClosed() ? {
     horizontalOverflowPx: -1,
@@ -349,8 +622,24 @@ async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promis
 }
 
 async function ensureSearchPage(page: Page) {
-  await page.goto('/stocks', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('unified-asset-search-page')).toBeVisible({ timeout: 10_000 });
+  const searchPage = page.getByTestId('unified-asset-search-page');
+  let lastNavigationError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.goto('/stocks', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+    } catch (error) {
+      lastNavigationError = error;
+    }
+
+    if (await searchPage.isVisible({ timeout: 5_000 }).catch(() => false)) return;
+    if (attempt === 0) await page.waitForTimeout(500);
+  }
+
+  if (lastNavigationError) {
+    console.warn('[production-comprehensive] /stocks navigation remained slow after one bounded retry');
+  }
+  await expect(searchPage).toBeVisible({ timeout: 10_000 });
 }
 
 async function searchMatrix(
@@ -364,7 +653,7 @@ async function searchMatrix(
   for (const label of labels) {
     let marketButton = page.getByRole('button', { name: label, exact: true });
     if (!(await marketButton.isVisible({ timeout: 1_500 }).catch(() => false))) {
-      results.push({ market: label, query: '[MARKET_TAB_MISSING]', durationMs: 0, resultCount: 0, matched: false, outcome: 'MARKET_TAB_MISSING', sample: [] });
+      results.push({ market: label, query: '[MARKET_TAB_MISSING]', durationMs: 0, resultCount: 0, matched: false, outcome: 'MARKET_TAB_MISSING', sample: [], requests: [] });
       onProgress(results);
       continue;
     }
@@ -374,6 +663,42 @@ async function searchMatrix(
       const started = Date.now();
       let outcome: string | null = null;
       let optionTexts: string[] = [];
+      const requests: SearchRequestAudit[] = [];
+      const requestsByObject = new Map<Request, SearchRequestAudit>();
+      const requestStartedAt = new Map<Request, number>();
+      const requestListener = (request: Request) => {
+        let url: URL;
+        try { url = new URL(request.url()); } catch { return; }
+        if (url.pathname !== '/api/search/suggest' || url.searchParams.get('q') !== query) return;
+        const record: SearchRequestAudit = {
+          endpoint: `${url.pathname}?${url.searchParams.toString()}`,
+          query: url.searchParams.get('q'),
+          market: url.searchParams.get('market'),
+          startedAfterInputMs: Date.now() - started,
+          responseLatencyMs: null,
+          status: null,
+          failure: null,
+        };
+        requests.push(record);
+        requestsByObject.set(request, record);
+        requestStartedAt.set(request, Date.now());
+      };
+      const responseListener = (response: { request(): Request; status(): number }) => {
+        const request = response.request();
+        const record = requestsByObject.get(request);
+        if (!record) return;
+        record.status = response.status();
+        record.responseLatencyMs = Date.now() - (requestStartedAt.get(request) ?? Date.now());
+      };
+      const requestFailedListener = (request: Request) => {
+        const record = requestsByObject.get(request);
+        if (!record) return;
+        record.failure = request.failure()?.errorText ?? 'REQUEST_FAILED';
+        record.responseLatencyMs = Date.now() - (requestStartedAt.get(request) ?? Date.now());
+      };
+      page.on('request', requestListener);
+      page.on('response', responseListener);
+      page.on('requestfailed', requestFailedListener);
       try {
         let input = page.getByRole('combobox', { name: '통합 자산 검색' });
         await input.fill(query, { timeout: 2_000 });
@@ -397,6 +722,10 @@ async function searchMatrix(
           marketButton = page.getByRole('button', { name: label, exact: true });
           await marketButton.click({ timeout: 1_500 }).catch(() => undefined);
         }
+      } finally {
+        page.off('request', requestListener);
+        page.off('response', responseListener);
+        page.off('requestfailed', requestFailedListener);
       }
       const needle = query.replace(/[^A-Z0-9]/gi, '').toUpperCase();
       const matched = optionTexts.some((item) => item.replace(/[^A-Z0-9]/gi, '').toUpperCase().includes(needle));
@@ -408,6 +737,7 @@ async function searchMatrix(
         matched,
         outcome,
         sample: optionTexts.slice(0, 3),
+        requests,
       });
       onProgress(results);
       await page.waitForTimeout(80).catch(() => undefined);
@@ -432,17 +762,29 @@ function responseMatchesChart(rawUrl: string, market: string, timeframe: string)
 }
 
 async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => void): Promise<ChartAudit[]> {
+  const bootstrapStatuses = new Map<string, number[]>();
+  const bootstrapListener = (response: { url(): string; status(): number }) => {
+    for (const market of CHART_MARKETS) {
+      for (const timeframe of TIMEFRAMES) {
+        if (!responseMatchesChart(response.url(), market, timeframe)) continue;
+        const key = `${market}:${timeframe}`;
+        bootstrapStatuses.set(key, [...(bootstrapStatuses.get(key) ?? []), response.status()]);
+      }
+    }
+  };
+  page.on('response', bootstrapListener);
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m', {
     waitUntil: 'domcontentloaded',
     timeout: 15_000,
   });
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible({ timeout: 12_000 });
+  page.off('response', bootstrapListener);
   const audits: ChartAudit[] = [];
   for (const market of CHART_MARKETS) {
     await page.getByTestId(`market-${market}`).click({ timeout: 2_500 }).catch(() => undefined);
     await expect(page).toHaveURL(new RegExp(`market=${market}`), { timeout: 4_000 }).catch(() => undefined);
     for (const timeframe of TIMEFRAMES) {
-      const statuses: number[] = [];
+      const statuses: number[] = [...(bootstrapStatuses.get(`${market}:${timeframe}`) ?? [])];
       const listener = (response: { url(): string; status(): number }) => {
         if (responseMatchesChart(response.url(), market, timeframe)) statuses.push(response.status());
       };
@@ -453,6 +795,18 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
         await page.getByTestId(`timeframe-${timeframe}`).click({ timeout: 2_500 });
         await expect(page).toHaveURL(new RegExp(`timeframe=${timeframe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), { timeout: 3_000 }).catch(() => undefined);
         terminal = await expect.poll(async () => {
+          const chart = page.getByTestId('unified-analysis-chart');
+          const [selectedMarket, selectedTimeframe, queryFetching, dataMarket, dataTimeframe] = await Promise.all([
+            chart.getAttribute('data-chart-market'),
+            chart.getAttribute('data-chart-timeframe'),
+            chart.getAttribute('data-chart-query-fetching'),
+            chart.getAttribute('data-chart-data-market'),
+            chart.getAttribute('data-chart-data-timeframe'),
+          ]);
+          if (selectedMarket !== market || selectedTimeframe !== timeframe) return 'timeout';
+          if (statuses.length === 0 || queryFetching === 'true') return 'timeout';
+          if (statuses.some((status) => status >= 200 && status < 300)
+            && (dataMarket !== market || dataTimeframe !== timeframe)) return 'timeout';
           if (await page.getByTestId('unified-chart-canvas').isVisible({ timeout: 200 }).catch(() => false)) return 'canvas';
           if (await page.getByTestId('chart-empty-state').isVisible({ timeout: 200 }).catch(() => false)) return 'empty';
           if (await page.getByTestId('chart-error-state').isVisible({ timeout: 200 }).catch(() => false)) return 'error';
@@ -477,6 +831,93 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
 test.describe('Production comprehensive read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
+  test('Production Telegram runtime readiness is complete and zero-authority', async ({ page }, testInfo) => {
+    test.skip(!telegramQaEnabled, 'Telegram runtime QA is isolated to Telegram release');
+    test.skip(testInfo.project.name !== 'prod-desktop-1440');
+    const diagnostics: Diagnostic[] = [];
+    const blocked: Diagnostic[] = [];
+    attachDiagnostics(page, diagnostics);
+    await installSafety(page, blocked);
+    await login(page, testInfo, diagnostics, blocked, 'telegram-runtime');
+
+    const result = await page.evaluate(async () => {
+      const sessionEntry = Object.entries(localStorage).find(([key]) => /^sb-[^-]+-auth-token$/.test(key));
+      let accessToken: string | null = null;
+      if (sessionEntry) {
+        try {
+          const session = JSON.parse(sessionEntry[1]) as { access_token?: unknown };
+          if (typeof session.access_token === 'string' && session.access_token.trim()) {
+            accessToken = session.access_token;
+          }
+        } catch {
+          // A malformed client session remains unauthenticated and fails closed below.
+        }
+      }
+      const response = await fetch('/api/user-integrations', {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          Accept: 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+      });
+      const payload = await response.json().catch(() => null);
+      return { status: response.status, accessTokenPresent: Boolean(accessToken), payload };
+    });
+    const root = result.payload && typeof result.payload === 'object'
+      ? result.payload as Record<string, unknown>
+      : {};
+    const runtime = root.telegramRuntime && typeof root.telegramRuntime === 'object'
+      ? root.telegramRuntime as Record<string, unknown>
+      : {};
+    const sanitized = {
+      status: result.status,
+      deliveryReady: runtime.deliveryReady === true,
+      linkingReady: runtime.linkingReady === true,
+      webhookConfigured: runtime.webhookConfigured === true,
+      botUsernameConfigured: runtime.botUsernameConfigured === true,
+      stockRoomReady: runtime.stockRoomReady === true,
+      cryptoRoomReady: runtime.cryptoRoomReady === true,
+      backgroundWorkersEnabled: runtime.backgroundWorkersEnabled === true,
+      personalWorkerEnabled: runtime.personalWorkerEnabled === true,
+      intelligenceWorkerEnabled: runtime.intelligenceWorkerEnabled === true,
+      richSignalEnabled: runtime.richSignalEnabled === true,
+      aiExplanationEnabled: runtime.aiExplanationEnabled === true,
+      signalFollowupEnabled: runtime.signalFollowupEnabled === true,
+      memberHoldingsEnabled: runtime.memberHoldingsEnabled === true,
+      marketBriefEnabled: runtime.marketBriefEnabled === true,
+      orderAuthority: runtime.orderAuthority ?? null,
+      privateTradingApiAllowed: runtime.privateTradingApiAllowed ?? null,
+      realOrderAllowed: runtime.realOrderAllowed ?? null,
+    };
+    writeJson('prod-desktop-1440-telegram-runtime.json', sanitized);
+
+    expect(blocked, 'Telegram runtime QA attempted a blocked mutation').toEqual([]);
+    expect(result.accessTokenPresent, 'app authentication session token').toBe(true);
+    expect(result.status, 'user integrations runtime endpoint').toBe(200);
+    expect(sanitized).toMatchObject({
+      deliveryReady: true,
+      linkingReady: true,
+      webhookConfigured: true,
+      botUsernameConfigured: true,
+      stockRoomReady: true,
+      cryptoRoomReady: true,
+      backgroundWorkersEnabled: true,
+      personalWorkerEnabled: true,
+      intelligenceWorkerEnabled: true,
+      richSignalEnabled: true,
+      aiExplanationEnabled: true,
+      signalFollowupEnabled: true,
+      memberHoldingsEnabled: true,
+      marketBriefEnabled: true,
+      orderAuthority: 'NONE',
+      privateTradingApiAllowed: false,
+      realOrderAllowed: false,
+    });
+    expect(diagnostics.filter((item) => item.kind === 'pageerror' || item.kind === 'requestfailed'),
+      'Telegram runtime browser failures detected').toEqual([]);
+  });
+
   test('Production route, layout, overlap, scroll, and safe-tab audit', async ({ page }, testInfo) => {
     const full = testInfo.project.name === 'prod-desktop-1440' || testInfo.project.name === 'prod-mobile-390';
     test.setTimeout(full ? 7 * 60_000 : 4 * 60_000);
@@ -484,7 +925,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'routes');
     const routes = full ? FULL_ROUTES : CRITICAL_ROUTES;
     const audits: RouteAudit[] = [];
     const tabFailures: Array<{ route: string; failures: string[] }> = [];
@@ -510,14 +951,17 @@ test.describe('Production comprehensive read-only QA', () => {
   });
 
   test('Production market search matrix uses real UI and dozens of symbols', async ({ page }, testInfo) => {
-    test.skip(!['prod-desktop-1440','prod-mobile-390'].includes(testInfo.project.name));
     test.setTimeout(testInfo.project.name === 'prod-desktop-1440' ? 10 * 60_000 : 4 * 60_000);
     const diagnostics: Diagnostic[] = [];
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
-    const perMarket = testInfo.project.name === 'prod-desktop-1440' ? 20 : 5;
+    await login(page, testInfo, diagnostics, blocked, 'search');
+    const perMarket = testInfo.project.name === 'prod-desktop-1440'
+      ? 20
+      : testInfo.project.name === 'prod-mobile-390'
+        ? 5
+        : 1;
     const filename = `${slug(testInfo.project.name)}-search.json`;
     const audits = await searchMatrix(page, ['국내','미국','코인 현물','코인 선물'], perMarket, (progress) => {
       writeJson(filename, { project: testInfo.project.name, audits: progress, diagnostics, blocked, complete: false });
@@ -526,7 +970,19 @@ test.describe('Production comprehensive read-only QA', () => {
     expect(blocked, 'search QA attempted a blocked mutation').toEqual([]);
     expect(audits.filter((item) => !item.matched), 'search query did not return the requested market symbol').toEqual([]);
     expect(audits.filter((item) => item.durationMs > 5_500), 'search exceeded user-visible budget').toEqual([]);
-    expect(diagnostics.filter((item) => item.kind === 'pageerror' || item.kind === 'requestfailed'), 'search browser failures detected').toEqual([]);
+    expect(audits.filter((item) => item.requests.length !== 1), 'search issued a missing or duplicate request').toEqual([]);
+    expect(audits.flatMap((item) => item.requests).filter((request) => request.status !== 200 || request.failure),
+      'search request did not complete exactly once with HTTP 200').toEqual([]);
+    expect(audits.filter((item) => item.requests.some((request) => request.market !== SEARCH_MARKET_PARAMS[item.market])),
+      'search request used the wrong market route').toEqual([]);
+    expect(audits.flatMap((item) => item.requests)
+      .filter((request) => request.startedAfterInputMs < 150 || request.startedAfterInputMs > 1_000),
+    'search debounce delayed or dispatched the request outside its bounded window').toEqual([]);
+    expect(diagnostics.filter((item) => item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'),
+      'search browser failures detected').toEqual([]);
+    expect(diagnostics.filter((item) => item.kind === 'http'
+      && (item.status === 401 || item.status === 403 || (item.status ?? 0) >= 500)),
+      'unexpected authenticated GET 401/403/5xx detected during search').toEqual([]);
   });
 
   test('Production chart matrix checks 4 markets x 8 timeframes and chart controls', async ({ page }, testInfo) => {
@@ -536,7 +992,7 @@ test.describe('Production comprehensive read-only QA', () => {
     const blocked: Diagnostic[] = [];
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
-    await login(page);
+    await login(page, testInfo, diagnostics, blocked, 'charts');
     const filename = `${slug(testInfo.project.name)}-charts.json`;
     const audits = await chartMatrix(page, (progress) => {
       writeJson(filename, { project: testInfo.project.name, audits: progress, diagnostics, blocked, complete: false });

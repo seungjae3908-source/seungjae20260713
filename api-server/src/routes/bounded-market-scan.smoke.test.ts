@@ -288,7 +288,10 @@ test('some item timeouts return explicit partial HTTP 200', async () => {
 test('route deadline returns explicit unavailable partial HTTP 200 and aborts scanner work', async () => {
   let scannerAborted = false;
   const scanner: StockScannerRunner = {
-    scan: async (request) => await new Promise<ScannerResponse>((_resolve, reject) => {
+    // Return the promise directly so an abort rejection can win Promise.race
+    // before the route-deadline rejection. The route must still emit its
+    // bounded HTTP 200 fallback instead of leaving the browser hanging.
+    scan: (request) => new Promise<ScannerResponse>((_resolve, reject) => {
       const onAbort = () => {
         scannerAborted = true;
         reject(request.signal?.reason ?? new Error('aborted'));

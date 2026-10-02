@@ -38,7 +38,7 @@ type ApprovalStatus = {
 
 export type TradeApprovalQueueItem = {
   id: string;
-  exchange: 'bitget' | 'upbit' | 'kiwoom';
+  exchange: 'bitget' | 'upbit' | 'kiwoom' | 'toss';
   accountMode: 'paper' | 'mock' | 'live';
   strategyId: string;
   signalId: string;
@@ -91,7 +91,8 @@ type ApprovalStatusResponse = {
 const EXCHANGE_LABEL: Record<TradeApprovalQueueItem['exchange'], string> = {
   bitget: 'Bitget 선물',
   upbit: 'Upbit 현물',
-  kiwoom: 'Kiwoom 국내주식',
+  kiwoom: 'Kiwoom 주식',
+  toss: 'Toss 주식',
 };
 
 const SIGNAL_LABEL: Record<SignalState, string> = {
@@ -125,7 +126,7 @@ function stateClass(state: SignalState) {
 }
 
 function accountModeClass(mode: TradeApprovalQueueItem['accountMode']) {
-  if (mode === 'live') return 'border-destructive/40 bg-destructive/10 text-destructive';
+  if (mode === 'live') return 'border-warning/40 bg-warning/10 text-warning';
   if (mode === 'mock') return 'border-warning/40 bg-warning/10 text-warning';
   return 'border-primary/30 bg-primary/10 text-primary';
 }
@@ -142,7 +143,23 @@ function mergeApprovalStatus(item: TradeApprovalQueueItem, payload: ApprovalStat
   };
 }
 
-export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueItem[] }) {
+type TradeApprovalQueueProps = {
+  fixture?: TradeApprovalQueueItem[];
+  symbolFilter?: string;
+  exchangeFilter?: TradeApprovalQueueItem['exchange'];
+  compact?: boolean;
+};
+
+function normalizedQueueSymbol(value: string): string {
+  return value.trim().toUpperCase().replace(/^KRW[-/]/, '').replace(/[^A-Z0-9]/g, '');
+}
+
+export function TradeApprovalQueue({
+  fixture,
+  symbolFilter,
+  exchangeFilter,
+  compact = false,
+}: TradeApprovalQueueProps) {
   const [items, setItems] = useState<TradeApprovalQueueItem[]>(fixture ?? []);
   const [loading, setLoading] = useState(!fixture);
   const [dataState, setDataState] = useState<QueueDataState>(fixture ? 'ready' : 'loading');
@@ -173,7 +190,13 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8_000);
     try {
-      const response = await authorizedFetch('/api/trade-automation/approval-queue', {
+      const query = new URLSearchParams();
+      if (symbolFilter) query.set('symbol', symbolFilter);
+      if (exchangeFilter) query.set('exchange', exchangeFilter);
+      const endpoint = query.size
+        ? `/api/trade-automation/approval-queue?${query.toString()}`
+        : '/api/trade-automation/approval-queue';
+      const response = await authorizedFetch(endpoint, {
         headers: { 'Cache-Control': 'no-cache' },
         signal: controller.signal,
       });
@@ -211,7 +234,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       window.clearTimeout(timeout);
       if (requestSequence === requestSequenceRef.current && !silent) setLoading(false);
     }
-  }, [fixture]);
+  }, [exchangeFilter, fixture, symbolFilter]);
 
   useEffect(() => {
     void load();
@@ -242,27 +265,32 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
     return () => window.clearInterval(interval);
   }, []);
 
-  const sorted = useMemo(() => [...items].sort((a, b) => {
+  const visibleItems = useMemo(() => items.filter((item) => {
+    if (exchangeFilter && item.exchange !== exchangeFilter) return false;
+    if (!symbolFilter) return true;
+    return normalizedQueueSymbol(item.symbol) === normalizedQueueSymbol(symbolFilter);
+  }), [exchangeFilter, items, symbolFilter]);
+
+  const sorted = useMemo(() => [...visibleItems].sort((a, b) => {
     const approvalRank = Number(b.approval.approvalEnabled) - Number(a.approval.approvalEnabled);
     return approvalRank || Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-  }), [items]);
+  }), [visibleItems]);
 
   const summary = useMemo(() => {
     let available = 0;
     let expiringSoon = 0;
     let invalid = 0;
-    for (const item of items) {
+    for (const item of visibleItems) {
       const countdown = approvalCountdown(item.approval.expiresAt, now);
       const enabled = item.approval.approvalEnabled
         && item.state === 'APPROVAL_PENDING'
-        && item.accountMode !== 'live'
         && !countdown.expired;
       if (enabled) available += 1;
       if (enabled && countdown.seconds <= 60) expiringSoon += 1;
       if (item.signalState === 'INVALIDATED' || item.signalState === 'EXPIRED' || item.state === 'EXPIRED') invalid += 1;
     }
     return { available, expiringSoon, invalid };
-  }, [items, now]);
+  }, [now, visibleItems]);
 
   const fetchApprovalStatus = useCallback(async (planId: string) => {
     const controller = new AbortController();
@@ -322,18 +350,15 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       && item.state === 'APPROVAL_PENDING'
       && item.signalState === 'READY_FOR_APPROVAL'
       && !countdown.expired
-      && item.accountMode !== 'live'
       && !stale
       && !offline
       && dataState === 'ready';
     setConfirmationId(item.id);
     setValidationMessage(locallyEnabled
       ? '서버 승인 상태를 확인하고 있습니다.'
-      : item.accountMode === 'live'
-        ? '실전 계좌 주문은 현재 차단 상태입니다.'
-        : stale || offline || dataState !== 'ready'
-          ? '통신 상태가 최신이 아니어서 서버 재검증 전까지 승인할 수 없습니다.'
-          : approvalMessage(item.approval.reasonCode, item.signalInvalidationReason));
+      : stale || offline || dataState !== 'ready'
+        ? '통신 상태가 최신이 아니어서 서버 재검증 전까지 승인할 수 없습니다.'
+        : approvalMessage(item.approval.reasonCode, item.signalInvalidationReason));
     void revalidateConfirmation(item.id);
   }
 
@@ -358,16 +383,13 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       setItems((current) => current.map((candidate) => candidate.id === item.id ? checkedItem : candidate));
       const countdown = approvalCountdown(checkedItem.approval.expiresAt);
       if (!queueMutationAllowedRef.current
-        || checkedItem.accountMode === 'live'
         || !checkedItem.approval.approvalEnabled
         || checkedItem.state !== 'APPROVAL_PENDING'
         || checkedItem.signalState !== 'READY_FOR_APPROVAL'
         || countdown.expired) {
         setValidationMessage(!queueMutationAllowedRef.current
           ? '최신 승인 목록 상태를 확인할 수 없어 주문 승인을 잠갔습니다.'
-          : checkedItem.accountMode === 'live'
-            ? '실전 계좌 주문은 현재 차단 상태입니다.'
-            : approvalMessage(checkedItem.approval.reasonCode, checkedItem.signalInvalidationReason));
+          : approvalMessage(checkedItem.approval.reasonCode, checkedItem.signalInvalidationReason));
         return;
       }
 
@@ -433,12 +455,15 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
 
   return (
     <>
-      <section className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="trade-approval-queue">
+      <section className={cn(
+        'border border-card-border bg-card text-left shadow-sm',
+        compact ? 'rounded-2xl p-3' : 'rounded-3xl p-4',
+      )} data-testid="trade-approval-queue">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
-              <h2 className="text-sm font-extrabold">승인 대기 신호</h2>
+              <h2 className="text-sm font-extrabold">{symbolFilter ? '현재 종목 진입 승인' : '승인 대기 신호'}</h2>
             </div>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
               검색 조건이 서버에서 유지되는 동안만 주문 승인 버튼이 활성화됩니다.
@@ -488,17 +513,21 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
             <div className="rounded-2xl border border-dashed border-card-border bg-background p-5 text-center" data-testid="approval-queue-empty">
               <Clock3 className="mx-auto h-6 w-6 text-muted-foreground" />
               <p className="mt-2 text-sm font-extrabold">
-                {stale ? '마지막 정상 조회에서 승인 대기 신호가 없었습니다.' : '현재 승인 대기 신호가 없습니다.'}
+                {stale
+                  ? '마지막 정상 조회에서 승인 대기 신호가 없었습니다.'
+                  : symbolFilter ? '현재 종목의 승인 대기 진입이 없습니다.' : '현재 승인 대기 신호가 없습니다.'}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {stale ? '현재 갱신에 실패해 상태가 오래됐습니다. 새로고침 후 다시 확인해 주세요.' : '검색기 신호가 진입 조건을 유지하면 이곳에 표시됩니다.'}
+                {stale
+                  ? '현재 갱신에 실패해 상태가 오래됐습니다. 새로고침 후 다시 확인해 주세요.'
+                  : symbolFilter ? '신호검색기에서 현재 종목의 canonical 진입계획이 생성되고 서버 조건이 유지될 때만 표시됩니다.' : '검색기 신호가 진입 조건을 유지하면 이곳에 표시됩니다.'}
               </p>
             </div>
           ) : null}
 
           {!loading && sorted.map((item) => {
             const countdown = approvalCountdown(item.approval.expiresAt, now);
-            const liveBlocked = item.accountMode === 'live';
+            const liveBlocked = item.accountMode === 'live' && item.approval.reasonCode === 'LIVE_EXECUTION_DISABLED';
             const enabled = item.approval.approvalEnabled
               && !countdown.expired
               && item.state === 'APPROVAL_PENDING'
@@ -544,7 +573,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
                     <p className="font-extrabold">{busy ? '서버 확인 중' : enabled ? '최종 승인 가능' : liveBlocked ? '실전 주문 차단' : '주문 승인 비활성화'}</p>
                     <p className="mt-0.5 break-keep leading-5 text-muted-foreground">
                       {liveBlocked
-                        ? '실전 계좌 주문은 현재 활성화되지 않았습니다.'
+                        ? '실전 주문 서버게이트가 꺼져 있어 실제 주문을 보낼 수 없습니다.'
                         : stale || offline || dataState !== 'ready'
                           ? '최신 상태를 확인할 수 없어 승인·거절 기능을 잠갔습니다.'
                           : countdown.expired
@@ -591,7 +620,15 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
                     className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-3 text-xs font-extrabold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
                   >
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : enabled ? <ShieldCheck className="h-4 w-4" /> : <ShieldX className="h-4 w-4" />}
-                    {busy ? '서버 확인 중' : liveBlocked ? '실전 주문 차단' : item.accountMode === 'paper' ? 'Paper 주문 승인' : '모의 주문 승인'}
+                    {busy
+                      ? '서버 확인 중'
+                      : liveBlocked
+                        ? '실전 주문 차단'
+                        : item.accountMode === 'live'
+                          ? '실전 주문 승인'
+                          : item.accountMode === 'paper'
+                            ? 'Paper 주문 승인'
+                            : '모의 주문 승인'}
                   </button>
                 </div>
               </article>

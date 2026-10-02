@@ -58,6 +58,7 @@ export type AiChartPublicStreamClient = {
 };
 
 const MAX_RECONNECT_ATTEMPTS = 5;
+const providerFallbackUntilMs = new Map<string, number>();
 
 function defaultSocketFactory(url: string): WebSocketLike {
   if (typeof WebSocket === 'undefined') throw new Error('WEBSOCKET_UNAVAILABLE');
@@ -80,6 +81,8 @@ export function createAiChartPublicStreamClient(
   const expectedSymbol = options.market === 'UPBIT'
     ? options.symbol.trim().toUpperCase().replace(/^KRW[-_:]?/, '')
     : options.symbol.trim().toUpperCase().replace(/[-_/]/g, '');
+  const fallbackKey = `${options.market}:${expectedSymbol}`;
+  const usesDefaultSocketFactory = options.socketFactory == null;
   const now = options.now ?? (() => Date.now());
   const setTimeoutFn = options.setTimeoutFn ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimeoutFn = options.clearTimeoutFn ?? ((handle) => clearTimeout(handle));
@@ -99,6 +102,7 @@ export function createAiChartPublicStreamClient(
 
   let socket: WebSocketLike | null = null;
   let status: AiChartPublicStreamStatus = 'DISCONNECTED';
+  let statusReason = 'PUBLIC_STREAM';
   let stopped = true;
   let reconnectAttempts = 0;
   let connectedAtMs: number | null = null;
@@ -112,7 +116,7 @@ export function createAiChartPublicStreamClient(
 
   const snapshot = (): AiChartStreamDiagnostic => ({
     status,
-    reason: status === 'FALLBACK_POLLING' ? 'PUBLIC_STREAM_UNAVAILABLE' : 'PUBLIC_STREAM',
+    reason: statusReason,
     market: options.market,
     symbol: options.symbol,
     reconnectAttempts,
@@ -124,10 +128,19 @@ export function createAiChartPublicStreamClient(
     pendingRenderWork: flushFrame == null ? 0 : 1,
   });
 
+  // Status/diagnostic hooks are observer sinks. A UI/telemetry consumer must
+  // never gain transport control by throwing from a notification callback.
+  const notifyStatus = (nextStatus: AiChartPublicStreamStatus, reason: string) => {
+    try { options.onStatus?.(nextStatus, reason); } catch { /* isolate observer failure */ }
+  };
+  const notifyDiagnostic = (diagnostic: AiChartStreamDiagnostic) => {
+    try { options.onDiagnostic?.(diagnostic); } catch { /* isolate observer failure */ }
+  };
   const publish = (nextStatus: AiChartPublicStreamStatus, reason: string) => {
     status = nextStatus;
-    options.onStatus?.(nextStatus, reason);
-    options.onDiagnostic?.({ ...snapshot(), reason });
+    statusReason = reason;
+    notifyStatus(nextStatus, reason);
+    notifyDiagnostic(snapshot());
   };
   const clearTimer = (handle: TimerHandle | null) => { if (handle != null) clearTimeoutFn(handle); };
   const clearRuntimeTimers = () => {
@@ -139,9 +152,12 @@ export function createAiChartPublicStreamClient(
     connectTimer = null;
   };
   const clearPendingWork = () => {
-    if (flushFrame != null) cancelFrame(flushFrame);
+    const frame = flushFrame;
     flushFrame = null;
     pendingEvents = [];
+    if (frame != null) {
+      try { cancelFrame(frame); } catch { /* teardown must continue fail-closed */ }
+    }
   };
   const forceFallback = (reason: string) => {
     clearRuntimeTimers();
@@ -152,11 +168,39 @@ export function createAiChartPublicStreamClient(
     const active = socket;
     socket = null;
     try { active?.close(1000, 'polling-fallback'); } catch { /* fail closed */ }
+    if (
+      usesDefaultSocketFactory
+      && (reason === 'PREOPEN_CONNECTION_CLOSED'
+        || reason === 'CONNECT_TIMEOUT'
+        || reason === 'FIRST_EVENT_TIMEOUT'
+        || reason === 'STREAM_STALE'
+        || reason === 'STREAM_BUFFER_OVERFLOW'
+        || reason === 'SUBSCRIBE_SEND_FAILED'
+        || reason === 'HEARTBEAT_SEND_FAILED'
+        || reason === 'PROTOCOL_FAILURE'
+        || reason === 'RECONNECT_LIMIT_REACHED')
+    ) {
+      providerFallbackUntilMs.set(fallbackKey, now() + subscription.staleAfterMs * 2);
+    }
     publish('FALLBACK_POLLING', reason);
   };
-  const scheduleHeartbeat = () => {
+  const scheduleRuntimeTimer = (
+    callback: () => void,
+    delayMs: number,
+    assign: (handle: TimerHandle) => void,
+  ): boolean => {
+    try {
+      assign(setTimeoutFn(callback, delayMs));
+      return true;
+    } catch {
+      forceFallback('PROTOCOL_FAILURE');
+      return false;
+    }
+  };
+  const scheduleHeartbeat = (): boolean => {
     clearTimer(heartbeatTimer);
-    heartbeatTimer = setTimeoutFn(() => {
+    heartbeatTimer = null;
+    return scheduleRuntimeTimer(() => {
       heartbeatTimer = null;
       if (
         stopped
@@ -166,17 +210,15 @@ export function createAiChartPublicStreamClient(
         || status === 'FALLBACK_POLLING'
       ) return;
       try { socket.send(subscription.heartbeatPayload); }
-      catch {
-        try { socket.close(1011, 'heartbeat-send-failed'); }
-        catch { forceFallback('HEARTBEAT_SEND_FAILED'); return; }
-      }
+      catch { forceFallback('HEARTBEAT_SEND_FAILED'); return; }
       scheduleHeartbeat();
-    }, subscription.heartbeatIntervalMs);
+    }, subscription.heartbeatIntervalMs, (handle) => { heartbeatTimer = handle; });
   };
-  const scheduleWatchdog = () => {
+  const scheduleWatchdog = (): boolean => {
     clearTimer(watchdogTimer);
+    watchdogTimer = null;
     const cadence = Math.max(1_000, Math.min(5_000, subscription.staleAfterMs));
-    watchdogTimer = setTimeoutFn(() => {
+    return scheduleRuntimeTimer(() => {
       watchdogTimer = null;
       if (stopped || (status !== 'WAITING_FIRST_EVENT' && status !== 'LIVE_STREAM')) return;
       const currentNow = now();
@@ -194,40 +236,49 @@ export function createAiChartPublicStreamClient(
         return;
       }
       const freshness = aiChartStreamFreshness({ status, lastEventAtMs, nowMs: currentNow, staleAfterMs: subscription.staleAfterMs });
-      if (freshness === 'DELAYED') options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_DELAYED' });
+      if (freshness === 'DELAYED') notifyDiagnostic({ ...snapshot(), reason: 'STREAM_DELAYED' });
       scheduleWatchdog();
-    }, cadence);
+    }, cadence, (handle) => { watchdogTimer = handle; });
   };
-
 
   const scheduleFlush = (expectedSocket: WebSocketLike) => {
     if (flushFrame != null) return;
-    flushFrame = requestFrame(() => {
-      flushFrame = null;
-      if (stopped || socket !== expectedSocket || pendingEvents.length === 0) {
+    try {
+      flushFrame = requestFrame(() => {
+        flushFrame = null;
+        if (stopped || socket !== expectedSocket || pendingEvents.length === 0) {
+          pendingEvents = [];
+          return;
+        }
+
+        const batch = pendingEvents;
         pendingEvents = [];
-        return;
-      }
+        let accepted = false;
+        try {
+          if (options.onTrades) {
+            accepted = options.onTrades(batch) !== false;
+          } else if (options.onTrade) {
+            for (const event of batch) options.onTrade(event);
+            accepted = true;
+          }
+        } catch {
+          forceFallback('PROTOCOL_FAILURE');
+          return;
+        }
+        if (!accepted) {
+          notifyDiagnostic({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
+          return;
+        }
 
-      const batch = pendingEvents;
-      pendingEvents = [];
-      let accepted = false;
-      if (options.onTrades) {
-        accepted = options.onTrades(batch) !== false;
-      } else if (options.onTrade) {
-        for (const event of batch) options.onTrade(event);
-        accepted = true;
-      }
-      if (!accepted) {
-        options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
-        return;
-      }
-
-      lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...batch.map((event) => event.eventTimeMs));
-      reconnectAttempts = 0;
-      if (status !== 'LIVE_STREAM') publish('LIVE_STREAM', 'FIRST_VALID_EVENT_ACCEPTED');
-      else options.onDiagnostic?.({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
-    });
+        lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...batch.map((event) => event.eventTimeMs));
+        reconnectAttempts = 0;
+        if (status !== 'LIVE_STREAM') publish('LIVE_STREAM', 'FIRST_VALID_EVENT_ACCEPTED');
+        else notifyDiagnostic({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
+      });
+    } catch {
+      flushFrame = null;
+      forceFallback('PROTOCOL_FAILURE');
+    }
   };
 
   const connect = () => {
@@ -240,13 +291,18 @@ export function createAiChartPublicStreamClient(
     let nextSocket: WebSocketLike;
     try { nextSocket = socketFactory(subscription.endpoint); }
     catch { forceFallback('WEBSOCKET_UNAVAILABLE'); return; }
-    if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
     socket = nextSocket;
-    connectTimer = setTimeoutFn(() => {
+    try {
+      if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
+    } catch {
+      forceFallback('PROTOCOL_FAILURE');
+      return;
+    }
+    if (!scheduleRuntimeTimer(() => {
       connectTimer = null;
       if (stopped || socket !== nextSocket || connectedAtMs != null) return;
       forceFallback('CONNECT_TIMEOUT');
-    }, subscription.staleAfterMs);
+    }, subscription.staleAfterMs, (handle) => { connectTimer = handle; })) return;
 
     nextSocket.onopen = () => {
       if (stopped || socket !== nextSocket) return;
@@ -256,7 +312,7 @@ export function createAiChartPublicStreamClient(
       catch { forceFallback('SUBSCRIBE_SEND_FAILED'); return; }
       connectedAtMs = now();
       publish('WAITING_FIRST_EVENT', 'PUBLIC_STREAM_CONNECTED_WAITING_FOR_DATA');
-      scheduleHeartbeat();
+      if (!scheduleHeartbeat()) return;
       scheduleWatchdog();
     };
 
@@ -264,7 +320,7 @@ export function createAiChartPublicStreamClient(
       if (stopped || socket !== nextSocket) return;
       const raw = decodeAiChartWebSocketPayload(message.data);
       if (!raw) {
-        options.onDiagnostic?.({ ...snapshot(), reason: 'UNSUPPORTED_MESSAGE_PAYLOAD' });
+        notifyDiagnostic({ ...snapshot(), reason: 'UNSUPPORTED_MESSAGE_PAYLOAD' });
         return;
       }
       const events = parseAiChartPublicStreamMessage(options.market, raw, now())
@@ -280,20 +336,32 @@ export function createAiChartPublicStreamClient(
 
     nextSocket.onerror = () => {
       if (stopped || socket !== nextSocket) return;
-      options.onDiagnostic?.({ ...snapshot(), reason: 'SOCKET_ERROR' });
+      notifyDiagnostic({ ...snapshot(), reason: 'SOCKET_ERROR' });
     };
     nextSocket.onclose = () => {
       if (stopped || socket !== nextSocket) return;
+      const opened = connectedAtMs != null;
       socket = null;
       clearRuntimeTimers();
       clearPendingWork();
       connectedAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
+      // A close before onopen is a rejected/blocked handshake, not an
+      // established stream interruption. Repeating the same public handshake
+      // only amplifies provider throttling (for example an Upbit HTTP 429) and
+      // produces no additional evidence, so move directly to bounded REST
+      // polling. Established streams retain the normal reconnect policy.
+      if (!opened) { forceFallback('PREOPEN_CONNECTION_CLOSED'); return; }
       reconnectAttempts += 1;
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) { forceFallback('RECONNECT_LIMIT_REACHED'); return; }
       publish('RECOVERING', 'SOCKET_CLOSED');
       clearTimer(reconnectTimer);
-      reconnectTimer = setTimeoutFn(() => { reconnectTimer = null; connect(); }, nextAiChartReconnectDelayMs(reconnectAttempts - 1));
+      reconnectTimer = null;
+      scheduleRuntimeTimer(
+        () => { reconnectTimer = null; connect(); },
+        nextAiChartReconnectDelayMs(reconnectAttempts - 1),
+        (handle) => { reconnectTimer = handle; },
+      );
     };
   };
 
@@ -305,6 +373,15 @@ export function createAiChartPublicStreamClient(
       connectedAtMs = null;
       lastEventAtMs = null;
       status = 'DISCONNECTED';
+      statusReason = 'PUBLIC_STREAM';
+      if (usesDefaultSocketFactory) {
+        const fallbackUntilMs = providerFallbackUntilMs.get(fallbackKey) ?? 0;
+        if (fallbackUntilMs > now()) {
+          publish('FALLBACK_POLLING', 'PROVIDER_FALLBACK_COOLDOWN');
+          return;
+        }
+        providerFallbackUntilMs.delete(fallbackKey);
+      }
       connect();
     },
     stop: () => {

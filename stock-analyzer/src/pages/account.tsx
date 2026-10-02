@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { ArrowLeft, Clock3, LogIn, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { BrokerageAccountConnections } from '@/components/brokerage-account-connections';
+import { TradeExecutionConnections } from '@/components/trade-execution-connections';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
 import { useAuth } from '@/lib/auth';
@@ -54,7 +55,8 @@ export default function AccountPage() {
       infoTitle="계정 안내"
       infoItems={[
         '회원가입, 승인 상태와 로그인 정보를 관리합니다.',
-        '실계좌 연결은 조회 전용 경로만 사용합니다.',
+        '실계좌 조회 연결과 실주문 거래 연결은 서로 다른 권한으로 분리됩니다.',
+        '거래키 저장만으로 실주문이 활성화되지는 않습니다.',
       ]}
     />
     <main className="mx-auto w-full max-w-3xl min-w-0 flex-1 px-3 pb-28 pt-4 sm:px-5 sm:pt-5">
@@ -80,7 +82,10 @@ export default function AccountPage() {
           <button type="submit" disabled={busy} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-semibold text-primary-foreground disabled:opacity-50">{register ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}{busy ? '처리 중...' : register ? '가입 신청' : '로그인'}</button>
         </form>
       </Card>}
-      {!auth.loading && auth.user && auth.can('canAccessBasicInfo') ? <BrokerageAccountConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} /> : null}
+      {!auth.loading && auth.user && auth.can('canAccessBasicInfo') ? <>
+        <BrokerageAccountConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} />
+        <TradeExecutionConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} />
+      </> : null}
       {!auth.loading && auth.user && auth.can('canConnectPersonalTelegram') ? <div className="mt-4"><UserBrokerTelegramPanel /></div> : null}
       {(notice || error) && <p role={error ? 'alert' : 'status'} className={`mt-3 break-words rounded-2xl p-4 text-center text-sm font-semibold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
     </main>{auth.isApproved && <BottomNav />}

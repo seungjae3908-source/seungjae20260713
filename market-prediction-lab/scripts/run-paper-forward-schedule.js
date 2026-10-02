@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
@@ -22,6 +22,12 @@ import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-
 import {
   runPaperForwardScheduledInvocation,
 } from "../src/paper-forward-schedule-runtime-v1.js";
+import {
+  buildAutonomousAlphaArchitectureReadinessV1,
+} from "../src/autonomous-alpha-certification-v1.js";
+import { createNaturalPaperTriggerBoundSettlementCostProducer } from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
+import { createNaturalPaperAuthoritativeSettlementCostCollector } from "../src/natural-paper-authoritative-settlement-cost-collector-v1.js";
+import { materializeApprovedPaperRiskPolicyRecord } from "./materialize-paper-risk-policy-record.mjs";
 
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 const forbiddenActivationKeys = [
@@ -71,6 +77,40 @@ async function readConfiguredEvidenceRecord(path) {
   } catch {
     return null;
   }
+}
+
+function createRiskPolicyRecordReader({ env, researchCodeSha }) {
+  const recordPath = configuredEvidencePath(env, "PAPER_FORWARD_RISK_POLICY_RECORD_PATH");
+  const decisionPath = configuredEvidencePath(env, "PAPER_FORWARD_RISK_POLICY_DECISION_PATH");
+  if (recordPath && decisionPath) {
+    throw Object.assign(new Error("CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS"), {
+      code: "CANONICAL_RISK_POLICY_SOURCE_AMBIGUOUS",
+    });
+  }
+  if (recordPath) {
+    return Object.freeze({
+      transport: "CONFIGURED_READ_ONLY",
+      read: async () => readConfiguredEvidenceRecord(recordPath),
+    });
+  }
+  if (!decisionPath) {
+    return Object.freeze({
+      transport: "MISSING",
+      read: async () => null,
+    });
+  }
+  return Object.freeze({
+    transport: "MATERIALIZED_APPROVED_DECISION",
+    async read() {
+      const decision = await readConfiguredEvidenceRecord(decisionPath);
+      if (!decision) return null;
+      return materializeApprovedPaperRiskPolicyRecord({
+        decision,
+        researchCodeSha,
+        nowMs: Date.now(),
+      });
+    },
+  });
 }
 
 function paperStateSnapshotFailureState(error) {
@@ -275,6 +315,139 @@ async function atomicJson(path, value) {
   const temporary = `${path}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, path);
+}
+
+export async function buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+  rootDirectory,
+  researchCodeSha,
+  paperOutput,
+  architectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessV1,
+  readHandoff = readConfiguredEvidenceRecord,
+  observedAtMs = Date.now(),
+} = {}) {
+  const safePaper = paperOutput
+    && paperOutput.scheduleActive === true
+    && paperOutput.externalFinancialMutationAllowed === false
+    && paperOutput.privateRequestCount === 0
+    && paperOutput.financialMutationCount === 0
+    && paperOutput.orderCount === 0
+    && paperOutput.liveTrading === false
+    && paperOutput.orderAuthority === false;
+  const base = {
+    schemaVersion: "autonomous-alpha-natural-paper-observer-v1",
+    observedAtMs,
+    sourceSha: researchCodeSha,
+    paperOnly: true,
+    observerOnly: true,
+    liveTrading: false,
+    autoTrading: false,
+    realOrderEnabled: false,
+    privateTradingApiAllowed: false,
+    executionAuthority: "NONE",
+    privateRequestCount: 0,
+    realOrderCount: 0,
+    automaticPromotionAllowed: false,
+  };
+  if (!safePaper) {
+    return Object.freeze({
+      ...base,
+      status: "BLOCKED_DATA",
+      blockers: Object.freeze(["ALPHA_OBSERVER_PAPER_RUNTIME_UNSAFE"]),
+      alphaHandoffPresent: false,
+      architectureReadiness: null,
+      profitabilityProven: false,
+    });
+  }
+  const alphaRoot = join(rootDirectory, "autonomous-alpha");
+  const handoffPath = join(alphaRoot, "handoff-v1.json");
+  const handoff = await readHandoff(handoffPath);
+  if (handoff == null) {
+    return Object.freeze({
+      ...base,
+      status: "WAITING_FOR_ALPHA_HANDOFF",
+      blockers: Object.freeze(["ALPHA_HANDOFF_MISSING"]),
+      alphaHandoffPresent: false,
+      architectureReadiness: null,
+      naturalPaper: Object.freeze({
+        cycleId: paperOutput.cycleId ?? null,
+        naturalScheduleInvocation: paperOutput.naturalScheduleInvocation === true,
+        entryCount: Number.isInteger(paperOutput.canonicalEntryCount) ? paperOutput.canonicalEntryCount : null,
+        positionCount: Number.isInteger(paperOutput.canonicalPositionCount) ? paperOutput.canonicalPositionCount : null,
+        settlementCount: Number.isInteger(paperOutput.canonicalSettlementCount) ? paperOutput.canonicalSettlementCount : null,
+      }),
+      profitabilityProven: false,
+    });
+  }
+  const validEnvelope = handoff.schemaVersion === "autonomous-alpha-runtime-handoff-v1"
+    && handoff.sourceSha === researchCodeSha
+    && handoff.executionAuthority === "NONE"
+    && handoff.liveTrading === false
+    && handoff.autoTrading === false
+    && handoff.realOrderEnabled === false
+    && handoff.privateTradingApiAllowed === false
+    && handoff.worldKnowledge
+    && handoff.alphaGenome
+    && handoff.redTeam
+    && handoff.forecast
+    && handoff.counterfactual
+    && handoff.digitalTwin
+    && handoff.championChallenger
+    && handoff.certification;
+  if (!validEnvelope) {
+    return Object.freeze({
+      ...base,
+      status: "BLOCKED_DATA",
+      blockers: Object.freeze(["ALPHA_HANDOFF_INVALID_OR_UNSAFE"]),
+      alphaHandoffPresent: true,
+      architectureReadiness: null,
+      profitabilityProven: false,
+    });
+  }
+  const architectureReadiness = architectureReadinessBuilder({
+    worldKnowledge: handoff.worldKnowledge,
+    alphaGenome: handoff.alphaGenome,
+    redTeam: handoff.redTeam,
+    forecast: handoff.forecast,
+    counterfactual: handoff.counterfactual,
+    digitalTwin: handoff.digitalTwin,
+    championChallenger: handoff.championChallenger,
+    certification: handoff.certification,
+  });
+  const ready = architectureReadiness?.architectureReady === true
+    && architectureReadiness?.executionAuthority === "NONE"
+    && architectureReadiness?.liveTradingAllowed === false
+    && architectureReadiness?.autoTradingAllowed === false
+    && architectureReadiness?.realOrderAllowed === false;
+  return Object.freeze({
+    ...base,
+    status: ready ? "ALPHA_OBSERVING_NATURAL_PAPER" : "ALPHA_HANDOFF_REJECTED_BY_LINEAGE_FIREWALL",
+    blockers: Object.freeze(ready ? [] : [...(architectureReadiness?.blockers ?? ["ALPHA_LINEAGE_INVALID"])]),
+    alphaHandoffPresent: true,
+    alphaHandoffDigest: typeof handoff.handoffDigest === "string" ? handoff.handoffDigest : null,
+    architectureReadiness,
+    naturalPaper: Object.freeze({
+      cycleId: paperOutput.cycleId ?? null,
+      naturalScheduleInvocation: paperOutput.naturalScheduleInvocation === true,
+      entryCount: Number.isInteger(paperOutput.canonicalEntryCount) ? paperOutput.canonicalEntryCount : null,
+      positionCount: Number.isInteger(paperOutput.canonicalPositionCount) ? paperOutput.canonicalPositionCount : null,
+      settlementCount: Number.isInteger(paperOutput.canonicalSettlementCount) ? paperOutput.canonicalSettlementCount : null,
+    }),
+    profitabilityProven: ready && architectureReadiness.profitabilityProven === true,
+  });
+}
+
+export async function persistAutonomousAlphaNaturalPaperObserverReceiptV1({
+  rootDirectory,
+  receipt,
+} = {}) {
+  const alphaRoot = join(rootDirectory, "autonomous-alpha");
+  await mkdir(alphaRoot, { recursive: true, mode: 0o700 });
+  await atomicJson(join(alphaRoot, "observer-latest.json"), receipt);
+  await appendFile(
+    join(alphaRoot, "observer-history.jsonl"),
+    `${JSON.stringify(receipt)}\n`,
+    { mode: 0o600 },
+  );
 }
 
 function expectedStrategyId(outcomeAccumulationEnabled, authoritativeAccountRequired = false) {
@@ -641,6 +814,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   authoritativePaperPackageLoader = loadValidatedAuthoritativePaperRuntimePackage,
   paperStateOwnerFactory = createLosslessPaperStateSnapshotFileOwner,
   paperStateSourceFactory = null,
+  alphaArchitectureReadinessBuilder = buildAutonomousAlphaArchitectureReadinessV1,
+  alphaHandoffReader = readConfiguredEvidenceRecord,
 } = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
@@ -700,6 +875,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     let paperStateSnapshotForCard = async () => null;
     let compatibilityPaperStateForCard = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
+    let settlementCostProducer = null;
     let cutover = Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
 
     if (researchProduction) {
@@ -891,20 +1067,29 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
       }
 
-      const riskPolicyRecordPath = configuredEvidencePath(
+      const riskPolicySource = createRiskPolicyRecordReader({
         env,
-        "PAPER_FORWARD_RISK_POLICY_RECORD_PATH",
-      );
+        researchCodeSha,
+      });
       const supplementalCostEvidencePath = configuredEvidencePath(
         env,
         "PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH",
       );
+      const collectAuthoritativeEvidence = createNaturalPaperAuthoritativeSettlementCostCollector({
+        runtimePackage,
+        readSupplementalCostInput: async () => readConfiguredEvidenceRecord(
+          supplementalCostEvidencePath,
+        ),
+      });
+      settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
+        collectAuthoritativeEvidence,
+      });
       const canonicalNaturalWiring = runtimePackage
         .createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
           researchCodeSha,
           sources: {
             paperStateSnapshotForCard,
-            riskPolicyRecordForCard: async () => readConfiguredEvidenceRecord(riskPolicyRecordPath),
+            riskPolicyRecordForCard: riskPolicySource.read,
             supplementalCostInputForCard: async () => readConfiguredEvidenceRecord(
               supplementalCostEvidencePath,
             ),
@@ -934,8 +1119,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         financialMutationAllowed: runtimePackage.financialMutationAllowed,
         paperStateOwner: paperStateOwnerAudit,
         naturalCycleSourceGraph: canonicalNaturalWiring.naturalCycleSourceGraph,
-        riskPolicyRecordTransport: riskPolicyRecordPath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        riskPolicyRecordTransport: riskPolicySource.transport,
         supplementalCostTransport: supplementalCostEvidencePath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        settlementCostProducerBinding: "BOUND_FAIL_CLOSED",
       });
     }
 
@@ -948,6 +1134,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       authoritativeAccountRequired,
       authoritativeAccountSeedSnapshot,
       expectedPublisherAccountIdSha256,
+      ...(settlementCostProducer == null ? {} : { settlementCostProducer }),
     };
     if (publicEvidenceProvider != null) {
       invocation.publicEvidenceProvider = meaningfulSearchPaperRuntimeForMarket == null
@@ -1017,7 +1204,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       naturalScheduleInvocation: result?.invocation?.naturalScheduleInvocation === true,
       replayed: result?.status === "REPLAYED",
     });
-    const output = {
+    const baseOutput = {
       schemaVersion: "paper-forward-schedule-cli-v5",
       status: result.status,
       cycleId: result.cycleId ?? null,
@@ -1103,9 +1290,50 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       liveTrading: false,
       orderAuthority: false,
     };
+    let autonomousAlphaObserver;
+    try {
+      autonomousAlphaObserver = await buildAutonomousAlphaNaturalPaperObserverReceiptV1({
+        rootDirectory,
+        researchCodeSha,
+        paperOutput: baseOutput,
+        architectureReadinessBuilder: alphaArchitectureReadinessBuilder,
+        readHandoff: alphaHandoffReader,
+      });
+      const naturalCreditableCycle = result?.invocation?.naturalScheduleInvocation === true
+        && result.status !== "BLOCKED_DATA"
+        && result.status !== "REPLAYED";
+      if (naturalCreditableCycle) {
+        await persistAutonomousAlphaNaturalPaperObserverReceiptV1({
+          rootDirectory,
+          receipt: autonomousAlphaObserver,
+        });
+      }
+    } catch (error) {
+      autonomousAlphaObserver = Object.freeze({
+        schemaVersion: "autonomous-alpha-natural-paper-observer-v1",
+        status: "OBSERVER_ERROR_FAIL_CLOSED",
+        blockers: Object.freeze(["ALPHA_OBSERVER_INTERNAL_ERROR"]),
+        errorCode: String(error?.code ?? error?.message ?? "UNKNOWN").slice(0, 120),
+        sourceSha: researchCodeSha,
+        paperOnly: true,
+        observerOnly: true,
+        liveTrading: false,
+        autoTrading: false,
+        realOrderEnabled: false,
+        privateTradingApiAllowed: false,
+        executionAuthority: "NONE",
+        privateRequestCount: 0,
+        realOrderCount: 0,
+        profitabilityProven: false,
+      });
+    }
+    const output = Object.freeze({
+      ...baseOutput,
+      autonomousAlphaObserver,
+    });
     process.stdout.write(`${JSON.stringify(output)}\n`);
     if (result.status === "BLOCKED_DATA") process.exitCode = 2;
-    return Object.freeze(output);
+    return output;
   } catch (error) {
     fail(`Paper Forward scheduled invocation failed closed: ${error?.code ?? error?.message ?? "UNKNOWN"}`, 1);
   }
