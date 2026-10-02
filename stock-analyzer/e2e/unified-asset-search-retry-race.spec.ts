@@ -94,3 +94,26 @@ test('changing the query aborts an in-flight manual retry before stale results c
   await expect(page.getByRole('option', { name: /이전검색결과/ })).toHaveCount(0);
   await expect(page.getByRole('option', { name: /새검색결과/ })).toBeVisible();
 });
+
+
+test('selecting a suggestion does not launch a second search before navigation', async ({ page }) => {
+  const queries: string[] = [];
+
+  await page.route('**/api/search/suggest**', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q') ?? '';
+    queries.push(query);
+    await fulfillJson(route, searchResponse(query, 'Apple', 'AAPL'));
+  });
+
+  await page.goto('/__phase11-unified-search-e2e');
+  await page.getByRole('button', { name: '미국', exact: true }).click();
+
+  const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+  await input.fill('AAPL');
+  const option = page.getByRole('option').filter({ hasText: /Apple|AAPL/i }).first();
+  await expect(option).toBeVisible();
+  await option.click();
+
+  await page.waitForTimeout(350);
+  expect(queries).toEqual(['AAPL']);
+});
