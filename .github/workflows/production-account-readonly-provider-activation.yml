@@ -230,7 +230,11 @@ jobs:
           git cat-file -e "$TARGET_SHA^{commit}"
           if ! git diff --quiet "$ACTIVE_SHA" "$TARGET_SHA" -- \
             api-server/src/features/account-readonly \
-            api-server/src/services/trade-exchange-adapters.service.ts
+            api-server/src/services/trade-exchange-adapters.service.ts \
+            stock-analyzer/src/components/brokerage-account-connections.tsx \
+            stock-analyzer/src/pages/account.tsx \
+            stock-analyzer/src/lib/auth-fetch.ts \
+            stock-analyzer/src/main.tsx
           then
             echo 'ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY' >&2
             exit 1
