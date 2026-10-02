@@ -59,6 +59,7 @@ type PaperJournalDependencies = {
   reviewProvider: TradingReviewProvider | null;
   allowTossContractPreview: boolean;
   accountHistoryReader: typeof readAccountJournalHistory;
+  automationJournalReader: (request: AuthenticatedRequest, ownerId: string) => Promise<Record<string, unknown>[]>;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -194,6 +195,11 @@ export function createPaperJournalRouter(
   const reviewProvider = dependencies.reviewProvider === undefined ? configuredTradingReviewProvider() : dependencies.reviewProvider;
   const allowTossContractPreview = dependencies.allowTossContractPreview === true;
   const accountHistoryReader = dependencies.accountHistoryReader ?? readAccountJournalHistory;
+  const automationJournalReader = dependencies.automationJournalReader ?? (async (request, ownerId) => (
+    request.accessToken
+      ? readTradeAutomationJournalPayloads(createSupabaseTradingRepository(request.accessToken, ownerId), ownerId)
+      : []
+  ));
 
   const accountHistoryProviders = (request: AuthenticatedRequest) => {
     if (!request.member) return [] as Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'>;
@@ -416,9 +422,7 @@ export function createPaperJournalRouter(
           providers: accountHistoryProviders(request),
           now: observedAt,
         }),
-        request.accessToken
-          ? readTradeAutomationJournalPayloads(createSupabaseTradingRepository(request.accessToken, ownerId), ownerId)
-          : Promise.resolve([]),
+        automationJournalReader(request, ownerId),
       ]);
       const knownBrokerOrderIds = new Set(
         [...storedPayloads, ...automationPayloads]
