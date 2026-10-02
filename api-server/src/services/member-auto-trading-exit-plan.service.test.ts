@@ -63,7 +63,19 @@ test('exit plan can close only the remaining tracked quantity and reason is part
   const stop=buildAutomaticExitPlanInput({...base,reason:'STOP_LOSS',remainingQuantity:0.4});
   const take=buildAutomaticExitPlanInput({...base,reason:'TAKE_PROFIT',remainingQuantity:0.4});
   assert.equal(stop.quantity,0.4);
-  assert.equal(stop.signalId.endsWith(':STOP_LOSS'),true);
-  assert.equal(take.signalId.endsWith(':TAKE_PROFIT'),true);
+  assert.ok(stop.signalId.includes(':STOP_LOSS:'));
+  assert.ok(take.signalId.includes(':TAKE_PROFIT:'));
   assert.notEqual(stop.signalId,take.signalId);
+});
+
+
+test('fresh mark identity allows a safe retry only after a prior automatic exit is terminal',()=>{
+  const entry=plan('buy','upbit');
+  const base={entryPlan:entry,entryOrder:order(entry),fx:{market:'CRYPTO_SPOT' as const,krwPerQuoteCurrency:1,source:'KRW_NATIVE',observedAt:NOW,stale:false},reason:'STOP_LOSS' as const,remainingQuantity:1};
+  const first=buildAutomaticExitPlanInput({...base,mark:{market:'CRYPTO_SPOT',symbol:'BTC',price:94,observedAt:NOW,source:'public'}});
+  const nextAt='2026-10-02T03:00:30.000Z';
+  const retry=buildAutomaticExitPlanInput({...base,mark:{market:'CRYPTO_SPOT',symbol:'BTC',price:93,observedAt:nextAt,source:'public'}});
+  assert.notEqual(first.signalId,retry.signalId);
+  assert.ok(first.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
+  assert.ok(retry.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
 });
