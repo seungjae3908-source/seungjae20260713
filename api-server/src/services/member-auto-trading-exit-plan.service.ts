@@ -64,7 +64,7 @@ export function buildAutomaticExitPlanInput(input: {
     stockBroker: entryPlan.stockBroker ?? null,
     stockExchange: entryPlan.stockExchange ?? null,
     strategyId: entryPlan.strategyId,
-    signalId: `${entryPlan.signalId}:auto-exit:${entryPlan.id}:${reason}`,
+    signalId: `${entryPlan.signalId}:auto-exit:${entryPlan.id}:${reason}:${mark.observedAt}`,
     symbol: entryPlan.symbol,
     market: entryPlan.market,
     side: exitSide(entryPlan),
