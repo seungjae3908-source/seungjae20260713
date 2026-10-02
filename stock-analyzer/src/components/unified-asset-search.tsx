@@ -122,6 +122,7 @@ export function UnifiedAssetSearch({
   const popupRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
   const activeRequestController = useRef<AbortController | null>(null);
+  const suppressSelectedQueryRef = useRef<string | null>(null);
   const accessTokenRef = useRef<string | null>(auth.session?.access_token ?? null);
   accessTokenRef.current = auth.session?.access_token ?? null;
   const [query, setQuery] = useState('');
@@ -261,6 +262,12 @@ export function UnifiedAssetSearch({
 
   useEffect(() => {
     cancelActiveRequest();
+    if (suppressSelectedQueryRef.current === trimmed) {
+      suppressSelectedQueryRef.current = null;
+      setLoading(false);
+      setError(null);
+      return;
+    }
     if (!trimmed || composing) {
       setResponse(null);
       setLoading(false);
@@ -297,6 +304,7 @@ export function UnifiedAssetSearch({
 
   const selectItem = (item: UnifiedAssetSuggestion) => {
     cancelActiveRequest();
+    suppressSelectedQueryRef.current = item.displayName.trim();
     saveRecent(item);
     setRecent(readRecent());
     setFocused(false);
