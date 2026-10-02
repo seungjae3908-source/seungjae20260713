@@ -40,8 +40,9 @@ jobs:
         run: |
           npm run check
           npm test
-          python3 -m py_compile server.py
+          python3 -m py_compile server.py video_research_readback.py
           python3 test/test_server.py
+          python3 test/test_video_research_readback.py
       - name: Validate exact Python server startup and read-only aggregation
         shell: bash
         run: |
@@ -94,6 +95,45 @@ jobs:
           cat >"$state/forward/shadow-state.json" <<'JSON'
           {"groups":{"fixture":{"records":[{"status":"settled"},{"status":"pending"}]}}}
           JSON
+          mkdir -p "$state/video-research/current" "$state/video-research" "$state/ai-review"
+          cat >"$state/video-research/current/video-research-public-provider-runtime-v3.json" <<'JSON'
+          {
+            "runtimeVersion":"video-research-public-provider-runtime-v3","status":"SUCCESS","provider":"YOUTUBE_DATA_API_V3",
+            "providerAccess":"OFFICIAL_PUBLIC_API","requestMode":"READ_ONLY_GET","query":"fixture research","pagesUsed":1,
+            "quotaState":"UNKNOWN","credentialConfigured":true,"credentialValueExposed":false,"sourceCount":0,"records":[],
+            "safety":{"researchOnly":true,"economicEvidenceCredit":0,"profitabilityCredit":0,"executionAuthority":"NONE",
+              "paidProviderEnabled":false,"scheduleActive":false,"automaticDiscoveryEnabled":false,"liveTrading":false,
+              "privateTradingApi":false,"realOrderEnabled":false,"credentialMutation":false,"transcriptDownloadEnabled":false},
+            "snapshotProvenance":{"schemaVersion":"video-research-sanitized-snapshot-v1","sourceHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "observedAt":"2026-10-02T03:00:00.000Z","publisherMode":"LOCAL_ATOMIC_FILE",
+              "providerRuntimeVersion":"video-research-public-provider-runtime-v3","economicEvidenceCredit":0,"profitabilityCredit":0,
+              "executionAuthority":"NONE"}
+          }
+          JSON
+          cat >"$state/video-research/latest.json" <<'JSON'
+          {
+            "schemaVersion":"research-video-discovery-scan-v1","status":"COMPLETE","observedAt":"2026-10-02T03:00:00.000Z",
+            "researchSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider":"YOUTUBE_DATA_API_V3","query":"fixture research",
+            "sourceCount":0,"snapshotDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "providerNetworkCalls":1,"invocationMode":"SYSTEMD_TIMER","scheduledInvocationObserved":false,"reason":null,
+            "nextRequiredStep":"SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR",
+            "safety":{"researchOnly":true,"metadataDiscoveryOnly":true,"transcriptDownloadEnabled":false,"automaticGeminiExecution":false,
+              "automaticGroqExecution":false,"automaticAdoption":false,"paidFallback":false,"economicEvidenceCredit":0,
+              "profitabilityCredit":0,"executionAuthority":"NONE","liveTrading":false,"privateTradingApiAllowed":false,"realOrderEnabled":false}
+          }
+          JSON
+          cat >"$state/ai-review/latest.json" <<'JSON'
+          {
+            "schemaVersion":"research-production-ai-scan-v1","status":"NO_NEW_EVIDENCE","observedAt":1790910030000,
+            "researchSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider":"groq","model":"openai/gpt-oss-20b",
+            "reason":"CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN","providerNetworkCalls":0,"cacheHits":0,"reviews":[],
+            "missingProfiles":[],"blockedProfiles":[],"deferredProfiles":[],"invocationMode":"SYSTEMD_TIMER","scheduledInvocationObserved":false,
+            "evidenceCredit":0,"profitabilityProven":false,"champion":null,
+            "safety":{"researchProposalOnly":true,"paidFallback":false,"executionAuthority":"NONE","numericPerformanceAuthority":false,
+              "promotionAuthority":false,"championAuthority":false,"finalHoldoutOpened":false,"orderAllowed":false,"liveTrading":false,
+              "privateTradingApiAllowed":false,"evidenceCredit":0}
+          }
+          JSON
 
           RESEARCH_DASHBOARD_HOST=127.0.0.1 \
           RESEARCH_DASHBOARD_PORT=18091 \
@@ -114,10 +154,12 @@ jobs:
           done
           [[ "$ready" == true ]]
           curl --fail --silent --show-error --max-time 3 http://127.0.0.1:18091/api/research/overview >"$tmp/overview.json"
-          python3 - "$tmp/health.json" "$tmp/overview.json" <<'PY'
+          curl --fail --silent --show-error --max-time 3 http://127.0.0.1:18091/api/research/video/evidence >"$tmp/video.json"
+          python3 - "$tmp/health.json" "$tmp/overview.json" "$tmp/video.json" <<'PY'
           import json, sys
           health = json.load(open(sys.argv[1], encoding='utf-8'))
           overview = json.load(open(sys.argv[2], encoding='utf-8'))
+          video = json.load(open(sys.argv[3], encoding='utf-8'))
           assert health['ok'] is True
           assert health['service'] == 'investment-research-dashboard'
           assert health['readOnly'] is True
@@ -135,6 +177,17 @@ jobs:
           assert overview['shadow']['records']['settledRecords'] == 1
           assert overview['shadow']['records']['pendingRecords'] == 1
           assert overview['profitability']['proven'] is False
+          assert video['ok'] is True
+          assert video['available'] is True
+          assert video['dataState'] == 'MEASURED'
+          assert video['sourceCount'] == 0
+          assert video['automation']['invocationMode'] == 'SYSTEMD_TIMER'
+          assert video['automation']['scheduledInvocationObserved'] is False
+          assert video['aiReview']['status'] == 'NO_NEW_EVIDENCE'
+          assert video['aiReview']['scheduledInvocationObserved'] is False
+          assert video['economicEvidenceCredit'] == 0
+          assert video['profitabilityCredit'] == 0
+          assert video['executionAuthority'] == 'NONE'
           PY
           code="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST http://127.0.0.1:18091/api/research/overview)"
           [[ "$code" == 405 ]]

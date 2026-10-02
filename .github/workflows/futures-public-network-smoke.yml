@@ -136,11 +136,31 @@ jobs:
             } while (cursor);
             if (unresolved !== 0) { core.setFailed(`[READY_REVIEW_THREADS_OPEN] ${unresolved}`); return; }
 
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, { owner: context.repo.owner, repo: context.repo.repo, head_sha: targetSha, event: 'pull_request', per_page: 100 });
-            const fastRuns = runs.filter((run) => run.name === 'Application Fast CI' && String(run.head_sha).toLowerCase() === targetSha).sort((a, b) => b.id - a.id);
-            const latestFast = fastRuns[0];
+            const readLatestFast = async () => {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner, repo: context.repo.repo, head_sha: targetSha, event: 'pull_request', per_page: 100,
+              });
+              return runs
+                .filter((run) => run.name === 'Application Fast CI' && String(run.head_sha).toLowerCase() === targetSha)
+                .sort((a, b) => b.id - a.id)[0] ?? null;
+            };
+            let latestFast = await readLatestFast();
+            const terminalFailure = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'stale', 'startup_failure']);
+            for (let attempt = 0; attempt < 45; attempt += 1) {
+              if (latestFast?.conclusion === 'success') break;
+              if (latestFast?.conclusion && terminalFailure.has(latestFast.conclusion)) break;
+              if (attempt === 44) break;
+              core.info(`Fast CI exact-head run is not terminal yet; bounded wait attempt=${attempt + 1}/45 run=${latestFast?.id ?? 'MISSING'} status=${latestFast?.status ?? 'MISSING'}`);
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              const currentPr = await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber });
+              if (String(currentPr.data.head.sha).toLowerCase() !== targetSha) {
+                core.setFailed(`[READY_HEAD_MOVED] expected=${targetSha} actual=${currentPr.data.head.sha}`);
+                return;
+              }
+              latestFast = await readLatestFast();
+            }
             if (!latestFast || latestFast.conclusion !== 'success') {
-              core.setFailed(`[READY_FAST_CI_NOT_GREEN] latest=${latestFast ? `${latestFast.id}:${latestFast.conclusion}` : 'MISSING'}`);
+              core.setFailed(`[READY_FAST_CI_NOT_GREEN] latest=${latestFast ? `${latestFast.id}:${latestFast.status}:${latestFast.conclusion}` : 'MISSING'}`);
               return;
             }
             core.info(`Pre-merge Gate PASS for PR #${prNumber}, head ${targetSha}, Fast CI ${latestFast.id}.`);
