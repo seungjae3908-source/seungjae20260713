@@ -1468,6 +1468,8 @@ async function runAuthenticatedSearchCertification(page: Page) {
   await input.fill('AAPL');
   const selectionResponse = await selectionResponsePromise;
   expect(selectionResponse.status(), 'AI Chart analysis-selection search must return HTTP 200').toBe(200);
+  const selectionResponseError = await selectionResponse.finished();
+  expect(selectionResponseError, 'AI Chart analysis-selection search must fully finish before route navigation').toBeNull();
   await expect.poll(async () => (await page.getByRole('option').allTextContents())
     .map(normalizedAssetSymbol)
     .some((text) => text.includes('AAPL')), {
