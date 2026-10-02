@@ -128,6 +128,8 @@ test('timer-configured service never claims scheduler observation without separa
     const inbox = await readdir(join(root, 'video-research', 'inbox'));
     assert.equal(history.length, 2);
     assert.equal(inbox.length, 2);
+    assert.equal(first.reviewInboxCreated, true);
+    assert.equal(second.reviewInboxCreated, true);
     const latest = await readFile(join(root, 'video-research', 'latest.json'), 'utf8');
     assert.equal(latest.includes(SECRET), false);
     assert.match(latest, /SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR/);
@@ -178,4 +180,33 @@ test('policy rejects malformed query configuration without provider access', () 
     YOUTUBE_DATA_API_KEY: SECRET,
     RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: JSON.stringify(['ok', 'bad\nquery']),
   }), /VIDEO_DISCOVERY_QUERIES_INVALID/);
+});
+
+test('repeated identical sources do not duplicate the source-review inbox', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-video-dedupe-'));
+  const env = {
+    RESEARCH_VIDEO_DISCOVERY_APPROVED: 'true',
+    RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON: JSON.stringify(['same query']),
+    YOUTUBE_DATA_API_KEY: SECRET,
+  };
+  let tick = 0;
+  try {
+    const discover = async ({ query, observedAt }) => ({ published: true, snapshot: snapshot(query, observedAt) });
+    const input = {
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root), discover,
+      clock: () => tick++ === 0 ? '2026-10-02T03:00:00.000Z' : '2026-10-02T06:00:00.000Z',
+    };
+    const first = await runResearchVideoDiscoveryScan(input);
+    const second = await runResearchVideoDiscoveryScan(input);
+    assert.equal(first.sourceReviewDigest, second.sourceReviewDigest);
+    assert.equal(first.reviewInboxCreated, true);
+    assert.equal(second.reviewInboxCreated, false);
+    const inbox = await readdir(join(root, 'video-research', 'inbox'));
+    const history = await readdir(join(root, 'video-research', 'history'));
+    assert.equal(inbox.length, 1);
+    assert.equal(history.length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
