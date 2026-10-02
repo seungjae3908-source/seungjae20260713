@@ -88,6 +88,7 @@ jobs:
           grep -Fq "requiredSnapshotsHealthy" "$spec"
           grep -Fq "new URL('/api/auth/profile'" "$login"
           grep -Fq "Do not submit credentials a second time" "$login"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING" "$file"
           grep -Fq "post-merge-provenance/verified" "$file"
           grep -Fq "ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY" "$file"
           grep -Fq "ACCOUNT_READ_ACTIVATION_MAIN_MOVED_BEFORE_MUTATION" "$file"
@@ -192,6 +193,37 @@ jobs:
               return;
             }
             core.info('Production provenance and shared live concurrency gate accepted.');
+
+      - name: Require successful pre-activation four-provider Production QA
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-account-readonly-live-qa.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const expectedProviders = 'bitget,kiwoom,toss,upbit';
+            const match = runs
+              .filter((run) =>
+                run.status === 'completed'
+                && run.conclusion === 'success'
+                && String(run.head_sha).toLowerCase() === target
+                && String(run.display_title ?? '').includes(active)
+                && String(run.display_title ?? '').includes(expectedProviders))
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!match) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING');
+              return;
+            }
+            core.info('Pre-activation four-provider Production QA accepted from Run ' + match.id + '.');
 
       - name: Require verified post-merge provenance for exact current main
         uses: actions/github-script@v7
