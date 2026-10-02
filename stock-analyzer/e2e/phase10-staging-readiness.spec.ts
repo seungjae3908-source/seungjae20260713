@@ -145,6 +145,7 @@ const recentConfirmedRouteTransitions = new WeakMap<Page, RecentRouteTransitionO
 const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
+const verifierOwnedTeardownPages = new WeakSet<Page>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
 const pendingSameOriginReadRequests = new WeakMap<Page, Set<Request>>();
@@ -163,6 +164,7 @@ const diagnostics: {
   expected_capability_denials: Diagnostic[];
   expected_capability_console_errors: Diagnostic[];
   expected_research_reload_aborts: Diagnostic[];
+  expected_page_teardown_aborts: Diagnostic[];
   api_diagnostics: SafeApiDiagnostic[];
   authenticated_search: {
     samples: AuthenticatedSearchEvidence[];
@@ -186,6 +188,7 @@ const diagnostics: {
   expected_capability_denials: [],
   expected_capability_console_errors: [],
   expected_research_reload_aborts: [],
+  expected_page_teardown_aborts: [],
   api_diagnostics: [],
   authenticated_search: { samples: [], summary: null },
   authenticated_ai_chart: { sessions: [], summary: null },
@@ -695,6 +698,14 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       && Date.now() - recentRouteObservation.confirmedAt > recentAiChartCandleAbortWindowMs
     ) {
       recentConfirmedRouteTransitions.delete(page);
+    }
+    if (
+      verifierOwnedTeardownPages.has(page)
+      && request.failure()?.errorText === 'net::ERR_ABORTED'
+      && isSameOriginBrowserRead(request)
+    ) {
+      diagnostics.expected_page_teardown_aborts.push(diagnostic);
+      return;
     }
     diagnostics.unexpected_http_errors.push(diagnostic);
   });
@@ -1360,7 +1371,8 @@ async function runAuthenticatedSearchCertification(page: Page) {
   await expect(input).toBeEditable();
   const samples: AuthenticatedSearchEvidence[] = [];
 
-  for (const item of matrix) {
+  for (let round = 0; round < 5; round += 1) {
+    for (const item of matrix) {
     const tab = page.getByRole('button', { name: item.label, exact: true });
     await expect(tab).toBeVisible();
     await tab.click();
@@ -1442,8 +1454,10 @@ async function runAuthenticatedSearchCertification(page: Page) {
     expect(sample.failureCode, `${item.label} search terminal evidence: ${JSON.stringify(sample)}`).toBeNull();
     expect(sample.exactMatch, `${item.label} search exact-match evidence: ${JSON.stringify(sample)}`).toBe(true);
     expect(sample.durationMs, `${item.label} search exceeded the 5s hard maximum`).toBeLessThan(5_000);
+    }
   }
 
+  expect(samples.length, 'authenticated Search p95 requires at least 20 real browser samples').toBeGreaterThanOrEqual(20);
   const summary = performanceSummary(samples.map((sample) => sample.durationMs));
   diagnostics.authenticated_search.summary = summary;
   expect(summary.p95Ms, `authenticated Search p95 evidence: ${JSON.stringify(summary)}`).toBeLessThanOrEqual(2_000);
@@ -1910,7 +1924,11 @@ test.describe('real staging release readiness', () => {
     attachDiagnostics(page, testInfo);
   });
 
-  test.afterEach(async ({}, testInfo) => {
+  test.afterEach(async ({ page }, testInfo) => {
+    if (!page.isClosed()) {
+      verifierOwnedTeardownPages.add(page);
+      await page.close({ runBeforeUnload: false });
+    }
     const errors = errorsFor(testInfo);
     expect(errors.console, 'browser console errors').toEqual([]);
     expect(errors.page, 'pageerror events').toEqual([]);
