@@ -43,7 +43,9 @@ test('canonical app execution ledger is projected into journal without provider-
     'APP_TRADE_AUTOMATION_LEDGER_PROJECTION',
   ]) assert.ok(adapter.includes(marker), marker);
   assert.ok(route.includes('readTradeAutomationJournalPayloads'));
-  assert.ok(route.includes('appBrokerOrderIds'));
+  assert.ok(route.includes('knownBrokerOrderIds'));
+  assert.ok(route.includes('BROKER_HISTORY_IMPORTED_PERSISTENTLY'));
+  assert.ok(!route.includes("...payload.warnings.filter((item): item is string => typeof item === 'string'), 'BROKER_HISTORY_IMPORTED_PERSISTENTLY'"));
   assert.ok(route.includes('/paper-journal/import-account-history'));
   assert.ok(route.includes("['toss', 'kiwoom']"));
   assert.ok(service.includes("executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual'"));
@@ -64,6 +66,7 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
   const verifier = read('api-server/scripts/verify-production-automatic-trading-gate.mjs');
+  const deploy = read('ops/deploy-production.sh');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
     assert.ok(handoff.includes(market), market);
   }
@@ -80,4 +83,5 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
   assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V2_MISSING'));
+  assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
 });
