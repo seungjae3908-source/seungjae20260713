@@ -12,4 +12,8 @@ test('AI research unit installer installs only and never activates timers', asyn
   assert.doesNotMatch(script,/enable\s+--now|--now\s+enable/);
   assert.doesNotMatch(script,/pm2\s+(?:start|restart|reload)/);
   assert.doesNotMatch(script,/LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true/);
+  const preflightIndex=script.indexOf('systemctl is-enabled --quiet');
+  const installIndex=script.indexOf('install -o root -g root -m 0644');
+  assert.ok(preflightIndex >= 0 && installIndex >= 0 && preflightIndex < installIndex,
+    'active/enabled timer preflight must occur before unit-file mutation');
 });
