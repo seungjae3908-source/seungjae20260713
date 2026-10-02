@@ -73,21 +73,6 @@ type SafeRecord = {
   executionAuthority: 'NONE';
 };
 
-type SafeAutomation = {
-  schemaVersion: 'research-video-discovery-scan-v1';
-  status: 'COMPLETE' | 'BLOCKED' | 'WAITING_CONFIGURATION';
-  observedAt: string;
-  researchSha: string;
-  query: string | null;
-  sourceCount: number | null;
-  snapshotDigest: string | null;
-  providerNetworkCalls: number;
-  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
-  scheduledInvocationObserved: boolean;
-  reason: string | null;
-  nextRequiredStep: string;
-};
-
 type SafeSnapshotProvenance = {
   schemaVersion: typeof SNAPSHOT_SCHEMA;
   sourceHeadSha: string;
@@ -114,7 +99,6 @@ type SafeEvidence = {
   records: SafeRecord[];
   safety: typeof REQUIRED_SAFETY;
   snapshotProvenance: SafeSnapshotProvenance;
-  automation: SafeAutomation | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -214,39 +198,6 @@ function safeSnapshotProvenance(value: unknown): SafeSnapshotProvenance | null {
   };
 }
 
-function safeAutomation(value: unknown): SafeAutomation | null {
-  if (value == null) return null;
-  if (!isRecord(value)
-    || value.schemaVersion !== 'research-video-discovery-scan-v1'
-    || !['COMPLETE', 'BLOCKED', 'WAITING_CONFIGURATION'].includes(String(value.status ?? ''))
-    || !canonicalIsoTimestamp(value.observedAt)) return null;
-  const researchSha = exactSha(value.researchSha);
-  if (!researchSha
-    || (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER')
-    || typeof value.scheduledInvocationObserved !== 'boolean'
-    || typeof value.providerNetworkCalls !== 'number' || !Number.isSafeInteger(value.providerNetworkCalls)
-    || value.providerNetworkCalls < 0 || value.providerNetworkCalls > 1
-    || (value.query !== null && (typeof value.query !== 'string' || !value.query.trim() || value.query.length > 120))
-    || (value.sourceCount !== null && (typeof value.sourceCount !== 'number' || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 0 || value.sourceCount > 5))
-    || (value.snapshotDigest !== null && (typeof value.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(value.snapshotDigest)))
-    || (value.reason !== null && (typeof value.reason !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.reason)))
-    || typeof value.nextRequiredStep !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.nextRequiredStep)) return null;
-  return {
-    schemaVersion: 'research-video-discovery-scan-v1',
-    status: value.status as SafeAutomation['status'],
-    observedAt: value.observedAt,
-    researchSha,
-    query: value.query as string | null,
-    sourceCount: value.sourceCount as number | null,
-    snapshotDigest: value.snapshotDigest as string | null,
-    providerNetworkCalls: value.providerNetworkCalls,
-    invocationMode: value.invocationMode as SafeAutomation['invocationMode'],
-    scheduledInvocationObserved: value.scheduledInvocationObserved,
-    reason: value.reason as string | null,
-    nextRequiredStep: value.nextRequiredStep,
-  };
-}
-
 function safetyMatches(value: unknown): value is typeof REQUIRED_SAFETY {
   if (!isRecord(value)) return false;
   return Object.entries(REQUIRED_SAFETY).every(([key, expected]) => value[key] === expected);
@@ -264,8 +215,7 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   if (!Array.isArray(value.records) || value.records.length !== value.sourceCount) return null;
   if (!safetyMatches(value.safety)) return null;
   const snapshotProvenance = safeSnapshotProvenance(value.snapshotProvenance);
-  const automation = safeAutomation(value.automation);
-  if (!snapshotProvenance || (value.automation != null && !automation)) return null;
+  if (!snapshotProvenance) return null;
 
   const records = value.records.map(safeRecord);
   if (records.some((record) => record === null)) return null;
@@ -285,7 +235,6 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
     records: records as SafeRecord[],
     safety: REQUIRED_SAFETY,
     snapshotProvenance,
-    automation,
   };
 }
 
@@ -302,23 +251,7 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(): Promise<unknow
       throw error;
     }
   }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 750);
-  try {
-    const response = await fetch('http://127.0.0.1:18090/api/research/video/evidence', {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) return null;
-    const value = await response.json() as unknown;
-    return isRecord(value) && value.available === true ? value : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  return null;
 }
 
 function unavailable(reason: string) {
