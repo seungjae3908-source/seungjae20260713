@@ -12,7 +12,6 @@ import {
   X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
-import { AiChartPositionPanel } from '@/components/ai-chart-position-panel';
 import { BottomNav } from '@/components/bottom-nav';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import {
@@ -68,6 +67,16 @@ import { cn } from '@/lib/utils';
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
 
+// On a direct /ai-chart document, this route module is already requested ahead
+// of the wider app graph by main.tsx. Start the renderer chunk request as soon
+// as this module evaluates, without turning the renderer into a static import.
+// React.lazy below remains the canonical render boundary and the browser module
+// cache shares the same module fetch.
+const directAiChartRendererPrewarm = import.meta.glob('../components/unified-analysis-chart.tsx');
+if (typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart')) {
+  void directAiChartRendererPrewarm['../components/unified-analysis-chart.tsx']?.();
+}
+
 const LazyAiChartV2IntelligencePanel = lazy(() =>
   import('@/components/ai-chart-v2-intelligence-panel').then(({ AiChartV2IntelligencePanel }) => ({
     default: AiChartV2IntelligencePanel,
@@ -81,6 +90,11 @@ const LazyFuturesPublicContextPanel = lazy(() =>
 const LazyUnifiedAnalysisChart = lazy(() =>
   import('@/components/unified-analysis-chart').then(({ UnifiedAnalysisChart }) => ({
     default: UnifiedAnalysisChart,
+  })),
+);
+const LazyAiChartPositionPanel = lazy(() =>
+  import('@/components/ai-chart-position-panel').then(({ AiChartPositionPanel }) => ({
+    default: AiChartPositionPanel,
   })),
 );
 
@@ -854,7 +868,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {mobileTab === 'position' ? (
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
                 {hasSelection ? (
-                  <AiChartPositionPanel
+                  <LazyAiChartPositionPanel
                     selection={selection}
                     market={selection.market}
                     symbol={selection.symbol || selection.ticker}
