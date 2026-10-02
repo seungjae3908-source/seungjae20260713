@@ -15,7 +15,7 @@ const PROVIDER_KEYS=Object.freeze([
 ]);
 const MAX_ENV_BYTES=128*1024;
 const KEY_PATTERN=/^[A-Za-z0-9_.-]{8,512}$/;
-const SECRET_KEY_PATTERN=/(?:SUPABASE|DATABASE|POSTGRES|BITGET|UPBIT|KIWOOM|TOSS|TELEGRAM|PASSWORD|PRIVATE|ACCOUNT|JWT|SERVICE_ROLE)/i;
+const OUTPUT_KEY_ALLOWLIST=new Set(['YOUTUBE_DATA_API_KEY','GEMINI_API_KEY','GEMINI_MODEL','GROQ_API_KEY','GROQ_MODEL']);
 
 function clean(value){return typeof value==='string'?value.trim():'';}
 function safePath(root,relative){
@@ -133,7 +133,12 @@ export async function materializeResearchProviderEnv({appRoot='/opt/stock-app',o
     '',
   ];
   const serialized=rows.join('\n');
-  if(SECRET_KEY_PATTERN.test(serialized.replace(/^(?:YOUTUBE_DATA_API_KEY|GEMINI_API_KEY|GROQ_API_KEY)=.*$/gm,'')))throw new Error('PROVIDER_BOOTSTRAP_SCOPE_VIOLATION');
+  for(const line of rows){
+    if(!line || line.startsWith('#'))continue;
+    const separator=line.indexOf('=');
+    const key=separator>0?line.slice(0,separator):'';
+    if(!OUTPUT_KEY_ALLOWLIST.has(key))throw new Error('PROVIDER_BOOTSTRAP_SCOPE_VIOLATION');
+  }
   const target=join(resolve(outputRoot),'research-providers.env');
   await atomic(target,serialized);
   return {...publicStatus(result),materialized:true,target,credentialValuesExposed:false};
