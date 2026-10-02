@@ -93,7 +93,7 @@ test('discovery waits fail-closed until explicitly approved and configured', asy
   }
 });
 
-test('scheduled discovery rotates bounded queries and persists sanitized history plus review inbox', async () => {
+test('timer-configured service never claims scheduler observation without separate runtime proof', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-video-rotate-'));
   const queries = ['kr strategy research', 'us strategy research'];
   const seen = [];
@@ -118,7 +118,8 @@ test('scheduled discovery rotates bounded queries and persists sanitized history
     const second = await runResearchVideoDiscoveryScan(input);
     assert.deepEqual(seen, queries);
     assert.equal(first.status, 'COMPLETE');
-    assert.equal(first.scheduledInvocationObserved, true);
+    assert.equal(first.invocationMode, 'SYSTEMD_TIMER');
+    assert.equal(first.scheduledInvocationObserved, false);
     assert.equal(second.nextQueryIndex, 0);
     assert.equal(second.safety.automaticGeminiExecution, false);
     assert.equal(second.safety.automaticGroqExecution, false);
