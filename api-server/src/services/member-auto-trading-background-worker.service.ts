@@ -117,7 +117,7 @@ export function resolveMemberStockBroker(
   return null;
 }
 
-function marketMapping(
+export function marketMapping(
   market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
   policy: TradingPolicy,
 ): {
@@ -127,19 +127,23 @@ function marketMapping(
   stockBroker: 'kiwoom' | 'toss' | null;
 } {
   if (market === 'KR_STOCK') {
+    const stockBroker = resolveMemberStockBroker(policy, market);
+    if (!stockBroker) throw new Error('BACKGROUND_STOCK_BROKER_REQUIRED');
     return {
-      exchange: 'kiwoom',
+      exchange: stockBroker,
       assetClass: 'domestic_stock',
       planMarket: 'KR',
-      stockBroker: resolveMemberStockBroker(policy, market),
+      stockBroker,
     };
   }
   if (market === 'US_STOCK') {
+    const stockBroker = resolveMemberStockBroker(policy, market);
+    if (!stockBroker) throw new Error('BACKGROUND_STOCK_BROKER_REQUIRED');
     return {
-      exchange: 'kiwoom',
+      exchange: stockBroker,
       assetClass: 'us_stock',
       planMarket: 'US',
-      stockBroker: resolveMemberStockBroker(policy, market),
+      stockBroker,
     };
   }
   if (market === 'CRYPTO_SPOT') {
@@ -396,10 +400,23 @@ function buildPlanInput(
     ? new Date(entry.signal.timestampMs).toISOString()
     : observedAt;
 
+  const stockExchangeRaw = String(
+    evidence?.stockExchange ?? evidence?.exchange ?? evidence?.venue ?? '',
+  ).trim().toUpperCase();
+  const stockExchange = entry.identity.market === 'US_STOCK' && mapping.exchange === 'kiwoom'
+    ? (['NASDAQ', 'NYSE', 'AMEX'].includes(stockExchangeRaw)
+      ? stockExchangeRaw as 'NASDAQ' | 'NYSE' | 'AMEX'
+      : null)
+    : null;
+  if (entry.identity.market === 'US_STOCK' && mapping.exchange === 'kiwoom' && !stockExchange) {
+    throw new Error('BACKGROUND_US_STOCK_EXCHANGE_REQUIRED');
+  }
+
   return {
     exchange: mapping.exchange,
     accountMode: 'paper',
     stockBroker: mapping.stockBroker,
+    stockExchange,
     strategyId: entry.identity.strategyId,
     signalId: entry.identity.signalId,
     symbol: entry.identity.symbol,
