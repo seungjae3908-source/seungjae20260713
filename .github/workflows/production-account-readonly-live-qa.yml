@@ -78,6 +78,7 @@ jobs:
           requireText(live, 'Resolve exact workflow-generation QA harness safely', 'LIVE_QA_CURRENT_HARNESS_OVERLAY_REQUIRED');
           requireText(live, 'QA_HARNESS_SHA:', 'LIVE_QA_HARNESS_SHA_MUST_BE_PINNED');
           requireText(live, 'stock-analyzer/e2e/support/production-readonly-login.ts', 'LIVE_QA_LOGIN_HARNESS_OVERLAY_REQUIRED');
+          requireText(live, 'PRODUCTION_ACCOUNT_QA_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY', 'LIVE_QA_PROVIDER_CODE_DRIFT_GATE_REQUIRED');
           requireText(login, "new URL('/api/auth/profile'", 'LOGIN_AUTH_PROFILE_READ_PROOF_REQUIRED');
           requireText(login, 'Do not submit credentials a second time', 'LOGIN_AUTH_RETRY_MUST_NOT_RESUBMIT_CREDENTIALS');
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
@@ -198,6 +199,14 @@ jobs:
           set -Eeuo pipefail
           [[ "$QA_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
+          if ! git diff --quiet "$EXPECTED_DEPLOY_SHA" "$QA_HARNESS_SHA" -- \
+            api-server/src/features/account-readonly \
+            api-server/src/services/trade-exchange-adapters.service.ts
+          then
+            echo 'PRODUCTION_ACCOUNT_QA_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY' >&2
+            exit 1
+          fi
           if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
             test -s stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
             test -s stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts
@@ -206,7 +215,6 @@ jobs:
             test -s stock-analyzer/playwright.production-account-readonly.config.ts
             echo "QA harness already belongs to the exact deployed SHA; overlay not required."
           else
-            git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
             git cat-file -e "$QA_HARNESS_SHA^{commit}"
             for harness_path in \
               stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts \
