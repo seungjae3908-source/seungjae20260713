@@ -71,8 +71,12 @@ export async function readTradeAutomationJournalPayloads(
     const market = marketForPlan(plan);
     const broker = plan.exchange.toUpperCase();
     const side = plan.side === 'buy' || plan.side === 'long' ? 'BUY' : 'SELL';
-    const positionSide = plan.side === 'short' ? 'SHORT' : 'LONG';
     const positionEffect = plan.reduceOnly === true || (plan.exchange !== 'bitget' && plan.side === 'sell') ? 'CLOSE' : 'OPEN';
+    const positionSide = plan.exchange === 'bitget' && plan.reduceOnly === true
+      ? (side === 'SELL' ? 'LONG' : 'SHORT')
+      : plan.side === 'short'
+        ? 'SHORT'
+        : 'LONG';
 
     return [{
       schemaVersion: 1,
