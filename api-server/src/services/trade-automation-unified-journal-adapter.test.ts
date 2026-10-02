@@ -59,3 +59,28 @@ test('canonical execution ledger separates manual live, automatic live, and auto
   assert.equal(byOrder.get('exchange-order-paper')?.source,'APP_PAPER');
   assert.equal(rows.every((row)=>String(row.accountIdMasked).includes('****')),true);
 });
+
+
+test('Bitget reduce-only exit keeps the original position side so entry and exit reconcile into one journal cycle', async () => {
+  const repository=new InMemoryTradingRepository();
+  const entry={...plan('future-entry','live','automatic'),
+    exchange:'bitget' as const,market:'USDT-FUTURES',side:'long' as const,
+    leverage:2,marginMode:'isolated' as const,quantity:1,quoteAmount:null,
+    estimatedKrw:1_000_000,reduceOnly:false};
+  const exit={...plan('future-exit','live','automatic'),
+    exchange:'bitget' as const,market:'USDT-FUTURES',side:'short' as const,
+    leverage:2,marginMode:'isolated' as const,quantity:1,quoteAmount:null,
+    estimatedKrw:1_000_000,reduceOnly:true,
+    signalReasons:['AUTO_EXIT_ENTRY_PLAN:future-entry','AUTO_EXIT_REASON:TAKE_PROFIT']};
+  await repository.savePlan(entry);
+  await repository.savePlan(exit);
+  await repository.saveOrder({...order('future-entry-order','future-entry'),exchange:'bitget'});
+  await repository.saveOrder({...order('future-exit-order','future-exit'),exchange:'bitget'});
+  const rows=await readTradeAutomationJournalPayloads(repository,USER);
+  const entryRow=rows.find((row)=>row.brokerOrderId==='exchange-future-entry-order');
+  const exitRow=rows.find((row)=>row.brokerOrderId==='exchange-future-exit-order');
+  assert.equal(entryRow?.positionSide,'LONG');
+  assert.equal(entryRow?.positionEffect,'OPEN');
+  assert.equal(exitRow?.positionSide,'LONG');
+  assert.equal(exitRow?.positionEffect,'CLOSE');
+});
