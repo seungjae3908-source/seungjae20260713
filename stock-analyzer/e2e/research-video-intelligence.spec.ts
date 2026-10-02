@@ -5,7 +5,8 @@ const USER='99999999-9999-4999-8999-999999999999';
 const PROFILE={id:USER,login_name:'video-test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true};
 const safety={researchOnly:true,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',paidProviderEnabled:false,scheduleActive:false,automaticDiscoveryEnabled:false,liveTrading:false,privateTradingApi:false,realOrderEnabled:false,credentialMutation:false,transcriptDownloadEnabled:false};
 const row={videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST_ONLY source',channelOrPublisher:'TEST_ONLY channel',publishedAt:'2026-09-12T00:00:00.000Z',discoveredAt:'2026-09-13T00:00:00.000Z',language:'ko',durationSec:321,transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:false,sourceTrustTier:'UNKNOWN',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
-const evidence={ok:true,available:true,dataState:'MEASURED',runtimeVersion:'video-research-public-provider-runtime-v3',status:'SUCCESS',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',query:'TEST_ONLY research',pagesUsed:1,quotaState:'BOUNDED_ESTIMATE_USED_100_UNITS',credentialConfigured:true,credentialValueExposed:false,sourceCount:1,records:[row],safety,snapshotProvenance:{schemaVersion:'video-research-sanitized-snapshot-v1',sourceHeadSha:'a'.repeat(40),observedAt:'2026-09-13T00:00:00.000Z',publisherMode:'LOCAL_ATOMIC_FILE',providerRuntimeVersion:'video-research-public-provider-runtime-v3',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'},economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
+const automation={schemaVersion:'research-video-discovery-scan-v1',status:'COMPLETE',observedAt:'2026-09-13T00:00:00.000Z',researchSha:'a'.repeat(40),query:'TEST_ONLY research',sourceCount:1,snapshotDigest:'b'.repeat(64),providerNetworkCalls:1,invocationMode:'SYSTEMD_TIMER',scheduledInvocationObserved:true,reason:null,nextRequiredStep:'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR',snapshotBound:true};
+const evidence={ok:true,available:true,dataState:'MEASURED',runtimeVersion:'video-research-public-provider-runtime-v3',status:'SUCCESS',provider:'YOUTUBE_DATA_API_V3',providerAccess:'OFFICIAL_PUBLIC_API',requestMode:'READ_ONLY_GET',query:'TEST_ONLY research',pagesUsed:1,quotaState:'BOUNDED_ESTIMATE_USED_100_UNITS',credentialConfigured:true,credentialValueExposed:false,sourceCount:1,records:[row],safety,automation,snapshotProvenance:{schemaVersion:'video-research-sanitized-snapshot-v1',sourceHeadSha:'a'.repeat(40),observedAt:'2026-09-13T00:00:00.000Z',publisherMode:'LOCAL_ATOMIC_FILE',providerRuntimeVersion:'video-research-public-provider-runtime-v3',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'},economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
 async function install(page:Page,payload:unknown){
   const calls:Array<{method:string;auth:boolean}>=[],external:string[]=[],errors:string[]=[];
   page.on('pageerror',error=>errors.push(error.message));
@@ -43,7 +44,9 @@ for(const width of [320,1440]){
     await expect(page.getByTestId('video-strategy-state')).toContainText('BLOCKED_TRANSCRIPT_NOT_PROVIDED');
     await expect(page.getByTestId('video-evidence-state')).toContainText('aaaaaaaaaaaa');
     for(const word of ['FACT','CREATOR CLAIM','AI INFERENCE','UNKNOWN','CONTRADICTED'])await expect(page.getByTestId('video-truth-legend')).toContainText(word);
-    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Schedule OFF');
+    await expect(page.getByTestId('video-phase2-safety-footer')).toContainText('Server scheduler authority separate');
+    await expect(page.getByTestId('video-discovery-state')).toContainText('최근 TIMER-MODE 실행 증거 있음');
+    await expect(h.panel).toContainText('snapshot 일치');
     expect(h.calls.length).toBeGreaterThan(0);expect(h.calls.every(x=>x.method==='GET'&&x.auth)).toBe(true);
     expect(h.external).toEqual([]);expect(h.errors).toEqual([]);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(2);
@@ -66,4 +69,10 @@ test('malformed provenance cannot become measured',async({page})=>{
   const {panel}=await install(page,{...evidence,snapshotProvenance:{...evidence.snapshotProvenance,sourceHeadSha:'invalid'}});
   await expect(panel).not.toContainText('MEASURED · sanitized reader connected');
   await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
+});
+
+test('stale automation is shown as unbound rather than current snapshot proof',async({page})=>{
+  const {panel}=await install(page,{...evidence,automation:{...automation,snapshotBound:false}});
+  await expect(panel).toContainText('snapshot 미결합');
+  await expect(page.getByTestId('video-discovery-state')).toContainText('현재 enabled/active는 운영 QA 필요');
 });
