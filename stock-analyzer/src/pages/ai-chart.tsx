@@ -67,6 +67,7 @@ import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
+const DIRECT_AI_CHART_COLD_ROUTE = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');
 
 const LazyAiChartV2IntelligencePanel = lazy(() =>
   import('@/components/ai-chart-v2-intelligence-panel').then(({ AiChartV2IntelligencePanel }) => ({
@@ -435,6 +436,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const hasSelection = Boolean(String(selection.symbol || selection.ticker || '').trim());
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
+  const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
@@ -477,6 +479,11 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       window.clearTimeout(popupPublishTimeoutRef.current);
       popupPublishTimeoutRef.current = null;
     }
+  }, []);
+
+  const handleAnalysisChange = useCallback((nextAnalysis: ChartAnalysis | null) => {
+    setAnalysis(nextAnalysis);
+    setCriticalRendererMounted(true);
   }, []);
 
   const updateStrategyMode = useCallback((nextMode: AiChartStrategyMode) => {
@@ -746,12 +753,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       <LazyUnifiedAnalysisChart
         selection={selection}
         onSelectionChange={updateSelection}
-        onAnalysisChange={setAnalysis}
+        onAnalysisChange={handleAnalysisChange}
       />
     </Suspense>
   ) : emptyState;
 
-  const intelligencePanel = hasSelection ? (
+  const deferNonCriticalEvidence = DIRECT_AI_CHART_COLD_ROUTE
+    && desktop
+    && !embedded
+    && !externalMode
+    && !criticalRendererMounted;
+
+  const intelligencePanel = hasSelection && !deferNonCriticalEvidence ? (
     <Suspense fallback={<p role="status" aria-label="AI 분석 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">AI 분석 근거를 불러오는 중입니다. 차트는 계속 사용할 수 있습니다.</p>}>
       <LazyAiChartV2IntelligencePanel
         selection={selection}
@@ -764,10 +777,22 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const details = hasSelection ? (
     <div className="space-y-4">
-      {intelligencePanel}
-      <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
-        <LazyFuturesPublicContextPanel selection={selection} />
-      </Suspense>
+      {deferNonCriticalEvidence ? (
+        <p
+          role="status"
+          data-testid="ai-chart-cold-evidence-deferred"
+          className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground"
+        >
+          차트를 먼저 준비한 뒤 AI 분석 근거와 공개 시장 근거를 불러옵니다.
+        </p>
+      ) : (
+        <>
+          {intelligencePanel}
+          <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
+            <LazyFuturesPublicContextPanel selection={selection} />
+          </Suspense>
+        </>
+      )}
       <ContextCard selection={selection} analysis={analysis} />
       <DecisionCard analysis={analysis} />
       <SafetyNote />
