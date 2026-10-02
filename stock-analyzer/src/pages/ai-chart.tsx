@@ -12,7 +12,6 @@ import {
   X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
-import { AiChartPositionPanel } from '@/components/ai-chart-position-panel';
 import { BottomNav } from '@/components/bottom-nav';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import {
@@ -68,16 +67,6 @@ import { cn } from '@/lib/utils';
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
 
-// The canonical HTML/main entry prioritizes this route module first. Once this
-// route module is evaluating, start the renderer request in parallel with the
-// remaining page module work while preserving the single React.lazy import
-// contract below. Vite resolves this glob to the same renderer module URL, so
-// browser module loading de-duplicates it with the later lazy mount request.
-const directAiChartRendererModules = import.meta.glob('/src/components/unified-analysis-chart.tsx');
-if (typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart')) {
-  void directAiChartRendererModules['/src/components/unified-analysis-chart.tsx']?.().catch(() => undefined);
-}
-
 const LazyAiChartV2IntelligencePanel = lazy(() =>
   import('@/components/ai-chart-v2-intelligence-panel').then(({ AiChartV2IntelligencePanel }) => ({
     default: AiChartV2IntelligencePanel,
@@ -91,6 +80,11 @@ const LazyFuturesPublicContextPanel = lazy(() =>
 const LazyUnifiedAnalysisChart = lazy(() =>
   import('@/components/unified-analysis-chart').then(({ UnifiedAnalysisChart }) => ({
     default: UnifiedAnalysisChart,
+  })),
+);
+const LazyAiChartPositionPanel = lazy(() =>
+  import('@/components/ai-chart-position-panel').then(({ AiChartPositionPanel }) => ({
+    default: AiChartPositionPanel,
   })),
 );
 
@@ -864,7 +858,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {mobileTab === 'position' ? (
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
                 {hasSelection ? (
-                  <AiChartPositionPanel
+                  <LazyAiChartPositionPanel
                     selection={selection}
                     market={selection.market}
                     symbol={selection.symbol || selection.ticker}
