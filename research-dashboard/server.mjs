@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readVideoResearchReadback } from './video-research-readback.mjs';
 
 const MODULE_DIR = fileURLToPath(new URL('.', import.meta.url));
 const DEFAULT_STATE_ROOT = '/var/lib/investment-research-production';
@@ -1000,6 +1001,10 @@ export function createResearchDashboardServer({ stateRoot = DEFAULT_STATE_ROOT, 
       if (url.pathname === '/api/research/overview') {
         const overview = await buildResearchOverview({ stateRoot });
         return json(res, 200, overview);
+      }
+      if (url.pathname === '/api/research/video/evidence') {
+        const evidence = await readVideoResearchReadback(stateRoot);
+        return json(res, 200, evidence);
       }
       if (url.pathname.startsWith('/api/')) return json(res, 404, { ok: false, error: 'not_found' });
 
