@@ -634,7 +634,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
                 'status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL',
@@ -838,7 +838,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
                 'status: DISABLED',
