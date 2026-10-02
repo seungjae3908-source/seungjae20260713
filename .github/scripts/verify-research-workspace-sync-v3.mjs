@@ -153,13 +153,13 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
  if(existed)throw new Error('UNREVIEWED_ADD_ADD_CONFLICT:'+p);
 }
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
+const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
 let current=git('show','HEAD:api-server/src/routes/index.ts');
-if(!isAncestor(OWNER,MAIN))current=current
+// If this PR preserved current-main route bytes exactly, do not rewrite them through
+// legacy owner normalizers. Only normalize a genuinely changed route before comparison.
+if(current!==mainRoute && !isAncestor(OWNER,MAIN))current=current
  .replace("\nimport videoResearchEvidenceRouter from './video-research-evidence';",'').replace(mount,'');
-// #1463 intentionally shares one existing READ_ONLY account service instance so
-// portfolio intelligence and the account screen reuse token/last-good caches.
-// Normalize that reviewed refactor back to current-main text for preservation proof.
-current=current
+if(current!==mainRoute)current=current
  .replace(
    "import { createAccountReadonlyRouter } from '../features/account-readonly/account-readonly.route';\nimport { accountReadonlyRuntimeService } from '../features/account-readonly/account-readonly.runtime-service';",
    "import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';\nimport { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';\nimport { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';\nimport { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';",
@@ -168,7 +168,7 @@ current=current
    "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
    "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
  );
-if(current!==git('show',`${MAIN}:api-server/src/routes/index.ts`))throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
+if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 for(const p of protectedPaths)if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
