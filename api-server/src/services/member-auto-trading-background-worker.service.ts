@@ -1255,6 +1255,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs(process.env.MEMBER_AUTO_TRADING_BACKGROUND_INTERVAL_MS));
   timer.unref?.();
-  console.log('[member-auto-trading-background] started in Paper-only mode');
+  console.log(liveBackgroundEnabled()
+    ? '[member-auto-trading-background] started in Paper+Live guarded mode'
+    : '[member-auto-trading-background] started in Paper-only mode');
   return { stop: () => clearInterval(timer) };
 }
