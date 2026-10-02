@@ -7,6 +7,9 @@ on:
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+      - 'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-login.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
   issue_comment:
     types: [created]
@@ -74,12 +77,15 @@ jobs:
           runtime='api-server/src/features/account-readonly/account-readonly.runtime.ts'
           provider='api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts'
           spec='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+          login='stock-analyzer/e2e/support/production-readonly-login.ts'
           for endpoint in '/api/v3/account/settings' '/api/v3/account/assets' '/api/v3/position/current-position' '/api/v3/trade/unfilled-orders'; do
             grep -Fq "$endpoint" "$adapter"
             grep -Fq "$endpoint" "$runtime"
           done
           grep -Fq "readBitgetUtaSnapshot" "$provider"
           grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$spec"
+          grep -Fq "new URL('/api/auth/profile'" "$login"
+          grep -Fq "Do not submit credentials a second time" "$login"
           if grep -Eq "bitgetRequest\([^,]+,[[:space:]]*'(POST|DELETE)'[[:space:]]*,[[:space:]]*'/api/v3/(account/info|account/assets|position/current-position|trade/unfilled-orders)'" "$adapter"; then
             echo 'Bitget UTA read-only endpoints must remain GET-only.' >&2
             exit 1
@@ -455,17 +461,28 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Overlay exact current-main Production QA assertions
+      - name: Overlay exact current-main Production QA harness
         env:
           TARGET_SHA: ${{ steps.command.outputs.target_sha }}
         run: |
           set -Eeuo pipefail
-          source_path='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
           git fetch --no-tags --depth=1 origin "$TARGET_SHA"
-          git show "$TARGET_SHA:$source_path" > "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
-          grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
-          grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
-          install -m 0644 "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts" "$source_path"
+          for harness_path in \
+            stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts \
+            stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts \
+            stock-analyzer/e2e/support/production-readonly-login.ts \
+            stock-analyzer/e2e/support/production-readonly-policy.ts \
+            stock-analyzer/playwright.production-account-readonly.config.ts
+          do
+            tmp="$RUNNER_TEMP/$(basename "$harness_path")"
+            git show "$TARGET_SHA:$harness_path" > "$tmp"
+            test -s "$tmp"
+            install -m 0644 "$tmp" "$harness_path"
+          done
+          grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+          grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+          grep -Fq "new URL('/api/auth/profile'" stock-analyzer/e2e/support/production-readonly-login.ts
+          grep -Fq "Do not submit credentials a second time" stock-analyzer/e2e/support/production-readonly-login.ts
 
       - name: Require exact runtime identity after activation
         env:
