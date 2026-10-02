@@ -90,3 +90,18 @@ test('reduce-only automatic plan does not call entry market-intelligence gate', 
     setTradingPlanMarketIntelligenceRunnerForTests(null);
   }
 });
+
+
+test('reduce-only risk envelope remains executable during high slippage while entry envelopes stay bounded', () => {
+  const input=exitInput();
+  const now=new Date();
+  const plan={...input,id:'33333333-3333-3333-3333-333333333333',userId:'44444444-4444-4444-4444-444444444444',
+    idempotencyKey:'reduce-only-high-slippage',state:'SUBMITTED' as const,version:1,
+    approvalExpiresAt:new Date(now.getTime()+60_000).toISOString(),approvedAt:now.toISOString(),
+    createdAt:now.toISOString(),updatedAt:now.toISOString()};
+  const approved=withRiskEnvelope(plan,buildRiskEnvelope(plan,DEFAULT_TRADING_POLICY,plan.approvedAt!));
+  const stressed={...approved.marketSnapshot,currentPrice:80_000_000,estimatedSlippagePercent:5,estimatedFeePercent:2};
+  const result=evaluateRiskEnvelope({plan:approved,snapshot:stressed,now});
+  assert.equal(result.blockCodes.includes('RISK_ENVELOPE_SLIPPAGE_EXCEEDED'),false);
+  assert.equal(result.blockCodes.includes('RISK_ENVELOPE_MAX_LOSS_EXCEEDED'),false);
+});

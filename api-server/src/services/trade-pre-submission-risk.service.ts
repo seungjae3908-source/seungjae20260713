@@ -16,7 +16,7 @@ const MAX_SIGNAL_AGE_MS = 30_000;
 const MAX_ESTIMATED_SLIPPAGE_PERCENT = 1;
 const MAX_ESTIMATED_FEE_PERCENT = 1;
 const FAST_MOVE_PERCENT = 5;
-const OPEN_POSITION_STATES = new Set(['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED']);
+const OPEN_POSITION_STATES = new Set(['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED']);
 const MAINTAINED_SIGNAL_STATES = new Set(['condition_maintained', 'entry_ready', 'approved', 'READY_FOR_APPROVAL']);
 const BROKEN_SIGNAL_STATES = new Set(['condition_broken', 'expired', 'invalidated', 'WEAKENED', 'INVALIDATED', 'EXPIRED']);
 
@@ -202,11 +202,16 @@ export class TradePreSubmissionRiskService {
       else blockCodes.push('CURRENT_PRICE_UNAVAILABLE');
     }
     if (approvedPrice == null) {
-      if (currentPlan.accountMode === 'paper') warnings.push('승인 기준가격이 없어 모의 실행에서 가격 괴리 검사를 생략했습니다.');
+      if (riskReducing) warnings.push('위험축소 청산은 승인 기준가격 괴리 제한을 적용하지 않습니다.');
+      else if (currentPlan.accountMode === 'paper') warnings.push('승인 기준가격이 없어 모의 실행에서 가격 괴리 검사를 생략했습니다.');
       else blockCodes.push('APPROVAL_REFERENCE_PRICE_UNAVAILABLE');
     } else if (finite(currentPrice) && currentPrice > 0) {
       priceDriftPercent = Math.abs(currentPrice - approvedPrice) / approvedPrice * 100;
-      if (priceDriftPercent > MAX_APPROVAL_PRICE_DRIFT_PERCENT) blockCodes.push('APPROVAL_PRICE_DRIFT_EXCEEDED');
+      if (!riskReducing && priceDriftPercent > MAX_APPROVAL_PRICE_DRIFT_PERCENT) {
+        blockCodes.push('APPROVAL_PRICE_DRIFT_EXCEEDED');
+      } else if (riskReducing && priceDriftPercent > MAX_APPROVAL_PRICE_DRIFT_PERCENT) {
+        warnings.push('위험축소 청산은 가격 급변 중에도 현재가·수량 검증 후 계속 진행합니다.');
+      }
     }
 
     const signalState = snapshot.signalState;
@@ -241,15 +246,23 @@ export class TradePreSubmissionRiskService {
 
     const slippage = snapshot.estimatedSlippagePercent;
     if (!finite(slippage) || slippage < 0) {
-      if (currentPlan.accountMode !== 'paper') blockCodes.push('SLIPPAGE_ESTIMATE_UNAVAILABLE');
-    } else if (slippage > MAX_ESTIMATED_SLIPPAGE_PERCENT) blockCodes.push('ESTIMATED_SLIPPAGE_TOO_HIGH');
+      if (riskReducing) warnings.push('위험축소 청산의 슬리피지 추정치가 없어도 계좌·가격·수량 검증을 우선합니다.');
+      else if (currentPlan.accountMode !== 'paper') blockCodes.push('SLIPPAGE_ESTIMATE_UNAVAILABLE');
+    } else if (slippage > MAX_ESTIMATED_SLIPPAGE_PERCENT) {
+      if (riskReducing) warnings.push('위험축소 청산의 슬리피지가 높지만 포지션 축소를 우선합니다.');
+      else blockCodes.push('ESTIMATED_SLIPPAGE_TOO_HIGH');
+    }
 
     const fee = snapshot.estimatedFeePercent;
     if (!finite(fee) || fee < 0) {
-      if (currentPlan.accountMode !== 'paper') blockCodes.push('FEE_ESTIMATE_UNAVAILABLE');
-    } else if (fee > MAX_ESTIMATED_FEE_PERCENT) blockCodes.push('ESTIMATED_FEE_TOO_HIGH');
+      if (riskReducing) warnings.push('위험축소 청산의 수수료 추정치가 없어도 포지션 축소를 우선합니다.');
+      else if (currentPlan.accountMode !== 'paper') blockCodes.push('FEE_ESTIMATE_UNAVAILABLE');
+    } else if (fee > MAX_ESTIMATED_FEE_PERCENT) {
+      if (riskReducing) warnings.push('위험축소 청산의 비용이 높지만 포지션 축소를 우선합니다.');
+      else blockCodes.push('ESTIMATED_FEE_TOO_HIGH');
+    }
 
-    if (finite(currentPrice) && currentPrice > 0 && finite(slippage) && finite(fee)) {
+    if (!riskReducing && finite(currentPrice) && currentPrice > 0 && finite(slippage) && finite(fee)) {
       const targetPercent = targetMovePercent(currentPlan, currentPrice);
       const roundTripCostPercent = (slippage + fee) * 2;
       if (targetPercent != null && targetPercent <= roundTripCostPercent) blockCodes.push('EXPECTED_COST_EXCEEDS_TARGET_MOVE');
