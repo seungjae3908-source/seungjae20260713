@@ -27,6 +27,8 @@ test("Pump installer is isolated, minute-cadence, exact-SHA and Paper-only", asy
     "productionAppDeployPerformed: false",
     "existing Pump policy strategy identity mismatch; refusing retry",
     "cross-SHA Pump policy reuse requires verified operational-only retry",
+    "cross-SHA Pump retry requires prior frozen runtime bundle",
+    "cross-SHA Pump runtime bundle changed; refusing frozen policy reuse",
     "SOURCE_PARAMETER_HASH",
     "EXISTING_PARAMETER_HASH",
     "PUMP_ALLOWED_POLICY_RESEARCH_SHA",
