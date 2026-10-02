@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import express from 'express';
 import marketSummaryAvailabilityRouter from './market-summary-availability';
@@ -364,4 +367,42 @@ test('video runtime loader falls back only to fixed local Research Dashboard end
   const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, []);
   assert.equal(seenUrl, 'http://127.0.0.1:18090/api/research/video/evidence');
   assert.equal((result as Record<string, unknown>).provider, 'YOUTUBE_DATA_API_V3');
+});
+
+
+test('authoritative dashboard evidence wins over an older valid local snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-priority-'));
+  try {
+    const local = videoEvidenceSnapshot();
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(local));
+    const dashboard = {
+      ...videoEvidenceSnapshot(),
+      query: 'NEW_DURABLE_QUERY',
+      automation: {
+        ...videoEvidenceSnapshot().automation,
+        query: 'NEW_DURABLE_QUERY',
+      },
+    };
+    const fakeFetch = (async () => new Response(JSON.stringify({ ok: true, available: true, ...dashboard }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    })) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath]) as Record<string, unknown>;
+    assert.equal(result.query, 'NEW_DURABLE_QUERY');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('local snapshot is fallback only when internal dashboard is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-fallback-'));
+  try {
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
+    const fakeFetch = (async () => { throw new Error('TEST_ONLY_DASHBOARD_DOWN'); }) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath]) as Record<string, unknown>;
+    assert.equal(result.query, 'TEST_ONLY video strategy');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
