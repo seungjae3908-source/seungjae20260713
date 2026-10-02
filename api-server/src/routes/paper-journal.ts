@@ -132,22 +132,37 @@ function unifiedFilters(query: Request['query']): UnifiedJournalFilters {
 }
 
 function importedHistoryRecord(payload: Record<string, unknown>, observedAt: Date) {
-  const canonical = JSON.stringify(payload);
-  const digest = createHash('sha256').update(canonical).digest('hex').slice(0, 32);
-  const sourceTime = typeof payload.observedAt === 'string' && Number.isFinite(Date.parse(payload.observedAt))
-    ? new Date(payload.observedAt).toISOString()
+  const sourceTime = typeof payload.closedAt === 'string' && Number.isFinite(Date.parse(payload.closedAt))
+    ? new Date(payload.closedAt).toISOString()
     : typeof payload.filledAt === 'string' && Number.isFinite(Date.parse(payload.filledAt))
       ? new Date(payload.filledAt).toISOString()
-      : typeof payload.closedAt === 'string' && Number.isFinite(Date.parse(payload.closedAt))
-        ? new Date(payload.closedAt).toISOString()
+      : typeof payload.orderedAt === 'string' && Number.isFinite(Date.parse(payload.orderedAt))
+        ? new Date(payload.orderedAt).toISOString()
         : observedAt.toISOString();
+  const identity = [
+    String(payload.source ?? ''),
+    String(payload.broker ?? ''),
+    String(payload.brokerOrderId ?? payload.tradeId ?? payload.id ?? ''),
+    String(payload.fillId ?? ''),
+    String(payload.symbol ?? ''),
+    String(payload.positionSide ?? payload.side ?? ''),
+    sourceTime,
+  ].join('|');
+  const digest = createHash('sha256').update(identity).digest('hex').slice(0, 32);
+  const persistedPayload = {
+    ...payload,
+    observedAt: sourceTime,
+    warnings: Array.isArray(payload.warnings)
+      ? [...new Set([...payload.warnings.filter((item): item is string => typeof item === 'string'), 'BROKER_HISTORY_IMPORTED_PERSISTENTLY'])]
+      : ['BROKER_HISTORY_IMPORTED_PERSISTENTLY'],
+  };
   return {
     kind: 'journal' as const,
     id: `broker-import:${digest}`,
     version: 1,
     updatedAt: sourceTime,
     deletedAt: null,
-    payload,
+    payload: persistedPayload,
   };
 }
 
