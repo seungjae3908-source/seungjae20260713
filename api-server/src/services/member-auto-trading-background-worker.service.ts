@@ -39,8 +39,7 @@ import { readTradeAutomationJournalPayloads } from './trade-automation-unified-j
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
   automaticExitReason,
-  buildAutomaticExitPlanInput,
-  type MemberAutoTradingExitReason,
+  buildAutomaticExitPlanInput
 } from './member-auto-trading-exit-plan.service';
 import {
   readMemberAutoTradingMarketMark,
@@ -54,10 +53,6 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
-const ACTIVE_ORDER_STATES = new Set([
-  'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED',
-]);
-
 type EligibleMember = Readonly<{
   userId: string;
   profile: MemberAccessProfile;
@@ -331,16 +326,6 @@ function providerPositionQuantity(snapshot: CanonicalAccountSnapshot, position: 
     throw new Error('BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT');
   }
   return quantity;
-}
-
-function activePlans(plans: readonly TradingPlan[], orders: readonly TradingOrder[]) {
-  const planById = new Map(plans.map((plan) => [plan.id, plan]));
-  return orders
-    .filter((order) => ACTIVE_ORDER_STATES.has(order.state))
-    .flatMap((order) => {
-      const plan = planById.get(order.planId);
-      return plan ? [plan] : [];
-    });
 }
 
 function currentConsecutiveLosses(journal: readonly Record<string, unknown>[]) {
