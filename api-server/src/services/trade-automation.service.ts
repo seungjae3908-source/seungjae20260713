@@ -189,6 +189,7 @@ export class TradeAutomationService {
     const now = new Date();
     const plan: TradingPlan = {
       ...input,
+      executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
       id: randomUUID(), userId, idempotencyKey,
       state: 'APPROVAL_PENDING',
       version: 0,
