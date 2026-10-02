@@ -54,6 +54,22 @@ type SnapshotProvenance = {
   executionAuthority: 'NONE';
 };
 
+type DiscoveryAutomation = {
+  schemaVersion: 'research-video-discovery-scan-v1';
+  status: 'COMPLETE' | 'BLOCKED' | 'WAITING_CONFIGURATION';
+  observedAt: string;
+  researchSha: string;
+  query: string | null;
+  sourceCount: number | null;
+  snapshotDigest: string | null;
+  providerNetworkCalls: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+  reason: string | null;
+  nextRequiredStep: string;
+  snapshotBound: boolean;
+};
+
 type RuntimeEvidence = {
   available: true;
   dataState: 'MEASURED';
@@ -84,6 +100,7 @@ type RuntimeEvidence = {
     transcriptDownloadEnabled: false;
   };
   snapshotProvenance: SnapshotProvenance;
+  automation: DiscoveryAutomation | null;
   economicEvidenceCredit: 0;
   profitabilityCredit: 0;
   executionAuthority: 'NONE';
@@ -105,6 +122,24 @@ function canonicalIsoTimestamp(value: unknown): value is string {
 
 function canonicalYoutubeUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
+function parseDiscoveryAutomation(value: unknown): DiscoveryAutomation | null {
+  if (!isRecord(value)
+    || value.schemaVersion !== 'research-video-discovery-scan-v1'
+    || !['COMPLETE', 'BLOCKED', 'WAITING_CONFIGURATION'].includes(String(value.status ?? ''))
+    || !canonicalIsoTimestamp(value.observedAt)
+    || typeof value.researchSha !== 'string' || !/^[0-9a-f]{40}$/u.test(value.researchSha)
+    || (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER')
+    || typeof value.scheduledInvocationObserved !== 'boolean'
+    || typeof value.snapshotBound !== 'boolean') return null;
+  return value as unknown as DiscoveryAutomation;
+}
+
+function formatAutomationTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '시간 미확인';
+  return new Intl.DateTimeFormat('ko-KR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Seoul' }).format(date);
 }
 
 function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
@@ -130,6 +165,8 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   if (!canonicalIsoTimestamp(provenance.observedAt)) return null;
   if (provenance.economicEvidenceCredit !== 0 || provenance.profitabilityCredit !== 0 || provenance.executionAuthority !== 'NONE') return null;
 
+  const automation = parseDiscoveryAutomation(value.automation);
+
   for (const record of value.records) {
     if (!isRecord(record)) return null;
     if (typeof record.videoId !== 'string' || !record.videoId.trim()) return null;
@@ -142,7 +179,7 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
     if (typeof record.sourceTrustTier !== 'string' || !SOURCE_TRUST_TIERS.has(record.sourceTrustTier)) return null;
     if (record.contentAuthority !== 'UNTRUSTED_EXTERNAL_DATA' || record.economicEvidenceCredit !== 0 || record.profitabilityCredit !== 0 || record.executionAuthority !== 'NONE') return null;
   }
-  return value as unknown as RuntimeEvidence;
+  return { ...(value as unknown as RuntimeEvidence), automation };
 }
 
 function uniqueSorted(values: string[]) {
@@ -245,9 +282,19 @@ export function ResearchVideoPanel() {
   const compilerState = runtimeEvidence?.records.some((record) => record.transcriptStatus === 'AVAILABLE')
     ? 'NOT_EVALUATED — source-bound TESTABLE strategy evidence required'
     : 'BLOCKED — authorized transcript required before strategy extraction/compiler';
+  const automation = runtimeEvidence?.automation ?? null;
+  const automationState = !automation
+    ? 'UNKNOWN — 자동수집 readback 없음'
+    : automation.status === 'BLOCKED'
+      ? `BLOCKED · ${automation.reason ?? '원인 미확인'}`
+      : automation.status === 'WAITING_CONFIGURATION'
+        ? '설정 대기'
+        : automation.invocationMode === 'SYSTEMD_TIMER'
+          ? `최근 TIMER 실행 · ${formatAutomationTime(automation.observedAt)} · ${automation.snapshotBound ? 'snapshot 일치' : 'snapshot 미결합'}`
+          : `최근 MANUAL 실행 · ${formatAutomationTime(automation.observedAt)}`;
 
   const statusRows = [
-    ['Video discovery', '수동 / 공식 public API runtime'],
+    ['Video discovery', automationState],
     ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.provider} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
     ['Runtime evidence', runtimeState],
     ['Transcript access', transcriptAccessState],
@@ -264,8 +311,8 @@ export function ResearchVideoPanel() {
         ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
         ['Browser credential', 'NOT_EXPOSED'],
         ['최근 discovery evidence', runtimeEvidence ? `${runtimeEvidence.status} · ${runtimeEvidence.query}` : runtimeState],
-        ['자동 수집', 'OFF'],
-        ['Schedule', 'INACTIVE'],
+        ['자동 수집', automation?.status === 'COMPLETE' ? (automation.invocationMode === 'SYSTEMD_TIMER' ? '최근 TIMER-MODE 실행 증거 있음' : '최근 MANUAL 실행') : automationState],
+        ['Schedule', automation?.scheduledInvocationObserved ? '최근 timer 실행 증거 있음 · 현재 enabled/active는 운영 QA 필요' : '현재 enabled/active 미검증'],
         ['Quota', runtimeEvidence?.quotaState ?? 'UNKNOWN — sanitized runtime snapshot unavailable'],
       ],
     },
@@ -413,7 +460,7 @@ export function ResearchVideoPanel() {
         </div>
 
         <footer className="rounded-2xl border border-card-border bg-card p-4 text-xs leading-5 text-muted-foreground" data-testid="video-phase2-safety-footer">
-          Official public provider only · Browser credential NOT_EXPOSED · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Economic Evidence Credit 0 · Execution Authority NONE
+          Official public provider only · Browser credential NOT_EXPOSED · Provider runtime auto-discovery flag OFF · Server scheduler authority separate · No downloader bypass · No new Backtester · Existing canonical compiler only · Economic Evidence Credit 0 · Execution Authority NONE
         </footer>
       </div>
     </section>
