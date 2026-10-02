@@ -282,7 +282,7 @@ def probe_systemd_timer(unit):
         env.update({'LC_ALL':'C','TZ':'UTC','SYSTEMD_COLORS':'0'})
         completed = subprocess.run(
             ['systemctl','show',unit,'--property=UnitFileState','--property=ActiveState','--property=LastTriggerUSec','--no-pager'],
-            check=True, capture_output=True, text=True, timeout=1.2, env=env,
+            check=True, capture_output=True, text=True, timeout=0.35, env=env,
         )
         values = {}
         for line in completed.stdout.splitlines():
