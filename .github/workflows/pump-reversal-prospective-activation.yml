@@ -290,6 +290,62 @@ jobs:
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
 
+      - name: Read frozen Pump policy retry identity
+        id: retry_policy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          policy_path='/opt/stock-app-data/pump-reversal-v1/policy/pump-prospective-policy-v1.json'
+          if ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "test -r '$policy_path'"; then
+            research_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "node -e 'const fs=require(\"fs\");const v=JSON.parse(fs.readFileSync(process.argv[1],\"utf8\"));const s=String(v?.candidate?.researchCodeSha??\"\");if(!/^[0-9a-f]{40}$/.test(s))process.exit(2);process.stdout.write(s)' '$policy_path'")"
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+          else
+            research_sha="$TARGET_SHA"
+            echo "existing=false" >> "$GITHUB_OUTPUT"
+          fi
+          [[ "$research_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "research_sha=$research_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify cross-SHA retry is operational-only
+        id: retry_equivalence
+        uses: actions/github-script@v7
+        env:
+          POLICY_RESEARCH_SHA: ${{ steps.retry_policy.outputs.research_sha }}
+          POLICY_EXISTS: ${{ steps.retry_policy.outputs.existing }}
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const policySha = process.env.POLICY_RESEARCH_SHA;
+            const target = process.env.TARGET_SHA;
+            if (process.env.POLICY_EXISTS !== 'true' || policySha === target) {
+              core.setOutput('verified', 'false');
+              return;
+            }
+            const allowed = new Set([
+              '.github/workflows/pump-reversal-prospective-activation.yml',
+              'ops/install-pump-reversal-prospective-schedule.sh',
+              'market-prediction-lab/scripts/verify-pump-reversal-prospective-activation.mjs',
+              'market-prediction-lab/tests/pump-reversal-prospective-schedule-install-contract-v1.test.js',
+              'market-prediction-lab/tests/verify-pump-reversal-prospective-activation.test.js',
+            ]);
+            const comparison = await github.rest.repos.compareCommitsWithBasehead({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              basehead: `${policySha}...${target}`,
+              per_page: 100,
+            });
+            if (!['ahead', 'identical'].includes(comparison.data.status)) {
+              core.setFailed(`Frozen policy SHA is not an ancestor-equivalent retry base: ${comparison.data.status}`);
+              return;
+            }
+            const files = comparison.data.files ?? [];
+            const unsafe = files.map((file) => file.filename).filter((name) => !allowed.has(name));
+            if (unsafe.length > 0) {
+              core.setFailed(`Cross-SHA policy reuse blocked by non-operational changes: ${unsafe.join(',')}`);
+              return;
+            }
+            core.setOutput('verified', 'true');
+
       - name: Capture immutable Production application identity
         id: app_before
         shell: bash
@@ -304,6 +360,8 @@ jobs:
         id: install
         env:
           PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+          POLICY_RESEARCH_SHA: ${{ steps.retry_policy.outputs.research_sha }}
+          OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED: ${{ steps.retry_equivalence.outputs.verified }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -313,7 +371,7 @@ jobs:
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             pump-activation-build/pump-runtime.mjs             "$SSH_USER@$SSH_HOST:$remote_runtime"
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             pump-activation-build/pump-policy.json             "$SSH_USER@$SSH_HOST:$remote_policy"
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT"             market-prediction-lab/scripts/verify-pump-reversal-prospective-activation.mjs             "$SSH_USER@$SSH_HOST:$remote_verify"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST"             "PUMP_RUNTIME_BUNDLE_SOURCE='$remote_runtime' PUMP_POLICY_SOURCE='$remote_policy' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s '$TARGET_SHA'"             < ops/install-pump-reversal-prospective-schedule.sh             > "$EVIDENCE_DIR/activation.json"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST"             "PUMP_RUNTIME_BUNDLE_SOURCE='$remote_runtime' PUMP_POLICY_SOURCE='$remote_policy' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' PUMP_ALLOWED_POLICY_RESEARCH_SHA='$POLICY_RESEARCH_SHA' PUMP_OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED='$OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED' bash -s '$TARGET_SHA'"             < ops/install-pump-reversal-prospective-schedule.sh             > "$EVIDENCE_DIR/activation.json"
           echo "remote_verify=$remote_verify" >> "$GITHUB_OUTPUT"
 
       - name: Verify Production application identity remained unchanged
@@ -415,6 +473,8 @@ jobs:
                 'POLL_CADENCE=EVERY_1_MINUTE',
                 'SIGNAL_UNIVERSE_SCAN=ONCE_PER_CLOSED_1H_BAR',
                 `POLICY_FROZEN_AT_MS=${activation.policyFrozenAtMs}`,
+                `POLICY_RESEARCH_CODE_SHA=${activation.policyResearchCodeSha}`,
+                `OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED=${activation.operationalRetryEquivalenceVerified === true}`,
                 `GENUINE_PROSPECTIVE_ELIGIBLE_AFTER_MS=${activation.eligibleAfterMs}`,
                 'PRE_ELIGIBILITY_SAMPLE_CREDIT=0',
                 `PAPER_STATE_AVAILABLE_AT_ACTIVATION=${activation.paperStateSnapshotAvailableAtActivation === true}`,
