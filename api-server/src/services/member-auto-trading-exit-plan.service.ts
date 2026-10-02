@@ -73,7 +73,7 @@ export function buildAutomaticExitPlanInput(input: {
     quoteAmount: null,
     limitPrice: mark.price,
     estimatedKrw,
-    stopPrice: null,
+    stopPrice: mark.price,
     targetPrices: [],
     splitRatios: [100],
     leverage: entryPlan.leverage,
