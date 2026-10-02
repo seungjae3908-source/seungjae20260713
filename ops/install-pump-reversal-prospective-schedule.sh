@@ -151,9 +151,9 @@ if [[ -e "$POLICY_PATH" ]]; then
     [[ "$PUMP_OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED" == true       && "$PUMP_ALLOWED_POLICY_RESEARCH_SHA" == "$EXISTING_RESEARCH_SHA" ]]       || fail "cross-SHA Pump policy reuse requires verified operational-only retry" 9
   fi
 else
-  cp "$POLICY_SOURCE" "$POLICY_PATH.tmp-$"
-  chmod 600 "$POLICY_PATH.tmp-$"
-  mv "$POLICY_PATH.tmp-$" "$POLICY_PATH"
+  cp "$POLICY_SOURCE" "$POLICY_PATH.tmp-$$"
+  chmod 600 "$POLICY_PATH.tmp-$$"
+  mv "$POLICY_PATH.tmp-$$" "$POLICY_PATH"
   POLICY_SUMMARY="$SOURCE_POLICY_SUMMARY"
 fi
 
