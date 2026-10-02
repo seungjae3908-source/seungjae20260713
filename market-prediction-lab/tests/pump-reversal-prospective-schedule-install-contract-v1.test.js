@@ -60,7 +60,7 @@ test("Pump installer is isolated, minute-cadence, exact-SHA and Paper-only", asy
 
 test("Pump wrapper generation defers runtime variables under set -u", async () => {
   const source = await readFile(installPath, "utf8");
-  const block = /cat > "\\$TEMP_WRAPPER" <<WRAPPER\\n[\\s\\S]*?\\nWRAPPER/u.exec(source)?.[0];
+  const block = /cat > "\$TEMP_WRAPPER" <<WRAPPER\n[\s\S]*?\nWRAPPER/u.exec(source)?.[0];
   assert.ok(block, "wrapper heredoc block");
 
   const root = await mkdtemp(join(tmpdir(), "pump-wrapper-"));
@@ -79,7 +79,7 @@ test("Pump wrapper generation defers runtime variables under set -u", async () =
       'NODE_BIN="/usr/bin/node"',
       `RUNTIME_BUNDLE="${root}/runtime.mjs"`,
       block,
-    ].join("\\n");
+    ].join("\n");
     await execFileAsync("bash", ["-c", shell], {
       env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root },
     });
