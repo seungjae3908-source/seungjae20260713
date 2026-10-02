@@ -68,6 +68,14 @@ test('free provider policy fails closed unless an exact approved free route is c
   const gemini = resolveResearchFreeAiPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'gemini', GEMINI_API_KEY: 'TEST_ONLY_GEMINI' });
   assert.equal(gemini.provider, 'gemini');
   assert.equal(gemini.model, 'gemini-3.1-flash-lite');
+  const coexist = resolveResearchFreeAiPolicy({
+    RESEARCH_AI_FREE_TIER_CONFIRMED: 'true',
+    AI_CHAT_PROVIDER: 'gemini',
+    GEMINI_API_KEY: 'TEST_ONLY_GEMINI',
+    GROQ_API_KEY: SECRET,
+  });
+  assert.equal(coexist.provider, 'gemini');
+  assert.equal(coexist.model, 'gemini-3.1-flash-lite');
 });
 
 test('cycle projection exposes only structural runtime state and binds it to exact release SHA', () => {

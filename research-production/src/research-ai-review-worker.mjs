@@ -118,7 +118,7 @@ export function resolveResearchFreeAiPolicy(env = process.env) {
   if (selected === 'gemini' || selected === 'google' || selected === 'google-gemini') {
     const model = String(env.AI_CHAT_MODEL ?? env.GEMINI_MODEL ?? GEMINI_MODEL).trim();
     const apiKey = String(env.AI_CHAT_API_KEY ?? env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? '').trim();
-    if (!String(env.GROQ_API_KEY ?? '').trim() && model === GEMINI_MODEL && apiKey) {
+    if (model === GEMINI_MODEL && apiKey) {
       return Object.freeze({ provider: 'gemini', model, apiKey, reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' });
     }
     return Object.freeze({ provider: null, model: null, apiKey: null, reason: 'ISOLATED_FREE_PROVIDER_REQUIRED' });
