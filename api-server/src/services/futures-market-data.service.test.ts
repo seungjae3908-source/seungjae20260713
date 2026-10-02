@@ -8,6 +8,7 @@ import {
   calculateSpreadPercent,
   classifyDataStatus,
   normalizeBitgetCandles,
+  normalizeFuturesMarketFlowEvidence,
   normalizeFuturesSymbol,
   resolveSnapshotTimestampStatus,
   toFiniteNumber,
@@ -126,4 +127,61 @@ test('snapshot keeps live status when a valid exchange timestamp exists', () => 
   assert.equal(result.sourceTimestamp, now - 10_000);
   assert.equal(result.status, 'live');
   assert.equal(result.warning, null);
+});
+
+
+test('futures flow keeps selected-symbol long-short and liquidation evidence read-only', () => {
+  const now = Date.UTC(2026, 8, 26, 3, 0, 0);
+  const result = normalizeFuturesMarketFlowEvidence({
+    symbol: 'SUIUSDT',
+    now,
+    longShortPayload: {
+      code: '00000',
+      data: [{
+        symbol: 'SUIUSDT',
+        longRatio: '0.58',
+        shortRatio: '0.42',
+        longShortRatio: '1.380952',
+        ts: String(now - 10_000),
+      }],
+    },
+    liquidationPayload: {
+      code: '00000',
+      data: {
+        list: [
+          { symbol: 'SUIUSDT', side: 'buy', amount: '1200', ts: String(now - 8_000) },
+          { symbol: 'SUIUSDT', side: 'sell', amount: '800', ts: String(now - 7_000) },
+          { symbol: 'BTCUSDT', side: 'buy', amount: '999999', ts: String(now - 6_000) },
+        ],
+      },
+    },
+  });
+  assert.equal(result.symbol, 'SUIUSDT');
+  assert.equal(result.longRatio, 0.58);
+  assert.equal(result.shortRatio, 0.42);
+  assert.equal(result.longShortRatio, 1.380952);
+  assert.equal(result.longLiquidationAmount, 1200);
+  assert.equal(result.shortLiquidationAmount, 800);
+  assert.equal(result.liquidationCount, 2);
+  assert.equal(result.status, 'live');
+  assert.equal(result.publicDataOnly, true);
+  assert.equal(result.directionalScoreImpact, 0);
+  assert.equal(result.probabilityImpact, 0);
+  assert.equal(result.executionAuthority, 'NONE');
+});
+
+test('futures flow never coerces missing ratio or liquidation evidence to zero', () => {
+  const result = normalizeFuturesMarketFlowEvidence({
+    symbol: 'SUIUSDT',
+    now: Date.UTC(2026, 8, 26, 3, 0, 0),
+    longShortPayload: { code: '00000', data: [] },
+    liquidationPayload: { code: '00000', data: { list: [] } },
+  });
+  assert.equal(result.longRatio, null);
+  assert.equal(result.shortRatio, null);
+  assert.equal(result.longShortRatio, null);
+  assert.equal(result.longLiquidationAmount, null);
+  assert.equal(result.shortLiquidationAmount, null);
+  assert.equal(result.liquidationCount, 0);
+  assert.equal(result.status, 'insufficient');
 });

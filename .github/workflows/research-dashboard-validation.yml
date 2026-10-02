@@ -2,7 +2,6 @@ name: Research Dashboard Validation
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - 'research-dashboard/**'
       - '.github/workflows/research-dashboard-validation.yml'
@@ -15,8 +14,21 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    env:
+      DASHBOARD_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DASHBOARD_HEAD_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact validation head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$DASHBOARD_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DASHBOARD_HEAD_SHA"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

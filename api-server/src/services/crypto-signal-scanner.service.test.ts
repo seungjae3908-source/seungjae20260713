@@ -135,6 +135,39 @@ test('Upbit spot scanner uses public data and never emits SHORT or order flags',
   assert.ok(result.cards.every((card) => card.warnings.includes('현물 Scanner에는 숏·레버리지를 적용하지 않습니다.')));
 });
 
+test('Forward observer Spot caps public batch at five symbols without relaxing timeouts or admission', async () => {
+  let candleCalls = 0;
+  let spreadCalls = 0;
+  const rows = Array.from({ length: 12 }, (_, index) => ticker(`COIN${index}`));
+  const service = createCryptoSignalScannerService(providers({
+    getUniverse: async () => universe(rows),
+    getCandles: async () => {
+      candleCalls += 1;
+      return candles();
+    },
+    getSpread: async (_market, row) => {
+      spreadCalls += 1;
+      return { bid: row.bid, ask: row.ask };
+    },
+  }));
+
+  const result = await service.scan({
+    ...request('spot'),
+    memberId: 'forward-observer-public-only',
+    timeframe: '60m',
+    strategyMode: 'swing',
+    batchSize: 20,
+  });
+
+  assert.equal(result.execution.requestedCount, 5);
+  assert.equal(result.execution.startedCount, 5);
+  assert.equal(result.universe.nextCursor, 5);
+  assert.ok(candleCalls <= 10);
+  assert.equal(spreadCalls, 5);
+  assert.equal(result.execution.partial, false);
+  assert.equal(result.execution.providerErrorCount, 0);
+});
+
 test('scanner expiry is derived from the authoritative observed timestamp without clock drift', async () => {
   const observedAtMs = Date.parse('2026-08-27T07:30:00.000Z');
   const evaluationAtMs = observedAtMs + 12_345;

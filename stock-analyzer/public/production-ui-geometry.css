@@ -245,3 +245,14 @@ button[data-testid="load-multi-timeframe"] {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+/*
+ * Portfolio holdings can contain KRW and USD rows at the same time. The legacy
+ * holdings summary adds those native amounts arithmetically without an FX
+ * conversion, so presenting it as one total would be false precision. Hide the
+ * legacy aggregate fail-closed; Portfolio Intelligence remains the canonical
+ * normalized-KRW aggregate surface with explicit FX provenance.
+ */
+[data-testid="portfolio-holdings-summary"] {
+  display: none !important;
+}

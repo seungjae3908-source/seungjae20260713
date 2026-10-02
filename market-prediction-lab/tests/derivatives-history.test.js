@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   collectFundingRateHistory,
+  collectLongShortRatioHistory,
   createTemporalDerivativesProvider,
+  normalizeLongShortRatioRecord,
   normalizeOpenInterestSnapshot,
   summarizeTemporalCoverage,
 } from "../src/derivatives-history.js";
@@ -34,11 +36,13 @@ test("funding collector paginates backward, deduplicates and respects the reques
     symbol: "BTCUSDT",
     startTime: START + 20 * 8 * HOUR,
     endTime: START + 220 * 8 * HOUR,
+    now: () => START + 300 * 8 * HOUR,
   });
   assert.equal(result.records.length, 201);
   assert.equal(new Set(result.records.map((row) => row.timestamp)).size, result.records.length);
   assert.ok(result.records.every((row) => row.timestamp >= START + 20 * 8 * HOUR));
   assert.ok(result.records.every((row) => row.timestamp <= START + 220 * 8 * HOUR));
+  assert.equal(result.collectedAt, START + 300 * 8 * HOUR);
 });
 
 test("funding collector rejects stalled pagination", async () => {
@@ -51,6 +55,51 @@ test("funding collector rejects stalled pagination", async () => {
     endTime: START + 1000 * HOUR,
     maxPages: 3,
   }), /did not move backward/);
+});
+
+test("long-short public collector normalizes and sorts public ratio observations", async () => {
+  const client = {
+    get: async (path, params) => {
+      assert.equal(path, "/api/v2/mix/market/long-short");
+      assert.deepEqual(params, { symbol: "BTCUSDT", period: "1h" });
+      return {
+        code: "00000",
+        data: [
+          { longShortRatio: "1.20", ts: String(START + HOUR) },
+          { longShortRatio: "1.10", ts: String(START) },
+          { longShortRatio: "1.20", ts: String(START + HOUR) },
+        ],
+      };
+    },
+  };
+  const result = await collectLongShortRatioHistory({ client, symbol: "BTCUSDT", period: "1h" });
+  assert.equal(result.provider, "bitget-public-v2");
+  assert.deepEqual(result.records.map((row) => row.ratio), [1.1, 1.2]);
+  assert.deepEqual(result.records.map((row) => row.timestamp), [START, START + HOUR]);
+});
+
+test("long-short ratio stays fail-closed until temporal training parity is explicitly confirmed", () => {
+  const history = [
+    { longShortRatio: "1.1", ts: START },
+    { longShortRatio: "1.2", ts: START + HOUR },
+  ];
+  const blocked = createTemporalDerivativesProvider({ longShortHistory: history });
+  assert.equal(blocked({ anchorTimestamp: START + HOUR }).derivativesFeatures.longShortRatio, undefined);
+
+  const enabled = createTemporalDerivativesProvider({
+    longShortHistory: history,
+    longShortTrainingParityConfirmed: true,
+  });
+  const row = enabled({ anchorTimestamp: START + 90 * 60 * 1000 });
+  assert.equal(row.derivativesFeatures.longShortRatio, 1.2);
+  assert.equal(row.featureAvailability.longShortKnown, true);
+  assert.equal(row.featureAvailability.longShortTimestamp, START + HOUR);
+});
+
+test("long-short normalizer preserves exact decimal source text", () => {
+  const row = normalizeLongShortRatioRecord({ ts: START, longShortRatio: "1.234500" });
+  assert.equal(row.ratioRaw, "1.234500");
+  assert.equal(row.ratio, 1.2345);
 });
 
 test("open-interest snapshots fail closed by default when training parity is not confirmed", () => {
@@ -115,13 +164,15 @@ test("temporal provider rejects non-boolean OI training parity flags", () => {
 
 test("coverage summary counts only truly available temporal features", () => {
   const summary = summarizeTemporalCoverage([
-    { featureAvailability: { fundingKnown: true, openInterestKnown: false } },
-    { featureAvailability: { fundingKnown: true, openInterestKnown: true } },
-    { featureAvailability: { fundingKnown: false, openInterestKnown: false } },
+    { featureAvailability: { fundingKnown: true, openInterestKnown: false, longShortKnown: true } },
+    { featureAvailability: { fundingKnown: true, openInterestKnown: true, longShortKnown: false } },
+    { featureAvailability: { fundingKnown: false, openInterestKnown: false, longShortKnown: false } },
   ]);
   assert.equal(summary.total, 3);
   assert.equal(summary.fundingKnown, 2);
   assert.equal(summary.openInterestKnown, 1);
+  assert.equal(summary.longShortKnown, 1);
+  assert.equal(summary.longShortCoverage, 1 / 3);
 });
 
 test("open-interest normalizer preserves decimal source text", () => {

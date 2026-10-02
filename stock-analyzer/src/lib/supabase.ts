@@ -5,6 +5,7 @@
 // access is protected by Supabase Row Level Security policies.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { AUTH_SESSION_BOOTSTRAP_TIMEOUT_MS } from '@/lib/auth-bootstrap';
+import { deviceTrustRequestHeaders } from '@/lib/device-trust';
 import { validatePortfolioHoldingRows } from '@/lib/portfolio-holding-truth';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -29,6 +30,58 @@ function requestUrl(input: RequestInfo | URL): URL | null {
   } catch {
     return null;
   }
+}
+
+function requestHeaders(input: RequestInfo | URL, init: RequestInit): Headers {
+  const headers = input instanceof Request ? new Headers(input.headers) : new Headers();
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  return headers;
+}
+
+function configuredSupabaseOrigin(): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+function jwtSubject(authorization: string | null): string | null {
+  if (!authorization?.toLowerCase().startsWith('bearer ')) return null;
+  const token = authorization.slice(7).trim();
+  const encoded = token.split('.')[1];
+  if (!encoded || typeof globalThis.atob !== 'function') return null;
+  try {
+    const normalized = encoded.replace(/-/gu, '+').replace(/_/gu, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const payload = JSON.parse(globalThis.atob(padded)) as { sub?: unknown };
+    return typeof payload.sub === 'string' && payload.sub.length > 0 ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameOriginSelfProfileHeaders(input: RequestInfo | URL, init: RequestInit): Headers | null {
+  if (requestMethod(input, init) !== 'GET') return null;
+  const parsed = requestUrl(input);
+  const supabaseOrigin = configuredSupabaseOrigin();
+  if (!parsed || !supabaseOrigin || parsed.origin !== supabaseOrigin) return null;
+  if (parsed.pathname.replace(/\/+$/u, '') !== '/rest/v1/profiles') return null;
+  if (parsed.searchParams.get('select') !== '*') return null;
+
+  const headers = requestHeaders(input, init);
+  const authorization = headers.get('authorization');
+  const subject = jwtSubject(authorization);
+  if (!subject || parsed.searchParams.get('id') !== `eq.${subject}`) return null;
+
+  const proxyHeaders = new Headers();
+  proxyHeaders.set('Authorization', authorization!);
+  proxyHeaders.set('Accept', 'application/json');
+  Object.entries(deviceTrustRequestHeaders()).forEach(([key, value]) => {
+    proxyHeaders.set(key, value);
+  });
+  return proxyHeaders;
 }
 
 function isPortfolioHoldingsRead(input: RequestInfo | URL, init: RequestInit): boolean {
@@ -86,7 +139,14 @@ async function boundedSupabaseFetch(input: RequestInfo | URL, init: RequestInit 
   );
 
   try {
-    const response = await fetch(input, { ...init, signal: controller.signal });
+    const selfProfileHeaders = sameOriginSelfProfileHeaders(input, init);
+    const response = selfProfileHeaders
+      ? await fetch('/api/auth/profile', {
+        method: 'GET',
+        headers: selfProfileHeaders,
+        signal: controller.signal,
+      })
+      : await fetch(input, { ...init, signal: controller.signal });
     return await enforcePortfolioHoldingTruth(input, init, response);
   } finally {
     globalThis.clearTimeout(timer);

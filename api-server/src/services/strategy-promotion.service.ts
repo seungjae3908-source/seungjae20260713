@@ -203,7 +203,10 @@ export function strategyParameterHash(profile: ScannerStrategyProfile): string {
   return createHash('sha256').update(JSON.stringify(stableValue(profile))).digest('hex');
 }
 
-export function strategyCandidateId(identity: StrategyIdentity): string {
+export function strategyCandidateId(identity: Pick<StrategyIdentity,
+  'strategyFamily' | 'strategyId' | 'strategyVersion' | 'parameterHash' | 'market' | 'assetClass'
+  | 'universe' | 'timeframe' | 'direction' | 'researchCodeSha' | 'costPolicyVersion' | 'riskPolicyVersion'>
+  & { symbol: string | null; strategyHorizon: StrategyIdentity['strategyHorizon'] | null }): string {
   const candidateIdentity = {
     schemaVersion: 'paper-candidate-identity-v1',
     strategyFamily: identity.strategyFamily,

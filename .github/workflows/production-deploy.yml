@@ -22,12 +22,19 @@ on:
       - .github/workflows/production-deploy.yml
       - .github/workflows/production-one-time-approval.yml
       - .github/workflows/futures-public-network-smoke.yml
+      - .github/workflows/post-merge-release-provenance.yml
       - .github/workflows/staging-readiness.yml
       - ops/deploy-production.sh
+      - ops/production-verification-diagnostics.sh
+      - ops/production-trade-schema-readonly-audit.sh
+      - ops/verify-production-trade-schema-readonly-audit.mjs
       - ops/deploy-staging.sh
       - api-server/scripts/production-ci-provenance.cjs
+      - api-server/scripts/release-candidate-provenance.cjs
+      - api-server/scripts/release-candidate-provenance.test.cjs
       - api-server/scripts/verify-production-ci-provenance-contract.mjs
       - api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - api-server/scripts/verify-production-verification-contract.mjs
       - api-server/scripts/verify-phase10-deployment-safety.mjs
       - api-server/scripts/build-staging-verdict.mjs
       - api-server/scripts/verify-staging-verdict.mjs
@@ -38,8 +45,11 @@ permissions:
   statuses: read
 
 concurrency:
-  group: stock-app-production-live
-  cancel-in-progress: false
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch'
+        && 'stock-app-production-live'
+        || format('production-deploy-pr-validation-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -56,16 +66,22 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n ops/deploy-production.sh
+          bash -n ops/production-verification-diagnostics.sh
+          bash -n ops/production-trade-schema-readonly-audit.sh
           bash -n ops/deploy-staging.sh
       - name: Verify Phase 10 deployment safety contract
         run: node api-server/scripts/verify-phase10-deployment-safety.mjs
-      - name: Verify Production CI provenance contract
+      - name: Verify release candidate provenance contract
         run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
       - name: Verify Production data-plane probe contract
         run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
+      - name: Verify Production post-switch verification contract
+        run: node api-server/scripts/verify-production-verification-contract.mjs
+      - name: Verify Production trade schema read-only gate contract
+        run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
 
   approval-gate:
-    name: Validate immutable main revision, CI provenance, and exact staging verdict
+    name: Validate immutable main revision, release provenance, and exact staging verdict
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -99,61 +115,50 @@ jobs:
             exit 1
           }
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-      - name: Require verified statuses and exact Application CI provenance
+      - name: Require verified post-merge release provenance
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         with:
           script: |
-            const required = [
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
-              'futures-public-network-smoke/verified',
-            ];
             const {
-              REQUIRED_PRODUCTION_STATUSES,
-              evaluateProductionCiProvenance,
-              inspectRequiredStatusEvidence,
-            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
-            if (JSON.stringify(required) !== JSON.stringify(REQUIRED_PRODUCTION_STATUSES)) {
-              core.setFailed('Production workflow status list differs from the shared provenance contract.');
-              return;
-            }
+              evaluatePostMergeStatusProvenance,
+              inspectPostMergeStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/release-candidate-provenance.cjs`);
             const targetSha = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: targetSha,
               per_page: 100,
             });
-            const evidence = inspectRequiredStatusEvidence(statuses);
+            const evidence = inspectPostMergeStatusEvidence(statuses);
             if (!evidence.ok) {
-              core.setFailed(`Required CI status provenance rejected: ${evidence.reason}.`);
+              core.setFailed(`Post-merge release provenance unavailable: ${evidence.reason}.`);
               return;
             }
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            const run = (await github.rest.actions.getWorkflowRun({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              head_sha: targetSha,
-              branch: 'main',
-              status: 'completed',
-              per_page: 100,
-            });
-            const run = runs.find((candidate) => Number(candidate.id) === evidence.runId);
-            const verified = evaluateProductionCiProvenance({
+              run_id: evidence.runId,
+            })).data;
+            const verified = evaluatePostMergeStatusProvenance({
               targetSha,
-              currentMainSha: targetSha,
+              currentMainSha: main.data.commit.sha,
               statuses,
               run,
             });
             if (!verified.ok) {
-              core.setFailed(`Application CI provenance rejected: ${verified.reason}.`);
+              core.setFailed(`Post-merge release provenance rejected: ${verified.reason}.`);
               return;
             }
-            core.info(`Required CI 6/6 verified by exact Application CI Run ID ${verified.runId} (${verified.event}).`);
+            core.info(`Pre-merge Full CI + merged-tree identity accepted from Post-Merge Provenance Run ID ${verified.runId}.`);
+
       - name: Locate successful exact-SHA staging verdict artifact
         id: verdict-artifact
         uses: actions/github-script@v7
@@ -213,7 +218,7 @@ jobs:
       - name: Record accepted staging evidence
         run: |
           {
-            echo '## Production approval gate passed'
+            echo '## Production release gate passed'
             echo
             echo "- Target SHA: \`${{ steps.target.outputs.sha }}\`"
             echo "- Staging Run ID: \`${{ steps.verdict-artifact.outputs.run_id }}\`"
@@ -239,9 +244,13 @@ jobs:
       TARGET_SHA: ${{ needs.approval-gate.outputs.target_sha }}
       DATA_PROBE_PATH: ${{ inputs.data_probe_path }}
       FORCE_REBUILD: ${{ inputs.force_rebuild }}
-      PUBLIC_BASE_URL: https://lsj119.duckdns.org
+      PUBLIC_BASE_URL: https://lsj119.com
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
       - name: Validate production secrets
         run: |
           set -Eeuo pipefail
@@ -259,6 +268,49 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
+      - name: Require canonical Production trade schema before application mutation
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'Protected Production database credential is missing or invalid.' >&2
+            exit 1
+          }
+          audit_artifact="$(mktemp "$RUNNER_TEMP/production-trade-schema-audit.XXXXXX.json")"
+          audit_stderr="$(mktemp "$RUNNER_TEMP/production-trade-schema-audit.XXXXXX.stderr")"
+          cleanup() { rm -f "$audit_artifact" "$audit_stderr"; }
+          trap cleanup EXIT
+          audit_script_b64="$(base64 -w0 ops/production-trade-schema-readonly-audit.sh)"
+          quoted_script="$(printf '%q' "$audit_script_b64")"
+          remote_command="PM2_NAME=stock-app AUDIT_SCRIPT_B64=$quoted_script bash -c 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; printf \"%s\" \"\$AUDIT_SCRIPT_B64\" | base64 -d | bash'"
+
+          set +e
+          printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+            -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            > "$audit_artifact" 2> "$audit_stderr"
+          audit_status=$?
+          set -e
+
+          [[ -s "$audit_artifact" ]] || {
+            echo 'Production trade schema audit produced no sanitized evidence; remote stderr is intentionally not printed.' >&2
+            exit 1
+          }
+          node ops/verify-production-trade-schema-readonly-audit.mjs --artifact "$audit_artifact"
+          if (( audit_status != 0 )); then
+            node - "$audit_artifact" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          console.error('Production trade schema gate blocked application deployment.');
+          console.error('code=' + String(value.code ?? 'UNKNOWN'));
+          console.error('missingTables=' + JSON.stringify(value.missingTables ?? []));
+          console.error('missingFunctions=' + JSON.stringify(value.missingFunctions ?? []));
+          NODE
+            exit "$audit_status"
+          fi
+
       - name: Deploy exact approved revision
         run: |
           set -Eeuo pipefail
@@ -300,8 +352,10 @@ jobs:
           fi
           DEPLOY_SCRIPT="$SOURCE_DIR/ops/deploy-production.sh"
           [[ -f "$DEPLOY_SCRIPT" ]] || { echo 'Deployment script missing' >&2; exit 1; }
+          [[ -f "$SOURCE_DIR/ops/production-verification-diagnostics.sh" ]] || { echo 'Production verification diagnostics missing' >&2; exit 1; }
           chmod 700 "$DEPLOY_SCRIPT"
-          SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME="$PM2_NAME" LIVE_PORT="$LIVE_PORT" \
+          BASH_ENV="$SOURCE_DIR/ops/production-verification-diagnostics.sh" \
+            SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME="$PM2_NAME" LIVE_PORT="$LIVE_PORT" \
             CANARY_PORT="$CANARY_PORT" DATA_PROBE_PATH="$DATA_PROBE_PATH" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
             "$DEPLOY_SCRIPT" "$TARGET_SHA"
           REMOTE
@@ -314,7 +368,7 @@ jobs:
             echo "- Approved SHA: \`$TARGET_SHA\`"
             echo '- Trigger: explicit workflow dispatch only'
             echo '- Environment: `production`'
-            echo '- CI provenance: exact current main, required status 6/6, and one successful official `Application CI` run required'
+            echo '- Release provenance: pre-merge Required CI 6/6 + exact merged-tree identity verified on current main'
             echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
             echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'

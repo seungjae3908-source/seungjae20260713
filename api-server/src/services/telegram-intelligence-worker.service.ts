@@ -12,6 +12,10 @@ import {
   type TelegramMarketBriefSnapshot,
 } from './telegram-market-brief.service';
 import {
+  missingTelegramMarketRoomEnv,
+  telegramMarketRoomChatId,
+} from './telegram-market-room.service';
+import {
   sendTelegramAlert,
   type TelegramAlertInput,
   type TelegramAlertResult,
@@ -108,11 +112,7 @@ function reportDetails(kind: TelegramIntelligenceReportKind, localDate: string):
 }
 
 export function telegramDestinationChatId(destination: TelegramReportDestination): string | null {
-  switch (destination) {
-    case 'STOCK_ROOM': return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-    case 'CRYPTO_ROOM': return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
-    case 'PERSONAL': return process.env.TELEGRAM_PERSONAL_CHAT_ID?.trim() || null;
-  }
+  return telegramMarketRoomChatId(destination, process.env);
 }
 
 export type TelegramIntelligenceDelivery = (
@@ -158,10 +158,10 @@ export class TelegramIntelligenceWorker {
     if (this.running) return result;
     this.running = true;
     try {
-      const includePersonal = Boolean(process.env.TELEGRAM_PERSONAL_CHAT_ID?.trim());
       const plans = dueTelegramIntelligenceReports(now, {
         membership: 'admin',
-        portfolioRelevant: includePersonal,
+        portfolioRelevant: false,
+        watchlistRelevant: false,
         includeStocks: true,
         includeCrypto: true,
       });
@@ -262,8 +262,11 @@ export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerCon
     console.log('[telegram-intelligence-worker] disabled; Telegram bot token is required');
     return null;
   }
-  if (!process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || !process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim()) {
-    console.log('[telegram-intelligence-worker] disabled; dedicated stock and crypto Telegram rooms are required');
+  const missingMarketRooms = missingTelegramMarketRoomEnv(process.env);
+  if (missingMarketRooms.length) {
+    console.log('[telegram-intelligence-worker] disabled; four dedicated market Telegram rooms are required', {
+      missing: missingMarketRooms,
+    });
     return null;
   }
 

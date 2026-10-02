@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   AUTHORITATIVE_PAPER_PARTIAL_FILL_CALIBRATION_VERSION,
   AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY,
+  PARTIAL_FILL_CALIBRATION_FRESHNESS_AUTHORITY,
+  PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
   buildAuthoritativePaperPartialFillCostEvidence,
   computeAuthoritativePaperPartialFillCalibrationDigest,
   type CompetingCostEvidenceIdentity,
@@ -160,10 +162,87 @@ test('independent OOS partial-fill calibration produces estimated cost evidence'
   assert.equal(result.evidence?.valuePercent, 0.25);
   assert.equal(result.evidence?.quality, 'ESTIMATED');
   assert.match(result.evidence?.source ?? '', /^INDEPENDENT_PARTIAL_FILL_CALIBRATION:/);
+  assert.equal(result.evidence?.observedAtMs, nowMs);
+  assert.equal(artifact.calibratedAtMs, nowMs - 1_000);
   assert.equal(result.sampleN, 30);
   assert.equal(result.oosSampleN, 10);
   assert.equal(result.executionAuthority, 'NONE');
   assert.equal(result.realFillObserved, false);
+});
+
+test('calibration freshness is separate from the 30 second runtime evidence window', () => {
+  const base = artifactBase();
+  const calibratedAtMs = nowMs - 60_000;
+  const artifact = withDigest({
+    ...base,
+    calibratedAtMs,
+    maximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+    sourceObservationLineage: {
+      ...base.sourceObservationLineage,
+      firstObservedAtMs: calibratedAtMs - 2_000,
+      lastObservedAtMs: calibratedAtMs - 1_000,
+    },
+    outOfSampleValidationReference: {
+      ...base.outOfSampleValidationReference,
+      evaluatedAtMs: calibratedAtMs - 500,
+    },
+  });
+  const result = buildAuthoritativePaperPartialFillCostEvidence({
+    artifact,
+    expected: context({
+      maximumAgeMs: 30_000,
+      calibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+    }),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.evidence?.observedAtMs, nowMs);
+  assert.equal(artifact.calibratedAtMs, calibratedAtMs);
+  assert.equal(PARTIAL_FILL_CALIBRATION_FRESHNESS_AUTHORITY.maximumAgeCalendarDays, 14);
+  assert.equal(
+    PARTIAL_FILL_CALIBRATION_FRESHNESS_AUTHORITY.maximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+});
+
+test('calibration policy cannot be widened beyond the frozen 14 day authority', () => {
+  const result = buildAuthoritativePaperPartialFillCostEvidence({
+    artifact: withDigest(artifactBase()),
+    expected: context({
+      calibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS + 1,
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_EXCEEDED'));
+});
+
+test('calibration older than its frozen maximum age remains blocked', () => {
+  const evaluationNowMs = (PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS * 2) + 10_000;
+  const calibratedAtMs = evaluationNowMs - PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS - 1;
+  const base = artifactBase();
+  const artifact = withDigest({
+    ...base,
+    calibratedAtMs,
+    maximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+    sourceObservationLineage: {
+      ...base.sourceObservationLineage,
+      firstObservedAtMs: calibratedAtMs - 2_000,
+      lastObservedAtMs: calibratedAtMs - 1_000,
+    },
+    outOfSampleValidationReference: {
+      ...base.outOfSampleValidationReference,
+      evaluatedAtMs: calibratedAtMs - 500,
+    },
+  });
+  const result = buildAuthoritativePaperPartialFillCostEvidence({
+    artifact,
+    expected: context({
+      nowMs: evaluationNowMs,
+      maximumAgeMs: 30_000,
+      calibrationMaximumAgeMs: PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('PARTIAL_FILL_CALIBRATION_STALE'));
 });
 
 test('missing calibration artifact stays blocked instead of deriving cost from public L2', () => {
@@ -279,6 +358,13 @@ test('safety contract forbids L2 derivation, cost reuse, private API, live tradi
   assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.sharedObservationLineageAllowed, false);
   assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.testFixtureRuntimeCredit, 0);
   assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.missingDataMayProduceZeroCost, false);
+  assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.calibrationFreshnessAuthorityBound, true);
+  assert.equal(
+    AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.calibrationMaximumAgeMs,
+    PARTIAL_FILL_CALIBRATION_POLICY_MAXIMUM_AGE_MS,
+  );
+  assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.runtimeEvidenceRevalidatedAtReadTime, true);
+  assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.calibrationTimestampRewritten, false);
   assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.privateApiAllowed, false);
   assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.liveTrading, false);
   assert.equal(AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY.orderSubmissionAllowed, false);

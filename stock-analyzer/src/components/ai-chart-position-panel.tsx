@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
+import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 
 export type {
   AiChartAccountPosition,
@@ -7,6 +7,7 @@ export type {
 } from './ai-chart-position-panel-impl';
 
 type Props = {
+  selection: AnalysisSelection;
   market: AnalysisMarket;
   symbol: string;
   chartPrice: number | null;

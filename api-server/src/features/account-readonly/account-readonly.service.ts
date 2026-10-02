@@ -1,5 +1,6 @@
 import { emptySnapshot, type AccountProvider, type CanonicalAccountSnapshot } from './account-readonly.contract';
-import { classifyProviderError } from './account-readonly.errors';
+import type { BitgetReadonlyDiagnostic } from '../../services/trade-exchange-adapters.service';
+import { classifyProviderError, isAccountReadonlyCredentialAccessError } from './account-readonly.errors';
 
 export type AccountReadScope = {
   userId: string;
@@ -18,6 +19,7 @@ export type AccountCredentialConfigurationReader = (
 
 export class AccountReadonlyService {
   private lastGood = new Map<string, CanonicalAccountSnapshot>();
+  private bitgetDiagnostics = new WeakMap<CanonicalAccountSnapshot, BitgetReadonlyDiagnostic>();
 
   constructor(
     private readonly readers: Partial<Record<AccountProvider, AccountReader>>,
@@ -25,6 +27,18 @@ export class AccountReadonlyService {
     private readonly now = () => new Date(),
     private readonly credentialConfigured: AccountCredentialConfigurationReader = async () => false,
   ) {}
+
+  bitgetDiagnosticFor(snapshot: CanonicalAccountSnapshot) {
+    return this.bitgetDiagnostics.get(snapshot) ?? null;
+  }
+
+  private attachBitgetDiagnostic(
+    snapshot: CanonicalAccountSnapshot,
+    diagnostic: BitgetReadonlyDiagnostic | null,
+  ) {
+    if (diagnostic) this.bitgetDiagnostics.set(snapshot, diagnostic);
+    return snapshot;
+  }
 
   async read(scope: AccountReadScope, provider: AccountProvider, signal?: AbortSignal) {
     const userId = scope.userId.trim();
@@ -74,26 +88,32 @@ export class AccountReadonlyService {
       return value;
     } catch (error) {
       const classified = classifyProviderError(error);
-      if (classified.code === 'AUTH_FAILED') {
+      if (isAccountReadonlyCredentialAccessError(classified.code)) {
         this.lastGood.delete(cacheKey);
-        return emptySnapshot(provider, 'AUTH_FAILED', this.now().toISOString(), classified.code);
+        return this.attachBitgetDiagnostic(
+          emptySnapshot(provider, 'AUTH_FAILED', this.now().toISOString(), classified.code),
+          classified.bitgetDiagnostic,
+        );
       }
 
       const prior = this.lastGood.get(cacheKey);
       if (prior) {
-        return {
+        return this.attachBitgetDiagnostic({
           ...prior,
           status: 'STALE' as const,
           stale: true,
           checkedAt: this.now().toISOString(),
           errorCode: classified.code,
-        };
+        }, classified.bitgetDiagnostic);
       }
 
       const status = classified.code === 'RATE_LIMITED'
         ? 'RATE_LIMITED'
         : 'UNAVAILABLE';
-      return emptySnapshot(provider, status, this.now().toISOString(), classified.code);
+      return this.attachBitgetDiagnostic(
+        emptySnapshot(provider, status, this.now().toISOString(), classified.code),
+        classified.bitgetDiagnostic,
+      );
     }
   }
 }
