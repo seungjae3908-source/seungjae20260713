@@ -55,3 +55,15 @@ test('exit plan is reduce-only and bound to entry identity',()=>{
   assert.equal(input.targetPrices.length,0);
   assert.equal(input.stopPrice,null);
 });
+
+
+test('exit plan can close only the remaining tracked quantity and reason is part of idempotency identity',()=>{
+  const entry=plan('buy','upbit');
+  const base={entryPlan:entry,entryOrder:order(entry),mark:{market:'CRYPTO_SPOT' as const,symbol:'BTC',price:94,observedAt:NOW,source:'public'},fx:{market:'CRYPTO_SPOT' as const,krwPerQuoteCurrency:1,source:'KRW_NATIVE',observedAt:NOW,stale:false}};
+  const stop=buildAutomaticExitPlanInput({...base,reason:'STOP_LOSS',remainingQuantity:0.4});
+  const take=buildAutomaticExitPlanInput({...base,reason:'TAKE_PROFIT',remainingQuantity:0.4});
+  assert.equal(stop.quantity,0.4);
+  assert.equal(stop.signalId.endsWith(':STOP_LOSS'),true);
+  assert.equal(take.signalId.endsWith(':TAKE_PROFIT'),true);
+  assert.notEqual(stop.signalId,take.signalId);
+});

@@ -42,9 +42,10 @@ export function buildAutomaticExitPlanInput(input: {
   mark: MemberAutoTradingMarketMark;
   fx: MemberAutoTradingFxQuote;
   reason: MemberAutoTradingExitReason;
+  remainingQuantity?: number;
 }): TradingPlanInput {
   const { entryPlan, entryOrder, mark, fx, reason } = input;
-  const quantity = entryOrder.filledQuantity;
+  const quantity = input.remainingQuantity ?? entryOrder.filledQuantity;
   if (!positive(quantity)) throw new Error('BACKGROUND_EXIT_FILLED_QUANTITY_REQUIRED');
   if (!positive(mark.price) || mark.market !== (
     entryPlan.exchange === 'upbit' ? 'CRYPTO_SPOT'
@@ -63,7 +64,7 @@ export function buildAutomaticExitPlanInput(input: {
     stockBroker: entryPlan.stockBroker ?? null,
     stockExchange: entryPlan.stockExchange ?? null,
     strategyId: entryPlan.strategyId,
-    signalId: `${entryPlan.signalId}:auto-exit:${entryPlan.id}`,
+    signalId: `${entryPlan.signalId}:auto-exit:${entryPlan.id}:${reason}`,
     symbol: entryPlan.symbol,
     market: entryPlan.market,
     side: exitSide(entryPlan),
