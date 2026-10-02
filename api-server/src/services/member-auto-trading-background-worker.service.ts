@@ -538,10 +538,9 @@ function availableBalanceKrw(
       .filter((row) => String(row.currency ?? '').toUpperCase() === currency)
       .flatMap((row) => finite(row.buyingPower) && row.buyingPower! >= 0 ? [row.buyingPower!] : []),
   ];
-  if (!candidates.length) throw new Error('BACKGROUND_LIVE_AVAILABLE_BALANCE_REQUIRED');
+  if (!candidates.length) return null;
   const value = Math.max(...candidates) * fx.krwPerQuoteCurrency;
-  if (!finite(value) || value < 0) throw new Error('BACKGROUND_LIVE_AVAILABLE_BALANCE_INVALID');
-  return value;
+  return finite(value) && value >= 0 ? value : null;
 }
 
 function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEntry['identity']['market'] {
@@ -559,6 +558,7 @@ async function liveJournalRiskState(
   policy: TradingPolicy,
   nowMs: number,
   fxCache: Map<string, MemberAutoTradingFxQuote>,
+  entrySymbol: string,
 ) {
   const fxFor = async (market: MemberAutoTradingPaperHandoffEntry['identity']['market']) => {
     let fx = fxCache.get(market);
@@ -588,8 +588,13 @@ async function liveJournalRiskState(
   for (const position of snapshot.positions ?? []) {
     if (!finite(position.quantity) || Math.abs(position.quantity!) <= 0) continue;
     const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
-    if (!matched) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_PRESENT');
-    if (!finite(position.unrealizedPnl)) throw new Error('BACKGROUND_LIVE_UNREALIZED_PNL_REQUIRED');
+    if (!matched) {
+      if (normalizedSymbol(position.symbol) === normalizedSymbol(entrySymbol)) {
+        throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_SAME_SYMBOL');
+      }
+      continue;
+    }
+    if (!finite(position.unrealizedPnl)) continue;
     const fx = await fxFor(tradeMarketForPlan(matched));
     unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
   }
@@ -624,14 +629,15 @@ async function buildLivePlanInput(input: {
   nowMs: number;
 }): Promise<TradingPlanInput> {
   const exposure = exposureState(input.runtime, input.member.policy, input.entry, input.nowMs, 'live');
-  const availableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
+  const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
   const risk = await liveJournalRiskState(
     input.source, input.repository, input.member.userId, input.runtime, input.snapshot,
-    input.member.policy, input.nowMs, input.fxCache,
+    input.member.policy, input.nowMs, input.fxCache, input.entry.identity.symbol,
   );
+  const availableBalance = readOnlyAvailableBalance ?? 0;
   const accountValueKrw = Math.max(1, Math.min(
     input.member.policy.totalCapitalKrw,
-    availableBalance + exposure.accountExposureKrw,
+    Math.max(availableBalance, exposure.accountExposureKrw || 1),
   ));
   const slippage = finite(input.paperInput.marketSnapshot.estimatedSlippagePercent)
     ? input.paperInput.marketSnapshot.estimatedSlippagePercent
@@ -809,8 +815,7 @@ export class MemberAutoTradingBackgroundWorker {
             if (liveBackgroundEnabled()) {
               const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
-              result.privateTradingRequests += 1;
-              const liveInput = await buildLivePlanInput({
+              const liveSeed = await buildLivePlanInput({
                 source: this.source,
                 repository,
                 member,
@@ -822,6 +827,30 @@ export class MemberAutoTradingBackgroundWorker {
                 fxCache,
                 nowMs,
               });
+              const livePreview = await new TradeExecutionService(repository).previewLiveRiskSnapshot(
+                member.userId,
+                liveSeed,
+                { fxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency, now },
+              );
+              result.privateTradingRequests += livePreview.providerRequests;
+              const liveInput: TradingPlanInput = {
+                ...liveSeed,
+                marketSnapshot: {
+                  ...livePreview.snapshot,
+                  dailyPnlPercent: liveSeed.marketSnapshot.dailyPnlPercent,
+                  weeklyPnlPercent: liveSeed.marketSnapshot.weeklyPnlPercent,
+                  consecutiveLosses: liveSeed.marketSnapshot.consecutiveLosses,
+                  accountExposureKrw: liveSeed.marketSnapshot.accountExposureKrw,
+                  instrumentExposureKrw: liveSeed.marketSnapshot.instrumentExposureKrw,
+                  strategyExposureKrw: liveSeed.marketSnapshot.strategyExposureKrw,
+                  assetClassExposureKrw: liveSeed.marketSnapshot.assetClassExposureKrw,
+                  openRiskKrw: liveSeed.marketSnapshot.openRiskKrw,
+                  correlatedExposurePercent: liveSeed.marketSnapshot.correlatedExposurePercent,
+                  source: `${livePreview.snapshot.source ?? 'provider-private-preflight'}+member-live-auto`,
+                },
+                estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
+                averageSpreadPercent: livePreview.snapshot.spreadPercent,
+              };
               const liveRun = await executeAutomaticPlan({
                 repository,
                 userId: member.userId,
