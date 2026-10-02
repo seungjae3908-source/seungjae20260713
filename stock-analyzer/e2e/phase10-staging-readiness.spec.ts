@@ -2218,6 +2218,7 @@ test.describe('real staging release readiness', () => {
     expect(previewDiagnostic.orderSubmitted).toBe(false);
     expect(previewDiagnostic.exchangeRequestSent).toBe(false);
     await runAuthenticatedSearchCertification(page);
+    await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
   });
