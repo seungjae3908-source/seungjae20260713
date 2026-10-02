@@ -373,7 +373,7 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(): Promise<unknow
     });
     if (!response.ok) return null;
     const payload = await response.json() as unknown;
-    return isRecord(payload) && payload.available === true ? payload : null;
+    return isRecord(payload) ? payload : null;
   } catch {
     return null;
   } finally {
@@ -410,6 +410,18 @@ export function createVideoResearchEvidenceRouter(loadSnapshot: SnapshotLoader =
     }
     if (raw === null || raw === undefined) {
       res.status(200).json(unavailable('SANITIZED_RUNTIME_EVIDENCE_MISSING'));
+      return;
+    }
+    if (isRecord(raw) && raw.available === false && raw.dataState === 'UNKNOWN') {
+      const automation = safeAutomation(raw.automation);
+      const aiReview = safeAiReview(raw.aiReview);
+      const reason = typeof raw.reason === 'string' && /^[A-Z0-9_:-]{1,160}$/u.test(raw.reason)
+        ? raw.reason : 'SANITIZED_RUNTIME_EVIDENCE_UNAVAILABLE';
+      if ((raw.automation != null && !automation) || (raw.aiReview != null && !aiReview)) {
+        res.status(200).json(unavailable('SANITIZED_RUNTIME_EVIDENCE_INVALID'));
+        return;
+      }
+      res.status(200).json({ ...unavailable(reason), automation, aiReview });
       return;
     }
     const evidence = sanitizeVideoResearchRuntimeEvidence(raw);

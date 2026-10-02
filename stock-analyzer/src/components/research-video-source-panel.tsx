@@ -305,6 +305,8 @@ const truthBadges = [
 
 export function ResearchVideoPanel() {
   const [runtimeEvidence, setRuntimeEvidence] = useState<RuntimeEvidence | null>(null);
+  const [automationReadback, setAutomationReadback] = useState<DiscoveryAutomation | null>(null);
+  const [aiReviewReadback, setAiReviewReadback] = useState<AiReviewStatus | null>(null);
   const [readerSettled, setReaderSettled] = useState(false);
 
   useEffect(() => {
@@ -317,12 +319,17 @@ export function ResearchVideoPanel() {
       .then(async (response) => response.ok ? response.json() as Promise<unknown> : null)
       .then((payload) => {
         if (controller.signal.aborted) return;
-        setRuntimeEvidence(parseRuntimeEvidence(payload));
+        const measured = parseRuntimeEvidence(payload);
+        setRuntimeEvidence(measured);
+        setAutomationReadback(isRecord(payload) ? parseDiscoveryAutomation(payload.automation) : null);
+        setAiReviewReadback(isRecord(payload) ? parseAiReview(payload.aiReview) : null);
         setReaderSettled(true);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
         setRuntimeEvidence(null);
+        setAutomationReadback(null);
+        setAiReviewReadback(null);
         setReaderSettled(true);
       });
     return () => controller.abort();
@@ -343,8 +350,8 @@ export function ResearchVideoPanel() {
   const compilerState = runtimeEvidence?.records.some((record) => record.transcriptStatus === 'AVAILABLE')
     ? 'NOT_EVALUATED — source-bound TESTABLE strategy evidence required'
     : 'BLOCKED — authorized transcript required before strategy extraction/compiler';
-  const automation = runtimeEvidence?.automation ?? null;
-  const aiReview = runtimeEvidence?.aiReview ?? null;
+  const automation = automationReadback ?? runtimeEvidence?.automation ?? null;
+  const aiReview = aiReviewReadback ?? runtimeEvidence?.aiReview ?? null;
   const automationState = !automation
     ? 'UNKNOWN — 운영 자동수집 readback 없음'
     : automation.status === 'COMPLETE' && automation.scheduledInvocationObserved

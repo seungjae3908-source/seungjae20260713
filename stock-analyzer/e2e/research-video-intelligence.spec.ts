@@ -62,9 +62,12 @@ for(const width of [320,1440]){
     await expect(page.getByTestId('video-transcript-state')).toContainText('MULTI_SOURCE');
   });
 }
-test('missing source stays unknown, not a measured zero',async({page})=>{
-  const {panel}=await install(page,{available:false,dataState:'UNKNOWN'});
+test('missing source stays unknown while safe AI status remains visible',async({page})=>{
+  const waitingAutomation={...automation,status:'WAITING_CONFIGURATION',query:null,sourceCount:null,snapshotDigest:null,providerNetworkCalls:0,scheduledInvocationObserved:false,reason:'YOUTUBE_PROVIDER_NOT_CONFIGURED',nextRequiredStep:'CONFIGURE_APPROVED_READ_ONLY_YOUTUBE_DISCOVERY'};
+  const {panel}=await install(page,{available:false,dataState:'UNKNOWN',reason:'VIDEO_RESEARCH_SNAPSHOT_MISSING',automation:waitingAutomation,aiReview});
   await expect(panel).toContainText('UNKNOWN — sanitized runtime snapshot unavailable');
+  await expect(panel).toContainText('설정 대기');
+  await expect(panel).toContainText('TIMER 실행 확인');
   await expect(page.getByTestId('video-evidence-state')).toContainText('UNKNOWN — missing runtime snapshot != 0');
   await expect(page.getByTestId('video-cluster-empty-state')).toContainText('missing을 0으로 만들지 않습니다');
 });
