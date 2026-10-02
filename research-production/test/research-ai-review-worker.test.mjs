@@ -145,6 +145,8 @@ test('scan reviews each unseen profile once, caches by evidence digest and never
     assert.equal(first.champion, null);
     assert.equal(first.safety.executionAuthority, 'NONE');
     assert.equal(first.safety.orderAllowed, false);
+    assert.equal(first.invocationMode, 'MANUAL');
+    assert.equal(first.scheduledInvocationObserved, false);
 
     for (const review of first.reviews) {
       const artifact = JSON.parse(await readFile(join(root, 'ai-review', 'reviews', `${review.evidenceDigest}.json`), 'utf8'));

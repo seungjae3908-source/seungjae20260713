@@ -97,6 +97,11 @@ function parseAiAnswer(answer) {
   });
 }
 
+function parseInvocationMode(env) {
+  return String(env.RESEARCH_AI_INVOCATION_MODE ?? '').trim().toUpperCase() === 'SYSTEMD_TIMER'
+    ? 'SYSTEMD_TIMER' : 'MANUAL';
+}
+
 function providerPresence(env) {
   const selected = String(env.AI_CHAT_PROVIDER ?? '').trim().toLowerCase();
   const generic = String(env.AI_CHAT_API_KEY ?? '').trim();
@@ -285,6 +290,8 @@ export async function preflightResearchAiReview({ repoRoot, stateRoot, researchS
     reason: policy.reason,
     providerPresence: presence,
     providerNetworkCalls: 0,
+    invocationMode: parseInvocationMode(env),
+    scheduledInvocationObserved: false,
     safety: RESEARCH_AI_WORKER_SAFETY,
   });
 }
@@ -319,6 +326,7 @@ export async function runResearchAiReviewScan({
       schemaVersion: 'research-production-ai-scan-v1', status: 'WAITING_FOR_FREE_AI', observedAt,
       researchSha: base.researchSha, provider: null, model: null, reason: policy.reason,
       providerNetworkCalls: 0, cacheHits: 0, reviews: [], missingProfiles: [], blockedProfiles: [], deferredProfiles: [],
+      invocationMode: parseInvocationMode(env), scheduledInvocationObserved: false,
       safety: RESEARCH_AI_WORKER_SAFETY,
     });
     await atomicJson(join(aiRoot, 'latest.json'), waiting, env);
@@ -382,6 +390,7 @@ export async function runResearchAiReviewScan({
     status: blockedProfiles.length > 0 ? 'PARTIAL_AI_UNAVAILABLE' : reviews.length > 0 ? 'COMPLETE' : 'NO_NEW_EVIDENCE',
     observedAt, researchSha: base.researchSha, provider: policy.provider, model: policy.model, reason: policy.reason,
     providerNetworkCalls, cacheHits,
+    invocationMode: parseInvocationMode(env), scheduledInvocationObserved: false,
     reviews: Object.freeze(reviews), missingProfiles: Object.freeze(missingProfiles),
     blockedProfiles: Object.freeze(blockedProfiles), deferredProfiles: Object.freeze(deferredProfiles),
     evidenceCredit: 0, profitabilityProven: false, champion: null,
