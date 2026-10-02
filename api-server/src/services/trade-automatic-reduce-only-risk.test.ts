@@ -13,7 +13,7 @@ function exitInput(): TradingPlanInput {
     exchange:'upbit', accountMode:'live', stockBroker:null, stockExchange:null,
     strategyId:'auto-exit', signalId:'auto-exit:entry-1', symbol:'BTC', market:'KRW',
     side:'sell', orderType:'market', quantity:0.01, quoteAmount:null, limitPrice:null,
-    estimatedKrw:2_000_000, stopPrice:null, targetPrices:[], splitRatios:[100],
+    estimatedKrw:2_000_000, stopPrice:100_000_000, targetPrices:[], splitRatios:[100],
     leverage:null, marginMode:null, reduceOnly:true, invalidateAction:'hold',
     signalReasons:['AUTO_EXIT','ENTRY_PLAN_ID:entry-1'],
     marketSnapshot:{
