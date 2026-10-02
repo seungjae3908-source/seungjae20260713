@@ -206,10 +206,17 @@ function paperRepository(nowMs: number): PaperJournalRepository {
 function source(
   repository: InMemoryTradingRepository,
   nowMs: number,
-  options: { missingRecentMove?: boolean; tier?: 'pending' | 'associate' } = {},
+  options: {
+    missingRecentMove?: boolean;
+    tier?: 'pending' | 'associate';
+    handoffMissing?: boolean;
+    markPrice?: number;
+  } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
-    async readHandoff() { return handoff(nowMs, options.missingRecentMove) as never; },
+    async readHandoff() {
+      return options.handoffMissing ? null : handoff(nowMs, options.missingRecentMove) as never;
+    },
     async listEligibleMembers() {
       return [{
         userId: USER,
@@ -235,6 +242,15 @@ function source(
     },
     async readLiveAccountSnapshot() {
       throw new Error('LIVE_ACCOUNT_READ_MUST_NOT_RUN_WHEN_DISABLED');
+    },
+    async readMarketMark() {
+      return {
+        market: 'CRYPTO_SPOT',
+        symbol: 'BTC',
+        price: options.markPrice ?? 100_050,
+        observedAt: new Date(nowMs).toISOString(),
+        source: 'test-public-mark',
+      };
     },
   };
 }
@@ -487,4 +503,31 @@ test('Paper-only worker never touches live account reader when live lane is disa
       else process.env[key] = value;
     }
   }
+});
+
+
+test('automatic Paper exit closes a tracked position even when the next handoff is missing', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const firstWorker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { markPrice: 100_050 }));
+  const first = await withFetchMock(() => firstWorker.runOnce(new Date(nowMs)));
+  assert.equal(first.filledOrders, 1);
+  assert.equal(first.paperExitOrders, 0);
+
+  const secondWorker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs + 5_000, { handoffMissing: true, markPrice: 90_000 }),
+  );
+  const second = await withFetchMock(() => secondWorker.runOnce(new Date(nowMs + 5_000)));
+  assert.equal(second.handoffStatus, 'MISSING');
+  assert.equal(second.paperExitOrders, 1);
+  assert.equal(second.liveExitOrders, 0);
+  const plans = await repository.listPlans(USER);
+  const exitPlan = plans.find((plan) => plan.reduceOnly === true);
+  assert.ok(exitPlan);
+  assert.ok(exitPlan.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
+  const orders = await repository.listOrders(USER);
+  const exitOrder = orders.find((order) => order.planId === exitPlan!.id);
+  assert.equal(exitOrder?.state, 'FILLED');
+  assert.equal(exitOrder?.filledQuantity, 0.1);
 });
