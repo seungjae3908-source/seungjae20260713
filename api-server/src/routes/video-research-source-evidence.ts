@@ -307,30 +307,41 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(
     resolve(process.cwd(), 'data', SNAPSHOT_FILE),
   ],
 ): Promise<unknown> {
-  for (const path of candidates) {
-    try {
-      return JSON.parse(await readFile(path, 'utf8')) as unknown;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
-      throw error;
-    }
-  }
+  // Research Dashboard is the authoritative durable Production readback once #899 is active.
+  // A local snapshot is compatibility fallback only when that internal endpoint is unavailable.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 750);
+  let dashboardUnavailable = false;
   try {
     const response = await fetchImpl('http://127.0.0.1:18090/api/research/video/evidence', {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     });
-    if (!response.ok) return null;
-    const payload = await response.json() as unknown;
-    return isRecord(payload) && payload.available === true ? payload : null;
+    if (response.ok) {
+      const payload = await response.json() as unknown;
+      if (isRecord(payload) && payload.available === true) return payload;
+      if (isRecord(payload) && payload.available === false) return null;
+      dashboardUnavailable = true;
+    } else {
+      dashboardUnavailable = true;
+    }
   } catch {
-    return null;
+    dashboardUnavailable = true;
   } finally {
     clearTimeout(timer);
   }
+  if (!dashboardUnavailable) return null;
+  for (const path of candidates) {
+    try {
+      const value = JSON.parse(await readFile(path, 'utf8')) as unknown;
+      if (sanitizeVideoResearchRuntimeEvidence(value)) return value;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT' || error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
+  return null;
 }
 
 function unavailable(reason: string) {
