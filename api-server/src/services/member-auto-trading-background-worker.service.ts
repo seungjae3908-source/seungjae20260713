@@ -808,6 +808,98 @@ async function executeAutomaticPlan(input: {
   return { created, plan, order, orderDuplicate: createdOrder.duplicate };
 }
 
+async function processAutomaticExit(input: {
+  source: MemberAutoTradingBackgroundSource;
+  repository: TradingRepository;
+  member: EligibleMember;
+  position: TrackedAutomaticPosition;
+  fxCache: Map<string, MemberAutoTradingFxQuote>;
+  now: Date;
+  live: boolean;
+}) {
+  if (input.position.activeExit) {
+    return { status: 'IDEMPOTENT' as const, privateRequests: 0, orderCreated: false };
+  }
+  const market = tradeMarketForPlan(input.position.plan);
+  const mark = await input.source.readMarketMark(market, input.position.plan.symbol);
+  const initialReason = automaticExitReason(input.position.plan, mark.price);
+  if (!initialReason) return { status: 'HOLD' as const, privateRequests: 0, orderCreated: false };
+
+  let fx = input.fxCache.get(market);
+  if (!fx) {
+    fx = await input.source.resolveFx(market, input.now.getTime());
+    input.fxCache.set(market, fx);
+  }
+
+  let exitInput = buildAutomaticExitPlanInput({
+    entryPlan: input.position.plan,
+    entryOrder: input.position.order,
+    mark,
+    fx,
+    reason: initialReason,
+    remainingQuantity: input.position.remainingQuantity,
+  });
+  let privateRequests = 0;
+
+  if (input.live) {
+    if (!liveBackgroundEnabled()) {
+      return { status: 'HOLD' as const, privateRequests: 0, orderCreated: false };
+    }
+    const provider = input.position.plan.exchange as AccountProvider;
+    const accountSnapshot = await input.source.readLiveAccountSnapshot(input.member.userId, provider);
+    privateRequests += 1;
+    const providerQuantity = providerPositionQuantity(accountSnapshot, input.position);
+    exitInput = { ...exitInput, quantity: providerQuantity };
+    const preview = await new TradeExecutionService(input.repository).previewLiveRiskSnapshot(
+      input.member.userId,
+      exitInput,
+      { fxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency, now: input.now },
+    );
+    privateRequests += preview.providerRequests;
+    const confirmedPrice = Number(preview.snapshot.currentPrice);
+    const confirmedReason = automaticExitReason(input.position.plan, confirmedPrice);
+    if (confirmedReason !== initialReason) {
+      return { status: 'BLOCKED_RECHECK' as const, privateRequests, orderCreated: false };
+    }
+    exitInput = {
+      ...exitInput,
+      marketSnapshot: {
+        ...preview.snapshot,
+        source: `${preview.snapshot.source ?? 'provider-private-preflight'}+automatic-exit`,
+        signalState: 'approved',
+        signalObservedAt: preview.snapshot.observedAt,
+      },
+      estimatedSlippagePercent: preview.snapshot.estimatedSlippagePercent,
+      averageSpreadPercent: preview.snapshot.spreadPercent,
+    };
+  }
+
+  const persistentStop = await input.repository.getGlobalEmergencyStop();
+  const execution = await executeAutomaticPlan({
+    repository: input.repository,
+    userId: input.member.userId,
+    planInput: exitInput,
+    policy: input.member.policy,
+    emergencyStopped: input.member.policy.emergencyStopped
+      || persistentStop
+      || process.env.TRADING_EMERGENCY_STOP === 'true',
+  });
+  if (!execution.plan || !execution.order) {
+    return { status: 'BLOCKED_PLAN' as const, privateRequests, orderCreated: false };
+  }
+  const orderCreated = !execution.orderDuplicate;
+  if (['REJECTED', 'RECOVERY_REQUIRED'].includes(execution.order.state)) {
+    return { status: 'BLOCKED_ORDER' as const, privateRequests, orderCreated };
+  }
+  return {
+    status: ['FILLED', 'PARTIALLY_FILLED', 'ACCEPTED'].includes(execution.order.state)
+      ? 'EXIT_SUBMITTED' as const
+      : 'HOLD' as const,
+    privateRequests,
+    orderCreated,
+  };
+}
+
 function intervalMs(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed)
@@ -841,6 +933,9 @@ export class MemberAutoTradingBackgroundWorker {
       failures: 0,
       livePlans: 0,
       liveOrders: 0,
+      paperExitOrders: 0,
+      liveExitOrders: 0,
+      exitBlocked: 0,
       privateTradingRequests: 0,
     };
     if (this.running) return result;
@@ -848,13 +943,13 @@ export class MemberAutoTradingBackgroundWorker {
     try {
       const nowMs = now.getTime();
       const handoff = await this.source.readHandoff(nowMs);
-      if (!handoff) return result;
-      result.handoffStatus = handoff.status;
-      if (handoff.status !== 'READY' || handoff.entryCount === 0) return result;
+      if (handoff) result.handoffStatus = handoff.status;
 
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
-      const entries = handoff.entries.slice(0, MAX_ENTRIES_PER_TICK);
+      const entries = handoff?.status === 'READY'
+        ? handoff.entries.slice(0, MAX_ENTRIES_PER_TICK)
+        : [];
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
 
@@ -871,6 +966,73 @@ export class MemberAutoTradingBackgroundWorker {
         } catch {
           result.blocked += entries.length;
           continue;
+        }
+
+        let exitChanged = false;
+        for (const position of trackedAutomaticPositions(runtime, 'paper')) {
+          try {
+            const exit = await processAutomaticExit({
+              source: this.source,
+              repository,
+              member,
+              position,
+              fxCache,
+              now,
+              live: false,
+            });
+            if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
+              result.paperExitOrders += 1;
+              exitChanged = true;
+            } else if (exit.status.startsWith('BLOCKED')) {
+              result.exitBlocked += 1;
+            }
+          } catch (error) {
+            const code = errorCode(error);
+            if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
+              result.exitBlocked += 1;
+            } else {
+              result.failures += 1;
+            }
+          }
+        }
+
+        if (liveBackgroundEnabled()) {
+          for (const position of trackedAutomaticPositions(runtime, 'live')) {
+            try {
+              const exit = await processAutomaticExit({
+                source: this.source,
+                repository,
+                member,
+                position,
+                fxCache,
+                now,
+                live: true,
+              });
+              result.privateTradingRequests += exit.privateRequests;
+              if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
+                result.liveExitOrders += 1;
+                exitChanged = true;
+              } else if (exit.status.startsWith('BLOCKED')) {
+                result.exitBlocked += 1;
+              }
+            } catch (error) {
+              const code = errorCode(error);
+              if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
+                result.exitBlocked += 1;
+              } else {
+                result.failures += 1;
+              }
+            }
+          }
+        }
+
+        if (exitChanged) {
+          try {
+            runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          } catch {
+            result.exitBlocked += 1;
+            continue;
+          }
         }
 
         for (const entry of entries) {
@@ -1058,6 +1220,13 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     if (!reader) throw new Error('BACKGROUND_LIVE_ACCOUNT_READER_UNAVAILABLE');
     return reader({ userId, accessToken: 'service-role-background' });
   }
+
+  readMarketMark(
+    market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+    symbol: string,
+  ) {
+    return readMemberAutoTradingMarketMark(market, symbol);
+  }
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
@@ -1073,7 +1242,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   const tick = async () => {
     try {
       const result = await worker.runOnce(new Date());
-      if (result.evaluated > 0 || result.failures > 0) {
+      if (result.evaluated > 0 || result.paperExitOrders > 0 || result.liveExitOrders > 0
+        || result.exitBlocked > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
