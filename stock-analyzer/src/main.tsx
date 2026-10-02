@@ -6,7 +6,12 @@
 const directAiChartColdRoute = window.location.pathname.endsWith('/ai-chart');
 
 if (directAiChartColdRoute) {
+	// Start both the route shell and the user-critical renderer graph immediately.
+	// The page keeps the renderer behind React.lazy for normal navigation, but a
+	// direct /ai-chart document should not wait for the page render before the
+	// renderer chunk request begins.
 	void import('@/pages/ai-chart').catch(() => undefined);
+	void import('@/components/unified-analysis-chart').catch(() => undefined);
 	for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]')) {
 		link.setAttribute('fetchpriority', 'high');
 	}
