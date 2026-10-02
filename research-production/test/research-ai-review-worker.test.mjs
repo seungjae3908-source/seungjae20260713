@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 
 import {
   buildResearchAiEvidence,
+  preflightResearchAiReview,
   resolveResearchFreeAiPolicy,
   runResearchAiReviewScan,
 } from '../src/research-ai-review-worker.mjs';
@@ -76,6 +77,27 @@ test('free provider policy fails closed unless an exact approved free route is c
   });
   assert.equal(coexist.provider, 'gemini');
   assert.equal(coexist.model, 'gemini-3.1-flash-lite');
+});
+
+test('provider presence maps a generic AI key only to its explicitly selected provider', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-presence-'));
+  try {
+    const common = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_API_KEY: SECRET };
+    const groq = await preflightResearchAiReview({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA,
+      env: { ...common, AI_CHAT_PROVIDER: 'groq', AI_CHAT_MODEL: 'openai/gpt-oss-20b' },
+      verifyGitHead: false, preflight: fakePreflight(root),
+    });
+    assert.deepEqual(groq.providerPresence, { groq: true, gemini: false });
+    const gemini = await preflightResearchAiReview({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA,
+      env: { ...common, AI_CHAT_PROVIDER: 'gemini', AI_CHAT_MODEL: 'gemini-3.1-flash-lite' },
+      verifyGitHead: false, preflight: fakePreflight(root),
+    });
+    assert.deepEqual(gemini.providerPresence, { groq: false, gemini: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('cycle projection exposes only structural runtime state and binds it to exact release SHA', () => {

@@ -98,9 +98,13 @@ function parseAiAnswer(answer) {
 }
 
 function providerPresence(env) {
+  const selected = String(env.AI_CHAT_PROVIDER ?? '').trim().toLowerCase();
+  const generic = String(env.AI_CHAT_API_KEY ?? '').trim();
+  const genericGroq = selected === 'groq' ? generic : '';
+  const genericGemini = ['gemini', 'google', 'google-gemini'].includes(selected) ? generic : '';
   return Object.freeze({
-    groq: Boolean(String(env.GROQ_API_KEY ?? env.AI_CHAT_API_KEY ?? '').trim()),
-    gemini: Boolean(String(env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? env.AI_CHAT_API_KEY ?? '').trim()),
+    groq: Boolean(String(env.GROQ_API_KEY ?? '').trim() || genericGroq),
+    gemini: Boolean(String(env.GEMINI_API_KEY ?? '').trim() || String(env.GOOGLE_API_KEY ?? '').trim() || genericGemini),
   });
 }
 
