@@ -81,6 +81,9 @@ test('canonical full CI is pre-merge/manual only and independently requires gree
   assert.doesNotMatch(triggerSection, /pull_request:/u);
   assert.doesNotMatch(triggerSection, /push:/u);
   assert.match(document, /READY_FAST_CI_NOT_GREEN/u);
+  assert.match(document, /bounded wait attempt/u);
+  assert.match(document, /setTimeout\(resolve, 2000\)/u);
+  assert.match(document, /terminalFailure/u);
   assert.match(document, /latestFast\.conclusion !== 'success'/u);
   assert.match(document, /^  ready-gate:/mu);
   assert.match(document, /Pre-merge current-base virtual merge gate/u);
