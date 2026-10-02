@@ -32,7 +32,10 @@ test('trading workspace unifies auto, paper, four markets, journal and selected-
   expect(auto).toContain('모의매매</SegmentedButton>');
   for (const label of ['국내주식', '미국주식', '코인현물', '코인선물']) expect(auto).toContain(label);
   for (const label of ['대시보드', '포지션·주문', '매매일지', '설정']) expect(auto).toContain(label);
-  expect(auto).toContain("forcedSource={mode === 'auto' ? 'APP_AUTO' : 'APP_PAPER'}");
+  expect(auto).not.toContain("forcedSource={mode === 'auto' ? 'APP_AUTO' : 'APP_PAPER'}");
+  expect(auto).toContain('title="매매일지"');
+  for (const label of ['직접매매', '자동매매', '자동모의매매']) expect(journal).toContain(label);
+  for (const book of ['MANUAL', 'AUTO_REAL', 'AUTO_PAPER']) expect(journal).toContain(book);
   expect(auto).toContain('selectedMarket={market}');
   expect(auto).toContain("initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'");
   expect(paper).toContain('<AutoTradingPage initialMode="paper" />');

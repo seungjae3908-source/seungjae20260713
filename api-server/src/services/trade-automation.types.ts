@@ -290,6 +290,7 @@ export type TradingRiskEnvelope = {
 };
 
 export type TradingPlan = TradingPlanInput & {
+  executionMode?: 'manual' | 'automatic';
   id: string;
   userId: string;
   idempotencyKey: string;
