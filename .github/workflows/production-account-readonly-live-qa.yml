@@ -10,6 +10,7 @@ on:
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
       - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-login.ts'
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
   workflow_dispatch:
@@ -59,6 +60,7 @@ jobs:
           const workflow = fs.readFileSync('.github/workflows/production-account-readonly-live-qa.yml', 'utf8');
           const bridge = fs.readFileSync('.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml', 'utf8');
           const spec = fs.readFileSync('stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts', 'utf8');
+          const login = fs.readFileSync('stock-analyzer/e2e/support/production-readonly-login.ts', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-account-readonly.config.ts', 'utf8');
           const live = workflow.split('\n  production-account-readonly-live-qa:\n')[1] ?? '';
           const requireText = (source, value, code) => {
@@ -72,6 +74,359 @@ jobs:
           requireText(live, 'PRODUCTION_DEPLOY_RUN_ID: ' + '$' + '{{ inputs.production_deploy_run_id }}', 'LIVE_QA_DEPLOY_RUN_ID_INPUT_REQUIRED');
           requireText(live, 'getWorkflowRun', 'LIVE_QA_EXACT_DEPLOY_RUN_LOOKUP_REQUIRED');
           requireText(live, 'assertProductionDeployProvenance', 'LIVE_QA_DEPLOY_PROVENANCE_VALIDATION_REQUIRED');
+          requireText(workflow, "'stock-analyzer/e2e/support/production-readonly-login.ts'", 'LOGIN_HELPER_CHANGE_MUST_TRIGGER_CONTRACT');
+          requireText(live, 'Resolve exact workflow-generation QA harness safely', 'LIVE_QA_CURRENT_HARNESS_OVERLAY_REQUIRED');
+          requireText(live, 'QA_HARNESS_SHA: ' + '          requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
+          requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
+          requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
+          requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
+          requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
+          requireText(spec, 'bitgetDiagnostic', 'BITGET_SANITIZED_DIAGNOSTIC_REQUIRED');
+          requireText(bridge, 'canonicalizeProductionAccountProviders', 'BRIDGE_ALLOWED_TARGET_PROVIDERS_REQUIRED');
+          requireText(bridge, 'inputs: { sha: target, providers, production_deploy_run_id: productionDeployRunId }', 'BRIDGE_TARGET_PROVIDER_DISPATCH_REQUIRED');
+          requireText(bridge, 'assertProductionDeployProvenance', 'BRIDGE_DEPLOY_PROVENANCE_VALIDATION_REQUIRED');
+          const adapter = fs.readFileSync('api-server/src/services/trade-exchange-adapters.service.ts', 'utf8');
+          const runtime = fs.readFileSync('api-server/src/features/account-readonly/account-readonly.runtime.ts', 'utf8');
+          const exchange = fs.readFileSync('api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts', 'utf8');
+          for (const endpoint of ['/api/v3/account/settings', '/api/v3/account/assets', '/api/v3/position/current-position', '/api/v3/trade/unfilled-orders']) {
+            requireText(adapter, endpoint, 'BITGET_UTA_ADAPTER_ENDPOINT_REQUIRED_' + endpoint);
+            requireText(runtime, endpoint, 'BITGET_UTA_RUNTIME_ENDPOINT_REQUIRED_' + endpoint);
+          }
+          requireText(exchange, 'readBitgetUtaSnapshot', 'BITGET_UTA_READER_REQUIRED');
+          for (const provider of ['toss', 'upbit', 'bitget']) {
+            requireText(spec, "'" + provider + "'", 'REQUIRED_PROVIDER_MISSING_' + provider.toUpperCase());
+          }
+          for (const mutation of ['page.request.post(', 'page.request.put(', 'page.request.patch(', 'page.request.delete(']) {
+            if (spec.includes(mutation)) throw new Error('DIRECT_MUTATION_REQUEST_FORBIDDEN');
+          }
+          for (const secret of ['TOSS_CLIENT_SECRET', 'UPBIT_SECRET_KEY', 'BITGET_SECRET_KEY', 'KIWOOM_APP_SECRET']) {
+            if (live.includes(secret)) throw new Error('PROVIDER_SECRET_MUST_NOT_ENTER_QA_WORKFLOW_' + secret);
+          }
+          for (const line of ["trace: 'off'", "video: 'off'", "screenshot: 'off'"]) {
+            requireText(config, line, 'RAW_AUTHENTICATED_ARTIFACT_RETENTION_FORBIDDEN');
+          }
+          NODE
+
+      - name: Run Production Deploy provenance regression tests
+        run: node --test .github/scripts/production-deploy-provenance.test.cjs
+
+  production-account-readonly-live-qa:
+    name: Real Production account read-only provider QA
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_BASE_URL: https://lsj119.com
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_ACCOUNT_READONLY_LIVE_QA: "true"
+      PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-account-readonly-artifacts
+      EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
+      PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+      PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ${{ inputs.providers }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact deployed source checkout
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+
+      - name: Require exact bridge-validated official Production Deploy provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+        with:
+          script: |
+            const { assertProductionDeployProvenance } = require('./.github/scripts/production-deploy-provenance.cjs');
+            const target = process.env.TARGET_SHA;
+            const productionDeployRunId = String(process.env.PRODUCTION_DEPLOY_RUN_ID ?? '').trim();
+            if (!/^[1-9][0-9]*$/.test(productionDeployRunId)) {
+              core.setFailed('PRODUCTION_DEPLOY_PROVENANCE_RUN_ID_INVALID');
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(productionDeployRunId),
+            })).data;
+            try {
+              assertProductionDeployProvenance(run, {
+                targetSha: target,
+                productionDeployRunId,
+              });
+            } catch (error) {
+              core.setFailed(String(error?.message ?? 'PRODUCTION_DEPLOY_PROVENANCE_INVALID'));
+              return;
+            }
+            core.info('Production Deploy provenance accepted from exact Run ' + productionDeployRunId + '.');
+
+      - name: Require exact Production runtime identity
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/production-account-qa-health.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { assertProductionRuntimeIdentity } = require('./.github/scripts/production-deploy-provenance.cjs');
+          const health = JSON.parse(fs.readFileSync('/tmp/production-account-qa-health.json', 'utf8'));
+          assertProductionRuntimeIdentity(health, process.env.EXPECTED_DEPLOY_SHA);
+          NODE
+
+      - name: Require Production QA login credential
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
+            exit 1
+          }
+
+      - name: Resolve exact workflow-generation QA harness safely
+        env:
+          QA_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
+            test -s stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+            test -s stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts
+            test -s stock-analyzer/e2e/support/production-readonly-login.ts
+            test -s stock-analyzer/e2e/support/production-readonly-policy.ts
+            test -s stock-analyzer/playwright.production-account-readonly.config.ts
+            echo "QA harness already belongs to the exact deployed SHA; overlay not required."
+          else
+            git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
+            git cat-file -e "$QA_HARNESS_SHA^{commit}"
+            for harness_path in \
+              stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts \
+              stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts \
+              stock-analyzer/e2e/support/production-readonly-login.ts \
+              stock-analyzer/e2e/support/production-readonly-policy.ts \
+              stock-analyzer/playwright.production-account-readonly.config.ts
+            do
+              tmp="/tmp/$(basename "$harness_path")"
+              git show "$QA_HARNESS_SHA:$harness_path" > "$tmp"
+              test -s "$tmp"
+              install -m 0644 "$tmp" "$harness_path"
+            done
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install isolated Chromium runtime
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Run authenticated real-account read-only QA
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+
+      - name: Verify sanitized immutable QA evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence="stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json"
+          test -s "$evidence"
+          node - "$evidence" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS" <<'NODE'
+          const fs = require('node:fs');
+          const [file, expectedSha, rawTargetProviders] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const allowedTargets = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
+          const requestedProviders = String(rawTargetProviders ?? '').split(',').filter(Boolean);
+          const expectedTestedProviders = [...requestedProviders].sort();
+          if (requestedProviders.length === 0
+            || new Set(requestedProviders).size !== requestedProviders.length
+            || requestedProviders.some((provider) => !allowedTargets.has(provider))) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
+          }
+          const providers = Array.isArray(value?.providers) ? value.providers : [];
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
+            || value?.targetSha !== expectedSha
+            || !Array.isArray(value?.testedProviders)
+            || JSON.stringify(value.testedProviders) !== JSON.stringify(expectedTestedProviders)
+            || value?.officialProductionOrigin !== true
+            || value?.authenticatedProductionSession !== true
+            || value?.credentialVaultEncryptionConfigured !== true
+            || value?.secretValuesRecorded !== false
+            || value?.accountValuesRecorded !== false
+            || value?.orderRequests !== 0
+            || value?.cancelRequests !== 0
+            || value?.amendRequests !== 0
+            || value?.transferRequests !== 0
+            || value?.withdrawalRequests !== 0
+            || value?.blockedMutationRequests !== 0
+            || value?.observedAppMutationRequests !== 0
+            || value?.liveTradingAuthorityGranted !== false
+            || value?.autoTradingAuthorityGranted !== false) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_EVIDENCE_CONTRACT_FAILED');
+          }
+          if (!providers.some((item) => item?.provider === 'bitget')) {
+            throw new Error('PRODUCTION_ACCOUNT_QA_BITGET_DIAGNOSTIC_MISSING');
+          }
+          for (const provider of expectedTestedProviders) {
+            const row = providers.find((item) => item?.provider === provider);
+            if (!row || row.connected !== true || row.status !== 'CONNECTED'
+              || row.stale !== false || row.fresh !== true || row.errorCode !== null
+              || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true
+              || row.reconciliation !== 'PASS' || row.reconciliationPassed !== true) {
+              throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_FAILED_' + provider.toUpperCase());
+            }
+          }
+          const diagnosticFields = new Set([
+            'provider',
+            'requestMethod',
+            'requestPath',
+            'endpointFamily',
+            'probe',
+            'httpStatus',
+            'applicationCode',
+            'sanitizedClassification',
+            'fallbackAttempted',
+            'timestampRejected',
+            'productionHost',
+            'credentialPresence',
+          ]);
+          const allowedPaths = new Set([
+            '/api/v3/account/settings',
+            '/api/v3/account/info',
+            '/api/v3/account/assets',
+            '/api/v3/position/current-position',
+            '/api/v3/trade/unfilled-orders',
+            '/api/v2/mix/account/accounts',
+            '/api/v2/mix/position/all-position',
+            '/api/v2/mix/order/orders-pending',
+          ]);
+          for (const row of providers) {
+            const diagnostic = row?.provider === 'bitget' ? row?.bitgetDiagnostic : null;
+            if (diagnostic === null || diagnostic === undefined) continue;
+            if (typeof diagnostic !== 'object' || Array.isArray(diagnostic)
+              || Object.keys(diagnostic).some((key) => !diagnosticFields.has(key))
+              || diagnostic.provider !== 'bitget'
+              || diagnostic.requestMethod !== 'GET'
+              || !allowedPaths.has(diagnostic.requestPath)
+              || !['UTA_V3', 'CLASSIC'].includes(diagnostic.endpointFamily)
+              || !['ACCOUNT_SETTINGS', 'ACCOUNT_INFO', 'ASSETS', 'POSITIONS', 'OPEN_ORDERS'].includes(diagnostic.probe)
+              || (diagnostic.httpStatus !== null
+                && (!Number.isInteger(diagnostic.httpStatus)
+                  || diagnostic.httpStatus < 100
+                  || diagnostic.httpStatus > 599))
+              || (diagnostic.applicationCode !== null
+                && (typeof diagnostic.applicationCode !== 'string' || !/^\\d+$/.test(diagnostic.applicationCode)))
+              || ![
+                'BITGET_NOT_UTA',
+                'BITGET_AUTH_FAILED',
+                'BITGET_HTTP_401_NO_APPLICATION_CODE',
+                'BITGET_IP_NOT_ALLOWED',
+                'BITGET_PERMISSION_DENIED',
+                'BITGET_TIMESTAMP_REJECTED',
+                'BITGET_PARAMETER_REJECTED',
+                'BITGET_REQUEST_REJECTED',
+                'PROVIDER_UNAVAILABLE',
+                'RATE_LIMITED',
+                'BITGET_TRANSPORT_DNS',
+                'BITGET_TRANSPORT_TLS',
+                'BITGET_TRANSPORT_CONNECT',
+                'BITGET_TRANSPORT_TIMEOUT',
+                'BITGET_TRANSPORT_NETWORK',
+                'BITGET_RESPONSE_SHAPE_INVALID',
+                'BITGET_RESPONSE_IDENTITY_INVALID',
+                'BITGET_RESPONSE_VALUE_INVALID',
+                'BITGET_RESPONSE_DUPLICATE_IDENTITY',
+              ].includes(diagnostic.sanitizedClassification)
+              || typeof diagnostic.fallbackAttempted !== 'boolean'
+              || typeof diagnostic.timestampRejected !== 'boolean'
+              || typeof diagnostic.productionHost !== 'boolean'
+              || typeof diagnostic.credentialPresence !== 'object'
+              || diagnostic.credentialPresence === null
+              || Object.keys(diagnostic.credentialPresence).length !== 3
+              || typeof diagnostic.credentialPresence.key !== 'boolean'
+              || typeof diagnostic.credentialPresence.secret !== 'boolean'
+              || typeof diagnostic.credentialPresence.passphrase !== 'boolean') {
+              throw new Error('PRODUCTION_ACCOUNT_QA_BITGET_DIAGNOSTIC_NOT_SANITIZED');
+            }
+          }
+          const forbiddenEvidenceKeys = new Set([
+            'clientSecret',
+            'secretKey',
+            'accessKey',
+            'apiKey',
+            'signature',
+            'prehash',
+            'authorization',
+            'accountUid',
+            'accountRef',
+            'user_id',
+            'vaultRowId',
+            'balances',
+            'positions',
+            'openOrders',
+          ]);
+          const inspectEvidence = (node, path = []) => {
+            if (Array.isArray(node)) {
+              node.forEach((item, index) => inspectEvidence(item, [...path, String(index)]));
+              return;
+            }
+            if (!node || typeof node !== 'object') return;
+            for (const [key, child] of Object.entries(node)) {
+              const isCredentialPresencePassphrase = key === 'passphrase'
+                && path.length >= 2
+                && path.at(-1) === 'credentialPresence'
+                && path.at(-2) === 'bitgetDiagnostic';
+              if (forbiddenEvidenceKeys.has(key) || (key === 'passphrase' && !isCredentialPresencePassphrase)) {
+                throw new Error('PRODUCTION_ACCOUNT_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
+              }
+              inspectEvidence(child, [...path, key]);
+            }
+          };
+          inspectEvidence(value);
+          NODE
+
+      - name: Upload sanitized Production account QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ inputs.sha }}
+          path: stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Write safety summary
+        if: always()
+        run: |
+          {
+            echo '## Production Account Read-only Live QA'
+            echo
+            echo "- Exact deployed Production SHA: $EXPECTED_DEPLOY_SHA"
+            echo '- Session: authenticated Production QA member'
+            echo '- Credential source: member-scoped encrypted Production Vault'
+            echo "- Activation target providers: $PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS"
+            echo '- Target provider contract: CONNECTED, fresh, reconciliation PASS'
+            echo '- Bitget: non-blocking diagnostic unless explicitly selected as a futures activation target'
+            echo '- Account/holding/order values retained in evidence: false'
+            echo '- Provider Secret values retained in evidence: false'
+            echo '- Actual orders/cancels/amends/transfers/withdrawals: 0'
+            echo '- Live/auto trading authority granted by QA: false'
+          } >> "$GITHUB_STEP_SUMMARY"
+ + '{{ github.sha }}', 'LIVE_QA_HARNESS_SHA_MUST_BE_PINNED');
+          requireText(live, 'stock-analyzer/e2e/support/production-readonly-login.ts', 'LIVE_QA_LOGIN_HARNESS_OVERLAY_REQUIRED');
+          requireText(login, "new URL('/api/auth/profile'", 'LOGIN_AUTH_PROFILE_READ_PROOF_REQUIRED');
+          requireText(login, 'Do not submit credentials a second time', 'LOGIN_AUTH_RETRY_MUST_NOT_RESUBMIT_CREDENTIALS');
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
           requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
