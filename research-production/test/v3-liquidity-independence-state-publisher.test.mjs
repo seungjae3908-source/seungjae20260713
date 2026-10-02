@@ -170,6 +170,109 @@ test('rejects unreconciled split counts', async () => {
   });
 });
 
+test('accepts frozen Phase2 multi-lane credit up to two independent observations per genuine slot', async () => {
+  await withRoot(async (root) => {
+    const summary = makeSummary({
+      slot: 479,
+      trainBuy: 83,
+      trainSell: 76,
+      rawAcceptedN: 2000,
+      overrides: {
+        genuineScheduledSlotN: 153,
+        preCapIndependentN: 159,
+        multiLanePolicyVersion: 'public-forward-liquidity-multi-lane-prospective-policy-v1',
+        multiLanePolicyDigest: '1'.repeat(64),
+        laneRegistryDigest: '2'.repeat(64),
+        dependencyPolicyDigest: '3'.repeat(64),
+        balancingPolicyDigest: '4'.repeat(64),
+        maxCreditPerLanePerSlot: 1,
+        maxTotalCreditPerSlot: 2,
+        maxCreditPerDependencyComponent: 1,
+        laneSlotCapRejectedN: 0,
+        globalSlotCapRejectedN: 0,
+        utc27AdditionalIndependentCredit: 0,
+        retroactiveMultiLaneCreditAllowed: false,
+      },
+    });
+
+    const result = await publishV3LiquidityIndependenceSummary({
+      stateRoot: root,
+      summaryText: asText(summary),
+      authenticatedSource: makeSource(summary),
+    });
+    assert.equal(result.status, 'PUBLISHED');
+    assert.equal(result.targetSlotIndex, 479);
+    const persisted = JSON.parse(await readFile(result.targetPath, 'utf8'));
+    assert.equal(persisted.genuineScheduledSlotN, 153);
+    assert.equal(persisted.effectiveIndependentN, 159);
+  });
+});
+
+test('rejects multi-lane summaries that exceed frozen slot capacity or weaken frozen caps', async () => {
+  for (const overrides of [
+    { genuineScheduledSlotN: 79 },
+    { maxTotalCreditPerSlot: 3 },
+    { maxCreditPerLanePerSlot: 2 },
+    { maxCreditPerDependencyComponent: 2 },
+    { retroactiveMultiLaneCreditAllowed: true },
+    { utc27AdditionalIndependentCredit: 1 },
+  ]) {
+    await withRoot(async (root) => {
+      const summary = makeSummary({
+        slot: 479,
+        trainBuy: 83,
+        trainSell: 76,
+        rawAcceptedN: 2000,
+        overrides: {
+          genuineScheduledSlotN: 153,
+          preCapIndependentN: 159,
+          multiLanePolicyVersion: 'public-forward-liquidity-multi-lane-prospective-policy-v1',
+          multiLanePolicyDigest: '1'.repeat(64),
+          laneRegistryDigest: '2'.repeat(64),
+          dependencyPolicyDigest: '3'.repeat(64),
+          balancingPolicyDigest: '4'.repeat(64),
+          maxCreditPerLanePerSlot: 1,
+          maxTotalCreditPerSlot: 2,
+          maxCreditPerDependencyComponent: 1,
+          laneSlotCapRejectedN: 0,
+          globalSlotCapRejectedN: 0,
+          utc27AdditionalIndependentCredit: 0,
+          retroactiveMultiLaneCreditAllowed: false,
+          ...overrides,
+        },
+      });
+      await assert.rejects(
+        publishV3LiquidityIndependenceSummary({
+          stateRoot: root,
+          summaryText: asText(summary),
+          authenticatedSource: makeSource(summary),
+        }),
+        assertCode('SOURCE_INVALID'),
+      );
+    });
+  }
+});
+
+test('accepts a bounded summary larger than the old one MiB publisher limit', async () => {
+  await withRoot(async (root) => {
+    const observations = Array.from({ length: 30000 }, (_, index) => ({
+      observationId: `obs-${index}`,
+      padding: 'x'.repeat(32),
+    }));
+    const summary = makeSummary({ overrides: { observations } });
+    const text = asText(summary);
+    assert.ok(Buffer.byteLength(text, 'utf8') > 1024 * 1024);
+    assert.ok(Buffer.byteLength(text, 'utf8') < 8 * 1024 * 1024);
+
+    const result = await publishV3LiquidityIndependenceSummary({
+      stateRoot: root,
+      summaryText: text,
+      authenticatedSource: makeSource(summary),
+    });
+    assert.equal(result.status, 'PUBLISHED');
+  });
+});
+
 test('requires metadata binding to the exact successful #813 artifact', async () => {
   await withRoot(async (root) => {
     const summary = makeSummary();

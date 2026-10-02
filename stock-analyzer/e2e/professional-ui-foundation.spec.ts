@@ -84,13 +84,13 @@ async function installApprovedRuntime(page: Page) {
 }
 
 test('professional UI stylesheet is bundled after the existing source UI layers', () => {
-  const main = source('src/main.tsx');
+  const runtime = source('src/app-runtime.tsx');
   const html = source('index.html');
   const css = source('src/professional-ui-foundation.css');
 
-  const base = main.indexOf("import './index.css';");
-  const chartTouch = main.indexOf("import './unified-analysis-chart-touch.css';");
-  const professional = main.indexOf("import './professional-ui-foundation.css';");
+  const base = runtime.indexOf("import './index.css';");
+  const chartTouch = runtime.indexOf("import './unified-analysis-chart-touch.css';");
+  const professional = runtime.indexOf("import './professional-ui-foundation.css';");
 
   expect(base).toBeGreaterThan(-1);
   expect(chartTouch).toBeGreaterThan(base);

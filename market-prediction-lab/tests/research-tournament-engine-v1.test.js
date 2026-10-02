@@ -417,9 +417,18 @@ test("canonical FSM enforces exact stage order, no skip, and no re-entry after n
 
 test("FormulaCandidateV1 automatically traverses the strict tournament and only then becomes RESEARCH_SURVIVOR", async () => {
   const deps = happyDependencies();
-  const result = await runResearchTournamentV1(tournamentInput(), deps);
+  const input = tournamentInput();
+  const result = await runResearchTournamentV1(input, deps);
   assert.equal(result.candidates.length, 1);
   const candidate = result.candidates[0];
+  assert.deepEqual(candidate.formulaCandidate, input.formulaCandidates[0]);
+  assert.equal(candidate.formulaCandidate.formulaHash, candidate.strategyHash);
+  assert.equal(candidate.generatedCandidate.formulaCandidateId, candidate.formulaCandidateId);
+  assert.equal(candidate.generatedCandidate.generatedCandidateId, candidate.generatedCandidateId);
+  assert.equal(candidate.generatedCandidate.formulaHash, candidate.strategyHash);
+  assert.equal(candidate.generatedCandidate.parameterIdentity, candidate.parameterIdentity);
+  assert.deepEqual(candidate.generatedCandidate.selectedParameters, candidate.formula.selectedParameters);
+  assert.equal(candidate.generatedCandidate.searchProvenance.finalHoldoutAccess, false);
   assert.equal(candidate.researchSurvivor, true);
   assert.equal(candidate.profitable, false);
   assert.equal(candidate.validatedChampion, false);

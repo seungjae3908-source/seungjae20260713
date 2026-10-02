@@ -1,0 +1,37 @@
+import { expect, test } from '@playwright/test';
+import { fetchNonEmptyPublicCandleRows } from '../../api-server/src/lib/public-candle-retry';
+
+test('public candles retry one transient empty success and keep genuine rows', async () => {
+  const responses = [[], [{ time: '2026-09-20T00:00:00Z', close: 100 }]];
+  let calls = 0;
+  let waits = 0;
+
+  const rows = await fetchNonEmptyPublicCandleRows(
+    async () => responses[calls++] ?? [],
+    async () => { waits += 1; },
+  );
+
+  expect(rows).toEqual([{ time: '2026-09-20T00:00:00Z', close: 100 }]);
+  expect(calls).toBe(2);
+  expect(waits).toBe(1);
+});
+
+test('public candles do not retry a genuine non-empty response', async () => {
+  let calls = 0;
+  const rows = await fetchNonEmptyPublicCandleRows(async () => {
+    calls += 1;
+    return [{ time: '2026-09-20T00:00:00Z', close: 100 }];
+  });
+
+  expect(rows).toHaveLength(1);
+  expect(calls).toBe(1);
+});
+
+test('public candles fail closed after two empty provider successes', async () => {
+  let calls = 0;
+  await expect(fetchNonEmptyPublicCandleRows(
+    async () => { calls += 1; return []; },
+    async () => undefined,
+  )).rejects.toThrow('PUBLIC_CANDLE_ROWS_EMPTY');
+  expect(calls).toBe(2);
+});

@@ -83,10 +83,16 @@ function telegramRuntimeState() {
     botUsernameConfigured,
     stockRoomReady: Boolean(process.env.TELEGRAM_STOCK_CHAT_ID?.trim()),
     cryptoRoomReady: Boolean(process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim()),
+    backgroundWorkersEnabled: process.env.BACKGROUND_WORKERS_ENABLED !== 'false',
+    personalWorkerEnabled: process.env.PERSONAL_TELEGRAM_WORKER_ENABLED === 'true',
+    intelligenceWorkerEnabled: process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'true',
     richSignalEnabled: process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED === 'true',
     aiExplanationEnabled: process.env.TELEGRAM_SIGNAL_AI_ENABLED === 'true',
     signalFollowupEnabled: process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED === 'true',
     memberHoldingsEnabled: process.env.MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED === 'true',
+    marketBriefEnabled: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'
+      && process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED !== 'false'
+      && process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED === 'true',
     orderAuthority: 'NONE' as const,
     privateTradingApiAllowed: false as const,
     realOrderAllowed: false as const,

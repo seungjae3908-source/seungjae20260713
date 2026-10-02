@@ -185,7 +185,8 @@ test('Scanner PricePlan reaches the AI Chart consumer unchanged and is cleared o
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
 
   const consumer = page.getByTestId('scanner-price-plan-chart');
-  await expect(consumer).toContainText('74,000원 ~ 75,000원');
+  await expect(consumer).toContainText('74,000원');
+  await expect(consumer).toContainText('75,000원');
   await expect(consumer).toContainText('70,000원');
   await expect(consumer).toContainText('82,000원');
   await expect(consumer).toContainText('86,000원');
@@ -193,7 +194,8 @@ test('Scanner PricePlan reaches the AI Chart consumer unchanged and is cleared o
 
   await page.getByTestId('market-US').click();
   await expect(consumer).toContainText('Scanner에서 전달된 Price Plan이 없습니다.');
-  await expect(consumer).not.toContainText('74,000원 ~ 75,000원');
+  await expect(consumer).not.toContainText('74,000원');
+  await expect(consumer).not.toContainText('75,000원');
   await expect(consumer).not.toContainText('82,000원');
 });
 
@@ -209,7 +211,15 @@ type GeminiRequestBody = { contents?: Array<{ parts?: Array<{ text?: string }> }
 type PublicContextPrompt = {
   task?: string;
   publicContext?: {
-    selection?: { market?: string; symbol?: string; displayName?: string };
+    selection?: {
+      market?: string;
+      symbol?: string;
+      displayName?: string;
+      ticker?: string;
+      timeframe?: string | null;
+      action?: string | null;
+      selectedAt?: string | null;
+    };
     quote?: Record<string, unknown>;
     company?: Record<string, unknown> | null;
     news?: { items?: Array<Record<string, unknown>> } | null;
@@ -306,7 +316,14 @@ for (const fixture of [
         const prompt = providerPrompt(init);
         const context = prompt.publicContext;
         expect(prompt.task).toBe('answer_or_summarize_public_financial_information');
-        expect(context?.selection).toEqual({ market: fixture.market, symbol: fixture.symbol, displayName: fixture.displayName });
+        expect(context?.selection).toEqual({
+          market: fixture.market,
+          symbol: fixture.symbol,
+          displayName: fixture.displayName,
+          timeframe: null,
+          action: null,
+          selectedAt: null,
+        });
         expect(context?.quote?.price).toBe(fixture.price);
         expect(context?.company?.market).toBe(fixture.market);
         expect(context?.news?.items?.[0]?.source).toBe('fixture-news');
@@ -506,7 +523,7 @@ async function expectPrimaryStockInfoUsable(page: Page) {
   await page.keyboard.press('Escape');
   await navigation.getByRole('button', { name: '기술', exact: true }).click();
   await expect(page.getByRole('menu', { name: '기술 메뉴' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'AI 차트', exact: true })).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: 'AI차트', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
 }
 

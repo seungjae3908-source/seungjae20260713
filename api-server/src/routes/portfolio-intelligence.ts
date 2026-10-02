@@ -1,5 +1,8 @@
 import { Router, type IRouter } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth.ts';
+import { hasCapability } from '../../../packages/member-access/src/index.js';
+import type { AccountProvider } from '../features/account-readonly/account-readonly.contract.ts';
+import { readPortfolioAccountSources } from '../features/account-readonly/account-readonly.portfolio-source.ts';
 import {
   buildMonthlyInvestmentPlan,
   simulateAdditionalInvestment,
@@ -7,6 +10,28 @@ import {
 import { buildPortfolioIntelligence } from '../services/portfolio-intelligence.service.ts';
 
 const router: IRouter = Router();
+
+function accountProvidersFor(req: AuthenticatedRequest): AccountProvider[] {
+  if (!req.member) return [];
+  const providers: AccountProvider[] = ['toss', 'kiwoom'];
+  if (hasCapability(req.member, 'canAccessSpot')) providers.push('upbit');
+  if (hasCapability(req.member, 'canAccessFutures')) providers.push('bitget');
+  return providers;
+}
+
+async function portfolioInput(req: AuthenticatedRequest, profile?: unknown) {
+  if (!req.accessToken || !req.member?.id) throw new Error('LOGIN_REQUIRED');
+  const accountSources = await readPortfolioAccountSources({
+    userId: req.member.id,
+    accessToken: req.accessToken,
+    providers: accountProvidersFor(req),
+  });
+  return buildPortfolioIntelligence({
+    accessToken: req.accessToken,
+    profile,
+    accountSources,
+  });
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -34,10 +59,7 @@ router.get('/portfolio/intelligence', async (req: AuthenticatedRequest, res) => 
     return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
   }
   try {
-    const portfolio = await buildPortfolioIntelligence({
-      accessToken: req.accessToken,
-      profile: req.query.profile,
-    });
+    const portfolio = await portfolioInput(req, req.query.profile);
     res.setHeader('Cache-Control', 'private, max-age=10, stale-while-revalidate=20');
     return res.json({ ok: true, portfolio });
   } catch (cause) {
@@ -56,7 +78,7 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
   }
 
   try {
-    const portfolio = await buildPortfolioIntelligence({ accessToken: req.accessToken });
+    const portfolio = await portfolioInput(req);
     const holding = portfolio.holdings.find((row) => row.ticker === ticker);
     if (!holding) return res.status(404).json({ ok: false, error: 'HOLDING_NOT_FOUND' });
 
@@ -116,10 +138,7 @@ router.post('/portfolio/intelligence/monthly-contribution', async (req: Authenti
   }
 
   try {
-    const portfolio = await buildPortfolioIntelligence({
-      accessToken: req.accessToken,
-      profile: body.profile,
-    });
+    const portfolio = await portfolioInput(req, body.profile);
     const allocation = Object.entries(portfolio.allocation.buckets)
       .filter((entry): entry is [string, number] => entry[1] != null && Number.isFinite(entry[1]) && entry[1] >= 0)
       .map(([key, weight]) => ({ key, weight: weight / 100 }));

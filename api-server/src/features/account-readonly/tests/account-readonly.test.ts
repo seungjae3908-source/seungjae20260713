@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { buildUpbitJwt } from '../../../services/trade-exchange-adapters.service';
 import { maskAccountRef, nullableNumber } from '../account-readonly.contract';
+import { AccountReadonlyError } from '../account-readonly.errors';
 import { bindAccountReadonlyDisconnectAbort } from '../account-readonly.route';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
@@ -18,12 +19,20 @@ test('read-only account numbers reject coercion and preserve actual zero', () =>
   assert.equal(nullableNumber('1,000.50'), 1000.5);
 });
 
-test('Bitget read-only provider error and malformed data never become a connected empty account', async () => {
+test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
   const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
-  for (const response of [{}, { code: '40009', data: [] }, { code: '00000' }, { code: '00000', data: [null] }]) {
-    await assert.rejects(readBitgetSnapshot(credentials, async () => response), /RESPONSE_INVALID/);
+  for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
+    await assert.rejects(readBitgetSnapshot(credentials, async () => response));
   }
-  await assert.rejects(readBitgetSnapshot(credentials, async (request) => ({ code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] })), /IDENTITY_INVALID/);
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
+  );
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async (request) => {
+      if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+      return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
+    }),
+  );
 });
 
 test('client response close aborts unfinished account read and cleanup removes both listeners', () => {
@@ -154,14 +163,187 @@ test('Toss provider rejects every mutation path and masks accountSeq', async () 
 });
 
 test('Upbit wrapper reuses JWT signer and preserves locked and missing values', async () => {
-  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => { seen.push(request); return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }]; });
+  const seen: any[] = []; const result = await readUpbitSnapshot({ accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path === '/v1/orders/open') return [];
+    return [{ currency: 'BTC', balance: '1', locked: '0.25', avg_buy_price: '' }];
+  });
   assert.match(seen[0].headers.Authorization, /^Bearer /); assert.equal(result.balances?.[0]?.total, 1.25); assert.equal(result.positions?.[0]?.averageEntryPrice, null); assert.equal(result.orderRequests, 0);
   assert.notEqual(buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''), buildUpbitJwt({ accessKey: 'a', secretKey: 'b' }, ''));
 });
 
-test('Bitget wrapper uses only signed GET account and position requests and redacts passphrase', async () => {
-  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => { seen.push(request); return request.path.includes('position') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] }; });
+test('Upbit balance read stays connected when only optional open-order scope is denied', async () => {
+  let accountCalls = 0;
+  let openOrderCalls = 0;
+  const result = await readUpbitSnapshot(
+    { accessKey: 'UPBIT_ACCESS_TEST_ONLY', secretKey: 'UPBIT_SECRET_TEST_ONLY' },
+    async (request) => {
+      if (request.path === '/v1/accounts') {
+        accountCalls += 1;
+        return [{ currency: 'KRW', balance: '100000', locked: '0', avg_buy_price: '0' }];
+      }
+      if (request.path === '/v1/orders/open') {
+        openOrderCalls += 1;
+        throw new AccountReadonlyError('UPBIT_PERMISSION_DENIED');
+      }
+      throw new Error('UNEXPECTED_UPBIT_READ_PATH');
+    },
+  );
+
+  assert.equal(accountCalls, 1);
+  assert.equal(openOrderCalls, 2);
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.stale, false);
+  assert.equal(result.errorCode, 'UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED');
+  assert.equal(result.balances?.[0]?.total, 100000);
+  assert.equal(result.openOrders, null);
+  assert.notEqual(result.lastGoodAt, null);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget Classic fallback is selected when official UTA error 25245 reports non-unified account mode', async () => {
+  const seen: string[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request.path);
+      if (request.path === '/api/v3/account/settings') {
+        return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+      }
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_CLASSIC_FALLBACK_PATH');
+    },
+  );
+
+  assert.deepEqual(new Set(seen), new Set([
+    '/api/v3/account/settings',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.errorCode, null);
+  assert.equal(result.balances?.[0]?.currency, 'USDT');
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget wrapper probes UTA mode then preserves Classic signed GET reads and redacts passphrase', async () => {
+  const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
+    seen.push(request);
+    if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+    if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
+    if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
+    return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
+  });
+  assert.equal(seen[0]?.path, '/api/v3/account/settings');
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget account-mode transition fails closed as retryable instead of guessing Classic or UTA', async () => {
+  await assert.rejects(
+    readBitgetSnapshot(
+      { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+      async (request) => {
+        assert.equal(request.path, '/api/v3/account/settings');
+        return { code: '00000', data: { accountMode: 'upgrading' } };
+      },
+    ),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'BITGET_ACCOUNT_MODE_TRANSITION'
+      && error.retryable === true,
+  );
+});
+
+test('Bitget settings permission denial uses account-info mode fallback without mutation authority', async () => {
+  const seen: any[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request);
+      if (request.path === '/api/v3/account/settings') return { code: '40025', data: null };
+      if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [], endId: '' } };
+      }
+      throw new Error('UNEXPECTED_BITGET_FALLBACK_PATH');
+    },
+  );
+
+  assert.equal(result.connected, true);
+  assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
+    '/api/v3/account/settings',
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.ok(seen.every((row) => row.method === 'GET' && row.body === null));
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes without mutation authority', async () => {
+  const seen: any[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request);
+      if (request.path === '/api/v3/account/settings') return { code: '00000', data: { accountMode: 'unified', accountLevel: 'basic' } };
+      if (request.path === '/api/v3/account/assets') {
+        return { code: '00000', data: { assets: [{ coin: 'USDT', equity: '100', available: '90', locked: '10' }] } };
+      }
+      if (request.path === '/api/v3/position/current-position') {
+        return { code: '00000', data: { list: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.08', avgPrice: '60000', markPrice: '61000', unrealisedPnl: '100', leverage: '2', liquidationPrice: '30000', marginMode: 'crossed', posSide: 'long' }] } };
+      }
+      if (request.path === '/api/v3/trade/unfilled-orders') {
+        return { code: '00000', data: { list: [{ orderId: 'UTA-1', symbol: 'BTCUSDT', side: 'buy', price: '60000', qty: '0.1', cumExecQty: '0.04', orderStatus: 'partially_filled' }] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_UTA_PATH');
+    },
+  );
+  assert.deepEqual(seen.map((row) => row.path).sort(), [
+    '/api/v3/account/assets',
+    '/api/v3/account/settings',
+    '/api/v3/position/current-position',
+    '/api/v3/trade/unfilled-orders',
+  ].sort());
+  assert.ok(seen.every((row) => row.method === 'GET' && row.body === null));
+  assert.equal(result.connected, true);
+  assert.equal(result.balances?.[0]?.total, 100);
+  assert.equal(result.positions?.[0]?.side, 'long');
+  assert.equal(result.openOrders?.[0]?.id, 'UTA-1');
+  assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12);
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
 });
 
 test('last-good fallback is same-user only and auth failure evicts it fail-closed', async () => {
@@ -203,4 +385,41 @@ test('last-good fallback is same-user only and auth failure evicts it fail-close
   assert.equal(afterEviction.status, 'UNAVAILABLE');
   assert.equal(afterEviction.stale, false);
   assert.equal(afterEviction.balances, null);
+});
+
+test('Bitget Classic fallback is selected when UTA returns 40084 for Classic Account mode', async () => {
+  const seen: string[] = [];
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_40084_TEST_ONLY', secretKey: 'BITGET_SECRET_40084_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_40084_TEST_ONLY' },
+    async (request) => {
+      seen.push(request.path);
+      if (request.path === '/api/v3/account/settings') {
+        return { code: '40084', msg: 'Classic Account mode does not support Unified Account API', data: null };
+      }
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [] } };
+      }
+      throw new Error('UNEXPECTED_BITGET_40084_CLASSIC_FALLBACK_PATH');
+    },
+  );
+
+  assert.deepEqual(new Set(seen), new Set([
+    '/api/v3/account/settings',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
+  assert.equal(result.connected, true);
+  assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.amendRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
 });

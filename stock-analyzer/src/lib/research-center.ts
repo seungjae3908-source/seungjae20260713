@@ -26,6 +26,22 @@ export interface ResearchCycleSummary {
   tasks: ResearchCycleTask[];
 }
 
+export interface ResearchTemporalCryptoSummary {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'complete' | 'partial_failure';
+  generatedAt: number | null;
+  researchSha: string | null;
+  failedCount: number | null;
+  observationCount: number | null;
+  ledgerDigest: string | null;
+  results: Array<{
+    symbol: string;
+    status: 'success' | 'failed';
+    observedCount: number;
+    appendedCount: number;
+  }>;
+}
+
 export interface ResearchPaperRuntime {
   present: boolean;
   status: string;
@@ -49,6 +65,59 @@ export interface ResearchPaperLedger {
   sampleCount?: number | null;
   positionCount: number | null;
   settlementCount: number | null;
+}
+
+export interface ResearchCandidatePerformance {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'BLOCKED' | 'PRESENT';
+  schemaVersion: 'frozen-candidate-performance-reader-v1' | null;
+  FIRST_ZERO: string;
+  reason: string;
+  candidateId: string | null;
+  strategyId: string | null;
+  freezeTimestamp: string | null;
+  identity14Verified: boolean;
+  fullCostEvidence: {
+    fullCostReady: false;
+    components: Record<
+      'commission' | 'tax' | 'spread' | 'slippage' | 'funding' | 'latency' | 'liquidityImpact' | 'partialFillImpact',
+      { state: 'MEASURED' | 'MODELED' | 'UNKNOWN' | 'BLOCKED_DATA'; valuePercent: number | null; provenance: string | null }
+    >;
+  };
+  effectiveIndependentMarketN: number | null;
+  candidateMatchedN: number | null;
+  LONG_SIGNAL_N: number | null;
+  SHORT_SIGNAL_N: number | null;
+  NO_TRADE_N: number | null;
+  Entry_N: number | null;
+  Position_N: number | null;
+  PositionObservation_N: number | null;
+  Settlement_N: number | null;
+  TRAIN_N: number | null;
+  VALIDATION_N: number | null;
+  OOS_N: number | null;
+  WIN_N: number | null;
+  LOSS_N: number | null;
+  BREAKEVEN_N: number | null;
+  WIN_RATE: number | null;
+  AVG_WIN: number | null;
+  AVG_LOSS: number | null;
+  PAYOFF_RATIO: number | null;
+  GROSS_EXPECTANCY: number | null;
+  PF: number | null;
+  MDD: number | null;
+  MFE: number | null;
+  MAE: number | null;
+  TIME_TO_EXIT: number | null;
+  Gross_PnL: number | null;
+  Net_PnL: number | null;
+  FULL_COST_READY: false;
+  NET_ALPHA_PROVEN: false;
+  PROFITABILITY_PROVEN: false;
+  TRAIN_DIAGNOSTIC_ONLY: true;
+  VALIDATION_COMPLETE: false;
+  OOS_COMPLETE: false;
+  executionAuthority: 'NONE';
 }
 
 export interface ResearchShadowGroup {
@@ -82,6 +151,24 @@ export interface StrategyHealthBinding {
   executionAuthority: 'NONE';
 }
 
+export interface ResearchFactoryRuntimeSummary {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'BLOCKED_POLICY_MISSING' | 'BLOCKED_POLICY_INVALID' | 'BLOCKED_NO_READY_PROFILES' | 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING' | 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID' | 'BLOCKED_RUNTIME_BINDINGS' | 'READY_NON_ACTIVATING';
+  generatedAt: number | null;
+  researchSha: string | null;
+  firstZero: string | null;
+  policyPresent: boolean | null;
+  policyValid: boolean | null;
+  policyDigest: string | null;
+  readyMarketCount: number | null;
+  blockedMarketCount: number | null;
+  readyProfileCount: number | null;
+  blockedProfileCount: number | null;
+  runtimeStatus: string | null;
+  nextFirstZero: string | null;
+  controlPlaneDigest: string | null;
+}
+
 export interface ResearchCenterOverview {
   schemaVersion: 'research-dashboard-overview-v1';
   generatedAt: number;
@@ -102,10 +189,30 @@ export interface ResearchCenterOverview {
     failedTasks: number | null;
     blockedDataTasks: number | null;
     cycles: ResearchCycleSummary[];
+    liquidityIndependence?: {
+      present: boolean;
+      status: 'MISSING' | 'INVALID' | 'PRESENT';
+      producerSha?: string | null;
+      upstreamIngestRunId?: string | null;
+      upstreamIngestArtifactId?: string | null;
+      upstreamIngestArtifactDigest?: string | null;
+      sourceInventoryDigest?: string | null;
+      effectiveIndependentN: number | null;
+      independenceAuditDigest?: string | null;
+      independentSplitSourceDigest?: string | null;
+      v3IndependentSplitIndexDigest?: string | null;
+      frozenSplitCounts: { TRAIN: number | null; VALIDATION: number | null; OOS: number | null };
+      reportDigest?: string | null;
+    };
   };
+  dataFactory?: {
+    temporalCryptoFutures: ResearchTemporalCryptoSummary;
+  };
+  factory?: ResearchFactoryRuntimeSummary;
   paper: {
     runtime: ResearchPaperRuntime;
     ledger: ResearchPaperLedger;
+    candidatePerformance?: ResearchCandidatePerformance;
   };
   shadow: {
     groups: ResearchShadowGroup[];

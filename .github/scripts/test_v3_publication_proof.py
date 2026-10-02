@@ -187,9 +187,20 @@ class ArtifactTests(unittest.TestCase):
 
     def test_oversized_member_rejected(self):
         with zipfile.ZipFile(self.archive, 'w', zipfile.ZIP_DEFLATED) as z:
-            z.writestr(p.SUMMARY_NAME, b' ' * (p.MAX_JSON + 1))
+            z.writestr(p.SUMMARY_NAME, b' ' * (p.MAX_SUMMARY_JSON + 1))
         with self.assertRaisesRegex(p.ProofError, 'SUMMARY_ENTRY_UNSAFE'):
             self.extract()
+
+    def test_summary_above_generic_limit_within_summary_limit_is_accepted(self):
+        body = json.dumps({'padding': 'x' * (p.MAX_JSON + 1024)}, separators=(',', ':')).encode()
+        self.assertGreater(len(body), p.MAX_JSON)
+        self.assertLess(len(body), p.MAX_SUMMARY_JSON)
+        with self.assertRaisesRegex(p.ProofError, 'JSON_SIZE_LIMIT'):
+            p.parse_json(body)
+        with zipfile.ZipFile(self.archive, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr(p.SUMMARY_NAME, body)
+        self.extract()
+        self.assertEqual(self.output.read_bytes(), body)
 
     def test_existing_destination_not_overwritten(self):
         with zipfile.ZipFile(self.archive, 'w') as z:
@@ -378,6 +389,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('    needs: authorize', self.workflow)
         self.assertIn("github.event_name == 'issue_comment'", self.workflow)
         self.assertIn('  cancel-in-progress: false', self.workflow)
+
+    def test_summary_size_guard_tracks_bounded_summary_limit(self):
+        self.assertIn('test "$(wc -c < "$summary")" -le 8388608', self.workflow)
+        self.assertNotIn('test "$(wc -c < "$summary")" -le 1048576', self.workflow)
+        self.assertEqual(p.MAX_SUMMARY_JSON, 8 * p.MAX_JSON)
+        self.assertEqual(p.MAX_OVERVIEW_JSON, 2 * p.MAX_SUMMARY_JSON)
+        self.assertEqual(p.MAX_SNAPSHOT_JSON, 3 * p.MAX_SUMMARY_JSON)
 
     def test_code_archive_ancestry_and_dynamic_readback_are_in_execution_path(self):
         for token in ('extract-summary', 'code-proof', 'runtime-proof', 'check-ancestor',

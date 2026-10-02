@@ -60,6 +60,29 @@ def valid_summary(buy=10, sell=5):
     })
 
 
+def valid_multilane_summary():
+    value = valid_summary(83, 76)
+    value.update({
+        'targetSlotIndex': 479,
+        'genuineScheduledSlotN': 153,
+        'rawAcceptedN': 2000,
+        'preCapIndependentN': 159,
+        'multiLanePolicyVersion': 'public-forward-liquidity-multi-lane-prospective-policy-v1',
+        'multiLanePolicyDigest': '1' * 64,
+        'laneRegistryDigest': '2' * 64,
+        'dependencyPolicyDigest': '3' * 64,
+        'balancingPolicyDigest': '4' * 64,
+        'maxCreditPerLanePerSlot': 1,
+        'maxTotalCreditPerSlot': 2,
+        'maxCreditPerDependencyComponent': 1,
+        'laneSlotCapRejectedN': 0,
+        'globalSlotCapRejectedN': 0,
+        'utc27AdditionalIndependentCredit': 0,
+        'retroactiveMultiLaneCreditAllowed': False,
+    })
+    return signed(value)
+
+
 def overview(liquidity=MISSING):
     return {
         'schemaVersion': 'research-dashboard-overview-v1',
@@ -133,6 +156,34 @@ class V3StateDiagnosticTest(unittest.TestCase):
         self.assertEqual(observed['effectiveIndependentN'], 15)
         self.assertEqual(observed['OOS'], 0)
         self.assertEqual(observed['executionAuthority'], 'NONE')
+
+    def test_phase2_multilane_summary_is_shape_valid_but_not_rewritten_to_legacy_truth(self):
+        schema, digest, shape, observed, expected = diag.validate_v3(valid_multilane_summary())
+        self.assertEqual((schema, digest, shape), (True, True, True))
+        self.assertFalse(expected)
+        self.assertEqual(observed['genuineScheduledSlotN'], 153)
+        self.assertEqual(observed['effectiveIndependentN'], 159)
+        self.assertEqual(observed['TRAIN'], 159)
+
+    def test_phase2_multilane_policy_weakening_remains_invalid(self):
+        for field, value in (
+            ('genuineScheduledSlotN', 79),
+            ('maxTotalCreditPerSlot', 3),
+            ('maxCreditPerLanePerSlot', 2),
+            ('maxCreditPerDependencyComponent', 2),
+            ('utc27AdditionalIndependentCredit', 1),
+            ('retroactiveMultiLaneCreditAllowed', True),
+        ):
+            with self.subTest(field=field):
+                candidate = valid_multilane_summary()
+                candidate[field] = value
+                candidate = signed(candidate)
+                schema, digest, shape, observed, expected = diag.validate_v3(candidate)
+                self.assertTrue(schema)
+                self.assertTrue(digest)
+                self.assertFalse(shape)
+                self.assertFalse(expected)
+                self.assertEqual(observed['effectiveIndependentN'], 159)
 
     def test_invalid_object_validator_preserves_unknown_counts(self):
         schema, digest, shape, observed, expected = diag.validate_v3({})

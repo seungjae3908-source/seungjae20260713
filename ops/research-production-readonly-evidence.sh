@@ -135,6 +135,104 @@ emit_cycle forward
 emit_cycle fast-historical
 emit_cycle long-history
 
+emit_task_failure_signature() {
+  local profile="$1"
+  local task_id="$2"
+  local cycle_file="$STATE/latest/$profile.json"
+  if ! file_exists "$cycle_file"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=CYCLE_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+
+  local task_failure_path=""
+  task_failure_path="$(read_file "$cycle_file" | node -e '
+    const { isAbsolute, join, resolve, sep } = require("node:path");
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => raw += chunk);
+    process.stdin.on("end", () => {
+      const stateRoot = resolve(process.argv[1]);
+      const taskId = String(process.argv[2] ?? "");
+      const targetSha = String(process.argv[3] ?? "").toLowerCase();
+      const cycle = JSON.parse(raw);
+      if (cycle?.researchSha !== targetSha) return;
+      if (!/^[a-z0-9][a-z0-9-]{1,80}$/u.test(taskId)) return;
+      const row = (Array.isArray(cycle?.results) ? cycle.results : [])
+        .find(item => item?.id === taskId && item?.status === "failed");
+      const candidate = String(row?.stderrPath ?? "");
+      if (!isAbsolute(candidate)) return;
+      const resolved = resolve(candidate);
+      const runsRoot = join(stateRoot, "runs") + sep;
+      if (!resolved.startsWith(runsRoot)) return;
+      if (!resolved.endsWith(sep + taskId + sep + "stderr.log")) return;
+      process.stdout.write(resolved);
+    });
+  ' "$STATE" "$task_id" "$TARGET_RESEARCH_SHA" 2>/dev/null || true)"
+  if [[ -z "$task_failure_path" ]]; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_PATH_UNAVAILABLE raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+  if ! file_exists "$task_failure_path"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=FAILED_TASK_STDERR_MISSING raw_log_included=false\n' "$profile" "$task_id"
+    return 0
+  fi
+
+  if ! "${SUDO[@]}" tail -c 65536 -- "$task_failure_path" | node -e '
+    const { createHash } = require("node:crypto");
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", chunk => raw += chunk);
+    process.stdin.on("end", () => {
+      const profile = String(process.argv[1] ?? "");
+      const taskId = String(process.argv[2] ?? "");
+      const signatures = new Set();
+      const domain = /\b(?:PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE|SHADOW|ETH_V6|RESEARCH)_[A-Z0-9_]{2,96}\b/gu;
+      for (const match of raw.match(domain) ?? []) signatures.add(match);
+      for (const code of [
+        "ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNSUPPORTED_DIR_IMPORT",
+        "ERR_INVALID_PACKAGE_CONFIG", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_INVALID_MODULE_SPECIFIER",
+        "ERR_REQUIRE_ESM", "MODULE_NOT_FOUND",
+      ]) if (raw.includes(code)) signatures.add(code);
+      if (/\bSyntaxError\b/u.test(raw)) signatures.add("NODE_SYNTAX_ERROR");
+      if (/\bReferenceError\b/u.test(raw)) signatures.add("NODE_REFERENCE_ERROR");
+      if (/\bTypeError\b/u.test(raw)) signatures.add("NODE_TYPE_ERROR");
+      if (/\bENOENT\b/u.test(raw)) signatures.add("FS_ENOENT");
+      if (/\bEACCES\b/u.test(raw)) signatures.add("FS_EACCES");
+      if (/\bERR_ACCESS_DENIED\b/u.test(raw)) signatures.add("FS_ACCESS_DENIED");
+      const values = [...signatures].sort().slice(0, 24);
+      const categories = new Set();
+      for (const value of values) {
+        if (value.startsWith("PAPER_FORWARD_")) categories.add("PAPER_FORWARD_RUNTIME");
+        else if (value.startsWith("PAPER_STATE_")) categories.add("PAPER_STATE");
+        else if (value.startsWith("AUTHORITATIVE_")) categories.add("AUTHORITATIVE_RUNTIME");
+        else if (value.startsWith("SHADOW_") || value.startsWith("ETH_V6_")) categories.add("SHADOW_RUNTIME");
+        else if (value.startsWith("RESEARCH_")) categories.add("RESEARCH_RUNTIME");
+        else if (value.startsWith("ERR_") || value.startsWith("MODULE_") || value.startsWith("NODE_")) categories.add("NODE_RUNTIME");
+        else if (value.startsWith("FS_")) categories.add("FILESYSTEM");
+      }
+      const clean = value => String(value ?? "").replace(/[^A-Za-z0-9_.:,-]/gu, "_").slice(0, 1024);
+      const stderrSha = createHash("sha256").update(raw).digest("hex");
+      console.log([
+        "TASK_FAILURE_SIGNATURE",
+        "profile=" + clean(profile),
+        "id=" + clean(taskId),
+        "present=true",
+        "signature_count=" + values.length,
+        "signatures=" + clean(values.length ? values.join(",") : "NONE"),
+        "categories=" + clean(categories.size ? [...categories].sort().join(",") : "UNCLASSIFIED"),
+        "stderr_tail_size_bytes=" + Buffer.byteLength(raw, "utf8"),
+        "stderr_tail_sha256=" + stderrSha,
+        "raw_log_included=false",
+      ].join(" "));
+    });
+  ' "$profile" "$task_id"; then
+    printf 'TASK_FAILURE_SIGNATURE profile=%s id=%s present=false blocker=SIGNATURE_EXTRACTION_FAILED raw_log_included=false\n' "$profile" "$task_id"
+  fi
+}
+
+emit_task_failure_signature forward shadow-forward
+emit_task_failure_signature forward paper-forward
+
 forward_cycle="$STATE/latest/forward.json"
 paper_stdout_path=""
 if file_exists "$forward_cycle"; then
@@ -228,6 +326,23 @@ else
             ...boundedEvidence(evidence),
           }]))
         : {};
+      const sourceBlockers = Array.isArray(value.authoritativeSourceBlockers)
+        ? value.authoritativeSourceBlockers.slice(0, 24).map(item => String(item).slice(0, 200))
+        : [];
+      const authoritativeEvidenceTransports = {
+        wiringStatus: value.authoritativeSourceWiringStatus ?? null,
+        sourceBlockers,
+        paperState: {
+          status: value.paperStateTransport?.status ?? null,
+          state: value.paperStateTransport?.state ?? null,
+          reason: value.paperStateTransport?.reason ?? null,
+          sourceShaExact: value.paperStateTransport?.sourceShaExact ?? null,
+          publisherAccountBound: value.paperStateTransport?.publisherAccountBound ?? null,
+          callbackInvoked: value.paperStateTransport?.callbackInvoked ?? null,
+        },
+        riskPolicyRecord: value.authoritativeRuntimePackage?.riskPolicyRecordTransport ?? null,
+        supplementalCost: value.authoritativeRuntimePackage?.supplementalCostTransport ?? null,
+      };
       const selected = {
         schemaVersion: value.schemaVersion,
         status: value.status ?? null,
@@ -238,6 +353,7 @@ else
         naturalDatasetIdentity: datasetIdentity,
         naturalFunnelMeasurements: measurements,
         authoritativeFirstZeroReasonEvidenceByStage: reasons,
+        authoritativeEvidenceTransports,
         externalFinancialMutationAllowed: value.externalFinancialMutationAllowed,
         privateRequestCount: value.privateRequestCount,
         financialMutationCount: value.financialMutationCount,
@@ -266,6 +382,19 @@ else
         `dataset_identity_sha256=${clean(datasetIdentitySha256)}`,
         `payload_base64=${payload}`,
       ].join(" "));
+      console.log([
+        "PAPER_EVIDENCE_TRANSPORT",
+        `wiring_status=${clean(authoritativeEvidenceTransports.wiringStatus)}`,
+        `paper_state_status=${clean(authoritativeEvidenceTransports.paperState.status)}`,
+        `paper_state_state=${clean(authoritativeEvidenceTransports.paperState.state)}`,
+        `paper_state_reason=${clean(authoritativeEvidenceTransports.paperState.reason)}`,
+        `paper_state_source_sha_exact=${clean(authoritativeEvidenceTransports.paperState.sourceShaExact)}`,
+        `paper_state_publisher_account_bound=${clean(authoritativeEvidenceTransports.paperState.publisherAccountBound)}`,
+        `paper_state_callback_invoked=${clean(authoritativeEvidenceTransports.paperState.callbackInvoked)}`,
+        `risk_policy_record=${clean(authoritativeEvidenceTransports.riskPolicyRecord)}`,
+        `supplemental_cost=${clean(authoritativeEvidenceTransports.supplementalCost)}`,
+        `source_blockers=${clean(authoritativeEvidenceTransports.sourceBlockers.join("|"))}`,
+      ].join(" "));
       for (const measurement of selected.naturalFunnelMeasurements) {
         console.log([
           "PAPER_NATURAL_STAGE",
@@ -282,6 +411,29 @@ else
           `authoritative=${clean(evidence?.authoritative === true)}`,
           `freshness=${clean(evidence?.freshness)}`,
         ].join(" "));
+      }
+      const evidenceComplete = selected.naturalFunnelMeasurements
+        .find(item => (item?.stage ?? item?.name) === "EVIDENCE_COMPLETE");
+      const evidenceReason = String(
+        selected.authoritativeFirstZeroReasonEvidenceByStage?.EVIDENCE_COMPLETE?.reasonCode ?? "",
+      );
+      const ownerCount = Number(value.authoritativeEvidenceOwners?.authoritativeOwnersConnected);
+      const wiringStatus = String(value.authoritativeSourceWiringStatus ?? "");
+      const connected = (Number.isFinite(ownerCount) && ownerCount >= 5)
+        || /CONNECTED|CALLABLES_READY|READY/u.test(wiringStatus);
+      for (const [type, reasonToken, blockerToken] of [
+        ["CONTRACT_RULES", "MISSING_CONTRACT_RULES", "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE"],
+        ["EXECUTION_OBSERVATION", "MISSING_EXECUTION_OBSERVATION", "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE"],
+        ["LEARNING_SNAPSHOT", "MISSING_LEARNING_SNAPSHOT", "AUTHORITATIVE_LEARNING_SNAPSHOT_SOURCE_UNAVAILABLE"],
+        ["PAPER_STATE", "MISSING_PAPER_STATE", "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
+        ["SUPPLEMENTAL_COST_EVIDENCE", "MISSING_SUPPLEMENTAL_COST_EVIDENCE", "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE"],
+      ]) {
+        const missingNow = evidenceReason.includes(reasonToken)
+          || sourceBlockers.some(item => item.includes(blockerToken));
+        const state = missingNow
+          ? (connected ? "CONNECTED_NOT_OBSERVED" : "CODE_EXISTS_NOT_CONNECTED")
+          : (Number(evidenceComplete?.count) > 0 ? "OBSERVED" : "MISSING");
+        console.log(`PAPER_EVIDENCE_SOURCE type=${type} state=${state}`);
       }
     });
   '
@@ -370,10 +522,24 @@ if file_exists "$shadow_summary"; then
       const root = JSON.parse(raw);
       const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
       const compact = x => x == null ? "null" : JSON.stringify(x);
-      console.log("SHADOW_SUMMARY present=true");
+      console.log(`SHADOW_SUMMARY present=true status=${clean(root.status)}`);
       const candidates = root.groups && typeof root.groups === "object" ? root.groups : root;
       for (const [name, value] of Object.entries(candidates)) {
         if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const failure = value.error && typeof value.error === "object" && !Array.isArray(value.error)
+          ? value.error
+          : null;
+        if (value.status === "fail" || value.status === "technical_failure" || failure) {
+          console.log([
+            "SHADOW_GROUP_FAILURE",
+            `name=${clean(name)}`,
+            `status=${clean(value.status)}`,
+            `error_name=${clean(failure?.name)}`,
+            `error_message=${clean(failure?.message)}`,
+            `error_details=${clean(compact(failure?.details))}`,
+            "raw_log_included=false",
+          ].join(" "));
+        }
         const candidate = value.candidate && typeof value.candidate === "object" && !Array.isArray(value.candidate)
           ? value.candidate
           : value;

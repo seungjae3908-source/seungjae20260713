@@ -704,6 +704,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       displayName: card.name,
       timeframe: data?.timeframe ?? effectiveTimeframe,
       searchRunId: data?.requestId,
+      signalId: card.signalId,
       signalScore: card.score,
       signalRank: card.candidateRanking?.rank,
       confidence: card.confidence,

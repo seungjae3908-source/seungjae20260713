@@ -148,6 +148,8 @@ export class BitgetPublicClient {
 
 export const BITGET_ENDPOINTS = Object.freeze({
   futuresHistoryCandles: "/api/v2/mix/market/history-candles",
+  futuresHistoryMarkCandles: "/api/v2/mix/market/history-mark-candles",
+  futuresHistoryIndexCandles: "/api/v2/mix/market/history-index-candles",
   spotHistoryCandles: "/api/v2/spot/market/history-candles",
   openInterest: "/api/v2/mix/market/open-interest",
   fundingHistory: "/api/v2/mix/market/history-fund-rate",

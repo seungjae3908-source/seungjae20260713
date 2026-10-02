@@ -244,6 +244,7 @@ export function resolveCanonicalPaperAdmissionBridgeCandidate({
     execution: {
       dataEvidence: clone(bundle.executionEvidence.dataEvidence),
       costPolicy: clone(bundle.executionEvidence.costPolicy),
+      costProvenance: clone(bundle.executionEvidence.costProvenance),
       strategyIdentity: clone(bundle.paperCandidate.signal.strategyIdentity),
     },
     admissionEvidence: {
