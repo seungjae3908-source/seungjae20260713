@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,8 @@ async function fixture() {
     status: "ACTIVE_WAITING_FOR_24H_FUTURE_BOUNDARY",
     targetSha: SHA,
     paperRuntimeSourceSha: SHA,
+    policyResearchCodeSha: SHA,
+    operationalRetryEquivalenceVerified: false,
     productionAppShaBefore: APP,
     productionAppDeployPerformed: false,
     productionAppMutationAllowed: false,
@@ -134,6 +136,59 @@ test("activation verifier waits when no post-activation receipt exists", async (
       }),
       (error) => error?.code === "PUMP_ACTIVATION_FIRST_CRON_NOT_OBSERVED"
         && error?.exitCode === 75,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("activation verifier accepts a verified operational-only cross-SHA retry", async () => {
+  const root = await fixture();
+  const retrySha = "d".repeat(40);
+  try {
+    const activationPath = join(root, "activation.json");
+    const activation = JSON.parse(await readFile(activationPath, "utf8"));
+    activation.targetSha = retrySha;
+    activation.paperRuntimeSourceSha = retrySha;
+    activation.policyResearchCodeSha = SHA;
+    activation.operationalRetryEquivalenceVerified = true;
+    await writeFile(activationPath, JSON.stringify(activation));
+
+    const result = await verifyPumpProspectiveActivation({
+      targetSha: retrySha,
+      expectedProductionAppSha: APP,
+      root,
+      crontabText: "* * * * * x # stock-app-pump-reversal-v1\n",
+    });
+    assert.equal(result.status, "PASSED");
+    assert.equal(result.policyResearchCodeSha, SHA);
+    assert.equal(result.operationalRetryEquivalenceVerified, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("activation verifier rejects cross-SHA policy reuse without operational equivalence proof", async () => {
+  const root = await fixture();
+  const retrySha = "d".repeat(40);
+  try {
+    const activationPath = join(root, "activation.json");
+    const activation = JSON.parse(await readFile(activationPath, "utf8"));
+    activation.targetSha = retrySha;
+    activation.paperRuntimeSourceSha = retrySha;
+    activation.policyResearchCodeSha = SHA;
+    activation.operationalRetryEquivalenceVerified = false;
+    await writeFile(activationPath, JSON.stringify(activation));
+
+    await assert.rejects(
+      () => verifyPumpProspectiveActivation({
+        targetSha: retrySha,
+        expectedProductionAppSha: APP,
+        root,
+        crontabText: "* * * * * x # stock-app-pump-reversal-v1\n",
+      }),
+      (error) => error?.code === "PUMP_ACTIVATION_RECEIPT_INVALID",
     );
   } finally {
     await rm(root, { recursive: true, force: true });
