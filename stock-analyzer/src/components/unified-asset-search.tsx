@@ -44,6 +44,20 @@ const PROVIDER_LABEL: Record<string, string> = {
   bitget: 'Bitget',
 };
 
+function searchDebounceMs(value: string, market: UnifiedMarketFilter | null) {
+  const normalized = value.normalize('NFKC').trim().toUpperCase();
+  const exactCodeLike = market === 'KR'
+    ? /^\d{6}$/.test(normalized)
+    : market === 'US'
+      ? /^[A-Z][A-Z0-9.^-]{0,9}$/.test(normalized)
+      : market === 'spot'
+        ? /^KRW-[A-Z0-9]{2,20}$/.test(normalized)
+        : market === 'futures'
+          ? /^[A-Z0-9]{2,24}USDT$/.test(normalized)
+          : false;
+  return exactCodeLike ? 25 : 200;
+}
+
 function readRecent(): UnifiedAssetSuggestion[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -256,7 +270,10 @@ export function UnifiedAssetSearch({
     }
     const controller = new AbortController();
     activeRequestController.current = controller;
-    const timer = window.setTimeout(() => void runSearch(trimmed, controller.signal), 200);
+    const timer = window.setTimeout(
+      () => void runSearch(trimmed, controller.signal),
+      searchDebounceMs(trimmed, market),
+    );
     return () => {
       window.clearTimeout(timer);
       controller.abort();
