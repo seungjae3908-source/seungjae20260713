@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const installPath = new URL("../../ops/install-pump-reversal-prospective-schedule.sh", import.meta.url);
 const disablePath = new URL("../../ops/disable-pump-reversal-prospective-schedule.sh", import.meta.url);
@@ -50,6 +56,42 @@ test("Pump installer is isolated, minute-cadence, exact-SHA and Paper-only", asy
     "/api/v2/mix/order/",
     "/api/v2/mix/account/",
   ]) assert.equal(source.includes(forbidden), false, forbidden);
+});
+
+test("Pump wrapper generation defers runtime variables under set -u", async () => {
+  const source = await readFile(installPath, "utf8");
+  const block = /cat > "\\$TEMP_WRAPPER" <<WRAPPER\\n[\\s\\S]*?\\nWRAPPER/u.exec(source)?.[0];
+  assert.ok(block, "wrapper heredoc block");
+
+  const root = await mkdtemp(join(tmpdir(), "pump-wrapper-"));
+  try {
+    const wrapper = join(root, "wrapper");
+    const shell = [
+      "set -Eeuo pipefail",
+      `TEMP_WRAPPER="${wrapper}"`,
+      `STATE_ROOT="${root}/state"`,
+      `LOG_DIR="${root}/logs"`,
+      `RUNTIME_STATE_ROOT="${root}/runtime-state"`,
+      `POLICY_PATH="${root}/policy.json"`,
+      `PAPER_STATE_SNAPSHOT_PATH="${root}/paper.json"`,
+      `SUPPLEMENTAL_COST_EVIDENCE_PATH="${root}/cost.json"`,
+      `TARGET_SHA="${"a".repeat(40)}"`,
+      'NODE_BIN="/usr/bin/node"',
+      `RUNTIME_BUNDLE="${root}/runtime.mjs"`,
+      block,
+    ].join("\\n");
+    await execFileAsync("bash", ["-c", shell], {
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root },
+    });
+    const rendered = await readFile(wrapper, "utf8");
+    assert.ok(rendered.includes('[[ ! -e "$STATE_ROOT/DISABLED" ]]'));
+    assert.ok(rendered.includes('if [[ -f "$LOG_FILE" && "$(wc -c < "$LOG_FILE")" -gt 5242880 ]]'));
+    assert.ok(rendered.includes('exec >>"$LOG_FILE" 2>&1'));
+    assert.ok(rendered.includes('"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'));
+    assert.ok(rendered.includes('HOME="${HOME:-/tmp}"'));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Pump disable removes only its managed cron and leaves execution authority at NONE", async () => {
