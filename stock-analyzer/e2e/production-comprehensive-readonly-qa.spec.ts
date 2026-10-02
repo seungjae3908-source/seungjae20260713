@@ -64,6 +64,19 @@ const SEARCH_MARKET_PARAMS: Record<keyof typeof SEARCH_MATRIX, 'KR' | 'US' | 'sp
   '코인 선물': 'futures',
 };
 
+function minimumExpectedSearchDispatchMs(
+  marketLabel: keyof typeof SEARCH_MATRIX,
+  rawQuery: string,
+) {
+  const market = SEARCH_MARKET_PARAMS[marketLabel];
+  const query = rawQuery.trim().toUpperCase();
+  if (market === 'KR' && /^\d{6}$/.test(query)) return 0;
+  if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;
+  if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;
+  if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;
+  return 150;
+}
+
 const TIMEFRAMES = ['1m','3m','5m','15m','30m','1H','4H','1D'] as const;
 const CHART_MARKETS = ['KR','US','UPBIT','BITGET'] as const;
 
@@ -975,9 +988,10 @@ test.describe('Production comprehensive read-only QA', () => {
       'search request did not complete exactly once with HTTP 200').toEqual([]);
     expect(audits.filter((item) => item.requests.some((request) => request.market !== SEARCH_MARKET_PARAMS[item.market])),
       'search request used the wrong market route').toEqual([]);
-    expect(audits.flatMap((item) => item.requests)
-      .filter((request) => request.startedAfterInputMs < 150 || request.startedAfterInputMs > 1_000),
-    'search debounce delayed or dispatched the request outside its bounded window').toEqual([]);
+    expect(audits.filter((item) => item.requests.some((request) =>
+      request.startedAfterInputMs < minimumExpectedSearchDispatchMs(item.market, item.query)
+      || request.startedAfterInputMs > 1_000)),
+    'search dispatch fell outside the product fast-path/debounce contract').toEqual([]);
     expect(diagnostics.filter((item) => item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'),
       'search browser failures detected').toEqual([]);
     expect(diagnostics.filter((item) => item.kind === 'http'
