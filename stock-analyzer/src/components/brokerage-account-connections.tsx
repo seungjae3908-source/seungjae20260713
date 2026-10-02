@@ -4,6 +4,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 
 type Provider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+const ACCOUNT_AUTO_REFRESH_MS = 10_000;
 type CredentialProvider = Provider;
 type AccountReadStatus = 'CONNECTED' | 'CONFIGURED_UNVERIFIED' | 'NOT_CONFIGURED' | 'STALE' | 'AUTH_FAILED' | 'RATE_LIMITED' | 'UNAVAILABLE';
 
@@ -172,6 +173,8 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   const [saveMessage, setSaveMessage] = useState('');
   const requestSequence = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const refreshInFlight = useRef(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   const enabledProviders = useCallback((): Provider[] => [
     'toss',
@@ -181,26 +184,33 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   ], [canAccessFutures, canAccessSpot, kiwoomSupported]);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     const sequence = ++requestSequence.current;
     setLoading(true); setError('');
-    const results = await Promise.all(enabledProviders().map(async (provider) => {
-      try {
-        const result = await accountSnapshotRequest(provider, controller.signal);
-        return { provider, value: result.snapshot, bitgetDiagnostic: result.bitgetDiagnostic, error: null as string | null };
-      } catch (cause) {
-        if (controller.signal.aborted) return { provider, value: null, bitgetDiagnostic: null, error: null };
-        return { provider, value: null, bitgetDiagnostic: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
-      }
-    }));
-    if (controller.signal.aborted || sequence !== requestSequence.current) return;
-    setSnapshots((current) => { const next = { ...current }; for (const result of results) if (result.value) next[result.provider] = result.value; return next; });
-    const bitgetResult = results.find((result) => result.provider === 'bitget');
-    setBitgetDiagnostic(bitgetResult?.value?.connected === true ? null : bitgetResult?.bitgetDiagnostic ?? null);
-    setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
-    setLoading(false);
+    try {
+      const results = await Promise.all(enabledProviders().map(async (provider) => {
+        try {
+          const result = await accountSnapshotRequest(provider, controller.signal);
+          return { provider, value: result.snapshot, bitgetDiagnostic: result.bitgetDiagnostic, error: null as string | null };
+        } catch (cause) {
+          if (controller.signal.aborted) return { provider, value: null, bitgetDiagnostic: null, error: null };
+          return { provider, value: null, bitgetDiagnostic: null, error: cause instanceof Error ? cause.message : 'ACCOUNT_READ_FAILED' };
+        }
+      }));
+      if (controller.signal.aborted || sequence !== requestSequence.current) return;
+      setSnapshots((current) => { const next = { ...current }; for (const result of results) if (result.value) next[result.provider] = result.value; return next; });
+      const bitgetResult = results.find((result) => result.provider === 'bitget');
+      setBitgetDiagnostic(bitgetResult?.value?.connected === true ? null : bitgetResult?.bitgetDiagnostic ?? null);
+      setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
+      setLastSyncedAt(new Date().toISOString());
+    } finally {
+      if (sequence === requestSequence.current) setLoading(false);
+      refreshInFlight.current = false;
+    }
   }, [enabledProviders]);
 
   useLayoutEffect(() => {
@@ -219,13 +229,21 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     void refresh();
     const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
     const onOnline = () => void refresh();
-    document.addEventListener('visibilitychange', onVisibility); window.addEventListener('online', onOnline);
+    const onTradeExecution = () => void refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh();
+    }, ACCOUNT_AUTO_REFRESH_MS);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('trade-execution-completed', onTradeExecution);
     return () => {
       requestSequence.current += 1;
       controllerRef.current?.abort();
       controllerRef.current = null;
+      window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', onOnline);
+      window.removeEventListener('trade-execution-completed', onTradeExecution);
     };
   }, [refresh]);
 
@@ -298,6 +316,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     </div>
 
     <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl bg-positive/10 p-3 text-center text-xs font-semibold text-positive"><ShieldCheck className="h-4 w-4 shrink-0" /><span>조회 전용 · 주문·취소·이체·출금 없음</span></div>
+    <p className="mt-2 text-center text-[11px] font-semibold text-muted-foreground" data-testid="account-last-synced">최근 동기화 {lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString('ko-KR') : '대기 중'} · 화면 활성 중 10초 자동 갱신 · 주문 처리 후 즉시 재조회</p>
     <details className="mt-2 rounded-xl border border-card-border bg-background px-3 py-2 text-xs text-muted-foreground" data-testid="account-readonly-safety-details">
       <summary className="min-h-8 cursor-pointer text-center font-semibold text-foreground">보안·권한 상세</summary>
       <div className="border-t border-card-border pt-2 text-left leading-5">
