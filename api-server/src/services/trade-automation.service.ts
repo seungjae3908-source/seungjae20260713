@@ -343,6 +343,8 @@ export class TradeAutomationService {
     if (typeof metadata.exchangeOrderId === 'string') next.exchangeOrderId = metadata.exchangeOrderId;
     if (typeof metadata.filledQuantity === 'number') next.filledQuantity = metadata.filledQuantity;
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
+    if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
+    if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
     if (typeof metadata.errorCode === 'string') next.lastErrorCode = metadata.errorCode;
     if (typeof metadata.preSubmissionCheckedAt === 'string') next.preSubmissionCheckedAt = metadata.preSubmissionCheckedAt;
     if (metadata.preSubmissionDecision && typeof metadata.preSubmissionDecision === 'object') {
