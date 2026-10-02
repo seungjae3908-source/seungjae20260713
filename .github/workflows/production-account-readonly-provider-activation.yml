@@ -84,6 +84,8 @@ jobs:
           done
           grep -Fq "readBitgetUtaSnapshot" "$provider"
           grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$spec"
+          grep -Fq "Do not immediately add a third" "$spec"
+          grep -Fq "requiredSnapshotsHealthy" "$spec"
           grep -Fq "new URL('/api/auth/profile'" "$login"
           grep -Fq "Do not submit credentials a second time" "$login"
           grep -Fq "post-merge-provenance/verified" "$file"
