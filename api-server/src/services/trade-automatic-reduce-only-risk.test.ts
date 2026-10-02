@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
 import { normalizeTradingPolicy, evaluateTradingPlan } from './trade-automation-risk.service';
 import { buildRiskEnvelope, evaluateRiskEnvelope, withRiskEnvelope } from './trade-risk-envelope.service';
+import { InMemoryTradingRepository } from './trade-automation.repository';
+import { TradeAutomationService } from './trade-automation.service';
+import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 
 function exitInput(): TradingPlanInput {
   const now=new Date().toISOString();
@@ -62,4 +65,28 @@ test('reduce-only risk envelope does not require or re-trigger an entry stop', (
   const result=evaluateRiskEnvelope({plan:approved,snapshot:approved.marketSnapshot,now});
   assert.equal(result.allowed,true,result.blockCodes.join(','));
   assert.ok(envelope.maxLossKrw>0);
+});
+
+
+test('reduce-only automatic plan does not call entry market-intelligence gate', async () => {
+  const repository=new InMemoryTradingRepository();
+  const policy=normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,mode:'automatic',automaticEnabled:true,
+    newEntriesStopped:true,marketEnabled:{domestic_stock:false,us_stock:false,crypto_spot:false,crypto_futures:false},
+    exchangeEnabled:{bitget:false,upbit:false,kiwoom:false,toss:false},
+  });
+  await repository.savePolicy('user-exit',policy);
+  setTradingPlanMarketIntelligenceRunnerForTests(async () => {
+    throw new Error('ENTRY_INTELLIGENCE_MUST_NOT_RUN_FOR_REDUCE_ONLY');
+  });
+  try {
+    const automation=new TradeAutomationService(repository);
+    const input={...exitInput(),accountMode:'paper' as const};
+    const created=await automation.createPlan('user-exit',input,policy,true);
+    assert.ok(created.plan);
+    assert.equal(created.decision.allowed,true,created.decision.blockCodes.join(','));
+    assert.ok(created.decision.warnings.includes('RISK_REDUCING_EXIT_MARKET_INTELLIGENCE_ENTRY_GATE_SKIPPED'));
+  } finally {
+    setTradingPlanMarketIntelligenceRunnerForTests(null);
+  }
 });
