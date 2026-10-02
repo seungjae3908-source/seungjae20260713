@@ -85,7 +85,8 @@ else
   mv "$RUNTIME_BUNDLE.tmp-$$" "$RUNTIME_BUNDLE"
 fi
 
-POLICY_SUMMARY="$(node --input-type=module - "$POLICY_SOURCE" "$TARGET_SHA" <<'NODE'
+policy_summary_for_path() {
+  node --input-type=module - "$1" "$TARGET_SHA" <<'NODE'
 import fs from 'node:fs';
 const [path, targetSha] = process.argv.slice(2);
 const value = JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -95,9 +96,12 @@ const valid = value?.schemaVersion === 'crypto-pump-reversal-prospective-policy-
   && value?.candidate?.strategyId === 'CRYPTO_PUMP_REVERSAL_SHORT_CLEAN_V1'
   && value?.candidate?.market === 'CRYPTO_FUTURES'
   && value?.candidate?.direction === 'SHORT'
+  && typeof value?.candidate?.candidateId === 'string'
+  && typeof value?.candidate?.parameterHash === 'string'
   && Number.isSafeInteger(value?.policyFrozenAtMs)
   && Number.isSafeInteger(value?.eligibleAfterMs)
   && value.eligibleAfterMs >= value.policyFrozenAtMs + 86400000
+  && value?.bootstrap?.rawProspectiveSampleEconomicCredit === 0
   && value?.safety?.profitabilityProven === false
   && value?.safety?.executionAuthority === 'NONE'
   && value?.safety?.liveTrading === false
@@ -109,17 +113,26 @@ process.stdout.write(JSON.stringify({
   policyFrozenAtMs: value.policyFrozenAtMs,
   eligibleAfterMs: value.eligibleAfterMs,
   candidateId: value.candidate.candidateId,
+  parameterHash: value.candidate.parameterHash,
   policyDigest: value.policyDigest,
 }));
 NODE
-)" || fail "frozen Pump policy invalid for exact target SHA" 9
+}
+
+SOURCE_POLICY_SUMMARY="$(policy_summary_for_path "$POLICY_SOURCE")"   || fail "frozen Pump policy invalid for exact target SHA" 9
 
 if [[ -e "$POLICY_PATH" ]]; then
-  cmp -s "$POLICY_SOURCE" "$POLICY_PATH" || fail "existing Pump policy cannot be silently refrozen" 9
+  POLICY_SUMMARY="$(policy_summary_for_path "$POLICY_PATH")"     || fail "existing Pump policy invalid for exact target SHA" 9
+  SOURCE_CANDIDATE_ID="$(node -e 'const v=JSON.parse(process.argv[1]); process.stdout.write(String(v.candidateId))' "$SOURCE_POLICY_SUMMARY")"
+  EXISTING_CANDIDATE_ID="$(node -e 'const v=JSON.parse(process.argv[1]); process.stdout.write(String(v.candidateId))' "$POLICY_SUMMARY")"
+  SOURCE_PARAMETER_HASH="$(node -e 'const v=JSON.parse(process.argv[1]); process.stdout.write(String(v.parameterHash))' "$SOURCE_POLICY_SUMMARY")"
+  EXISTING_PARAMETER_HASH="$(node -e 'const v=JSON.parse(process.argv[1]); process.stdout.write(String(v.parameterHash))' "$POLICY_SUMMARY")"
+  [[ "$EXISTING_CANDIDATE_ID" == "$SOURCE_CANDIDATE_ID"     && "$EXISTING_PARAMETER_HASH" == "$SOURCE_PARAMETER_HASH" ]]     || fail "existing Pump policy identity mismatch; refusing refreeze" 9
 else
-  cp "$POLICY_SOURCE" "$POLICY_PATH.tmp-$$"
-  chmod 600 "$POLICY_PATH.tmp-$$"
-  mv "$POLICY_PATH.tmp-$$" "$POLICY_PATH"
+  cp "$POLICY_SOURCE" "$POLICY_PATH.tmp-$"
+  chmod 600 "$POLICY_PATH.tmp-$"
+  mv "$POLICY_PATH.tmp-$" "$POLICY_PATH"
+  POLICY_SUMMARY="$SOURCE_POLICY_SUMMARY"
 fi
 
 POLICY_FROZEN_AT_MS="$(node -e 'const v=JSON.parse(process.argv[1]); process.stdout.write(String(v.policyFrozenAtMs))' "$POLICY_SUMMARY")"

@@ -25,8 +25,12 @@ test("Pump installer is isolated, minute-cadence, exact-SHA and Paper-only", asy
     "missingEconomicEvidenceMayBecomeZero: false",
     "executionAuthority: 'NONE'",
     "productionAppDeployPerformed: false",
+    "existing Pump policy identity mismatch; refusing refreeze",
+    "SOURCE_PARAMETER_HASH",
+    "EXISTING_PARAMETER_HASH",
   ]) assert.ok(source.includes(expected), expected);
   for (const forbidden of [
+    'cmp -s "$POLICY_SOURCE" "$POLICY_PATH"',
     "deploy-production.sh",
     "pm2 restart",
     "pm2 reload",
