@@ -1,9 +1,37 @@
 import { calculateTradingRisk, floorQuantityToRules, type RiskEngineResult } from './trading-risk-engine.service';
-import type { CancelPaperOrderAction, MarkPaperPriceAction, PaperFill, PaperFillReason, PaperJournalEntry, PaperOrder, PaperOrderStatus, PaperPosition, PaperTradingActionResult, PaperTradingState, PlacePaperOrderAction } from './paper-trading.types';
+import type { CancelPaperOrderAction, MarkPaperPriceAction, PaperBacktestCandidateIdentity, PaperFill, PaperFillReason, PaperJournalEntry, PaperOrder, PaperOrderStatus, PaperPosition, PaperTradingActionResult, PaperTradingState, PlacePaperOrderAction } from './paper-trading.types';
 import {
   EPSILON, MODE, PaperTradingError, adverseFillPrice, buildRiskInput, createId, expectedEntry, finite,
   hasDuplicateSymbol, makeOrder, positive, referencePrice, safeNumber, toIso, unique, validateOrderRequest,
 } from './paper-trading-core.service';
+import type { prepareManualPaperCanonicalEvidence } from './manual-paper-canonical-contract.service';
+type CanonicalInput = NonNullable<ReturnType<typeof prepareManualPaperCanonicalEvidence>>;
+
+function assertBacktestSameCandidate(
+  candidate: PaperBacktestCandidateIdentity | undefined,
+  canonical: CanonicalInput | undefined,
+): void {
+  if (!candidate) return;
+  if (!canonical) {
+    throw new PaperTradingError('SERVER_OWNED_BACKTEST_PAPER_EVIDENCE_REQUIRED', 'Backtest 후보의 Canonical Paper owner evidence가 필요합니다.');
+  }
+  const identity = canonical.lineage.identity;
+  const expected = {
+    candidateId: identity.candidateId,
+    strategyId: identity.strategyId,
+    parameterHash: identity.parameterHash,
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    side: identity.side,
+    leverage: identity.leverage,
+  } as const;
+  for (const field of ['candidateId', 'strategyId', 'parameterHash', 'market', 'symbol', 'timeframe', 'side', 'leverage'] as const) {
+    if (candidate[field] !== expected[field]) {
+      throw new PaperTradingError(`BACKTEST_PAPER_IDENTITY_MISMATCH_${field.toUpperCase()}`, 'Backtest 후보와 Canonical Paper identity가 일치하지 않습니다.');
+    }
+  }
+}
 
 export function transitionPaperOrder(order: PaperOrder, next: PaperOrderStatus, at: string) {
   const allowed: Record<PaperOrderStatus, PaperOrderStatus[]> = {
@@ -51,6 +79,7 @@ export function createPositionFromOrder(
   reason: Extract<PaperFillReason, 'market' | 'limit' | 'stop_trigger'>,
   eventSeed: string,
   at: string,
+  canonical?: CanonicalInput,
 ): { position: PaperPosition; fill: PaperFill } {
   if (!positive(fillPrice) || !positive(reference) || !positive(order.quantity)) {
     throw new PaperTradingError('INVALID_FILL', '모의체결 계산값이 올바르지 않습니다.');
@@ -62,8 +91,9 @@ export function createPositionFromOrder(
   }
   const notional = fillPrice * order.quantity;
   const requiredMargin = notional / order.leverage;
-  const entryFee = notional * order.entryFeeRate;
-  if (!finite(requiredMargin) || requiredMargin + entryFee > state.account.availableMargin + EPSILON) {
+  const entryFee = canonical ? canonical.sample.fill.costs.commission : notional * order.entryFeeRate;
+  const entryImmediateCost = canonical?.sample.fill.costs.immediateCost ?? entryFee;
+  if (!finite(requiredMargin) || requiredMargin + entryImmediateCost > state.account.availableMargin + EPSILON) {
     order.rejectionCodes = unique([...order.rejectionCodes, 'INSUFFICIENT_MARGIN']);
     transitionPaperOrder(order, 'rejected', at);
     throw new PaperTradingError('INSUFFICIENT_MARGIN', '사용 가능 증거금이 부족합니다.');
@@ -87,7 +117,7 @@ export function createPositionFromOrder(
     unrealizedPnl: order.side === 'long'
       ? (reference - fillPrice) * order.quantity
       : (fillPrice - reference) * order.quantity,
-    realizedPnl: -entryFee - slippageCost,
+    realizedPnl: canonical ? -entryImmediateCost : -entryFee - slippageCost,
     totalFees: entryFee,
     totalSlippage: slippageCost,
     totalFunding: 0,
@@ -114,6 +144,8 @@ export function createPositionFromOrder(
     dataStatusAtEntry: order.dataStatusAtSubmission,
     marketRegimeAtEntry: order.marketRegimeAtSubmission,
     warnings: [...order.warnings],
+    ...(order.backtestCandidate ? { backtestCandidate: structuredClone(order.backtestCandidate) } : {}),
+    ...(canonical ? { canonicalPaper: structuredClone(canonical.lineage) } : {}),
   };
   const fill: PaperFill = {
     id: createId('paper_fill', `${eventSeed}:entry`),
@@ -130,26 +162,33 @@ export function createPositionFromOrder(
     side: order.side,
     referencePrice: reference,
     grossPnl: 0,
-    netPnl: -entryFee - slippageCost,
+    netPnl: canonical ? -entryImmediateCost : -entryFee - slippageCost,
+    ...(order.backtestCandidate ? { backtestCandidate: structuredClone(order.backtestCandidate) } : {}),
+    ...(canonical ? { symbol: canonical.lineage.identity.symbol, canonicalPaper: structuredClone(canonical.lineage) } : {}),
   };
   transitionPaperOrder(order, 'filled', at);
-  state.account.cashBalance -= entryFee;
-  state.account.realizedPnl -= entryFee;
+  state.account.cashBalance -= entryImmediateCost;
+  state.account.realizedPnl -= entryImmediateCost;
   state.positions.push(position);
   state.fills.push(fill);
   recalculateAccount(state, at);
   return { position, fill };
 }
 
-export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlacePaperOrderAction, now: Date): PaperTradingActionResult {
+export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlacePaperOrderAction, now: Date, canonical?: CanonicalInput): PaperTradingActionResult {
   const at = now.toISOString();
   const request = validateOrderRequest(action.request);
+  assertBacktestSameCandidate(request.backtestCandidate, canonical);
   const warnings = unique([
     ...(action.market.warnings ?? []),
     ...(action.contractRules.warnings ?? []),
   ]);
 
-  const entry = expectedEntry(request, action.market, warnings, action.riskInput.slippageRate);
+  const entry = canonical ? {
+    reference: canonical.sample.fill.fillPrice,
+    fill: canonical.sample.fill.fillPrice,
+    shouldFill: true,
+  } : expectedEntry(request, action.market, warnings, action.riskInput.slippageRate);
 
   const rejectionCodes: string[] = [];
   if (hasDuplicateSymbol(state, request.symbol)) rejectionCodes.push('DUPLICATE_SYMBOL_POSITION');
@@ -157,7 +196,7 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
 
   let riskResult: RiskEngineResult | null = null;
   let quantity = 0;
-  if (entry.fill != null && positive(entry.fill)) {
+  if (!canonical && entry.fill != null && positive(entry.fill)) {
     const riskInput = buildRiskInput(state, request, action.market, action.contractRules, action.riskInput, entry.fill, now);
     riskResult = calculateTradingRisk(riskInput, now);
     rejectionCodes.push(...riskResult.blockCodes);
@@ -176,8 +215,18 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
       rejectionCodes.push('INSUFFICIENT_MARGIN');
     }
   }
+  // The canonical sample has already consumed the canonical admission, risk,
+  // execution policy and simulation contracts. Do not reinterpret its fill with
+  // the legacy Futures-only risk/fee/slippage model.
+  if (canonical) {
+    quantity = canonical.sample.fill.filledQuantity;
+    const margin = canonical.sample.fill.notional / canonical.lineage.identity.leverage;
+    if (margin + canonical.sample.fill.costs.immediateCost > state.account.availableMargin + EPSILON) {
+      rejectionCodes.push('INSUFFICIENT_MARGIN');
+    }
+  }
 
-  const rejected = rejectionCodes.length > 0 || !riskResult?.allowed;
+  const rejected = rejectionCodes.length > 0 || (!canonical && !riskResult?.allowed);
   const order = makeOrder(
     action,
     request,
@@ -190,6 +239,15 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
     warnings,
     at,
   );
+  if (request.backtestCandidate) order.backtestCandidate = structuredClone(request.backtestCandidate);
+  if (canonical) {
+    order.canonicalPaper = structuredClone(canonical.lineage);
+    const evidence = canonical.lineage.entryCostEvidence.components;
+    order.entryFeeRate = evidence.commission.valuePercent / 100;
+    order.exitFeeRate = evidence.commission.valuePercent / 100;
+    order.slippageRate = evidence.slippage.valuePercent / 100;
+    order.fundingRatePerInterval = evidence.funding.valuePercent / 100;
+  }
   state.orders.push(order);
 
   const fills: PaperFill[] = [];
@@ -200,7 +258,7 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
       : request.orderType === 'limit'
         ? 'limit'
         : 'stop_trigger';
-    const opened = createPositionFromOrder(state, order, entry.reference, entry.fill, fillReason, action.eventId, at);
+    const opened = createPositionFromOrder(state, order, entry.reference, entry.fill, fillReason, action.eventId, at, canonical);
     position = opened.position;
     fills.push(opened.fill);
   }
@@ -307,6 +365,8 @@ function upsertJournal(
     entry.status = position.status;
     entry.warnings = unique([...entry.warnings, ...position.warnings]);
   }
+  if (position.backtestCandidate) entry.backtestCandidate = structuredClone(position.backtestCandidate);
+  if (position.canonicalPaper) entry.canonicalPaper = structuredClone(position.canonicalPaper);
 }
 
 export function closePositionInternal(
@@ -317,6 +377,7 @@ export function closePositionInternal(
   reason: PaperFillReason,
   eventSeed: string,
   at: string,
+  canonical?: CanonicalInput,
 ): PaperFill {
   if (position.status === 'closed' || position.remainingQuantity <= EPSILON) {
     throw new PaperTradingError('POSITION_ALREADY_CLOSED', '이미 종료된 포지션입니다.');
@@ -328,22 +389,25 @@ export function closePositionInternal(
     throw new PaperTradingError('MARKET_PRICE_UNAVAILABLE', '청산 기준가격을 확인할 수 없습니다.');
   }
   const actualQuantity = Math.min(quantity, position.remainingQuantity);
-  const fillPrice = adverseFillPrice(reference, position.side, position.slippageRate, 'exit');
+  if (position.canonicalPaper && !canonical?.settlement) {
+    throw new PaperTradingError('CANONICAL_PAPER_TRIGGER_BOUND_SETTLEMENT_REQUIRED', 'Canonical Full Cost settlement evidence가 필요합니다.');
+  }
+  const fillPrice = canonical?.settlement?.exitFillPrice ?? adverseFillPrice(reference, position.side, position.slippageRate, 'exit');
   if (!positive(fillPrice)) throw new PaperTradingError('INVALID_FILL', '청산 모의체결 가격이 올바르지 않습니다.');
 
-  const referenceGrossPnl = position.side === 'long'
+  const referenceGrossPnl = canonical?.settlement?.grossPnl ?? (position.side === 'long'
     ? (reference - position.entryReferencePrice) * actualQuantity
-    : (position.entryReferencePrice - reference) * actualQuantity;
-  const fillGrossPnl = position.side === 'long'
+    : (position.entryReferencePrice - reference) * actualQuantity);
+  const fillGrossPnl = canonical?.settlement?.grossPnl ?? (position.side === 'long'
     ? (fillPrice - position.entryPrice) * actualQuantity
-    : (position.entryPrice - fillPrice) * actualQuantity;
-  const exitFee = fillPrice * actualQuantity * position.exitFeeRate;
-  const exitSlippage = Math.abs(fillPrice - reference) * actualQuantity;
+    : (position.entryPrice - fillPrice) * actualQuantity);
+  const exitFee = canonical?.settlement?.exitFill.costs.commission ?? fillPrice * actualQuantity * position.exitFeeRate;
+  const exitSlippage = canonical ? 0 : Math.abs(fillPrice - reference) * actualQuantity;
   const entryFeeAllocation = position.entryFee * (actualQuantity / position.quantity);
   const entrySlippageAllocation = position.entrySlippageCost * (actualQuantity / position.quantity);
-  const funding = fundingCost(position, actualQuantity, at);
-  const netForJournal = referenceGrossPnl - entryFeeAllocation - exitFee - entrySlippageAllocation - exitSlippage - funding;
-  const cashChange = fillGrossPnl - exitFee - funding;
+  const funding = canonical?.settlement?.fundingCost ?? fundingCost(position, actualQuantity, at);
+  const netForJournal = canonical?.settlement?.netPnl ?? (referenceGrossPnl - entryFeeAllocation - exitFee - entrySlippageAllocation - exitSlippage - funding);
+  const cashChange = fillGrossPnl - (canonical?.settlement?.exitCost ?? exitFee) - funding;
 
   position.remainingQuantity = Math.max(0, position.remainingQuantity - actualQuantity);
   position.currentPrice = reference;
@@ -351,6 +415,10 @@ export function closePositionInternal(
   position.totalFees += exitFee;
   position.totalSlippage += exitSlippage;
   position.totalFunding += funding;
+  if (canonical) {
+    position.realizedPnl = netForJournal;
+    position.canonicalPaper = structuredClone(canonical.lineage);
+  }
   position.status = position.remainingQuantity <= EPSILON ? 'closed' : 'partially_closed';
   if (position.status === 'closed') {
     position.remainingQuantity = 0;
@@ -379,6 +447,8 @@ export function closePositionInternal(
     referencePrice: reference,
     grossPnl: referenceGrossPnl,
     netPnl: netForJournal,
+    ...(position.backtestCandidate ? { backtestCandidate: structuredClone(position.backtestCandidate) } : {}),
+    ...(canonical ? { symbol: canonical.lineage.identity.symbol, canonicalPaper: structuredClone(canonical.lineage) } : {}),
   };
   state.fills.push(fill);
   const order = state.orders.find((item) => item.id === position.orderId);

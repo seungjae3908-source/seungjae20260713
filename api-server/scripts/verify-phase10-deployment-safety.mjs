@@ -20,6 +20,8 @@ const stagingVerifier = await read('api-server/scripts/verify-phase10-staging-re
 const verdictBuilder = await read('api-server/scripts/build-staging-verdict.mjs');
 const verdictVerifier = await read('api-server/scripts/verify-staging-verdict.mjs');
 const ciProvenance = await read('api-server/scripts/production-ci-provenance.cjs');
+const releaseProvenance = await read('api-server/scripts/release-candidate-provenance.cjs');
+const postMergeProvenance = await read('.github/workflows/post-merge-release-provenance.yml');
 const stagingSpec = await read('stock-analyzer/e2e/phase10-staging-readiness.spec.ts');
 const stagingAccountLifecycle = await read('stock-analyzer/e2e/support/staging-account-lifecycle.ts');
 
@@ -31,17 +33,24 @@ for (const status of [
   'ai-privacy/verified',
   'futures-public-network-smoke/verified',
 ]) {
-  assert(production.includes(status), `production workflow is missing required status ${status}`);
-  assert(ciProvenance.includes(`'${status}'`), `shared production CI provenance is missing required status ${status}`);
+  assert(ciProvenance.includes(`'${status}'`), `shared pre-merge CI provenance is missing required status ${status}`);
 }
-assert(approval.includes('production-ci-provenance.cjs'), 'one-time approval must use the shared production CI provenance contract');
-assert(approval.includes('inspectRequiredStatusEvidence'), 'one-time approval must enforce same-run CI status evidence');
-assert(approval.includes('evaluateProductionCiProvenance'), 'one-time approval must verify official Application CI provenance');
+assert(releaseProvenance.includes('REQUIRED_PRODUCTION_STATUSES'), 'release provenance must consume the canonical six Required CI contexts');
+assert(releaseProvenance.includes('evaluateReleaseCandidateProvenance'), 'release provenance must verify the fully-tested PR candidate');
+assert(releaseProvenance.includes('evaluatePostMergeStatusProvenance'), 'release provenance must verify the official post-merge status owner');
+assert(postMergeProvenance.includes('evaluateReleaseCandidateProvenance'), 'post-merge workflow must prove pre-merge CI and merged-tree identity');
+assert(postMergeProvenance.includes('targetTreeSha'), 'post-merge workflow must resolve current-main tree identity');
+assert(postMergeProvenance.includes('headTreeSha'), 'post-merge workflow must resolve tested PR-head tree identity');
+assert(postMergeProvenance.includes('post-merge-provenance/verified'), 'post-merge workflow must publish the release provenance status');
+assert(approval.includes('release-candidate-provenance.cjs'), 'one-time approval must use the shared release provenance contract');
+assert(approval.includes('inspectPostMergeStatusEvidence'), 'one-time approval must bind the post-merge status to one official run');
+assert(approval.includes('evaluatePostMergeStatusProvenance'), 'one-time approval must verify official post-merge release provenance');
 
 assert(/workflow_dispatch:/.test(production), 'production workflow must support explicit workflow dispatch');
 assert(!/\n\s*push:\s*\n\s*branches:/.test(production), 'production workflow must not deploy on main push');
 assert(/\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact SHA');
-assert(production.includes('actions.listWorkflowRunsForRepo'), 'production gate must verify Application CI run provenance');
+assert(production.includes('release-candidate-provenance.cjs'), 'production gate must use shared release provenance');
+assert(production.includes('evaluatePostMergeStatusProvenance'), 'production gate must verify official post-merge provenance run');
 assert(production.includes('actions.listArtifactsForRepo'), 'production gate must locate staging verdict artifacts');
 assert(production.includes('actions.getWorkflowRun'), 'production gate must directly verify the artifact source run');
 assert(production.includes('actions/download-artifact@v4'), 'production gate must download the exact verdict artifact');
@@ -50,6 +59,10 @@ assert(production.includes('staging-verdict-${{ steps.target.outputs.sha }}'), '
 assert(production.includes("run.path === '.github/workflows/staging-readiness.yml'"), 'production gate must require the official staging workflow');
 assert(production.includes("run.conclusion === 'success'"), 'production gate must require successful staging workflow conclusion');
 assert(/environment:\s*production/.test(production), 'production deploy job must use the protected production environment');
+assert(production.includes("github.event_name == 'workflow_dispatch'"), 'production concurrency must distinguish real workflow_dispatch from PR validation');
+assert(production.includes("'stock-app-production-live'"), 'real Production Deploy must retain the canonical live concurrency group');
+assert(production.includes("production-deploy-pr-validation-{0}"), 'PR validation must use a concurrency group isolated from live Production deploys');
+assert(production.includes("cancel-in-progress: ${{ github.event_name == 'pull_request' }}"), 'only stale PR validation runs may be cancelled by concurrency');
 assert(!/STAGING_(?:SSH|SUPABASE|DATABASE|PENDING|ASSOCIATE|REGULAR|ADMIN)/.test(production), 'production workflow must not consume staging secrets');
 
 assert(/workflow_dispatch:/.test(approval), 'one-time approval must be explicitly workflow-dispatched');
@@ -94,6 +107,8 @@ assert(!approval.includes('/opt/stock-app'), 'one-time approval gate must not to
 
 assert(dispatchBridge.includes("flags.includes('--full-validation')"), 'staging bridge must parse full validation');
 assert(dispatchBridge.includes("workflowId = 'staging-readiness.yml'"), 'staging bridge must target only staging readiness');
+assert(dispatchBridge.includes('evaluatePostMergeStatusProvenance'), 'staging bridge must require verified post-merge release provenance');
+assert(staging.includes('evaluatePostMergeStatusProvenance'), 'direct staging readiness must require verified post-merge release provenance');
 assert(!dispatchBridge.includes('production-deploy.yml'), 'staging bridge must never dispatch production');
 
 for (const marker of [
@@ -116,7 +131,7 @@ assert(verdictVerifier.includes('verdict.deployed_sha !== targetSha'), 'producti
 for (const requirement of [
   'anonymous: health, login boundary, and protected API denial',
   'pending: approval-waiting account',
-  'associate: basic stock, spot, and scanner access allowed; futures, AI-risk, portfolio, and APIs denied',
+  'associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied',
   'regular: futures, scanner, paper trading',
   'admin: member management is allowed',
   'bottom navigation and popup menus',

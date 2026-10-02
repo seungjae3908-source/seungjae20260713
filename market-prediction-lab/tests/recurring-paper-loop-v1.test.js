@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildRecurringPaperSettlementRecord,
   createRecurringPaperLoopState,
   restoreRecurringPaperLoopState,
   runRecurringPaperCycle,
@@ -193,6 +194,78 @@ test("four markets and futures SHORT enter once with canonical public evidence",
   assert.equal(h.counts().learnedSignals, 5);
 });
 
+
+test("new positions preserve an immutable settlement execution policy without backfilling old state", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "settlement-policy");
+  const result = await run(h, { state: h.state, cycle: cycle("policy-cycle"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.state.positions.length, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.settlementExecutionPolicy, row.execution);
+  assert.deepEqual(position.settlementExecutionPolicy.marketAdapterIdentity, row.execution.marketAdapterIdentity);
+  assert.deepEqual(position.settlementExecutionPolicy.executionPolicy, row.execution.executionPolicy);
+  assert.deepEqual(position.settlementExecutionPolicy.entryDataEvidence, row.execution.dataEvidence);
+  assert.equal(position.settlementExecutionPolicy.costPolicyIdentity.version, row.execution.costPolicy.version);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.executionPolicy), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryDataEvidence), true);
+});
+
+test("entry candidate and authoritative cost provenance survive durable recurring state unchanged", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_FUTURES", "entry-provenance");
+  const component = (valuePercent, source, quality = "OBSERVED") => ({
+    valuePercent,
+    source,
+    quality,
+    observedAtMs: T0 - 1,
+  });
+  const provenance = {
+    market: "CRYPTO_FUTURES",
+    policyId: "cost-v1",
+    paperCostPolicyVersion: "cost-v1",
+    providerProvenance: "public-fixture",
+    components: {
+      commission: component(0.10, "public:commission"),
+      tax: component(0, "public:tax", "NOT_APPLICABLE"),
+      spread: component(0.02, "public:spread"),
+      slippage: component(0.03, "public:slippage", "ESTIMATED"),
+      funding: component(0.01, "public:funding"),
+      latency: component(0.01, "public:latency", "ESTIMATED"),
+      liquidityImpact: component(0.02, "public:liquidity", "ESTIMATED"),
+      partialFillImpact: component(0.03, "public:partial-fill", "ESTIMATED"),
+    },
+  };
+  row.execution = { ...row.execution, costProvenance: provenance };
+
+  const result = await run(h, {
+    state: h.state,
+    cycle: cycle("entry-provenance-cycle"),
+    candidates: [row],
+  });
+  assert.equal(result.summary.entries, 1);
+  const position = result.state.positions[0];
+  assert.notEqual(position.entryCandidate, row);
+  assert.deepEqual(position.entryCandidate.execution.costProvenance, provenance);
+  assert.deepEqual(position.entryCostProvenance, provenance);
+  assert.deepEqual(position.settlementExecutionPolicy.entryCostProvenance, provenance);
+  assert.equal(Object.isFrozen(position.entryCandidate), true);
+  assert.equal(Object.isFrozen(position.entryCostProvenance), true);
+  assert.equal(Object.isFrozen(position.settlementExecutionPolicy.entryCostProvenance), true);
+
+  const restored = restoreRecurringPaperLoopState(
+    serializeRecurringPaperLoopState(result.state),
+    identity,
+  );
+  assert.deepEqual(restored.positions[0].entryCandidate, position.entryCandidate);
+  assert.deepEqual(restored.positions[0].entryCostProvenance, position.entryCostProvenance);
+  assert.deepEqual(
+    restored.positions[0].settlementExecutionPolicy.entryCostProvenance,
+    position.settlementExecutionPolicy.entryCostProvenance,
+  );
+});
+
 test("canonical Phase3 candidate ID is preserved unchanged through genuine recurring Paper entry", async () => {
   const h = harness();
   const row = genuineNaturalCandidate("CRYPTO_SPOT", "phase3");
@@ -273,6 +346,27 @@ test("valid future exit settles exactly once and replay cannot mutate ledger", a
   assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.count, 1);
   assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.observationIds.length, 1);
   assert.equal(settled.state.positions.length, 0);
+  const record = settled.state.settlements[0];
+  assert.match(record.settlementId, /^[0-9a-f]{64}$/);
+  assert.equal(record.positionId, positionId);
+  assert.equal(record.entryId, opened.state.positions[0].paperSampleId);
+  assert.equal(record.settlementIdentity.netPnl, record.netPnl);
+  assert.equal(record.netPnl, record.grossPnl - record.entryCost - record.exitCost - record.fundingCost);
+  // Legacy monetary PnL is not complete canonical evidence. Enrichment must
+  // keep an absent cost reference absent, not create an all8 completion claim.
+  assert.equal(record.settlementIdentity.costEvidenceDigest, null);
+  assert.equal(record.lifecycleEvidence, null);
+  assert.equal(record.fullCostReady, undefined);
+  assert.equal(record.naturalSampleCredit, 0);
+  assert.equal(record.orderSubmitted, false);
+  const partial = { costEvidence: { status: 'BLOCKED_DATA', fullCostReady: false, components: {} } };
+  const transported = buildRecurringPaperSettlementRecord({ settlement: record, position: opened.state.positions[0],
+    canonicalLifecycleEvidence: partial, settlementRecordedAtMs: T0 + 10 });
+  assert.equal(transported.settlementIdentity.costEvidenceDigest, null);
+  assert.deepEqual(transported.lifecycleEvidence, partial);
+  assert.equal(transported.lifecycleEvidence.costEvidence.fullCostReady, false);
+  assert.equal(transported.fullCostReady, undefined);
+  assert.equal(transported.netPnl, record.netPnl);
   const replay = await run(h, { state: settled.state, cycle: cycle("c3", T0 + 11), exits: [exit] });
   assert.equal(replay.summary.tradesSettled, 0);
   assert.equal(h.counts().settlementMutations, 1);

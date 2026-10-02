@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isAdaptiveMultiEvidenceV2FrozenCandidateId } from "./adaptive-multi-evidence-natural-paper-v2.js";
 
 export const NATURAL_PAPER_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_VERSION =
   "natural-paper-trigger-bound-settlement-cost-producer-v1";
@@ -114,7 +115,9 @@ function positionIdentity(position) {
 
 function frozenCandidateIdentityBlockers(position) {
   const blockers = [];
-  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")) {
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")
+      && !/^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")
+      && !isAdaptiveMultiEvidenceV2FrozenCandidateId(position?.candidateId)) {
     blockers.push("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
   }
   if (!nonEmpty(position?.strategyFamily)) blockers.push("PAPER_POSITION_STRATEGY_FAMILY_REQUIRED");
@@ -498,10 +501,14 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
   });
 }
 
-export function createNaturalPaperTriggerBoundSettlementCostProducer({ collectAuthoritativeEvidence } = {}) {
+export function createNaturalPaperTriggerBoundSettlementCostProducer({
+  collectAuthoritativeEvidence,
+  clock = Date.now,
+} = {}) {
   if (typeof collectAuthoritativeEvidence !== "function") {
     throw new TypeError("authoritative Settlement evidence collector is required");
   }
+  if (typeof clock !== "function") throw new TypeError("authoritative Settlement evidence clock is required");
   return async function produceTriggerBoundSettlementCost({ position, observation, evaluatedAtMs } = {}) {
     const trigger = position?.lifecycle?.pendingExit;
     const identityBlockers = frozenCandidateIdentityBlockers(position);
@@ -519,11 +526,24 @@ export function createNaturalPaperTriggerBoundSettlementCostProducer({ collectAu
     } catch {
       return blocked(["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]);
     }
-    return bindNaturalPaperTriggerBoundSettlementEvidence({
+    const completedAtMs = clock();
+    if (!safeTime(completedAtMs)) {
+      return blocked(["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COLLECTION_TIME_INVALID"]);
+    }
+    const bindingEvaluatedAtMs = safeTime(evaluatedAtMs)
+      ? Math.max(evaluatedAtMs, completedAtMs)
+      : completedAtMs;
+    const bound = bindNaturalPaperTriggerBoundSettlementEvidence({
       position,
       observation,
       authoritativeEvidence,
-      evaluatedAtMs,
+      evaluatedAtMs: bindingEvaluatedAtMs,
+    });
+    return deepFreeze({
+      ...bound,
+      evaluatedAtMs: bindingEvaluatedAtMs,
+      sourceObservation: structuredClone(observation),
+      authoritativeEvidence: structuredClone(authoritativeEvidence),
     });
   };
 }

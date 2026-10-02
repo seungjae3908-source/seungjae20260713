@@ -301,7 +301,7 @@ jobs:
           summary="$source_dir/v3-authoritative-independence-summary.json"
           python3 "$PROOF_SCRIPT" extract-summary "$archive" "$ARTIFACT_DIGEST" "$summary"
           test -f "$summary"
-          test "$(wc -c < "$summary")" -le 1048576
+          test "$(wc -c < "$summary")" -le 8388608
           printf '%s\n' "summary_file=$summary" >> "$GITHUB_OUTPUT"
       - name: Build immutable authenticated-source envelope
         id: envelope

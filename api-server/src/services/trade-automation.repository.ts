@@ -30,6 +30,7 @@ export interface TradingRepository {
   getConnections(userId: string): Promise<ExchangeConnection[]>;
   getConnection(userId: string, exchange: TradingExchange): Promise<ExchangeConnection | null>;
   saveConnection(connection: ExchangeConnection): Promise<void>;
+  deleteConnection(userId: string, exchange: TradingExchange): Promise<void>;
   findPlanByIdempotency(userId: string, key: string): Promise<TradingPlan | null>;
   getPlan(userId: string, id: string): Promise<TradingPlan | null>;
   listPlans(userId: string): Promise<TradingPlan[]>;
@@ -71,6 +72,7 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     remainingQuantity: order.remainingQuantity ?? (order.requestedQuantity == null
       ? null
       : Math.max(0, order.requestedQuantity - order.filledQuantity)),
+    currentLimitPrice: order.currentLimitPrice ?? null,
     fills: copy(order.fills ?? []),
     feeAmount: order.feeAmount ?? null,
     feeCurrency: order.feeCurrency ?? null,
@@ -81,11 +83,14 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     nextRetryAt: order.nextRetryAt ?? null,
     lastReconciledAt: order.lastReconciledAt ?? null,
     manualReviewRequired: order.manualReviewRequired === true,
+    cancelOperationId: order.cancelOperationId ?? null,
     executionClaimId: order.executionClaimId ?? null,
     recoveryLeaseOwner: order.recoveryLeaseOwner ?? null,
     recoveryLeaseUntil: order.recoveryLeaseUntil ?? null,
     protectionStatus: order.protectionStatus ?? 'NOT_REQUIRED',
     protectionErrorCode: order.protectionErrorCode ?? null,
+    amendments: copy(order.amendments ?? []),
+    lastAmendRequestId: order.lastAmendRequestId ?? null,
   };
 }
 
@@ -108,6 +113,7 @@ export class InMemoryTradingRepository implements TradingRepository {
     return value ? copy(value) : null;
   }
   async saveConnection(connection: ExchangeConnection) { this.connections.set(`${connection.userId}:${connection.exchange}`, copy(connection)); }
+  async deleteConnection(userId: string, exchange: TradingExchange) { this.connections.delete(`${userId}:${exchange}`); }
   async findPlanByIdempotency(userId: string, key: string) {
     const value = [...this.plans.values()].find((item) => item.userId === userId && item.idempotencyKey === key);
     return value ? copy(value) : null;
@@ -271,13 +277,11 @@ function orderRow(order: TradingOrder) {
   };
 }
 
-export function createSupabaseTradingRepository(accessToken: string, authenticatedUserId: string): TradingRepository {
-  if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
-  const client = getUserSupabase(accessToken);
-  const secureClient = () => {
-    if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
-    return getSupabase();
-  };
+function createScopedTradingRepository(
+  client: SupabaseClient,
+  secureClient: () => SupabaseClient,
+  authenticatedUserId: string,
+): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
 
   const selectPlanByIdempotency = async (userId: string, key: string) => {
@@ -297,9 +301,8 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
 
   return {
     async getGlobalEmergencyStop() {
-      if (!hasSupabaseServerKey()) return true;
       try {
-        const { data, error } = await getSupabase().from('trade_system_controls')
+        const { data, error } = await secureClient().from('trade_system_controls')
           .select('emergency_stopped').eq('control_key', 'global').maybeSingle();
         if (error || !data) return true;
         return data.emergency_stopped === true;
@@ -353,6 +356,12 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
         last_verified_at: connection.lastVerifiedAt, last_error_code: connection.lastErrorCode,
         updated_at: connection.updatedAt,
       }, { onConflict: 'user_id,exchange' });
+      if (error) throw databaseError();
+    },
+    async deleteConnection(userId, exchange) {
+      owned(userId);
+      const { error } = await secureClient().from('trade_exchange_connections')
+        .delete().eq('user_id', userId).eq('exchange', exchange);
       if (error) throw databaseError();
     },
     async findPlanByIdempotency(userId, key) { return selectPlanByIdempotency(userId, key); },
@@ -480,6 +489,31 @@ export function createSupabaseTradingRepository(accessToken: string, authenticat
       return (data ?? []).map((row) => row.payload as TradingOrderEvent);
     },
   };
+}
+
+export function createSupabaseTradingRepository(
+  accessToken: string,
+  authenticatedUserId: string,
+): TradingRepository {
+  if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
+  const client = getUserSupabase(accessToken);
+  const secureClient = () => {
+    if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
+    return getSupabase();
+  };
+  return createScopedTradingRepository(client, secureClient, authenticatedUserId);
+}
+
+export function createServiceRoleTradingRepository(
+  authenticatedUserId: string,
+  injectedClient?: SupabaseClient,
+): TradingRepository {
+  if (!authenticatedUserId) throw new Error('LOGIN_REQUIRED');
+  if (!injectedClient && !hasSupabaseServerKey()) {
+    throw new Error('TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED');
+  }
+  const client = injectedClient ?? getSupabase();
+  return createScopedTradingRepository(client, () => client, authenticatedUserId);
 }
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {

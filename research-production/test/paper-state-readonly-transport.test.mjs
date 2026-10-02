@@ -9,7 +9,9 @@ import {
 } from '../deploy/prepare-paper-state-readonly-transport.mjs';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
+const OTHER_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
 const DIGEST = 'a'.repeat(64);
+const OTHER_DIGEST = 'b'.repeat(64);
 
 function safetyEnvelope(value) {
   return {
@@ -67,6 +69,57 @@ test('forward transport copies canonical binding and snapshot bytes losslessly',
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('mismatched Paper transport identity fails closed before staging runtime files', async () => {
+  for (const mismatch of [
+    { name: 'source-sha', snapshotSha: OTHER_SHA, snapshotDigest: DIGEST },
+    { name: 'publisher-account', snapshotSha: SHA, snapshotDigest: OTHER_DIGEST },
+  ]) {
+    const root = await mkdtemp(join(tmpdir(), `research-paper-transport-${mismatch.name}-`));
+    const sourceRoot = join(root, 'canonical');
+    const runtimeDirectory = join(root, 'runtime');
+    const snapshotSourcePath = join(sourceRoot, 'publisher', 'paper-state-v2.json');
+    await mkdir(join(sourceRoot, 'publisher'), { recursive: true });
+    await mkdir(runtimeDirectory, { recursive: true });
+    await writeFile(
+      join(sourceRoot, 'publisher-binding.json'),
+      `${JSON.stringify(safetyEnvelope({
+        schemaVersion: 'paper-state-publisher-runtime-binding-v1',
+        paperRuntimeSourceSha: SHA,
+        snapshotPath: snapshotSourcePath,
+        publisherAccountIdSha256: DIGEST,
+      }), null, 2)}\n`,
+    );
+    await writeFile(
+      snapshotSourcePath,
+      `${JSON.stringify(safetyEnvelope({
+        schemaVersion: 'paper-trading-state-snapshot-v2',
+        sourceSha: mismatch.snapshotSha,
+        publisherAccountIdSha256: mismatch.snapshotDigest,
+        observedAtMs: 100,
+        maximumAgeMs: 1000,
+        state: { schemaVersion: 1 },
+      }), null, 2)}\n`,
+    );
+
+    try {
+      await assert.rejects(
+        preparePaperStateReadonlyTransport({ profile: 'forward', runtimeDirectory, sourceRoot }),
+        (error) => error?.code === 'PAPER_STATE_READONLY_IDENTITY_MISMATCH',
+      );
+      await assert.rejects(
+        readFile(join(runtimeDirectory, 'paper-state', 'publisher-binding.json')),
+        (error) => error?.code === 'ENOENT',
+      );
+      await assert.rejects(
+        readFile(join(runtimeDirectory, 'paper-state', 'paper-state-v2.json')),
+        (error) => error?.code === 'ENOENT',
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 

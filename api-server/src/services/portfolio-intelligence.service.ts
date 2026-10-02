@@ -1,4 +1,6 @@
 import { getUserSupabase } from '../lib/supabase.ts';
+import { accountSourcesToPortfolioEvidence } from '../features/account-readonly/account-readonly.portfolio-adapter.ts';
+import type { PortfolioAccountReadResult } from '../features/account-readonly/account-readonly.portfolio-source.ts';
 import { MarketDataService } from './market-data.service.ts';
 import { loadFreePublicFxQuotes } from './public-fx.service.ts';
 import {
@@ -96,6 +98,7 @@ export async function buildPortfolioIntelligence(input: {
   profile?: unknown;
   fetchImpl?: typeof fetch;
   now?: Date;
+  accountSources?: readonly PortfolioAccountReadResult[];
 }) {
   const now = input.now ?? new Date();
   const client = getUserSupabase(input.accessToken);
@@ -165,11 +168,18 @@ export async function buildPortfolioIntelligence(input: {
     });
   }
 
-  snapshots.push(
-    { provider: 'cash-account', source: 'not-connected-readonly-source', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', assets: [], errorCode: 'READONLY_CASH_SOURCE_UNAVAILABLE' },
-    { provider: 'crypto-spot-account', source: 'private-exchange-boundary', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', assets: [], errorCode: 'PRIVATE_PROVIDER_NOT_CALLED' },
-    { provider: 'crypto-futures-equity', source: 'private-exchange-boundary', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', assets: [], errorCode: 'PRIVATE_PROVIDER_NOT_CALLED' },
-  );
+  const accountEvidence = accountSourcesToPortfolioEvidence(input.accountSources ?? []);
+  snapshots.push(...accountEvidence.providerSnapshots);
+  missingSources.push(...accountEvidence.missing);
+  if (!accountEvidence.coverage.cash) {
+    snapshots.push({ provider: 'cash-account', source: 'not-connected-readonly-source', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', assets: [], errorCode: 'READONLY_CASH_SOURCE_UNAVAILABLE' });
+  }
+  if (!accountEvidence.coverage.cryptoSpot) {
+    snapshots.push({ provider: 'crypto-spot-account', source: 'private-exchange-boundary', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', assets: [], errorCode: 'PRIVATE_PROVIDER_NOT_CALLED' });
+  }
+  if (!accountEvidence.coverage.cryptoFuturesEquity) {
+    snapshots.push({ provider: 'crypto-futures-equity', source: 'private-exchange-boundary', asOf: now.toISOString(), quality: 'UNAVAILABLE', status: 'UNAVAILABLE', assets: [], errorCode: 'PRIVATE_PROVIDER_NOT_CALLED' });
+  }
 
   const aggregate = aggregatePortfolioProviderSnapshots(snapshots, fxQuotes, { now });
   const normalizedHoldings = knownHoldings.map((holding) => {
@@ -196,18 +206,32 @@ export async function buildPortfolioIntelligence(input: {
     const values = normalizedHoldings.filter((holding) => bucketFor(holding.market) === bucket).map((holding) => holding.normalizedKRW);
     bucketValues.set(bucket, values.some((value) => value == null) ? null : values.reduce<number>((sum, value) => sum + (value ?? 0), 0));
   }
-  bucketValues.set('CASH', null);
-  bucketValues.set('CRYPTO', null);
+  const accountBucketValue = (bucket: 'CASH' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES_EQUITY', proven: boolean) => {
+    if (!proven) return null;
+    const components = aggregate.assets.components.filter((component) => component.bucket === bucket);
+    if (components.some((component) => component.normalizedKRWAmount == null)) return null;
+    return components.reduce((sum, component) => sum + (component.normalizedKRWAmount ?? 0), 0);
+  };
+  bucketValues.set('CASH', accountBucketValue('CASH', accountEvidence.coverage.cash));
+  bucketValues.set('CRYPTO_SPOT', accountBucketValue('CRYPTO_SPOT', accountEvidence.coverage.cryptoSpot));
+  bucketValues.set('CRYPTO_FUTURES_EQUITY', accountBucketValue('CRYPTO_FUTURES_EQUITY', accountEvidence.coverage.cryptoFuturesEquity));
   const knownBucketTotal = [...bucketValues.values()].reduce<number>((sum, value) => sum + (value ?? 0), 0);
   const bucketPercent = (key: string) => {
     const value = bucketValues.get(key);
     return value == null || knownBucketTotal <= 0 ? null : (value / knownBucketTotal) * 100;
   };
+  const cryptoPercent = (() => {
+    const spot = bucketValues.get('CRYPTO_SPOT');
+    const futures = bucketValues.get('CRYPTO_FUTURES_EQUITY');
+    if (spot == null && futures == null) return null;
+    const value = (spot ?? 0) + (futures ?? 0);
+    return knownBucketTotal > 0 ? (value / knownBucketTotal) * 100 : null;
+  })();
   const allocationPolicy = comparePortfolioAllocation(profileOrDefault(input.profile), {
-    CASH: null,
+    CASH: bucketPercent('CASH'),
     KR_STOCKS: bucketPercent('KR_STOCKS'),
     US_STOCKS: bucketPercent('US_STOCKS'),
-    CRYPTO: null,
+    CRYPTO: cryptoPercent,
   });
 
   const topHoldings = normalizedHoldings
@@ -261,15 +285,18 @@ export async function buildPortfolioIntelligence(input: {
       quotes: fxQuotes.map((quote: FxQuote) => ({ rate: quote.krwRate, pair: `${quote.currency}/KRW`, source: quote.source, asOf: quote.asOf, quality: quote.quality })),
       status: fxMissing.length ? 'PARTIAL' : 'READY',
     },
-    cash: { status: 'UNAVAILABLE', totalKRW: null },
+    cash: {
+      status: accountEvidence.coverage.cash ? (bucketValues.get('CASH') == null ? 'PARTIAL' : 'READY') : 'UNAVAILABLE',
+      totalKRW: bucketValues.get('CASH') ?? null,
+    },
     minimumCashBuffer: { status: 'UNAVAILABLE', normalizedKRW: null },
     investableCash: { status: 'UNAVAILABLE', normalizedKRW: null },
     assets: {
       krStocks: bucketValues.get('KR_STOCKS') ?? null,
       usStocks: bucketValues.get('US_STOCKS') ?? null,
-      cryptoSpot: null,
-      cryptoFuturesEquity: null,
-      cash: null,
+      cryptoSpot: bucketValues.get('CRYPTO_SPOT') ?? null,
+      cryptoFuturesEquity: bucketValues.get('CRYPTO_FUTURES_EQUITY') ?? null,
+      cash: bucketValues.get('CASH') ?? null,
     },
     allocation: {
       status: 'PARTIAL',
@@ -277,16 +304,26 @@ export async function buildPortfolioIntelligence(input: {
       buckets: {
         KR_STOCKS: bucketPercent('KR_STOCKS'),
         US_STOCKS: bucketPercent('US_STOCKS'),
-        CRYPTO_SPOT: null,
-        CRYPTO_FUTURES_EQUITY: null,
-        CASH: null,
+        CRYPTO_SPOT: bucketPercent('CRYPTO_SPOT'),
+        CRYPTO_FUTURES_EQUITY: bucketPercent('CRYPTO_FUTURES_EQUITY'),
+        CASH: bucketPercent('CASH'),
       },
     },
     holdings: normalizedHoldings,
+    linkedAccountPositions: accountEvidence.linkedPositions,
     topHoldings,
     top5Concentration: { status: holdingAllocation.status, percent: holdingAllocation.top5ConcentrationPercent },
     correlation,
-    riskClassification: { status: 'PARTIAL', level: null, reason: 'CASH_AND_CRYPTO_EXPOSURE_UNAVAILABLE' },
+    riskClassification: {
+      status: 'PARTIAL',
+      level: null,
+      reason: [
+        ...(!accountEvidence.coverage.cash ? ['CASH_EXPOSURE_UNAVAILABLE'] : []),
+        ...(!accountEvidence.coverage.cryptoSpot ? ['CRYPTO_SPOT_EXPOSURE_UNAVAILABLE'] : []),
+        ...(!accountEvidence.coverage.cryptoFuturesEquity ? ['CRYPTO_FUTURES_EXPOSURE_UNAVAILABLE'] : []),
+        'REAL_ACCOUNT_RISK_THRESHOLDS_NOT_BOUND',
+      ].join('|'),
+    },
     allocationPolicy,
     dataQuality: {
       status: aggregate.status,

@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
+import {
+  telegramMarketRoomChatId,
+  telegramMarketRoomForLane,
+} from './telegram-market-room.service';
 import { sendTelegramAlert, type TelegramAlertInput } from './telegram-notification.service';
 import {
   deliverMemberWatchlistTelegramForSignal,
@@ -62,19 +66,96 @@ function endpoint(): string {
 }
 
 function chatIdForMarket(market: V3Event['market']): string | null {
-  if (market === 'KR_STOCK' || market === 'US_STOCK') return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
-  return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  return telegramMarketRoomChatId(
+    telegramMarketRoomForLane(market),
+    process.env,
+    { allowLegacyFallback: true },
+  );
 }
 
 function tierLabel(tier: V3Event['validationTier']): string {
-  if (tier === 'CHAMPION') return 'Champion 검증';
-  if (tier === 'FORWARD_VALIDATED') return 'Forward 검증';
-  return 'Research 후보 · 실전수익 미검증';
+  if (tier === 'CHAMPION') return '검증: Champion';
+  if (tier === 'FORWARD_VALIDATED') return '검증: Forward 완료';
+  return '검증: 연구 후보 · 실전수익 미검증';
 }
 
 function finiteText(value: unknown, digits = 2): string {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(digits) : 'N/A';
+}
+
+function marketLabel(market: V3Event['market']): string {
+  if (market === 'KR_STOCK') return '국내주식';
+  if (market === 'US_STOCK') return '미국주식';
+  if (market === 'CRYPTO_SPOT') return '코인현물';
+  return '코인선물';
+}
+
+function strategyLabel(strategy: string): string {
+  const normalized = strategy.trim().toUpperCase();
+  if (normalized === 'SCALPING') return '단타';
+  if (normalized === 'SWING') return '스윙';
+  if (normalized === 'POSITION') return '중장기';
+  return '전략';
+}
+
+function timeframeLabel(timeframe: string): string {
+  const normalized = timeframe.trim();
+  if (normalized === '60m' || normalized === '1H') return '1시간봉';
+  const minute = normalized.match(/^(\d+)m$/u);
+  if (minute) return `${minute[1]}분봉`;
+  const hour = normalized.match(/^(\d+)H$/u);
+  if (hour) return `${hour[1]}시간봉`;
+  if (normalized === '1D') return '1일봉';
+  if (normalized === '1W') return '1주봉';
+  if (normalized === '1M') return '1개월봉';
+  return '주기';
+}
+
+function directionLabel(direction: V3Event['direction']): string | null {
+  if (direction === 'BUY') return '매수';
+  if (direction === 'LONG') return 'LONG';
+  if (direction === 'SHORT') return 'SHORT';
+  return null;
+}
+
+function decisionLine(event: V3Event): string {
+  if (event.type === 'NEW_CANDIDATE') return '🟢 현재 판단: 진입 후보';
+  if (event.type === 'RESCAN_REQUESTED') return '🔄 현재 판단: 재분석 중';
+  if (event.state === 'CANDIDATE') return '🟢 현재 판단: 진입 후보';
+  if (event.state === 'BLOCKED_DATA') return '⚪ 현재 판단: 데이터 확인 중';
+  if (event.state === 'NO_TRADE' || event.state === 'ABSTAIN') return '🟡 현재 판단: 관망';
+  return '🟡 현재 판단: 재평가 중';
+}
+
+function reasonLabel(reason: string): string {
+  const normalized = reason.trim().toUpperCase();
+  if (normalized.startsWith('UTILITY_EVIDENCE_INCOMPLETE')) return '예상 수익 우위 근거 부족';
+  switch (normalized) {
+    case 'QUANT_NOT_ELIGIBLE':
+      return '정량 조건 미충족';
+    case 'PROFIT_GATE_REJECTED':
+      return '수익성 검증 기준 미충족';
+    case 'RISK_NOT_READY':
+      return '리스크 조건 미충족';
+    case 'NON_POSITIVE_NET_UTILITY':
+      return '비용 반영 기대수익이 양수가 아님';
+    case 'DATA_NOT_READY':
+      return '시장데이터 준비 미완료';
+    case 'DIRECTION_NOT_RECOMMENDABLE':
+      return '방향성 판단 근거 부족';
+    case 'AI_EVIDENCE_CONFLICT':
+      return 'AI 보조 근거가 서로 충돌함';
+    case 'DIRECTION_LOST_AUCTION':
+      return '다른 방향 후보가 우선 선정됨';
+    default:
+      return '추가 검증 조건 미충족';
+  }
+}
+
+function reasonLines(event: V3Event): string[] {
+  if (!Array.isArray(event.reasons) || !event.reasons.length) return [];
+  return [...new Set(event.reasons.map(reasonLabel))].slice(0, 4).map((reason) => `• ${reason}`);
 }
 
 function leverageText(event: V3Event): string | null {
@@ -84,7 +165,32 @@ function leverageText(event: V3Event): string | null {
   const max = leverage.recommendedRange?.max;
   const hard = leverage.hardMaximum;
   if (![min, max, hard].every((value) => Number.isFinite(Number(value)))) return null;
-  return `적정 레버리지 ${finiteText(min, 1)}x~${finiteText(max, 1)}x · hard max ${finiteText(hard, 1)}x · 참고값`;
+  return `레버리지 참고: ${finiteText(min, 1)}x~${finiteText(max, 1)}x · 상한 ${finiteText(hard, 1)}x`;
+}
+
+function kstTimestamp(now: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const parts = Object.fromEntries(formatter.formatToParts(now).map((part) => [part.type, part.value]));
+  return `${Number(parts.month)}월 ${Number(parts.day)}일 ${parts.hour}:${parts.minute}`;
+}
+
+function signalLabel(event: V3Event): string {
+  if (event.market === 'CRYPTO_FUTURES') return event.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  return '매수';
+}
+
+function alertTitle(event: V3Event): string {
+  const suffix = event.type === 'NEW_CANDIDATE'
+    ? `${signalLabel(event)} 신호`
+    : '상태 업데이트';
+  return `📊 ${event.symbol} · ${marketLabel(event.market)} · ${suffix}`;
 }
 
 function alertType(event: V3Event): TelegramAlertInput['type'] | null {
@@ -96,48 +202,53 @@ function alertType(event: V3Event): TelegramAlertInput['type'] | null {
   return null;
 }
 
-function details(event: V3Event): string {
-  if (event.type === 'NEW_CANDIDATE') {
-    return [
-      `${event.strategy}/${event.timeframe} · ${event.direction}`,
-      tierLabel(event.validationTier),
-      `Net utility ${finiteText(event.utilityR)}R`,
-      leverageText(event),
-      '신규 진입 후보 알림 · 주문 권한 없음',
-    ].filter(Boolean).join('\n');
-  }
-  if (event.type === 'STATE_CHANGED') {
-    return [
-      `${event.strategy}/${event.timeframe} · ${event.direction}`,
-      `${event.previousState ?? 'UNKNOWN'} → ${event.state ?? 'UNKNOWN'}`,
-      tierLabel(event.validationTier),
-      Array.isArray(event.reasons) && event.reasons.length ? `원인: ${event.reasons.join(', ')}` : null,
-      '신규 진입 판단 재평가 · 주문 권한 없음',
-    ].filter(Boolean).join('\n');
-  }
+function details(event: V3Event, now: Date): string {
+  const candidate = event.type === 'NEW_CANDIDATE' || event.state === 'CANDIDATE';
+  const direction = candidate ? directionLabel(event.direction) : null;
+  const reasons = reasonLines(event);
+  const action = event.type === 'RESCAN_REQUESTED'
+    ? '시장 변화 반영 후 다시 판단합니다.'
+    : event.state === 'BLOCKED_DATA'
+      ? '데이터가 준비되면 다시 분석합니다.'
+      : event.state === 'NO_TRADE' || event.state === 'ABSTAIN'
+        ? '조건 충족 시 다시 분석합니다.'
+        : candidate
+          ? '최신 시장데이터로 진입 조건을 다시 확인합니다.'
+          : '조건 변화를 확인해 다시 평가합니다.';
+
   return [
-    `${event.strategy}/${event.timeframe} · ${event.direction ?? 'N/A'}`,
+    decisionLine(event),
+    `${strategyLabel(event.strategy)} · ${timeframeLabel(event.timeframe)}`,
+    direction ? `방향: ${direction}` : null,
     tierLabel(event.validationTier),
-    'AI/시장 변화 감지 · deterministic Scanner 재평가 요청',
-    `현재 상태: ${event.state ?? 'UNKNOWN'}`,
-    '주문 권한 없음',
-  ].join('\n');
+    candidate && Number.isFinite(Number(event.utilityR)) ? `비용 반영 기대값: ${finiteText(event.utilityR)}R` : null,
+    candidate ? leverageText(event) : null,
+    reasons.length ? '이유' : null,
+    ...reasons,
+    action,
+    '🔒 이 알림은 주문을 실행하지 않습니다.',
+    `🕒 ${kstTimestamp(now)}`,
+  ].filter(Boolean).join('\n');
 }
 
-function alertFromEvent(event: V3Event, serviceSha: string): TelegramAlertInput | null {
+export function buildSignalIntelligenceTelegramInput(
+  event: V3Event,
+  serviceSha: string,
+  now = new Date(),
+): TelegramAlertInput | null {
   const type = alertType(event);
   const destinationChatId = chatIdForMarket(event.market);
   if (!type || !destinationChatId) return null;
   return {
     type,
+    title: alertTitle(event),
     symbol: event.symbol,
     market: event.market,
-    details: details(event),
+    details: details(event, now),
     destinationChatId,
     dedupeKey: `signal-intelligence-v3:${serviceSha}:${event.type}:${event.id}:${event.previousState ?? ''}:${event.state ?? ''}`,
     duplicateWindowMs: 14 * 24 * 60 * 60 * 1000,
     cooldownMs: 0,
-    timestamp: new Date().toISOString(),
   };
 }
 
@@ -231,7 +342,7 @@ export class SignalIntelligenceTelegramSubscriber {
           result.failed += 1;
         }
 
-        const alert = alertFromEvent(event, snapshot.serviceSha);
+        const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
         if (await this.store.has(alert.dedupeKey)) { result.deduped += 1; continue; }
         result.attempted += 1;

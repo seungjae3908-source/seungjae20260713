@@ -14,6 +14,7 @@ const policyTest = await read('stock-analyzer/e2e/support/production-readonly-po
 const config = await read('stock-analyzer/playwright.production.config.ts');
 const app = await read('stock-analyzer/src/App.tsx');
 const entrypoint = await read('stock-analyzer/src/main.tsx');
+const appRuntime = await read('stock-analyzer/src/app-runtime.tsx');
 const stylesheet = await read('stock-analyzer/src/index.css');
 const indexHtml = await read('stock-analyzer/index.html');
 const deployScript = await read('ops/deploy-production.sh');
@@ -72,7 +73,9 @@ for (const marker of [
   assert(spec.includes(marker), `browser evidence marker missing: ${marker}`);
 }
 assert(spec.includes("getByTestId('page-fallback')"), 'browser smoke must prove global loading terminates');
-assert(spec.includes("getByTestId('open-journal-sync')"), 'browser smoke must prove the real paper workspace becomes ready');
+assert(spec.includes("getByTestId('paper-trading-shell')"), 'browser smoke must prove the real paper workspace shell becomes ready');
+assert(spec.includes("getByTestId('trading-mode-paper')"), 'browser smoke must prove Paper mode is active');
+assert(spec.includes("getByTestId('paper-trading-dashboard')"), 'browser smoke must prove the Paper dashboard becomes ready');
 assert(spec.includes("getByTestId('paper-trading-route-skeleton')"), 'browser smoke must prove the paper skeleton terminates');
 assert(spec.includes('installProductionReadOnlyPolicy'), 'browser smoke must install fail-closed request policy');
 assert(spec.includes('isIgnorableProductionRequestFailure'), 'browser smoke must use the narrowly tested request-failure classifier');
@@ -86,7 +89,11 @@ assert(policyTest.includes('Cloudflare same-origin RUM POST navigation abort is 
 assert(app.includes('loadPaperTradingPage'), 'approved sessions must preload the paper trading route');
 assert(app.includes('PaperTradingRouteFallback'), 'paper trading must use a route-specific progressive fallback');
 assert(app.includes('paper-trading-route-skeleton'), 'paper trading fallback must have a deterministic readiness marker');
-assert(entrypoint.includes('if (!import.meta.env.PROD) return;'), 'service worker registration must stay production-only');
+assert(
+  appRuntime.includes('if (!import.meta.env.PROD) return;')
+    && appRuntime.includes("navigator.serviceWorker.register('/sw.js'"),
+  'service worker registration must stay production-only in the runtime bootstrap',
+);
 for (const source of [stylesheet, indexHtml]) {
   assert(!/fonts\.(?:googleapis|gstatic)\.com/i.test(source), 'Production source must not depend on remote Google fonts');
 }

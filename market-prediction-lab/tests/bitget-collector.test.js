@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectBitgetCandles, collectBitgetFuturesContext, normalizeBitgetCandle } from "../src/bitget-candle-collector.js";
+import { collectBitgetCandles, collectBitgetFuturesContext, collectBitgetFuturesReferenceCandles, normalizeBitgetCandle } from "../src/bitget-candle-collector.js";
 
 const INTERVAL = 15 * 60 * 1000;
 const START = Date.UTC(2026, 0, 1);
@@ -55,6 +55,60 @@ test("collector rejects stalled pagination", async () => {
   await assert.rejects(() => collectBitgetCandles({
     client, market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m",
     startTime: START - 1000 * INTERVAL, endTime: START + 500 * INTERVAL,
+  }), /pagination did not move backward/);
+});
+
+test("reference history collector uses public mark/index endpoints and preserves closed candle continuity", async () => {
+  const source = rows(450);
+  for (const priceType of ["mark", "index"]) {
+    const paths = [];
+    const client = {
+      get: async (path, params) => {
+        paths.push(path);
+        const end = Number(params.endTime);
+        const eligible = source.filter((row) => Number(row[0]) < end);
+        return { code: "00000", data: eligible.slice(-200) };
+      },
+    };
+    const result = await collectBitgetFuturesReferenceCandles({
+      client,
+      priceType,
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      startTime: START,
+      endTime: START + 450 * INTERVAL,
+    });
+    assert.equal(result.priceType, priceType);
+    assert.equal(result.market, "CRYPTO_FUTURES");
+    assert.equal(result.candles.length, 450);
+    assert.ok(paths.length >= 3);
+    assert.ok(paths.every((path) => path.endsWith(
+      priceType === "mark" ? "history-mark-candles" : "history-index-candles",
+    )));
+    for (let index = 1; index < result.candles.length; index += 1) {
+      assert.equal(result.candles[index].timestamp - result.candles[index - 1].timestamp, INTERVAL);
+    }
+  }
+});
+
+test("reference history collector rejects unsupported price type and stalled pagination", async () => {
+  const page = rows(200);
+  const client = { get: async () => ({ code: "00000", data: page }) };
+  await assert.rejects(() => collectBitgetFuturesReferenceCandles({
+    client,
+    priceType: "premium",
+    symbol: "BTCUSDT",
+    timeframe: "15m",
+    startTime: START,
+    endTime: START + 300 * INTERVAL,
+  }), /priceType/);
+  await assert.rejects(() => collectBitgetFuturesReferenceCandles({
+    client,
+    priceType: "mark",
+    symbol: "BTCUSDT",
+    timeframe: "15m",
+    startTime: START - 1000 * INTERVAL,
+    endTime: START + 500 * INTERVAL,
   }), /pagination did not move backward/);
 });
 

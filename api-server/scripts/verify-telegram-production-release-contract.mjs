@@ -9,6 +9,7 @@ const source = fs.readFileSync(workflowPath, 'utf8');
 const deploySource = fs.readFileSync(deployPath, 'utf8');
 const storageApplySource = fs.readFileSync(storageApplyPath, 'utf8');
 const appReleaseSource = fs.readFileSync(path.join(root, '.github/workflows/production-app-release-control.yml'), 'utf8');
+const personalWorkerSource = fs.readFileSync(path.join(root, 'api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts'), 'utf8');
 
 const requiredFragments = [
   'name: Telegram Production Release',
@@ -34,23 +35,67 @@ const requiredFragments = [
   'staging-postgres-auth-${targetSha}',
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
+  'Validate complete Telegram runtime and external reachability before any mutation',
+  'TELEGRAM_PREFLIGHT_MISSING_CONFIG',
+  'TELEGRAM_PREFLIGHT_EXTERNAL_FAILED',
   'Apply and verify Production personal Telegram storage atomically',
   'PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}',
   'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL',
   `printf '%s\\n' "$PROD_DATABASE_URL" | ssh`,
   'production-personal-telegram-storage-${{ steps.command.outputs.sha }}',
   'ops/verify-production-personal-telegram-storage.mjs --artifact',
-  "workflow_id: 'production-deploy.yml'",
-  'return_run_details: true',
-  'run.head_sha !== targetSha',
-  "run.path !== '.github/workflows/production-deploy.yml'",
+  'Require already-successful exact-SHA Production Deploy evidence',
+  'PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}',
+  "run.name === 'Production Deploy'",
+  'run.head_sha === targetSha',
+  "run.path === '.github/workflows/production-deploy.yml'",
   'LIVE_TELEGRAM_ACTIVATION_APPROVED',
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
+  'PERSONAL_TELEGRAM_WORKER_ENABLED',
+  'PUBLIC_BASE_URL: https://lsj119.com',
+  'TELEGRAM_REMOTE_NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection',
+  'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
+  'TELEGRAM_SIGNAL_AI_ENABLED',
+  'TELEGRAM_DAILY_BRIEF_RICH_ENABLED',
+  'TELEGRAM_SIGNAL_FOLLOWUP_ENABLED',
+  'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED',
+  'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
+  'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_CHAT_ID',
+  'TELEGRAM_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_KR_STOCK_CHAT_ID',
+  'TELEGRAM_US_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+  'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+  'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+  'TELEGRAM_AUTO_TRADING_CHAT_ID',
+  'TELEGRAM_OWNER_MEMBER_ID',
+  'TELEGRAM_BOT_USERNAME',
+  'TELEGRAM_WEBHOOK_SECRET',
+  'BACKGROUND_WORKERS_ENABLED=false',
+  'const preservedRuntimeEnv = Object.fromEntries',
+  '...process.env, ...preservedRuntimeEnv',
   '[telegram-intelligence-worker] started',
+  '[user-telegram-worker] started',
+  '[signal-intelligence-telegram] subscriber started',
+  "telegramApiRead('getMe')",
+  "telegramApiRead('getChat'",
+  "telegramApiRead('getWebhookInfo')",
+  'api.telegram.org/bot${encodeURIComponent(botToken)}/setWebhook',
+  'secret_token: webhookSecret',
+  'drop_pending_updates: false',
+  'telegramRoomDeliveryVerified: true',
   'api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage',
+  'api.telegram.org/bot${encodeURIComponent(botToken)}/editMessageText',
   'telegramValue?.ok !== true',
+  'telegramBotIdentityVerified: true',
+  'telegramRoomsVerified: true',
+  'telegramWebhookVerified: true',
+  'personalWorkerStarted: true',
+  'signalSubscriberStarted: true',
+  'telegramEditInPlaceAccepted: true',
   'orderSubmitted: false',
   'privateTradingApiCount: 0',
   'liveTradingAuthority: false',
@@ -63,10 +108,84 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+const requiredConfigBlocks = [
+  ['const requiredConfigKeys = [', 'TELEGRAM_PREFLIGHT_REQUIRED_CONFIG'],
+  ['const requiredTelegramConfigKeys = [', 'TELEGRAM_SMOKE_REQUIRED_CONFIG'],
+];
+for (const [marker, label] of requiredConfigBlocks) {
+  const start = source.indexOf(marker);
+  const end = start >= 0 ? source.indexOf('];', start) : -1;
+  if (start < 0 || end <= start) throw new Error(`${label}_BLOCK_MISSING`);
+  const block = source.slice(start, end);
+  for (const key of [
+    'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_CHAT_ID',
+    'TELEGRAM_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_CHAT_ID',
+    'TELEGRAM_BOT_USERNAME',
+    'TELEGRAM_WEBHOOK_SECRET',
+  ]) {
+    if (!block.includes(key)) throw new Error(`${label}_CORE_KEY_MISSING:${key}`);
+  }
+  for (const optionalKey of [
+    'TELEGRAM_KR_STOCK_CHAT_ID',
+    'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+    'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+    'TELEGRAM_AUTO_TRADING_CHAT_ID',
+    'TELEGRAM_OWNER_MEMBER_ID',
+  ]) {
+    if (block.includes(optionalKey)) throw new Error(`${label}_OPTIONAL_KEY_MUST_NOT_BLOCK_RELEASE:${optionalKey}`);
+  }
+}
+for (const fragment of [
+  "String(env.TELEGRAM_KR_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId",
+  "String(env.TELEGRAM_US_STOCK_CHAT_ID ?? '').trim() || stockLegacyChatId",
+  "String(env.TELEGRAM_CRYPTO_SPOT_CHAT_ID ?? '').trim() || cryptoLegacyChatId",
+  "String(env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID ?? '').trim() || cryptoLegacyChatId",
+  "if (holdingsChatId) uniqueRoomTargets.set(holdingsChatId, 'HOLDINGS_CHAT')",
+  "if (autoTradingChatId) uniqueRoomTargets.set(autoTradingChatId, 'AUTO_TRADING_CHAT')",
+]) {
+  if (!source.includes(fragment)) throw new Error(`TELEGRAM_RUNTIME_FALLBACK_CONTRACT_MISSING:${fragment}`);
+}
+
+if (!personalWorkerSource.includes("console.log('[user-telegram-worker] started')")) {
+  throw new Error('Personal Telegram delivery worker must emit a sanitized startup marker for Production proof');
+}
+
+const runtimePreflightIndex = source.indexOf('Validate complete Telegram runtime and external reachability before any mutation');
 const storageMigrationIndex = source.indexOf('Apply and verify Production personal Telegram storage atomically');
-const productionDispatchIndex = source.indexOf('Dispatch existing Production Deploy and require exact-run success');
-if (storageMigrationIndex < 0 || productionDispatchIndex <= storageMigrationIndex) {
-  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment');
+if (runtimePreflightIndex < 0 || storageMigrationIndex <= runtimePreflightIndex) {
+  throw new Error('Complete Telegram runtime/external read-only preflight must run before any Production storage mutation');
+}
+const remoteNodeOptionsValue = '--dns-result-order=ipv4first --no-network-family-autoselection';
+const remoteNodeOptionsDeclaration = `TELEGRAM_REMOTE_NODE_OPTIONS: ${remoteNodeOptionsValue}`;
+if (!source.includes(remoteNodeOptionsDeclaration)) {
+  throw new Error('Telegram Production must declare the tested IPv4-first remote Node network policy');
+}
+const runtimePreflightBlock = source.slice(runtimePreflightIndex, storageMigrationIndex);
+if (!runtimePreflightBlock.includes('NODE_OPTIONS=%q')
+  || !runtimePreflightBlock.includes('"$TELEGRAM_REMOTE_NODE_OPTIONS"')) {
+  throw new Error('Telegram runtime preflight must inject the IPv4-first Node policy into the remote SSH process');
+}
+const telegramSmokeIndex = source.indexOf('Activate approved Telegram runtime, verify exact identity, and send one sanitized proof');
+const completionEvidenceIndex = source.indexOf('Record sanitized Production completion evidence', telegramSmokeIndex);
+if (telegramSmokeIndex < 0 || completionEvidenceIndex <= telegramSmokeIndex) {
+  throw new Error('Telegram Production smoke verification block was not found');
+}
+const telegramSmokeBlock = source.slice(telegramSmokeIndex, completionEvidenceIndex);
+if (!telegramSmokeBlock.includes('NODE_OPTIONS=%q')
+  || !telegramSmokeBlock.includes('"$TELEGRAM_REMOTE_NODE_OPTIONS"')) {
+  throw new Error('Telegram Production smoke verification must inject the IPv4-first Node policy into the remote SSH process');
+}
+const remoteNodeOptionsInjectionCount = (source.match(/NODE_OPTIONS=%q/g) ?? []).length;
+if (remoteNodeOptionsInjectionCount !== 2) {
+  throw new Error(`Telegram remote Node network policy must be injected exactly twice; found ${remoteNodeOptionsInjectionCount}`);
+}
+const productionEvidenceIndex = source.indexOf('Require already-successful exact-SHA Production Deploy evidence');
+if (storageMigrationIndex < 0 || productionEvidenceIndex <= storageMigrationIndex) {
+  console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment evidence validation');
   process.exit(1);
 }
 const storageUploadIndex = source.indexOf('Upload sanitized Production personal Telegram storage evidence', storageMigrationIndex);
@@ -138,6 +257,18 @@ if (!canaryBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=false')
   console.error('[telegram-production-release-contract] canary must remain Telegram fail-closed');
   process.exit(1);
 }
+if (!canaryBlock.includes('NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"')) {
+  throw new Error('Production canary must use the IPv4-first Node network policy');
+}
+const restartStart = deploySource.indexOf('restart_application_preserving_telegram() {');
+const restartEnd = deploySource.indexOf('application_runtime_ready() {', restartStart);
+if (restartStart < 0 || restartEnd <= restartStart) {
+  throw new Error('Production restart block was not found');
+}
+const restartBlock = deploySource.slice(restartStart, restartEnd);
+if (!restartBlock.includes('NODE_OPTIONS="--dns-result-order=ipv4first --no-network-family-autoselection"')) {
+  throw new Error('Production PM2 restart must persist the IPv4-first Node network policy');
+}
 
 const sameTargetStart = deploySource.indexOf('if [[ "$CURRENT_SHA" == "$TARGET_SHA" ]]');
 const sameTargetEnd = deploySource.indexOf('mkdir -p "$RELEASE_DIR"', sameTargetStart);
@@ -172,7 +303,7 @@ if (!appReleaseSource.includes('PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEG
   throw new Error('Generic Production app approval must explicitly exclude Telegram activation authority');
 }
 const activationIndex = source.indexOf('const activationChanged = activateApprovedTelegram(');
-if (activationIndex <= productionDispatchIndex
+if (activationIndex <= productionEvidenceIndex
   || activationIndex <= source.indexOf('if (markerSha !== targetSha)')
   || !source.includes("runtime?.DEPLOY_SHA !== approvedSha")
   || !source.includes("environment: production")
@@ -180,13 +311,20 @@ if (activationIndex <= productionDispatchIndex
   throw new Error('Telegram activation must remain behind the existing owner/protected/exact-runtime gates');
 }
 
+if (!source.includes("const telegramFeatureFlags = [")
+  || !source.includes("const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));")
+  || !source.includes("if (approved && worker && allTelegramFeaturesEnabled) return false;")
+  || source.includes("if (approved && worker) return false;")) {
+  throw new Error('Telegram activation must not treat a partial feature-flag state as already complete');
+}
+
 const forbiddenPatterns = [
   [/pull_request_target\s*:/, 'pull_request_target is forbidden'],
   [/repository_dispatch\s*:/, 'repository_dispatch is forbidden'],
   [/cancel-in-progress:\s*true/, 'release cancellation is forbidden'],
   [/echo[^\n]*(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)/i, 'Telegram secrets must never be echoed'],
-  [/console\.(log|error)\([^\n]*(botToken|chatId)/, 'Telegram secrets must never be logged'],
-  [/core\.(info|notice|warning|error)\([^\n]*(botToken|chatId)/, 'Telegram secrets must never enter GitHub logs'],
+  [/console\.(log|error)\([^\n]*(botToken|chatId|webhookSecret)/, 'Telegram secrets must never be logged'],
+  [/core\.(info|notice|warning|error)\([^\n]*(botToken|chatId|webhookSecret)/, 'Telegram secrets must never enter GitHub logs'],
   [/pm2\s+(delete|stop)\s+stock-app/, 'Production process destructive control is forbidden'],
   [/\b(order|cancel|amend|withdraw|transfer)\s*\(/i, 'Trading mutations are forbidden'],
 ];
@@ -205,7 +343,21 @@ if (exactCommandMatches.length !== 1) {
   process.exit(1);
 }
 
-const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PROD_DATABASE_URL'];
+const secretNames = [
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_CHAT_ID',
+  'TELEGRAM_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_CHAT_ID',
+  'TELEGRAM_KR_STOCK_CHAT_ID',
+  'TELEGRAM_US_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+  'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+  'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+  'TELEGRAM_AUTO_TRADING_CHAT_ID',
+  'TELEGRAM_OWNER_MEMBER_ID',
+  'TELEGRAM_WEBHOOK_SECRET',
+  'PROD_DATABASE_URL',
+];
 for (const name of secretNames) {
   const outputPattern = new RegExp(`(?:GITHUB_OUTPUT|GITHUB_STEP_SUMMARY)[^\\n]*${name}`, 'i');
   if (outputPattern.test(source) || outputPattern.test(deploySource)) {
@@ -215,4 +367,4 @@ for (const name of secretNames) {
 }
 
 await import('./verify-production-telegram-preservation.mjs');
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, complete storage migration packaging, stdin-only Production DB handoff, generic deployment non-elevation, canary OFF, Telegram-only activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, full Telegram config preflight, PM2-owned env preservation, personal/intelligence/signal worker startup, bot identity, room reachability, webhook registration, sanitized Telegram proof, and zero-trading-authority contracts verified');

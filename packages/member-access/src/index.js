@@ -14,6 +14,7 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessRiskPreview',
   'canAccessBacktests',
   'canAccessPaperTrading',
+  'canAccessAutoTrading',
   'canPlaceOrders',
   'canConnectPersonalTelegram',
   'canAccessJournalSync',
@@ -27,6 +28,8 @@ const ASSOCIATE = Object.freeze({
   ...NONE,
   canAccessBasicInfo: true,
   canAccessSpot: true,
+  canAccessPaperTrading: true,
+  canAccessAutoTrading: true,
   canConnectPersonalTelegram: true,
 });
 const REGULAR = Object.freeze({

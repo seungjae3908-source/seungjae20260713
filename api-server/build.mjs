@@ -55,3 +55,153 @@ const require = __createRequire(import.meta.url);
 });
 
 console.log('[api-server] built dist/index.mjs');
+
+fs.mkdirSync(path.resolve(outDir, 'tools'), { recursive: true });
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/publish-research-canonical-bundle.ts')],
+	outfile: path.resolve(outDir, 'tools/publish-research-canonical-bundle.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built dist/tools/publish-research-canonical-bundle.mjs');
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/assemble-research-canonical-bundle.ts')],
+	outfile: path.resolve(outDir, 'tools/assemble-research-canonical-bundle.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built dist/tools/assemble-research-canonical-bundle.mjs');
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/register-research-canonical-component.ts')],
+	outfile: path.resolve(outDir, 'tools/register-research-canonical-component.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/check-research-canonical-component-readiness.ts')],
+	outfile: path.resolve(outDir, 'tools/check-research-canonical-component-readiness.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built canonical research component registry tools');
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/check-paper-canonical-runtime-readiness.ts')],
+	outfile: path.resolve(outDir, 'tools/check-paper-canonical-runtime-readiness.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built Paper Canonical runtime readiness tool');
+
+await build({
+	entryPoints: [path.resolve(rootDir, 'scripts/check-paper-canonical-runtime-readiness-remote.ts')],
+	outfile: path.resolve(outDir, 'tools/check-paper-canonical-runtime-readiness-remote.mjs'),
+	bundle: true,
+	platform: 'node',
+	format: 'esm',
+	target: 'node20',
+	sourcemap: true,
+	minify: false,
+	packages: 'external',
+	external,
+	banner: {
+		js: `
+import { createRequire as __createRequire } from 'node:module';
+const require = __createRequire(import.meta.url);
+`,
+	},
+	define: {
+		'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'development'),
+	},
+	logLevel: 'info',
+});
+
+console.log('[api-server] built Paper Canonical remote readiness tool');

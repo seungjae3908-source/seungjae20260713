@@ -422,7 +422,7 @@ function validateState(state) {
 }
 function validateOrderRequest(request) {
   const symbol = String(request.symbol ?? "").trim().toUpperCase();
-  if (!/^[A-Z0-9]{2,20}$/.test(symbol)) {
+  if (!(request.canonicalIdentity ? /^[A-Z0-9][A-Z0-9.:-]{1,39}$/ : /^[A-Z0-9]{2,20}$/).test(symbol)) {
     throw new PaperTradingError("INVALID_SYMBOL", "종목 형식이 올바르지 않습니다.");
   }
   if (!["long", "short"].includes(request.side)) {
@@ -4452,7 +4452,10 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
         }
         throw error instanceof CryptoScannerProviderError ? error : new CryptoScannerProviderError(error instanceof Error ? error.message : "CRYPTO_UNIVERSE_UNAVAILABLE");
       }
-      const batchSize = Math.max(5, Math.min(MAX_BATCH_SIZE, Math.floor(request.batchSize) || 24));
+      const requestedBatchSize = Math.floor(request.batchSize) || 24;
+      const forwardPublicSpot = request.market === "spot" && request.memberId === "forward-observer-public-only";
+      const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
+      const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
       const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
       const batch = universe.rows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
@@ -6038,13 +6041,14 @@ function prepareForwardRecommendationObservation(input) {
 }
 
 // src/services/forward-recommendation-observer-runtime.service.ts
-var FORWARD_OBSERVER_TIMEFRAME = "60m";
+var FORWARD_OBSERVER_DEFAULT_TIMEFRAME = "60m";
+var FORWARD_OBSERVER_SPOT_TIMEFRAME = "4H";
 var FORWARD_OBSERVER_DATA_MAX_AGE_MS = 90 * 60 * 1e3;
 var FORWARD_OBSERVER_LANES = Object.freeze([
-  { id: "KR_SWING_60M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: "US_SWING_60M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: "SPOT_SWING_60M", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME },
-  { id: "FUTURES_SWING_60M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: FORWARD_OBSERVER_TIMEFRAME }
+  { id: "KR_SWING_60M", market: "KR_STOCK", scannerMarket: "KR", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: "US_SWING_60M", market: "US_STOCK", scannerMarket: "US", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME },
+  { id: "SPOT_SWING_4H", market: "CRYPTO_SPOT", scannerMarket: "spot", batchSize: 20, timeframe: FORWARD_OBSERVER_SPOT_TIMEFRAME },
+  { id: "FUTURES_SWING_60M", market: "CRYPTO_FUTURES", scannerMarket: "futures", batchSize: 20, timeframe: FORWARD_OBSERVER_DEFAULT_TIMEFRAME }
 ]);
 var SAFETY = Object.freeze({
   publicDataOnly: true,
@@ -8461,8 +8465,8 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
   return async function produceAuthoritativePaperGenericRiskPolicy(request) {
     const requestBlockers = validateRequest(request);
     if (requestBlockers.length > 0) return blocked5(request ?? {}, requestBlockers);
-    const nowMs = now();
-    if (!positive10(nowMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
+    const sourceReadStartedAtMs = now();
+    if (!positive10(sourceReadStartedAtMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     let rawRecord;
     try {
       rawRecord = await input.readCanonicalRecord(Object.freeze({
@@ -8473,6 +8477,10 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
       }));
     } catch {
       return blocked5(request, ["RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR"]);
+    }
+    const nowMs = now();
+    if (!positive10(nowMs) || nowMs < sourceReadStartedAtMs) {
+      return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     }
     const checked = validateRecordEnvelope(rawRecord, request, nowMs);
     if (!checked.record) return blocked5(request, checked.blockers);

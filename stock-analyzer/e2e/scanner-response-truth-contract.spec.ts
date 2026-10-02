@@ -2,15 +2,15 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const mainPath = fileURLToPath(new URL('../src/main.tsx', import.meta.url));
+const runtimePath = fileURLToPath(new URL('../src/app-runtime.tsx', import.meta.url));
 const authFetchPath = fileURLToPath(new URL('../src/lib/auth-fetch.ts', import.meta.url));
 const bootstrapPath = fileURLToPath(new URL('../src/lib/scanner-response-guard-bootstrap.ts', import.meta.url));
 const guardPath = fileURLToPath(new URL('../src/lib/scanner-response-guard.ts', import.meta.url));
 const scannerPath = fileURLToPath(new URL('../src/pages/scanner.tsx', import.meta.url));
 
 test('scanner success truth keeps the api.scan boundary while deferring the heavy validator from app cold bootstrap', async () => {
-  const [main, authFetch, bootstrap, guard, scanner] = await Promise.all([
-    readFile(mainPath, 'utf8'),
+  const [runtime, authFetch, bootstrap, guard, scanner] = await Promise.all([
+    readFile(runtimePath, 'utf8'),
     readFile(authFetchPath, 'utf8'),
     readFile(bootstrapPath, 'utf8'),
     readFile(guardPath, 'utf8'),
@@ -25,9 +25,9 @@ test('scanner success truth keeps the api.scan boundary while deferring the heav
   expect(guard).toContain('ticker: card.symbol');
   expect(guard).toContain('isFresh(value.generatedAt');
 
-  expect(main).not.toContain("from '@/lib/scanner-response-guard'");
-  expect(main).toContain("from '@/lib/scanner-response-guard-bootstrap'");
-  expect(main).toContain('installDeferredScannerResponseGuard();');
+  expect(runtime).not.toContain("from '@/lib/scanner-response-guard'");
+  expect(runtime).toContain("from '@/lib/scanner-response-guard-bootstrap'");
+  expect(runtime).toContain('installDeferredScannerResponseGuard();');
   expect(authFetch).not.toContain("path === '/api/market/scan' && method === 'GET'");
   expect(bootstrap).toContain("import { api } from './api'");
   expect(bootstrap).not.toContain("import { validateScannerResponse } from './scanner-response-guard'");
@@ -41,8 +41,8 @@ test('scanner success truth keeps the api.scan boundary while deferring the heav
   expect(scanner).toContain('api.scan(selected, market');
   expect(scanner).toContain('조건에 맞는 종목이 없습니다. (조회는 정상 — 오류 아님)');
 
-  const install = main.indexOf('installDeferredScannerResponseGuard();');
-  const render = main.indexOf("createRoot(document.getElementById('root')!)");
+  const install = runtime.indexOf('installDeferredScannerResponseGuard();');
+  const render = runtime.indexOf("createRoot(document.getElementById('root')!)");
   expect(install).toBeGreaterThanOrEqual(0);
   expect(render).toBeGreaterThan(install);
 });

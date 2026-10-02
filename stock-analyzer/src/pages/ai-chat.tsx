@@ -3,7 +3,8 @@ import { useLocation } from 'wouter';
 import { ArrowRight, Bot, Loader2, Send, Square, UserRound, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
-import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
+import { acceptAiChatSelectionReply, aiChatSelectionContext, aiChatSelectionKey } from '@/lib/ai-chat-selection';
 import { cn } from '@/lib/utils';
 
 type AiChatDataDisclosure = {
@@ -21,6 +22,10 @@ type ChatMessage = {
   at: string;
   kind?: 'answer' | 'refusal';
   data?: AiChatDataDisclosure;
+  model?: string | null;
+  provider?: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  fallbackUsed?: boolean;
+  providerLatencyMs?: number | null;
 };
 
 type AiChatPayload = {
@@ -29,6 +34,11 @@ type AiChatPayload = {
   message?: string;
   error?: string;
   data?: AiChatDataDisclosure;
+  selection?: unknown;
+  model?: string | null;
+  provider?: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  fallbackUsed?: boolean;
+  providerLatencyMs?: number | null;
 };
 
 type HubTab = 'AI' | 'Portfolio';
@@ -90,6 +100,19 @@ function formatBasisTime(value: string | null): string {
   });
 }
 
+function providerLabel(provider: ChatMessage['provider']): string {
+  if (provider === 'google-gemini') return 'Gemini';
+  if (provider === 'groq') return 'Groq';
+  if (provider === 'openai-compatible') return 'OpenAI 호환';
+  return 'AI 공급자 미사용';
+}
+
+function latencyLabel(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return '';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(1)}초`;
+}
+
 function errorMessage(payload: AiChatPayload | null): string {
   if (payload?.error === 'AI_CHAT_RATE_LIMITED') return '무료 AI 사용 한도 또는 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.';
   if (payload?.error === 'AI_CHAT_TIMEOUT') return 'AI 응답 시간이 초과되었습니다. 질문을 짧게 줄여 다시 시도해 주세요.';
@@ -104,6 +127,10 @@ function errorMessage(payload: AiChatPayload | null): string {
 
 export default function AiChatPage() {
   const { selection } = useAnalysisSelection();
+  return <AiChatConversation key={aiChatSelectionKey(selection)} selection={selection} />;
+}
+
+function AiChatConversation({ selection }: { selection: AnalysisSelection | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>([{
     id: 'welcome',
     role: 'assistant',
@@ -131,22 +158,31 @@ export default function AiChatPage() {
     setBusy(true);
     const controller = new AbortController();
     controllerRef.current = controller;
+    const context = aiChatSelectionContext(selection);
     try {
       const response = await authorizedFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
-        body: JSON.stringify({ message, context: selection ? { market: selection.market, symbol: selection.symbol, displayName: selection.displayName } : undefined }),
+        body: JSON.stringify({ message, context }),
       });
       const payload = await response.json().catch(() => null) as AiChatPayload | null;
       const answer = payload?.answer;
       if (!response.ok || !answer) throw new Error(errorMessage(payload));
+      if (controller.signal.aborted) return;
+      if (!acceptAiChatSelectionReply(payload.selection, context, controller.signal)) {
+        throw new Error('응답의 종목·시장·시간봉·방향이 현재 선택과 일치하지 않아 차단했습니다.');
+      }
       setMessages((current) => [...current, {
         id: `assistant:${Date.now()}`,
         role: 'assistant',
         content: answer,
         kind: payload.kind,
         data: payload.data,
+        model: payload.model,
+        provider: payload.provider,
+        fallbackUsed: payload.fallbackUsed,
+        providerLatencyMs: payload.providerLatencyMs,
         at: new Date().toISOString(),
       }]);
     } catch (cause) {
@@ -172,7 +208,7 @@ export default function AiChatPage() {
         <p className="mx-auto mt-1 max-w-2xl break-keep text-sm font-normal text-muted-foreground">공개 금융정보와 내 포트폴리오를 읽기 전용으로 확인합니다.</p>
         {selection && (
           <p className="mt-2 truncate text-xs font-medium text-muted-foreground">
-            선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}
+            선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol} · {selection.timeframe} · {selection.action ?? 'MISSING'}
           </p>
         )}
       </header>
@@ -210,6 +246,14 @@ export default function AiChatPage() {
                         : 'bg-card',
                   )}>
                     <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                    {message.role === 'assistant' && message.provider ? (
+                      <div data-testid="ai-chat-provider-meta" className="mt-2 flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                        <span className="rounded-full border border-card-border bg-background/70 px-2 py-1">{providerLabel(message.provider)}</span>
+                        {message.fallbackUsed ? <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-1 text-warning">Fallback 사용</span> : <span className="rounded-full border border-positive/30 bg-positive/10 px-2 py-1 text-positive">Primary 응답</span>}
+                        {latencyLabel(message.providerLatencyMs) ? <span className="rounded-full border border-card-border bg-background/70 px-2 py-1">{latencyLabel(message.providerLatencyMs)}</span> : null}
+                        {message.model ? <span className="max-w-full truncate rounded-full border border-card-border bg-background/70 px-2 py-1">{message.model}</span> : null}
+                      </div>
+                    ) : null}
                     {message.role === 'assistant' && message.data && message.data.status !== 'not_requested' && (
                       <details className="mt-2 rounded-xl border border-card-border/70 bg-background/60">
                         <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-foreground/80 [&::-webkit-details-marker]:hidden">

@@ -1,0 +1,316 @@
+name: Production Trade Automation Storage Apply
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-trade-automation-storage-apply.yml'
+      - 'ops/apply-production-trade-automation-storage.mjs'
+      - 'api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql'
+      - 'api-server/supabase/migrations/2026080301_trade_automation_integration.sql'
+      - 'api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql'
+      - 'api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql'
+      - 'api-server/supabase/migrations/2026080504_trade_pre_submission_fence.sql'
+      - 'api-server/supabase/migrations/2026080505_trade_split_child_orders.sql'
+      - 'api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql'
+      - 'api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql'
+      - 'api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: production-trade-automation-storage-apply
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Production trade automation storage contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate exact-head storage tooling
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check ops/apply-production-trade-automation-storage.mjs
+          grep -Fq "TRADE_STORAGE_PREEXISTING_OR_PARTIAL" ops/apply-production-trade-automation-storage.mjs
+          grep -Fq "'trade_tables_verified',8" ops/apply-production-trade-automation-storage.mjs
+          grep -Fq "'trade_functions_verified',10" ops/apply-production-trade-automation-storage.mjs
+          grep -Fq "'trade_user_rows_created',0" ops/apply-production-trade-automation-storage.mjs
+          grep -Fq "'private_trading_api_count',0" ops/apply-production-trade-automation-storage.mjs
+          grep -Fq 'process.env.PROD_DATABASE_URL' ops/apply-production-trade-automation-storage.mjs
+          grep -Fq 'delete baseEnv.PROD_DATABASE_URL' ops/apply-production-trade-automation-storage.mjs
+          grep -Fq 'PROD_DATABASE_URL:' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq 'secrets.PROD_DATABASE_URL' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq 'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq 'printf '\''%s\n'\'' "$PROD_DATABASE_URL" | ssh' .github/workflows/production-trade-automation-storage-apply.yml
+          ! grep -Eq 'PROD_DATABASE_URL[=]%q' .github/workflows/production-trade-automation-storage-apply.yml
+          grep -Fq "to_regprocedure('public.current_membership_level()') is null" api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
+          grep -Fq "coalesce(p.status::text, 'pending') <> 'approved'" api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
+          ! grep -Eiq '\b(update|delete|insert)[[:space:]]+public[.]profiles\b' api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
+          ! grep -Eiq '\b(create|drop)[[:space:]]+policy\b' api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql
+
+  apply:
+    name: Owner-approved atomic Production trade automation storage apply
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/apply-production-trade-automation-storage ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY || '').trim();
+          const match = /^\/apply-production-trade-automation-storage ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40})$/.exec(body);
+          if (!match) throw new Error('TRADE_STORAGE_OWNER_COMMAND_INVALID');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'active_sha=' + match[1].toLowerCase() + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'target_sha=' + match[2].toLowerCase() + '\n');
+          NODE
+
+      - name: Require exact current main SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          test "$(git rev-parse origin/main^{commit})" = "$TARGET_SHA"
+
+      - name: Require exact-main Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: process.env.TARGET_SHA, per_page: 100,
+            });
+            statuses.sort((a, b) => Number(b.id) - Number(a.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) { core.setFailed('TRADE_STORAGE_REQUIRED_CI_NOT_6_OF_6:' + missing.join(',')); return; }
+            const runIds = new Set(required.map((name) => {
+              const match = String(latest.get(name)?.target_url || '').match(/\/actions\/runs\/(\d+)/);
+              return match ? Number(match[1]) : null;
+            }));
+            if (runIds.size !== 1 || runIds.has(null)) core.setFailed('TRADE_STORAGE_REQUIRED_CI_NOT_COHERENT');
+
+      - name: Require successful exact-SHA PostgreSQL Auth artifact
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const artifactName = 'staging-postgres-auth-' + target;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: target, branch: 'main',
+              event: 'issue_comment', status: 'completed', per_page: 100,
+            });
+            for (const run of runs.filter((item) => item.name === 'Staging PostgreSQL Auth Gate'
+              && item.path === '.github/workflows/staging-postgres-auth-gate.yml'
+              && item.head_sha === target && item.conclusion === 'success')) {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
+              });
+              if ((response.data.artifacts || []).some((item) => item.name === artifactName
+                && item.expired !== true && item.workflow_run?.head_sha === target)) return;
+            }
+            core.setFailed('TRADE_STORAGE_POSTGRES_AUTH_EVIDENCE_MISSING:' + target);
+
+      - name: Require successful exact-SHA release-ready Staging verdict
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const artifactName = 'staging-verdict-' + target;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, name: artifactName, per_page: 100,
+            });
+            for (const artifact of artifacts.filter((item) => !item.expired && item.workflow_run?.head_sha === target)) {
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id,
+              })).data;
+              if (run.event === 'workflow_dispatch' && run.head_branch === 'main' && run.head_sha === target
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed' && run.conclusion === 'success') return;
+            }
+            core.setFailed('TRADE_STORAGE_STAGING_RELEASE_READY_EVIDENCE_MISSING:' + target);
+
+      - name: Require deployed Production SHA provenance
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch', per_page: 100,
+            });
+            const latest = runs.filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== process.env.ACTIVE_SHA) {
+              core.setFailed('TRADE_STORAGE_ACTIVE_PRODUCTION_SHA_MISMATCH');
+            }
+
+      - name: Configure canonical Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Apply and verify Production trade automation storage atomically
+        id: storage
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'Protected Production database credential is missing or invalid.' >&2
+            exit 1
+          }
+          artifact="$RUNNER_TEMP/production-trade-automation-storage.json"
+          archive="$RUNNER_TEMP/production-trade-automation-storage-tooling.tar.gz"
+          stderr_file="$RUNNER_TEMP/production-trade-automation-storage.stderr"
+          remote_dir="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/trade-automation-storage.XXXXXX')"
+          [[ "$remote_dir" =~ ^/tmp/trade-automation-storage\.[A-Za-z0-9]+$ ]]
+          quoted_remote_dir="$(printf '%q' "$remote_dir")"
+          cleanup_remote() {
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" \
+              "case $quoted_remote_dir in /tmp/trade-automation-storage.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+          tar -czf "$archive" \
+            ops/apply-production-trade-automation-storage.mjs \
+            api-server/supabase/migrations/2026092801_trade_membership_compatibility.sql \
+            api-server/supabase/migrations/2026080301_trade_automation_integration.sql \
+            api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql \
+            api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql \
+            api-server/supabase/migrations/2026080504_trade_pre_submission_fence.sql \
+            api-server/supabase/migrations/2026080505_trade_split_child_orders.sql \
+            api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql \
+            api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql \
+            api-server/supabase/migrations/2026092502_trade_live_execution_toss_provider.sql
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+          remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-trade-automation-storage.mjs' "$remote_dir" "$ACTIVE_SHA" "$TARGET_SHA")"
+          if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$remote_command" > "$artifact" 2> "$stderr_file"; then
+            echo 'Production trade storage apply failed safely; remote diagnostics are intentionally not printed.' >&2
+            exit 1
+          fi
+          node - "$artifact" "$TARGET_SHA" "$ACTIVE_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, target, active] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const valid = value?.schemaVersion === 'production-trade-automation-storage-apply-v1'
+            && value?.status === 'passed' && value?.approved_target_sha === target
+            && value?.expected_active_sha === active && value?.atomic_transaction === true
+            && value?.trade_tables_verified === 8 && value?.trade_functions_verified === 10
+            && value?.trade_user_rows_created === 0 && value?.private_trading_api_count === 0
+            && value?.live_trading === false && value?.auto_trading === false
+            && value?.real_order_enabled === false && value?.private_trading_api_allowed === false
+            && value?.execution_authority === 'NONE';
+          if (!valid) process.exit(1);
+          NODE
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized trade storage evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-trade-automation-storage-${{ steps.command.outputs.target_sha }}
+          path: ${{ steps.storage.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report sanitized trade storage result
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23,
+              body: [
+                'Production trade automation storage applied and verified atomically.',
+                '',
+                '- Active Production SHA before apply: `' + process.env.ACTIVE_SHA + '`',
+                '- Approved exact current main SHA: `' + process.env.TARGET_SHA + '`',
+                '- Trade tables: `8/8`',
+                '- Trade safety/atomicity functions: `10/10`',
+                '- Trade user rows created: `0`',
+                '- Orders/cancels/amends/transfers/withdrawals: `0`',
+                '- Private trading API count: `0`',
+                '- LIVE/AUTO/REAL/private authority: `false`',
+                '- executionAuthority: `NONE`',
+                '- Storage Apply Run ID: `' + context.runId + '`',
+                '- Source command comment ID: `' + process.env.SOURCE_COMMENT_ID + '`',
+              ].join('\n'),
+            });

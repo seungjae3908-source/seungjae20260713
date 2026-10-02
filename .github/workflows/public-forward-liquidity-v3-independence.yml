@@ -66,6 +66,8 @@ jobs:
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.name == 'Public Forward Liquidity V3 Canonical Ingest' &&
+       (github.event.workflow_run.event == 'workflow_run' ||
+        github.event.workflow_run.event == 'issue_comment') &&
        github.event.workflow_run.status == 'completed' &&
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
@@ -135,12 +137,46 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/jobs?per_page=100" > "$RUNNER_TEMP/source-jobs.json"
           node - <<'NODE'
           const fs = require('node:fs');
           const source = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
           const data = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-artifacts.json', 'utf8'));
+          const jobsData = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-jobs.json', 'utf8'));
           const pattern = new RegExp(`^public-forward-liquidity-v3-authoritative-ingest-slot-([0-9]+)-${source.id}-${source.run_attempt}$`);
           const matches = (data.artifacts ?? []).filter((artifact) => artifact.expired !== true && pattern.test(artifact.name));
+          if (matches.length === 0) {
+            const ingestJobs = (jobsData.jobs ?? []).filter((job) => job.name === 'produce-cumulative-v3-ingest');
+            const requiredSkippedStepNames = Object.freeze([
+              'Discover successful genuine scheduled V3 runs through selected source time',
+              'Download immutable V3 raw-slot and finalized-receipt artifacts',
+              'Build ordered credited V3 source manifest',
+              'Rebuild cumulative canonical ingest state from genuine V3 source artifacts',
+              'Build portable cumulative V3 ingest evidence inventory',
+              'Upload immutable cumulative V3 receipt-bound ingest evidence',
+            ]);
+            if (ingestJobs.length !== 1) {
+              throw new Error(`UPSTREAM_V3_INGEST_ZERO_ARTIFACT_JOB_CARDINALITY_INVALID:${ingestJobs.length}`);
+            }
+            const ingestJob = ingestJobs[0];
+            const stepConclusions = new Map((ingestJob.steps ?? []).map((step) => [step.name, step.conclusion]));
+            const provenNoop = ingestJob.status === 'completed'
+              && ingestJob.conclusion === 'success'
+              && stepConclusions.get('Resolve exact triggering or owner-selected source run') === 'success'
+              && requiredSkippedStepNames.every((name) => stepConclusions.get(name) === 'skipped');
+            if (!provenNoop) {
+              throw new Error('UPSTREAM_V3_INGEST_ZERO_ARTIFACT_NOT_PROVEN_NOOP');
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'source_artifact_ready=false\n');
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+              'UPSTREAM_V3_INGEST_ZERO_CREDIT_NOOP',
+              `source_run_id=${source.id}`,
+              'economic_credit=0',
+              'reason=UPSTREAM_CANONICAL_INGEST_PROVED_NO_CAPTURE_NOOP',
+              '',
+            ].join('\n'));
+            process.exit(0);
+          }
           if (matches.length !== 1) throw new Error(`UPSTREAM_V3_INGEST_ARTIFACT_CARDINALITY_INVALID:${matches.length}`);
           const artifact = matches[0];
           const slot = Number(pattern.exec(artifact.name)[1]);
@@ -150,6 +186,7 @@ jobs:
             throw new Error('UPSTREAM_V3_INGEST_ARTIFACT_METADATA_INVALID');
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            'source_artifact_ready=true',
             `artifact_id=${artifact.id}`,
             `artifact_name=${artifact.name}`,
             `artifact_digest=${String(artifact.digest).replace(/^sha256:/u, '')}`,
@@ -158,7 +195,14 @@ jobs:
           ].join('\n'));
           NODE
 
+      - name: Record proven zero-credit upstream ingest no-op
+        if: steps.artifact.outputs.source_artifact_ready == 'false'
+        run: |
+          set -euo pipefail
+          echo 'V3 independence consume clean no-op: upstream canonical ingest proved no capture artifact; economic credit remains 0.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Download exact V3 cumulative ingest evidence
+        if: steps.artifact.outputs.source_artifact_ready == 'true'
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
           ARTIFACT_NAME: ${{ steps.artifact.outputs.artifact_name }}
@@ -170,6 +214,7 @@ jobs:
           test -f "$STATE_ROOT/ingest-evidence-report.json"
 
       - name: Validate V3 inventory provenance and build source manifest
+        if: steps.artifact.outputs.source_artifact_ready == 'true'
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
@@ -255,6 +300,7 @@ jobs:
           NODE
 
       - name: Execute receipt-bound effective-independence audit
+        if: steps.artifact.outputs.source_artifact_ready == 'true'
         env:
           PRODUCER_SHA: ${{ github.sha }}
         run: |
@@ -265,6 +311,7 @@ jobs:
             --output "$STATE_ROOT/independence-report.json"
 
       - name: Propagate immutable V3 frozen slot split to effective-independent observations
+        if: steps.artifact.outputs.source_artifact_ready == 'true'
         env:
           PRODUCER_SHA: ${{ github.sha }}
         run: |
@@ -289,6 +336,7 @@ jobs:
           NODE
 
       - name: Assert V3 independence truth boundary and write immutable summary
+        if: steps.artifact.outputs.source_artifact_ready == 'true'
         env:
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
@@ -406,6 +454,7 @@ jobs:
           NODE
 
       - name: Upload immutable V3 independence evidence
+        if: steps.artifact.outputs.source_artifact_ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: public-forward-liquidity-v3-authoritative-independence-slot-${{ steps.artifact.outputs.target_slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
