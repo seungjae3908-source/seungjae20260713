@@ -200,15 +200,43 @@ test('Production real-account read-only providers return fresh connected snapsho
     ...cryptoProviders,
   ];
 
-  const refresh = page.getByRole('button', { name: '계좌 연결 새로고침' });
-  await expect(refresh).toBeVisible({ timeout: 10_000 });
-  await refresh.click();
-
   const requiredSnapshots: Provider[] = testedProviders.length > 0 ? testedProviders : providers;
-  await expect.poll(
-    () => requiredSnapshots.every((provider) => snapshots.has(provider)),
-    { timeout: 45_000, intervals: [500, 1_000, 2_000] },
-  ).toBe(true);
+
+  // AccountConnections performs its own read-only refresh on mount and may run
+  // once more when Kiwoom support is resolved. Do not immediately add a third
+  // provider fan-out from QA; that previously increased Toss rate-limit risk.
+  // Reuse the real UI's initial snapshots when they arrive, and issue exactly
+  // one bounded manual refresh only if a required provider is still missing.
+  const requiredSnapshotsHealthy = () => requiredSnapshots.every((provider) => {
+    const snapshot = snapshots.get(provider);
+    return snapshot?.connected === true
+      && snapshot.status === 'CONNECTED'
+      && snapshot.stale === false
+      && snapshot.errorCode === null
+      && Array.isArray(snapshot.openOrders);
+  });
+
+  let initialSnapshotsHealthy = false;
+  try {
+    await expect.poll(
+      requiredSnapshotsHealthy,
+      { timeout: 20_000, intervals: [200, 500, 1_000, 2_000] },
+    ).toBe(true);
+    initialSnapshotsHealthy = true;
+  } catch {
+    initialSnapshotsHealthy = false;
+  }
+
+  if (!initialSnapshotsHealthy) {
+    const refresh = page.getByRole('button', { name: '계좌 연결 새로고침' });
+    await expect(refresh).toBeVisible({ timeout: 10_000 });
+    await expect(refresh).toBeEnabled({ timeout: 15_000 });
+    await refresh.click();
+    await expect.poll(
+      requiredSnapshotsHealthy,
+      { timeout: 45_000, intervals: [500, 1_000, 2_000, 5_000] },
+    ).toBe(true);
+  }
 
   expect(credentialStatus?.ok).toBe(true);
   expect(credentialStatus?.encryptionConfigured).toBe(true);

@@ -1,4 +1,5 @@
 name: Production Account Read-only Live QA
+run-name: Production Account Read-only Live QA ${{ inputs.sha || github.event.pull_request.head.sha }} ${{ inputs.providers || 'contract' }}
 
 on:
   pull_request:
@@ -10,6 +11,7 @@ on:
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
       - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-login.ts'
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
   workflow_dispatch:
@@ -59,11 +61,13 @@ jobs:
           const workflow = fs.readFileSync('.github/workflows/production-account-readonly-live-qa.yml', 'utf8');
           const bridge = fs.readFileSync('.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml', 'utf8');
           const spec = fs.readFileSync('stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts', 'utf8');
+          const login = fs.readFileSync('stock-analyzer/e2e/support/production-readonly-login.ts', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-account-readonly.config.ts', 'utf8');
           const live = workflow.split('\n  production-account-readonly-live-qa:\n')[1] ?? '';
           const requireText = (source, value, code) => {
             if (!source.includes(value)) throw new Error(code);
           };
+          requireText(workflow, 'run-name: Production Account Read-only Live QA', 'LIVE_QA_TARGETED_RUN_NAME_REQUIRED');
           requireText(live, "if: github.event_name == 'workflow_dispatch'", 'LIVE_QA_MUST_BE_DISPATCH_ONLY');
           requireText(live, 'environment: production', 'LIVE_QA_MUST_USE_PRODUCTION_ENVIRONMENT');
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
@@ -72,9 +76,18 @@ jobs:
           requireText(live, 'PRODUCTION_DEPLOY_RUN_ID: ' + '$' + '{{ inputs.production_deploy_run_id }}', 'LIVE_QA_DEPLOY_RUN_ID_INPUT_REQUIRED');
           requireText(live, 'getWorkflowRun', 'LIVE_QA_EXACT_DEPLOY_RUN_LOOKUP_REQUIRED');
           requireText(live, 'assertProductionDeployProvenance', 'LIVE_QA_DEPLOY_PROVENANCE_VALIDATION_REQUIRED');
+          requireText(workflow, "'stock-analyzer/e2e/support/production-readonly-login.ts'", 'LOGIN_HELPER_CHANGE_MUST_TRIGGER_CONTRACT');
+          requireText(live, 'Resolve exact workflow-generation QA harness safely', 'LIVE_QA_CURRENT_HARNESS_OVERLAY_REQUIRED');
+          requireText(live, 'QA_HARNESS_SHA:', 'LIVE_QA_HARNESS_SHA_MUST_BE_PINNED');
+          requireText(live, 'stock-analyzer/e2e/support/production-readonly-login.ts', 'LIVE_QA_LOGIN_HARNESS_OVERLAY_REQUIRED');
+          requireText(live, 'PRODUCTION_ACCOUNT_QA_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY', 'LIVE_QA_PROVIDER_CODE_DRIFT_GATE_REQUIRED');
+          requireText(login, "new URL('/api/auth/profile'", 'LOGIN_AUTH_PROFILE_READ_PROOF_REQUIRED');
+          requireText(login, 'Do not submit credentials a second time', 'LOGIN_AUTH_RETRY_MUST_NOT_RESUBMIT_CREDENTIALS');
           requireText(spec, 'installProductionReadOnlyPolicy', 'READONLY_BROWSER_POLICY_REQUIRED');
           requireText(spec, '/api/accounts/read-only/credentials/status', 'CREDENTIAL_STATUS_READ_REQUIRED');
           requireText(spec, 'Persist bounded, sanitized provider state before any connectivity assertion', 'SANITIZED_FAILURE_DIAGNOSTICS_REQUIRED');
+          requireText(spec, 'Do not immediately add a third', 'REDUNDANT_PROVIDER_REFRESH_GUARD_REQUIRED');
+          requireText(spec, 'requiredSnapshotsHealthy', 'HEALTHY_SNAPSHOT_RETRY_GATE_REQUIRED');
           requireText(spec, 'testedProviders', 'TESTED_PROVIDERS_EVIDENCE_REQUIRED');
           requireText(spec, 'reconciliationPassed', 'TARGET_PROVIDER_RECONCILIATION_REQUIRED');
           requireText(spec, 'bitgetDiagnostic', 'BITGET_SANITIZED_DIAGNOSTIC_REQUIRED');
@@ -182,6 +195,48 @@ jobs:
             echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
             exit 1
           }
+
+      - name: Resolve exact workflow-generation QA harness safely
+        env:
+          QA_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth 1 origin "$QA_HARNESS_SHA"
+          if ! git diff --quiet "$EXPECTED_DEPLOY_SHA" "$QA_HARNESS_SHA" -- \
+            api-server/src/features/account-readonly \
+            api-server/src/services/trade-exchange-adapters.service.ts \
+            stock-analyzer/src/components/brokerage-account-connections.tsx \
+            stock-analyzer/src/pages/account.tsx \
+            stock-analyzer/src/lib/auth-fetch.ts \
+            stock-analyzer/src/main.tsx
+          then
+            echo 'PRODUCTION_ACCOUNT_QA_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY' >&2
+            exit 1
+          fi
+          if [[ "$QA_HARNESS_SHA" == "$EXPECTED_DEPLOY_SHA" ]]; then
+            test -s stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+            test -s stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts
+            test -s stock-analyzer/e2e/support/production-readonly-login.ts
+            test -s stock-analyzer/e2e/support/production-readonly-policy.ts
+            test -s stock-analyzer/playwright.production-account-readonly.config.ts
+            echo "QA harness already belongs to the exact deployed SHA; overlay not required."
+          else
+            git cat-file -e "$QA_HARNESS_SHA^{commit}"
+            for harness_path in \
+              stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts \
+              stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts \
+              stock-analyzer/e2e/support/production-readonly-login.ts \
+              stock-analyzer/e2e/support/production-readonly-policy.ts \
+              stock-analyzer/playwright.production-account-readonly.config.ts
+            do
+              tmp="/tmp/$(basename "$harness_path")"
+              git show "$QA_HARNESS_SHA:$harness_path" > "$tmp"
+              test -s "$tmp"
+              install -m 0644 "$tmp" "$harness_path"
+            done
+          fi
 
       - uses: pnpm/action-setup@v4
         with:

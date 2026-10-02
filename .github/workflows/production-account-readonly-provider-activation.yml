@@ -7,6 +7,9 @@ on:
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+      - 'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-login.ts'
+      - 'stock-analyzer/e2e/support/production-readonly-policy.ts'
       - 'stock-analyzer/playwright.production-account-readonly.config.ts'
   issue_comment:
     types: [created]
@@ -74,12 +77,25 @@ jobs:
           runtime='api-server/src/features/account-readonly/account-readonly.runtime.ts'
           provider='api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts'
           spec='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
+          login='stock-analyzer/e2e/support/production-readonly-login.ts'
           for endpoint in '/api/v3/account/settings' '/api/v3/account/assets' '/api/v3/position/current-position' '/api/v3/trade/unfilled-orders'; do
             grep -Fq "$endpoint" "$adapter"
             grep -Fq "$endpoint" "$runtime"
           done
           grep -Fq "readBitgetUtaSnapshot" "$provider"
           grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$spec"
+          grep -Fq "Do not immediately add a third" "$spec"
+          grep -Fq "requiredSnapshotsHealthy" "$spec"
+          grep -Fq "new URL('/api/auth/profile'" "$login"
+          grep -Fq "Do not submit credentials a second time" "$login"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_LATEST_PRE_QA_NOT_SUCCESS" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING_OR_RELEVANT_DRIFT" "$file"
+          grep -Fq "production-account-readonly-live-qa.spec.ts" "$file"
+          grep -Fq "brokerage-account-connections.tsx" "$file"
+          grep -Fq "post-merge-provenance/verified" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_MAIN_MOVED_BEFORE_MUTATION" "$file"
+          grep -Fq "ACCOUNT_READ_ACTIVATION_MAIN_MOVED_DURING_QA" "$file"
           if grep -Eq "bitgetRequest\([^,]+,[[:space:]]*'(POST|DELETE)'[[:space:]]*,[[:space:]]*'/api/v3/(account/info|account/assets|position/current-position|trade/unfilled-orders)'" "$adapter"; then
             echo 'Bitget UTA read-only endpoints must remain GET-only.' >&2
             exit 1
@@ -181,6 +197,131 @@ jobs:
             }
             core.info('Production provenance and shared live concurrency gate accepted.');
 
+      - name: Require successful pre-activation four-provider Production QA
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-account-readonly-live-qa.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const expectedProviders = 'bitget,kiwoom,toss,upbit';
+            const relevantRuns = runs
+              .filter((run) =>
+                String(run.display_title ?? '').includes(active)
+                && String(run.display_title ?? '').includes(expectedProviders))
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            const latestRelevant = relevantRuns[0];
+            if (!latestRelevant
+              || latestRelevant.status !== 'completed'
+              || latestRelevant.conclusion !== 'success') {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_LATEST_PRE_QA_NOT_SUCCESS');
+              return;
+            }
+            const candidates = [latestRelevant];
+
+            const criticalExact = new Set([
+              '.github/workflows/production-account-readonly-live-qa.yml',
+              '.github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml',
+              'api-server/src/services/trade-exchange-adapters.service.ts',
+              'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts',
+              'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts',
+              'stock-analyzer/e2e/support/production-readonly-login.ts',
+              'stock-analyzer/e2e/support/production-readonly-policy.ts',
+              'stock-analyzer/playwright.production-account-readonly.config.ts',
+              'stock-analyzer/src/components/brokerage-account-connections.tsx',
+              'stock-analyzer/src/pages/account.tsx',
+              'stock-analyzer/src/lib/auth-fetch.ts',
+              'stock-analyzer/src/main.tsx',
+              'pnpm-lock.yaml',
+              'package.json',
+              'stock-analyzer/package.json',
+            ]);
+            const criticalPrefix = ['api-server/src/features/account-readonly/'];
+            const isCritical = (filename) =>
+              criticalExact.has(filename) || criticalPrefix.some((prefix) => filename.startsWith(prefix));
+
+            let match = null;
+            for (const run of candidates) {
+              const qaHead = String(run.head_sha ?? '').toLowerCase();
+              if (!/^[0-9a-f]{40}$/.test(qaHead)) continue;
+              const compare = await github.rest.repos.compareCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                base: qaHead,
+                head: target,
+                per_page: 100,
+              });
+              if (!['ahead', 'identical'].includes(compare.data.status)) continue;
+              const files = Array.isArray(compare.data.files) ? compare.data.files : [];
+              if (files.length >= 300) continue;
+              const drift = files.some((file) => isCritical(String(file.filename ?? '')));
+              if (drift) continue;
+              match = run;
+              break;
+            }
+            if (!match) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRE_QA_SUCCESS_MISSING_OR_RELEVANT_DRIFT');
+              return;
+            }
+            core.info('Pre-activation four-provider Production QA accepted from Run ' + match.id
+              + ' with no relevant drift through current main.');
+
+      - name: Require verified post-merge provenance for exact current main
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            const status = statuses.find((item) =>
+              item.context === 'post-merge-provenance/verified' && item.state === 'success');
+            const match = /\/actions\/runs\/(\d+)/.exec(String(status?.target_url ?? ''));
+            if (!status || !match) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_POST_MERGE_PROVENANCE_MISSING');
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: Number(match[1]),
+            })).data;
+            if (run.name !== 'Post-Merge Release Provenance'
+              || String(run.head_sha).toLowerCase() !== target
+              || run.status !== 'completed'
+              || run.conclusion !== 'success') {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_POST_MERGE_PROVENANCE_INVALID');
+            }
+
+      - name: Require account read-only code identity with active Production
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git cat-file -e "$ACTIVE_SHA^{commit}"
+          git cat-file -e "$TARGET_SHA^{commit}"
+          if ! git diff --quiet "$ACTIVE_SHA" "$TARGET_SHA" -- \
+            api-server/src/features/account-readonly \
+            api-server/src/services/trade-exchange-adapters.service.ts \
+            stock-analyzer/src/components/brokerage-account-connections.tsx \
+            stock-analyzer/src/pages/account.tsx \
+            stock-analyzer/src/lib/auth-fetch.ts \
+            stock-analyzer/src/main.tsx
+          then
+            echo 'ACCOUNT_READ_ACTIVATION_PROVIDER_CODE_DRIFT_REQUIRES_REDEPLOY' >&2
+            exit 1
+          fi
+
       - name: Configure canonical Production SSH
         run: |
           set -Eeuo pipefail
@@ -196,6 +337,40 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
           fi
+
+      - name: Revalidate current main and Production immediately before activation
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            });
+            if (String(branch.data.commit.sha).toLowerCase() !== target) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_MAIN_MOVED_BEFORE_MUTATION');
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== active) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRODUCTION_MOVED_BEFORE_MUTATION');
+              return;
+            }
+            if (runs.some((run) => run.status !== 'completed')) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_DEPLOY_STARTED_BEFORE_MUTATION');
+            }
 
       - name: Activate four read-only providers with rollback
         id: activation
@@ -455,17 +630,28 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Overlay exact current-main Production QA assertions
+      - name: Overlay exact current-main Production QA harness
         env:
           TARGET_SHA: ${{ steps.command.outputs.target_sha }}
         run: |
           set -Eeuo pipefail
-          source_path='stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
           git fetch --no-tags --depth=1 origin "$TARGET_SHA"
-          git show "$TARGET_SHA:$source_path" > "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
-          grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
-          grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts"
-          install -m 0644 "$RUNNER_TEMP/production-account-readonly-live-qa.spec.ts" "$source_path"
+          for harness_path in \
+            stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts \
+            stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts \
+            stock-analyzer/e2e/support/production-readonly-login.ts \
+            stock-analyzer/e2e/support/production-readonly-policy.ts \
+            stock-analyzer/playwright.production-account-readonly.config.ts
+          do
+            tmp="$RUNNER_TEMP/$(basename "$harness_path")"
+            git show "$TARGET_SHA:$harness_path" > "$tmp"
+            test -s "$tmp"
+            install -m 0644 "$tmp" "$harness_path"
+          done
+          grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+          grep -Fq "Persist bounded, sanitized provider state before any connectivity assertion" stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+          grep -Fq "new URL('/api/auth/profile'" stock-analyzer/e2e/support/production-readonly-login.ts
+          grep -Fq "Do not submit credentials a second time" stock-analyzer/e2e/support/production-readonly-login.ts
 
       - name: Require exact runtime identity after activation
         env:
@@ -566,6 +752,40 @@ jobs:
             throw new Error('ACCOUNT_READ_ACTIVATION_QA_SECRET_OR_ACCOUNT_VALUE_LEAK');
           }
           NODE
+
+      - name: Require activation target remains current after QA
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+            const target = String(process.env.TARGET_SHA ?? '').toLowerCase();
+            const branch = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            });
+            if (String(branch.data.commit.sha).toLowerCase() !== target) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_MAIN_MOVED_DURING_QA');
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== active) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_PRODUCTION_MOVED_DURING_QA');
+              return;
+            }
+            if (runs.some((run) => run.status !== 'completed')) {
+              core.setFailed('ACCOUNT_READ_ACTIVATION_DEPLOY_STARTED_DURING_QA');
+            }
 
       - name: Upload sanitized QA evidence
         if: always()

@@ -129,11 +129,11 @@ jobs:
               event: 'workflow_dispatch',
               per_page: 100,
             });
-            const active = runs.filter((run) => run.status !== 'completed');
-            const duplicate = active.find((run) => String(run.display_title ?? '').includes(target)
-              || String(run.head_sha).toLowerCase() === target);
-            if (duplicate) {
-              core.setFailed('Production account read-only QA is already active: run=' + duplicate.id);
+            const active = runs
+              .filter((run) => run.status !== 'completed')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            if (active.length > 0) {
+              core.setFailed('Production account read-only QA is already active: run=' + active[0].id);
               return;
             }
 
