@@ -1,0 +1,37 @@
+[Unit]
+Description=Investment Research Production YouTube public discovery scan
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+EnvironmentFile=/etc/investment-research/research-production.env
+EnvironmentFile=-/etc/investment-research/research-video.env
+EnvironmentFile=-/etc/investment-research/research-providers.env
+Environment=RESEARCH_VIDEO_INVOCATION_MODE=SYSTEMD_TIMER
+# This marks the service contract only. The worker intentionally keeps scheduledInvocationObserved=false;
+# a later activation/readback gate must prove the timer is actually enabled and triggered.
+ExecStart=/usr/bin/env node research-production/bin/research-video-discovery.mjs run
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=3m
+
+[Install]
+WantedBy=multi-user.target
