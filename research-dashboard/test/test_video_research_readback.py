@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from video_research_readback import read_video_research_readback  # noqa: E402
+from video_research_readback import _parse_systemd_timestamp, read_video_research_readback  # noqa: E402
 
 SHA='a'*40
 DIGEST='b'*64
@@ -51,6 +51,10 @@ def ai_review():
         'privateTradingApiAllowed':False,'evidenceCredit':0}}
 
 class VideoResearchReadbackTest(unittest.TestCase):
+    def test_systemd_utc_trigger_timestamp_is_parseable(self):
+        self.assertEqual(_parse_systemd_timestamp('Fri 2026-10-02 03:00:00 UTC'), 1790910000000)
+        self.assertIsNone(_parse_systemd_timestamp('n/a'))
+
     def root(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);return Path(temp.name)
 
