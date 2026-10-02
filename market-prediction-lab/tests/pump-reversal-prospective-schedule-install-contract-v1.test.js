@@ -28,9 +28,17 @@ test("Pump installer is isolated, minute-cadence, exact-SHA and Paper-only", asy
     "existing Pump policy identity mismatch; refusing refreeze",
     "SOURCE_PARAMETER_HASH",
     "EXISTING_PARAMETER_HASH",
+    "PUMP_ALLOWED_POLICY_RESEARCH_SHA",
+    "PUMP_OPERATIONAL_RETRY_EQUIVALENCE_VERIFIED",
+    '[[ ! -e "\\$STATE_ROOT/DISABLED" ]]',
+    'exec >>"\\$LOG_FILE" 2>&1',
+    'HOME="\\${HOME:-/tmp}"',
   ]) assert.ok(source.includes(expected), expected);
   for (const forbidden of [
     'cmp -s "$POLICY_SOURCE" "$POLICY_PATH"',
+    '[[ ! -e "$STATE_ROOT/DISABLED" ]]',
+    'exec >>"$LOG_FILE" 2>&1',
+    'HOME="${HOME:-/tmp}"',
     "deploy-production.sh",
     "pm2 restart",
     "pm2 reload",
