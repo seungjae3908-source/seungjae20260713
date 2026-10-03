@@ -74,7 +74,7 @@ test('Research Center V2 source preserves the complete fail-closed maturity ladd
   expect(page).toContain('label="현재 막힌 단계"');
   expect(page).toContain('전체 비용');
   expect(page).toContain('자료 부족');
-  expect(page).toContain('후보 증거가 없으면 일반 모의매매 수를 빌려오지 않습니다');
+  expect(page).toContain("value == null\n    ? '자료 없음'");
   // User-facing UI may hide technical identifiers, but fail-closed semantics stay enforced in logic.
   const unavailableRows = buildFullCostRows({
     fullCostReady: false,
