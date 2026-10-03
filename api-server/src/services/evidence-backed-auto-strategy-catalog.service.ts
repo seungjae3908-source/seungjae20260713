@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export type StrategyRulePackMarket =
   | 'KR_STOCK'
   | 'US_STOCK'
@@ -119,7 +121,6 @@ const COMMON: readonly StrategyRuleEvidenceKey[] = Object.freeze([
   'liquidityReady',
   'costEvidenceReady',
   'riskReady',
-  'aiReviewReady',
 ]);
 
 function req(...keys: StrategyRuleEvidenceKey[]) {
@@ -271,6 +272,90 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export const STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA = 'trade-rule-pack-ai-review-v1' as const;
+export const STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION = 'trade-rule-pack-ai-review-v1' as const;
+export const STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS = 120_000;
+const AI_REVIEW_CLOCK_SKEW_MS = 5_000;
+const AI_REVIEW_FORBIDDEN_KEY = /(?:credential|secret|token|authorization|password|account|balance|equity|api[_-]?key|private[_-]?key)/i;
+
+function safeProjection(value: unknown, depth = 0): unknown {
+  if (depth > 3) return null;
+  if (value == null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') return value.slice(0, 240);
+  if (Array.isArray(value)) return value.slice(0, 16).map((item) => safeProjection(item, depth + 1));
+  const row = record(value);
+  if (!row) return null;
+  const entries = Object.entries(row)
+    .filter(([key]) => !AI_REVIEW_FORBIDDEN_KEY.test(key) && key !== 'aiDecision' && key !== 'aiReviewReady')
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 64)
+    .map(([key, nested]) => [key, safeProjection(nested, depth + 1)] as const);
+  return Object.fromEntries(entries);
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  const row = record(value);
+  if (row) {
+    return '{' + Object.keys(row).sort().map((key) => JSON.stringify(key) + ':' + stableStringify(row[key])).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+
+export type StrategyRulePackGateInput = {
+  strategyId: string;
+  market: string;
+  direction: string;
+  signalId?: string | null;
+  symbol?: string | null;
+  timeframe?: string | null;
+  learningSnapshot?: unknown;
+  dataEvidence?: unknown;
+  publicQuote?: unknown;
+  aiReview?: unknown;
+  expectedAiEvidenceDigest?: string | null;
+  nowMs?: number;
+};
+
+export type StrategyRulePackAiEvidenceProjection = Readonly<{
+  strategyId: string;
+  signalId: string | null;
+  market: string;
+  direction: string;
+  symbol: string | null;
+  timeframe: string | null;
+  ruleEvidence: unknown;
+  dataEvidence: unknown;
+  publicQuote: unknown;
+}>;
+
+export function buildStrategyRulePackAiEvidenceProjection(
+  input: Omit<StrategyRulePackGateInput, 'aiReview' | 'expectedAiEvidenceDigest' | 'nowMs'>,
+): StrategyRulePackAiEvidenceProjection {
+  const learning = record(input.learningSnapshot);
+  const evidence = record(learning?.strategyRulePackEvidence);
+  return Object.freeze({
+    strategyId: input.strategyId,
+    signalId: input.signalId?.trim() || null,
+    market: input.market,
+    direction: input.direction,
+    symbol: input.symbol?.trim() || null,
+    timeframe: input.timeframe?.trim() || null,
+    ruleEvidence: safeProjection(evidence),
+    dataEvidence: safeProjection(input.dataEvidence),
+    publicQuote: safeProjection(input.publicQuote),
+  });
+}
+
+export function strategyRulePackAiEvidenceDigest(
+  input: Omit<StrategyRulePackGateInput, 'aiReview' | 'expectedAiEvidenceDigest' | 'nowMs'>,
+): string {
+  return createHash('sha256')
+    .update(stableStringify(buildStrategyRulePackAiEvidenceProjection(input)))
+    .digest('hex');
+}
+
 export type StrategyRulePackGate = Readonly<{
   recognized: boolean;
   strategyId: string;
@@ -281,25 +366,15 @@ export type StrategyRulePackGate = Readonly<{
   definition: StrategyRulePackDefinition | null;
 }>;
 
-export function evaluateStrategyRulePackGate(input: {
+export type StrategyRulePackDeterministicGate = Readonly<{
+  recognized: boolean;
   strategyId: string;
-  market: string;
-  direction: string;
-  learningSnapshot?: unknown;
-}): StrategyRulePackGate {
-  const definition = BY_ID.get(input.strategyId as StrategyRulePackId) ?? null;
-  if (!definition) {
-    return Object.freeze({
-      recognized: false,
-      strategyId: input.strategyId,
-      state: 'PASS_THROUGH',
-      paperAllowed: true,
-      liveAllowed: false,
-      blockers: Object.freeze([]),
-      definition: null,
-    });
-  }
+  readyForAiReview: boolean;
+  blockers: readonly string[];
+  definition: StrategyRulePackDefinition | null;
+}>;
 
+function deterministicBlockers(input: StrategyRulePackGateInput, definition: StrategyRulePackDefinition): string[] {
   const blockers: string[] = [];
   if (!definition.markets.includes(input.market as StrategyRulePackMarket)) {
     blockers.push('STRATEGY_RULE_PACK_MARKET_MISMATCH');
@@ -312,28 +387,119 @@ export function evaluateStrategyRulePackGate(input: {
   const evidence = record(learning?.strategyRulePackEvidence);
   if (!evidence) {
     blockers.push('STRATEGY_RULE_PACK_EVIDENCE_REQUIRED');
-  } else {
-    if (evidence.strategyId !== definition.strategyId) blockers.push('STRATEGY_RULE_PACK_ID_MISMATCH');
-    for (const key of definition.requiredEvidence) {
-      if (evidence[key] !== true) blockers.push('STRATEGY_RULE_PACK_' + key.replace(/[A-Z]/g, (m) => '_' + m).toUpperCase() + '_REQUIRED');
-    }
-    const aiDecision = String(evidence.aiDecision ?? '').toUpperCase();
-    if (!['PASS', 'ABSTAIN'].includes(aiDecision)) {
-      blockers.push(aiDecision === 'VETO'
-        ? 'STRATEGY_RULE_PACK_AI_VETO'
-        : 'STRATEGY_RULE_PACK_AI_REVIEW_UNUSABLE');
+    return blockers;
+  }
+  if (evidence.strategyId !== definition.strategyId) blockers.push('STRATEGY_RULE_PACK_ID_MISMATCH');
+  for (const key of definition.requiredEvidence) {
+    if (key === 'aiReviewReady') continue;
+    if (evidence[key] !== true) {
+      blockers.push('STRATEGY_RULE_PACK_' + key.replace(/[A-Z]/g, (m) => '_' + m).toUpperCase() + '_REQUIRED');
     }
   }
+  return blockers;
+}
 
-  const unique = [...new Set(blockers)].sort();
+export function evaluateStrategyRulePackDeterministicGate(
+  input: StrategyRulePackGateInput,
+): StrategyRulePackDeterministicGate {
+  const definition = BY_ID.get(input.strategyId as StrategyRulePackId) ?? null;
+  if (!definition) {
+    return Object.freeze({
+      recognized: false,
+      strategyId: input.strategyId,
+      readyForAiReview: true,
+      blockers: Object.freeze([]),
+      definition: null,
+    });
+  }
+  const blockers = [...new Set(deterministicBlockers(input, definition))].sort();
   return Object.freeze({
     recognized: true,
     strategyId: definition.strategyId,
+    readyForAiReview: blockers.length === 0,
+    blockers: Object.freeze(blockers),
+    definition,
+  });
+}
+
+function reviewBlockers(input: StrategyRulePackGateInput): string[] {
+  const blockers: string[] = [];
+  const review = record(input.aiReview);
+  if (!review) return ['STRATEGY_RULE_PACK_AI_REVIEW_REQUIRED'];
+  if (review.schemaVersion !== STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA) blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA_INVALID');
+  if (review.status !== 'READY') blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_UNAVAILABLE');
+  if (review.strategyId !== input.strategyId) blockers.push('STRATEGY_RULE_PACK_AI_STRATEGY_MISMATCH');
+  if (input.signalId && review.signalId !== input.signalId) blockers.push('STRATEGY_RULE_PACK_AI_SIGNAL_MISMATCH');
+  if (review.market !== input.market) blockers.push('STRATEGY_RULE_PACK_AI_MARKET_MISMATCH');
+  if (review.direction !== input.direction) blockers.push('STRATEGY_RULE_PACK_AI_DIRECTION_MISMATCH');
+  if (input.symbol && review.symbol !== input.symbol) blockers.push('STRATEGY_RULE_PACK_AI_SYMBOL_MISMATCH');
+  if (input.timeframe && review.timeframe !== input.timeframe) blockers.push('STRATEGY_RULE_PACK_AI_TIMEFRAME_MISMATCH');
+  if (review.promptVersion !== STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION) blockers.push('STRATEGY_RULE_PACK_AI_PROMPT_VERSION_MISMATCH');
+
+  const expectedDigest = String(input.expectedAiEvidenceDigest ?? '').toLowerCase();
+  const actualDigest = String(review.evidenceDigest ?? '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(expectedDigest)) blockers.push('STRATEGY_RULE_PACK_AI_EVIDENCE_DIGEST_REQUIRED');
+  else if (actualDigest !== expectedDigest) blockers.push('STRATEGY_RULE_PACK_AI_EVIDENCE_DIGEST_MISMATCH');
+
+  const generatedAtMs = typeof review.generatedAt === 'string' ? Date.parse(review.generatedAt) : NaN;
+  const expiresAtMs = typeof review.expiresAt === 'string' ? Date.parse(review.expiresAt) : NaN;
+  const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
+  if (!Number.isFinite(generatedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= generatedAtMs) {
+    blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_TIME_INVALID');
+  } else {
+    if (generatedAtMs > nowMs + AI_REVIEW_CLOCK_SKEW_MS) blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_FUTURE');
+    if (expiresAtMs <= nowMs) blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_STALE');
+    if (expiresAtMs - generatedAtMs > STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS) blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_TTL_INVALID');
+  }
+
+  if (typeof review.provider !== 'string' || !review.provider.trim()
+    || typeof review.model !== 'string' || !review.model.trim()) {
+    blockers.push('STRATEGY_RULE_PACK_AI_PROVIDER_IDENTITY_REQUIRED');
+  }
+
+  const safety = record(review.safety);
+  if (!safety
+    || safety.executionAuthority !== 'NONE'
+    || safety.orderAllowed !== false
+    || safety.riskOverrideAllowed !== false
+    || safety.positionSizeAuthority !== false
+    || safety.leverageAuthority !== false) {
+    blockers.push('STRATEGY_RULE_PACK_AI_SAFETY_INVALID');
+  }
+
+  const decision = String(review.decision ?? '').toUpperCase();
+  if (decision === 'VETO') blockers.push('STRATEGY_RULE_PACK_AI_VETO');
+  else if (decision !== 'PASS' && decision !== 'ABSTAIN') blockers.push('STRATEGY_RULE_PACK_AI_REVIEW_UNUSABLE');
+  return blockers;
+}
+
+export function evaluateStrategyRulePackGate(input: StrategyRulePackGateInput): StrategyRulePackGate {
+  const deterministic = evaluateStrategyRulePackDeterministicGate(input);
+  if (!deterministic.recognized) {
+    return Object.freeze({
+      recognized: false,
+      strategyId: input.strategyId,
+      state: 'PASS_THROUGH',
+      paperAllowed: true,
+      liveAllowed: false,
+      blockers: Object.freeze([]),
+      definition: null,
+    });
+  }
+
+  const blockers = [
+    ...deterministic.blockers,
+    ...(deterministic.readyForAiReview ? reviewBlockers(input) : []),
+  ];
+  const unique = [...new Set(blockers)].sort();
+  return Object.freeze({
+    recognized: true,
+    strategyId: deterministic.strategyId,
     state: unique.length === 0 ? 'PAPER_CANDIDATE' : 'NO_TRADE',
     paperAllowed: unique.length === 0,
     liveAllowed: false,
     blockers: Object.freeze(unique),
-    definition,
+    definition: deterministic.definition,
   });
 }
 
