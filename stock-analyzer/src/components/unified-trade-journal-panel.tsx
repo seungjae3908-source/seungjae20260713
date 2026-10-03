@@ -154,6 +154,24 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       </section>
     </div>
 
+    {trade.canonicalLineage && (
+      trade.canonicalLineage.signalIds.length
+      || trade.canonicalLineage.planIds.length
+      || trade.canonicalLineage.orderIds.length
+      || trade.canonicalLineage.fillIds.length
+    ) ? (
+      <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-canonical-lineage">
+        <h4 className="text-sm font-bold">Canonical 거래 연결</h4>
+        <p className="mt-1 text-[10px] text-muted-foreground">신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Metric label="signalId" value={trade.canonicalLineage.signalIds.join(' · ') || 'N/A'} />
+          <Metric label="planId" value={trade.canonicalLineage.planIds.join(' · ') || 'N/A'} />
+          <Metric label="orderId" value={trade.canonicalLineage.orderIds.join(' · ') || 'N/A'} />
+          <Metric label="fillId" value={trade.canonicalLineage.fillIds.join(' · ') || 'N/A'} />
+        </div>
+      </section>
+    ) : null}
+
     {trade.source === 'APP_PAPER' ? (
       <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-research-binding">
         <div className="flex flex-wrap items-start justify-between gap-2">
