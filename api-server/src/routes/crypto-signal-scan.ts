@@ -176,15 +176,8 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const result = await precision.align(market, scanned, controller.signal);
       if (controller.signal.aborted || res.writableEnded) return;
 
-      const provisionalRanking = rankScannerCandidates({
-        cards: result.cards,
-        market: result.market,
-        strategy: strategyMode,
-        softMinimumScore,
-        limit: 20,
-      });
       const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
-        provisionalRanking.cards,
+        result.cards,
         { signal: controller.signal },
       );
       const ranking = rankScannerCandidates({
