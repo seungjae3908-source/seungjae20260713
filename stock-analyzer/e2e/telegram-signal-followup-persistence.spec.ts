@@ -58,8 +58,10 @@ function followupCard(
 async function withFollowupEnv(run: () => Promise<void>) {
   const previousEnabled = process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED;
   const previousRoom = process.env.TELEGRAM_STOCK_CHAT_ID;
+  const previousKrRoom = process.env.TELEGRAM_KR_STOCK_CHAT_ID;
   process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = 'true';
-  process.env.TELEGRAM_STOCK_CHAT_ID = 'stock-room-test';
+  process.env.TELEGRAM_STOCK_CHAT_ID = 'legacy-stock-room-test';
+  process.env.TELEGRAM_KR_STOCK_CHAT_ID = 'kr-stock-room-test';
   clearTelegramSignalFollowupState();
   try {
     await run();
@@ -68,6 +70,8 @@ async function withFollowupEnv(run: () => Promise<void>) {
     else process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = previousEnabled;
     if (previousRoom == null) delete process.env.TELEGRAM_STOCK_CHAT_ID;
     else process.env.TELEGRAM_STOCK_CHAT_ID = previousRoom;
+    if (previousKrRoom == null) delete process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+    else process.env.TELEGRAM_KR_STOCK_CHAT_ID = previousKrRoom;
     clearTelegramSignalFollowupState();
   }
 }
@@ -135,7 +139,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     clearTelegramSignalFollowupState();
 
     let newMessages = 0;
-    const edits: Array<{ messageId: number; text: string }> = [];
+    const edits: Array<{ messageId: number; text: string; destinationChatId: string }> = [];
     await deliverScannerTelegramFollowups(
       [followupCard('signal-edit-in-place')],
       async () => {
@@ -145,7 +149,7 @@ test('public signal lifecycle edits the original Telegram message instead of cre
       ANNOUNCED_AT + 1_000,
       repository,
       async (input) => {
-        edits.push({ messageId: input.messageId, text: input.text });
+        edits.push({ messageId: input.messageId, text: input.text, destinationChatId: input.destinationChatId });
         return { ok: true, attempts: 1 };
       },
     );
@@ -153,6 +157,8 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(newMessages).toBe(0);
     expect(edits).toHaveLength(1);
     expect(edits[0].messageId).toBe(42);
+    expect(edits[0].destinationChatId).toBe('kr-stock-room-test');
+    expect(edits[0].destinationChatId).not.toBe('legacy-stock-room-test');
     expect(edits[0].text).toContain('TP1 105 ✅');
     expect(edits[0].text).toContain('현재 상태');
 
