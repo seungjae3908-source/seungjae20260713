@@ -82,7 +82,7 @@ jobs:
           path: |
             ${{ runner.temp }}/workspace-preservation.json
             ${{ runner.temp }}/workspace-tests.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
   application-integration:
     needs: contract-and-preservation
@@ -232,5 +232,5 @@ jobs:
             ${{ runner.temp }}/research-one-shot-v12-help.log
             ${{ runner.temp }}/research-human-bind-v16-tests.log
             ${{ runner.temp }}/research-human-bind-v16-help.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
