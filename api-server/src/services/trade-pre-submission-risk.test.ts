@@ -62,7 +62,7 @@ function plan(now: Date, version = 1): TradingPlan {
     updatedAt: now.toISOString(),
     exchange: 'upbit',
     accountMode: 'live',
-    strategyId: 'breakout-v1',
+    strategyId: 'TREND_PULLBACK_REACCEL_V1',
     signalId: 'signal-1',
     symbol: 'BTC',
     market: 'KRW',
@@ -189,6 +189,35 @@ test('changed plan version invalidates the approval captured by the order', asyn
     (error: unknown) => {
       assert.ok(error instanceof TradePreSubmissionRiskError);
       assert.ok(error.result.blockCodes.includes('APPROVAL_VERSION_CHANGED'));
+      return true;
+    },
+  );
+});
+
+
+test('rule-pack live entry above current operating-capital ceiling fails closed', async () => {
+  const now = new Date();
+  const { repository, currentPlan, currentOrder, service } = await setup(now);
+  const oversized = { ...currentPlan, estimatedKrw: 510_000, quoteAmount: 510_000 };
+  oversized.riskEnvelope = buildRiskEnvelope(
+    oversized,
+    { ...DEFAULT_TRADING_POLICY, maxOrderKrw: 1_000_000 },
+    oversized.approvedAt!,
+  );
+  await repository.savePlan(oversized);
+
+  await assert.rejects(
+    () => service.evaluate({
+      userId: USER_ID,
+      expectedPlan: oversized,
+      order: currentOrder,
+      snapshot: snapshot(now),
+      serverLiveEnabled: true,
+      now,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof TradePreSubmissionRiskError);
+      assert.ok(error.result.blockCodes.includes('PILOT_DYNAMIC_ENTRY_LIMIT'));
       return true;
     },
   );
