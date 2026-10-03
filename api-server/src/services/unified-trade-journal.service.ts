@@ -70,6 +70,13 @@ export type TechnicalSnapshot = Readonly<{
   signalReasons: readonly string[];
 }>;
 
+export type CanonicalTradeLineage = Readonly<{
+  signalIds: readonly string[];
+  planIds: readonly string[];
+  orderIds: readonly string[];
+  fillIds: readonly string[];
+}>;
+
 export type UnifiedTradeOrder = {
   schemaVersion: 1;
   recordType: 'unified_trade_order';
@@ -105,6 +112,7 @@ export type UnifiedTradeOrder = {
   ruleViolation: boolean;
   warnings: string[];
   technicalSnapshot: TechnicalSnapshot;
+  canonicalLineage?: CanonicalTradeLineage;
 };
 
 export type TossOrderContract = {
@@ -190,6 +198,7 @@ export type UnifiedTradeCycle = {
   ruleViolation: boolean;
   warnings: string[];
   technicalSnapshot: TechnicalSnapshot;
+  canonicalLineage?: CanonicalTradeLineage;
   review: TradeReview;
 };
 
@@ -577,6 +586,17 @@ function normalizeCanonicalOrder(payload: Record<string, unknown>): UnifiedTrade
     ruleViolation: payload.ruleViolation === true,
     warnings: [...stringArray(payload.warnings), ...costWarnings(costEvidence)],
     technicalSnapshot: technicalSnapshot(payload.technicalSnapshot, executionKey),
+    canonicalLineage: (() => {
+      const row = isObject(payload.canonicalLineage) ? payload.canonicalLineage : null;
+      if (!row) return undefined;
+      const clean = (value: unknown, max = 40) => stringArray(value).slice(0, max);
+      return Object.freeze({
+        signalIds: clean(row.signalIds),
+        planIds: clean(row.planIds),
+        orderIds: clean(row.orderIds),
+        fillIds: clean(row.fillIds),
+      });
+    })(),
   };
 }
 
@@ -669,6 +689,21 @@ function reviewCycle(cycle: Omit<UnifiedTradeCycle, 'review'>): TradeReview {
 
 type OpenCycle = Omit<UnifiedTradeCycle, 'review'> & { entryValue: number; exitValue: number };
 
+function mergeCanonicalLineage(
+  current: CanonicalTradeLineage | undefined,
+  next: CanonicalTradeLineage | undefined,
+): CanonicalTradeLineage | undefined {
+  if (!current && !next) return undefined;
+  const merge = (left: readonly string[] = [], right: readonly string[] = []) =>
+    [...new Set([...left, ...right])].slice(0, 80);
+  return Object.freeze({
+    signalIds: merge(current?.signalIds, next?.signalIds),
+    planIds: merge(current?.planIds, next?.planIds),
+    orderIds: merge(current?.orderIds, next?.orderIds),
+    fillIds: merge(current?.fillIds, next?.fillIds),
+  });
+}
+
 function finishCycle(cycle: OpenCycle): UnifiedTradeCycle {
   const { entryValue: _entryValue, exitValue: _exitValue, ...result } = cycle;
   return { ...result, review: reviewCycle(result) };
@@ -732,6 +767,7 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
           ruleViolation: order.ruleViolation,
           warnings: [...order.warnings],
           technicalSnapshot: order.technicalSnapshot,
+          canonicalLineage: order.canonicalLineage,
         };
         open.set(key, { ...unsigned, entryValue: leg.price * leg.quantity, exitValue: 0 });
       } else {
@@ -745,6 +781,7 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
         existing.costEvidence = mergeCostEvidence(existing.costEvidence, leg.costEvidence);
         existing.netPnl = netFromCosts(existing.grossPnl, existing.fees, existing.tax);
         existing.ruleViolation ||= order.ruleViolation;
+        existing.canonicalLineage = mergeCanonicalLineage(existing.canonicalLineage, order.canonicalLineage);
         existing.warnings.push(...order.warnings, ...costWarnings(existing.costEvidence));
       }
       continue;
@@ -777,6 +814,7 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
     current.netPnl = netFromCosts(current.grossPnl, current.fees, current.tax);
     current.netReturnPercent = current.entryValue > 0 && current.netPnl != null ? current.netPnl / current.entryValue * 100 : null;
     current.ruleViolation ||= order.ruleViolation;
+    current.canonicalLineage = mergeCanonicalLineage(current.canonicalLineage, order.canonicalLineage);
     current.warnings.push(...order.warnings, ...costWarnings(current.costEvidence));
     if (current.remainingQuantity > EPSILON) {
       current.partialExits.push(allocated);
