@@ -676,7 +676,7 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
   const debate = extractResearchAiDebate(overview as unknown);
   const preview = buildDebatePreview(overview);
   const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState('질문을 입력하면 현재 canonical evidence에서 확인되는 내용만 찾아드립니다.');
+  const [answer, setAnswer] = useState('질문을 입력하면 현재 수집된 연구 자료에서 확인되는 내용만 찾아드립니다.');
   const firstBlocker = cards.find((card) => card.blocker) ?? null;
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -694,13 +694,13 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         <InsightCard title="AI 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : 'AI 분석 자료가 없습니다.'}</p></InsightCard>
         <InsightCard title="모델 간 합의" icon={BadgeCheck}><ul className="space-y-1">{debate.actualEvidence ? preview.support.map((line) => <li key={line}>• {line}</li>) : <li>AI 분석 근거 미수집</li>}</ul></InsightCard>
         <InsightCard title="모델 간 의견 차이" icon={MessageSquareText}><p>{debate.conflictReason ?? (debate.actualEvidence ? '명시적 충돌 근거 없음' : 'AI 분석 근거 미수집')}</p></InsightCard>
-        <InsightCard title="현재 가장 큰 blocker" icon={CircleAlert}><p>{firstBlocker ? `${firstBlocker.label} · ${blockerCopy(firstBlocker)}` : '막힌 이유 없음'}</p></InsightCard>
+        <InsightCard title="현재 가장 큰 막힘" icon={CircleAlert}><p>{firstBlocker ? `${firstBlocker.label} · ${blockerCopy(firstBlocker)}` : '막힌 이유 없음'}</p></InsightCard>
         <InsightCard title="데이터가 더 필요한 항목" icon={Database}><ul className="space-y-1">{preview.verify.slice(0, 4).map((line) => <li key={line}>• {line}</li>)}</ul></InsightCard>
         <InsightCard title="다음 연구 후보" icon={FlaskConical}><p>{cards.find((card) => card.status === 'waiting' || card.status === 'insufficient')?.label ?? '연구 후보 없음'}</p></InsightCard>
       </div>
 
       {debate.actualEvidence ? (
-        <section className="grid gap-3 md:grid-cols-2" aria-label="실제 AI review evidence">
+        <section className="grid gap-3 md:grid-cols-2" aria-label="실제 AI 분석 자료">
           {[debate.ai1, debate.ai2, ...debate.committee].filter(Boolean).map((review) => (
             <article key={review!.label} className="rounded-2xl border border-card-border bg-card p-4">
               <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-black">{review!.label}</h3><span className="text-[10px] text-muted-foreground">{review!.conclusion ?? '결론 미측정'}</span></div>
@@ -711,7 +711,7 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
         </section>
       ) : null}
 
-      <form onSubmit={submit} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="Canonical 연구 근거 질문">
+      <form onSubmit={submit} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 근거 질문">
         <div className="flex items-center gap-2"><Bot className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">연구 근거에 질문하기</h2></div>
         <p className="mt-1 text-[10px] text-muted-foreground">현재 수집된 연구 자료에서 답을 찾습니다.</p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
@@ -740,6 +740,15 @@ function EvidenceTab({ overview, promotion, cards }: {
   promotion: StrategyPromotionResponse | null;
   cards: ResearchPipelineCard[];
 }) {
+  const [stageDetailOpen, setStageDetailOpen] = useState(false);
+  useEffect(() => {
+    if (!stageDetailOpen) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setStageDetailOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [stageDetailOpen]);
   const sourceSha = promotion?.sourceSha && /^[0-9a-f]{40}$/i.test(promotion.sourceSha) ? promotion.sourceSha : '미수집';
   const factory = overview.factory;
   const liquidity = overview.research.liquidityIndependence;
@@ -764,7 +773,7 @@ function EvidenceTab({ overview, promotion, cards }: {
       <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
         <EvidenceItem label="연구 실행 버전" value={runtimeSha === '미수집' ? '미수집' : '확인됨'} state={runtimeSha === '미수집' ? 'unmeasured' : 'verified'} />
         <EvidenceItem label="연구 소스 버전" value={sourceSha === '미수집' ? '미수집' : '확인됨'} state={sourceSha === '미수집' ? 'unmeasured' : 'verified'} />
-        <EvidenceItem label="Dataset identity" value={datasets.size ? `${datasets.size}개 canonical dataset` : '미수집'} state={datasets.size ? 'verified' : 'unmeasured'} />
+        <EvidenceItem label="데이터셋 연결" value={datasets.size ? `${datasets.size}개 확인됨` : '미수집'} state={datasets.size ? 'verified' : 'unmeasured'} />
         <EvidenceItem label="전략 연결" value={promotion ? `${promotion.items.length}개` : '미수집'} state={promotion ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="제어 정보" value={factory?.controlPlaneDigest ? '확인됨' : '미수집'} state={factory?.controlPlaneDigest ? 'verified' : 'unmeasured'} />
         <EvidenceItem label="실행 기록" value={liquidity?.upstreamIngestRunId ? '확인됨' : '미수집'} state={liquidity?.upstreamIngestRunId ? 'verified' : 'unmeasured'} />
@@ -775,12 +784,12 @@ function EvidenceTab({ overview, promotion, cards }: {
         <EvidenceItem
           label="자료 신선도"
           value={runtimeLiveness?.status === 'LIVE'
-            ? `LIVE · age ${Math.round((runtimeLiveness.ageMs ?? 0) / 60000)}분 · missed ${runtimeLiveness.missedCycles ?? 0}`
+            ? `정상 · ${Math.round((runtimeLiveness.ageMs ?? 0) / 60000)}분 전 · 놓친 실행 ${runtimeLiveness.missedCycles ?? 0}`
             : runtimeLiveness?.status === 'STALE'
-              ? `STALE · age ${Math.round((runtimeLiveness.ageMs ?? 0) / 60000)}분 · missed ${runtimeLiveness.missedCycles ?? 0}`
+              ? `지연 · ${Math.round((runtimeLiveness.ageMs ?? 0) / 60000)}분 전 · 놓친 실행 ${runtimeLiveness.missedCycles ?? 0}`
               : runtimeLiveness?.status === 'INVALID'
-                ? 'INVALID heartbeat'
-                : stale ? `STALE ${stale}개` : 'Heartbeat 미수집'}
+                ? '시각 오류'
+                : stale ? `지연 단계 ${stale}개` : '상태 미수집'}
           state={runtimeLiveness?.status === 'INVALID' ? 'error' : runtimeLiveness?.stale ? 'stale' : runtimeLiveness?.status === 'LIVE' ? 'verified' : stale ? 'stale' : 'unmeasured'}
         />
         <EvidenceItem label="버전 일치" value={wrongSha ? `불일치 ${wrongSha}개` : '불일치 없음'} state={wrongSha ? 'attention' : 'normal'} />
@@ -792,16 +801,43 @@ function EvidenceTab({ overview, promotion, cards }: {
         <EvidenceItem label="그림자 검증" value={overview.shadow.records.present ? '확인됨' : '자료 없음'} state={overview.shadow.records.present ? 'accumulating' : 'unmeasured'} />
         <EvidenceItem label="모의매매 검증" value={overview.paper.runtime.present ? '확인됨' : '자료 없음'} state={overview.paper.runtime.present ? 'normal' : 'unmeasured'} />
         <EvidenceItem label="수익성 검증" value={overview.profitability.proven ? '검증됨' : '미검증'} state={overview.profitability.proven ? 'verified' : 'waiting'} />
-        <EvidenceItem label="Champion" value={champion.metrics[0]?.value ?? '자료 없음'} state={champion.status} />
+        <EvidenceItem label="최종 전략" value={champion.metrics[0]?.value ?? '자료 없음'} state={champion.status} />
         <EvidenceItem label="현재 막힌 단계" value={firstZero === '미수집' ? '미수집' : '다음 검증 자료 필요'} state={firstZero === '미수집' ? 'unmeasured' : 'attention'} />
       </dl>
 
-      <details className="rounded-2xl border border-card-border bg-card p-4">
-        <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">단계별 검증 상태 보기 <ChevronDown className="h-4 w-4" /></summary>
-        <div className="mt-3 space-y-2 border-t border-card-border pt-3">
-          {cards.map((card) => <div key={card.key} className="grid gap-1 rounded-xl bg-background p-3 text-[11px] sm:grid-cols-[10rem_8rem_1fr]"><strong>{card.label}</strong><span>{evidenceStateLabel(card.evidenceState)}</span><span className="text-muted-foreground">{card.blocker ? blockerCopy(card) : '없음'}</span></div>)}
+      <button
+        type="button"
+        onClick={() => setStageDetailOpen(true)}
+        className="flex min-h-12 w-full items-center justify-between rounded-2xl border border-card-border bg-card px-4 text-sm font-black"
+      >
+        단계별 검증 상태 보기
+        <ChevronRight className="h-4 w-4" />
+      </button>
+      {stageDetailOpen ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+          role="presentation"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setStageDetailOpen(false); }}
+        >
+          <section role="dialog" aria-modal="true" aria-label="단계별 검증 상태" className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-t-3xl border border-card-border bg-card p-4 shadow-2xl sm:rounded-3xl sm:p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="text-base font-black">단계별 검증 상태</h3>
+              <button type="button" onClick={() => setStageDetailOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {cards.map((card) => (
+                <div key={card.key} className="grid gap-1 rounded-xl bg-background p-3 text-[11px] sm:grid-cols-[10rem_8rem_1fr]">
+                  <strong>{card.label}</strong>
+                  <span>{evidenceStateLabel(card.evidenceState)}</span>
+                  <span className="text-muted-foreground">{card.blocker ? blockerCopy(card) : '없음'}</span>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
-      </details>
+      ) : null}
 
     </section>
   );
