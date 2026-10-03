@@ -258,8 +258,24 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
+    const preliminaryRanking = rankScannerCandidates({
+      cards: broadCandidates,
+      market: request.market,
+      strategy: strategyMode,
+      softMinimumScore: request.filters.minimumScore,
+      limit: 10,
+    });
+    const intelligenceBudgetMs = Math.max(0, Math.min(1_200, 9_300 - (Date.now() - startedAt)));
+    const intelligenceCandidates = await enrichStockScannerCardsWithNewsDisclosureIntelligence(preliminaryRanking.cards, {
+      market: request.market,
+      enabled: !publicCoreOnly,
+      ...(publicCoreOnly ? { disabledReason: 'PUBLIC_CORE_RECURSION_GUARD' } : {}),
+      maxCandidates: 2,
+      budgetMs: intelligenceBudgetMs,
+      signal: request.signal,
+    });
     const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
-      broadCandidates,
+      intelligenceCandidates,
       { signal: request.signal },
     );
     const ranking = rankScannerCandidates({
@@ -273,15 +289,7 @@ export const StockSignalScannerService = {
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card);
     const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
-    const intelligenceBudgetMs = Math.max(0, Math.min(1_200, 9_300 - (Date.now() - startedAt)));
-    const intelligenceCards = await enrichStockScannerCardsWithNewsDisclosureIntelligence(lifecycle.cards, {
-      market: request.market,
-      enabled: !publicCoreOnly,
-      ...(publicCoreOnly ? { disabledReason: 'PUBLIC_CORE_RECURSION_GUARD' } : {}),
-      maxCandidates: 2,
-      budgetMs: intelligenceBudgetMs,
-      signal: request.signal,
-    });
+    const intelligenceCards = lifecycle.cards;
     const visibleTradeReviewCount = intelligenceCards.filter((card) => card.direction === 'LONG').length;
     const discovery = buildScannerDiscoveryView(broadCandidates, {
       tradeReviewCount: visibleTradeReviewCount,
