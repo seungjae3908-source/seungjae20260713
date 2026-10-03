@@ -14,6 +14,8 @@ const routeIndex = source('../api-server/src/routes/index.ts');
 const backgroundWorker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
 const journalAdapter = source('../api-server/src/services/trade-automation-unified-journal-adapter.ts');
 const journalPanel = source('src/components/unified-trade-journal-panel.tsx');
+const aiChart = source('src/pages/ai-chart.tsx');
+const executionBridge = source('../api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.ts');
 
 test('Scanner carries canonical signal identity into AI Chart and canonical trading workspace', () => {
   expect(scanner).toContain('signalId: String(card.signalId ?? "").trim() || undefined');
@@ -69,4 +71,19 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
   expect(journalAdapter).toContain('fillIds: fills.map');
   expect(journalPanel).toContain('unified-journal-canonical-lineage');
   expect(journalPanel).toContain('신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.');
+});
+
+
+test('AI chart exposes provenance while keeping AI separate from execution authority', () => {
+  expect(aiChart).toContain('data-testid="ai-analysis-provenance"');
+  expect(aiChart).toContain('signalId · {selection.signalId');
+  expect(aiChart).toContain('searchRunId · {selection.searchRunId');
+  expect(aiChart).toContain('analysisId · {analysis?.id');
+  expect(aiChart).toContain('engine · {analysis?.engineVersion');
+  expect(aiChart).toContain('source · {analysis?.source');
+  expect(aiChart).toContain('AI 분석은 설명/evidence이며 주문 허용 권한은 별도 서버 Gate가 결정합니다.');
+});
+
+test('automatic execution method stays AUTO_POLICY through member event projection', () => {
+  expect(executionBridge).toContain("plan.executionMode === 'automatic' ? 'AUTO_POLICY' : 'USER_APPROVED'");
 });
