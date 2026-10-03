@@ -1,5 +1,6 @@
 import type { MemberAutoTradingPaperHandoffEntry } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
-import { AiChatError, answerAiStructuredJson, type AiChatResult } from './ai-chat.service';
+import { AiChatError, type AiChatResult } from './ai-chat.service';
+import { answerBoundedAiJson } from './bounded-ai-json-provider.service';
 import {
   STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS,
   STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
@@ -247,7 +248,7 @@ function unavailable(entry: MemberAutoTradingPaperHandoffEntry, nowMs: number, d
 
 export class TradeRulePackAiReviewer {
   private readonly cache = new Map<string, TradeRulePackAiReview>();
-  constructor(private readonly invoke: AiInvoker = answerAiStructuredJson, private readonly env: NodeJS.ProcessEnv = process.env) {}
+  constructor(private readonly invoke: AiInvoker = answerBoundedAiJson, private readonly env: NodeJS.ProcessEnv = process.env) {}
 
   runtimeStatus(): TradeRulePackAiReviewRuntimeStatus { return tradeRulePackAiReviewRuntimeStatus(this.env); }
   clearCache(): void { this.cache.clear(); }
