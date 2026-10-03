@@ -176,23 +176,16 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const result = await precision.align(market, scanned, controller.signal);
       if (controller.signal.aborted || res.writableEnded) return;
 
-      const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
-        result.cards,
-        { signal: controller.signal },
-      );
-      const ranking = rankScannerCandidates({
-        cards: aiReviewedCandidates,
+      const preliminaryRanking = rankScannerCandidates({
+        cards: result.cards,
         market: result.market,
         strategy: strategyMode,
         softMinimumScore,
         limit: 10,
       });
-      const baseRankedCards = enforceScannerAiFinalPromotionPolicy(ranking.cards).map((card) => card.signalGrade === 'B'
-        ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
-        : card);
       const overlay = selectedCondition === 'williams'
-        ? await williamsOverlay.apply({ market, cards: baseRankedCards, signal: controller.signal })
-        : { cards: baseRankedCards, matchedCount: 0, unavailableCount: 0 };
+        ? await williamsOverlay.apply({ market, cards: preliminaryRanking.cards, signal: controller.signal })
+        : { cards: preliminaryRanking.cards, matchedCount: 0, unavailableCount: 0 };
       if (controller.signal.aborted || res.writableEnded) return;
       const directionFilteredCards = overlay.cards.filter((card) => (
         market === 'spot'
@@ -204,12 +197,27 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         dependencies.marketIntelligence,
       );
       if (controller.signal.aborted || res.writableEnded) return;
-      const rankedCards = await enrichCryptoScannerCardsWithPublicEventContext(intelligenceCards, {
+      const eventCandidates = await enrichCryptoScannerCardsWithPublicEventContext(intelligenceCards, {
         market,
         maxCandidates: 2,
         budgetMs: 800,
         signal: controller.signal,
       });
+      if (controller.signal.aborted || res.writableEnded) return;
+      const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
+        eventCandidates,
+        { signal: controller.signal },
+      );
+      const ranking = rankScannerCandidates({
+        cards: aiReviewedCandidates,
+        market: result.market,
+        strategy: strategyMode,
+        softMinimumScore,
+        limit: 10,
+      });
+      const rankedCards = enforceScannerAiFinalPromotionPolicy(ranking.cards).map((card) => card.signalGrade === 'B'
+        ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
+        : card);
       if (controller.signal.aborted || res.writableEnded) return;
       const discovery = buildScannerDiscoveryView(result.cards, {
         tradeReviewCount: rankedCards.length,
