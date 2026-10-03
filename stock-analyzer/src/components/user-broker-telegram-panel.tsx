@@ -503,18 +503,26 @@ export function UserBrokerTelegramPanel() {
     && state.telegramRuntime.backgroundWorkersEnabled
     && state.telegramRuntime.personalWorkerEnabled
   );
+  const deliveryHasFailure = Boolean(state && (state.deliveryHealth.failed > 0 || state.deliveryHealth.deadLetter > 0));
+  const deliveryRetrying = Boolean(state && state.deliveryHealth.retryScheduled > 0);
   const telegramStatusLabel = requestState === 'failure'
     ? '확인 실패'
-    : telegramHealthy
-      ? '정상'
-      : state?.telegram.connected
-        ? '확인 필요'
-        : '연결 필요';
-  const telegramStatusTone = requestState === 'failure'
+    : deliveryHasFailure
+      ? '전송 오류'
+      : deliveryRetrying
+        ? '재시도 중'
+        : telegramHealthy
+          ? '정상'
+          : state?.telegram.connected
+            ? '확인 필요'
+            : '연결 필요';
+  const telegramStatusTone = requestState === 'failure' || deliveryHasFailure
     ? 'bg-destructive/10 text-destructive'
-    : telegramHealthy
-      ? 'bg-positive/10 text-positive'
-      : 'bg-warning/10 text-warning';
+    : deliveryRetrying
+      ? 'bg-warning/10 text-warning'
+      : telegramHealthy
+        ? 'bg-positive/10 text-positive'
+        : 'bg-warning/10 text-warning';
 
   const toggleMarketGroup = async (markets: TelegramPolicyMarket[], value: boolean) => {
     if (!state) return;
