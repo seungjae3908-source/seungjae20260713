@@ -148,9 +148,18 @@ const EMPTY_RUNTIME_SNAPSHOT: ReviewRuntimeSnapshot = Object.freeze({
 
 export function tradeRulePackAiReviewRuntimeStatus(
   env: NodeJS.ProcessEnv = process.env,
-  snapshot: ReviewRuntimeSnapshot = EMPTY_RUNTIME_SNAPSHOT,
+  snapshot?: ReviewRuntimeSnapshot,
 ): TradeRulePackAiReviewRuntimeStatus {
   const provider = boundedAiJsonProviderRuntimeStatus(env);
+  const runtime = snapshot ?? Object.freeze({
+    ...EMPTY_RUNTIME_SNAPSHOT,
+    cacheMaxEntries: boundedInteger(
+      env.TRADE_RULE_PACK_AI_REVIEW_CACHE_MAX_ENTRIES,
+      DEFAULT_CACHE_MAX_ENTRIES,
+      MIN_CACHE_MAX_ENTRIES,
+      MAX_CACHE_MAX_ENTRIES,
+    ),
+  });
   return Object.freeze({
     configured: provider.configured,
     provider: provider.provider,
@@ -162,7 +171,7 @@ export function tradeRulePackAiReviewRuntimeStatus(
     producer: 'BOUNDED_AI_JSON_PROVIDER' as const,
     failClosed: true as const,
     cacheEnabled: true as const,
-    ...snapshot,
+    ...runtime,
     providerCalls: provider.calls,
     providerSuccesses: provider.successes,
     providerFailures: provider.failures,
