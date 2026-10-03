@@ -211,6 +211,7 @@ function source(
     tier?: 'pending' | 'associate';
     handoffMissing?: boolean;
     markPrice?: number;
+    syncCalls?: { count: number };
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
@@ -252,6 +253,12 @@ function source(
         source: 'test-public-mark',
       };
     },
+    ...(options.syncCalls ? {
+      async syncExecutionEvents() {
+        options.syncCalls!.count += 1;
+        return { inserted: 1, deliveryQueued: 1, missingReferences: 0 };
+      },
+    } : {}),
   };
 }
 
@@ -381,6 +388,24 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal((await repository.listEvents(USER))
     .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED').length, 1);
   assert.equal(second.liveOrders, 0);
+});
+
+test('background worker automatically projects canonical execution events without requiring the manual sync endpoint', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { handoffMissing: true, syncCalls }),
+  );
+
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionEventsInserted, 1);
+  assert.equal(result.notificationDeliveriesQueued, 1);
+  assert.equal(result.executionSyncMissingReferences, 0);
+  assert.equal(result.executionSyncFailures, 0);
+  assert.equal(result.privateTradingRequests, 0);
 });
 
 test('missing <=60s reference move evidence blocks before plan creation', async () => {
