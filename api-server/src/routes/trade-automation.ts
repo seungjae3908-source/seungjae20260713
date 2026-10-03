@@ -31,6 +31,7 @@ import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capab
 import { evidenceBackedAutoStrategyCatalog } from '../services/evidence-backed-auto-strategy-catalog.service';
 import { readRulePackPilotCapitalState } from '../services/trade-rule-pack-pilot-capital.service';
 import { tradeRulePackAiReviewer } from '../services/trade-rule-pack-ai-review.service';
+import { scannerAiRuntimeStatus } from '../services/scanner-ai-runtime.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -735,6 +736,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       liveExecutionReadiness,
       pilotCapitalState,
       strategyAiReview: tradeRulePackAiReviewer.runtimeStatus(),
+      scannerAiReview: scannerAiRuntimeStatus(),
       evidenceBackedStrategies: evidenceBackedAutoStrategyCatalog().map((strategy) => ({
         strategyId: strategy.strategyId,
         label: strategy.label,
