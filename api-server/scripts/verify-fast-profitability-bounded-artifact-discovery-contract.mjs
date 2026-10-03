@@ -14,7 +14,11 @@ const files = [
 ];
 for (const file of files) {
   const text = await read(file);
-  assert(!text.includes('listArtifactsForRepo'), file + ' must not scan the repository-wide artifact collection');
+  const artifactCalls = [...text.matchAll(/listArtifactsForRepo\(\{([\s\S]*?)\}\)/gu)];
+  for (const [, args] of artifactCalls) {
+    assert(/\bname\s*:/u.test(args) || /\bname\s*,/u.test(args), file + ' repository artifact lookup must use an exact name filter');
+    assert(/per_page\s*:\s*100/u.test(args), file + ' exact-name repository artifact lookup must remain bounded to one page');
+  }
   assert(!text.includes('github.paginate(github.rest.actions.listWorkflowRuns'), file + ' must not use unbounded workflow-run pagination');
   assert(text.includes('const HUB_ISSUE = 1102;'), file + ' must resolve activation from the canonical Hub receipt');
   assert(text.includes('const MAX_HUB_COMMENTS = 2500;'), file + ' must preserve the bounded Hub hard limit');
@@ -46,8 +50,12 @@ const extractGithubScript = (text, stepName) => {
 
 for (const [file, stepName] of [
   ['.github/workflows/fast-profitability-v1-activation.yml', 'Reject duplicate active binding'],
+  ['.github/workflows/fast-profitability-v1-activation.yml', 'Locate previous durable preactivation Forward state'],
   ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate unique active binding'],
+  ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate prior cumulative state'],
+  ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate latest successful Shadow artifact'],
   ['.github/workflows/fast-profitability-v1-preactivation-watch.yml', 'Resolve exact current main and safety gates'],
+  ['.github/workflows/fast-profitability-v1-preactivation-watch.yml', 'Locate prior exact-SHA watch state'],
 ]) {
   const text = await read(file);
   const script = extractGithubScript(text, stepName);
@@ -62,5 +70,17 @@ const activation = await read('.github/workflows/fast-profitability-v1-activatio
 assert(activation.includes("'activation_run_id=' + String(process.env.GITHUB_RUN_ID ?? '')"), 'activation receipt must publish exact workflow run id');
 const collector = await read('.github/workflows/fast-profitability-v1-collector.yml');
 assert(collector.includes('run_id: Number(process.env.ACTIVATION_RUN_ID)'), 'OOS key lookup must remain scoped to the bound activation run');
-assert(collector.includes('prediction-lab-canonical-shadow-cycle.yml'), 'Shadow lookup must remain scoped to the canonical Shadow workflow');
-console.log('[fast-artifact-discovery-contract] canonical Hub receipt + exact run-scoped artifact discovery passed');
+assert(collector.includes("name: process.env.STATE_NAME"), 'prior cumulative state must use exact-name artifact discovery');
+assert(!collector.includes('FAST_STATE_DISCOVERY_WINDOW_EXHAUSTED'), 'prior cumulative state must not age out behind a workflow-run window');
+assert(collector.includes("workflow_id: 'prediction-lab-canonical-shadow-cycle.yml'"), 'Shadow lookup must remain scoped to the canonical Shadow workflow');
+assert(collector.includes("event: 'schedule'"), 'Shadow lookup must ignore issue-comment/no-op runs and inspect genuine scheduled cycles');
+
+assert(activation.includes("name: artifactName"), 'activation preflight state must use exact-name artifact discovery');
+assert(!activation.includes('FAST_PREACTIVATION_FORWARD_DISCOVERY_WINDOW_EXHAUSTED'), 'activation preflight state must not age out behind issue-comment history');
+
+const watch = await read('.github/workflows/fast-profitability-v1-preactivation-watch.yml');
+assert(watch.includes('listArtifactsForRepo'), 'preactivation watch must use exact-name artifact discovery for prior state');
+assert(watch.includes('name,'), 'preactivation watch prior state lookup must bind the exact artifact name');
+assert(!watch.includes('PREACTIVATION_WATCH_STATE_DISCOVERY_WINDOW_EXHAUSTED'), 'preactivation watch state must not age out behind scheduled run history');
+
+console.log('[fast-artifact-discovery-contract] canonical receipt + durable exact-name state discovery passed');

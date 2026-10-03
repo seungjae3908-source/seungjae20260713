@@ -11,6 +11,7 @@ on:
       - '.github/workflows/prediction-lab-52d-validation.yml'
       - 'api-server/scripts/verify-research-center-predeploy-contract.mjs'
       - 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs'
+      - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
       - 'api-server/src/routes/admin.ts'
       - 'api-server/src/routes/index.ts'
       - 'api-server/src/routes/paper-journal.ts'
@@ -98,6 +99,7 @@ jobs:
           set -Eeuo pipefail
           node api-server/scripts/verify-research-center-predeploy-contract.mjs
           node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
+          node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
 
       - name: Backend and frontend semantic typecheck
         run: |
