@@ -33,6 +33,18 @@ import {
   type MemberAutoTradingFxQuote,
 } from './member-auto-trading-fx.service';
 import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
+import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import type { AccountProvider, CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
+import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
+import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import {
+  automaticExitReason,
+  buildAutomaticExitPlanInput
+} from './member-auto-trading-exit-plan.service';
+import {
+  readMemberAutoTradingMarketMark,
+  type MemberAutoTradingMarketMark,
+} from './member-auto-trading-market-mark.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -41,10 +53,6 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
-const ACTIVE_ORDER_STATES = new Set([
-  'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED',
-]);
-
 type EligibleMember = Readonly<{
   userId: string;
   profile: MemberAccessProfile;
@@ -69,6 +77,11 @@ export interface MemberAutoTradingBackgroundSource {
     market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
     nowMs: number,
   ): Promise<MemberAutoTradingFxQuote>;
+  readLiveAccountSnapshot(userId: string, provider: AccountProvider): Promise<CanonicalAccountSnapshot>;
+  readMarketMark(
+    market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+    symbol: string,
+  ): Promise<MemberAutoTradingMarketMark>;
 }
 
 export type MemberAutoTradingBackgroundRunResult = {
@@ -84,8 +97,12 @@ export type MemberAutoTradingBackgroundRunResult = {
   lifecycleIdempotent: number;
   duplicates: number;
   failures: number;
-  liveOrders: 0;
-  privateTradingRequests: 0;
+  livePlans: number;
+  liveOrders: number;
+  paperExitOrders: number;
+  liveExitOrders: number;
+  exitBlocked: number;
+  privateTradingRequests: number;
 };
 
 function finite(value: unknown): value is number {
@@ -117,7 +134,7 @@ export function resolveMemberStockBroker(
   return null;
 }
 
-function marketMapping(
+export function marketMapping(
   market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
   policy: TradingPolicy,
 ): {
@@ -127,19 +144,23 @@ function marketMapping(
   stockBroker: 'kiwoom' | 'toss' | null;
 } {
   if (market === 'KR_STOCK') {
+    const stockBroker = resolveMemberStockBroker(policy, market);
+    if (!stockBroker) throw new Error('BACKGROUND_STOCK_BROKER_REQUIRED');
     return {
-      exchange: 'kiwoom',
+      exchange: stockBroker,
       assetClass: 'domestic_stock',
       planMarket: 'KR',
-      stockBroker: resolveMemberStockBroker(policy, market),
+      stockBroker,
     };
   }
   if (market === 'US_STOCK') {
+    const stockBroker = resolveMemberStockBroker(policy, market);
+    if (!stockBroker) throw new Error('BACKGROUND_STOCK_BROKER_REQUIRED');
     return {
-      exchange: 'kiwoom',
+      exchange: stockBroker,
       assetClass: 'us_stock',
       planMarket: 'US',
-      stockBroker: resolveMemberStockBroker(policy, market),
+      stockBroker,
     };
   }
   if (market === 'CRYPTO_SPOT') {
@@ -216,14 +237,95 @@ function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaper
   return true;
 }
 
-function activePlans(plans: readonly TradingPlan[], orders: readonly TradingOrder[]) {
-  const planById = new Map(plans.map((plan) => [plan.id, plan]));
-  return orders
-    .filter((order) => ACTIVE_ORDER_STATES.has(order.state))
-    .flatMap((order) => {
-      const plan = planById.get(order.planId);
-      return plan ? [plan] : [];
-    });
+const EXIT_PARENT_REASON_PREFIX = 'AUTO_EXIT_ENTRY_PLAN:';
+const POSITION_QUANTITY_TOLERANCE = 1e-8;
+
+function reasonValue(plan: TradingPlan, prefix: string) {
+  const reason = plan.signalReasons.find((value) => value.startsWith(prefix));
+  return reason ? reason.slice(prefix.length) : null;
+}
+
+function backgroundAutomaticPlan(plan: TradingPlan) {
+  return plan.executionMode === 'automatic'
+    || plan.signalReasons.includes('CANONICAL_PAPER_HANDOFF')
+    || plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF')
+    || Boolean(reasonValue(plan, EXIT_PARENT_REASON_PREFIX));
+}
+
+type TrackedAutomaticPosition = Readonly<{
+  plan: TradingPlan;
+  order: TradingOrder;
+  remainingQuantity: number;
+  activeExit: boolean;
+}>;
+
+function trackedAutomaticPositions(
+  runtime: MemberRuntimeState,
+  accountMode: 'paper' | 'live',
+): TrackedAutomaticPosition[] {
+  const orderByPlan = new Map(runtime.orders.map((order) => [order.planId, order]));
+  const exitsByParent = new Map<string, TradingOrder[]>();
+  for (const exitPlan of runtime.plans) {
+    if (exitPlan.accountMode !== accountMode || exitPlan.reduceOnly !== true || !backgroundAutomaticPlan(exitPlan)) continue;
+    const parentId = reasonValue(exitPlan, EXIT_PARENT_REASON_PREFIX);
+    if (!parentId) continue;
+    const exitOrder = orderByPlan.get(exitPlan.id);
+    if (!exitOrder) continue;
+    const rows = exitsByParent.get(parentId) ?? [];
+    rows.push(exitOrder);
+    exitsByParent.set(parentId, rows);
+  }
+  return runtime.plans.flatMap((plan) => {
+    if (plan.accountMode !== accountMode || plan.reduceOnly === true || !backgroundAutomaticPlan(plan)) return [];
+    const order = orderByPlan.get(plan.id);
+    if (!order || !['PARTIALLY_FILLED', 'FILLED'].includes(order.state) || !(order.filledQuantity > 0)) return [];
+    const exits = exitsByParent.get(plan.id) ?? [];
+    const exited = exits.reduce((sum, row) => (
+      ['PARTIALLY_FILLED', 'FILLED'].includes(row.state) && row.filledQuantity > 0
+        ? sum + row.filledQuantity
+        : sum
+    ), 0);
+    const remainingQuantity = Math.max(0, order.filledQuantity - exited);
+    if (!(remainingQuantity > POSITION_QUANTITY_TOLERANCE)) return [];
+    return [{
+      plan,
+      order,
+      remainingQuantity,
+      activeExit: exits.some((row) => ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(row.state)),
+    }];
+  });
+}
+
+function openAutomaticPlans(runtime: MemberRuntimeState, accountMode: 'paper' | 'live') {
+  const openPositionIds = new Set(trackedAutomaticPositions(runtime, accountMode).map((row) => row.plan.id));
+  const orderByPlan = new Map(runtime.orders.map((order) => [order.planId, order]));
+  return runtime.plans.filter((plan) => {
+    if (plan.accountMode !== accountMode || plan.reduceOnly === true || !backgroundAutomaticPlan(plan)) return false;
+    if (openPositionIds.has(plan.id)) return true;
+    const order = orderByPlan.get(plan.id);
+    return Boolean(order && ['SUBMITTED', 'ACCEPTED', 'RECOVERY_REQUIRED'].includes(order.state));
+  });
+}
+
+function providerPositionQuantity(snapshot: CanonicalAccountSnapshot, position: TrackedAutomaticPosition) {
+  if (!snapshot.connected || snapshot.stale || snapshot.status !== 'CONNECTED') {
+    throw new Error('BACKGROUND_LIVE_ACCOUNT_SNAPSHOT_NOT_FRESH');
+  }
+  const symbol = normalizedSymbol(position.plan.symbol);
+  const matches = (snapshot.positions ?? []).filter((row) =>
+    normalizedSymbol(row.symbol) === symbol && finite(row.quantity) && Math.abs(row.quantity!) > POSITION_QUANTITY_TOLERANCE);
+  if (matches.length !== 1) throw new Error('BACKGROUND_LIVE_POSITION_RECONCILIATION_REQUIRED');
+  const row = matches[0]!;
+  if (position.plan.exchange === 'bitget' && row.side) {
+    const expected = position.plan.side === 'short' ? 'short' : 'long';
+    if (String(row.side).toLowerCase() !== expected) throw new Error('BACKGROUND_LIVE_POSITION_SIDE_MISMATCH');
+  }
+  const quantity = Math.abs(Number(row.availableQuantity ?? row.quantity));
+  if (!finite(quantity) || quantity <= 0
+    || Math.abs(quantity - position.remainingQuantity) > Math.max(POSITION_QUANTITY_TOLERANCE, position.remainingQuantity * 1e-6)) {
+    throw new Error('BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT');
+  }
+  return quantity;
 }
 
 function currentConsecutiveLosses(journal: readonly Record<string, unknown>[]) {
@@ -287,8 +389,9 @@ function exposureState(
   policy: TradingPolicy,
   entry: MemberAutoTradingPaperHandoffEntry,
   nowMs: number,
+  accountMode: TradingPlan['accountMode'] = 'paper',
 ) {
-  const active = activePlans(runtime.plans, runtime.orders);
+  const active = openAutomaticPlans(runtime, accountMode === 'live' ? 'live' : 'paper');
   const mapping = marketMapping(entry.identity.market, policy);
   const side = sideFor(entry.identity.direction);
   const sameInstrument = active.filter((plan) => plan.exchange === mapping.exchange
@@ -306,8 +409,10 @@ function exposureState(
     openRiskKrw: active.reduce((total, plan) => total + plannedRiskKrw(plan), 0),
     openPositionCount: active.length,
     dailyOrderCount: runtime.orders.filter((order) => {
+      const plan = runtime.plans.find((candidate) => candidate.id === order.planId);
       const at = Date.parse(order.createdAt);
-      return Number.isFinite(at) && at >= nowMs - 24 * 60 * 60_000;
+      return plan?.accountMode === accountMode
+        && Number.isFinite(at) && at >= nowMs - 24 * 60 * 60_000;
     }).length,
     existingPositionSide: sameInstrument.find((plan) => plan.side === side)?.side
       ?? sameInstrument[0]?.side
@@ -396,10 +501,23 @@ function buildPlanInput(
     ? new Date(entry.signal.timestampMs).toISOString()
     : observedAt;
 
+  const stockExchangeRaw = String(
+    evidence?.stockExchange ?? evidence?.exchange ?? evidence?.venue ?? '',
+  ).trim().toUpperCase();
+  const stockExchange = entry.identity.market === 'US_STOCK' && mapping.exchange === 'kiwoom'
+    ? (['NASDAQ', 'NYSE', 'AMEX'].includes(stockExchangeRaw)
+      ? stockExchangeRaw as 'NASDAQ' | 'NYSE' | 'AMEX'
+      : null)
+    : null;
+  if (entry.identity.market === 'US_STOCK' && mapping.exchange === 'kiwoom' && !stockExchange) {
+    throw new Error('BACKGROUND_US_STOCK_EXCHANGE_REQUIRED');
+  }
+
   return {
     exchange: mapping.exchange,
     accountMode: 'paper',
     stockBroker: mapping.stockBroker,
+    stockExchange,
     strategyId: entry.identity.strategyId,
     signalId: entry.identity.signalId,
     symbol: entry.identity.symbol,
@@ -471,6 +589,302 @@ function buildPlanInput(
   };
 }
 
+
+export function liveBackgroundEnabled() {
+  return process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'
+    && process.env.AUTO_TRADING === 'true'
+    && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+    && process.env.LIVE_TRADING === 'true'
+    && process.env.REAL_ORDER_ENABLED === 'true'
+    && process.env.PRIVATE_TRADING_API_ALLOWED === 'true';
+}
+
+function normalizedSymbol(value: unknown) {
+  return String(value ?? '').trim().toUpperCase().replace(/^KRW-/u, '');
+}
+
+function activeLivePlans(runtime: MemberRuntimeState) {
+  return openAutomaticPlans(runtime, 'live');
+}
+
+function expectedBalanceCurrency(market: MemberAutoTradingPaperHandoffEntry['identity']['market']) {
+  if (market === 'KR_STOCK' || market === 'CRYPTO_SPOT') return 'KRW';
+  if (market === 'US_STOCK') return 'USD';
+  return 'USDT';
+}
+
+function availableBalanceKrw(
+  snapshot: CanonicalAccountSnapshot,
+  market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+  fx: MemberAutoTradingFxQuote,
+) {
+  if (!snapshot.connected || snapshot.stale || snapshot.status !== 'CONNECTED') {
+    throw new Error('BACKGROUND_LIVE_ACCOUNT_SNAPSHOT_NOT_FRESH');
+  }
+  const currency = expectedBalanceCurrency(market);
+  const candidates = [
+    ...(snapshot.balances ?? [])
+      .filter((row) => String(row.currency).toUpperCase() === currency)
+      .flatMap((row) => finite(row.available) && row.available! >= 0 ? [row.available!] : []),
+    ...(snapshot.accounts ?? [])
+      .filter((row) => String(row.currency ?? '').toUpperCase() === currency)
+      .flatMap((row) => finite(row.buyingPower) && row.buyingPower! >= 0 ? [row.buyingPower!] : []),
+  ];
+  if (!candidates.length) return null;
+  const value = Math.max(...candidates) * fx.krwPerQuoteCurrency;
+  return finite(value) && value >= 0 ? value : null;
+}
+
+function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEntry['identity']['market'] {
+  if (plan.exchange === 'upbit') return 'CRYPTO_SPOT';
+  if (plan.exchange === 'bitget') return 'CRYPTO_FUTURES';
+  return plan.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
+}
+
+async function liveJournalRiskState(
+  source: MemberAutoTradingBackgroundSource,
+  repository: TradingRepository,
+  userId: string,
+  runtime: MemberRuntimeState,
+  snapshot: CanonicalAccountSnapshot,
+  policy: TradingPolicy,
+  nowMs: number,
+  fxCache: Map<string, MemberAutoTradingFxQuote>,
+  entrySymbol: string,
+) {
+  const fxFor = async (market: MemberAutoTradingPaperHandoffEntry['identity']['market']) => {
+    let fx = fxCache.get(market);
+    if (!fx) {
+      fx = await source.resolveFx(market, nowMs);
+      fxCache.set(market, fx);
+    }
+    return fx;
+  };
+  const payloads = await readTradeAutomationJournalPayloads(repository, userId);
+  const journal = buildUnifiedTradeJournal(payloads, { range: 'ALL', source: 'APP_AUTO' }, new Date(nowMs));
+  const closed = journal.trades.filter((trade) => trade.source === 'APP_AUTO' && trade.status === 'CLOSED' && trade.closedAt);
+  const pnlKrw = async (cutoff: number) => {
+    let total = 0;
+    for (const trade of closed) {
+      const closedAt = Date.parse(trade.closedAt ?? '');
+      if (!Number.isFinite(closedAt) || closedAt < cutoff) continue;
+      if (!finite(trade.netPnl)) throw new Error('BACKGROUND_LIVE_REALIZED_PNL_EVIDENCE_REQUIRED');
+      const fx = await fxFor(trade.market);
+      total += trade.netPnl! * fx.krwPerQuoteCurrency;
+    }
+    return total;
+  };
+  const livePlans = activeLivePlans(runtime);
+  const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
+  let unrealizedKrw = 0;
+  for (const position of snapshot.positions ?? []) {
+    if (!finite(position.quantity) || Math.abs(position.quantity!) <= 0) continue;
+    const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
+    if (!matched) {
+      if (normalizedSymbol(position.symbol) === normalizedSymbol(entrySymbol)) {
+        throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_SAME_SYMBOL');
+      }
+      continue;
+    }
+    if (!finite(position.unrealizedPnl)) continue;
+    const fx = await fxFor(tradeMarketForPlan(matched));
+    unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
+  }
+  const dailyKrw = await pnlKrw(nowMs - 24 * 60 * 60_000) + unrealizedKrw;
+  const weeklyKrw = await pnlKrw(nowMs - 7 * 24 * 60 * 60_000) + unrealizedKrw;
+  const equityBase = Math.max(1, policy.totalCapitalKrw);
+  const ordered = closed
+    .filter((trade) => finite(trade.netPnl))
+    .sort((a, b) => Date.parse(b.closedAt ?? '') - Date.parse(a.closedAt ?? ''));
+  let consecutiveLosses = 0;
+  for (const trade of ordered) {
+    if (Number(trade.netPnl) < 0) consecutiveLosses += 1;
+    else break;
+  }
+  return {
+    dailyPnlPercent: dailyKrw / equityBase * 100,
+    weeklyPnlPercent: weeklyKrw / equityBase * 100,
+    consecutiveLosses,
+  };
+}
+
+async function buildLivePlanInput(input: {
+  source: MemberAutoTradingBackgroundSource;
+  repository: TradingRepository;
+  member: EligibleMember;
+  entry: MemberAutoTradingPaperHandoffEntry;
+  runtime: MemberRuntimeState;
+  paperInput: TradingPlanInput;
+  snapshot: CanonicalAccountSnapshot;
+  fx: MemberAutoTradingFxQuote;
+  fxCache: Map<string, MemberAutoTradingFxQuote>;
+  nowMs: number;
+}): Promise<TradingPlanInput> {
+  const exposure = exposureState(input.runtime, input.member.policy, input.entry, input.nowMs, 'live');
+  const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
+  const risk = await liveJournalRiskState(
+    input.source, input.repository, input.member.userId, input.runtime, input.snapshot,
+    input.member.policy, input.nowMs, input.fxCache, input.entry.identity.symbol,
+  );
+  const availableBalance = readOnlyAvailableBalance ?? 0;
+  const accountValueKrw = Math.max(1, Math.min(
+    input.member.policy.totalCapitalKrw,
+    Math.max(availableBalance, exposure.accountExposureKrw || 1),
+  ));
+  const slippage = finite(input.paperInput.marketSnapshot.estimatedSlippagePercent)
+    ? input.paperInput.marketSnapshot.estimatedSlippagePercent
+    : null;
+  return {
+    ...input.paperInput,
+    accountMode: 'live',
+    signalReasons: [
+      ...input.paperInput.signalReasons.filter((reason) => reason !== 'CANONICAL_PAPER_HANDOFF'),
+      'CANONICAL_LIVE_AUTO_HANDOFF',
+      'ACCOUNT_READONLY_PRECHECK',
+    ],
+    marketSnapshot: {
+      ...input.paperInput.marketSnapshot,
+      availableBalance,
+      accountValueKrw,
+      dailyPnlPercent: risk.dailyPnlPercent,
+      weeklyPnlPercent: risk.weeklyPnlPercent,
+      consecutiveLosses: risk.consecutiveLosses,
+      accountExposureKrw: exposure.accountExposureKrw,
+      instrumentExposureKrw: exposure.instrumentExposureKrw,
+      strategyExposureKrw: exposure.strategyExposureKrw,
+      assetClassExposureKrw: exposure.assetClassExposureKrw,
+      openRiskKrw: exposure.openRiskKrw,
+      openPositionCount: Math.max(
+        exposure.openPositionCount,
+        (input.snapshot.positions ?? []).filter((row) => finite(row.quantity) && Math.abs(row.quantity!) > 0).length,
+      ),
+      dailyOrderCount: exposure.dailyOrderCount,
+      assetExposurePercent: exposure.assetExposurePercent,
+      existingPositionSide: exposure.existingPositionSide,
+      correlatedExposurePercent: exposure.assetExposurePercent,
+      source: `${input.paperInput.marketSnapshot.source}+account-readonly-live-precheck`,
+    },
+    estimatedSlippagePercent: slippage,
+    averageSpreadPercent: input.paperInput.marketSnapshot.spreadPercent,
+    economics: null,
+  };
+}
+
+async function executeAutomaticPlan(input: {
+  repository: TradingRepository;
+  userId: string;
+  planInput: TradingPlanInput;
+  policy: TradingPolicy;
+  emergencyStopped: boolean;
+}) {
+  const automation = new TradeAutomationService(input.repository);
+  const execution = new TradeExecutionService(input.repository);
+  const created = await automation.createPlan(
+    input.userId, input.planInput, input.policy, input.emergencyStopped,
+  );
+  if (!created.plan) return { created, plan: null, order: null, orderDuplicate: false };
+  let plan = created.plan;
+  if (plan.state === 'APPROVAL_PENDING') plan = await automation.beginAutomaticPlan(input.userId, plan.id);
+  if (plan.state !== 'SUBMITTED') return { created, plan, order: null, orderDuplicate: false };
+  const createdOrder = await automation.createOrder(input.userId, plan);
+  const order = createdOrder.duplicate
+    ? createdOrder.order
+    : await execution.execute(input.userId, plan, createdOrder.order);
+  return { created, plan, order, orderDuplicate: createdOrder.duplicate };
+}
+
+async function processAutomaticExit(input: {
+  source: MemberAutoTradingBackgroundSource;
+  repository: TradingRepository;
+  member: EligibleMember;
+  position: TrackedAutomaticPosition;
+  fxCache: Map<string, MemberAutoTradingFxQuote>;
+  now: Date;
+  live: boolean;
+}) {
+  if (input.position.activeExit) {
+    return { status: 'IDEMPOTENT' as const, privateRequests: 0, orderCreated: false };
+  }
+  const market = tradeMarketForPlan(input.position.plan);
+  const mark = await input.source.readMarketMark(market, input.position.plan.symbol);
+  const initialReason = automaticExitReason(input.position.plan, mark.price);
+  if (!initialReason) return { status: 'HOLD' as const, privateRequests: 0, orderCreated: false };
+
+  let fx = input.fxCache.get(market);
+  if (!fx) {
+    fx = await input.source.resolveFx(market, input.now.getTime());
+    input.fxCache.set(market, fx);
+  }
+
+  let exitInput = buildAutomaticExitPlanInput({
+    entryPlan: input.position.plan,
+    entryOrder: input.position.order,
+    mark,
+    fx,
+    reason: initialReason,
+    remainingQuantity: input.position.remainingQuantity,
+  });
+  let privateRequests = 0;
+
+  if (input.live) {
+    if (!liveBackgroundEnabled()) {
+      return { status: 'HOLD' as const, privateRequests: 0, orderCreated: false };
+    }
+    const provider = input.position.plan.exchange as AccountProvider;
+    const accountSnapshot = await input.source.readLiveAccountSnapshot(input.member.userId, provider);
+    privateRequests += 1;
+    const providerQuantity = providerPositionQuantity(accountSnapshot, input.position);
+    exitInput = { ...exitInput, quantity: providerQuantity };
+    const preview = await new TradeExecutionService(input.repository).previewLiveRiskSnapshot(
+      input.member.userId,
+      exitInput,
+      { fxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency, now: input.now },
+    );
+    privateRequests += preview.providerRequests;
+    const confirmedPrice = Number(preview.snapshot.currentPrice);
+    const confirmedReason = automaticExitReason(input.position.plan, confirmedPrice);
+    if (confirmedReason !== initialReason) {
+      return { status: 'BLOCKED_RECHECK' as const, privateRequests, orderCreated: false };
+    }
+    exitInput = {
+      ...exitInput,
+      marketSnapshot: {
+        ...preview.snapshot,
+        source: `${preview.snapshot.source ?? 'provider-private-preflight'}+automatic-exit`,
+        signalState: 'approved',
+        signalObservedAt: preview.snapshot.observedAt,
+      },
+      estimatedSlippagePercent: preview.snapshot.estimatedSlippagePercent,
+      averageSpreadPercent: preview.snapshot.spreadPercent,
+    };
+  }
+
+  const persistentStop = await input.repository.getGlobalEmergencyStop();
+  const execution = await executeAutomaticPlan({
+    repository: input.repository,
+    userId: input.member.userId,
+    planInput: exitInput,
+    policy: input.member.policy,
+    emergencyStopped: input.member.policy.emergencyStopped
+      || persistentStop
+      || process.env.TRADING_EMERGENCY_STOP === 'true',
+  });
+  if (!execution.plan || !execution.order) {
+    return { status: 'BLOCKED_PLAN' as const, privateRequests, orderCreated: false };
+  }
+  const orderCreated = !execution.orderDuplicate;
+  if (['REJECTED', 'RECOVERY_REQUIRED'].includes(execution.order.state)) {
+    return { status: 'BLOCKED_ORDER' as const, privateRequests, orderCreated };
+  }
+  return {
+    status: ['FILLED', 'PARTIALLY_FILLED', 'ACCEPTED'].includes(execution.order.state)
+      ? 'EXIT_SUBMITTED' as const
+      : 'HOLD' as const,
+    privateRequests,
+    orderCreated,
+  };
+}
+
 function intervalMs(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed)
@@ -502,7 +916,11 @@ export class MemberAutoTradingBackgroundWorker {
       lifecycleIdempotent: 0,
       duplicates: 0,
       failures: 0,
+      livePlans: 0,
       liveOrders: 0,
+      paperExitOrders: 0,
+      liveExitOrders: 0,
+      exitBlocked: 0,
       privateTradingRequests: 0,
     };
     if (this.running) return result;
@@ -510,13 +928,13 @@ export class MemberAutoTradingBackgroundWorker {
     try {
       const nowMs = now.getTime();
       const handoff = await this.source.readHandoff(nowMs);
-      if (!handoff) return result;
-      result.handoffStatus = handoff.status;
-      if (handoff.status !== 'READY' || handoff.entryCount === 0) return result;
+      if (handoff) result.handoffStatus = handoff.status;
 
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
-      const entries = handoff.entries.slice(0, MAX_ENTRIES_PER_TICK);
+      const entries = handoff?.status === 'READY'
+        ? handoff.entries.slice(0, MAX_ENTRIES_PER_TICK)
+        : [];
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
 
@@ -535,6 +953,73 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
 
+        let exitChanged = false;
+        for (const position of trackedAutomaticPositions(runtime, 'paper')) {
+          try {
+            const exit = await processAutomaticExit({
+              source: this.source,
+              repository,
+              member,
+              position,
+              fxCache,
+              now,
+              live: false,
+            });
+            if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
+              result.paperExitOrders += 1;
+              exitChanged = true;
+            } else if (exit.status.startsWith('BLOCKED')) {
+              result.exitBlocked += 1;
+            }
+          } catch (error) {
+            const code = errorCode(error);
+            if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
+              result.exitBlocked += 1;
+            } else {
+              result.failures += 1;
+            }
+          }
+        }
+
+        if (liveBackgroundEnabled()) {
+          for (const position of trackedAutomaticPositions(runtime, 'live')) {
+            try {
+              const exit = await processAutomaticExit({
+                source: this.source,
+                repository,
+                member,
+                position,
+                fxCache,
+                now,
+                live: true,
+              });
+              result.privateTradingRequests += exit.privateRequests;
+              if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
+                result.liveExitOrders += 1;
+                exitChanged = true;
+              } else if (exit.status.startsWith('BLOCKED')) {
+                result.exitBlocked += 1;
+              }
+            } catch (error) {
+              const code = errorCode(error);
+              if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
+                result.exitBlocked += 1;
+              } else {
+                result.failures += 1;
+              }
+            }
+          }
+        }
+
+        if (exitChanged) {
+          try {
+            runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          } catch {
+            result.exitBlocked += 1;
+            continue;
+          }
+        }
+
         for (const entry of entries) {
           if (!policyAllowsEntry(member, entry)) {
             result.skipped += 1;
@@ -547,53 +1032,99 @@ export class MemberAutoTradingBackgroundWorker {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
               fxCache.set(entry.identity.market, fx);
             }
-            const input = buildPlanInput(member, entry, runtime, fx, nowMs);
-            const automation = new TradeAutomationService(repository);
-            const execution = new TradeExecutionService(repository);
+            const paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
             const persistentStop = await repository.getGlobalEmergencyStop();
-            const created = await automation.createPlan(
-              member.userId,
-              input,
-              member.policy,
-              member.policy.emergencyStopped
+            const paperRun = await executeAutomaticPlan({
+              repository,
+              userId: member.userId,
+              planInput: paperInput,
+              policy: member.policy,
+              emergencyStopped: member.policy.emergencyStopped
                 || persistentStop
                 || process.env.TRADING_EMERGENCY_STOP === 'true',
-            );
-            if (!created.plan) {
+            });
+            if (!paperRun.plan || !paperRun.order) {
               result.blocked += 1;
-              continue;
+            } else {
+              if (paperRun.created.duplicate || paperRun.orderDuplicate) result.duplicates += 1;
+              else result.createdPlans += 1;
+              if (paperRun.order.state === 'FILLED') {
+                result.filledOrders += paperRun.orderDuplicate ? 0 : 1;
+                const lifecycle = await persistMemberAutoTradingPaperPositionBridge({
+                  repository,
+                  userId: member.userId,
+                  plan: paperRun.plan,
+                  order: paperRun.order,
+                  entry,
+                  now,
+                });
+                if (lifecycle.status === 'PERSISTED') result.positionLifecycles += 1;
+                else if (lifecycle.status === 'IDEMPOTENT') result.lifecycleIdempotent += 1;
+                else result.blocked += 1;
+              } else if (paperRun.order.state === 'REJECTED' || paperRun.order.state === 'RECOVERY_REQUIRED') {
+                result.blocked += 1;
+              }
             }
-            if (created.duplicate) result.duplicates += 1;
-            else result.createdPlans += 1;
 
-            let plan = created.plan;
-            if (plan.state === 'APPROVAL_PENDING') {
-              plan = await automation.beginAutomaticPlan(member.userId, plan.id);
-            }
-            if (plan.state !== 'SUBMITTED') {
-              result.blocked += 1;
-              continue;
-            }
-            const createdOrder = await automation.createOrder(member.userId, plan);
-            if (createdOrder.duplicate) result.duplicates += 1;
-            const order = createdOrder.duplicate
-              ? createdOrder.order
-              : await execution.execute(member.userId, plan, createdOrder.order);
-            if (order.state === 'FILLED') {
-              result.filledOrders += createdOrder.duplicate ? 0 : 1;
-              const lifecycle = await persistMemberAutoTradingPaperPositionBridge({
+            if (liveBackgroundEnabled()) {
+              const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
+              const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
+              const liveSeed = await buildLivePlanInput({
+                source: this.source,
+                repository,
+                member,
+                entry,
+                runtime,
+                paperInput,
+                snapshot: accountSnapshot,
+                fx,
+                fxCache,
+                nowMs,
+              });
+              const livePreview = await new TradeExecutionService(repository).previewLiveRiskSnapshot(
+                member.userId,
+                liveSeed,
+                { fxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency, now },
+              );
+              result.privateTradingRequests += livePreview.providerRequests;
+              const liveInput: TradingPlanInput = {
+                ...liveSeed,
+                marketSnapshot: {
+                  ...livePreview.snapshot,
+                  dailyPnlPercent: liveSeed.marketSnapshot.dailyPnlPercent,
+                  weeklyPnlPercent: liveSeed.marketSnapshot.weeklyPnlPercent,
+                  consecutiveLosses: liveSeed.marketSnapshot.consecutiveLosses,
+                  accountExposureKrw: liveSeed.marketSnapshot.accountExposureKrw,
+                  instrumentExposureKrw: liveSeed.marketSnapshot.instrumentExposureKrw,
+                  strategyExposureKrw: liveSeed.marketSnapshot.strategyExposureKrw,
+                  assetClassExposureKrw: liveSeed.marketSnapshot.assetClassExposureKrw,
+                  openRiskKrw: liveSeed.marketSnapshot.openRiskKrw,
+                  correlatedExposurePercent: liveSeed.marketSnapshot.correlatedExposurePercent,
+                  source: `${livePreview.snapshot.source ?? 'provider-private-preflight'}+member-live-auto`,
+                },
+                estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
+                averageSpreadPercent: livePreview.snapshot.spreadPercent,
+              };
+              const liveRun = await executeAutomaticPlan({
                 repository,
                 userId: member.userId,
-                plan,
-                order,
-                entry,
-                now,
+                planInput: liveInput,
+                policy: member.policy,
+                emergencyStopped: member.policy.emergencyStopped
+                  || persistentStop
+                  || process.env.TRADING_EMERGENCY_STOP === 'true',
               });
-              if (lifecycle.status === 'PERSISTED') result.positionLifecycles += 1;
-              else if (lifecycle.status === 'IDEMPOTENT') result.lifecycleIdempotent += 1;
-              else result.blocked += 1;
-            } else if (order.state === 'REJECTED' || order.state === 'RECOVERY_REQUIRED') {
-              result.blocked += 1;
+              if (!liveRun.plan || !liveRun.order) {
+                result.blocked += 1;
+              } else {
+                if (!liveRun.created.duplicate) result.livePlans += 1;
+                else result.duplicates += 1;
+                if (!liveRun.orderDuplicate
+                  && ['ACCEPTED', 'PARTIALLY_FILLED', 'FILLED', 'RECOVERY_REQUIRED'].includes(liveRun.order.state)) {
+                  result.liveOrders += 1;
+                }
+                if (liveRun.order.state === 'REJECTED') result.blocked += 1;
+              }
             }
           } catch (error) {
             const code = errorCode(error);
@@ -613,6 +1144,8 @@ export class MemberAutoTradingBackgroundWorker {
 }
 
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
+  private readonly accountReaders = createVaultBackedAccountReaders();
+
   constructor(
     private readonly client: SupabaseClient = getSupabase(),
     private readonly handoffPath = process.env.MEMBER_AUTO_TRADING_HANDOFF_PATH?.trim()
@@ -666,6 +1199,19 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   resolveFx(market: MemberAutoTradingPaperHandoffEntry['identity']['market'], nowMs: number) {
     return resolveMemberAutoTradingKrwRate(market, { nowMs });
   }
+
+  async readLiveAccountSnapshot(userId: string, provider: AccountProvider) {
+    const reader = this.accountReaders[provider];
+    if (!reader) throw new Error('BACKGROUND_LIVE_ACCOUNT_READER_UNAVAILABLE');
+    return reader({ userId, accessToken: 'service-role-background' });
+  }
+
+  readMarketMark(
+    market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
+    symbol: string,
+  ) {
+    return readMemberAutoTradingMarketMark(market, symbol);
+  }
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
@@ -681,7 +1227,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   const tick = async () => {
     try {
       const result = await worker.runOnce(new Date());
-      if (result.evaluated > 0 || result.failures > 0) {
+      if (result.evaluated > 0 || result.paperExitOrders > 0 || result.liveExitOrders > 0
+        || result.exitBlocked > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
@@ -693,6 +1240,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs(process.env.MEMBER_AUTO_TRADING_BACKGROUND_INTERVAL_MS));
   timer.unref?.();
-  console.log('[member-auto-trading-background] started in Paper-only mode');
+  console.log(liveBackgroundEnabled()
+    ? '[member-auto-trading-background] started in Paper+Live guarded mode'
+    : '[member-auto-trading-background] started in Paper-only mode');
   return { stop: () => clearInterval(timer) };
 }
