@@ -138,10 +138,23 @@ jobs:
       - name: Development-only safety boundary
         run: |
           set -Eeuo pipefail
-          workflow='.github/workflows/research-center-predeploy-validation.yml'
-          ! grep -Eq '^\s*environment:\s*(production|staging)\s*$' "$workflow"
-          ! grep -Eq 'secrets\.' "$workflow"
-          ! grep -Eq 'merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true' "$workflow"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
           git diff --exit-code
           test -z "$(git status --porcelain=v1)"
 
