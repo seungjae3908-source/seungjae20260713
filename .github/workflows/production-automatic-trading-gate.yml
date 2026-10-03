@@ -266,7 +266,7 @@ jobs:
                 && body.includes('status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL')
                 && body.includes('target_sha: ' + target)
                 && body.includes('provider: bitget')
-                && /max_leverage:\s*(2|3)/u.test(body)
+                && /max_leverage:\\s*3/u.test(body)
                 && body.includes('margin_mode: isolated')
                 && body.includes('FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED')
                 && body.includes('AUTO_TRADING=false')
@@ -277,7 +277,7 @@ jobs:
               core.setFailed('AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED:' + target);
               return;
             }
-            const leverage = /max_leverage:\s*(2|3)/u.exec(String(futuresReceipt.body || ''))?.[1];
+            const leverage = /max_leverage:\\s*(3)/u.exec(String(futuresReceipt.body || ''))?.[1];
             if (!leverage) {
               core.setFailed('AUTOMATIC_TRADING_FUTURES_LEVERAGE_RECEIPT_INVALID');
               return;
@@ -379,7 +379,7 @@ jobs:
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
-          if (!['2', '3'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
+          if (expectedLeverage !== '3') throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_MUST_BE_3X');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
           if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
 
@@ -420,11 +420,19 @@ jobs:
             futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
             futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
             futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || '').toLowerCase(),
+            tossAccountRead: bool(env, 'TOSS_ACCOUNT_READ_ENABLED'),
+            kiwoomAccountRead: bool(env, 'KIWOOM_ACCOUNT_READ_ENABLED'),
+            upbitAccountRead: bool(env, 'UPBIT_ACCOUNT_READ_ENABLED'),
+            bitgetAccountRead: bool(env, 'BITGET_ACCOUNT_READ_ENABLED'),
           });
           const assertAllFourManual = (env, expectedAuto) => {
             const manual = manualState(env);
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
+            }
+            if (!manual.tossAccountRead || !manual.kiwoomAccountRead
+              || !manual.upbitAccountRead || !manual.bitgetAccountRead) {
+              throw new Error('AUTOMATIC_TRADING_ACCOUNT_READ_PROVIDERS_NOT_READY');
             }
             if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
               || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
