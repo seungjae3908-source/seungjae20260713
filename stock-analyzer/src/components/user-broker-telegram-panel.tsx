@@ -85,6 +85,18 @@ type TelegramRuntimeState = {
   realOrderAllowed: false;
 };
 
+type DeliveryHealth = {
+  pending: number;
+  retryScheduled: number;
+  failed: number;
+  deadLetter: number;
+  sent: number;
+  lastSentAt: string | null;
+  lastFailureAt: string | null;
+  lastErrorCode: string | null;
+  lastActivityAt: string | null;
+};
+
 type IntegrationState = {
   brokerConnections: BrokerConnection[];
   telegram: { connected: boolean; status: string; connectedAt: string | null };
@@ -93,6 +105,7 @@ type IntegrationState = {
   alertPolicySource: string;
   alertPolicyStorageAvailable: boolean;
   telegramRuntime: TelegramRuntimeState;
+  deliveryHealth: DeliveryHealth;
 };
 
 const preferenceLabels: Record<PreferenceKey, string> = {
@@ -208,6 +221,62 @@ function normalizeTelegramRuntime(value: unknown): TelegramRuntimeState {
   };
 }
 
+function normalizeDeliveryHealth(value: unknown): DeliveryHealth {
+  const rows = Array.isArray(value) ? value : [];
+  const health: DeliveryHealth = {
+    pending: 0,
+    retryScheduled: 0,
+    failed: 0,
+    deadLetter: 0,
+    sent: 0,
+    lastSentAt: null,
+    lastFailureAt: null,
+    lastErrorCode: null,
+    lastActivityAt: null,
+  };
+  let latestFailureMs = -1;
+  for (const item of rows) {
+    const row = record(item);
+    if (!row || typeof row.state !== 'string') continue;
+    const state = row.state;
+    if (state === 'PENDING' || state === 'SENDING') health.pending += 1;
+    else if (state === 'RETRY_SCHEDULED') health.retryScheduled += 1;
+    else if (state === 'FAILED') health.failed += 1;
+    else if (state === 'DEAD_LETTER') health.deadLetter += 1;
+    else if (state === 'SENT') health.sent += 1;
+    else continue;
+
+    const updatedAt = typeof row.updatedAt === 'string' && Number.isFinite(Date.parse(row.updatedAt))
+      ? new Date(Date.parse(row.updatedAt)).toISOString()
+      : null;
+    if (updatedAt && (!health.lastActivityAt || updatedAt > health.lastActivityAt)) health.lastActivityAt = updatedAt;
+    if (state === 'SENT' && updatedAt && (!health.lastSentAt || updatedAt > health.lastSentAt)) health.lastSentAt = updatedAt;
+    if (['FAILED', 'RETRY_SCHEDULED', 'DEAD_LETTER'].includes(state) && updatedAt) {
+      const failureMs = Date.parse(updatedAt);
+      if (failureMs > latestFailureMs) {
+        latestFailureMs = failureMs;
+        health.lastFailureAt = updatedAt;
+        health.lastErrorCode = typeof row.lastErrorCode === 'string' && row.lastErrorCode.trim()
+          ? row.lastErrorCode.trim().slice(0, 120)
+          : null;
+      }
+    }
+  }
+  return health;
+}
+
+function deliveryHealthTime(value: string | null) {
+  if (!value) return '없음';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(value));
+}
+
 function normalizeIntegrationState(value: unknown): IntegrationState {
   const root = record(value) ?? {};
   const telegram = record(root.telegram) ?? {};
@@ -243,6 +312,7 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
     alertPolicySource: typeof root.alertPolicySource === 'string' ? root.alertPolicySource : 'DEFAULT_MISSING',
     alertPolicyStorageAvailable: root.alertPolicyStorageAvailable !== false,
     telegramRuntime: normalizeTelegramRuntime(root.telegramRuntime),
+    deliveryHealth: normalizeDeliveryHealth(root.deliveries),
   };
 }
 
@@ -506,6 +576,30 @@ export function UserBrokerTelegramPanel() {
           </button>
         </div>
         {link ? <p className="mt-2 text-xs"><a className="font-bold underline" href={link} target="_blank" rel="noreferrer">텔레그램에서 연결 완료</a></p> : null}
+
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="telegram-delivery-health">
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">대기</p>
+            <p className="mt-1 text-xs font-extrabold">{state.deliveryHealth.pending}건</p>
+          </div>
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">재시도</p>
+            <p className="mt-1 text-xs font-extrabold">{state.deliveryHealth.retryScheduled}건</p>
+          </div>
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">실패</p>
+            <p className="mt-1 text-xs font-extrabold">{state.deliveryHealth.failed + state.deliveryHealth.deadLetter}건</p>
+          </div>
+          <div className="rounded-xl border border-card-border bg-background p-2.5 text-center">
+            <p className="text-[10px] font-bold text-muted-foreground">마지막 성공</p>
+            <p className="mt-1 text-xs font-extrabold">{deliveryHealthTime(state.deliveryHealth.lastSentAt)}</p>
+          </div>
+        </div>
+        {state.deliveryHealth.lastErrorCode ? (
+          <p className="mt-2 break-all rounded-xl border border-warning/30 bg-warning/10 p-2.5 text-[10px] font-bold text-warning" data-testid="telegram-delivery-last-error">
+            최근 전송 오류 · {state.deliveryHealth.lastErrorCode} · {deliveryHealthTime(state.deliveryHealth.lastFailureAt)}
+          </p>
+        ) : null}
 
         <div className="mt-4 divide-y divide-card-border overflow-hidden rounded-2xl border border-card-border bg-background" data-testid="telegram-simple-settings">
           <ToggleRow
