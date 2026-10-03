@@ -174,6 +174,10 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/src/pages/research-center.tsx',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
+ 'stock-analyzer/src/components/research-center-general.tsx',
+ 'stock-analyzer/src/pages/research-center-workspace.tsx',
+ 'stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts',
+ 'stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts',
 ];
 const researchBacktestPaperReviewed=[
  '.github/tests/trading-ops-consolidated-preflight.test.mjs',
