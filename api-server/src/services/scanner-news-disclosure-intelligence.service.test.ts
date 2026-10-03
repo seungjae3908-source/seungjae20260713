@@ -16,6 +16,16 @@ function card(symbol: string, overrides: Partial<ScannerSignalCard> = {}): Scann
     tradingValue: 100, spreadPercent: 0.01, volatilityPercent: 1, matched: [], notMatched: [], unverified: [],
     evidence: [], pricePlan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
     dataState: 'complete', dataSources: ['test'], observedAt: '2026-08-27T02:00:00.000Z', expiresAt: '2026-08-27T03:00:00.000Z',
+    dataQuality: {
+      state: 'TRUSTED',
+      strongSignalAllowed: true,
+      complete: true,
+      fresh: true,
+      identityResolved: true,
+      priceAvailable: true,
+      liquidityVerified: true,
+      warnings: [],
+    },
     strongSignalEligible: true, warnings: [], signalGrade: 'A',
     ...overrides,
   };
