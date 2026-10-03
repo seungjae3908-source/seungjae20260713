@@ -90,7 +90,7 @@ const parameterBoolean = (parameters: Record<string, number | boolean>, key: str
 export function validateBacktestRequest(request: BacktestRequest) {
   const markets = new Set<BacktestMarket>(['kr-stock', 'us-stock', 'crypto-spot', 'crypto-futures']);
   if (!markets.has(request.market)) throw new BacktestValidationError('INVALID_MARKET', '지원하지 않는 시장입니다.');
-  if (request.market === 'kr-stock' && !/^\\d{6}$/u.test(request.symbol)) {
+  if (request.market === 'kr-stock' && !/^\d{6}$/u.test(request.symbol)) {
     throw new BacktestValidationError('INVALID_SYMBOL', '국내주식 종목코드는 6자리여야 합니다.');
   }
   if (request.market === 'us-stock' && !/^[A-Z0-9.-]{1,16}$/u.test(request.symbol)) {
@@ -170,7 +170,7 @@ function walkForwardWindows(request: BacktestRequest, trades: readonly BacktestT
 
 export function runBacktest(request: BacktestRequest, rawCandles: readonly NormalizedCandle[], now = new Date()): BacktestResult {
   validateBacktestRequest(request); const sanitized = sanitizeClosedCandles(rawCandles); const identityMismatches = sanitized.data.filter((candle) => candle.market !== request.market || candle.symbol !== request.symbol); if (identityMismatches.length) throw new BacktestValidationError('CANDLE_IDENTITY_MISMATCH', '시장·종목이 다른 캔들이 섞여 있어 실행을 중단했습니다.'); const candles = sanitized.data.filter((candle) => candle.timestamp >= request.startTime && candle.timestamp <= request.endTime); if (candles.length < BACKTEST_LIMITS.minimumCandles) throw new BacktestValidationError('INSUFFICIENT_CANDLES', `최소 ${BACKTEST_LIMITS.minimumCandles}개의 완료 캔들이 필요합니다.`); if (candles.length > BACKTEST_LIMITS.maximumCandles) throw new BacktestValidationError('CANDLE_LIMIT_EXCEEDED', '백테스트 최대 캔들 수를 초과했습니다.');
-  const warnings = [...sanitized.warnings]; const priority = request.intrabarPriority ?? 'stop_first'; warnings.push(priority === 'stop_first' ? '같은 봉에서 손절과 목표가가 모두 닿으면 손절을 우선합니다.' : '같은 봉에서 손절과 목표가가 모두 닿으면 목표가를 우선합니다.', '실현 손익 기준 자산곡선입니다.', '일별 실현수익률로 위험조정 지표를 계산합니다.'); if (request.market === 'crypto-futures') warnings.push('펀딩비는 보유시간 기준으로 계산합니다.');
+  const warnings = [...sanitized.warnings]; const priority = request.intrabarPriority ?? 'stop_first'; warnings.push(priority === 'stop_first' ? '같은 봉에서 손절과 목표가가 모두 닿으면 손절을 우선합니다.' : '같은 봉에서 손절과 목표가가 모두 닿으면 목표가를 우선합니다.', '실현 손익 기준 자산곡선입니다.', '일별 실현수익률로 위험조정 지표를 계산합니다.', '협정세계시 기준 하루 단위 거래량가중평균가를 사용합니다.'); if (request.market === 'crypto-futures') warnings.push('펀딩비는 보유시간 기준으로 계산합니다.');
   const signals = calculateStrategySignals(request, candles); const signalsByIndex = new Map<number, Signal[]>(); for (const signal of signals) signalsByIndex.set(signal.index, [...(signalsByIndex.get(signal.index) ?? []), signal]); const atr = atrSeries(candles, 14); const openPositions: OpenPosition[] = []; const trades: BacktestTrade[] = []; const tradesPerDay = new Map<string, number>(); let equity = request.initialCapital; let tradeSequence = 0;
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
