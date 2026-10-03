@@ -85,12 +85,12 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-upbit')).toBeVisible();
     await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
-    await expect(page.getByLabel('Bitget 레버리지')).toHaveCount(0);
+    await expect(page.getByLabel('비트겟 레버리지')).toHaveCount(0);
 
     await page.getByTestId('trading-settings-market-crypto_futures').click();
     await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-bitget')).toBeVisible();
-    await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
+    await expect(page.getByLabel('비트겟 레버리지')).toBeVisible();
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
@@ -128,12 +128,12 @@ test('automatic trading keeps standing authorization while settings follow one s
   await expect(dialog).toContainText('국내주식, 코인현물, 코인선물');
   await expect(dialog).not.toContainText('국내주식, 미국주식, 코인현물, 코인선물');
   await expect(dialog).toContainText('국내주식 증권사');
-  await expect(dialog).toContainText('Toss');
+  await expect(dialog).toContainText('토스');
   await expect(dialog).toContainText('미국주식 증권사');
-  await expect(dialog).toContainText('Kiwoom');
-  await expect(dialog).toContainText('Upbit 고정');
-  await expect(dialog).toContainText('Bitget 고정');
-  await expect(dialog).toContainText('거래키 + provider 서버게이트 + 주문 직전 Risk Gate 모두 필요');
+  await expect(dialog).toContainText('키움');
+  await expect(dialog).toContainText('업비트');
+  await expect(dialog).toContainText('비트겟');
+  await expect(dialog).toContainText('거래키 + 서버 허용 + 주문 직전 위험검사');
   await dialog.getByRole('button', { name: '설정 적용' }).click();
   await expect(page.getByRole('status')).toContainText('테스트 설정이 저장되었습니다.');
 
