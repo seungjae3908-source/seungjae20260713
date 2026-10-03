@@ -9,6 +9,8 @@ const REQUEST_MODE = 'READ_ONLY_GET';
 const SNAPSHOT_FILE = 'video-research-public-provider-runtime-v3.json';
 const SNAPSHOT_SCHEMA = 'video-research-sanitized-snapshot-v1';
 const SNAPSHOT_PUBLISHER_MODE = 'LOCAL_ATOMIC_FILE';
+const VIDEO_RUNTIME_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const VIDEO_RUNTIME_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const TRANSCRIPT_STATUSES = new Set([
   'AVAILABLE',
   'UNAVAILABLE',
@@ -367,12 +369,37 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   };
 }
 
+function videoEvidenceFreshness(
+  evidence: SafeEvidence,
+  nowMs: number,
+): 'FRESH' | 'STALE' | 'CLOCK_SKEW' | 'INVALID' {
+  if (!Number.isSafeInteger(nowMs) || nowMs <= 0) return 'INVALID';
+  const observedAtMs = Date.parse(evidence.snapshotProvenance.observedAt);
+  if (!Number.isFinite(observedAtMs)) return 'INVALID';
+  if (observedAtMs > nowMs + VIDEO_RUNTIME_CLOCK_SKEW_MS) return 'CLOCK_SKEW';
+  return nowMs - observedAtMs > VIDEO_RUNTIME_MAX_AGE_MS ? 'STALE' : 'FRESH';
+}
+
+function unavailableVideoSnapshot(
+  reason: 'VIDEO_RESEARCH_SNAPSHOT_STALE' | 'VIDEO_RESEARCH_SNAPSHOT_CLOCK_SKEW',
+  evidence: SafeEvidence,
+) {
+  return {
+    available: false,
+    dataState: 'UNKNOWN',
+    reason,
+    automation: evidence.automation,
+    aiReview: evidence.aiReview,
+  } as const;
+}
+
 export async function loadVideoResearchRuntimeEvidenceSnapshot(
   fetchImpl: typeof fetch = fetch,
   candidates: string[] = [
     resolve(process.cwd(), 'api-server', 'data', SNAPSHOT_FILE),
     resolve(process.cwd(), 'data', SNAPSHOT_FILE),
   ],
+  nowMs: number = Date.now(),
 ): Promise<unknown> {
   // The durable Research Dashboard readback is authoritative. A local snapshot
   // is compatibility fallback only when the fixed loopback endpoint is unavailable.
@@ -387,7 +414,17 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(
     });
     if (response.ok) {
       const payload = await response.json() as unknown;
-      if (isRecord(payload) && payload.available === true) return payload;
+      if (isRecord(payload) && payload.available === true) {
+        const evidence = sanitizeVideoResearchRuntimeEvidence(payload);
+        if (evidence) {
+          const freshness = videoEvidenceFreshness(evidence, nowMs);
+          if (freshness === 'STALE') return unavailableVideoSnapshot('VIDEO_RESEARCH_SNAPSHOT_STALE', evidence);
+          if (freshness === 'CLOCK_SKEW' || freshness === 'INVALID') {
+            return unavailableVideoSnapshot('VIDEO_RESEARCH_SNAPSHOT_CLOCK_SKEW', evidence);
+          }
+        }
+        return payload;
+      }
       if (isRecord(payload) && payload.available === false) return null;
       dashboardUnavailable = true;
     } else {
@@ -403,7 +440,10 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(
   for (const path of candidates) {
     try {
       const value = JSON.parse(await readFile(path, 'utf8')) as unknown;
-      if (sanitizeVideoResearchRuntimeEvidence(value)) return value;
+      const evidence = sanitizeVideoResearchRuntimeEvidence(value);
+      if (!evidence) continue;
+      if (videoEvidenceFreshness(evidence, nowMs) !== 'FRESH') continue;
+      return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT' || error instanceof SyntaxError) continue;
       throw error;
