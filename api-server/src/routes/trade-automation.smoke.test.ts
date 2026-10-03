@@ -1432,6 +1432,78 @@ test('status is authenticated, automatic execution defaults off, and never retur
   } finally { await close(authenticated.server); }
 });
 
+test('status partitions recent canonical orders by all four trading markets', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const baseMs = Date.UTC(2026, 9, 4, 0, 0, 0);
+  const rows = [
+    { asset: 'domestic_stock', planId: 'status-kr-plan', orderId: 'status-kr-order', exchange: 'kiwoom', market: 'KR', symbol: '005930', side: 'buy' },
+    { asset: 'us_stock', planId: 'status-us-plan', orderId: 'status-us-order', exchange: 'toss', market: 'US', symbol: 'AAPL', side: 'buy' },
+    { asset: 'crypto_spot', planId: 'status-spot-plan', orderId: 'status-spot-order', exchange: 'upbit', market: 'KRW', symbol: 'BTC', side: 'buy' },
+    { asset: 'crypto_futures', planId: 'status-futures-plan', orderId: 'status-futures-order', exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT', side: 'long' },
+  ] as const;
+
+  for (const [index, row] of rows.entries()) {
+    const createdAt = new Date(baseMs + index * 1_000).toISOString();
+    await isolated.savePlan({
+      id: row.planId,
+      userId: USER,
+      idempotencyKey: row.planId + '-key',
+      state: 'SUBMITTED',
+      version: 0,
+      exchange: row.exchange,
+      accountMode: 'live',
+      strategyId: 'status-market-test',
+      signalId: row.planId + '-signal',
+      symbol: row.symbol,
+      market: row.market,
+      side: row.side,
+      orderType: 'limit',
+      estimatedKrw: 100,
+      stopPrice: 90,
+      targetPrices: [110],
+      splitRatios: [100],
+      signalReasons: ['status-market-test'],
+      marketSnapshot: {} as any,
+      approvalExpiresAt: null,
+      approvedAt: null,
+      createdAt,
+      updatedAt: createdAt,
+    } as any);
+    await isolated.saveOrder({
+      id: row.orderId,
+      userId: USER,
+      planId: row.planId,
+      exchange: row.exchange,
+      clientOrderId: row.orderId + '-client',
+      exchangeOrderId: null,
+      state: 'ACCEPTED',
+      requestedQuantity: 1,
+      filledQuantity: 0,
+      averageFillPrice: null,
+      retryCount: 0,
+      lastErrorCode: null,
+      createdAt,
+      updatedAt: createdAt,
+    } as any);
+  }
+
+  const authenticated = await startServer();
+  try {
+    const response = await fetch(`${authenticated.baseUrl}/api/trade-automation/status`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      lastOrderByMarket: Record<string, { id: string } | null>;
+      actualOrderSubmittedByStatusRequest: boolean;
+    };
+    for (const row of rows) assert.equal(body.lastOrderByMarket[row.asset]?.id, row.orderId);
+    assert.equal(body.actualOrderSubmittedByStatusRequest, false);
+  } finally {
+    await close(authenticated.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('status degrades storage failures to a read-only unavailable payload without a 5xx or trading side effects', async () => {
   const unavailable = new Proxy(repository as TradingRepository, {
     get(target, property) {
