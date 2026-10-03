@@ -10,19 +10,25 @@ import type { AiChatResult } from './ai-chat.service';
 
 const NOW = Date.parse('2026-10-03T15:00:00.000Z');
 
-function entry(options: { stale?: boolean } = {}): MemberAutoTradingPaperHandoffEntry {
+function entry(options: { stale?: boolean; signalId?: string; symbol?: string } = {}): MemberAutoTradingPaperHandoffEntry {
   const asOfMs = NOW - (options.stale ? 60_000 : 1_000);
   return {
     identity: {
       strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
-      signalId: 'signal-ai-review-1',
+      signalId: options.signalId ?? 'signal-ai-review-1',
       market: 'CRYPTO_SPOT',
       direction: 'BUY',
-      symbol: 'BTC',
+      symbol: options.symbol ?? 'BTC',
       timeframe: '15m',
     },
     signal: {
+      signalId: options.signalId ?? 'signal-ai-review-1',
+      market: 'CRYPTO_SPOT',
+      symbol: options.symbol ?? 'BTC',
+      timestampMs: NOW - 1_000,
       expiresAtMs: NOW + 60_000,
+      timeframe: '15m',
+      direction: 'BUY',
       learningSnapshot: {
         strategyRulePackEvidence: {
           strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
@@ -86,6 +92,7 @@ function env(): NodeJS.ProcessEnv {
     AI_CHAT_API_KEY: 'test-provider-key',
     AI_CHAT_MODEL: 'gemini-test-model',
     TRADE_RULE_PACK_AI_REVIEW_TTL_MS: '60000',
+    TRADE_RULE_PACK_AI_REVIEW_CACHE_MAX_ENTRIES: '10',
   };
 }
 
@@ -94,10 +101,12 @@ test('runtime status exposes provider identity and safety state without credenti
   assert.equal(status.configured, true);
   assert.equal(status.provider, 'google-gemini');
   assert.equal(status.model, 'gemini-test-model');
+  assert.equal(status.producer, 'BOUNDED_AI_JSON_PROVIDER');
   assert.equal(status.failClosed, true);
   assert.equal(status.executionAuthority, 'NONE');
   assert.equal(status.orderAllowed, false);
   assert.equal(status.riskOverrideAllowed, false);
+  assert.equal(status.cacheMaxEntries, 500);
   assert.equal(JSON.stringify(status).includes('test-provider-key'), false);
 });
 
@@ -184,4 +193,53 @@ test('VETO is preserved as a review decision with zero trading authority', async
   assert.equal(result.decision, 'VETO');
   assert.equal(result.safety.positionSizeAuthority, false);
   assert.equal(result.safety.leverageAuthority, false);
+});
+
+
+test('review cache is bounded, evicts LRU entries, and reports live health counters', async () => {
+  let calls = 0;
+  const reviewer = new TradeRulePackAiReviewer(async () => {
+    calls += 1;
+    return answer('PASS');
+  }, env());
+
+  for (let index = 0; index < 11; index += 1) {
+    const result = await reviewer.review(entry({
+      signalId: 'signal-cache-' + index,
+      symbol: 'BTC' + index,
+    }), NOW + index);
+    assert.equal(result.status, 'READY');
+  }
+
+  const status = reviewer.runtimeStatus();
+  assert.equal(calls, 11);
+  assert.equal(status.cacheMaxEntries, 10);
+  assert.equal(status.cacheSize, 10);
+  assert.equal(status.cacheEvictions, 1);
+  assert.equal(status.reviewCalls, 11);
+  assert.equal(status.pass, 11);
+  assert.equal(status.abstain, 0);
+  assert.equal(status.veto, 0);
+  assert.ok(status.lastDecisionAt);
+});
+
+test('cache hit moves entry to MRU and increments cache hit counter without provider reinvocation', async () => {
+  let calls = 0;
+  const reviewer = new TradeRulePackAiReviewer(async () => {
+    calls += 1;
+    return answer('PASS');
+  }, env());
+  const first = entry({ signalId: 'signal-mru-1', symbol: 'BTC-MRU-1' });
+  const second = entry({ signalId: 'signal-mru-2', symbol: 'BTC-MRU-2' });
+
+  await reviewer.review(first, NOW);
+  await reviewer.review(second, NOW + 1);
+  const cached = await reviewer.review(first, NOW + 2);
+
+  assert.equal(cached.cacheHit, true);
+  assert.equal(calls, 2);
+  const status = reviewer.runtimeStatus();
+  assert.equal(status.cacheHits, 1);
+  assert.equal(status.reviewCalls, 3);
+  assert.equal(status.pass, 3);
 });
