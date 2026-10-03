@@ -63,6 +63,7 @@ jobs:
           grep -Fq "LIVE_AUTOMATIC_TRADING_ENABLED=false" "$workflow"
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
           grep -Fq "CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS" "$workflow"
+          grep -Fq 'run.name.startsWith(`${name} ${target} `)' "$workflow"
           ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
           ! grep -Eq 'LIVE_AUTOMATIC_TRADING_ENABLED:[[:space:]]+["'\'']?true' "$workflow"
@@ -185,7 +186,8 @@ jobs:
               return;
             }
             const productionCompletedAt = Date.parse(production.updated_at ?? '');
-            const afterDeploy = (run, name, path) => run.name === name
+            const afterDeploy = (run, name, path) => (run.name === name
+              || run.name.startsWith(`${name} ${target} `))
               && run.path === path
               && run.event === 'workflow_dispatch'
               && run.head_sha === target
