@@ -738,6 +738,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         summary: strategy.summary,
         rules: strategy.rules,
         paperResearchAllowedWhenReady: strategy.paperResearchAllowedWhenReady,
+        pilotProfile: strategy.pilotProfile,
         automaticLivePromotionAllowed: strategy.automaticLivePromotionAllowed,
         promotionRequirements: strategy.promotionRequirements,
       })),
