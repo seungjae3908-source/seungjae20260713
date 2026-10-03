@@ -71,6 +71,9 @@ test('six-strategy AI review connectivity is visible and explicitly fail-closed'
   expect(settings).toContain('Cache');
   expect(settings).toContain('Scanner AI');
   expect(settings).toContain('PASS-only 사전계약 · 현재 6전략 자동 Live는 비활성');
+  expect(settings).toContain('AI 감사 Journal');
+  expect(settings).toContain('주문계획 전 필수 저장');
+  expect(settings).toContain('원문 Prompt/Secret 저장 안 함');
 });
 
 test('rule-pack pilot profile is visible and keeps live order confirmation explicit', () => {
