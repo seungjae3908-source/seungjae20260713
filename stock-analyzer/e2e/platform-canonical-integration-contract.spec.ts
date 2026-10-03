@@ -72,7 +72,9 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
   expect(journalAdapter).toContain('orderIds: [order.id]');
   expect(journalAdapter).toContain('fillIds: fills.map');
   expect(journalPanel).toContain('unified-journal-canonical-lineage');
-  expect(journalPanel).toContain('신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.');
+  expect(journalPanel).toContain('신호 → 분석 스냅샷 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.');
+  expect(journalPanel).toContain('label="snapshotId"');
+  expect(journalPanel).toContain('label="journalId"');
 });
 
 
