@@ -226,3 +226,11 @@ test('AI Chart intelligence panel is wired to the V3 decision gate and keeps pro
   expect(panel).toContain('비용 반영 EV');
   expect(panel).toContain('미검증');
 });
+
+
+test('AI Chart UI discloses that realtime decision engine is quant/rule evidence rather than an LLM call', async () => {
+  const page = await readFile(new URL('../src/pages/ai-chart.tsx', import.meta.url), 'utf8');
+  expect(page).toContain('data-testid="ai-chart-engine-kind"');
+  expect(page).toContain('Quant/Rule Evidence Engine');
+  expect(page).toContain('실시간 판단은 LLM 호출이 아님');
+});
