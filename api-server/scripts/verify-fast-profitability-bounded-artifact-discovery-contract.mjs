@@ -19,6 +19,8 @@ for (const file of files) {
   assert(text.includes('listWorkflowRunArtifacts'), file + ' must bind artifact reads to an exact workflow run');
   assert(text.includes('const maxPages = 5;'), file + ' must use a bounded workflow-run discovery window');
   assert(text.includes('DISCOVERY_WINDOW_EXHAUSTED'), file + ' must fail closed when bounded discovery is exhausted');
+  assert(text.includes("status: 'success'"), file + ' must ask GitHub for successful runs before artifact inspection');
+  assert(!text.includes("status: 'completed'"), file + ' must not let failed/skipped/cancelled runs consume the bounded discovery window');
 }
 const collector = await read('.github/workflows/fast-profitability-v1-collector.yml');
 assert(collector.includes('run_id: Number(process.env.ACTIVATION_RUN_ID)'), 'OOS key lookup must be scoped to the bound activation run');
