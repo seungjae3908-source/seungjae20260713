@@ -16,6 +16,10 @@ const memberAccessSource = fs.readFileSync(
   path.resolve(process.cwd(), '../packages/member-access/src/index.js'),
   'utf8',
 );
+const signalScannerSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/signal-scanner.tsx'),
+  'utf8',
+);
 
 function technicalItem(id: string) {
   const group = APP_NAVIGATION.find((item) => item.id === 'technical');
@@ -70,4 +74,7 @@ test('associate S-grade scanner policy is server-visible while pending remains f
   );
   expect(accessControl).toContain("tier === 'associate' || tier === 'regular' || tier === 'admin'");
   expect(accessControl).not.toContain("tier === 'admin' || grade !== 'S'");
+  expect(signalScannerSource).toContain('data-testid="scanner-member-grade-policy"');
+  expect(signalScannerSource).toContain('승인된 준회원부터 S/A/B 포함 전체 신호 등급 열람 가능');
+  expect(signalScannerSource).toContain('주문 권한은 별도');
 });
