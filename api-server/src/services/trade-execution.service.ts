@@ -257,6 +257,32 @@ function tossToken(payload: ExchangePayload) {
   return token;
 }
 
+function tossVerificationAccountSeq(payload: ExchangePayload, requested?: string) {
+  const result = payload.result;
+  const resultRecord = isRecord(result) ? result : null;
+  const preferred = payload.accounts ?? resultRecord?.accounts;
+  const candidate = preferred ?? result ?? payload.data ?? payload;
+  const rows = Array.isArray(candidate)
+    ? candidate.filter(isRecord)
+    : isRecord(candidate)
+      ? [candidate]
+      : [];
+  const accounts = rows.flatMap((row) => {
+    const accountSeq = text(row.accountSeq);
+    return accountSeq ? [{ row, accountSeq }] : [];
+  });
+  const configured = text(requested);
+  if (configured) {
+    if (!accounts.some((entry) => entry.accountSeq === configured)) throw new Error('TOSS_ACCOUNT_NOT_FOUND');
+    return configured;
+  }
+  const brokerage = accounts.filter(({ row }) => String(row.accountType ?? '').trim().toLowerCase() === 'brokerage');
+  if (brokerage.length === 1) return brokerage[0]!.accountSeq;
+  if (accounts.length === 1) return accounts[0]!.accountSeq;
+  if (accounts.length === 0) throw new Error('TOSS_ACCOUNT_NOT_FOUND');
+  throw new Error('TOSS_ACCOUNT_SELECTION_REQUIRED');
+}
+
 function assertTossOrderAccepted(payload: ExchangePayload, expectedClientOrderId: string) {
   const row = tossResult(payload);
   const orderId = text(row.orderId ?? row.order_id);
@@ -635,15 +661,19 @@ export class TradeExecutionService {
           prepareTossToken(toss),
           PREFLIGHT_TIMEOUT_MS,
         ));
-        const authenticated = { ...toss, accessToken: tossToken(tokenPayload) };
-        tossResult(await request(() => sendExchangeRequest(
+        const token = tossToken(tokenPayload);
+        const authenticated = { ...toss, accessToken: token };
+        const accountsPayload = await request(() => sendExchangeRequest(
           BASE_URLS.toss,
           prepareTossAccounts(authenticated),
           PREFLIGHT_TIMEOUT_MS,
-        )));
+        ));
+        tossResult(accountsPayload);
+        const accountSeq = tossVerificationAccountSeq(accountsPayload, toss.accountSeq);
+        const selectedAccount = { ...authenticated, accountSeq };
         tossResult(await request(() => sendExchangeRequest(
           BASE_URLS.toss,
-          prepareTossBuyingPower(authenticated, 'KRW'),
+          prepareTossBuyingPower(selectedAccount, 'KRW'),
           PREFLIGHT_TIMEOUT_MS,
         )));
       }
