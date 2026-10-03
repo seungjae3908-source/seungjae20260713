@@ -162,11 +162,9 @@ export function normalizeReadonlyCredentialsForLiveExecution(
     const clientSecret = value('clientSecret');
     if (!clientId || !clientSecret) throw new Error('READONLY_CREDENTIALS_INCOMPLETE');
     const accountSeq = value('accountSeq');
-    return {
-      clientId,
-      clientSecret,
-      accountSeq,
-    };
+    const normalized: Record<string, string> = { clientId, clientSecret };
+    if (accountSeq) normalized.accountSeq = accountSeq;
+    return normalized;
   }
   if (exchange === 'kiwoom') {
     const appKey = value('appKey');
