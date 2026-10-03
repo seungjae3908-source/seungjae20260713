@@ -214,6 +214,19 @@ export interface ResearchCenterOverview {
       reportDigest?: string | null;
     };
   };
+  activity?: {
+    windowHours: 24;
+    generatedAt: number | null;
+    entries: Array<{
+      id: string;
+      at: number;
+      source: string;
+      label: string;
+      status: string;
+      detail: string | null;
+      profile: string | null;
+    }>;
+  };
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };
