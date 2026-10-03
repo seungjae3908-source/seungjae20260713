@@ -8,7 +8,7 @@ import {
 } from './trade-automation.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
-import { decryptTradingCredentials } from './trade-credential-vault.service';
+import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
 import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
 import {
   prepareBitgetAccount,
@@ -613,6 +613,7 @@ export class TradeExecutionService {
       throw new Error('LIVE_EXECUTION_CONNECTION_NOT_CONFIGURED');
     }
     const credentials = decryptTradingCredentials(connection.encryptedCredentials);
+    let verifiedCredentials: Record<string, string> = credentials;
     let providerRequests = 0;
     const request = async <T>(operation: () => Promise<T>) => {
       providerRequests += 1;
@@ -671,6 +672,7 @@ export class TradeExecutionService {
         tossResult(accountsPayload);
         const accountSeq = tossVerificationAccountSeq(accountsPayload, toss.accountSeq);
         const selectedAccount = { ...authenticated, accountSeq };
+        verifiedCredentials = { ...toss, accountSeq };
         tossResult(await request(() => sendExchangeRequest(
           BASE_URLS.toss,
           prepareTossBuyingPower(selectedAccount, 'KRW'),
@@ -681,6 +683,7 @@ export class TradeExecutionService {
       const verifiedAt = new Date().toISOString();
       await this.repository.saveConnection({
         ...connection,
+        encryptedCredentials: encryptTradingCredentials(verifiedCredentials),
         lastVerifiedAt: verifiedAt,
         lastErrorCode: null,
         updatedAt: verifiedAt,
