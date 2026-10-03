@@ -853,10 +853,14 @@ def build_research_activity(root, now_ms=None, maximum_entries=200):
 
     runs_root = root / 'runs'
     try:
-        run_dirs = [path for path in runs_root.iterdir() if path.is_dir() and not path.is_symlink()]
+        run_dirs = sorted(
+            [path for path in runs_root.iterdir() if path.is_dir() and not path.is_symlink()],
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )[:500]
     except FileNotFoundError:
         run_dirs = []
-    for run_dir in run_dirs[-500:]:
+    for run_dir in run_dirs:
         try:
             value = read_json_optional(run_dir / 'cycle.json')
         except RuntimeError:
