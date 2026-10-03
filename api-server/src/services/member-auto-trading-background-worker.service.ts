@@ -34,6 +34,7 @@ import {
 } from './member-auto-trading-fx.service';
 import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
 import {
+  STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
   evaluateStrategyRulePackDeterministicGate,
   evaluateStrategyRulePackGate,
   strategyRulePackAiEvidenceDigest,
