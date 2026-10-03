@@ -1,0 +1,58 @@
+name: Research US Equity Bucket Router V2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-equity-bucket-router-v2.mjs
+      - .github/workflows/research-us-equity-bucket-router-v2.yml
+      - market-prediction-lab/src/stock-swing-optimizer.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-equity-bucket-router-v2-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-equity-bucket-router-v2.mjs
+          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-equity-bucket-router-v2.mjs
+      - name: Run bucket-specific challenger research
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-equity-bucket-router-v2.mjs docs/us-equity-bucket-router-v2.json
+      - name: Assert split and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/us-equity-bucket-router-v2.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.selectionContract.testUsedForSelection!==false) throw new Error('TEST_SELECTION');
+          if(!(r.universe.historySuccesses>=150)) throw new Error('HISTORY_COVERAGE');
+          if(r.safety.researchOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY');
+          if(!r.MID||!r.SMALL) throw new Error('BUCKETS');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-equity-bucket-router-v2-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-equity-bucket-router-v2.json
+          if-no-files-found: error
+          retention-days: 30
