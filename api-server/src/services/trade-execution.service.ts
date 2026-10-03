@@ -3,7 +3,6 @@ import type { TradingRepository } from './trade-automation.repository';
 import {
   TradeAutomationService,
   automaticLiveExecutionEnabled,
-  liveCapabilityDecision,
   liveExecutionEnabled,
   livePlanCapabilityDecision,
 } from './trade-automation.service';
@@ -595,12 +594,9 @@ export class TradeExecutionService {
     };
 
     try {
-      for (const capability of ['BALANCE_READ', 'POSITION_READ'] as const) {
-        const decision = liveCapabilityDecision(exchange, capability);
-        if (!decision.allowed) {
-          throw new Error(`SPOT_LIVE_CAPABILITY_BLOCKED:${decision.blockCodes.join(',')}`);
-        }
-      }
+      // Connection verification is a credential/read probe, not an execution grant.
+      // It must remain available while LIVE/AUTO execution gates are OFF so that
+      // credentials can be verified before any order authority is enabled.
       if (exchange === 'upbit') {
         await request(() => sendExchangeListRequest(
           BASE_URLS.upbit,
