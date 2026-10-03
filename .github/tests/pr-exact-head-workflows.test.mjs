@@ -216,7 +216,7 @@ test("multi-market PR data blocks stay truthful without weakening full dispatch 
   assert.match(documents.multiMarket, /RESEARCH_HOLD_TEMPORAL_EVIDENCE/u);
   assert.match(documents.multiMarket, /MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:/u);
 
-  const failStart = documents.multiMarket.indexOf("- name: Fail workflow when technical validation failed");
+  const failStart = documents.multiMarket.lastIndexOf("- name: Fail workflow when technical validation failed");
   const nextJob = documents.multiMarket.indexOf("\n  durable-policy-preflight:", failStart);
   assert.ok(failStart >= 0 && nextJob > failStart, "multi-market technical failure block must remain present");
   const technicalFailureBlock = documents.multiMarket.slice(failStart, nextJob);
