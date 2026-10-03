@@ -89,6 +89,22 @@ function metric(value: number | null, suffix = '') {
   return value == null ? 'N/A' : `${number.format(value)}${suffix}`;
 }
 
+function evidenceTime(value: string | null | undefined) {
+  if (!value) return 'N/A';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return 'N/A';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(time));
+}
+
 function money(value: number | null | undefined, currency: string) {
   return value == null ? 'N/A' : `${number.format(value)} ${currency}`;
 }
@@ -143,7 +159,7 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h4 className="text-sm font-bold">Canonical 거래 연결</h4>
-          <p className="mt-1 text-[10px] text-muted-foreground">신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">신호 → 분석 스냅샷 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
         </div>
         <span className="rounded-full border border-primary/20 bg-background px-2 py-1 text-[10px] font-extrabold text-primary">
           {trade.canonicalLineage ? '연결됨' : '미확인'}
@@ -151,9 +167,11 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       </div>
       <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
         <Metric label="signalId" value={trade.canonicalLineage?.signalIds.join(' · ') || 'N/A'} />
+        <Metric label="snapshotId" value={trade.technicalSnapshot.snapshotId || 'N/A'} />
         <Metric label="planId" value={trade.canonicalLineage?.planIds.join(' · ') || 'N/A'} />
         <Metric label="orderId" value={trade.canonicalLineage?.orderIds.join(' · ') || 'N/A'} />
         <Metric label="fillId" value={trade.canonicalLineage?.fillIds.join(' · ') || 'N/A'} />
+        <Metric label="journalId" value={trade.id} />
       </div>
     </section>
 
@@ -225,6 +243,8 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       {snapshot.contextSource === 'NO_PRE_TRADE_CONTEXT'
         ? <p className="mt-2 text-xs text-muted-foreground">진입 전 저장된 분석 정보가 없습니다. 현재 데이터로 과거 지표를 꾸며내지 않았습니다.</p>
         : <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Metric label="스냅샷 ID" value={snapshot.snapshotId || 'N/A'} />
+          <Metric label="증거 기준시각" value={evidenceTime(snapshot.capturedAt)} />
           <Metric label="시간봉" value={snapshot.timeframe ?? 'N/A'} />
           <Metric label="RSI" value={metric(snapshot.rsi)} />
           <Metric label="신호 점수" value={metric(snapshot.signalScore)} />
