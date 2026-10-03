@@ -58,6 +58,8 @@ const files = Object.fromEntries(await Promise.all([
   '.github/workflows/fast-profitability-v1-collector.yml',
   '.github/workflows/fast-profitability-v1-preactivation-watch.yml',
   '.github/workflows/prediction-lab-52d-validation.yml',
+  '.github/workflows/prediction-lab-canonical-shadow-cycle.yml',
+  'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js',
 ].map(async (file) => [file, await read(file)])));
 
 const app = files['stock-analyzer/src/App.tsx'];
@@ -148,6 +150,19 @@ for (const file of [
   requireText(text, 'listWorkflowRunArtifacts', file + ' exact artifact binding');
   forbidText(text, 'FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED', file + ' noisy run-history failure');
 }
+
+const shadowWorkflow = files['.github/workflows/prediction-lab-canonical-shadow-cycle.yml'];
+const shadowTest = files['market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js'];
+requireText(shadowWorkflow, 'successful_publisher_runs=', 'Shadow authoritative Publisher history index');
+requireText(shadowWorkflow, 'A receipt artifact is authoritative history only when its owning Publisher run succeeded.', 'Shadow authoritative receipt rule');
+requireText(shadowWorkflow, 'Authoritative successful Publisher receipt history exists but no valid predecessor is usable; fail closed instead of bootstrap recovery', 'Shadow authoritative-history fail-closed guard');
+requireText(shadowWorkflow, 'recovery_owner="${REPOSITORY%%/*}"', 'Shadow recovery owner binding');
+requireText(shadowWorkflow, 'recovery_expected="/approve-canonical-shadow-recovery $TARGET_SHA"', 'Shadow exact recovery command');
+requireText(shadowWorkflow, 'jq -sr --arg owner "$recovery_owner" --arg expected "$recovery_expected"', 'Shadow streamed recovery approval parser');
+forbidText(shadowWorkflow, 'comments_json=', 'Shadow buffered Hub history');
+forbidText(shadowWorkflow, '--paginate --slurp', 'Shadow slurped Hub history');
+requireText(shadowTest, 'authoritative', 'Shadow authoritative history regression coverage');
+requireText(shadowTest, 'flatten\\(1\\)', 'Shadow streamed pagination regression coverage');
 
 const multiMarket = files['.github/workflows/prediction-lab-52d-validation.yml'];
 requireText(multiMarket, 'Record explicit research hold when required temporal evidence is incomplete', 'Multi-Market temporal hold');
