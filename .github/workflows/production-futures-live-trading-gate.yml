@@ -24,7 +24,7 @@ permissions:
 concurrency:
   group: >-
     ${{ github.event_name == 'issue_comment'
-        && github.event.issue.number == 23
+        && github.event.issue.number == 1555
         && github.event.comment.user.login == 'seungjae3908-source'
         && github.event.comment.author_association == 'OWNER'
         && (startsWith(github.event.comment.body, '/activate-production-futures-live-trading ')
@@ -63,6 +63,7 @@ jobs:
           grep -Fq "LIVE_AUTOMATIC_TRADING_ENABLED=false" "$workflow"
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
           grep -Fq "CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS" "$workflow"
+          grep -Fq 'run.name.startsWith(`${name} ${target} `)' "$workflow"
           ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
           ! grep -Eq 'LIVE_AUTOMATIC_TRADING_ENABLED:[[:space:]]+["'\'']?true' "$workflow"
@@ -72,10 +73,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/activate-production-futures-live-trading ')
@@ -185,7 +186,8 @@ jobs:
               return;
             }
             const productionCompletedAt = Date.parse(production.updated_at ?? '');
-            const afterDeploy = (run, name, path) => run.name === name
+            const afterDeploy = (run, name, path) => (run.name === name
+              || run.name.startsWith(`${name} ${target} `))
               && run.path === path
               && run.event === 'workflow_dispatch'
               && run.head_sha === target
@@ -405,6 +407,10 @@ jobs:
                   ...process.env,
                   AUTO_TRADING: 'false',
                   LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+                  MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+                  MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
                   FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
                   BITGET_FUTURES_LIVE_ORDER_ENABLED: 'true',
                   FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED',
@@ -484,7 +490,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]',
                 'status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL',
@@ -501,6 +507,8 @@ jobs:
                 'FUTURES_LIVE_MARKET_ALLOWLIST=CRYPTO_FUTURES',
                 'AUTO_TRADING=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
                 'REAL_ORDER_SUBMITTED=false',
                 'transfer_withdrawal_authority=false',
                 `workflow_run: ${context.runId}`,
@@ -512,10 +520,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/disable-production-futures-live-trading ')
@@ -632,7 +640,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]',
                 'status: DISABLED_FUTURES_LIVE_LIMITED',
