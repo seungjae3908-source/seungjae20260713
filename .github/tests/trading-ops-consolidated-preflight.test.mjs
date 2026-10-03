@@ -121,12 +121,12 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(stockScanner.includes('enforceScannerAiFinalPromotionPolicy'));
   assert.ok(cryptoScanner.includes('enrichTopScannerCandidatesWithAi'));
   const stockNewsIndex = stockScanner.indexOf('enrichStockScannerCardsWithNewsDisclosureIntelligence');
-  const stockAiIndex = stockScanner.indexOf('enrichTopScannerCandidatesWithAi');
+  const stockAiIndex = stockScanner.lastIndexOf('enrichTopScannerCandidatesWithAi');
   const stockFinalRankIndex = stockScanner.lastIndexOf('rankScannerCandidates');
   assert.ok(stockNewsIndex >= 0 && stockAiIndex > stockNewsIndex && stockFinalRankIndex > stockAiIndex);
   const cryptoMarketIndex = cryptoScanner.indexOf('enrichScannerCardsWithMarketIntelligence');
   const cryptoEventIndex = cryptoScanner.indexOf('enrichCryptoScannerCardsWithPublicEventContext');
-  const cryptoAiIndex = cryptoScanner.indexOf('enrichTopScannerCandidatesWithAi');
+  const cryptoAiIndex = cryptoScanner.lastIndexOf('enrichTopScannerCandidatesWithAi');
   const cryptoFinalRankIndex = cryptoScanner.lastIndexOf('rankScannerCandidates');
   assert.ok(
     cryptoMarketIndex >= 0
