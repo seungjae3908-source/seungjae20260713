@@ -299,10 +299,17 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
 
   for (const key of ['external-research', 'backtest', 'oos', 'shadow', 'settlement', 'profitability', 'champion']) {
     await page.getByTestId(`research-stage-${key}`).click();
-    await expect(page.getByTestId(`research-detail-${key}`)).toBeVisible();
+    const detail = page.getByTestId(`research-detail-${key}`);
+    await expect(detail).toBeVisible();
+    await detail.getByRole('button', { name: '닫기' }).click();
+    await expect(detail).toHaveCount(0);
   }
 
   await page.getByTestId('research-stage-paper').click();
+  const paperDetail = page.getByTestId('research-detail-paper');
+  await expect(paperDetail).toBeVisible();
+  await paperDetail.getByRole('button', { name: '닫기' }).click();
+  await page.getByRole('tab', { name: '모의매매' }).click();
   await expect(page.getByTestId('research-paper-tab')).toBeVisible();
   await expect(page.getByText('실주문 비활성')).toBeVisible();
   await expect(page.getByTestId('paper-open-positions')).toContainText('열린 모의 포지션 없음');
@@ -335,7 +342,9 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
     await openExpertResearch(page);
     await expect(page.getByRole('tab')).toHaveCount(4);
     await page.getByTestId('research-stage-backtest').click();
-    await expect(page.getByTestId('research-detail-backtest')).toBeVisible();
+    const backtestDetail = page.getByTestId('research-detail-backtest');
+    await expect(backtestDetail).toBeVisible();
+    await backtestDetail.getByRole('button', { name: '닫기' }).click();
     await page.getByRole('tab', { name: '모의매매' }).click();
     await expect(page.getByTestId('research-paper-tab')).toBeVisible();
     await captureScreenshot(page, `after-mobile-${viewport.width}-paper.png`);
