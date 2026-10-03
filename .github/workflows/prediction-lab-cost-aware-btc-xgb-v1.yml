@@ -1,0 +1,73 @@
+name: Prediction Lab Cost-Aware BTC XGBoost V1
+
+on:
+  push:
+    branches:
+      - research/multi-evidence-profit-tournament-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/run-cost-aware-btc-xgb-v1.py
+      - .github/workflows/prediction-lab-cost-aware-btc-xgb-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cost-aware-btc-xgb-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: BTC XGBoost cost-aware walk-forward
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      PYTHONHASHSEED: "42"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies
+        run: python -m pip install --disable-pip-version-check "numpy==2.2.6" "pandas==2.2.3" "requests==2.32.5" "scikit-learn==1.6.1" "xgboost==3.4.1"
+      - name: Safety envelope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+      - name: Causal and cost-rule self-test
+        run: python market-prediction-lab/scripts/run-cost-aware-btc-xgb-v1.py --self-test
+      - name: Run BTC XGBoost cost-aware benchmark
+        run: python market-prediction-lab/scripts/run-cost-aware-btc-xgb-v1.py --output market-prediction-lab/docs/cost-aware-btc-xgb-v1-result.json
+      - name: Assert positive-survivor truth boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          p="market-prediction-lab/docs/cost-aware-btc-xgb-v1-result.json"
+          r=json.load(open(p))
+          assert r["safety"]["profitabilityProven"] is False
+          assert r["safety"]["executionAuthority"]=="NONE"
+          for x in r["profitableSurvivorsOnly"]:
+              assert x["metrics"]["totalReturn"]>0
+              assert x["metrics"]["profitFactor"]>1
+              assert x["metrics"]["positionChanges"]>=30
+          print(json.dumps({"survivors":[{"candidate":x["candidate"],**x["metrics"],"windows":x["windows"]} for x in r["profitableSurvivorsOnly"]]},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cost-aware-btc-xgb-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/cost-aware-btc-xgb-v1-result.json
+          if-no-files-found: error
+          retention-days: 14
