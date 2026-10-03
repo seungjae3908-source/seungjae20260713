@@ -1,0 +1,59 @@
+name: Research Upbit Overnight Intraday Replay V3
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-upbit-overnight-intraday-replay-v3.mjs
+      - .github/workflows/research-upbit-overnight-intraday-replay-v3.yml
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify public research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-upbit-overnight-intraday-replay-v3.mjs
+          ! grep -Eiq 'UPBIT_ACCESS_KEY|UPBIT_SECRET_KEY|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-upbit-overnight-intraday-replay-v3.mjs
+      - name: Run pre-observed long-window Upbit replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-overnight-intraday-replay-v3.mjs docs/upbit-overnight-intraday-replay-v3.json
+      - name: Assert strict temporal, selection, and safety gates
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/upbit-overnight-intraday-replay-v3.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.selectionContract.selectedFamilyChosenByCalibrationScoreOnly!==true) throw new Error('TRAIN_ONLY_SELECTION');
+          if(r.selectionContract.validationCanOnlyPassOrFailSelectedFamily!==true) throw new Error('VALIDATION_SWITCH_FORBIDDEN');
+          if(r.selectionContract.testUsedForSelection!==false||r.selectionContract.holdoutSymbolsUsedForSelection!==false) throw new Error('SELECTION_LEAK');
+          if(r.selectionContract.actualHistoricalLlmCalled!==false) throw new Error('HISTORICAL_LLM_FABRICATION');
+          if(r.dataWindow.testDates.some(d=>d>=r.dataWindow.observedCutoffExclusive)) throw new Error('OBSERVED_WINDOW_LEAK');
+          if(r.dataWindow.calibrationDates.length<60||r.dataWindow.validationDates.length<20||r.dataWindow.testDates.length<20) throw new Error('SPLIT_TOO_SMALL');
+          if(r.universe.discovery.length!==12||r.universe.holdout.length!==12) throw new Error('COHORT_SIZE');
+          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorCompletedDailyCandle||!r.lookahead.dailyWaveUsesOnlyConfirmedPriorData||!r.lookahead.intradayUsesCompleted15mAnd1hOnly||!r.lookahead.entryNext15mOpen) throw new Error('LOOKAHEAD');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-overnight-intraday-replay-v3-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/upbit-overnight-intraday-replay-v3.json
+          if-no-files-found: error
+          retention-days: 30
