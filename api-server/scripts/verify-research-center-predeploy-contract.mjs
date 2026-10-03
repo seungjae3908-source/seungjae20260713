@@ -98,6 +98,8 @@ requireText(videoRouter, "router.use('/', sourceEvidenceRouter);", 'video source
 requireText(videoSource, "router.get('/', async (_req, res) => {", 'video source GET-only route');
 requireText(videoSource, "fetchImpl('http://127.0.0.1:18090/api/research/video/evidence'", 'durable video dashboard readback');
 requireText(videoSource, 'snapshotBound', 'video automation lineage binding');
+requireText(videoSource, 'VIDEO_RUNTIME_MAX_AGE_MS', 'video runtime bounded freshness');
+requireText(videoSource, 'VIDEO_RESEARCH_SNAPSHOT_STALE', 'video stale snapshot fail-closed state');
 requireText(videoClient, 'snapshotBound', 'browser video lineage parser');
 requireText(videoClient, '현재 snapshot과 lineage 미결합', 'browser stale automation fail-closed state');
 forbidText(videoSource, "router.post('/',", 'video source write route');
@@ -169,6 +171,10 @@ const multiMarket = files['.github/workflows/prediction-lab-52d-validation.yml']
 requireText(multiMarket, 'Record explicit research hold when required temporal evidence is incomplete', 'Multi-Market temporal hold');
 requireText(multiMarket, 'RESEARCH_HOLD_TEMPORAL_EVIDENCE', 'Multi-Market temporal hold classification');
 requireText(multiMarket, 'MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:', 'Multi-Market temporal evidence blocker');
+requireText(multiMarket, 'prediction-lab-research-hold-state-v1', 'Multi-Market hold aging state');
+requireText(multiMarket, 'consecutiveHoldCycles', 'Multi-Market hold consecutive-cycle counter');
+requireText(multiMarket, "starvationState = holdAgeHours >= 72 ? 'STARVED' : holdAgeHours >= 24 ? 'WARNING' : 'NORMAL'", 'Multi-Market hold starvation threshold');
+requireText(multiMarket, 'prediction-lab-research-hold-state-${{ github.run_id }}', 'Multi-Market hold durable artifact');
 const failureStart = multiMarket.lastIndexOf('- name: Fail workflow when technical validation failed');
 const nextJob = multiMarket.indexOf('\n  durable-policy-preflight:', failureStart);
 if (failureStart < 0 || nextJob < 0) fail('Multi-Market technical failure step not found');
