@@ -7,7 +7,7 @@ import {
 } from './bounded-scanner.service';
 import { buildContext, type ScanFilters } from './signal.service';
 import { rankScannerCandidates } from './scanner-candidate-ranking.service';
-import { enrichTopScannerCandidatesWithAi } from './scanner-ai-runtime.service';
+import { enforceScannerAiFinalPromotionPolicy, enrichTopScannerCandidatesWithAi } from './scanner-ai-runtime.service';
 import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
@@ -269,7 +269,7 @@ export const StockSignalScannerService = {
       softMinimumScore: request.filters.minimumScore,
       limit: 10,
     });
-    const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
+    const rankedCards = enforceScannerAiFinalPromotionPolicy(ranking.cards).map((card) => card.signalGrade === 'B'
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card);
     const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
