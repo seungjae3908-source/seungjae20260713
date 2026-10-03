@@ -235,7 +235,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         href: APP_ROUTES.aiChart,
         label: 'AI차트',
         icon: 'chart',
-        capability: 'canAccessRiskPreview',
+        capability: 'canAccessBasicInfo',
       },
       {
         id: 'auto-trading',
