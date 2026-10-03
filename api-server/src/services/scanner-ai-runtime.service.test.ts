@@ -188,3 +188,48 @@ test('final S-grade output is downgraded unless the candidate has explicit AI PA
   const retained = enforceScannerAiFinalPromotionPolicy([passed]);
   assert.equal(retained[0].signalGrade, 'S');
 });
+
+
+test('AI input includes market identity and upstream intelligence evidence before validation', async () => {
+  const candidate = card('intel-signal', 92, 'A') as ScannerSignalCard & Record<string, unknown>;
+  candidate.market = 'BITGET';
+  candidate.marketIntelligence = {
+    status: 'READY',
+    warnings: ['funding-risk'],
+    autoTrading: { mode: 'BLOCKED_RISK', hardBlockReason: 'EXTREME_FUNDING' },
+  };
+  candidate.cryptoPublicEventContext = {
+    status: 'READY',
+    tradingStatus: 'normal',
+    warnings: ['PUBLIC_EVENT_WARNING'],
+  };
+
+  let captured: any = null;
+  await enrichTopScannerCandidatesWithAi(
+    [candidate],
+    {
+      env: configuredEnv,
+      maxCandidates: 1,
+      validator: {
+        async validate(input: any) {
+          captured = input;
+          return {
+            status: 'PASS' as const,
+            provider: 'test-ai',
+            counterEvidence: [],
+            missingData: [],
+            risks: [],
+            explanation: 'pass',
+          };
+        },
+      },
+    },
+  );
+
+  assert.equal(captured.market, 'BITGET');
+  assert.ok(captured.evidence.includes('MARKET_INTELLIGENCE_STATUS:READY'));
+  assert.ok(captured.evidence.includes('MARKET_INTELLIGENCE_AUTO:BLOCKED_RISK'));
+  assert.ok(captured.evidence.includes('MARKET_INTELLIGENCE_BLOCK:EXTREME_FUNDING'));
+  assert.ok(captured.evidence.includes('CRYPTO_PUBLIC_EVENT_STATUS:READY'));
+  assert.ok(captured.evidence.includes('CRYPTO_TRADING_STATUS:normal'));
+});
