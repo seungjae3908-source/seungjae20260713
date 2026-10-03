@@ -62,6 +62,7 @@ import {
   unifiedMarketLabel,
   type UnifiedChartTimeframe,
 } from '@/lib/unified-chart-data';
+import { tradeFocusFromSearch } from '@/lib/trade-navigation';
 import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
@@ -431,6 +432,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectSelection = state.select;
   const desktop = useDesktopChartLayout();
   const initialSearchRef = useRef(currentBrowserSearch());
+  const tradeFocusRef = useRef(tradeFocusFromSearch(initialSearchRef.current));
+  const tradeRouteRequested = tradeFocusRef.current !== null;
   const routeModeRef = useRef(chartWindowRouteModeFromSearch(initialSearchRef.current));
   const routeSelectionRef = useRef(supportedSelection(chartSelectionFromSearch(initialSearchRef.current)));
   const externalMode = routeModeRef.current === 'external';
@@ -452,7 +455,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
-  const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
+  const [mobileTab, setMobileTab] = useState<MobileChartTab>(() => tradeRouteRequested ? 'position' : 'summary');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -809,6 +812,20 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       )}
       <ContextCard selection={selection} analysis={analysis} />
       <DecisionCard analysis={analysis} />
+      {desktop && tradeRouteRequested ? (
+        <Suspense fallback={<p role="status" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">매매창을 준비하고 있습니다.</p>}>
+          <LazyAiChartPositionPanel
+            selection={selection}
+            market={selection.market}
+            symbol={selection.symbol || selection.ticker}
+            chartPrice={null}
+            pricePlan={selection.pricePlan}
+            onOverlayChange={ignorePositionOverlay}
+            initialCockpitOpen
+            initialCockpitTab={tradeFocusRef.current ?? 'entry'}
+          />
+        </Suspense>
+      ) : null}
       <SafetyNote />
     </div>
   ) : <div className="space-y-4"><SafetyNote /></div>;
@@ -900,6 +917,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
                     chartPrice={null}
                     pricePlan={selection.pricePlan}
                     onOverlayChange={ignorePositionOverlay}
+                    initialCockpitOpen={tradeRouteRequested}
+                    initialCockpitTab={tradeFocusRef.current ?? 'entry'}
                   />
                 ) : emptyState}
               </section>
