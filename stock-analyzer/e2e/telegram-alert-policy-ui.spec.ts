@@ -359,7 +359,7 @@ test('Telegram delivery health summarizes durable outbox states without creating
   await expect(health).toContainText('실패');
   await expect(health).toContainText('마지막 성공');
   await expect(page.getByTestId('telegram-delivery-last-error')).toContainText('TELEGRAM_FORBIDDEN');
-  await expect(page.getByTestId('user-broker-telegram-panel')).toContainText('정상');
+  await expect(page.getByTestId('user-broker-telegram-panel')).toContainText('전송 오류');
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
