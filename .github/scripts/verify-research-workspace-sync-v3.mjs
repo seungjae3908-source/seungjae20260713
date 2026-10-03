@@ -157,6 +157,18 @@ const researchCenterIntegrationReviewed=[
  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
  'api-server/src/routes/market-summary-availability.smoke.test.ts',
  'api-server/src/routes/video-research-source-evidence.ts',
+ 'api-server/src/services/research-center-readonly-contract.service.ts',
+ 'api-server/src/services/fast-profitability-activation.service.ts',
+ 'api-server/src/services/fast-profitability-evidence-runtime.service.ts',
+ 'api-server/src/services/forward-recommendation-observer.service.ts',
+ 'api-server/src/services/unified-trade-journal-canonical-binding.service.ts',
+ 'api-server/src/scripts/run-fast-profitability-collector.ts',
+ 'market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js',
+ 'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',
+ 'research-dashboard/server.py',
+ 'research-dashboard/test/test_server.py',
+ 'stock-analyzer/src/lib/research-center.ts',
+ 'stock-analyzer/src/pages/research-center.tsx',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
@@ -201,7 +213,18 @@ if(!mainRoute.includes("import { accountReadonlyRuntimeService } from '../featur
 if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 const protectedPathExceptions=new Map([
- ['market-prediction-lab',new Set(['market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js'])],
+ ['market-prediction-lab',new Set([
+  'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js',
+  'market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js',
+  'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',
+ ])],
+ ['research-dashboard',new Set([
+  'research-dashboard/server.py',
+  'research-dashboard/test/test_server.py',
+ ])],
+ ['stock-analyzer/src/pages/research-center.tsx',new Set([
+  'stock-analyzer/src/pages/research-center.tsx',
+ ])],
 ]);
 for(const p of protectedPaths){
  const exceptions=protectedPathExceptions.get(p);
