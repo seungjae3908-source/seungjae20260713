@@ -1546,6 +1546,139 @@ test('read-only credentials normalize into live execution shape without requirin
   );
 });
 
+test('saved read-only Toss credentials without accountSeq auto-select the brokerage account for live verification', async () => {
+  process.env.ORDER_EXECUTION_ENABLED = 'false';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'false';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'false';
+  process.env.REAL_ORDER_ENABLED = 'false';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'false';
+  process.env.TOSS_LIVE_ORDER_ENABLED = 'false';
+  process.env.LIVE_TRADING = 'false';
+  process.env.executionAuthority = 'NONE';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = '';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = '';
+
+  const clientId = 'readonly-toss-client-secret';
+  const clientSecret = 'readonly-toss-signing-secret';
+  const encryptedCredentials = encryptTradingCredentials({ clientId, clientSecret });
+  setTradeReadonlyCredentialRepositoryFactoryForTests(() => ({
+    async get(userId, provider) {
+      if (userId !== USER || provider !== 'toss') return null;
+      return {
+        userId,
+        provider,
+        configured: true,
+        encryptedCredentials,
+        lastVerifiedAt: '2026-10-03T00:00:00.000Z',
+        lastErrorCode: null,
+        updatedAt: '2026-10-03T00:00:00.000Z',
+      };
+    },
+  }));
+
+  await repository.deleteConnection(USER, 'toss');
+  const { server, baseUrl } = await startServer();
+  const nativeFetch = globalThis.fetch;
+  let financialMutationRequests = 0;
+  let buyingPowerAccountHeader: string | null = null;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return nativeFetch(input, init);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      const headers = new Headers(init?.headers);
+
+      if (url.includes('openapi.tossinvest.com/oauth2/token') && method === 'POST') {
+        return new Response(JSON.stringify({ access_token: 'toss-test-token', expires_in: 3600 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/api/v1/accounts') && method === 'GET') {
+        assert.equal(headers.get('X-Tossinvest-Account'), null);
+        return new Response(JSON.stringify({
+          result: [{ accountSeq: 'brokerage-001', accountType: 'brokerage' }],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('openapi.tossinvest.com/api/v1/buying-power') && method === 'GET') {
+        buyingPowerAccountHeader = headers.get('X-Tossinvest-Account');
+        return new Response(JSON.stringify({ result: { currency: 'KRW', amount: '1000000' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (method !== 'GET') financialMutationRequests += 1;
+      throw new Error(`UNEXPECTED_TOSS_REUSE_VERIFY_REQUEST:${method}:${url}`);
+    };
+
+    const response = await globalThis.fetch(
+      `${baseUrl}/api/trade-automation/connections/toss/reuse-readonly`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      },
+    );
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.doesNotMatch(text, new RegExp(clientId));
+    assert.doesNotMatch(text, new RegExp(clientSecret));
+    const body = JSON.parse(text) as {
+      configured: boolean;
+      verified: boolean;
+      reusedReadonlyCredential: boolean;
+      credentialsReturned: boolean;
+      liveExecutionActivated: boolean;
+      automaticLiveExecutionActivated: boolean;
+      orderRequests: number;
+      cancelRequests: number;
+      amendRequests: number;
+      transferRequests: number;
+      withdrawalRequests: number;
+      realOrderSubmitted: boolean;
+    };
+    assert.equal(body.configured, true);
+    assert.equal(body.verified, true);
+    assert.equal(body.reusedReadonlyCredential, true);
+    assert.equal(body.credentialsReturned, false);
+    assert.equal(body.liveExecutionActivated, false);
+    assert.equal(body.automaticLiveExecutionActivated, false);
+    assert.equal(body.orderRequests, 0);
+    assert.equal(body.cancelRequests, 0);
+    assert.equal(body.amendRequests, 0);
+    assert.equal(body.transferRequests, 0);
+    assert.equal(body.withdrawalRequests, 0);
+    assert.equal(body.realOrderSubmitted, false);
+    assert.equal(buyingPowerAccountHeader, 'brokerage-001');
+    assert.equal(financialMutationRequests, 0);
+
+    const connection = await repository.getConnection(USER, 'toss');
+    assert.equal(connection?.configured, true);
+    assert.equal(connection?.accountMode, 'live');
+    assert.ok(connection?.lastVerifiedAt);
+    assert.equal(connection?.lastErrorCode, null);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeReadonlyCredentialRepositoryFactoryForTests(null);
+    await close(server);
+    for (const key of [
+      'ORDER_EXECUTION_ENABLED',
+      'LIVE_TRADING_ACTIVATION_APPROVED',
+      'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+      'REAL_ORDER_ENABLED',
+      'PRIVATE_TRADING_API_ALLOWED',
+      'TOSS_LIVE_ORDER_ENABLED',
+      'LIVE_TRADING',
+      'executionAuthority',
+      'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+      'SPOT_LIVE_MARKET_ALLOWLIST',
+    ]) delete process.env[key];
+  }
+});
+
 test('saved read-only Upbit credentials can be reused and verified without secret echo or financial mutation', async () => {
   // This must work before any live execution authority is enabled.
   process.env.ORDER_EXECUTION_ENABLED = 'false';
