@@ -588,7 +588,8 @@ test('Paper-only worker never touches live account reader when live lane is disa
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, policy());
   let liveReads = 0;
-  const base = source(repository, nowMs);
+  const auditSink: Array<Record<string, unknown>> = [];
+  const base = source(repository, nowMs, { auditSink });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
     readLiveAccountSnapshot: async () => {
@@ -712,11 +713,19 @@ test('complete rule-pack evidence enters canonical Paper but never crosses into 
     assert.equal(result.filledOrders, 1);
     assert.equal(result.liveOrders, 0);
     assert.equal(result.privateTradingRequests, 0);
+    assert.equal(result.aiAuditWritten, 1);
+    assert.equal(result.aiAuditFailures, 0);
     assert.equal(liveReads, 0);
+    assert.equal(auditSink.length, 1);
+    assert.equal(auditSink[0]?.recordType, 'trade_rule_pack_ai_review');
+    assert.equal(auditSink[0]?.decision, 'PASS');
+    assert.equal(auditSink[0]?.rawPromptStored, false);
+    assert.equal(auditSink[0]?.credentialsStored, false);
     const plans = await repository.listPlans(USER);
     assert.equal(plans[0]?.accountMode, 'paper');
     assert.ok(plans[0]?.signalReasons.includes('STRATEGY_RULE_PACK:CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1'));
     assert.ok(plans[0]?.signalReasons.includes('STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE'));
+    assert.ok(plans[0]?.signalReasons.includes('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'));
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -762,6 +771,8 @@ test('runtime AI provider unavailable blocks a complete rule-pack before any Pap
   const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
   assert.equal(result.aiReviewCalls, 1);
   assert.equal(result.aiReviewBlocked, 1);
+  assert.equal(result.aiAuditWritten, 1);
+  assert.equal(result.aiAuditFailures, 0);
   assert.equal(result.createdPlans, 0);
   assert.equal(result.filledOrders, 0);
   assert.equal(result.blocked, 1);
@@ -803,6 +814,63 @@ test('runtime AI VETO blocks a complete rule-pack and is counted separately', as
   const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
   assert.equal(result.aiReviewCalls, 1);
   assert.equal(result.aiReviewVeto, 1);
+  assert.equal(result.aiAuditWritten, 1);
+  assert.equal(result.aiAuditFailures, 0);
   assert.equal(result.createdPlans, 0);
   assert.equal(result.blocked, 1);
+});
+
+
+test('rule-pack AI audit persistence failure blocks Paper planning before any order can be created', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const basePaper = paperRepository(nowMs);
+
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.learningSnapshot.strategyRulePackEvidence = {
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        dataReady: true,
+        formulaReady: true,
+        waveStructureReady: true,
+        indicatorReady: true,
+        entryTriggerReady: true,
+        liquidityReady: true,
+        costEvidenceReady: true,
+        riskReady: true,
+        orderFlowReady: true,
+        cvdReady: true,
+        takerBuyReady: true,
+        orderbookImbalanceReady: true,
+        mlRankReady: true,
+        modelFrozen: true,
+      };
+      return value;
+    },
+    paperJournalRepositoryFor() {
+      return {
+        ...basePaper,
+        async upsertRecord() {
+          throw new Error('JOURNAL_STORAGE_UNAVAILABLE');
+        },
+      } as PaperJournalRepository;
+    },
+  }, passingRulePackAiReviewer('PASS'));
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.aiReviewCalls, 1);
+  assert.equal(result.aiAuditWritten, 0);
+  assert.equal(result.aiAuditFailures, 1);
+  assert.equal(result.aiReviewBlocked, 1);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
 });
