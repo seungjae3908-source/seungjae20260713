@@ -185,7 +185,8 @@ jobs:
               return;
             }
             const productionCompletedAt = Date.parse(production.updated_at ?? '');
-            const afterDeploy = (run, name, path) => run.name === name
+            const afterDeploy = (run, name, path) => (run.name === name
+              || run.name.startsWith(`${name} ${target} `))
               && run.path === path
               && run.event === 'workflow_dispatch'
               && run.head_sha === target
