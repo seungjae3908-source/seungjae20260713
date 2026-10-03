@@ -6,7 +6,7 @@ export interface ScannerAiValidationInput {
   signalId: string;
   symbol: string;
   market: string;
-  strategy: 'scalping' | 'swing';
+  strategy: 'scalping' | 'swing' | 'position';
   direction: 'LONG' | 'SHORT' | 'NEUTRAL';
   score: number;
   riskScore: number | null;
