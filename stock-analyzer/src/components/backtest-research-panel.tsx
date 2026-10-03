@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Download, Loader2, PlayCircle, ShieldCheck } from 'lucide-react';
 import {
   CartesianGrid,
@@ -14,6 +15,7 @@ import { Link } from 'wouter';
 import { backtestPaperHandoffPath } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import { downloadExcelWorkbook } from '@/lib/excel-export';
+import { fetchResearchCenterOverview } from '@/lib/research-center';
 import {
   runBacktest,
   type BacktestFormValues,
@@ -277,6 +279,86 @@ function CurveChart({ title, data, dataKey }: { title: string; data: Array<Recor
   );
 }
 
+function AutomaticResearchBacktestPanel() {
+  const query = useQuery({
+    queryKey: ['backtest', 'automatic-research'],
+    queryFn: ({ signal }) => fetchResearchCenterOverview(signal),
+    staleTime: 30_000,
+    retry: false,
+  });
+  const auto = query.data?.autoBacktest;
+  const pipelines = auto?.pipelines ?? [];
+
+  function exportAutomaticResearch() {
+    if (!auto) return;
+    const timestamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    downloadExcelWorkbook(`automatic-research-backtest-${timestamp}.xls`, [
+      {
+        name: '자동백테스트',
+        rows: [
+          ['Cycle', 'Research SHA', '생성시각', '파이프라인', '상태', '후보통과', '자동전달', '피드백'],
+          ...pipelines.map((pipeline) => [
+            auto.cycleId ?? '', auto.researchSha ?? '', auto.generatedAt ? dateTime(auto.generatedAt) : '',
+            pipeline.id, pipeline.status, pipeline.candidatePassed, pipeline.automaticHandoffObserved, pipeline.feedback,
+          ]),
+        ],
+      },
+      {
+        name: '단계별결과',
+        rows: [
+          ['파이프라인', '단계', '상태', '리포트상태', '시작', '종료'],
+          ...pipelines.flatMap((pipeline) => pipeline.steps.map((step) => [
+            pipeline.id, step.id, step.status, step.reportStatus ?? '',
+            step.startedAt ? dateTime(step.startedAt) : '', step.endedAt ? dateTime(step.endedAt) : '',
+          ])),
+        ],
+      },
+    ]);
+  }
+
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4" data-testid="automatic-research-backtest">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">4-market research lane</p>
+          <h2 className="mt-1 text-base font-black">자동 연구 백테스트</h2>
+          <p className="mt-1 text-xs text-muted-foreground">서버의 실제 fast-historical 결과를 읽습니다. 후보 단계 통과 시 같은 cycle의 후속 검증으로 자동 진행됩니다.</p>
+        </div>
+        {auto?.present ? (
+          <button type="button" onClick={exportAutomaticResearch} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs font-black hover:border-primary/50">
+            <Download className="h-4 w-4" /> 자동연구 Excel
+          </button>
+        ) : null}
+      </div>
+      {query.isLoading ? <p className="mt-3 text-xs text-muted-foreground">자동 연구 상태 확인 중…</p> : null}
+      {query.isError ? <p className="mt-3 text-xs text-muted-foreground">자동 연구 근거는 관리자 Research Center 권한에서 확인할 수 있습니다.</p> : null}
+      {!query.isLoading && !query.isError && !pipelines.length ? <p className="mt-3 text-xs text-muted-foreground">아직 fast-historical 실행 이력이 없습니다.</p> : null}
+      {pipelines.length ? (
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          {pipelines.map((pipeline) => (
+            <article key={pipeline.id} className="rounded-xl border border-border bg-background p-3">
+              <div className="flex items-center justify-between gap-2">
+                <strong className="text-xs">{pipeline.id}</strong>
+                <span className="rounded-full border border-border px-2 py-0.5 text-[9px] font-black">{pipeline.status}</span>
+              </div>
+              <p className="mt-2 text-[10px] leading-4 text-muted-foreground">{pipeline.feedback}</p>
+              <ol className="mt-3 space-y-1">
+                {pipeline.steps.map((step, index) => (
+                  <li key={step.id} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-2 rounded-lg border border-border px-2 py-1.5 text-[10px]">
+                    <span className="font-black">{index + 1}</span><span className="truncate font-mono">{step.id}</span><strong>{step.status}</strong>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-2 text-[10px] font-bold">자동 전달: {pipeline.automaticHandoffObserved ? '확인됨' : pipeline.candidatePassed ? '후속 검증 대기' : '후보 통과 전'}</p>
+            </article>
+          ))}
+        </div>
+      ) : null}
+      <p className="mt-3 text-[10px] text-muted-foreground">KR/US/코인현물은 LONG-only 정책, 코인선물은 LONG/SHORT 연구 경로를 유지하며 이 화면은 주문 권한이 없습니다.</p>
+    </section>
+  );
+}
+
 function ResultTable({
   title,
   testId,
@@ -382,6 +464,8 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
         >
           과거 데이터 기반 백테스트이며 미래 수익을 보장하지 않습니다.
         </p>
+
+        {!compact ? <AutomaticResearchBacktestPanel /> : null}
 
         <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" aria-busy={loading} data-testid="backtest-form">
           <h2 className="mb-4 text-center text-base font-black">기본 설정</h2>
