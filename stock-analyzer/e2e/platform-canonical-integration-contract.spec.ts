@@ -45,7 +45,11 @@ test('trade automation status exposes market-scoped recent orders and UI consume
 });
 
 test('canonical integration remains fail-closed and does not add a second browser execution authority', () => {
-  expect(scanner).toContain('enabled: false');
+  expect(scanner).not.toContain('@/lib/auto-trading');
+  expect(scanner).not.toContain('executeAutoTradeCandidates');
+  expect(scanner).not.toContain('monitorAutoTradePositions');
+  expect(scanner).not.toContain('closeAutoTradePosition');
+  expect(scanner).not.toContain('viewMode === "auto"');
   expect(crypto).toContain('enabled: false');
   expect(routeIndex).toContain('PRIVATE_EXCHANGE_API_DISABLED');
   expect(autoTrading).toContain('실거래 권한');
@@ -69,4 +73,15 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
   expect(journalAdapter).toContain('fillIds: fills.map');
   expect(journalPanel).toContain('unified-journal-canonical-lineage');
   expect(journalPanel).toContain('신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.');
+});
+
+
+test('operational observability exposes market activity, delivery health and pre-trade snapshot identity without adding authority', () => {
+  expect(tradeAutomationRoute).toContain('marketActivityByMarket');
+  expect(autoTrading).toContain('data-testid="auto-trading-market-activity"');
+  expect(autoTrading).toContain('미결 주문');
+  expect(autoTrading).toContain('오늘 주문');
+  expect(autoTrading).toContain('오늘 체결');
+  expect(journalPanel).toContain('스냅샷 ID');
+  expect(journalPanel).toContain('증거 기준시각');
 });
