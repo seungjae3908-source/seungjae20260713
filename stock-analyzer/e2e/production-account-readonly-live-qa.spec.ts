@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loginProductionReadOnly } from './support/production-readonly-login';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
+import { parseBitgetReadonlyDiagnosticHeader, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -117,6 +118,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   const blocked: Array<{ method: string; path: string; reason: string }> = [];
   const observedAppMutations: Array<{ method: string; path: string }> = [];
   const snapshots = new Map<Provider, SafetySnapshot>();
+  const bitgetDiagnostics = new Map<Provider, SanitizedBitgetReadonlyDiagnostic>();
   let credentialStatus: CredentialStatus | null = null;
 
   await installProductionReadOnlyPolicy(page, productionOrigin, (request, reason) => {
@@ -149,6 +151,12 @@ test('Production real-account read-only providers return fresh connected snapsho
 
     const match = /^\/api\/accounts\/read-only\/(toss|kiwoom|upbit|bitget)$/.exec(url.pathname);
     if (!match || !response.ok()) return;
+    if (match[1] === 'bitget') {
+      const diagnostic = parseBitgetReadonlyDiagnosticHeader(
+        response.headers()['x-account-readonly-bitget-diagnostic'],
+      );
+      if (diagnostic) bitgetDiagnostics.set('bitget', diagnostic);
+    }
     try {
       snapshots.set(match[1] as Provider, await response.json() as SafetySnapshot);
     } catch {
@@ -192,15 +200,43 @@ test('Production real-account read-only providers return fresh connected snapsho
     ...cryptoProviders,
   ];
 
-  const refresh = page.getByRole('button', { name: '계좌 연결 새로고침' });
-  await expect(refresh).toBeVisible({ timeout: 10_000 });
-  await refresh.click();
-
   const requiredSnapshots: Provider[] = testedProviders.length > 0 ? testedProviders : providers;
-  await expect.poll(
-    () => requiredSnapshots.every((provider) => snapshots.has(provider)),
-    { timeout: 45_000, intervals: [500, 1_000, 2_000] },
-  ).toBe(true);
+
+  // AccountConnections performs its own read-only refresh on mount and may run
+  // once more when Kiwoom support is resolved. Do not immediately add a third
+  // provider fan-out from QA; that previously increased Toss rate-limit risk.
+  // Reuse the real UI's initial snapshots when they arrive, and issue exactly
+  // one bounded manual refresh only if a required provider is still missing.
+  const requiredSnapshotsHealthy = () => requiredSnapshots.every((provider) => {
+    const snapshot = snapshots.get(provider);
+    return snapshot?.connected === true
+      && snapshot.status === 'CONNECTED'
+      && snapshot.stale === false
+      && snapshot.errorCode === null
+      && Array.isArray(snapshot.openOrders);
+  });
+
+  let initialSnapshotsHealthy = false;
+  try {
+    await expect.poll(
+      requiredSnapshotsHealthy,
+      { timeout: 20_000, intervals: [200, 500, 1_000, 2_000] },
+    ).toBe(true);
+    initialSnapshotsHealthy = true;
+  } catch {
+    initialSnapshotsHealthy = false;
+  }
+
+  if (!initialSnapshotsHealthy) {
+    const refresh = page.getByRole('button', { name: '계좌 연결 새로고침' });
+    await expect(refresh).toBeVisible({ timeout: 10_000 });
+    await expect(refresh).toBeEnabled({ timeout: 15_000 });
+    await refresh.click();
+    await expect.poll(
+      requiredSnapshotsHealthy,
+      { timeout: 45_000, intervals: [500, 1_000, 2_000, 5_000] },
+    ).toBe(true);
+  }
 
   expect(credentialStatus?.ok).toBe(true);
   expect(credentialStatus?.encryptionConfigured).toBe(true);
@@ -236,6 +272,9 @@ test('Production real-account read-only providers return fresh connected snapsho
         provider,
         typeof snapshot.errorCode === 'string' ? snapshot.errorCode : null,
       ),
+      ...(provider === 'bitget'
+        ? { bitgetDiagnostic: bitgetDiagnostics.get('bitget') ?? null }
+        : {}),
     };
   });
 
@@ -243,7 +282,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   // Production failure identifies the exact provider status/error without retaining
   // account values, credentials, traces, screenshots, or mutation payloads.
   writeEvidence({
-    schemaVersion: 'production-account-readonly-live-qa-v1',
+    schemaVersion: 'production-account-readonly-live-qa-v2',
     targetSha: expectedDeploySha,
     officialProductionOrigin: true,
     authenticatedProductionSession: true,

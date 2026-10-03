@@ -50,7 +50,7 @@ export type TradingAiReviewResult = { summary: string; strengths: Array<{ title:
 export type AiReviewPreview = { dataset: TradingReviewDataset; includedFields:string[]; excludedFields:string[]; warnings:string[] };
 export type GeneratedAiReview = { providerRequestId:string|null; model:string; generatedAt:string; result:TradingAiReviewResult; usage:{inputUnits:number|null;outputUnits:number|null} };
 export type AiProviderCallState = { attempted:boolean; completed:boolean; reused:boolean };
-export type UnifiedTradeSource = 'TOSS_MANUAL'|'TOSS_API'|'UPBIT_API'|'BITGET_API'|'KIWOOM_API'|'APP_PAPER'|'APP_SHADOW'|'APP_AUTO';
+export type UnifiedTradeSource = 'TOSS_MANUAL'|'TOSS_API'|'UPBIT_API'|'BITGET_API'|'KIWOOM_API'|'APP_MANUAL'|'APP_PAPER'|'APP_SHADOW'|'APP_AUTO';
 export type UnifiedTradeMarket = 'KR_STOCK'|'US_STOCK'|'CRYPTO_SPOT'|'CRYPTO_FUTURES';
 export type UnifiedTradeRange = 'TODAY'|'7D'|'30D'|'90D'|'1Y'|'ALL';
 export type UnifiedTradeGrade = 'A'|'B'|'C'|'D';
@@ -128,7 +128,7 @@ export type UnifiedTradeJournal = {
   safety:{finalCostDelta:'0_KRW';actualOrderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;privateBrokerRequests:number};
   liveAccountHistory?:{
     requestedRange:UnifiedTradeRange; effectiveDays:number; rangeCapped:boolean; persisted:false; privateProviderRequests:number; truncated:boolean;
-    providers:Array<{provider:'kiwoom'|'upbit'|'bitget';configured:boolean|null;enabled:boolean;status:'READY'|'PARTIAL'|'NOT_CONFIGURED'|'DISABLED'|'UNAVAILABLE';records:number;privateProviderRequests:number;truncated:boolean;errorCode:string|null}>;
+    providers:Array<{provider:'toss'|'kiwoom'|'upbit'|'bitget';configured:boolean|null;enabled:boolean;status:'READY'|'PARTIAL'|'NOT_CONFIGURED'|'DISABLED'|'UNAVAILABLE';records:number;privateProviderRequests:number;truncated:boolean;errorCode:string|null}>;
     realizedEvidence?:Array<{provider:'kiwoom';market:'KR';evidenceType:'DAILY_CASH_REALIZED';date:string;symbol:string;buyAveragePrice:number|null;buyQuantity:number|null;sellAveragePrice:number;sellQuantity:number;feesAndTax:number|null;providerReportedPnl:number|null;providerReportedReturnPercent:number|null;canonicalAnalyticsPromoted:false}>;
     safety:{orderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;credentialsReturned:false;liveTradingEnabled:false;autoTradingEnabled:false};
   };
@@ -255,6 +255,25 @@ export async function getJournalAnalytics(periodStart?: string, periodEnd?: stri
   assertAnalysisEnvelope(body);
   if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '거래 분석을 불러오지 못했습니다.'));
   return body?.result as JournalAnalytics;
+}
+
+export type AccountHistoryImportResult = {
+  ok:true; mode:'journal-sync-only'; orderSubmitted:false; exchangeRequestSent:false;
+  requestedRange:UnifiedTradeRange; imported:number; unchanged:number; conflicts:number; failed:number; persisted:true;
+  providerHistory:UnifiedTradeJournal['liveAccountHistory'];
+};
+
+export async function importAccountHistory(range: UnifiedTradeRange = '30D', signal?: AbortSignal) {
+  const response = await authorizedFetch('/api/paper-journal/import-account-history', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ range }),
+    signal,
+  });
+  const body = await parseJson(response);
+  assertSyncEnvelope(body);
+  if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '기존 거래내역을 가져오지 못했습니다.'));
+  return body as unknown as AccountHistoryImportResult;
 }
 
 export async function getUnifiedTradeJournal(filters: UnifiedJournalFilters = {}, signal?: AbortSignal) {

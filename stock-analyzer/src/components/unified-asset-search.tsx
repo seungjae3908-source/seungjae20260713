@@ -30,6 +30,20 @@ import {
 } from '@/lib/stock-display';
 
 const RECENT_KEY = 'unified-asset-search:recent:v1';
+const DEFAULT_SEARCH_DEBOUNCE_MS = 200;
+
+function exactIdentitySearchDelayMs(
+  market: UnifiedMarketFilter | null,
+  rawQuery: string,
+) {
+  const query = rawQuery.trim().toUpperCase();
+  if (!market || !query) return DEFAULT_SEARCH_DEBOUNCE_MS;
+  if (market === 'KR' && /^\d{6}$/.test(query)) return 0;
+  if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;
+  if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;
+  if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;
+  return DEFAULT_SEARCH_DEBOUNCE_MS;
+}
 const GROUP_ORDER: UnifiedMarketFilter[] = ['KR', 'US', 'spot', 'futures'];
 const GROUP_LABEL: Record<UnifiedMarketFilter, string> = {
   KR: '국내주식',
@@ -108,6 +122,9 @@ export function UnifiedAssetSearch({
   const popupRef = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
   const activeRequestController = useRef<AbortController | null>(null);
+  const suppressSelectedQueryRef = useRef<string | null>(null);
+  const accessTokenRef = useRef<string | null>(auth.session?.access_token ?? null);
+  accessTokenRef.current = auth.session?.access_token ?? null;
   const [query, setQuery] = useState('');
   const [focused, setFocused] = useState(false);
   const [composing, setComposing] = useState(false);
@@ -223,7 +240,14 @@ export function UnifiedAssetSearch({
     setLoading(true);
     setError(null);
     try {
-      const raw = await fetchUnifiedAssetSuggestions({ q: value, asset, market, limit: value.length === 1 ? 25 : 30, signal });
+      const raw = await fetchUnifiedAssetSuggestions({
+        q: value,
+        asset,
+        market,
+        limit: value.length === 1 ? 25 : 30,
+        accessToken: accessTokenRef.current,
+        signal,
+      });
       if (sequence !== requestSequence.current) return;
       const next = filterResponse(raw);
       setResponse(next);
@@ -238,6 +262,12 @@ export function UnifiedAssetSearch({
 
   useEffect(() => {
     cancelActiveRequest();
+    if (suppressSelectedQueryRef.current === trimmed) {
+      suppressSelectedQueryRef.current = null;
+      setLoading(false);
+      setError(null);
+      return;
+    }
     if (!trimmed || composing) {
       setResponse(null);
       setLoading(false);
@@ -247,7 +277,7 @@ export function UnifiedAssetSearch({
     }
     const controller = new AbortController();
     activeRequestController.current = controller;
-    const timer = window.setTimeout(() => void runSearch(trimmed, controller.signal), 200);
+    const timer = window.setTimeout(() => void runSearch(trimmed, controller.signal), exactIdentitySearchDelayMs(market, trimmed));
     return () => {
       window.clearTimeout(timer);
       controller.abort();
@@ -274,6 +304,7 @@ export function UnifiedAssetSearch({
 
   const selectItem = (item: UnifiedAssetSuggestion) => {
     cancelActiveRequest();
+    suppressSelectedQueryRef.current = item.displayName.trim();
     saveRecent(item);
     setRecent(readRecent());
     setFocused(false);

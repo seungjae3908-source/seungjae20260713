@@ -73,6 +73,40 @@ type SafeRecord = {
   executionAuthority: 'NONE';
 };
 
+type SafeAutomation = {
+  schemaVersion: 'research-video-discovery-scan-v1';
+  status: 'COMPLETE' | 'BLOCKED' | 'WAITING_CONFIGURATION';
+  observedAt: string;
+  researchSha: string;
+  query: string | null;
+  sourceCount: number | null;
+  snapshotDigest: string | null;
+  providerNetworkCalls: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+  reason: string | null;
+  nextRequiredStep: string;
+};
+
+type SafeAiReview = {
+  status: 'WAITING_FOR_FREE_AI' | 'PARTIAL_AI_UNAVAILABLE' | 'COMPLETE' | 'NO_NEW_EVIDENCE';
+  observedAt: number;
+  researchSha: string;
+  provider: 'groq' | 'gemini' | null;
+  model: 'openai/gpt-oss-20b' | 'gemini-3.1-flash-lite' | null;
+  reason: string;
+  providerNetworkCalls: number;
+  cacheHits: number;
+  reviewCount: number;
+  proposerReviewCount: number;
+  criticReviewCount: number;
+  missingProfileCount: number;
+  blockedProfileCount: number;
+  deferredProfileCount: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+};
+
 type SafeSnapshotProvenance = {
   schemaVersion: typeof SNAPSHOT_SCHEMA;
   sourceHeadSha: string;
@@ -99,6 +133,8 @@ type SafeEvidence = {
   records: SafeRecord[];
   safety: typeof REQUIRED_SAFETY;
   snapshotProvenance: SafeSnapshotProvenance;
+  automation: SafeAutomation | null;
+  aiReview: SafeAiReview | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,6 +234,77 @@ function safeSnapshotProvenance(value: unknown): SafeSnapshotProvenance | null {
   };
 }
 
+function safeAutomation(value: unknown): SafeAutomation | null {
+  if (value == null) return null;
+  if (!isRecord(value) || value.schemaVersion !== 'research-video-discovery-scan-v1') return null;
+  if (value.status !== 'COMPLETE' && value.status !== 'BLOCKED' && value.status !== 'WAITING_CONFIGURATION') return null;
+  const observedAt = canonicalIsoTimestamp(value.observedAt);
+  const researchSha = exactSha(value.researchSha);
+  const query = value.query === null ? null : typeof value.query === 'string' && value.query.trim() && value.query.length <= 120 ? value.query : undefined;
+  const sourceCount = value.sourceCount === null ? null : typeof value.sourceCount === 'number' && Number.isSafeInteger(value.sourceCount) && value.sourceCount >= 0 && value.sourceCount <= 5 ? value.sourceCount : undefined;
+  const snapshotDigest = value.snapshotDigest === null ? null : typeof value.snapshotDigest === 'string' && /^[0-9a-f]{64}$/u.test(value.snapshotDigest) ? value.snapshotDigest : undefined;
+  const reason = value.reason === null ? null : typeof value.reason === 'string' && /^[A-Z0-9_:-]{1,160}$/u.test(value.reason) ? value.reason : undefined;
+  const nextRequiredStep = typeof value.nextRequiredStep === 'string' && /^[A-Z0-9_:-]{1,160}$/u.test(value.nextRequiredStep) ? value.nextRequiredStep : null;
+  if (!observedAt || !researchSha || query === undefined || sourceCount === undefined || snapshotDigest === undefined || reason === undefined || !nextRequiredStep) return null;
+  if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
+  if (typeof value.scheduledInvocationObserved !== 'boolean'
+    || typeof value.providerNetworkCalls !== 'number' || !Number.isSafeInteger(value.providerNetworkCalls)
+    || value.providerNetworkCalls < 0 || value.providerNetworkCalls > 1) return null;
+  return {
+    schemaVersion: 'research-video-discovery-scan-v1',
+    status: value.status,
+    observedAt,
+    researchSha,
+    query,
+    sourceCount,
+    snapshotDigest,
+    providerNetworkCalls: value.providerNetworkCalls,
+    invocationMode: value.invocationMode,
+    scheduledInvocationObserved: value.scheduledInvocationObserved,
+    reason,
+    nextRequiredStep,
+  };
+}
+
+function safeAiReview(value: unknown): SafeAiReview | null {
+  if (value == null) return null;
+  if (!isRecord(value)) return null;
+  const statuses = new Set(['WAITING_FOR_FREE_AI','PARTIAL_AI_UNAVAILABLE','COMPLETE','NO_NEW_EVIDENCE']);
+  if (!statuses.has(String(value.status ?? ''))) return null;
+  if (typeof value.observedAt !== 'number' || !Number.isSafeInteger(value.observedAt) || value.observedAt <= 0) return null;
+  const researchSha = exactSha(value.researchSha);
+  const provider = value.provider === null ? null : value.provider === 'groq' || value.provider === 'gemini' ? value.provider : undefined;
+  const model = value.model === null ? null : value.model === 'openai/gpt-oss-20b' || value.model === 'gemini-3.1-flash-lite' ? value.model : undefined;
+  const reason = typeof value.reason === 'string' && /^[A-Z0-9_.:-]{1,160}$/u.test(value.reason) ? value.reason : null;
+  const countKeys = ['providerNetworkCalls','cacheHits','reviewCount','proposerReviewCount','criticReviewCount','missingProfileCount','blockedProfileCount','deferredProfileCount'] as const;
+  if (!researchSha || provider === undefined || model === undefined || !reason) return null;
+  if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
+  if (typeof value.scheduledInvocationObserved !== 'boolean') return null;
+  if (countKeys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || (value[key] as number) < 0 || (value[key] as number) > 3)) return null;
+  const reviewCount = value.reviewCount as number;
+  const proposerReviewCount = value.proposerReviewCount as number;
+  const criticReviewCount = value.criticReviewCount as number;
+  if (proposerReviewCount + criticReviewCount !== reviewCount) return null;
+  return {
+    status: value.status as SafeAiReview['status'],
+    observedAt: value.observedAt,
+    researchSha,
+    provider,
+    model,
+    reason,
+    providerNetworkCalls: value.providerNetworkCalls as number,
+    cacheHits: value.cacheHits as number,
+    reviewCount,
+    proposerReviewCount,
+    criticReviewCount,
+    missingProfileCount: value.missingProfileCount as number,
+    blockedProfileCount: value.blockedProfileCount as number,
+    deferredProfileCount: value.deferredProfileCount as number,
+    invocationMode: value.invocationMode as SafeAiReview['invocationMode'],
+    scheduledInvocationObserved: value.scheduledInvocationObserved,
+  };
+}
+
 function safetyMatches(value: unknown): value is typeof REQUIRED_SAFETY {
   if (!isRecord(value)) return false;
   return Object.entries(REQUIRED_SAFETY).every(([key, expected]) => value[key] === expected);
@@ -215,7 +322,9 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   if (!Array.isArray(value.records) || value.records.length !== value.sourceCount) return null;
   if (!safetyMatches(value.safety)) return null;
   const snapshotProvenance = safeSnapshotProvenance(value.snapshotProvenance);
-  if (!snapshotProvenance) return null;
+  const automation = safeAutomation(value.automation);
+  const aiReview = safeAiReview(value.aiReview);
+  if (!snapshotProvenance || (value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
 
   const records = value.records.map(safeRecord);
   if (records.some((record) => record === null)) return null;
@@ -235,6 +344,8 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
     records: records as SafeRecord[],
     safety: REQUIRED_SAFETY,
     snapshotProvenance,
+    automation,
+    aiReview,
   };
 }
 
@@ -251,7 +362,23 @@ export async function loadVideoResearchRuntimeEvidenceSnapshot(): Promise<unknow
       throw error;
     }
   }
-  return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch('http://127.0.0.1:18090/api/research/video/evidence', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const payload = await response.json() as unknown;
+    return isRecord(payload) ? payload : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function unavailable(reason: string) {
@@ -283,6 +410,18 @@ export function createVideoResearchEvidenceRouter(loadSnapshot: SnapshotLoader =
     }
     if (raw === null || raw === undefined) {
       res.status(200).json(unavailable('SANITIZED_RUNTIME_EVIDENCE_MISSING'));
+      return;
+    }
+    if (isRecord(raw) && raw.available === false && raw.dataState === 'UNKNOWN') {
+      const automation = safeAutomation(raw.automation);
+      const aiReview = safeAiReview(raw.aiReview);
+      const reason = typeof raw.reason === 'string' && /^[A-Z0-9_:-]{1,160}$/u.test(raw.reason)
+        ? raw.reason : 'SANITIZED_RUNTIME_EVIDENCE_UNAVAILABLE';
+      if ((raw.automation != null && !automation) || (raw.aiReview != null && !aiReview)) {
+        res.status(200).json(unavailable('SANITIZED_RUNTIME_EVIDENCE_INVALID'));
+        return;
+      }
+      res.status(200).json({ ...unavailable(reason), automation, aiReview });
       return;
     }
     const evidence = sanitizeVideoResearchRuntimeEvidence(raw);
