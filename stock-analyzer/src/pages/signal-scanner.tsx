@@ -751,6 +751,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             <div>
               <p className="text-xs font-semibold text-primary">공개 시장데이터 전용 · 자동 전략 Profile</p>
               <h1 className="mt-1 text-xl font-black">AI 신호검색기</h1>
+              <p data-testid="scanner-engine-kind" className="mt-1 text-[11px] font-bold text-muted-foreground">Quant/Rule 랭킹 + 공개 Market Intelligence · 신호점수는 수익확률이 아님</p>
               <p className="mt-1 hidden max-w-3xl break-keep text-xs leading-relaxed text-muted-foreground sm:block">
                 시장과 투자 스타일만 선택하면 시간봉·기술지표·패턴·변동성·거래량·추세·시장국면·리스크 조건을 내부 엔진이 자동 조합합니다. 계좌·주문·취소 API는 호출하지 않습니다.
               </p>
