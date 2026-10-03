@@ -58,6 +58,13 @@ test('canonical execution ledger separates manual live, automatic live, and auto
   assert.equal(byOrder.get('exchange-order-auto')?.source,'APP_AUTO');
   assert.equal(byOrder.get('exchange-order-paper')?.source,'APP_PAPER');
   assert.equal(rows.every((row)=>String(row.accountIdMasked).includes('****')),true);
+  const automatic = byOrder.get('exchange-order-auto');
+  assert.deepEqual(automatic?.canonicalLineage, {
+    signalIds: ['signal-auto-live'],
+    planIds: ['auto-live'],
+    orderIds: ['order-auto'],
+    fillIds: ['fill-order-auto'],
+  });
 });
 
 
