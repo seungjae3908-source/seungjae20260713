@@ -46,6 +46,17 @@ const SECTIONS: Array<{ value: TradingSection; label: string }> = [
   { value: 'settings', label: '설정' },
 ];
 
+function tradingRouteState(): { market: TradingMarket; section: TradingSection } {
+  if (typeof window === 'undefined') return { market: 'domestic_stock', section: 'dashboard' };
+  const params = new URLSearchParams(window.location.search);
+  const market = params.get('market') as TradingMarket | null;
+  const section = params.get('section') as TradingSection | null;
+  return {
+    market: MARKETS.some((item) => item.value === market) ? market! : 'domestic_stock',
+    section: SECTIONS.some((item) => item.value === section) ? section! : 'dashboard',
+  };
+}
+
 function StatusItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-xl border border-card-border bg-background p-2.5 text-center">
@@ -91,15 +102,16 @@ function SegmentedButton({
 export default function AutoTradingPage({ fixture, embedded = false, initialMode = 'auto' }: AutoTradingPageProps) {
   const auth = useAuth();
   const { selection } = useAnalysisSelection();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const userId = auth.user?.id ?? auth.profile?.id ?? '';
   const testFixtureAccess = Boolean(fixture);
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
   const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
   const [mode, setMode] = useState<TradingMode>(initialMode);
-  const [market, setMarket] = useState<TradingMarket>('domestic_stock');
-  const [section, setSection] = useState<TradingSection>('dashboard');
+  const initialRouteState = useMemo(tradingRouteState, []);
+  const [market, setMarket] = useState<TradingMarket>(initialRouteState.market);
+  const [section, setSection] = useState<TradingSection>(initialRouteState.section);
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
   const [paperRevision, setPaperRevision] = useState(0);
@@ -112,6 +124,12 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
     if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
   }, [canAuto, canPaper, mode]);
+
+  useEffect(() => {
+    const next = tradingRouteState();
+    setMarket(next.market);
+    setSection(next.section);
+  }, [location]);
 
   useEffect(() => {
     if (fixture) {
@@ -147,7 +165,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
   const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
-  const lastOrder = runtimeStatus?.lastOrder;
+  const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
 
   const changeMode = (next: TradingMode) => {
