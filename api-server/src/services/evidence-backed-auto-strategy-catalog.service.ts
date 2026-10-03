@@ -59,7 +59,15 @@ export type StrategyRulePackDefinition = Readonly<{
   rules: readonly string[];
   requiredEvidence: readonly StrategyRuleEvidenceKey[];
   paperResearchAllowedWhenReady: true;
+  livePilotAllowedWhenReady: true;
   automaticLivePromotionAllowed: false;
+  livePilot: Readonly<{
+    maxOrderKrw: number;
+    maxOpenPositions: number;
+    maxDailyEntries: number;
+    dailyLossStopPercent: number;
+    maxConsecutiveLosses: number;
+  }>;
   promotionRequirements: readonly string[];
 }>;
 
@@ -74,6 +82,14 @@ const COMMON: readonly StrategyRuleEvidenceKey[] = Object.freeze([
   'riskReady',
   'aiReviewReady',
 ]);
+
+export const RULE_PACK_LIVE_PILOT = Object.freeze({
+  maxOrderKrw: 100_000,
+  maxOpenPositions: 2,
+  maxDailyEntries: 5,
+  dailyLossStopPercent: 1,
+  maxConsecutiveLosses: 2,
+});
 
 function req(...keys: StrategyRuleEvidenceKey[]) {
   return Object.freeze([...COMMON, ...keys]);
@@ -105,7 +121,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('trendRegimeReady', 'pullbackReady', 'reaccelerationReady', 'volumeAccelerationReady'),
     paperResearchAllowedWhenReady: true,
+    livePilotAllowedWhenReady: true,
     automaticLivePromotionAllowed: false,
+    livePilot: RULE_PACK_LIVE_PILOT,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -125,7 +143,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('eventCatalystReady', 'rvolReady', 'firstPullbackReady', 'vwapSupportReady', 'volumeReaccelerationReady'),
     paperResearchAllowedWhenReady: true,
+    livePilotAllowedWhenReady: true,
     automaticLivePromotionAllowed: false,
+    livePilot: RULE_PACK_LIVE_PILOT,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -145,7 +165,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('pitUniverseReady', 'first5mRvolReady', 'openingRangeReady', 'retestReady', 'microBreakoutReady'),
     paperResearchAllowedWhenReady: true,
+    livePilotAllowedWhenReady: true,
     automaticLivePromotionAllowed: false,
+    livePilot: RULE_PACK_LIVE_PILOT,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -165,7 +187,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('pressureReady', 'compressionReady', 'volumeExpansionReady', 'breakoutReady'),
     paperResearchAllowedWhenReady: true,
+    livePilotAllowedWhenReady: true,
     automaticLivePromotionAllowed: false,
+    livePilot: RULE_PACK_LIVE_PILOT,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -185,7 +209,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('orderFlowReady', 'cvdReady', 'takerBuyReady', 'orderbookImbalanceReady', 'mlRankReady', 'modelFrozen'),
     paperResearchAllowedWhenReady: true,
+    livePilotAllowedWhenReady: true,
     automaticLivePromotionAllowed: false,
+    livePilot: RULE_PACK_LIVE_PILOT,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'FROZEN_MODEL', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -205,7 +231,9 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('orderFlowReady', 'oiReady', 'cvdReady', 'takerFlowReady', 'fundingRiskReady'),
     paperResearchAllowedWhenReady: true,
+    livePilotAllowedWhenReady: true,
     automaticLivePromotionAllowed: false,
+    livePilot: RULE_PACK_LIVE_PILOT,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
 ]);
@@ -221,9 +249,9 @@ function record(value: unknown): Record<string, unknown> | null {
 export type StrategyRulePackGate = Readonly<{
   recognized: boolean;
   strategyId: string;
-  state: 'PASS_THROUGH' | 'NO_TRADE' | 'PAPER_CANDIDATE';
+  state: 'PASS_THROUGH' | 'NO_TRADE' | 'PAPER_LIVE_PILOT_CANDIDATE';
   paperAllowed: boolean;
-  liveAllowed: false;
+  liveAllowed: boolean;
   blockers: readonly string[];
   definition: StrategyRulePackDefinition | null;
 }>;
@@ -276,9 +304,9 @@ export function evaluateStrategyRulePackGate(input: {
   return Object.freeze({
     recognized: true,
     strategyId: definition.strategyId,
-    state: unique.length === 0 ? 'PAPER_CANDIDATE' : 'NO_TRADE',
+    state: unique.length === 0 ? 'PAPER_LIVE_PILOT_CANDIDATE' : 'NO_TRADE',
     paperAllowed: unique.length === 0,
-    liveAllowed: false,
+    liveAllowed: unique.length === 0 && definition.livePilotAllowedWhenReady,
     blockers: Object.freeze(unique),
     definition,
   });
