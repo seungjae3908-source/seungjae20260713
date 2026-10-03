@@ -93,16 +93,16 @@ test('Bitget reduce-only exit keeps the original position side so entry and exit
   assert.equal(exitRow?.positionEffect,'CLOSE');
   const journal=buildUnifiedTradeJournal(rows,{range:'ALL'},new Date(NOW));
   assert.equal(journal.trades.length,1);
-  assert.deepEqual(journal.trades[0]?.canonicalLineage?.signalIds.sort(),[
+  assert.deepEqual([...(journal.trades[0]?.canonicalLineage?.signalIds ?? [])].sort(),[
     'signal-future-entry','signal-future-exit',
   ].sort());
-  assert.deepEqual(journal.trades[0]?.canonicalLineage?.planIds.sort(),[
+  assert.deepEqual([...(journal.trades[0]?.canonicalLineage?.planIds ?? [])].sort(),[
     'future-entry','future-exit',
   ].sort());
-  assert.deepEqual(journal.trades[0]?.canonicalLineage?.orderIds.sort(),[
+  assert.deepEqual([...(journal.trades[0]?.canonicalLineage?.orderIds ?? [])].sort(),[
     'future-entry-order','future-exit-order',
   ].sort());
-  assert.deepEqual(journal.trades[0]?.canonicalLineage?.fillIds.sort(),[
+  assert.deepEqual([...(journal.trades[0]?.canonicalLineage?.fillIds ?? [])].sort(),[
     'fill-future-entry-order','fill-future-exit-order',
   ].sort());
 });
