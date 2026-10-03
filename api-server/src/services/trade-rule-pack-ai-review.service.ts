@@ -344,8 +344,8 @@ export class TradeRulePackAiReviewer {
     });
   }
 
-  runtimeStatus(): TradeRulePackAiReviewRuntimeStatus {
-    this.pruneExpired(Date.now());
+  runtimeStatus(nowMs = Date.now()): TradeRulePackAiReviewRuntimeStatus {
+    this.pruneExpired(nowMs);
     return tradeRulePackAiReviewRuntimeStatus(this.env, this.runtimeSnapshot());
   }
 
