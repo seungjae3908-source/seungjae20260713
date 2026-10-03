@@ -25,6 +25,14 @@ export type BacktestFormValues = {
   trailingEnabled: boolean;
   trailingActivationR: number;
   trailingDistanceR: number;
+  strategyParameters: {
+    fastPeriod: number;
+    slowPeriod: number;
+    pullbackTolerancePercent: number;
+    lookback: number;
+    volumePeriod: number;
+    volumeMultiplier: number;
+  };
 };
 export type BacktestPerformance = {
   trades: number;
@@ -101,11 +109,18 @@ function dateToUtc(value: string, endOfDay = false) {
 }
 
 export function toBacktestRequest(values: BacktestFormValues) {
+  const p = values.strategyParameters;
   const parameters: Record<string, number | boolean> = values.strategy === 'trend_pullback'
-    ? { fastPeriod: 20, slowPeriod: 50, pullbackTolerancePercent: 0.5, volumePeriod: 20, volumeMultiplier: 1 }
+    ? {
+        fastPeriod: p.fastPeriod,
+        slowPeriod: p.slowPeriod,
+        pullbackTolerancePercent: p.pullbackTolerancePercent,
+        volumePeriod: p.volumePeriod,
+        volumeMultiplier: p.volumeMultiplier,
+      }
     : values.strategy === 'breakout'
-      ? { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 }
-      : { volumePeriod: 20, volumeMultiplier: 1.1 };
+      ? { lookback: p.lookback, volumePeriod: p.volumePeriod, volumeMultiplier: p.volumeMultiplier }
+      : { volumePeriod: p.volumePeriod, volumeMultiplier: p.volumeMultiplier };
   return {
     market: 'crypto-futures' as const,
     symbol: values.symbol.trim().toUpperCase(),
