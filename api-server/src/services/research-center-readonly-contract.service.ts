@@ -625,6 +625,29 @@ function sanitizeRuntimeLiveness(value: unknown) {
   return { status, lastSuccessAt, expectedNextAt, ageMs, missedCycles, stale: input.stale, cadenceMs };
 }
 
+function sanitizeActivity(value: unknown) {
+  if (value === undefined || value === null) return { windowHours: 24, generatedAt: null, entries: [] };
+  const input = record(value);
+  if (!input || input.windowHours !== 24) return null;
+  const generatedAt = finiteOrNull(input.generatedAt);
+  const rows = Array.isArray(input.entries) ? input.entries : null;
+  if (generatedAt === undefined || !rows || rows.length > 200) return null;
+  const entries = rows.map((raw) => {
+    const row = record(raw);
+    const id = safeTextOrNull(row?.id, 180);
+    const at = finiteOrNull(row?.at);
+    const source = safeTextOrNull(row?.source, 80);
+    const label = safeTextOrNull(row?.label, 160);
+    const status = safeTextOrNull(row?.status, 80);
+    const detail = safeTextOrNull(row?.detail, 300);
+    const profile = safeTextOrNull(row?.profile, 80);
+    if (!row || !id || at == null || at <= 0 || !source || !label || !status) return null;
+    return { id, at, source, label, status, detail, profile };
+  });
+  if (entries.some((row) => row == null)) return null;
+  return { windowHours: 24, generatedAt, entries };
+}
+
 function sanitizeShadowGroup(value: unknown) {
   const group = record(value);
   const name = safeTextOrNull(group?.name, 120);
@@ -658,6 +681,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const dataFactory = record(payload?.dataFactory);
   const factory = sanitizeFactoryRuntimeSummary(payload?.factory);
   const runtimeLiveness = sanitizeRuntimeLiveness(state?.runtimeLiveness);
+  const activity = sanitizeActivity(payload?.activity);
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
   const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
@@ -665,7 +689,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !records || !liquidityIndependence) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !activity || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -700,6 +724,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
     research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
     dataFactory: { temporalCryptoFutures },
     factory,
+    activity,
     paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
     profitability: { proven: profitability.proven, status: profitabilityStatus, note: profitabilityNote },
