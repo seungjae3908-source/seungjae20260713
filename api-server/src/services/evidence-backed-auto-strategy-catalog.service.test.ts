@@ -25,7 +25,7 @@ function evidence(strategyId: StrategyRulePackId, extra: Record<string, unknown>
   };
 }
 
-test('registers the six requested rule packs with bounded live pilot but no automatic promotion', () => {
+test('registers the six requested rule packs and never grants automatic live promotion', () => {
   const catalog = evidenceBackedAutoStrategyCatalog();
   assert.equal(catalog.length, 6);
   assert.deepEqual(catalog.map((row) => row.strategyId), [
@@ -36,8 +36,6 @@ test('registers the six requested rule packs with bounded live pilot but no auto
     'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
     'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
   ]);
-  assert.equal(catalog.every((row) => row.livePilotAllowedWhenReady === true), true);
-  assert.equal(catalog.every((row) => row.livePilot.maxOrderKrw === 100_000), true);
   assert.equal(catalog.every((row) => row.automaticLivePromotionAllowed === false), true);
 });
 
@@ -67,9 +65,9 @@ test('trend pullback can enter Paper only after formula wave indicator reacceler
       volumeAccelerationReady: true,
     }),
   });
-  assert.equal(result.state, 'PAPER_LIVE_PILOT_CANDIDATE');
+  assert.equal(result.state, 'PAPER_CANDIDATE');
   assert.equal(result.paperAllowed, true);
-  assert.equal(result.liveAllowed, true);
+  assert.equal(result.liveAllowed, false);
 });
 
 test('AI VETO blocks even when deterministic market conditions are ready', () => {
@@ -113,7 +111,7 @@ test('cash rule packs reject SHORT while futures flow admits LONG and SHORT', ()
       }),
     });
     assert.equal(futures.paperAllowed, true);
-    assert.equal(futures.liveAllowed, true);
+    assert.equal(futures.liveAllowed, false);
   }
 });
 
