@@ -23,7 +23,6 @@ export type StrategyRuleEvidenceKey =
   | 'liquidityReady'
   | 'costEvidenceReady'
   | 'riskReady'
-  | 'aiReviewReady'
   | 'trendRegimeReady'
   | 'pullbackReady'
   | 'reaccelerationReady'
@@ -391,7 +390,6 @@ function deterministicBlockers(input: StrategyRulePackGateInput, definition: Str
   }
   if (evidence.strategyId !== definition.strategyId) blockers.push('STRATEGY_RULE_PACK_ID_MISMATCH');
   for (const key of definition.requiredEvidence) {
-    if (key === 'aiReviewReady') continue;
     if (evidence[key] !== true) {
       blockers.push('STRATEGY_RULE_PACK_' + key.replace(/[A-Z]/g, (m) => '_' + m).toUpperCase() + '_REQUIRED');
     }
