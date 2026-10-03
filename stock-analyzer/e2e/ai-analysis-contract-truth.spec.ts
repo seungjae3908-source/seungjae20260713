@@ -31,3 +31,11 @@ test('missing strategy evidence never fabricates target or stop prices', async (
   expect(source).not.toContain('formatPrice(data.stopLossPrice, currency)');
   expect(source).not.toContain('실시간 차트 데이터가 부족하여 모델 추정값으로 표시합니다.');
 });
+
+
+test('stock detail clearly identifies deterministic evidence analysis instead of implying external LLM generation', async () => {
+  const source = await readFile(tabPath, 'utf8');
+  expect(source).toContain('data-testid="stock-detail-ai-engine-kind"');
+  expect(source).toContain('결정론적 엔진');
+  expect(source).toContain('외부 LLM이 매수·매도 의견이나 수치를 새로 만들지 않습니다.');
+});
