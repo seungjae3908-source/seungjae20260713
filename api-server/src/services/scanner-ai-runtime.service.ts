@@ -1,5 +1,8 @@
 import { AiChatError, type AiChatResult } from './ai-chat.service';
-import { answerBoundedAiJson } from './bounded-ai-json-provider.service';
+import {
+  answerBoundedAiJson,
+  boundedAiJsonProviderRuntimeStatus,
+} from './bounded-ai-json-provider.service';
 import {
   FutureProvider,
   ScannerAiProviderError,
@@ -22,11 +25,30 @@ type Validator = {
 
 export type ScannerAiRuntimeStatus = Readonly<{
   configured: boolean;
-  providerSeam: 'AI_CHAT_PROVIDER_SEAM';
+  providerSeam: 'BOUNDED_AI_JSON_PROVIDER';
+  provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  model: string | null;
+  fallbackConfigured: boolean;
+  fallbackProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
   canonicalScannerWired: true;
   maxCandidatesPerRequest: number;
   failSoftForDisplay: true;
   vetoBlocksStrongSignal: true;
+  providerCalls: number;
+  providerSuccesses: number;
+  providerFailures: number;
+  providerFallbackSuccesses: number;
+  providerLastSuccessAt: string | null;
+  providerLastErrorAt: string | null;
+  providerLastErrorCode: string | null;
+  providerAverageLatencyMs: number | null;
+  providerMaxLatencyMs: number | null;
+  schedulerPending: number;
+  schedulerActive: number;
+  schedulerConsecutiveFailures: number;
+  schedulerCircuitOpen: boolean;
+  schedulerCircuitOpenedAt: number | null;
+  schedulerCircuitResetMs: number;
   executionAuthority: 'NONE';
   orderAllowed: false;
   positionSizeAuthority: false;
@@ -57,18 +79,6 @@ function stringList(value: unknown, maxItems = 6, maxLength = 180): string[] {
   }))].slice(0, maxItems);
 }
 
-function configured(env: NodeJS.ProcessEnv = process.env): boolean {
-  const selected = String(env.AI_CHAT_PROVIDER ?? '').trim().toLowerCase();
-  const generic = Boolean(String(env.AI_CHAT_API_KEY ?? '').trim());
-  const gemini = Boolean(String(env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? '').trim());
-  const groq = Boolean(String(env.GROQ_API_KEY ?? '').trim());
-  if (['gemini', 'google', 'google-gemini'].includes(selected)) return generic || gemini;
-  if (selected === 'groq') return generic || groq;
-  if (selected === 'openai-compatible') return generic && Boolean(String(env.AI_CHAT_MODEL ?? '').trim());
-  if (selected) return false;
-  return gemini || groq;
-}
-
 function maxCandidates(env: NodeJS.ProcessEnv = process.env): number {
   const parsed = Number(env.SCANNER_AI_MAX_CANDIDATES);
   return Number.isFinite(parsed)
@@ -77,17 +87,38 @@ function maxCandidates(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 export function scannerAiRuntimeStatus(env: NodeJS.ProcessEnv = process.env): ScannerAiRuntimeStatus {
+  const provider = boundedAiJsonProviderRuntimeStatus(env);
+  const scheduler = runtimeScheduler.health;
   return Object.freeze({
-    configured: configured(env),
-    providerSeam: 'AI_CHAT_PROVIDER_SEAM',
-    canonicalScannerWired: true,
+    configured: provider.configured,
+    providerSeam: 'BOUNDED_AI_JSON_PROVIDER' as const,
+    provider: provider.provider,
+    model: provider.model,
+    fallbackConfigured: provider.fallbackConfigured,
+    fallbackProvider: provider.fallbackProvider,
+    canonicalScannerWired: true as const,
     maxCandidatesPerRequest: maxCandidates(env),
-    failSoftForDisplay: true,
-    vetoBlocksStrongSignal: true,
-    executionAuthority: 'NONE',
-    orderAllowed: false,
-    positionSizeAuthority: false,
-    leverageAuthority: false,
+    failSoftForDisplay: true as const,
+    vetoBlocksStrongSignal: true as const,
+    providerCalls: provider.calls,
+    providerSuccesses: provider.successes,
+    providerFailures: provider.failures,
+    providerFallbackSuccesses: provider.fallbackSuccesses,
+    providerLastSuccessAt: provider.lastSuccessAt,
+    providerLastErrorAt: provider.lastErrorAt,
+    providerLastErrorCode: provider.lastErrorCode,
+    providerAverageLatencyMs: provider.averageLatencyMs,
+    providerMaxLatencyMs: provider.maxLatencyMs,
+    schedulerPending: scheduler.pendingCount,
+    schedulerActive: scheduler.activeCount,
+    schedulerConsecutiveFailures: scheduler.consecutiveFailures,
+    schedulerCircuitOpen: scheduler.circuitOpen,
+    schedulerCircuitOpenedAt: scheduler.circuitOpenedAt,
+    schedulerCircuitResetMs: scheduler.circuitResetMs,
+    executionAuthority: 'NONE' as const,
+    orderAllowed: false as const,
+    positionSizeAuthority: false as const,
+    leverageAuthority: false as const,
   });
 }
 
@@ -138,7 +169,7 @@ export function createScannerAiTransport(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   return async (input: ScannerAiValidationInput, signal: AbortSignal): Promise<ScannerAiValidation> => {
-    if (!configured(env)) throw new ScannerAiProviderError('SCANNER_AI_NOT_CONFIGURED');
+    if (!boundedAiJsonProviderRuntimeStatus(env).configured) throw new ScannerAiProviderError('SCANNER_AI_NOT_CONFIGURED');
     try {
       const result = await invoke(
         { message: prompt(input) },
@@ -282,10 +313,11 @@ export async function enrichTopScannerCandidatesWithAi<T extends ScannerSignalCa
   } = {},
 ): Promise<T[]> {
   const env = options.env ?? process.env;
-  if (!configured(env) || options.signal?.aborted) {
+  const providerConfigured = boundedAiJsonProviderRuntimeStatus(env).configured;
+  if (!providerConfigured || options.signal?.aborted) {
     return cards.map((card) => card.aiValidation?.status && card.aiValidation.status !== 'NOT_RUN'
       ? card
-      : notRun(card, configured(env) ? 'SCANNER_AI_ABORTED' : 'SCANNER_AI_NOT_CONFIGURED'));
+      : notRun(card, providerConfigured ? 'SCANNER_AI_ABORTED' : 'SCANNER_AI_NOT_CONFIGURED'));
   }
 
   const validator = options.validator ?? runtimeScheduler;
