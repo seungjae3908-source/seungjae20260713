@@ -1,9 +1,11 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { parseBacktestPaperHandoff, type BacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 
+export type BacktestMarket = 'kr-stock' | 'us-stock' | 'crypto-spot' | 'crypto-futures';
 export type BacktestStrategy = 'trend_pullback' | 'breakout' | 'vwap_reclaim';
 export type BacktestSide = 'long' | 'short' | 'both';
 export type BacktestFormValues = {
+  market: BacktestMarket;
   symbol: string;
   timeframe: string;
   startDate: string;
@@ -78,6 +80,7 @@ export type BacktestResult = {
   ok: true;
   mode: 'backtest-only';
   orderSubmitted: false;
+  market: BacktestMarket;
   symbol: string;
   timeframe: string;
   strategy: BacktestStrategy;
@@ -125,7 +128,7 @@ export function toBacktestRequest(values: BacktestFormValues) {
       ? { ...values.strategyParameters.breakout }
       : { ...values.strategyParameters.vwapReclaim };
   return {
-    market: 'crypto-futures' as const,
+    market: values.market,
     symbol: values.symbol.trim().toUpperCase(),
     timeframe: values.timeframe,
     startTime: dateToUtc(values.startDate),
@@ -135,12 +138,12 @@ export function toBacktestRequest(values: BacktestFormValues) {
     side: values.side,
     parameters,
     riskPercent: values.riskPercent,
-    leverage: values.leverage,
+    leverage: values.market === 'crypto-futures' ? values.leverage : 1,
     entryFeeRate: values.entryFeeRate,
     exitFeeRate: values.exitFeeRate,
     slippageRate: values.slippageRate,
-    fundingRatePerInterval: values.fundingRatePerInterval,
-    fundingIntervalHours: values.fundingIntervalHours,
+    fundingRatePerInterval: values.market === 'crypto-futures' ? values.fundingRatePerInterval : 0,
+    fundingIntervalHours: values.market === 'crypto-futures' ? values.fundingIntervalHours : 8,
     stopLossMode: values.stopLossMode,
     stopLossValue: values.stopLossValue,
     takeProfitMode: values.takeProfitMode,
@@ -170,9 +173,16 @@ export async function runBacktest(values: BacktestFormValues): Promise<BacktestR
   if (body.result.mode !== 'backtest-only' || body.result.orderSubmitted !== false) {
     throw new Error('백테스트 안전 계약을 확인하지 못했습니다.');
   }
+  const canonicalMarket = body.result.market === 'kr-stock' ? 'KR_STOCK'
+    : body.result.market === 'us-stock' ? 'US_STOCK'
+      : body.result.market === 'crypto-spot' ? 'CRYPTO_SPOT'
+        : 'CRYPTO_FUTURES';
   if (body.result.paperHandoffs !== undefined && (!Array.isArray(body.result.paperHandoffs)
-    || body.result.paperHandoffs.length > 2 || body.result.paperHandoffs.some((value) => !parseBacktestPaperHandoff(value)
-      || value.symbol !== body.result!.symbol || value.timeframe !== body.result!.timeframe))) {
+    || body.result.paperHandoffs.length > 2 || body.result.paperHandoffs.some((value) => {
+      const handoff = parseBacktestPaperHandoff(value);
+      return !handoff || handoff.symbol !== body.result!.symbol || handoff.timeframe !== body.result!.timeframe
+        || handoff.market !== canonicalMarket;
+    }))) {
     throw new Error('백테스트 후보 전달 계약을 확인하지 못했습니다.');
   }
   if (body.result.paperHandoffRunId !== undefined && !/^[0-9a-f-]{36}$/u.test(body.result.paperHandoffRunId)) {
