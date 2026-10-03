@@ -43,6 +43,7 @@ type Status = {
   emergencyStopped: boolean;
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
+  lastOrderByMarket?: Record<Market, { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null>;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
 };
 
