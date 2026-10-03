@@ -81,6 +81,14 @@ type Status = {
     orderAllowed: false;
     riskOverrideAllowed: false;
   };
+  strategyAiReviewAudit?: {
+    schemaVersion: 'trade-rule-pack-ai-audit-v1';
+    storage: 'paper_journal_entries';
+    requiredBeforePlan: true;
+    failurePolicy: 'BLOCK_ENTRY';
+    rawPromptStored: false;
+    credentialsStored: false;
+  };
   scannerAiReview?: {
     configured: boolean;
     providerSeam: 'BOUNDED_AI_JSON_PROVIDER';
@@ -581,6 +589,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         <dt className="font-bold">Scanner AI</dt><dd>{status?.scannerAiReview?.configured ? '연결됨' : '미설정'} · circuit {status?.scannerAiReview?.schedulerCircuitOpen ? 'OPEN' : 'CLOSED'} · active {status?.scannerAiReview?.schedulerActive ?? 0} · pending {status?.scannerAiReview?.schedulerPending ?? 0}</dd>
         <dt className="font-bold">TTL</dt><dd>최대 {Math.round((status?.strategyAiReview?.maxTtlMs ?? 0) / 1000)}초</dd>
         <dt className="font-bold">Live AI 정책</dt><dd>PASS-only 사전계약 · 현재 6전략 자동 Live는 비활성</dd>
+        <dt className="font-bold">AI 감사 Journal</dt><dd>{status?.strategyAiReviewAudit?.requiredBeforePlan ? '주문계획 전 필수 저장' : '미확인'} · 실패 시 {status?.strategyAiReviewAudit?.failurePolicy === 'BLOCK_ENTRY' ? '진입 차단' : '미확인'} · 원문 Prompt/Secret 저장 안 함</dd>
         <dt className="font-bold">권한</dt><dd>주문 없음 · Risk override 없음 · 실행권한 NONE</dd>
       </dl>
     </div> : null}
