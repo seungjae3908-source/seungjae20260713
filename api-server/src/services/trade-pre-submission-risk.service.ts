@@ -2,6 +2,11 @@ import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
+import {
+  isEvidenceBackedAutoStrategyId,
+  RULE_PACK_PILOT_PROFILE,
+} from './evidence-backed-auto-strategy-catalog.service';
+import { readRulePackPilotCapitalState } from './trade-rule-pack-pilot-capital.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder,
@@ -157,6 +162,63 @@ export class TradePreSubmissionRiskService {
       dailyOrderCount,
       openPositionCount,
     };
+
+    if (currentPlan.accountMode === 'live'
+      && !riskReducing
+      && isEvidenceBackedAutoStrategyId(currentPlan.strategyId)) {
+      const pilot = await readRulePackPilotCapitalState(this.repository, input.userId, now);
+      if (!pilot.settlementReady) blockCodes.push('PILOT_CAPITAL_SETTLEMENT_NOT_READY');
+      if (currentPlan.estimatedKrw > pilot.maxEntryKrw) blockCodes.push('PILOT_DYNAMIC_ENTRY_LIMIT');
+
+      const accountExposure = finite(snapshot.accountExposureKrw) && snapshot.accountExposureKrw >= 0
+        ? snapshot.accountExposureKrw
+        : null;
+      if (accountExposure == null) blockCodes.push('PILOT_PORTFOLIO_HEAT_UNAVAILABLE');
+      else if (accountExposure + currentPlan.estimatedKrw > pilot.operatingCapitalKrw) {
+        blockCodes.push('PILOT_PORTFOLIO_HEAT_LIMIT');
+      }
+
+      const envelopeRisk = Number(currentPlan.riskEnvelope?.maxLossKrw);
+      const policyRiskPercent = policy.riskPerTradePercent[currentPlan.exchange];
+      const pilotRiskPercent = Math.min(
+        policyRiskPercent,
+        RULE_PACK_PILOT_PROFILE.riskPerTradePercentCeiling,
+      );
+      const riskBudget = pilot.operatingCapitalKrw * pilotRiskPercent / 100;
+      if (!finite(envelopeRisk) || envelopeRisk < 0) blockCodes.push('PILOT_RISK_ENVELOPE_REQUIRED');
+      else if (envelopeRisk > riskBudget) blockCodes.push('PILOT_RISK_BUDGET_EXCEEDED');
+
+      if (snapshot.openPositionCount >= RULE_PACK_PILOT_PROFILE.maxConcurrentLivePositions) {
+        blockCodes.push('PILOT_CONCURRENT_POSITION_LIMIT');
+      }
+      if (pilot.dailyLosingTrades >= RULE_PACK_PILOT_PROFILE.maxDailyLosingTrades) {
+        blockCodes.push('PILOT_DAILY_LOSING_TRADE_LIMIT');
+      }
+      if (pilot.dailyRealizedPnlKrw <= -RULE_PACK_PILOT_PROFILE.dailyLossStopKrw) {
+        blockCodes.push('PILOT_DAILY_LOSS_KRW_LIMIT');
+      }
+      if (pilot.consecutiveLosses >= RULE_PACK_PILOT_PROFILE.maxConsecutiveLosses) {
+        blockCodes.push('PILOT_CONSECUTIVE_LOSS_LIMIT');
+      }
+
+      const symbol = String(currentPlan.symbol).trim().toUpperCase().replace(/^KRW-/u, '');
+      const latestLoss = pilot.latestLossBySymbol[symbol];
+      if (latestLoss) {
+        const lossAt = Date.parse(latestLoss.closedAt);
+        if (Number.isFinite(lossAt)
+          && now.getTime() - lossAt < RULE_PACK_PILOT_PROFILE.lossCooldownMinutes * 60_000) {
+          blockCodes.push('PILOT_SYMBOL_LOSS_COOLDOWN');
+        }
+        if (latestLoss.signalId === currentPlan.signalId) blockCodes.push('PILOT_FRESH_SIGNAL_REQUIRED');
+      }
+
+      if (currentPlan.exchange === 'bitget') {
+        if (currentPlan.leverage !== RULE_PACK_PILOT_PROFILE.futuresMaxLeverage) {
+          blockCodes.push('PILOT_FUTURES_LEVERAGE_REQUIRED');
+        }
+        if (currentPlan.marginMode !== 'isolated') blockCodes.push('PILOT_FUTURES_ISOLATED_REQUIRED');
+      }
+    }
 
     const observedAt = validateTimestamp({
       value: snapshot.observedAt,
