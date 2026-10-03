@@ -37,10 +37,10 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
   expect(qa).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
   expect(qa).toContain('const LOGIN_INTERACTIVE_COLD_RETRIES = 1;');
-  expect(qa).toContain('const CACHED_AUTH_TIMEOUT_RETRIES = 1;');
+
   const timeoutHelperStart = qa.indexOf('function isPlaywrightTimeout');
   const navigationRetryStart = qa.indexOf('async function gotoLoginWithTimeoutRetry');
-  const validateCachedAuthStart = qa.indexOf('async function validateCachedAuthState');
+  const validateCachedAuthStart = qa.indexOf('function validateCachedAuthState');
   const loginStart = qa.indexOf('async function login(');
   const timeoutHelper = qa.slice(timeoutHelperStart, navigationRetryStart);
   const loginNavigation = qa.slice(navigationRetryStart, qa.indexOf('async function restoreCachedAuthState'));
@@ -53,15 +53,23 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(loginNavigation).toContain('isPlaywrightTimeout(error)');
   expect(timeoutHelper).toContain("error.name === 'TimeoutError'");
   expect(timeoutHelper).toContain('/Timeout \\d+ms exceeded/i.test(error.message)');
-  expect(login).toContain('await validateCachedAuthState(page, cached);');
+  expect(login).toContain('validateCachedAuthState(cached);');
   expect(validateCachedAuthStart).toBeGreaterThanOrEqual(0);
   expect(loginStart).toBeGreaterThan(validateCachedAuthStart);
-  expect(validateCachedAuth).toContain("page.request.get(new URL('/api/auth/profile', baseUrl).toString()");
-  expect(validateCachedAuth).toContain('Authorization: `Bearer ${token}`');
-  expect(validateCachedAuth).toContain('const timeoutOnly = isPlaywrightTimeout(error);');
-  expect(validateCachedAuth).toContain('attempt >= CACHED_AUTH_TIMEOUT_RETRIES');
-  expect(validateCachedAuth).toContain('if (response.status() !== 200)');
-  expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  expect(qa).toContain('function accessTokenExpiresAtMs(token: string)');
+  expect(validateCachedAuth).toContain('const token = accessTokenFromStorageState(state);');
+  expect(validateCachedAuth).toContain('const expiresAtMs = accessTokenExpiresAtMs(token);');
+  expect(validateCachedAuth).toContain('Date.now() + 30_000');
+  expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_TOKEN_INVALID');
+  expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_TOKEN_EXPIRED');
+  expect(validateCachedAuth).not.toContain('page.request.get(');
+  expect(validateCachedAuth).not.toContain('/api/auth/profile');
+
+
+
+
+
+
   expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');
   expect(login).toContain('attempt <= LOGIN_INTERACTIVE_COLD_RETRIES');
   expect(login).toContain("currentPath(page) === '/login'");
@@ -77,7 +85,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(login).toContain('const cached = authStateByViewport.get(cacheKey);');
   expect(login).toContain('await restoreCachedAuthState(page, cached);');
   expect(login).not.toContain("await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
-  expect(validateCachedAuth).toContain("throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`)");
+
   expect(login).toContain('const state = await page.context().storageState();');
   expect(login).toContain('authStateByViewport.set(cacheKey, state);');
   const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('const loginId'));
@@ -122,6 +130,46 @@ test('Production chart audit waits for the matching settled query before accepti
   expect(marketData).toContain("const oneMinuteDisk = await readCandleDiskCache(ticker, '1m')");
   expect(marketData).toContain('aggregateOneMinuteCandles(oneMinuteDisk.candles, derivationSize)');
   expect(marketData).toContain('void cached(cacheKey, candleCacheTtl(timeframeText), load)');
+});
+
+test('Production search audit records one settled HTTP request at every configured viewport', () => {
+  const qa = source('e2e/production-comprehensive-readonly-qa.spec.ts');
+  const config = source('playwright.production-comprehensive.config.ts');
+  const searchTestStart = qa.indexOf("test('Production market search matrix uses real UI and dozens of symbols'");
+  const searchTestEnd = qa.indexOf("test('Production chart matrix", searchTestStart);
+  const searchTest = qa.slice(searchTestStart, searchTestEnd);
+
+  expect(searchTestStart).toBeGreaterThanOrEqual(0);
+  expect(searchTestEnd).toBeGreaterThan(searchTestStart);
+  expect(searchTest).not.toContain('test.skip(');
+  expect(searchTest).toContain("testInfo.project.name === 'prod-desktop-1440'");
+  expect(searchTest).toContain("testInfo.project.name === 'prod-mobile-390'");
+  expect(searchTest).toContain("item.requests.length !== 1");
+  expect(searchTest).toContain("request.status !== 200 || request.failure");
+  const searchComponent = source('src/components/unified-asset-search.tsx');
+  expect(searchTest).toContain("request.market !== SEARCH_MARKET_PARAMS[item.market]");
+  expect(searchTest).toContain("minimumExpectedSearchDispatchMs(item.market, item.query)");
+  expect(searchTest).toContain("request.startedAfterInputMs > 1_000");
+  expect(qa).toContain("function minimumExpectedSearchDispatchMs(");
+  expect(qa).toContain("if (market === 'KR' && /^\\d{6}$/.test(query)) return 0;");
+  expect(qa).toContain("if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;");
+  expect(qa).toContain("if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;");
+  expect(qa).toContain("if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;");
+  expect(qa).toContain('return 150;');
+  expect(searchComponent).toContain('function exactIdentitySearchDelayMs(');
+  expect(searchComponent).toContain("if (market === 'KR' && /^\\d{6}$/.test(query)) return 0;");
+  expect(searchComponent).toContain("if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;");
+  expect(searchComponent).toContain("if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;");
+  expect(searchComponent).toContain("if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;");
+  expect(searchComponent).toContain('return DEFAULT_SEARCH_DEBOUNCE_MS;');
+  expect(searchTest).toContain("item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'");
+  expect(searchTest).toContain("item.status === 401 || item.status === 403 || (item.status ?? 0) >= 500");
+  expect(qa).toContain("url.pathname !== '/api/search/suggest' || url.searchParams.get('q') !== query");
+  expect(qa).toContain('startedAfterInputMs: Date.now() - started');
+  expect(qa).toContain('record.responseLatencyMs = Date.now() - (requestStartedAt.get(request) ?? Date.now())');
+  for (const width of [1920, 1440, 1024, 800, 430, 390, 360, 320]) {
+    expect(config).toContain(`width: ${width}`);
+  }
 });
 
 test('Production read-only suites share the bounded cold login contract', () => {

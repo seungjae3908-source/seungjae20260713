@@ -37,6 +37,7 @@ async function start(options = {}) {
     reviewProvider: null,
     allowTossContractPreview: options.allowTossContractPreview === true,
     accountHistoryReader: options.accountHistoryReader,
+    automationJournalReader: options.automationJournalReader ?? (async () => []),
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
