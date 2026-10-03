@@ -70,6 +70,7 @@ on:
       - api-server/src/services/manual-paper-natural-contract.d.ts
       - api-server/src/routes/paper-trading.ts
       - api-server/src/services/backtest-paper-handoff.service.ts
+      - api-server/src/services/backtest-paper-handoff.service.test.ts
       - api-server/src/services/paper-trading.types.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.test.ts
@@ -323,6 +324,7 @@ jobs:
             api-server/src/services/manual-paper-natural-contract.d.ts
             api-server/src/routes/paper-trading.ts
             api-server/src/services/backtest-paper-handoff.service.ts
+            api-server/src/services/backtest-paper-handoff.service.test.ts
             api-server/src/services/paper-trading.types.ts
             api-server/src/services/member-auto-trading-background-worker.service.ts
             api-server/src/services/member-auto-trading-background-worker.service.test.ts
