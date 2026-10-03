@@ -335,6 +335,18 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
           <strong>{formatAiChartScore(analysis?.confidence ?? selection.confidence)}</strong>
         </div>
       </div>
+      <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-[10px] leading-5 text-muted-foreground" data-testid="ai-analysis-provenance">
+        <p className="font-black text-foreground">분석 연결 증거</p>
+        <div className="mt-1 grid min-w-0 gap-x-3 gap-y-1 sm:grid-cols-2">
+          <span className="min-w-0 break-all">signalId · {selection.signalId ?? 'N/A'}</span>
+          <span className="min-w-0 break-all">searchRunId · {selection.searchRunId ?? 'N/A'}</span>
+          <span className="min-w-0 break-all">analysisId · {analysis?.id ?? 'N/A'}</span>
+          <span className="min-w-0 break-all">engine · {analysis?.engineVersion ?? 'N/A'}</span>
+          <span className="min-w-0 break-all">source · {analysis?.source ?? 'N/A'}</span>
+          <span className="min-w-0 break-all">dataAsOf · {analysis ? formatAnalysisTime(analysis.detectedAt) : 'N/A'}</span>
+        </div>
+        <p className="mt-1 break-keep">AI 분석은 설명/evidence이며 주문 허용 권한은 별도 서버 Gate가 결정합니다.</p>
+      </div>
     </section>
   );
 }
