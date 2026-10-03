@@ -1,7 +1,10 @@
+import { createHash } from 'node:crypto';
 import { Router, type IRouter, type Request, type Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { calculatePaperJournalAnalytics, createTradingReviewDataset } from '../services/paper-journal-analytics.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
+import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
+import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
 import {
   deleteAllPaperJournalData,
   getPaperJournalSnapshot,
@@ -56,6 +59,7 @@ type PaperJournalDependencies = {
   reviewProvider: TradingReviewProvider | null;
   allowTossContractPreview: boolean;
   accountHistoryReader: typeof readAccountJournalHistory;
+  automationJournalReader: (request: AuthenticatedRequest, ownerId: string) => Promise<Record<string, unknown>[]>;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -128,6 +132,51 @@ function unifiedFilters(query: Request['query']): UnifiedJournalFilters {
   };
 }
 
+function importedHistoryRecord(payload: Record<string, unknown>, observedAt: Date) {
+  const sourceTime = typeof payload.closedAt === 'string' && Number.isFinite(Date.parse(payload.closedAt))
+    ? new Date(payload.closedAt).toISOString()
+    : typeof payload.filledAt === 'string' && Number.isFinite(Date.parse(payload.filledAt))
+      ? new Date(payload.filledAt).toISOString()
+      : typeof payload.orderedAt === 'string' && Number.isFinite(Date.parse(payload.orderedAt))
+        ? new Date(payload.orderedAt).toISOString()
+        : observedAt.toISOString();
+  const identity = [
+    String(payload.source ?? ''),
+    String(payload.broker ?? ''),
+    String(payload.brokerOrderId ?? payload.tradeId ?? payload.id ?? ''),
+    String(payload.fillId ?? ''),
+    String(payload.symbol ?? ''),
+    String(payload.positionSide ?? payload.side ?? ''),
+    sourceTime,
+  ].join('|');
+  const digest = createHash('sha256').update(identity).digest('hex').slice(0, 32);
+  const persistedPayload = {
+    ...payload,
+    observedAt: sourceTime,
+    warnings: Array.isArray(payload.warnings)
+      ? [...new Set([
+          ...payload.warnings.filter((item): item is string => (
+            typeof item === 'string' && item !== 'REAL_ACCOUNT_HISTORY_NOT_PERSISTED'
+          )),
+          'BROKER_HISTORY_IMPORTED_PERSISTENTLY',
+        ])]
+      : ['BROKER_HISTORY_IMPORTED_PERSISTENTLY'],
+  };
+  return {
+    kind: 'journal' as const,
+    id: `broker-import:${digest}`,
+    version: 1,
+    updatedAt: sourceTime,
+    deletedAt: null,
+    payload: persistedPayload,
+  };
+}
+
+function importBatchKey(recordIds: readonly string[], index: number) {
+  const digest = createHash('sha256').update(recordIds.join('|')).digest('hex').slice(0, 24);
+  return `broker-import-${index}-${digest}`;
+}
+
 function containsForbiddenContractField(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsForbiddenContractField);
   if (!isObject(value)) return false;
@@ -146,10 +195,15 @@ export function createPaperJournalRouter(
   const reviewProvider = dependencies.reviewProvider === undefined ? configuredTradingReviewProvider() : dependencies.reviewProvider;
   const allowTossContractPreview = dependencies.allowTossContractPreview === true;
   const accountHistoryReader = dependencies.accountHistoryReader ?? readAccountJournalHistory;
+  const automationJournalReader = dependencies.automationJournalReader ?? (async (request, ownerId) => (
+    request.accessToken
+      ? readTradeAutomationJournalPayloads(createSupabaseTradingRepository(request.accessToken, ownerId), ownerId)
+      : []
+  ));
 
   const accountHistoryProviders = (request: AuthenticatedRequest) => {
-    if (!request.member) return [] as Array<'kiwoom' | 'upbit' | 'bitget'>;
-    const providers: Array<'kiwoom' | 'upbit' | 'bitget'> = ['kiwoom'];
+    if (!request.member) return [] as Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'>;
+    const providers: Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'> = ['toss', 'kiwoom'];
     if (hasCapability(request.member, 'canAccessSpot')) providers.push('upbit');
     if (hasCapability(request.member, 'canAccessFutures')) providers.push('bitget');
     return providers;
@@ -298,6 +352,55 @@ export function createPaperJournalRouter(
     }
   });
 
+  router.post('/paper-journal/import-account-history', async (request: AuthenticatedRequest, response) => {
+    try {
+      const ownerId = request.member?.id ?? '';
+      if (!ownerId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      const range = queryText(isObject(request.body) ? request.body.range : null, 10) ?? '30D';
+      if (!TRADE_RANGES.includes(range as TradeRange)) {
+        throw new PaperJournalError('INVALID_JOURNAL_RANGE', '가져올 거래내역 기간을 확인하세요.');
+      }
+      const observedAt = now();
+      const history = await accountHistoryReader({
+        userId: ownerId,
+        range: range as TradeRange,
+        providers: accountHistoryProviders(request),
+        now: observedAt,
+      });
+      const repository = repositoryFactory(request);
+      const records = history.payloads.map((payload) => importedHistoryRecord(payload, observedAt));
+      let imported = 0;
+      let unchanged = 0;
+      let conflicts = 0;
+      let failed = 0;
+      const batchSize = 500;
+      for (let offset = 0, batchIndex = 0; offset < records.length; offset += batchSize, batchIndex += 1) {
+        const batch = records.slice(offset, offset + batchSize);
+        const result = await syncPaperJournal(repository, ownerId, {
+          idempotencyKey: importBatchKey(batch.map((record) => record.id), batchIndex),
+          clientTime: observedAt.toISOString(),
+          records: batch,
+        }, observedAt);
+        imported += result.uploaded.length;
+        unchanged += result.unchanged.length;
+        conflicts += result.conflicts.length;
+        failed += result.failed.length;
+      }
+      return response.json(syncEnvelope({
+        ok: true,
+        requestedRange: range,
+        imported,
+        unchanged,
+        conflicts,
+        failed,
+        providerHistory: historySummary(history),
+        persisted: true,
+      }));
+    } catch (cause) {
+      return handleError(response, cause, 'ACCOUNT_HISTORY_IMPORT_FAILED', '기존 거래내역을 가져오지 못했습니다.', syncEnvelope);
+    }
+  });
+
   router.get('/paper-journal/unified-ledger/status', (_request: AuthenticatedRequest, response) => response.json(analysisEnvelope({
     ok: true,
     result: {
@@ -311,7 +414,7 @@ export function createPaperJournalRouter(
       const ownerId = request.member?.id ?? '';
       const filters = unifiedFilters(request.query);
       const observedAt = now();
-      const [storedPayloads, liveHistory] = await Promise.all([
+      const [storedPayloads, liveHistory, automationPayloads] = await Promise.all([
         repositoryFactory(request).listJournalPayloads(ownerId),
         accountHistoryReader({
           userId: ownerId,
@@ -319,9 +422,18 @@ export function createPaperJournalRouter(
           providers: accountHistoryProviders(request),
           now: observedAt,
         }),
+        automationJournalReader(request, ownerId),
       ]);
+      const knownBrokerOrderIds = new Set(
+        [...storedPayloads, ...automationPayloads]
+          .map((payload) => String(payload.brokerOrderId ?? ''))
+          .filter(Boolean),
+      );
+      const externalHistoryPayloads = liveHistory.payloads.filter(
+        (payload) => !knownBrokerOrderIds.has(String(payload.brokerOrderId ?? '')),
+      );
       const journal = buildUnifiedTradeJournal(
-        [...storedPayloads, ...liveHistory.payloads],
+        [...storedPayloads, ...automationPayloads, ...externalHistoryPayloads],
         filters,
         observedAt,
       );

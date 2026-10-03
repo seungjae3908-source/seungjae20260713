@@ -1361,11 +1361,14 @@ async function runAuthenticatedSearchCertification(page: Page) {
   const samples: AuthenticatedSearchEvidence[] = [];
 
   for (const item of matrix) {
+    // Clear the previous market query before switching filters so the filter
+    // transition cannot launch a stale suggest request that is immediately aborted.
+    await input.fill('');
+    await expect(input).toHaveValue('');
     const tab = page.getByRole('button', { name: item.label, exact: true });
     await expect(tab).toBeVisible();
     await tab.click();
     await expect(tab).toHaveAttribute('aria-pressed', 'true');
-    await input.fill('');
     const started = Date.now();
     const responsePromise = page.waitForResponse((response) => {
       try {
@@ -1379,6 +1382,8 @@ async function runAuthenticatedSearchCertification(page: Page) {
     }, { timeout: 5_000 });
     await input.fill(item.query);
     const response = await responsePromise;
+    const responseError = await response.finished();
+    expect(responseError, `${item.label} search response must fully finish before the next filter transition`).toBeNull();
     const durationMs = Date.now() - started;
     const payload = await response.json().catch(() => ({})) as {
       ok?: boolean;
@@ -1450,10 +1455,11 @@ async function runAuthenticatedSearchCertification(page: Page) {
   expect(summary.maxMs, `authenticated Search max evidence: ${JSON.stringify(summary)}`).toBeLessThan(5_000);
   expect(summary.overFiveSeconds).toBe(0);
 
+  await input.fill('');
+  await expect(input).toHaveValue('');
   const usTab = page.getByRole('button', { name: '미국', exact: true });
   await usTab.click();
   await expect(usTab).toHaveAttribute('aria-pressed', 'true');
-  await input.fill('');
   const selectionResponsePromise = page.waitForResponse((response) => {
     try {
       const url = new URL(response.url());
@@ -1468,6 +1474,8 @@ async function runAuthenticatedSearchCertification(page: Page) {
   await input.fill('AAPL');
   const selectionResponse = await selectionResponsePromise;
   expect(selectionResponse.status(), 'AI Chart analysis-selection search must return HTTP 200').toBe(200);
+  const selectionResponseError = await selectionResponse.finished();
+  expect(selectionResponseError, 'AI Chart analysis-selection search must fully finish before route navigation').toBeNull();
   await expect.poll(async () => (await page.getByRole('option').allTextContents())
     .map(normalizedAssetSymbol)
     .some((text) => text.includes('AAPL')), {
@@ -2218,6 +2226,7 @@ test.describe('real staging release readiness', () => {
     expect(previewDiagnostic.orderSubmitted).toBe(false);
     expect(previewDiagnostic.exchangeRequestSent).toBe(false);
     await runAuthenticatedSearchCertification(page);
+    await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
   });
@@ -2273,11 +2282,12 @@ test.describe('real staging release readiness', () => {
     await openMenuRoute('assets', '통합검색', '/stocks');
     const searchInput = page.getByRole('combobox', { name: '통합 자산 검색' });
     await expect(searchInput).toBeEditable();
+    await searchInput.fill('');
+    await expect(searchInput).toHaveValue('');
     const usTab = page.getByRole('button', { name: '미국', exact: true });
     await expect(usTab).toBeVisible();
     await usTab.click();
     await expect(usTab).toHaveAttribute('aria-pressed', 'true');
-    await searchInput.fill('');
     const searchResponsePromise = page.waitForResponse((response) => {
       try {
         const url = new URL(response.url());

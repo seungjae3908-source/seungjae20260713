@@ -34,7 +34,9 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('위험검사');
   expect(page).toContain('data-testid="trading-market-tabs"');
   expect(page).toContain('data-testid="trading-section-tabs"');
-  expect(page).toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
+  expect(page).not.toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
+  expect(page).toContain('title="매매일지"');
+  expect(page).toContain('직접매매/자동매매/자동모의매매');
   expect(page).not.toContain('text-[10px]');
   expect(page).not.toContain('text-[11px]');
   expect(page).not.toContain('font-black');

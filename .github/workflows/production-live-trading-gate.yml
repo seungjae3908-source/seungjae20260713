@@ -18,7 +18,7 @@ permissions:
 concurrency:
   group: >-
     ${{ github.event_name == 'issue_comment'
-        && github.event.issue.number == 23
+        && github.event.issue.number == 1555
         && github.event.comment.user.login == 'seungjae3908-source'
         && github.event.comment.author_association == 'OWNER'
         && (startsWith(github.event.comment.body, '/activate-production-live-trading ')
@@ -62,11 +62,14 @@ jobs:
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
           grep -Fq "LIVE_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED" "$workflow"
           grep -Fq "LIVE_TRADING_EXACT_ACCOUNT_QA_REQUIRED" "$workflow"
+          grep -Fq 'runNameMatches = (name)' "$workflow"
+          grep -Fq 'name.startsWith(`${workflowName} ${target} `)' "$workflow"
           grep -Fq 'production-comprehensive-readonly-${run.id}' "$workflow"
           grep -Fq 'production-account-readonly-live-${target}' "$workflow"
           grep -Fq 'actions/download-artifact@v4' "$workflow"
           grep -Fq 'testedProviders' "$workflow"
           grep -Fq 'reconciliationPassed' "$workflow"
+          grep -Fq 'production-account-readonly-live-qa-v2' "$workflow"
           grep -Fq "const disableTradingGates = () =>" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED" "$workflow"
@@ -103,10 +106,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/activate-production-live-trading ')
@@ -270,8 +273,10 @@ jobs:
                 status: 'completed',
                 per_page: 100,
               });
+              const runNameMatches = (name) => name === workflowName
+                || name.startsWith(`${workflowName} ${target} `);
               const run = runs
-                .filter((candidate) => candidate.name === workflowName
+                .filter((candidate) => runNameMatches(candidate.name)
                   && candidate.path === `.github/workflows/${workflowId}`
                   && candidate.head_sha === target
                   && candidate.head_branch === 'main'
@@ -345,7 +350,7 @@ jobs:
             || requestedProviders.some((provider) => !allowedProviders.has(provider))) {
             throw new Error('LIVE_TRADING_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
           }
-          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v1'
+          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v2'
             || evidence?.targetSha !== target
             || evidence?.orderRequests !== 0
             || evidence?.cancelRequests !== 0
@@ -483,6 +488,10 @@ jobs:
                 LIVE_TRADING_ACTIVATION_APPROVED: 'false',
                 SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
                 LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+                MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+                MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
                 SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
                 SPOT_LIVE_MARKET_ALLOWLIST: '',
                 BITGET_LIVE_ORDER_ENABLED: 'false',
@@ -532,6 +541,10 @@ jobs:
                 LIVE_TRADING_ACTIVATION_APPROVED: 'true',
                 SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
                 LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+                MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+                MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
                 SPOT_LIVE_CAPABILITY_ALLOWLIST: capabilityAllowlist,
                 SPOT_LIVE_MARKET_ALLOWLIST: marketAllowlist,
                 BITGET_LIVE_ORDER_ENABLED: 'false',
@@ -625,7 +638,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
                 'status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL',
@@ -637,6 +650,8 @@ jobs:
                 `production_account_qa_run: ${process.env.ACCOUNT_QA_RUN_ID}`,
                 'AUTO_TRADING=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
                 'executionAuthority=SPOT_LIVE_LIMITED',
                 'SPOT_LIVE_CAPABILITY_ALLOWLIST=BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND',
                 'SPOT_LIVE_MARKET_ALLOWLIST=KR_STOCK,US_STOCK,CRYPTO_SPOT',
@@ -652,10 +667,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/disable-production-live-trading ')
@@ -738,6 +753,8 @@ jobs:
               SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
               FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
               SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
               SPOT_LIVE_MARKET_ALLOWLIST: '',
               FUTURES_LIVE_CAPABILITY_ALLOWLIST: '',
@@ -825,7 +842,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
                 'status: DISABLED',
@@ -840,6 +857,8 @@ jobs:
                 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false',
                 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
+                'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
                 'SPOT_LIVE_CAPABILITY_ALLOWLIST=',
                 'SPOT_LIVE_MARKET_ALLOWLIST=',
                 'executionAuthority=NONE',
