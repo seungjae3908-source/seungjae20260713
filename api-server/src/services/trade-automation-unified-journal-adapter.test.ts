@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
+import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 
 const USER='22222222-2222-2222-2222-222222222222';
@@ -58,6 +59,13 @@ test('canonical execution ledger separates manual live, automatic live, and auto
   assert.equal(byOrder.get('exchange-order-auto')?.source,'APP_AUTO');
   assert.equal(byOrder.get('exchange-order-paper')?.source,'APP_PAPER');
   assert.equal(rows.every((row)=>String(row.accountIdMasked).includes('****')),true);
+  const automatic = byOrder.get('exchange-order-auto');
+  assert.deepEqual(automatic?.canonicalLineage, {
+    signalIds: ['signal-auto-live'],
+    planIds: ['auto-live'],
+    orderIds: ['order-auto'],
+    fillIds: ['fill-order-auto'],
+  });
 });
 
 
@@ -83,4 +91,18 @@ test('Bitget reduce-only exit keeps the original position side so entry and exit
   assert.equal(entryRow?.positionEffect,'OPEN');
   assert.equal(exitRow?.positionSide,'LONG');
   assert.equal(exitRow?.positionEffect,'CLOSE');
+  const journal=buildUnifiedTradeJournal(rows,{range:'ALL'},new Date(NOW));
+  assert.equal(journal.trades.length,1);
+  assert.deepEqual(journal.trades[0]?.canonicalLineage?.signalIds.sort(),[
+    'signal-future-entry','signal-future-exit',
+  ].sort());
+  assert.deepEqual(journal.trades[0]?.canonicalLineage?.planIds.sort(),[
+    'future-entry','future-exit',
+  ].sort());
+  assert.deepEqual(journal.trades[0]?.canonicalLineage?.orderIds.sort(),[
+    'future-entry-order','future-exit-order',
+  ].sort());
+  assert.deepEqual(journal.trades[0]?.canonicalLineage?.fillIds.sort(),[
+    'fill-future-entry-order','fill-future-exit-order',
+  ].sort());
 });
