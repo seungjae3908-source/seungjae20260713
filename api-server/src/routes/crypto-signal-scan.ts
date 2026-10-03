@@ -15,7 +15,7 @@ import {
   type CryptoPricePrecisionService as CryptoPricePrecisionServiceContract,
 } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
-import { enrichTopScannerCandidatesWithAi } from '../services/scanner-ai-runtime.service';
+import { enforceScannerAiFinalPromotionPolicy, enrichTopScannerCandidatesWithAi } from '../services/scanner-ai-runtime.service';
 import { buildScannerDiscoveryView } from '../services/scanner-discovery-view.service';
 import {
   scannerStrategyForTimeframe,
@@ -187,7 +187,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         softMinimumScore,
         limit: 10,
       });
-      const baseRankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
+      const baseRankedCards = enforceScannerAiFinalPromotionPolicy(ranking.cards).map((card) => card.signalGrade === 'B'
         ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
         : card);
       const overlay = selectedCondition === 'williams'
