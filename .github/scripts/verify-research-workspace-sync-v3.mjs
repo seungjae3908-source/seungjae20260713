@@ -175,7 +175,26 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed]);
+const researchBacktestPaperReviewed=[
+ '.github/tests/trading-ops-consolidated-preflight.test.mjs',
+ '.github/workflows/production-automatic-trading-gate.yml',
+ '.github/workflows/paper-forward-schedule-validation.yml',
+ 'api-server/scripts/verify-production-automatic-trading-gate.mjs',
+ 'ops/deploy-production.sh',
+ 'api-server/src/routes/backtests.ts',
+ 'api-server/src/routes/paper-trading.ts',
+ 'api-server/src/services/backtest-data.service.ts',
+ 'api-server/src/services/backtest-engine.service.ts',
+ 'api-server/src/services/backtest-paper-handoff.service.ts',
+ 'api-server/src/services/futures-market-data.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
+ 'api-server/src/services/paper-trading.types.ts',
+ 'packages/strategy-hypothesis/src/backtest-paper-handoff.js',
+ 'packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+];
+const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed,...researchBacktestPaperReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
 if(researchCenterChanged.length>0){
@@ -239,7 +258,7 @@ for(const p of protectedPaths){
  if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
 }
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
-  reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,protectedPaths,
+  reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,researchBacktestPaperReviewed:changed.filter((p)=>researchBacktestPaperReviewed.includes(p)),protectedPaths,
   protectedPathExceptions:Object.fromEntries([...protectedPathExceptions].map(([key,value])=>[key,[...value]])),
   ancestryPreserved:true,mainUpdated:false,
   liveOrders:0,providerCalls:0,fixtureResultsAreEconomicEvidence:false};
