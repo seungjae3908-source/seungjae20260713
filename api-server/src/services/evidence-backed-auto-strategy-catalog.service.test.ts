@@ -39,10 +39,13 @@ test('registers the six requested rule packs and never grants automatic live pro
   assert.equal(catalog.every((row) => row.pilotProfile.totalBudgetKrw === 500_000), true);
   assert.equal(catalog.every((row) => row.pilotProfile.maxOrderKrw === 50_000), true);
   assert.equal(catalog.every((row) => row.pilotProfile.maxConcurrentLivePositions === 2), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.maxDailyLiveEntries === 4), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.dailyLossStopKrw === 10_000), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.maxConsecutiveLosses === 2), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.futuresMaxLeverage === 2), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.maxDailyLiveEntries === null), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.maxDailyLosingTrades === 5), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.dailyLossStopKrw === 25_000), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.maxConsecutiveLosses === 3), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.lossCooldownMinutes === 30), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.sameSymbolReentryRequiresFreshSignal === true), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.futuresMaxLeverage === 3), true);
   assert.equal(catalog.every((row) => row.pilotProfile.paperMirrorRequired === true), true);
   assert.equal(catalog.every((row) => row.pilotProfile.pairedFillComparisonRequired === true), true);
   assert.equal(catalog.every((row) => row.pilotProfile.liveOrderRequiresExplicitConfirmation === true), true);
