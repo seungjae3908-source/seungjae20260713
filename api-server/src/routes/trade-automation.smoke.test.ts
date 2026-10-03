@@ -1435,7 +1435,7 @@ test('status is authenticated, automatic execution defaults off, and never retur
 test('status partitions recent canonical orders by all four trading markets', async () => {
   const isolated = new InMemoryTradingRepository();
   setTradeAutomationRepositoryFactoryForTests(() => isolated);
-  const baseMs = Date.UTC(2026, 9, 4, 0, 0, 0);
+  const baseMs = Date.now() - 5_000;
   const rows = [
     { asset: 'domestic_stock', planId: 'status-kr-plan', orderId: 'status-kr-order', exchange: 'kiwoom', market: 'KR', symbol: '005930', side: 'buy' },
     { asset: 'us_stock', planId: 'status-us-plan', orderId: 'status-us-order', exchange: 'toss', market: 'US', symbol: 'AAPL', side: 'buy' },
@@ -1494,9 +1494,23 @@ test('status partitions recent canonical orders by all four trading markets', as
     assert.equal(response.status, 200);
     const body = await response.json() as {
       lastOrderByMarket: Record<string, { id: string } | null>;
+      marketActivityByMarket: Record<string, {
+        pendingOrders: number;
+        recoveryRequiredOrders: number;
+        todayOrders: number;
+        todayFilledOrders: number;
+        lastActivityAt: string | null;
+      }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
-    for (const row of rows) assert.equal(body.lastOrderByMarket[row.asset]?.id, row.orderId);
+    for (const row of rows) {
+      assert.equal(body.lastOrderByMarket[row.asset]?.id, row.orderId);
+      assert.equal(body.marketActivityByMarket[row.asset]?.pendingOrders, 1);
+      assert.equal(body.marketActivityByMarket[row.asset]?.recoveryRequiredOrders, 0);
+      assert.equal(body.marketActivityByMarket[row.asset]?.todayOrders, 1);
+      assert.equal(body.marketActivityByMarket[row.asset]?.todayFilledOrders, 0);
+      assert.ok(body.marketActivityByMarket[row.asset]?.lastActivityAt);
+    }
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally {
     await close(authenticated.server);

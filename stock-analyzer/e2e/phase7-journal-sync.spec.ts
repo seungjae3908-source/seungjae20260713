@@ -248,6 +248,9 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('매매 품질');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('0.2 USDT');
+  const lineage = page.getByTestId('unified-journal-canonical-lineage');
+  await expect(lineage).toContainText('snapshotId');
+  await expect(lineage).toContainText('journalId');
   const researchBinding = page.getByTestId('unified-journal-research-binding');
   await expect(researchBinding).toContainText('Research lineage');
   await expect(researchBinding).toContainText('VERIFIED');
@@ -259,7 +262,10 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(researchBinding).toContainText('exit-trigger-1');
   await expect(researchBinding).toContainText('검증됨');
   await expect(researchBinding).toContainText('AUTHENTICATED_PAPER_STATE_IDENTITY_MATCHED');
-  await expect(page.getByTestId('unified-journal-snapshot')).toContainText('진입 전 판단 근거');
+  const snapshot = page.getByTestId('unified-journal-snapshot');
+  await expect(snapshot).toContainText('진입 전 판단 근거');
+  await expect(snapshot).toContainText('스냅샷 ID');
+  await expect(snapshot).toContainText('증거 기준시각');
   await expect(page.getByTestId('unified-journal-monthly')).toContainText('2026-08');
   expect(errors).toEqual([]);
 });
