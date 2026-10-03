@@ -33,7 +33,16 @@ import {
   type MemberAutoTradingFxQuote,
 } from './member-auto-trading-fx.service';
 import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
-import { evaluateStrategyRulePackGate } from './evidence-backed-auto-strategy-catalog.service';
+import {
+  evaluateStrategyRulePackDeterministicGate,
+  evaluateStrategyRulePackGate,
+  strategyRulePackAiEvidenceDigest,
+} from './evidence-backed-auto-strategy-catalog.service';
+import {
+  tradeRulePackAiReviewer,
+  type TradeRulePackAiReview,
+  type TradeRulePackAiReviewer,
+} from './trade-rule-pack-ai-review.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
@@ -104,6 +113,12 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveExitOrders: number;
   exitBlocked: number;
   privateTradingRequests: number;
+  aiReviewCalls: number;
+  aiReviewCacheHits: number;
+  aiReviewPass: number;
+  aiReviewAbstain: number;
+  aiReviewVeto: number;
+  aiReviewBlocked: number;
 };
 
 function finite(value: unknown): value is number {
@@ -224,13 +239,40 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   return finite(rate) && rate >= 0 ? rate * 100 : null;
 }
 
-function strategyRulePackGate(entry: MemberAutoTradingPaperHandoffEntry) {
-  return evaluateStrategyRulePackGate({
+function rulePackGateInput(
+  entry: MemberAutoTradingPaperHandoffEntry,
+  nowMs: number,
+  aiReview?: TradeRulePackAiReview | null,
+) {
+  const input = {
     strategyId: entry.identity.strategyId,
     market: entry.identity.market,
     direction: entry.identity.direction,
+    signalId: entry.identity.signalId,
+    symbol: entry.identity.symbol,
+    timeframe: entry.identity.timeframe,
     learningSnapshot: entry.signal.learningSnapshot,
-  });
+    dataEvidence: entry.execution.dataEvidence,
+    publicQuote: entry.publicQuote,
+  };
+  return {
+    ...input,
+    aiReview: aiReview ?? null,
+    expectedAiEvidenceDigest: strategyRulePackAiEvidenceDigest(input),
+    nowMs,
+  };
+}
+
+function strategyRulePackDeterministicGate(entry: MemberAutoTradingPaperHandoffEntry, nowMs: number) {
+  return evaluateStrategyRulePackDeterministicGate(rulePackGateInput(entry, nowMs));
+}
+
+function strategyRulePackGate(
+  entry: MemberAutoTradingPaperHandoffEntry,
+  aiReview: TradeRulePackAiReview | null,
+  nowMs: number,
+) {
+  return evaluateStrategyRulePackGate(rulePackGateInput(entry, nowMs, aiReview));
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -463,6 +505,7 @@ function buildPlanInput(
   runtime: MemberRuntimeState,
   fx: MemberAutoTradingFxQuote,
   nowMs: number,
+  aiReview: TradeRulePackAiReview | null = null,
 ): TradingPlanInput {
   const mapping = marketMapping(entry.identity.market, member.policy);
   const quote = currentPrice(entry);
@@ -506,7 +549,7 @@ function buildPlanInput(
   }
 
   const side = sideFor(entry.identity.direction);
-  const rulePackGate = strategyRulePackGate(entry);
+  const rulePackGate = strategyRulePackGate(entry, aiReview, nowMs);
   const observedAt = new Date(observedAtMs).toISOString();
   const signalObservedAt = typeof entry.signal.timestampMs === 'number'
     ? new Date(entry.signal.timestampMs).toISOString()
@@ -554,6 +597,14 @@ function buildPlanInput(
       ...(rulePackGate.recognized ? [
         'STRATEGY_RULE_PACK:' + entry.identity.strategyId,
         'STRATEGY_RULE_PACK_GATE:' + rulePackGate.state,
+        ...(aiReview?.status === 'READY' ? [
+          'AI_REVIEW_DECISION:' + aiReview.decision,
+          'AI_REVIEW_PROVIDER:' + aiReview.provider,
+          'AI_REVIEW_MODEL:' + aiReview.model,
+          'AI_REVIEW_PROMPT:' + aiReview.promptVersion,
+          'AI_REVIEW_EVIDENCE:' + aiReview.evidenceDigest,
+          'AI_REVIEW_EXPIRES:' + aiReview.expiresAt,
+        ] : []),
       ] : []),
       'TOP_OF_BOOK_GAP_PROXY',
     ],
@@ -915,7 +966,10 @@ function errorCode(error: unknown) {
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
 
-  constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
+  constructor(
+    private readonly source: MemberAutoTradingBackgroundSource,
+    private readonly aiReviewer: Pick<TradeRulePackAiReviewer, 'review'> = tradeRulePackAiReviewer,
+  ) {}
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const result: MemberAutoTradingBackgroundRunResult = {
@@ -937,6 +991,12 @@ export class MemberAutoTradingBackgroundWorker {
       liveExitOrders: 0,
       exitBlocked: 0,
       privateTradingRequests: 0,
+      aiReviewCalls: 0,
+      aiReviewCacheHits: 0,
+      aiReviewPass: 0,
+      aiReviewAbstain: 0,
+      aiReviewVeto: 0,
+      aiReviewBlocked: 0,
     };
     if (this.running) return result;
     this.running = true;
@@ -1036,15 +1096,45 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         for (const entry of entries) {
-          const rulePackGate = strategyRulePackGate(entry);
-          if (rulePackGate.recognized && !rulePackGate.paperAllowed) {
-            result.blocked += 1;
-            continue;
-          }
           if (!policyAllowsEntry(member, entry)) {
             result.skipped += 1;
             continue;
           }
+
+          const deterministicGate = strategyRulePackDeterministicGate(entry, nowMs);
+          if (deterministicGate.recognized && !deterministicGate.readyForAiReview) {
+            result.blocked += 1;
+            continue;
+          }
+
+          let aiReview: TradeRulePackAiReview | null = null;
+          if (deterministicGate.recognized) {
+            result.aiReviewCalls += 1;
+            try {
+              aiReview = await this.aiReviewer.review(entry, nowMs);
+            } catch {
+              result.aiReviewBlocked += 1;
+              result.blocked += 1;
+              continue;
+            }
+            if (aiReview.cacheHit) result.aiReviewCacheHits += 1;
+            if (aiReview.status !== 'READY' || aiReview.decision == null) {
+              result.aiReviewBlocked += 1;
+              result.blocked += 1;
+              continue;
+            }
+            if (aiReview.decision === 'PASS') result.aiReviewPass += 1;
+            else if (aiReview.decision === 'ABSTAIN') result.aiReviewAbstain += 1;
+            else result.aiReviewVeto += 1;
+
+            const rulePackGate = strategyRulePackGate(entry, aiReview, nowMs);
+            if (!rulePackGate.paperAllowed) {
+              if (aiReview.decision !== 'VETO') result.aiReviewBlocked += 1;
+              result.blocked += 1;
+              continue;
+            }
+          }
+
           result.evaluated += 1;
           try {
             let fx = fxCache.get(entry.identity.market);
@@ -1052,7 +1142,7 @@ export class MemberAutoTradingBackgroundWorker {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
               fxCache.set(entry.identity.market, fx);
             }
-            const paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
+            const paperInput = buildPlanInput(member, entry, runtime, fx, nowMs, aiReview);
             const persistentStop = await repository.getGlobalEmergencyStop();
             const paperRun = await executeAutomaticPlan({
               repository,
