@@ -26,8 +26,6 @@ on:
       - 'api-server/src/services/scanner-ai-runtime.service.ts'
       - 'api-server/src/services/scanner-ai-runtime.service.test.ts'
       - 'api-server/src/services/scanner-ai-provider.service.ts'
-      - 'api-server/src/services/scanner-candidate-ranking.service.ts'
-      - 'api-server/src/services/scanner-candidate-ranking.service.test.ts'
       - 'api-server/src/services/stock-signal-scanner.service.ts'
       - 'api-server/src/routes/crypto-signal-scan.ts'
       - 'api-server/src/services/trade-execution.service.ts'
