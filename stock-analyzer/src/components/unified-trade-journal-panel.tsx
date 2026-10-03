@@ -159,7 +159,7 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h4 className="text-sm font-bold">Canonical 거래 연결</h4>
-          <p className="mt-1 text-[10px] text-muted-foreground">신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">신호 → 분석 스냅샷 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
         </div>
         <span className="rounded-full border border-primary/20 bg-background px-2 py-1 text-[10px] font-extrabold text-primary">
           {trade.canonicalLineage ? '연결됨' : '미확인'}
@@ -167,9 +167,11 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       </div>
       <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
         <Metric label="signalId" value={trade.canonicalLineage?.signalIds.join(' · ') || 'N/A'} />
+        <Metric label="snapshotId" value={trade.technicalSnapshot.snapshotId || 'N/A'} />
         <Metric label="planId" value={trade.canonicalLineage?.planIds.join(' · ') || 'N/A'} />
         <Metric label="orderId" value={trade.canonicalLineage?.orderIds.join(' · ') || 'N/A'} />
         <Metric label="fillId" value={trade.canonicalLineage?.fillIds.join(' · ') || 'N/A'} />
+        <Metric label="journalId" value={trade.id} />
       </div>
     </section>
 
