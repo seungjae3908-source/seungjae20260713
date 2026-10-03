@@ -387,6 +387,11 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                   <SummaryCard testId="research-summary-paper" selected={selected === 'paper'} onClick={() => setSelected('paper')} icon={<WalletCards className="h-5 w-5" />} label="모의매매 표본" {...paperSummary} />
                   <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                 </section>
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-card-border bg-card px-3 py-2 text-xs font-bold" data-testid="research-general-compact-status">
+                  <span>그림자 검증 {shadow.value}</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span>{execution.value}</span>
+                </div>
 
                 {selected ? (() => {
                   const info = {
