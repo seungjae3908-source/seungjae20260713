@@ -624,7 +624,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 <input className={inputClass} type="number" min="0.01" max="1" step="any" inputMode="decimal" value={values.riskPercent} onChange={(event) => update('riskPercent', Number(event.target.value))} />
               </Field>
               {values.market === 'crypto-futures' ? <Field label="레버리지">
-                <input className={inputClass} type="number" min="1" max="10" step="1" inputMode="decimal" value={values.leverage} onChange={(event) => update('leverage', Number(event.target.value))} />
+                <input className={inputClass} type="number" min="1" max="3" step="1" inputMode="decimal" value={values.leverage} onChange={(event) => update('leverage', Number(event.target.value))} />
               </Field> : null}
               <Field label="진입 수수료">
                 <input className={inputClass} type="number" min="0" step="any" inputMode="decimal" value={values.entryFeeRate} onChange={(event) => update('entryFeeRate', Number(event.target.value))} />
