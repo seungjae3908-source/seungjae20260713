@@ -211,6 +211,7 @@ const researchBacktestPaperReviewed=[
  'stock-analyzer/e2e/research-paper-closed-loop-observer.spec.ts',
  'stock-analyzer/src/components/trade-automation-settings.tsx',
  'stock-analyzer/src/components/paper-trading-panel.tsx',
+ 'stock-analyzer/e2e/paper-action-reentrancy.spec.ts',
 ];
 const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed,...researchBacktestPaperReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
