@@ -1426,6 +1426,19 @@ test('status is authenticated, automatic execution defaults off, and never retur
         strategyId: string;
         automaticLivePromotionAllowed: boolean;
         paperResearchAllowedWhenReady: boolean;
+        pilotProfile: {
+          totalBudgetKrw: number;
+          maxOrderKrw: number;
+          maxConcurrentLivePositions: number;
+          maxDailyLiveEntries: number;
+          dailyLossStopKrw: number;
+          maxConsecutiveLosses: number;
+          futuresMaxLeverage: number;
+          paperMirrorRequired: boolean;
+          pairedFillComparisonRequired: boolean;
+          liveOrderRequiresExplicitConfirmation: boolean;
+          automaticLiveExecutionAllowed: boolean;
+        };
       }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
@@ -1442,6 +1455,15 @@ test('status is authenticated, automatic execution defaults off, and never retur
       'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
     ]);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.paperResearchAllowedWhenReady === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.totalBudgetKrw === 500_000), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxOrderKrw === 50_000), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxConcurrentLivePositions === 2), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxDailyLiveEntries === 4), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.dailyLossStopKrw === 10_000), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxConsecutiveLosses === 2), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.futuresMaxLeverage === 2), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.liveOrderRequiresExplicitConfirmation === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.automaticLiveExecutionAllowed === false), true);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.automaticLivePromotionAllowed === false), true);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
