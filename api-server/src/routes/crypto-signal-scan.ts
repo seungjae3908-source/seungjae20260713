@@ -15,6 +15,7 @@ import {
   type CryptoPricePrecisionService as CryptoPricePrecisionServiceContract,
 } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
+import { enrichTopScannerCandidatesWithAi } from '../services/scanner-ai-runtime.service';
 import { buildScannerDiscoveryView } from '../services/scanner-discovery-view.service';
 import {
   scannerStrategyForTimeframe,
@@ -175,8 +176,19 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const result = await precision.align(market, scanned, controller.signal);
       if (controller.signal.aborted || res.writableEnded) return;
 
-      const ranking = rankScannerCandidates({
+      const provisionalRanking = rankScannerCandidates({
         cards: result.cards,
+        market: result.market,
+        strategy: strategyMode,
+        softMinimumScore,
+        limit: 20,
+      });
+      const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
+        provisionalRanking.cards,
+        { signal: controller.signal },
+      );
+      const ranking = rankScannerCandidates({
+        cards: aiReviewedCandidates,
         market: result.market,
         strategy: strategyMode,
         softMinimumScore,
