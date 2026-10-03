@@ -45,3 +45,20 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} />');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
+
+
+test('trading shell exposes selected-market read-only activity without creating execution authority', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const route = source('../api-server/src/routes/trade-automation.ts');
+
+  expect(page).toContain('data-testid="auto-trading-market-activity"');
+  expect(page).toContain('미결 주문');
+  expect(page).toContain('복구 필요');
+  expect(page).toContain('오늘 주문');
+  expect(page).toContain('오늘 체결');
+  expect(page).toContain('runtimeStatus?.marketActivityByMarket?.[market]');
+
+  expect(route).toContain('marketActivityByMarket');
+  expect(route).toContain('PENDING_ORDER_STATES');
+  expect(route).toContain('actualOrderSubmittedByStatusRequest: false');
+});
