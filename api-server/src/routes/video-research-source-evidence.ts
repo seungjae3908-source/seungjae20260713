@@ -86,6 +86,7 @@ type SafeAutomation = {
   scheduledInvocationObserved: boolean;
   reason: string | null;
   nextRequiredStep: string;
+  snapshotBound: boolean;
 };
 
 type SafeAiReview = {
@@ -234,7 +235,10 @@ function safeSnapshotProvenance(value: unknown): SafeSnapshotProvenance | null {
   };
 }
 
-function safeAutomation(value: unknown): SafeAutomation | null {
+function safeAutomation(
+  value: unknown,
+  binding?: { provenance: SafeSnapshotProvenance; query: string; sourceCount: number },
+): SafeAutomation | null {
   if (value == null) return null;
   if (!isRecord(value) || value.schemaVersion !== 'research-video-discovery-scan-v1') return null;
   if (value.status !== 'COMPLETE' && value.status !== 'BLOCKED' && value.status !== 'WAITING_CONFIGURATION') return null;
@@ -250,6 +254,14 @@ function safeAutomation(value: unknown): SafeAutomation | null {
   if (typeof value.scheduledInvocationObserved !== 'boolean'
     || typeof value.providerNetworkCalls !== 'number' || !Number.isSafeInteger(value.providerNetworkCalls)
     || value.providerNetworkCalls < 0 || value.providerNetworkCalls > 1) return null;
+  const snapshotBound = Boolean(
+    binding
+    && value.status === 'COMPLETE'
+    && researchSha === binding.provenance.sourceHeadSha
+    && observedAt === binding.provenance.observedAt
+    && query === binding.query
+    && sourceCount === binding.sourceCount
+  );
   return {
     schemaVersion: 'research-video-discovery-scan-v1',
     status: value.status,
@@ -263,6 +275,7 @@ function safeAutomation(value: unknown): SafeAutomation | null {
     scheduledInvocationObserved: value.scheduledInvocationObserved,
     reason,
     nextRequiredStep,
+    snapshotBound,
   };
 }
 
@@ -322,7 +335,11 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   if (!Array.isArray(value.records) || value.records.length !== value.sourceCount) return null;
   if (!safetyMatches(value.safety)) return null;
   const snapshotProvenance = safeSnapshotProvenance(value.snapshotProvenance);
-  const automation = safeAutomation(value.automation);
+  const automation = safeAutomation(value.automation, {
+    provenance: snapshotProvenance,
+    query: value.query,
+    sourceCount: value.sourceCount,
+  });
   const aiReview = safeAiReview(value.aiReview);
   if (!snapshotProvenance || (value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
 
@@ -349,38 +366,50 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   };
 }
 
-export async function loadVideoResearchRuntimeEvidenceSnapshot(): Promise<unknown> {
-  const candidates = [
+export async function loadVideoResearchRuntimeEvidenceSnapshot(
+  fetchImpl: typeof fetch = fetch,
+  candidates: string[] = [
     resolve(process.cwd(), 'api-server', 'data', SNAPSHOT_FILE),
     resolve(process.cwd(), 'data', SNAPSHOT_FILE),
-  ];
-  for (const path of candidates) {
-    try {
-      return JSON.parse(await readFile(path, 'utf8')) as unknown;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
-      throw error;
-    }
-  }
-
+  ],
+): Promise<unknown> {
+  // The durable Research Dashboard readback is authoritative. A local snapshot
+  // is compatibility fallback only when the fixed loopback endpoint is unavailable.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
+  let dashboardUnavailable = false;
   try {
-    const response = await fetch('http://127.0.0.1:18090/api/research/video/evidence', {
+    const response = await fetchImpl('http://127.0.0.1:18090/api/research/video/evidence', {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     });
-    if (!response.ok) return null;
-    const payload = await response.json() as unknown;
-    return isRecord(payload) ? payload : null;
+    if (response.ok) {
+      const payload = await response.json() as unknown;
+      if (isRecord(payload) && payload.available === true) return payload;
+      if (isRecord(payload) && payload.available === false) return null;
+      dashboardUnavailable = true;
+    } else {
+      dashboardUnavailable = true;
+    }
   } catch {
-    return null;
+    dashboardUnavailable = true;
   } finally {
     clearTimeout(timer);
   }
-}
 
+  if (!dashboardUnavailable) return null;
+  for (const path of candidates) {
+    try {
+      const value = JSON.parse(await readFile(path, 'utf8')) as unknown;
+      if (sanitizeVideoResearchRuntimeEvidence(value)) return value;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT' || error instanceof SyntaxError) continue;
+      throw error;
+    }
+  }
+  return null;
+}
 function unavailable(reason: string) {
   return {
     ok: false,
