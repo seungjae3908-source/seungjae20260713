@@ -1,4 +1,4 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { verifyPhase4FrozenChallengerV1 } from "./phase4-frozen-challenger-core-v1.js";
@@ -201,6 +201,24 @@ function validateSource(value) {
   return { source, ownerParts };
 }
 
+function assertMonotonicCandidatePerformance(previous, next) {
+  const prior = record(previous);
+  const current = record(next);
+  if (!prior || prior.status !== "PRESENT") return;
+  if (!current || current.status !== "PRESENT") {
+    throw new Error("CANDIDATE_PERFORMANCE_PRESENT_STATE_REGRESSION");
+  }
+  if (prior.candidateId !== current.candidateId) return;
+  for (const key of ["VALIDATION_N", "OOS_N", "Entry_N", "Settlement_N"]) {
+    const before = prior[key];
+    const after = current[key];
+    if (!Number.isInteger(before) || before < 0 || !Number.isInteger(after) || after < 0) {
+      throw new Error(`CANDIDATE_PERFORMANCE_${key}_WATERMARK_INVALID`);
+    }
+    if (after < before) throw new Error(`CANDIDATE_PERFORMANCE_${key}_REGRESSION`);
+  }
+}
+
 async function atomicPublish(rootDirectory, artifact) {
   if (!nonEmpty(rootDirectory) || !isAbsolute(rootDirectory)) {
     throw new TypeError("candidate performance rootDirectory must be absolute");
@@ -211,6 +229,15 @@ async function atomicPublish(rootDirectory, artifact) {
   const expected = join(root, ...FROZEN_CANDIDATE_PERFORMANCE_RELATIVE_PATH.split("/"));
   if (target !== expected) throw new Error("CANDIDATE_PERFORMANCE_TARGET_PATH_INVALID");
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  try {
+    const previous = JSON.parse(await readFile(target, "utf8"));
+    assertMonotonicCandidatePerformance(previous, artifact);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      if (error instanceof SyntaxError) throw new Error("CANDIDATE_PERFORMANCE_PREVIOUS_ARTIFACT_INVALID");
+      throw error;
+    }
+  }
   const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(temporary, `${JSON.stringify(artifact, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, target);
