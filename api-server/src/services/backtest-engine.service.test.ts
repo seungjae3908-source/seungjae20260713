@@ -146,7 +146,7 @@ test('sanitize removes duplicate timestamps', () => assert.equal(sanitizeClosedC
 test('sanitize sorts timestamps ascending', () => assert.deepEqual(sanitizeClosedCandles([makeCandle(2, 100), makeCandle(1, 100)]).data.map((row) => row.timestamp), [START + STEP, START + 2 * STEP]));
 
 test('request validation rejects unsupported strategy', () => assert.throws(() => validateBacktestRequest(request({ strategy: 'volume_breakout' })), BacktestValidationError));
-test('request validation rejects more than 10x leverage', () => assert.throws(() => validateBacktestRequest(request({ leverage: 11 })), /레버리지/));
+test('request validation rejects more than 3x leverage', () => assert.throws(() => validateBacktestRequest(request({ leverage: 4 })), /레버리지/));
 test('request validation rejects risk above one percent', () => assert.throws(() => validateBacktestRequest(request({ riskPercent: 1.1 })), /위험률/));
 test('request validation rejects inverted period', () => assert.throws(() => validateBacktestRequest(request({ startTime: START + STEP, endTime: START })), /기간/));
 test('request validation rejects split not totaling 100', () => assert.throws(() => validateBacktestRequest(request({ validationSplit: { trainingPercent: 60, validationPercent: 30, testPercent: 30 } })), /합은 100/));
@@ -298,7 +298,7 @@ test('maximum loss remains bounded by configured risk budget', () => {
 test('leverage change does not change riskPercent input', () => {
   const rows = breakoutFixture('long');
   const low = runBacktest(request({ side: 'long', leverage: 2, endTime: rows.at(-1)!.timestamp }), rows);
-  const high = runBacktest(request({ side: 'long', leverage: 5, endTime: rows.at(-1)!.timestamp }), rows);
+  const high = runBacktest(request({ side: 'long', leverage: 3, endTime: rows.at(-1)!.timestamp }), rows);
   assert.ok(Math.abs(low.trades[0].quantity - high.trades[0].quantity) < 1e-9);
 });
 test('result preserves backtest-only safety contract', () => {
