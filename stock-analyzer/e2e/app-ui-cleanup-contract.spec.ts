@@ -40,10 +40,11 @@ test('기술 라우트는 공통 개선 UI를 유지하면서 권한 없는 고�
 
   expect(app).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(app).not.toContain('scanner-workspace-basic');
-  expect(workspace).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
+  expect(workspace).toContain("const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessBasicInfo')");
   expect(workspace).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
   expect(workspace).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
-  expect(workspace).toContain('if (!canAccessRiskPreview)');
+  expect(workspace).toContain("if (value === 'chart') return canAccessAiChart");
+  expect(workspace).toContain('if (!canAccessAiChart)');
   expect(tabs).toContain('aria-disabled={option.disabled || undefined}');
   expect(tabs).toContain('disabled={option.disabled}');
   expect(tabs).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");
