@@ -58,6 +58,15 @@ test('automatic trading settings surface six Paper-only rule packs without live 
 });
 
 
+test('six-strategy AI review connectivity is visible and explicitly fail-closed', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+  expect(settings).toContain('data-testid="strategy-ai-review-status"');
+  expect(settings).toContain('6전략 AI Review 연결');
+  expect(settings).toContain('AI Provider 미설정 · FAIL-CLOSED');
+  expect(settings).toContain('결정론적 Evidence 통과 후에만 AI를 호출');
+  expect(settings).toContain('주문 없음 · Risk override 없음 · 실행권한 NONE');
+});
+
 test('rule-pack pilot profile is visible and keeps live order confirmation explicit', () => {
   const settings = source('src/components/trade-automation-settings.tsx');
   expect(settings).toContain('data-testid="strategy-pilot-risk-summary"');
