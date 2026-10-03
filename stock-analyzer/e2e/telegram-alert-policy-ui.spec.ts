@@ -80,6 +80,8 @@ function userIntegrationsResponse(connected: boolean) {
       aiExplanationEnabled: false,
       signalFollowupEnabled: false,
       memberHoldingsEnabled: false,
+      backgroundWorkersEnabled: true,
+      personalWorkerEnabled: true,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -254,6 +256,8 @@ test('personal Telegram runtime health is sanitized and visible without trading 
   expect(route).toContain('linkingReady');
   expect(route).toContain('stockRoomReady');
   expect(route).toContain('cryptoRoomReady');
+  expect(route).toContain('backgroundWorkersEnabled');
+  expect(route).toContain('personalWorkerEnabled');
   expect(route).toContain("orderAuthority: 'NONE' as const");
   expect(route).toContain('privateTradingApiAllowed: false as const');
   expect(route).toContain('realOrderAllowed: false as const');
