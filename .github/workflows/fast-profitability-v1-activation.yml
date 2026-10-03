@@ -500,7 +500,7 @@ jobs:
               '[FAST_PROFITABILITY_V1_ACTIVATED]',
               'target_sha=' + s.targetSha,
               'activation_digest=' + s.activationDigest,
-              'activation_run_id=' + context.runId,
+              'activation_run_id=' + String(process.env.GITHUB_RUN_ID ?? ''),
               'candidate_id=' + s.candidateId,
               'eligible_after_ms=' + s.eligibleAfterMs,
               'collector_cadence_minutes=' + s.collectorCadenceMinutes,
