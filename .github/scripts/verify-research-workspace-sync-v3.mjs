@@ -197,6 +197,7 @@ const researchBacktestPaperReviewed=[
  'packages/strategy-hypothesis/src/backtest-paper-handoff.js',
  'packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts',
  'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/e2e/phase6-paper-trading.spec.ts',
  'stock-analyzer/src/pages/phase5-backtest-e2e.tsx',
  'api-server/src/services/backtest-engine.service.test.ts',
  'api-server/src/services/backtest-paper-handoff.service.test.ts',
