@@ -224,6 +224,20 @@ function notRun(card: ScannerSignalCard, reason: string): ScannerSignalCard {
   });
 }
 
+export function enforceScannerAiFinalPromotionPolicy(cards: ScannerSignalCard[]): ScannerSignalCard[] {
+  return cards.map((card) => {
+    if (card.signalGrade !== 'S' || card.aiValidation?.status === 'PASS') return card;
+    return {
+      ...card,
+      signalGrade: 'A',
+      warnings: [...new Set([
+        ...card.warnings,
+        'S등급은 외부 AI 공개근거 검토 PASS가 있어야 하므로 A등급으로 제한했습니다.',
+      ])],
+    };
+  });
+}
+
 export async function enrichTopScannerCandidatesWithAi(
   cards: ScannerSignalCard[],
   options: {
