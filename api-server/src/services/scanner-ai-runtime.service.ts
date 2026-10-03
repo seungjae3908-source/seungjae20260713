@@ -1,4 +1,5 @@
-import { AiChatError, answerAiStructuredJson, type AiChatResult } from './ai-chat.service';
+import { AiChatError, type AiChatResult } from './ai-chat.service';
+import { answerBoundedAiJson } from './bounded-ai-json-provider.service';
 import {
   FutureProvider,
   ScannerAiProviderError,
@@ -133,7 +134,7 @@ function parse(answer: string, provider: string): ScannerAiValidation {
 }
 
 export function createScannerAiTransport(
-  invoke: AiInvoker = answerAiStructuredJson,
+  invoke: AiInvoker = answerBoundedAiJson,
   env: NodeJS.ProcessEnv = process.env,
 ) {
   return async (input: ScannerAiValidationInput, signal: AbortSignal): Promise<ScannerAiValidation> => {
