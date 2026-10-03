@@ -239,7 +239,14 @@ export async function enrichTopScannerCandidatesWithAi(
   const validator = options.validator ?? runtimeScheduler;
   const limit = Math.max(1, Math.min(MAX_MAX_CANDIDATES, options.maxCandidates ?? maxCandidates(env)));
   const selected = [...cards]
-    .filter((card) => card.strongSignalEligible !== false && (card.signalGrade === 'S' || card.signalGrade === 'A'))
+    .filter((card) => (
+      card.strongSignalEligible === true
+      && card.direction !== 'NEUTRAL'
+      && card.score >= 72
+      && (card.riskScore ?? 101) <= 50
+      && card.dataQuality?.state === 'TRUSTED'
+      && card.dataQuality.strongSignalAllowed === true
+    ))
     .sort((left, right) => right.score - left.score || (left.riskScore ?? 100) - (right.riskScore ?? 100))
     .slice(0, limit);
   const selectedIds = new Set(selected.map((card) => card.signalId));
