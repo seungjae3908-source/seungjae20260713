@@ -737,6 +737,14 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       pilotCapitalState,
       strategyAiReview: tradeRulePackAiReviewer.runtimeStatus(),
       scannerAiReview: scannerAiRuntimeStatus(),
+      strategyAiReviewAudit: {
+        schemaVersion: 'trade-rule-pack-ai-audit-v1',
+        storage: 'paper_journal_entries',
+        requiredBeforePlan: true,
+        failurePolicy: 'BLOCK_ENTRY',
+        rawPromptStored: false,
+        credentialsStored: false,
+      },
       evidenceBackedStrategies: evidenceBackedAutoStrategyCatalog().map((strategy) => ({
         strategyId: strategy.strategyId,
         label: strategy.label,
