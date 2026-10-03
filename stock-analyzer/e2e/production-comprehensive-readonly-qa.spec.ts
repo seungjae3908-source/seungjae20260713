@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type APIResponse, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -190,7 +190,6 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 const LOGIN_READY_BUDGET_MS = 15_000;
 const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
 const LOGIN_INTERACTIVE_COLD_RETRIES = 1;
-const CACHED_AUTH_TIMEOUT_RETRIES = 1;
 type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
 const authStateByViewport = new Map<string, CachedAuthState>();
 
@@ -264,32 +263,28 @@ function accessTokenFromStorageState(state: CachedAuthState) {
   throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
 }
 
-async function validateCachedAuthState(page: Page, state: CachedAuthState) {
+function accessTokenExpiresAtMs(token: string): number | null {
+  const payloadPart = token.split('.')[1];
+  if (!payloadPart) return null;
+  try {
+    const normalized = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as { exp?: unknown };
+    const expSeconds = Number(payload.exp);
+    return Number.isFinite(expSeconds) && expSeconds > 0 ? expSeconds * 1_000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateCachedAuthState(state: CachedAuthState) {
   const token = accessTokenFromStorageState(state);
-  let response: APIResponse | null = null;
-  for (let attempt = 0; attempt <= CACHED_AUTH_TIMEOUT_RETRIES; attempt += 1) {
-    try {
-      response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        timeout: LOGIN_READY_BUDGET_MS,
-        failOnStatusCode: false,
-      });
-      break;
-    } catch (error) {
-      const timeoutOnly = isPlaywrightTimeout(error);
-      if (!timeoutOnly || attempt >= CACHED_AUTH_TIMEOUT_RETRIES) throw error;
-    }
+  const expiresAtMs = accessTokenExpiresAtMs(token);
+  if (expiresAtMs === null) {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_TOKEN_INVALID');
   }
-  if (!response) throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_UNAVAILABLE');
-  if (response.status() !== 200) {
-    throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
-  }
-  const payload = await response.json().catch(() => null);
-  if (!payload || typeof payload !== 'object' || typeof (payload as Record<string, unknown>).id !== 'string') {
-    throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  if (expiresAtMs <= Date.now() + 30_000) {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_TOKEN_EXPIRED');
   }
 }
 
@@ -309,15 +304,15 @@ async function login(
     if (cached) {
       // Validate the real password-login path once per viewport, then reuse the
       // exact in-memory authenticated browser state for later read-only tests.
-      // Cached-session auth/status failures remain fail-closed. Only a transport
-      // timeout gets one bounded repeat of the same read-only profile proof.
+      // Cached state is checked locally for a valid, non-expiring access token;
+      // each real target route/API then proves server-side acceptance fail-closed.
       await restoreCachedAuthState(page, cached);
       // Do not add a second root-page navigation before every read-only test.
       // The first test in each viewport proves the real password-login path;
       // later tests restore that exact state and let their target route prove
       // whether the session is still accepted. This remains fail-closed while
       // avoiding a redundant / navigation that previously timed out under load.
-      await validateCachedAuthState(page, cached);
+      validateCachedAuthState(cached);
       // The new page is still about:blank here. restoreCachedAuthState installs
       // the Production-origin localStorage seed for the next navigation, but it
       // has not materialized that origin yet. Recapturing storageState now can
