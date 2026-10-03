@@ -161,6 +161,8 @@ test('automatic trading surface never exposes per-order approval actions', async
   await expect(page.getByRole('button', { name: /승인/ })).toHaveCount(0);
 
   await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('open-trading-automation-settings').click();
+  await expect(page.getByTestId('trading-automation-settings-dialog')).toBeVisible();
   await page.getByTestId('automatic-trading-master-toggle').click();
   await page.getByRole('button', { name: '설정 저장' }).click();
   await page.getByRole('dialog', { name: '자동매매 설정 확인' }).getByRole('button', { name: '설정 적용' }).click();
@@ -174,13 +176,14 @@ test('paper mode exposes the same four-market navigation without enabling live a
   await page.getByTestId('trading-mode-paper').click();
   await expect(page.getByTestId('trading-mode-paper')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible();
-  await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실제 주문 0');
+  await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실주문 없음');
 
   for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
     await page.getByTestId(`trading-market-${market}`).click();
     await expect(page.getByTestId(`trading-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
   }
 
-  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('LIVE/AUTO/REAL/Private API Gate');
+  await expect(page.getByTestId('trading-workspace-safety-note')).toHaveCount(0);
+  await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실주문 없음');
   expectNoBrowserFailures(failures);
 });
