@@ -72,6 +72,7 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
   const verifier = read('api-server/scripts/verify-production-automatic-trading-gate.mjs');
+  const credentialReuseQa = read('stock-analyzer/e2e/production-live-credential-reuse-qa.spec.ts');
   const deploy = read('ops/deploy-production.sh');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
     assert.ok(handoff.includes(market), market);
@@ -90,6 +91,22 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
+  assert.ok(gate.includes('AUTOMATIC_TRADING_ACCOUNT_READ_PROVIDERS_NOT_READY'));
+  for (const flag of [
+    'TOSS_ACCOUNT_READ_ENABLED',
+    'KIWOOM_ACCOUNT_READ_ENABLED',
+    'UPBIT_ACCOUNT_READ_ENABLED',
+    'BITGET_ACCOUNT_READ_ENABLED',
+  ]) assert.ok(gate.includes(flag), flag);
+  assert.ok(gate.includes("expectedLeverage !== '3'"));
+  assert.ok(gate.includes('AUTOMATIC_TRADING_FUTURES_LEVERAGE_MUST_BE_3X'));
+  assert.ok(worker.includes('liveBackgroundEnabled() && !deterministicGate.recognized'));
+  assert.ok(aiGate.includes('directionAllowedForMarket'));
+  assert.ok(aiGate.includes("market === 'KR_STOCK' || market === 'US_STOCK' || market === 'CRYPTO_SPOT'"));
+  assert.ok(aiGate.includes("market === 'CRYPTO_FUTURES'"));
+  assert.ok(credentialReuseQa.includes("const providers = ['toss', 'kiwoom', 'upbit', 'bitget'] as const"));
+  assert.ok(credentialReuseQa.includes('Credential reuse provider failures:'));
+  assert.ok(credentialReuseQa.includes('failures.push({ provider, status: response.status(), errorCode })'));
   assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V2_MISSING'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
