@@ -204,6 +204,9 @@ const researchBacktestPaperReviewed=[
  'stock-analyzer/e2e/backtester-korean-result-ui.spec.ts',
  'stock-analyzer/e2e/phase5-backtest.spec.ts',
  'stock-analyzer/e2e/auto-trading-professional-ui.spec.ts',
+ 'stock-analyzer/src/components/research-center-general.tsx',
+ 'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
+ 'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
 ];
 const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed,...researchBacktestPaperReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
