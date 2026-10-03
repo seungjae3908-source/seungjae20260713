@@ -104,6 +104,12 @@ export type UnifiedTradeCycle = {
   additions:UnifiedTradeLeg[];
   partialExits:UnifiedTradeLeg[];
   finalExit:UnifiedTradeLeg|null;
+  canonicalLineage?:{
+    signalIds:string[];
+    planIds:string[];
+    orderIds:string[];
+    fillIds:string[];
+  };
   canonicalResearchBinding?:UnifiedCanonicalResearchBinding;
 };
 export type UnifiedJournalAnalytics = {

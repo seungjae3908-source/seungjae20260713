@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import {
   CheckCircle2,
   ChevronDown,
@@ -1026,6 +1027,7 @@ export function CryptoTradingWorkspace({
   onBackToStock,
 }: Props) {
   const assetMode = useAssetMode();
+  const [, navigate] = useLocation();
   const chartSectionRef = useRef<HTMLElement | null>(null);
   const scannerSectionRef = useRef<HTMLDivElement | null>(null);
   const autoSectionRef = useRef<HTMLElement | null>(null);
@@ -1183,9 +1185,10 @@ export function CryptoTradingWorkspace({
   );
 
   const autoStatus = useQuery({
-    queryKey: ["crypto-auto-status"],
-    queryFn: () => getProtected<AnyObj>("/api/crypto/futures/auto/status"),
-    refetchInterval: 30_000,
+    queryKey: ["crypto-auto-status-retired"],
+    queryFn: async () => ({} as AnyObj),
+    enabled: false,
+    staleTime: Infinity,
   });
   const account = useQuery({
     queryKey: ["crypto-futures-account"],
@@ -1302,8 +1305,12 @@ export function CryptoTradingWorkspace({
   };
 
   const changeView = (next: CryptoWorkspaceViewMode) => {
+    if (next === "auto") {
+      navigate("/auto-trading?market=crypto_futures&section=dashboard");
+      return;
+    }
     onViewModeChange(next);
-    const target = next === "condition" ? scannerSectionRef.current : next === "chart" ? chartSectionRef.current : autoSectionRef.current;
+    const target = next === "condition" ? scannerSectionRef.current : chartSectionRef.current;
     window.setTimeout(() => target?.scrollIntoView({ behavior: "smooth", block: "start" }), 10);
   };
 
@@ -1313,7 +1320,6 @@ export function CryptoTradingWorkspace({
       tickersQuery.refetch(),
       candlesQuery.refetch(),
       scannerQuery.refetch(),
-      autoStatus.refetch(),
       account.refetch(),
       positionsQuery.refetch(),
     ]);
@@ -1976,7 +1982,27 @@ export function CryptoTradingWorkspace({
           </div>
         </section>
 
-        <section ref={autoSectionRef} className="scroll-mt-4 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <section className="rounded-3xl border border-primary/20 bg-primary/5 p-4 shadow-sm" data-testid="crypto-canonical-auto-handoff">
+          <div className="flex items-start gap-2">
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-black text-primary">통합 자동매매</p>
+              <h2 className="mt-1 text-sm font-black">비트겟 선물 주문은 Canonical Trade Automation에서 관리합니다.</h2>
+              <p className="mt-2 text-[11px] font-bold leading-5 text-muted-foreground">
+                이 화면의 과거 자동주문·실행키 경로는 사용하지 않습니다. 신호·주문·체결·매매일지는 통합 OMS와 Unified Journal 한 경로만 사용합니다.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigate("/auto-trading?market=crypto_futures&section=dashboard")}
+                className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 text-xs font-black text-primary-foreground"
+              >
+                통합 자동매매 열기
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section ref={autoSectionRef} className="hidden scroll-mt-4 rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-hidden="true">
           <div className="flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-warning" />
             <div>
@@ -2105,11 +2131,10 @@ export function CryptoTradingWorkspace({
                       <p className={cn("text-sm font-black", position.unrealizedPL >= 0 ? "text-positive" : "text-destructive")}>{formatPrice(position.unrealizedPL)} USDT</p>
                       <button
                         type="button"
-                        onClick={() => void buildClosePlan(position)}
-                        disabled={pendingAction != null}
-                        className="mt-1 rounded-xl border border-destructive/30 bg-destructive/10 px-2 py-1 text-[10px] font-black text-destructive disabled:opacity-50"
+                        onClick={() => navigate("/auto-trading?market=crypto_futures&section=orders")}
+                        className="mt-1 rounded-xl border border-primary/30 bg-primary/10 px-2 py-1 text-[10px] font-black text-primary"
                       >
-                        종료계획
+                        통합 주문관리
                       </button>
                     </div>
                   </div>
@@ -2120,7 +2145,7 @@ export function CryptoTradingWorkspace({
           </div>
         </section>
 
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <section className="hidden rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-hidden="true">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 text-positive" />
             <h2 className="text-sm font-black">최근 자동매매 기록</h2>
@@ -2141,7 +2166,7 @@ export function CryptoTradingWorkspace({
         </section>
 
 
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+        <section className="hidden rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-hidden="true">
           <div>
             <p className="text-[10px] font-black text-primary">매매기록 하단 환경</p>
             <h2 className="mt-1 text-sm font-black">비트겟 연결·주문 상태</h2>

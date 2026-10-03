@@ -177,7 +177,7 @@ test('rejects cross-user alert-policy identity and malformed policy evidence', (
   }));
 });
 
-test('binds canonical broker evidence to the authenticated user', () => {
+test('binds canonical broker evidence to the authenticated user across all four providers', () => {
   const connection = {
     userId: USER_ID,
     exchange: 'upbit',
@@ -188,8 +188,10 @@ test('binds canonical broker evidence to the authenticated user', () => {
     updatedAt: '2026-09-10T00:00:00.000Z',
     credentialsExposed: false,
   };
-  expect(requireUserIntegrationsResponse(canonical({ brokerConnections: [connection] }), USER_ID, NOW))
-    .toBeTruthy();
+  for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+    expect(requireUserIntegrationsResponse(canonical({ brokerConnections: [{ ...connection, exchange }] }), USER_ID, NOW))
+      .toBeTruthy();
+  }
   rejects(canonical({ brokerConnections: [{ ...connection, userId: 'user-b' }] }));
 });
 
@@ -245,4 +247,17 @@ test('rejects policy values outside the producer validity bounds', () => {
       deliveryMode: 'BATCHED',
     },
   }));
+});
+
+
+test('frontend provider visibility matches the canonical four-provider response contract', async () => {
+  const fs = await import('node:fs/promises');
+  const [responseSource, panelSource] = await Promise.all([
+    fs.readFile(new URL('../src/lib/user-integrations-response.ts', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../src/components/user-broker-telegram-panel.tsx', import.meta.url), 'utf8'),
+  ]);
+  for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+    expect(responseSource).toContain("'" + provider + "'");
+    expect(panelSource).toContain("'" + provider + "'");
+  }
 });
