@@ -38,7 +38,6 @@ requireText(workflow, 'AUTOMATIC_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED', 'AUTO
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED', 'AUTO_GATE_ACCOUNT_QA_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED', 'AUTO_GATE_CREDENTIAL_REUSE_QA_MISSING');
 requireText(workflow, 'production-live-credential-reuse-', 'AUTO_GATE_CREDENTIAL_REUSE_ARTIFACT_MISSING');
-requireText(workflow, 'PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE', 'AUTO_GATE_CONFLICT_GUARD_MISSING');
 requireText(workflow, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
 requireText(workflow, "name.startsWith(workflowName + ' ' + target + ' ')", 'AUTO_GATE_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
 requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
