@@ -55,8 +55,9 @@ export function buildBacktestPaperHandoffBundle(
     : request.market === 'us-stock' ? 'US_STOCK'
       : request.market === 'crypto-spot' ? 'CRYPTO_SPOT'
         : 'CRYPTO_FUTURES';
-  const assetClass = request.market === 'kr-stock' || request.market === 'us-stock'
-    ? 'STOCK' : canonicalMarket;
+  const assetClass: 'STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' = request.market === 'kr-stock' || request.market === 'us-stock'
+    ? 'STOCK'
+    : request.market === 'crypto-spot' ? 'CRYPTO_SPOT' : 'CRYPTO_FUTURES';
   const sides: readonly ('BUY' | 'LONG' | 'SHORT')[] = request.market === 'crypto-futures'
     ? (request.side === 'both' ? ['LONG', 'SHORT'] : request.side === 'long' ? ['LONG'] : ['SHORT'])
     : ['BUY'];
