@@ -937,9 +937,77 @@ def build_research_activity(root, now_ms=None, maximum_entries=200):
     }
 
 
+def summarize_auto_backtest(value):
+    if not isinstance(value, dict) or value.get('profile') != 'fast-historical':
+        return {
+            'present': False,
+            'status': 'MISSING',
+            'cycleId': None,
+            'generatedAt': None,
+            'researchSha': None,
+            'pipelines': [],
+            'executionAuthority': 'NONE',
+        }
+    pipelines = []
+    for raw in value.get('results') if isinstance(value.get('results'), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        steps = []
+        for step in raw.get('steps') if isinstance(raw.get('steps'), list) else []:
+            if not isinstance(step, dict):
+                continue
+            step_id = step.get('id')
+            status = step.get('status')
+            if not isinstance(step_id, str) or not isinstance(status, str):
+                continue
+            steps.append({
+                'id': step_id[:120],
+                'status': status[:40],
+                'reportStatus': step.get('reportStatus')[:80] if isinstance(step.get('reportStatus'), str) else None,
+                'startedAt': finite_number(step.get('startedAt')),
+                'endedAt': finite_number(step.get('endedAt')),
+            })
+        pipeline_id = raw.get('id')
+        status = raw.get('status')
+        if not isinstance(pipeline_id, str) or not isinstance(status, str):
+            continue
+        candidate_passed = len(steps) > 0 and steps[0].get('status') == 'success'
+        if status == 'success':
+            feedback = '후보 생성부터 후속 백테스트·검증 단계까지 자동 진행 완료'
+        elif status == 'blocked_data':
+            feedback = '필수 시점 데이터 부족으로 다음 단계 자동 중단 · 데이터 누적 후 재평가'
+        elif status == 'failed':
+            feedback = '기술 실패로 자동 중단 · 실패 원인 확인 필요'
+        else:
+            feedback = '자동 연구 상태 확인 필요'
+        pipelines.append({
+            'id': pipeline_id[:120],
+            'status': status[:40],
+            'startedAt': finite_number(raw.get('startedAt')),
+            'endedAt': finite_number(raw.get('endedAt')),
+            'stepCount': optional_integer_count(raw.get('stepCount')),
+            'plannedStepCount': optional_integer_count(raw.get('plannedStepCount')),
+            'candidatePassed': candidate_passed,
+            'automaticHandoffObserved': candidate_passed and len(steps) > 1,
+            'feedback': feedback,
+            'steps': steps,
+        })
+    return {
+        'present': True,
+        'status': str(value.get('status', 'unknown'))[:40],
+        'cycleId': value.get('cycleId') if isinstance(value.get('cycleId'), str) else None,
+        'generatedAt': finite_number(value.get('generatedAt')),
+        'researchSha': value.get('researchSha') if isinstance(value.get('researchSha'), str) else None,
+        'pipelines': pipelines,
+        'executionAuthority': 'NONE',
+    }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
-    cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
+    raw_cycles = {profile: read_json_optional(root / 'latest' / f'{profile}.json') for profile in PROFILES}
+    cycles = [summarize_cycle(profile, raw_cycles[profile]) for profile in PROFILES]
+    auto_backtest = summarize_auto_backtest(raw_cycles.get('fast-historical'))
     paper_runtime = summarize_paper_runtime(read_json_optional(root / 'forward' / 'paper' / 'status' / 'runtime-status.json'))
     paper_ledger = summarize_paper_ledger(read_json_optional(root / 'forward' / 'paper' / 'state' / 'recurring-paper-loop.json'))
     shadow_groups = summarize_shadow_groups(read_json_optional(root / 'forward' / 'shadow-summary.json'))
@@ -1011,6 +1079,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'dataFactory': {'temporalCryptoFutures': temporal_crypto},
         'factory': factory_runtime,
         'activity': activity,
+        'autoBacktest': auto_backtest,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {
