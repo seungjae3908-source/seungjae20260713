@@ -155,7 +155,7 @@ function readonlyCredentialRepository(userId: string) {
 export function normalizeReadonlyCredentialsForLiveExecution(
   exchange: TradingExchange,
   rawCredentials: Record<string, string>,
-) {
+): Record<string, string> {
   const value = (key: string) => String(rawCredentials[key] ?? '').trim();
   if (exchange === 'toss') {
     const clientId = value('clientId');
@@ -165,7 +165,7 @@ export function normalizeReadonlyCredentialsForLiveExecution(
     return {
       clientId,
       clientSecret,
-      ...(accountSeq ? { accountSeq } : {}),
+      accountSeq,
     };
   }
   if (exchange === 'kiwoom') {
@@ -896,7 +896,6 @@ router.post('/connections/:exchange/reuse-readonly', async (req: AuthenticatedRe
       const verification = await execution.verifyLiveConnection(userId, exchange);
       return res.json({
         ok: true,
-        exchange,
         accountMode: 'live',
         configured: true,
         reusedReadonlyCredential: true,
