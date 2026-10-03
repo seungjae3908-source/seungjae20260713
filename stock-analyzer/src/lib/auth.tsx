@@ -373,13 +373,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signingInRef.current = true;
       setBootstrapError(null);
       setLoading(true);
+      let authenticatedSession: Session | null = null;
       try {
-        const nextSession = await signInWithSupabase(name, password);
-        applySession(nextSession);
-        await loadProfileWithDeadline(nextSession.user);
+        authenticatedSession = await signInWithSupabase(name, password);
+        applySession(authenticatedSession);
+        try {
+          await reconcileInitialSessionProfile({
+            loadProfile: () => loadProfileWithDeadline(authenticatedSession!.user, { force: true }),
+            hasProfile: () => profileRef.current !== null,
+            isSessionCurrent: () => sessionRef.current?.user.id === authenticatedSession!.user.id,
+          });
+          if (profileRef.current === null) throw new Error('AUTH_PROFILE_NOT_FOUND');
+        } catch (cause) {
+          setBootstrapError(authBootstrapErrorMessage(cause));
+          throw new Error('로그인은 완료됐지만 회원 정보를 확인하지 못했습니다. 다시 확인해 주세요.');
+        }
       } catch (cause) {
-        applySession(null);
-        throw new Error(authMessage(cause));
+        if (!authenticatedSession) {
+          applySession(null);
+          throw new Error(authMessage(cause));
+        }
+        throw cause instanceof Error ? cause : new Error('로그인은 완료됐지만 회원 정보를 확인하지 못했습니다. 다시 확인해 주세요.');
       } finally {
         signingInRef.current = false;
         setLoading(false);

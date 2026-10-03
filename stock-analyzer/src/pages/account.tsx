@@ -28,16 +28,20 @@ export default function AccountPage() {
       if (register) {
         await auth.signUp(name, password);
         setNotice('가입 신청이 완료되었습니다. 관리자 승인 후 이용할 수 있습니다.');
+        setPassword('');
+        setConfirm('');
       } else {
         await auth.signIn(name, password);
         setNotice('로그인되었습니다.');
+        setPassword('');
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '계정 처리에 실패했습니다.');
     } finally { setBusy(false); }
   }
 
-  const stateMessage = auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
+  const stateMessage = auth.bootstrapError ? ''
+    : auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
     : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
     : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
     : auth.membershipLevel === 'pending' ? '관리자 승인 대기 중입니다.' : '';
@@ -60,6 +64,11 @@ export default function AccountPage() {
       ]}
     />
     <main className="mx-auto w-full max-w-3xl min-w-0 flex-1 px-3 pb-28 pt-4 sm:px-5 sm:pt-5">
+      {auth.bootstrapError && <section role="alert" data-testid="account-bootstrap-error" className="mb-4 rounded-2xl border border-warning/30 bg-warning/10 p-4">
+        <p className="text-sm font-bold text-warning">계정 상태를 불러오지 못했습니다.</p>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{auth.bootstrapError}</p>
+        <button type="button" onClick={() => auth.retryBootstrap()} className="mt-3 min-h-11 rounded-xl border border-warning/40 px-4 text-sm font-semibold text-warning">다시 확인</button>
+      </section>}
       {!auth.configured && <Card><p className="text-center font-bold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-center text-sm text-muted-foreground">계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card><p className="text-center text-sm font-medium">계정 상태를 확인하고 있습니다.</p></Card>}
       {!auth.loading && auth.user ? <Card>
