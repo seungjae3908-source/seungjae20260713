@@ -82,13 +82,16 @@ export function buildRiskEnvelope(plan: TradingPlan, policy: TradingPolicy, appr
   }
   const reference = referencePrice(plan);
   if (reference == null) throw new Error('RISK_ENVELOPE_REFERENCE_PRICE_REQUIRED');
-  const stopLossKrw = expectedStopLossKrw(plan, reference);
+  const slippageBudget = plan.estimatedKrw * policy.maxEstimatedSlippagePercent / 100;
+  const stopLossKrw = plan.reduceOnly === true ? 0 : expectedStopLossKrw(plan, reference);
   if (stopLossKrw == null) throw new Error('RISK_ENVELOPE_STOP_REQUIRED');
 
-  const slippageBudget = plan.estimatedKrw * policy.maxEstimatedSlippagePercent / 100;
-  const worstApprovedLoss = stopLossKrw + slippageBudget;
+  const worstApprovedLoss = plan.reduceOnly === true
+    ? Math.max(slippageBudget, 0.01)
+    : stopLossKrw + slippageBudget;
   const hardDailyLossBudget = policy.totalCapitalKrw * policy.dailyLossLimitPercent / 100;
-  if (!(hardDailyLossBudget > 0) || worstApprovedLoss > hardDailyLossBudget + 1e-9) {
+  if (plan.reduceOnly !== true
+    && (!(hardDailyLossBudget > 0) || worstApprovedLoss > hardDailyLossBudget + 1e-9)) {
     throw new Error('RISK_ENVELOPE_MAX_LOSS_EXCEEDED');
   }
   if (!Number.isInteger(plan.splitRatios.length) || plan.splitRatios.length < 1 || plan.splitRatios.length > 20) {
@@ -129,12 +132,14 @@ export function evaluateRiskEnvelope(input: {
   if (input.plan.splitRatios.length > envelope.maxSplitCount) blockCodes.push('RISK_ENVELOPE_SPLIT_COUNT_EXCEEDED');
 
   const slippage = input.snapshot.estimatedSlippagePercent;
-  if (!finiteNonNegative(slippage)) {
-    if (input.plan.accountMode !== 'paper' && input.plan.accountMode !== 'mock') {
-      blockCodes.push('RISK_ENVELOPE_SLIPPAGE_UNKNOWN');
+  if (input.plan.reduceOnly !== true) {
+    if (!finiteNonNegative(slippage)) {
+      if (input.plan.accountMode !== 'paper' && input.plan.accountMode !== 'mock') {
+        blockCodes.push('RISK_ENVELOPE_SLIPPAGE_UNKNOWN');
+      }
+    } else if (slippage > envelope.maxSlippagePercent + 1e-9) {
+      blockCodes.push('RISK_ENVELOPE_SLIPPAGE_EXCEEDED');
     }
-  } else if (slippage > envelope.maxSlippagePercent + 1e-9) {
-    blockCodes.push('RISK_ENVELOPE_SLIPPAGE_EXCEEDED');
   }
 
   const currentReference = finitePositive(input.snapshot.currentPrice)
@@ -142,6 +147,9 @@ export function evaluateRiskEnvelope(input: {
     : referencePrice(input.plan);
   if (currentReference == null) {
     blockCodes.push('RISK_ENVELOPE_REFERENCE_PRICE_UNAVAILABLE');
+  } else if (input.plan.reduceOnly === true) {
+    // Keep the approved notional/quantity envelope, but do not block a risk-reducing
+    // exit solely because fast-market slippage exceeded entry-time assumptions.
   } else {
     const stopLossKrw = expectedStopLossKrw(input.plan, currentReference);
     if (stopLossKrw == null) blockCodes.push('RISK_ENVELOPE_STOP_UNAVAILABLE');

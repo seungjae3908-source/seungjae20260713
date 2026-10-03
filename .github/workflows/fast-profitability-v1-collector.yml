@@ -86,7 +86,7 @@ jobs:
                 repo: context.repo.repo,
                 workflow_id: 'fast-profitability-v1-activation.yml',
                 event: 'issue_comment',
-                status: 'completed',
+                status: 'success',
                 per_page: 100,
                 page,
               });
@@ -225,7 +225,7 @@ jobs:
                 repo: context.repo.repo,
                 workflow_id: 'fast-profitability-v1-collector.yml',
                 event: 'schedule',
-                status: 'completed',
+                status: 'success',
                 per_page: 100,
                 page,
               });
@@ -275,7 +275,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: 'prediction-lab-canonical-shadow-cycle.yml',
-                status: 'completed',
+                status: 'success',
                 per_page: 100,
                 page,
               });

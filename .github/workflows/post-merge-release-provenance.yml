@@ -1,0 +1,197 @@
+name: Post-Merge Release Provenance
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: post-merge-release-provenance-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify merged tree equals pre-merge fully tested candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact merged revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify pre-merge CI and merged-tree identity
+        id: provenance
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('node:fs');
+            const {
+              evaluateReleaseCandidateProvenance,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/release-candidate-provenance.cjs`);
+            const {
+              inspectRequiredStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const targetSha = String(context.sha || '').toLowerCase();
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const statusContext = 'post-merge-provenance/verified';
+
+            if (!/^[0-9a-f]{40}$/u.test(targetSha)) {
+              core.setFailed('[POST_MERGE_INVALID_TARGET_SHA]');
+              return;
+            }
+
+            const main = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            const currentMainSha = String(main.data.commit.sha || '').toLowerCase();
+            if (currentMainSha !== targetSha) {
+              core.notice(`Main advanced before provenance verification: target=${targetSha} current=${currentMainSha}; stale push needs no release status.`);
+              core.setOutput('stale', 'true');
+              return;
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha: targetSha,
+              state: 'pending',
+              target_url: runUrl,
+              description: `Post-merge provenance run ${context.runId}: verifying tested tree`,
+              context: statusContext,
+            });
+
+            try {
+              const targetCommit = (await github.rest.repos.getCommit({ owner, repo, ref: targetSha })).data;
+              const targetTreeSha = String(targetCommit.commit?.tree?.sha || '').toLowerCase();
+              const seen = new Set();
+              const matches = [];
+
+              const inspectPr = async (number) => {
+                if (!Number.isInteger(number) || number <= 0 || seen.has(number)) return;
+                seen.add(number);
+                const pr = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+                if (!pr.merged_at || pr.base?.ref !== 'main') return;
+                const headSha = String(pr.head?.sha || '').toLowerCase();
+                if (!/^[0-9a-f]{40}$/u.test(headSha)) return;
+                const headCommit = (await github.rest.repos.getCommit({ owner, repo, ref: headSha })).data;
+                const headTreeSha = String(headCommit.commit?.tree?.sha || '').toLowerCase();
+                if (headTreeSha === targetTreeSha) matches.push({ pr, headTreeSha });
+              };
+
+              const associated = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+                owner,
+                repo,
+                commit_sha: targetSha,
+                per_page: 100,
+              });
+              for (const candidate of associated) await inspectPr(Number(candidate.number));
+
+              if (matches.length === 0) {
+                const recent = await github.rest.pulls.list({
+                  owner,
+                  repo,
+                  state: 'closed',
+                  base: 'main',
+                  sort: 'updated',
+                  direction: 'desc',
+                  per_page: 30,
+                });
+                for (const candidate of recent.data) await inspectPr(Number(candidate.number));
+              }
+
+              if (matches.length !== 1) {
+                throw new Error(`[POST_MERGE_PR_RESOLUTION_FAILED] matches=${matches.length} sha=${targetSha} tree=${targetTreeSha}`);
+              }
+
+              const { pr, headTreeSha } = matches[0];
+              const headSha = String(pr.head.sha).toLowerCase();
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner,
+                repo,
+                ref: headSha,
+                per_page: 100,
+              });
+              const statusEvidence = inspectRequiredStatusEvidence(statuses);
+              if (!statusEvidence.ok) {
+                throw new Error(`[PREMERGE_REQUIRED_CI_INVALID] ${statusEvidence.reason}`);
+              }
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner,
+                repo,
+                run_id: statusEvidence.runId,
+              })).data;
+
+              const verified = evaluateReleaseCandidateProvenance({
+                targetSha,
+                currentMainSha,
+                targetTreeSha,
+                pr,
+                headTreeSha,
+                statuses,
+                run,
+              });
+              if (!verified.ok) {
+                throw new Error(`[POST_MERGE_PROVENANCE_REJECTED] ${verified.reason}`);
+              }
+
+              const evidence = {
+                schemaVersion: 1,
+                targetSha,
+                targetTreeSha,
+                pullRequest: verified.prNumber,
+                testedHeadSha: verified.headSha,
+                testedHeadTreeSha: headTreeSha,
+                premergeApplicationCiRunId: verified.runId,
+                requiredContexts: [...statusEvidence.latest.keys()].sort(),
+                mergeCompletedAt: pr.merged_at,
+                verifiedAt: new Date().toISOString(),
+              };
+              fs.writeFileSync('release-candidate-provenance.json', `${JSON.stringify(evidence, null, 2)}\n`);
+
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha: targetSha,
+                state: 'success',
+                target_url: runUrl,
+                description: `Pre-merge 6/6 + merged tree identity verified (PR #${verified.prNumber})`,
+                context: statusContext,
+              });
+              core.setOutput('pr_number', String(verified.prNumber));
+              core.setOutput('premerge_run_id', String(verified.runId));
+              core.info(`Post-merge provenance PASS: main=${targetSha} PR=#${verified.prNumber} premerge-run=${verified.runId}.`);
+            } catch (error) {
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha: targetSha,
+                state: 'failure',
+                target_url: runUrl,
+                description: `Post-merge provenance failed: ${String(error?.message || error).slice(0, 100)}`,
+                context: statusContext,
+              });
+              core.setFailed(String(error?.stack || error));
+            }
+
+      - name: Upload immutable release provenance
+        if: steps.provenance.outputs.stale != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate-provenance-${{ github.sha }}
+          path: release-candidate-provenance.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Boundary
+        run: |
+          echo 'This workflow verifies pre-merge Required CI provenance and exact Git tree identity only.'
+          echo 'It cannot merge, deploy, mutate databases/secrets, enable trading, or place/cancel/modify/transfer/withdraw orders.'
