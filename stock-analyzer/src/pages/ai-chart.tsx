@@ -832,6 +832,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
           <div className="min-w-0 flex-1">
             <p className="truncate text-[10px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : selection.displayName}</p>
             <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-base font-black sm:text-lg">AI 차트</h1>
+            <p data-testid="ai-chart-engine-kind" className="truncate text-[9px] font-bold text-muted-foreground">Quant/Rule Evidence Engine · 실시간 판단은 LLM 호출이 아님</p>
           </div>
           {!embedded && !externalMode && externalControlAvailable && (
             <button
