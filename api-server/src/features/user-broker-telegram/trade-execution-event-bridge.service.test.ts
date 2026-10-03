@@ -97,6 +97,22 @@ test('bridge maps canonical historical transitions once without broker requests 
   assert.equal((await integrationRepository.listDeliveries('user-a')).length, 2);
 });
 
+test('automatic plans remain AUTO_POLICY through the execution event bridge', async () => {
+  const trading = new InMemoryTradingRepository();
+  const plan = { ...planFixture(), executionMode: 'automatic' as const };
+  const order = orderFixture(plan);
+  await trading.savePlan(plan);
+  await trading.saveOrder(order);
+  await trading.appendEvent(eventFixture(order, 'evt-auto-filled', 'ACCEPTED', 'FILLED', '2026-08-12T00:00:02.000Z'));
+
+  const { portfolio, service } = await linkedService();
+  const result = await new TradeExecutionEventBridgeService(trading, service).syncUser('user-a', 'associate');
+  assert.equal(result.inserted, 1);
+  assert.equal(portfolio.events.length, 1);
+  assert.equal(portfolio.events[0]?.executionMethod, 'AUTO_POLICY');
+  assert.equal(portfolio.events[0]?.metadata.approvalSource, 'AUTO_POLICY');
+});
+
 test('missing bridge membership fails closed for delivery queueing', async () => {
   const trading = new InMemoryTradingRepository();
   const plan = planFixture();
