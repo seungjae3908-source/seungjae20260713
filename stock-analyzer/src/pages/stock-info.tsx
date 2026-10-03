@@ -19,6 +19,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice, toggleWatchlistItem, isInWatchlist } from '@/lib/stock-display';
 import { cn } from '@/lib/utils';
 import { useAssetMode } from '@/lib/asset-mode';
+import { tradeChartPath } from '@/lib/trade-navigation';
 
 type AnyObj = Record<string, any>;
 type AssetTab = 'stock' | 'coin';
@@ -223,6 +224,18 @@ export default function StockInfoPage() {
 		navigate(`/stock-info/analysis?${params.toString()}`);
 	}
 
+	function openStockTrade(action: 'BUY' | 'SELL') {
+		navigate(tradeChartPath({
+			assetType: 'stock',
+			market,
+			symbol: ticker,
+			displayName: selectedName,
+			action,
+			focus: action === 'SELL' ? 'exit' : 'entry',
+			timeframe: '5m',
+		}));
+	}
+
 	function leaveDetail() {
 		const params = new URLSearchParams(location.includes('?') ? location.split('?')[1] ?? '' : '');
 		navigate(params.get('back')?.trim() || '/stocks');
@@ -405,6 +418,27 @@ export default function StockInfoPage() {
 											<Metric label="현재가" value={money(quote.data.price, currency)} strong />
 											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={changeTone(quote.data.changePercent)} />
 										</div>
+										<div className="mt-3 grid grid-cols-2 gap-2" data-testid="stock-info-trade-actions">
+											<button
+												type="button"
+												data-testid="stock-info-buy"
+												onClick={() => openStockTrade('BUY')}
+												className="min-h-11 rounded-2xl bg-positive px-3 text-sm font-black text-white active:scale-[0.99]"
+											>
+												구매하기
+											</button>
+											<button
+												type="button"
+												data-testid="stock-info-sell"
+												onClick={() => openStockTrade('SELL')}
+												className="min-h-11 rounded-2xl bg-destructive px-3 text-sm font-black text-destructive-foreground active:scale-[0.99]"
+											>
+												판매하기
+											</button>
+										</div>
+										<p className="mt-2 break-keep text-[10px] font-bold leading-4 text-muted-foreground">
+											구매하기는 기존 서버 승인형 진입 경로로, 판매하기는 실제 보유분 종료 경로로 이동합니다. 주식 판매는 신규 공매도 주문을 만들지 않습니다.
+										</p>
 										<button type="button" onClick={openDetailedAnalysis} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
 									</>
 								)}
@@ -1013,6 +1047,20 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 	const latestCandle = candles?.at(-1);
 	const connectionOk = coinMarket === 'spot' ? status.data?.upbit?.ok : status.data?.bitget?.ok;
 
+	function openCoinTrade(action: 'BUY' | 'SELL' | 'LONG' | 'SHORT') {
+		if (!selected) return;
+		const futures = coinMarket === 'futures';
+		navigate(tradeChartPath({
+			assetType: futures ? 'coin_futures' : 'coin_spot',
+			market: futures ? 'BITGET' : 'UPBIT',
+			symbol,
+			displayName: displayCoinName(String(selected.symbol), selected.koreanName, selected.englishName),
+			action,
+			focus: !futures && action === 'SELL' ? 'exit' : 'entry',
+			timeframe: '15m',
+		}));
+	}
+
 	return (
 		<main className="space-y-4 px-4 pb-28 pt-4">
 			<SpecialFeedPanel
@@ -1101,6 +1149,29 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 							<Metric label="캔들 수" value={candles?.length ? `${candles.length}개` : '데이터 없음'} />
 							{coinMarket === 'spot' && <Metric label="유의 상태" value={warningLabel(selected.warning)} tone={selected.warning === true ? 'down' : undefined} />}
 						</div>
+						<div className="mt-3 grid grid-cols-2 gap-2" data-testid="coin-info-trade-actions">
+							<button
+								type="button"
+								data-testid="coin-info-primary-trade-action"
+								onClick={() => openCoinTrade(coinMarket === 'futures' ? 'LONG' : 'BUY')}
+								className="min-h-11 rounded-2xl bg-positive px-3 text-sm font-black text-white active:scale-[0.99]"
+							>
+								{coinMarket === 'futures' ? 'LONG' : '구매하기'}
+							</button>
+							<button
+								type="button"
+								data-testid="coin-info-secondary-trade-action"
+								onClick={() => openCoinTrade(coinMarket === 'futures' ? 'SHORT' : 'SELL')}
+								className="min-h-11 rounded-2xl bg-destructive px-3 text-sm font-black text-destructive-foreground active:scale-[0.99]"
+							>
+								{coinMarket === 'futures' ? 'SHORT' : '판매하기'}
+							</button>
+						</div>
+						<p className="mt-2 break-keep text-[10px] font-bold leading-4 text-muted-foreground">
+							{coinMarket === 'futures'
+								? '선물만 LONG/SHORT 신규 진입을 허용하며 기존 서버 위험검증·레버리지 정책을 그대로 사용합니다.'
+								: '현물 판매하기는 보유 코인 범위의 종료 경로만 사용하며 현물 SHORT 주문을 만들지 않습니다.'}
+						</p>
 					</>
 				)}
 			</Section>
