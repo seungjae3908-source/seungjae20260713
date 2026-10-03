@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { request } from 'node:http';
 import express from 'express';
 import aiChatRouter from '../routes/ai-chat';
-import { AiChatError, actionRefusal, answerAiChat, validateChatMessage } from './ai-chat.service';
+import { AiChatError, actionRefusal, answerAiChat, answerAiStructuredJson, validateChatMessage } from './ai-chat.service';
 
 const aiEnvironmentKeys = [
   'AI_CHAT_PROVIDER',
@@ -451,5 +451,59 @@ test('POST /api/ai/chat uses only a mock Gemini provider and never leaks the tes
   } finally {
     globalThis.fetch = previousFetch;
     restoreAiEnvironment(previousEnvironment);
+  }
+});
+
+
+test('structured JSON AI seam uses classifier system instructions without changing normal AI chat semantics', async () => {
+  const previous = snapshotAiEnvironment();
+  clearAiEnvironment();
+  process.env.GEMINI_API_KEY = 'fake-gemini';
+  let requestBody: any = null;
+  try {
+    const result = await answerAiStructuredJson(
+      { message: '{"task":"classify","evidence":"public"}' },
+      async (_url, init) => {
+        requestBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"decision":"PASS","reasons":["coherent"]}' }] } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    );
+    assert.equal(result.provider, 'google-gemini');
+    assert.equal(result.answer, '{"decision":"PASS","reasons":["coherent"]}');
+    const system = String(requestBody.systemInstruction.parts[0].text);
+    assert.match(system, /bounded public-evidence classifier/);
+    assert.match(system, /Return only the exact JSON shape/);
+    assert.match(system, /Never override deterministic risk/);
+    assert.doesNotMatch(system, /public-market analysis assistant/);
+  } finally {
+    restoreAiEnvironment(previous);
+  }
+});
+
+test('structured JSON AI seam preserves retryable Gemini to Groq fallback with classifier instructions', async () => {
+  const previous = snapshotAiEnvironment();
+  clearAiEnvironment();
+  process.env.GEMINI_API_KEY = 'fake-gemini';
+  process.env.GROQ_API_KEY = 'fake-groq';
+  let groqBody: any = null;
+  try {
+    const result = await answerAiStructuredJson(
+      { message: '{"task":"classify"}' },
+      async (input, init) => {
+        if (String(input).includes('googleapis.com')) return new Response('{}', { status: 503 });
+        groqBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"status":"PASS","counterEvidence":[],"missingData":[],"risks":[],"explanation":"ok"}' } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    );
+    assert.equal(result.provider, 'groq');
+    assert.equal(result.fallbackUsed, true);
+    assert.match(String(groqBody.messages[0].content), /bounded public-evidence classifier/);
+    assert.doesNotMatch(String(groqBody.messages[0].content), /public-market analysis assistant/);
+  } finally {
+    restoreAiEnvironment(previous);
   }
 });
