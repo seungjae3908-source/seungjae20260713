@@ -1452,6 +1452,14 @@ test('status is authenticated, automatic execution defaults off, and never retur
         orderAllowed: boolean;
         riskOverrideAllowed: boolean;
       };
+      strategyAiReviewAudit: {
+        schemaVersion: string;
+        storage: string;
+        requiredBeforePlan: boolean;
+        failurePolicy: string;
+        rawPromptStored: boolean;
+        credentialsStored: boolean;
+      };
       scannerAiReview: {
         configured: boolean;
         providerSeam: string;
@@ -1512,6 +1520,10 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.equal(body.scannerAiReview.providerSeam, 'BOUNDED_AI_JSON_PROVIDER');
     assert.equal(body.scannerAiReview.executionAuthority, 'NONE');
     assert.equal(body.scannerAiReview.orderAllowed, false);
+    assert.equal(body.strategyAiReviewAudit.requiredBeforePlan, true);
+    assert.equal(body.strategyAiReviewAudit.failurePolicy, 'BLOCK_ENTRY');
+    assert.equal(body.strategyAiReviewAudit.rawPromptStored, false);
+    assert.equal(body.strategyAiReviewAudit.credentialsStored, false);
     assert.doesNotMatch(text, /AI_CHAT_API_KEY|GEMINI_API_KEY|GROQ_API_KEY/);
     assert.deepEqual(body.evidenceBackedStrategies.map((row) => row.strategyId), [
       'TREND_PULLBACK_REACCEL_V1',
