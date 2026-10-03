@@ -171,20 +171,53 @@ const runtimeScheduler = new ScannerAiProviderScheduler(runtimeAdapter, {
   circuitResetMs: 30_000,
 });
 
+function intelligenceEvidence(card: ScannerSignalCard): string[] {
+  const row = record(card as unknown);
+  const lines: string[] = [];
+
+  const marketIntelligence = record(row?.marketIntelligence);
+  const autoTrading = record(marketIntelligence?.autoTrading);
+  if (marketIntelligence) {
+    lines.push('MARKET_INTELLIGENCE_STATUS:' + clean(marketIntelligence.status, 40));
+    if (autoTrading?.mode) lines.push('MARKET_INTELLIGENCE_AUTO:' + clean(autoTrading.mode, 60));
+    if (autoTrading?.hardBlockReason) lines.push('MARKET_INTELLIGENCE_BLOCK:' + clean(autoTrading.hardBlockReason, 120));
+    lines.push(...stringList(marketIntelligence.warnings, 4, 120).map((value) => 'MARKET_INTELLIGENCE_WARNING:' + value));
+  }
+
+  const news = record(row?.newsDisclosureIntelligence);
+  if (news) {
+    lines.push('NEWS_DISCLOSURE_STATUS:' + clean(news.status, 40));
+    lines.push(...stringList(news.officialRiskEvents, 4, 80).map((value) => 'OFFICIAL_RISK_EVENT:' + value));
+    lines.push(...stringList(news.warnings, 4, 120).map((value) => 'NEWS_DISCLOSURE_WARNING:' + value));
+  }
+
+  const crypto = record(row?.cryptoPublicEventContext);
+  if (crypto) {
+    lines.push('CRYPTO_PUBLIC_EVENT_STATUS:' + clean(crypto.status, 40));
+    if (crypto.tradingStatus) lines.push('CRYPTO_TRADING_STATUS:' + clean(crypto.tradingStatus, 80));
+    lines.push(...stringList(crypto.warnings, 4, 120).map((value) => 'CRYPTO_EVENT_WARNING:' + value));
+  }
+
+  return [...new Set(lines.filter(Boolean))].slice(0, 12);
+}
+
 function validationInput(card: ScannerSignalCard): ScannerAiValidationInput {
   return {
     signalId: card.signalId,
     symbol: card.symbol,
-    market: card.assetClass,
+    market: String(card.market),
     strategy: card.strategyMode ?? 'swing',
     direction: card.direction,
     score: card.score,
     riskScore: card.riskScore,
     dataQualityScore: card.dataQuality?.score ?? 0,
-    evidence: card.evidence.slice(0, 12).flatMap((item) => [
-      item.label,
-      ...item.reasons.slice(0, 2),
-    ]).slice(0, 24),
+    evidence: [
+      ...card.evidence.slice(0, 10).flatMap((item) => [
+        item.label,
+        ...item.reasons.slice(0, 2),
+      ]),
+      ...intelligenceEvidence(card),
+    ].slice(0, 24),
     warnings: card.warnings.slice(0, 12),
   };
 }
