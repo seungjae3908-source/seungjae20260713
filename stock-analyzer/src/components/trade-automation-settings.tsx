@@ -524,7 +524,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="strategy-pilot-risk-summary">
       <p className="font-extrabold">50만원 실전 검증 방식</p>
       <p className="mt-1 leading-5 text-muted-foreground">
-        최대 진입은 현재 운용금과 함께 증가 · 손절거리 Risk Size가 더 작으면 자동 축소 · 거래당 위험은 운용금의 최대 0.5% · 동시 2개 · 조건이 좋으면 하루 진입 횟수 제한 없음 · 하루 손실거래 5회 중지 · 연속 3회 손실 시 중지 · 동일 종목 손실 후 30분 + 새 신호 필요 · 비상 일손실 2.5만원 · 선물 3배(위험예산 증액 금지) · Paper 동시 기록 · Reserve 자동출금 금지 · 실계좌 주문은 최종 확인 필요
+        최대 진입은 현재 운용금과 함께 증가 · 손절거리 Risk Size가 더 작으면 그 이하만 허용 · 거래당 위험은 운용금의 최대 0.5% · 동시 2개 · 조건이 좋으면 하루 진입 횟수 제한 없음 · 하루 손실거래 5회 중지 · 연속 3회 손실 시 중지 · 동일 종목 손실 후 30분 + 새 신호 필요 · 비상 일손실 2.5만원 · 선물 3배(위험예산 증액 금지) · Paper 동시 기록 · Reserve 자동출금 금지 · 실계좌 주문은 최종 확인 필요
       </p>
     </div> : null}
 
