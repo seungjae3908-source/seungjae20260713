@@ -145,6 +145,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const [paperRevision, setPaperRevision] = useState(0);
   const [manualPaperOpen, setManualPaperOpen] = useState(false);
   const [settingsPopup, setSettingsPopup] = useState<'automation' | 'telegram' | null>(null);
+  const [settingsMarket, setSettingsMarket] = useState<TradingMarket>('domestic_stock');
   const [paperSyncOpen, setPaperSyncOpen] = useState(false);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
@@ -336,7 +337,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <div className="grid gap-2 sm:grid-cols-2">
         <button
           type="button"
-          onClick={() => setSettingsPopup('automation')}
+          onClick={() => { setSettingsMarket(market); setSettingsPopup('automation'); }}
           className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-bold"
           data-testid="open-trading-automation-settings"
         >
@@ -419,12 +420,24 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
       </main>
       <PopupPanel
-        title={`${marketMeta.label} · ${mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}`}
+        title={`${mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}`}
         open={settingsPopup === 'automation'}
         onClose={() => setSettingsPopup(null)}
         testId="trading-automation-settings-dialog"
       >
-        <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="설정 시장 선택">
+          {MARKETS.map((item) => (
+            <SegmentedButton
+              key={item.value}
+              active={settingsMarket === item.value}
+              onClick={() => setSettingsMarket(item.value)}
+              testId={`trading-settings-market-${item.value}`}
+            >
+              {item.label}
+            </SegmentedButton>
+          ))}
+        </div>
+        <TradeAutomationSettings fixture={fixture} selectedMarket={settingsMarket} />
       </PopupPanel>
 
       <PopupPanel
