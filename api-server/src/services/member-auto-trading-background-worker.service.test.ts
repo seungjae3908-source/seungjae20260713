@@ -188,22 +188,52 @@ function handoff(nowMs: number, missingRecentMove = false) {
   } as const;
 }
 
-function paperRepository(nowMs: number): PaperJournalRepository {
+function paperRepository(
+  nowMs: number,
+  auditSink: Array<Record<string, unknown>> = [],
+): PaperJournalRepository {
+  const serverTime = new Date(nowMs).toISOString();
+  const records = new Map<string, any>();
+  const account = {
+    kind: 'account',
+    id: 'paper-account',
+    version: 1,
+    updatedAt: serverTime,
+    deletedAt: null,
+    createdAt: serverTime,
+    serverUpdatedAt: serverTime,
+    payload: {
+      id: 'paper-account',
+      equity: 1_000_000,
+      cashBalance: 1_000_000,
+      availableMargin: 1_000_000,
+    },
+  };
+  records.set('account:paper-account', account);
+
   return {
+    async getRecord(_userId, kind, id) {
+      return records.get(kind + ':' + id) ?? null;
+    },
+    async upsertRecord(_userId, record, updatedAt) {
+      const key = record.kind + ':' + record.id;
+      const existing = records.get(key);
+      const stored = {
+        ...record,
+        createdAt: existing?.createdAt ?? updatedAt,
+        serverUpdatedAt: updatedAt,
+      };
+      records.set(key, stored);
+      if (record.kind === 'journal') auditSink.push(record.payload);
+      return stored;
+    },
     async listSnapshot() {
-      return [{
-        kind: 'account',
-        id: 'paper-account',
-        version: 1,
-        updatedAt: new Date(nowMs).toISOString(),
-        deletedAt: null,
-        payload: {
-          id: 'paper-account',
-          equity: 1_000_000,
-          cashBalance: 1_000_000,
-          availableMargin: 1_000_000,
-        },
-      }];
+      return [...records.values()];
+    },
+    async listJournalPayloads() {
+      return [...records.values()]
+        .filter((record) => record.kind === 'journal' && record.deletedAt == null)
+        .map((record) => record.payload);
     },
   } as unknown as PaperJournalRepository;
 }
@@ -216,6 +246,7 @@ function source(
     tier?: 'pending' | 'associate';
     handoffMissing?: boolean;
     markPrice?: number;
+    auditSink?: Array<Record<string, unknown>>;
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
@@ -235,7 +266,7 @@ function source(
       }];
     },
     tradingRepositoryFor() { return repository; },
-    paperJournalRepositoryFor() { return paperRepository(nowMs); },
+    paperJournalRepositoryFor() { return paperRepository(nowMs, options.auditSink); },
     async resolveFx() {
       return {
         market: 'CRYPTO_SPOT',
