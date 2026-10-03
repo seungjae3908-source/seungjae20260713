@@ -211,6 +211,8 @@ function source(
     tier?: 'pending' | 'associate';
     handoffMissing?: boolean;
     markPrice?: number;
+    syncCalls?: { count: number };
+    syncFailure?: boolean;
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
@@ -252,6 +254,13 @@ function source(
         source: 'test-public-mark',
       };
     },
+    ...(options.syncCalls ? {
+      async syncExecutionEvents() {
+        options.syncCalls!.count += 1;
+        if (options.syncFailure) throw new Error('TEST_EXECUTION_SYNC_FAILED');
+        return { inserted: 1, deliveryQueued: 1, missingReferences: 0 };
+      },
+    } : {}),
   };
 }
 
@@ -381,6 +390,62 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal((await repository.listEvents(USER))
     .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED').length, 1);
   assert.equal(second.liveOrders, 0);
+});
+
+test('background worker automatically projects canonical execution events without requiring the manual sync endpoint', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { handoffMissing: true, syncCalls }),
+  );
+
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionEventsInserted, 1);
+  assert.equal(result.notificationDeliveriesQueued, 1);
+  assert.equal(result.executionSyncMissingReferences, 0);
+  assert.equal(result.executionSyncFailures, 0);
+  assert.equal(result.privateTradingRequests, 0);
+});
+
+test('execution event fan-out failure is non-fatal to canonical trading state and is observable', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { syncCalls, syncFailure: true }),
+  );
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionSyncFailures, 1);
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 1);
+  assert.equal(result.filledOrders, 1);
+  assert.equal((await repository.listOrders(USER))[0]?.state, 'FILLED');
+});
+
+test('execution projection failure is isolated from canonical trading state', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { handoffMissing: true });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async syncExecutionEvents() {
+      throw new Error('EXECUTION_EVENT_PROJECTION_UNAVAILABLE');
+    },
+  });
+
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(result.executionSyncFailures, 1);
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
 });
 
 test('missing <=60s reference move evidence blocks before plan creation', async () => {
