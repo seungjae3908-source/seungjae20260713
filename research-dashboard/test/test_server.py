@@ -187,7 +187,9 @@ def valid_candidate_performance():
 
 class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
     def test_activity_window_reads_real_cycle_history_and_latest_workers(self):
-        root = Path(self.temp_dir.name)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
         now_ms = 1_800_000_000_000
         (root / 'runs' / 'cycle-a').mkdir(parents=True)
         (root / 'runs' / 'cycle-a' / 'cycle.json').write_text(json.dumps({
