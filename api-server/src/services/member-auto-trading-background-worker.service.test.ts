@@ -428,6 +428,26 @@ test('execution event fan-out failure is non-fatal to canonical trading state an
   assert.equal((await repository.listOrders(USER))[0]?.state, 'FILLED');
 });
 
+test('execution projection failure is isolated from canonical trading state', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { handoffMissing: true });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async syncExecutionEvents() {
+      throw new Error('EXECUTION_EVENT_PROJECTION_UNAVAILABLE');
+    },
+  });
+
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(result.executionSyncFailures, 1);
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+});
+
 test('missing <=60s reference move evidence blocks before plan creation', async () => {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
