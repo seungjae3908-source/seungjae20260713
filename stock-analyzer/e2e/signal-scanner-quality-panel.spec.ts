@@ -232,6 +232,8 @@ test('mobile quality panel fails closed for untrusted and missing evidence', asy
   await expect(panel.getByTestId('scanner-quality-rank')).toHaveText('미확인');
   await expect(panel.getByText('• 차단 · STALE_CANDLES · 캔들 freshness 기준 미충족', { exact: true })).toBeVisible();
   expect(await panel.getByText('미확인', { exact: true }).count()).toBeGreaterThan(5);
+  await sheet.getByRole('tab', { name: '근거', exact: true }).click();
+  await expect(sheet.getByTestId('scanner-mobile-evidence')).toBeVisible();
   const aiReview = sheet.getByTestId('scanner-ai-validation');
   await expect(aiReview).toBeVisible();
   await expect(aiReview.getByText('PARTIAL', { exact: true })).toBeVisible();
