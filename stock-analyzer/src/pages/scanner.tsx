@@ -46,7 +46,7 @@ import {
 
 type AnyObj = Record<string, unknown>;
 type MarketFilter = "KR" | "US";
-type ScannerViewMode = "condition" | "chart" | "auto";
+type ScannerViewMode = "condition" | "chart";
 type ThresholdOption = number;
 type ScannerTimeframe = "5m" | "15m" | "1H" | "4H" | "1D";
 type SavedSearch = {
@@ -779,7 +779,13 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
     return (
       <CryptoTradingWorkspace
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={(nextMode) => {
+          if (nextMode === "auto") {
+            navigate("/auto-trading?market=crypto_futures&section=dashboard");
+            return;
+          }
+          setViewMode(nextMode);
+        }}
         onBackToStock={() => assetMode.setAsset("stock")}
       />
     );
