@@ -588,8 +588,7 @@ test('Paper-only worker never touches live account reader when live lane is disa
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, policy());
   let liveReads = 0;
-  const auditSink: Array<Record<string, unknown>> = [];
-  const base = source(repository, nowMs, { auditSink });
+  const base = source(repository, nowMs);
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
     readLiveAccountSnapshot: async () => {
@@ -675,7 +674,8 @@ test('complete rule-pack evidence enters canonical Paper but never crosses into 
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, policy());
   let liveReads = 0;
-  const base = source(repository, nowMs);
+  const auditSink: Array<Record<string, unknown>> = [];
+  const base = source(repository, nowMs, { auditSink });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
     async readHandoff() {
