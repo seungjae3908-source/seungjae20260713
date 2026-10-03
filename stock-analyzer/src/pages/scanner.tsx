@@ -577,28 +577,22 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
   }, [market, timeframe]);
 
   const autoTradeStatus = useQuery({
-    queryKey: ["auto-trade-status"],
-    queryFn: async () => {
-      const response = await authorizedFetch("/api/stocks/auto-trade/status");
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.message || "자동매매 상태 확인 실패");
-      return payload as {
-        mode: "real" | "mock";
-        enabled: boolean;
-        domesticSupported: boolean;
-        usSupported: boolean;
-        realKeyConfigured: boolean;
-        executionKeyConfigured: boolean;
-      };
-    },
-    enabled: viewMode === "auto",
-    staleTime: 30_000,
+    queryKey: ["auto-trade-status-retired"],
+    queryFn: async () => ({ mode: "mock" as const, enabled: false, domesticSupported: false, usSupported: false, realKeyConfigured: false, executionKeyConfigured: false }),
+    enabled: false,
+    staleTime: Infinity,
   });
 
   // 라우트가 바뀌어 새로 진입하면 다시 왼쪽 탭(조건검색)부터 시작한다.
   useEffect(() => {
     setViewMode("condition");
   }, [location]);
+
+  useEffect(() => {
+    if (viewMode === "auto") {
+      navigate(`/auto-trading?market=${market === "US" ? "us_stock" : "domestic_stock"}`);
+    }
+  }, [market, navigate, viewMode]);
 
   // localStorage에서 저장된 임계값 복원. (시장 선택은 새 진입 시 항상 국내부터)
   useEffect(() => {
@@ -823,15 +817,10 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
     .join("|");
 
   const tradeJournal = useQuery({
-    queryKey: ["auto-trade-journal"],
-    queryFn: async () => {
-      const response = await authorizedFetch("/api/stocks/auto-trade/journal");
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.message || "매매일지를 불러오지 못했습니다.");
-      return (payload.entries ?? []) as AutoTradeJournalEntry[];
-    },
-    enabled: viewMode === "auto",
-    refetchInterval: 30_000,
+    queryKey: ["auto-trade-journal-retired"],
+    queryFn: async () => [] as AutoTradeJournalEntry[],
+    enabled: false,
+    staleTime: Infinity,
   });
 
   const journalAnalysis = useMemo(() => {
@@ -1053,6 +1042,10 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
   const openInAiChart = (card: AnyObj, rank: number) => {
     const ticker = String(card.ticker ?? "").trim().toUpperCase();
     if (!ticker) return;
+    const rawAction = String(card.action ?? (String(card.direction ?? "").toUpperCase() === "LONG" ? "BUY" : card.direction ?? "")).trim().toUpperCase();
+    const action = ["BUY", "SELL", "LONG", "SHORT", "NO_TRADE", "UNKNOWN", "NONE"].includes(rawAction)
+      ? rawAction as AnalysisSelection["action"]
+      : undefined;
     const next: AnalysisSelection = {
       assetType: "stock",
       market: cardMarket(card),
@@ -1060,7 +1053,12 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
       ticker,
       displayName: displayStockName(ticker, String(card.name ?? ticker), cardMarket(card)),
       timeframe,
-      searchRunId: String((scan.data as any)?.searchRunId ?? "") || undefined,
+      searchRunId: String((scan.data as any)?.searchRunId ?? (scan.data as any)?.requestId ?? "") || undefined,
+      signalId: String(card.signalId ?? "").trim() || undefined,
+      action,
+      pricePlan: card.pricePlan && typeof card.pricePlan === "object"
+        ? card.pricePlan as AnalysisSelection["pricePlan"]
+        : undefined,
       signalScore: scoreOf(card),
       signalRank: rank,
       confidence: toNumber(card.confidence) ?? undefined,
@@ -1141,7 +1139,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
           </button>
           <button
             type="button"
-            onClick={() => navigate("/auto-trading")}
+            onClick={() => navigate(`/auto-trading?market=${market === "US" ? "us_stock" : "domestic_stock"}`)}
             className="inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border border-card-border bg-card px-2 py-2 text-sm font-extrabold text-muted-foreground"
           >
             자동매매
