@@ -156,7 +156,7 @@ function journalBindingBody(kind: 'verified'|'verified-no-trigger'|'verified-no-
       canonicalResearchBinding: {
         schemaVersion: 'unified-journal-canonical-research-binding-v1',
         status: verified ? 'VERIFIED' : 'NOT_AVAILABLE',
-        source: '동일 후보',
+        source: 'AUTHENTICATED_PAPER_STATE',
         sourceSha: RESEARCH_SHA,
         paperTradeCount: 1,
         verifiedTradeCount: verified ? 1 : 0,
