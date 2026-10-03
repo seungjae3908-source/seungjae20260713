@@ -1430,9 +1430,36 @@ test('status is authenticated, automatic execution defaults off, and never retur
         promptVersion: string;
         producer: string;
         failClosed: boolean;
+        cacheSize: number;
+        cacheMaxEntries: number;
+        cacheHits: number;
+        cacheEvictions: number;
+        reviewCalls: number;
+        pass: number;
+        abstain: number;
+        veto: number;
+        blocked: number;
+        unavailable: number;
+        providerCalls: number;
+        providerSuccesses: number;
+        providerFailures: number;
+        providerFallbackSuccesses: number;
+        providerLastSuccessAt: string | null;
+        providerLastErrorCode: string | null;
+        providerAverageLatencyMs: number | null;
+        providerMaxLatencyMs: number | null;
         executionAuthority: string;
         orderAllowed: boolean;
         riskOverrideAllowed: boolean;
+      };
+      scannerAiReview: {
+        configured: boolean;
+        providerSeam: string;
+        schedulerCircuitOpen: boolean;
+        schedulerPending: number;
+        schedulerActive: number;
+        executionAuthority: string;
+        orderAllowed: boolean;
       };
       pilotCapitalState: {
         initialOperatingCapitalKrw: number;
@@ -1479,7 +1506,12 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.equal(body.strategyAiReview.executionAuthority, 'NONE');
     assert.equal(body.strategyAiReview.orderAllowed, false);
     assert.equal(body.strategyAiReview.riskOverrideAllowed, false);
-    assert.equal(body.strategyAiReview.producer, 'AI_CHAT_PROVIDER_SEAM');
+    assert.equal(body.strategyAiReview.producer, 'BOUNDED_AI_JSON_PROVIDER');
+    assert.ok(body.strategyAiReview.cacheSize <= body.strategyAiReview.cacheMaxEntries);
+    assert.equal(body.strategyAiReview.providerFailures >= 0, true);
+    assert.equal(body.scannerAiReview.providerSeam, 'BOUNDED_AI_JSON_PROVIDER');
+    assert.equal(body.scannerAiReview.executionAuthority, 'NONE');
+    assert.equal(body.scannerAiReview.orderAllowed, false);
     assert.doesNotMatch(text, /AI_CHAT_API_KEY|GEMINI_API_KEY|GROQ_API_KEY/);
     assert.deepEqual(body.evidenceBackedStrategies.map((row) => row.strategyId), [
       'TREND_PULLBACK_REACCEL_V1',
