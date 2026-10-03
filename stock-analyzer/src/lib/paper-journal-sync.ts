@@ -111,7 +111,6 @@ export type UnifiedTradeCycle = {
     fillIds:string[];
   };
   canonicalResearchBinding?:UnifiedCanonicalResearchBinding;
-  canonicalLineage?:{signalIds:string[];planIds:string[];orderIds:string[];fillIds:string[]};
 };
 export type UnifiedJournalAnalytics = {
   sampleSize:number; openTrades:number; closedTrades:number; winRate:number|null; profitFactor:number|null;
