@@ -211,7 +211,7 @@ test('review cache is bounded, evicts LRU entries, and reports live health count
     assert.equal(result.status, 'READY');
   }
 
-  const status = reviewer.runtimeStatus();
+  const status = reviewer.runtimeStatus(NOW + 20);
   assert.equal(calls, 11);
   assert.equal(status.cacheMaxEntries, 10);
   assert.equal(status.cacheSize, 10);
@@ -238,7 +238,7 @@ test('cache hit moves entry to MRU and increments cache hit counter without prov
 
   assert.equal(cached.cacheHit, true);
   assert.equal(calls, 2);
-  const status = reviewer.runtimeStatus();
+  const status = reviewer.runtimeStatus(NOW + 3);
   assert.equal(status.cacheHits, 1);
   assert.equal(status.reviewCalls, 3);
   assert.equal(status.pass, 3);
