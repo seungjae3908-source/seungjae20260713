@@ -61,10 +61,12 @@ test('automatic trading settings surface six Paper-only rule packs without live 
 test('rule-pack pilot profile is visible and keeps live order confirmation explicit', () => {
   const settings = source('src/components/trade-automation-settings.tsx');
   expect(settings).toContain('data-testid="strategy-pilot-risk-summary"');
-  expect(settings).toContain('1회 5만원 · 동시 2개 · 하루 신규 4회');
-  expect(settings).toContain('일손실 1만원 중지');
-  expect(settings).toContain('연속 2회 손실 중지');
-  expect(settings).toContain('선물 2배');
+  expect(settings).toContain('조건이 좋으면 하루 진입 횟수 제한 없음');
+  expect(settings).toContain('하루 손실거래 5회 중지');
+  expect(settings).toContain('연속 3회 손실 시 중지');
+  expect(settings).toContain('동일 종목 손실 후 30분 + 새 신호 필요');
+  expect(settings).toContain('비상 일손실 2.5만원');
+  expect(settings).toContain('선물 3배');
   expect(settings).toContain('Paper 동시 기록');
   expect(settings).toContain('실계좌 주문은 최종 확인 필요');
 });
