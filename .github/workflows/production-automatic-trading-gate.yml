@@ -180,8 +180,10 @@ jobs:
                 workflow_id: workflowId, branch: 'main',
                 event: 'workflow_dispatch', status: 'completed', per_page: 100,
               });
+              const runNameMatches = (name) => name === workflowName
+                || name.startsWith(workflowName + ' ' + target + ' ');
               const run = qaRuns
-                .filter((candidate) => candidate.name === workflowName
+                .filter((candidate) => runNameMatches(candidate.name)
                   && candidate.path === '.github/workflows/' + workflowId
                   && candidate.head_sha === target
                   && candidate.head_branch === 'main'
