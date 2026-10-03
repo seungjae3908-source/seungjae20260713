@@ -12,6 +12,11 @@ on:
       - api-server/src/services/evidence-backed-auto-strategy-catalog.service.test.ts
       - api-server/src/services/trade-rule-pack-ai-review.service.ts
       - api-server/src/services/trade-rule-pack-ai-review.service.test.ts
+      - api-server/src/services/scanner-ai-runtime.service.ts
+      - api-server/src/services/scanner-ai-runtime.service.test.ts
+      - api-server/src/services/scanner-ai-provider.service.ts
+      - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/routes/crypto-signal-scan.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
