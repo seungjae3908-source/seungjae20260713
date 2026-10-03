@@ -9,6 +9,8 @@ on:
       - '.github/workflows/fast-profitability-v1-collector.yml'
       - '.github/workflows/fast-profitability-v1-preactivation-watch.yml'
       - '.github/workflows/prediction-lab-52d-validation.yml'
+      - '.github/workflows/prediction-lab-canonical-shadow-cycle.yml'
+      - 'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js'
       - 'api-server/scripts/verify-research-center-predeploy-contract.mjs'
       - 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs'
       - 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs'
