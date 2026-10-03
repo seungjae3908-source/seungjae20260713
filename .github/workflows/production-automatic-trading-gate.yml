@@ -8,6 +8,10 @@ on:
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts
+      - api-server/src/services/evidence-backed-auto-strategy-catalog.service.test.ts
+      - api-server/src/services/trade-rule-pack-ai-review.service.ts
+      - api-server/src/services/trade-rule-pack-ai-review.service.test.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
