@@ -106,7 +106,7 @@ test('runtime status exposes provider identity and safety state without credenti
   assert.equal(status.executionAuthority, 'NONE');
   assert.equal(status.orderAllowed, false);
   assert.equal(status.riskOverrideAllowed, false);
-  assert.equal(status.cacheMaxEntries, 500);
+  assert.equal(status.cacheMaxEntries, 10);
   assert.equal(JSON.stringify(status).includes('test-provider-key'), false);
 });
 
