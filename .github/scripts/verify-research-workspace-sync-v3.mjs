@@ -198,6 +198,7 @@ const researchBacktestPaperReviewed=[
  'api-server/src/services/backtest-paper-handoff.service.test.ts',
  'stock-analyzer/e2e/backtester-korean-result-ui.spec.ts',
  'stock-analyzer/e2e/phase5-backtest.spec.ts',
+ 'stock-analyzer/e2e/auto-trading-professional-ui.spec.ts',
 ];
 const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed,...researchBacktestPaperReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
