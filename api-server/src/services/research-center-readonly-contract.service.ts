@@ -648,6 +648,54 @@ function sanitizeActivity(value: unknown) {
   return { windowHours: 24, generatedAt, entries };
 }
 
+function sanitizeAutoBacktest(value: unknown) {
+  if (value === undefined || value === null) {
+    return { present: false, status: 'MISSING', cycleId: null, generatedAt: null, researchSha: null, pipelines: [], executionAuthority: 'NONE' as const };
+  }
+  const input = record(value);
+  if (!input || typeof input.present !== 'boolean' || input.executionAuthority !== 'NONE') return null;
+  const status = safeTextOrNull(input.status, 40);
+  const cycleId = safeTextOrNull(input.cycleId, 180);
+  const generatedAt = finiteOrNull(input.generatedAt);
+  const researchSha = safeTextOrNull(input.researchSha, 40);
+  const rows = Array.isArray(input.pipelines) ? input.pipelines : null;
+  if (!status || cycleId === undefined || generatedAt === undefined || researchSha === undefined || !rows || rows.length > 16) return null;
+  if (researchSha != null && !SHA_PATTERN.test(researchSha)) return null;
+  const pipelines = rows.map((raw) => {
+    const row = record(raw);
+    const id = safeTextOrNull(row?.id, 120);
+    const pipelineStatus = safeTextOrNull(row?.status, 40);
+    const startedAt = finiteOrNull(row?.startedAt);
+    const endedAt = finiteOrNull(row?.endedAt);
+    const stepCount = countOrNull(row?.stepCount);
+    const plannedStepCount = countOrNull(row?.plannedStepCount);
+    const feedback = safeTextOrNull(row?.feedback, 300);
+    const stepsRaw = Array.isArray(row?.steps) ? row.steps : null;
+    if (!row || !id || !pipelineStatus || startedAt === undefined || endedAt === undefined
+      || stepCount === undefined || plannedStepCount === undefined || !feedback
+      || typeof row.candidatePassed !== 'boolean' || typeof row.automaticHandoffObserved !== 'boolean'
+      || !stepsRaw || stepsRaw.length > 20) return null;
+    const steps = stepsRaw.map((rawStep) => {
+      const step = record(rawStep);
+      const stepId = safeTextOrNull(step?.id, 120);
+      const stepStatus = safeTextOrNull(step?.status, 40);
+      const reportStatus = safeTextOrNull(step?.reportStatus, 80);
+      const stepStartedAt = finiteOrNull(step?.startedAt);
+      const stepEndedAt = finiteOrNull(step?.endedAt);
+      if (!step || !stepId || !stepStatus || reportStatus === undefined || stepStartedAt === undefined || stepEndedAt === undefined) return null;
+      return { id: stepId, status: stepStatus, reportStatus, startedAt: stepStartedAt, endedAt: stepEndedAt };
+    });
+    if (steps.some((step) => step == null)) return null;
+    return {
+      id, status: pipelineStatus, startedAt, endedAt, stepCount, plannedStepCount,
+      candidatePassed: row.candidatePassed, automaticHandoffObserved: row.automaticHandoffObserved,
+      feedback, steps,
+    };
+  });
+  if (pipelines.some((row) => row == null)) return null;
+  return { present: input.present, status, cycleId, generatedAt, researchSha: researchSha?.toLowerCase() ?? null, pipelines, executionAuthority: 'NONE' as const };
+}
+
 function sanitizeShadowGroup(value: unknown) {
   const group = record(value);
   const name = safeTextOrNull(group?.name, 120);
@@ -682,6 +730,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const factory = sanitizeFactoryRuntimeSummary(payload?.factory);
   const runtimeLiveness = sanitizeRuntimeLiveness(state?.runtimeLiveness);
   const activity = sanitizeActivity(payload?.activity);
+  const autoBacktest = sanitizeAutoBacktest(payload?.autoBacktest);
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
   const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
@@ -689,7 +738,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !activity || !records || !liquidityIndependence) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !activity || !autoBacktest || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -725,6 +774,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
     dataFactory: { temporalCryptoFutures },
     factory,
     activity,
+    autoBacktest,
     paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
     profitability: { proven: profitability.proven, status: profitabilityStatus, note: profitabilityNote },
