@@ -12,6 +12,59 @@ const artifactDir = path.resolve(process.env.PRODUCTION_LIVE_CREDENTIAL_REUSE_AR
 const providers = ['toss', 'kiwoom', 'upbit', 'bitget'] as const;
 type Provider = typeof providers[number];
 
+function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const token = accessTokenFromUnknown(item, depth + 1);
+      if (token) return token;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.access_token === 'string' && record.access_token.length > 20) return record.access_token;
+  for (const child of Object.values(record)) {
+    const token = accessTokenFromUnknown(child, depth + 1);
+    if (token) return token;
+  }
+  return null;
+}
+
+async function productionAccessToken(page: Page) {
+  const state = await page.context().storageState();
+  const origin = new URL(baseUrl).origin;
+  const originState = state.origins.find((entry) => entry.origin === origin);
+  for (const entry of originState?.localStorage ?? []) {
+    try {
+      const token = accessTokenFromUnknown(JSON.parse(entry.value));
+      if (token) return token;
+    } catch {
+      // Ignore unrelated localStorage values.
+    }
+  }
+  throw new Error('PRODUCTION_CREDENTIAL_REUSE_ACCESS_TOKEN_MISSING');
+}
+
+function assertReuseBody(body: Record<string, unknown> | null) {
+  expect(body).not.toBeNull();
+  assertNoSensitiveKeys(body);
+  expect(body?.ok).toBe(true);
+  expect(body?.accountMode).toBe('live');
+  expect(body?.configured).toBe(true);
+  expect(body?.verified).toBe(true);
+  expect(body?.reusedReadonlyCredential).toBe(true);
+  expect(body?.credentialsReturned).toBe(false);
+  expect(body?.liveExecutionActivated).toBe(false);
+  expect(body?.automaticLiveExecutionActivated).toBe(false);
+  expect(body?.orderRequests).toBe(0);
+  expect(body?.cancelRequests).toBe(0);
+  expect(body?.amendRequests).toBe(0);
+  expect(body?.transferRequests).toBe(0);
+  expect(body?.withdrawalRequests).toBe(0);
+  expect(body?.realOrderSubmitted).toBe(false);
+}
+
 function assertNoSensitiveKeys(value: unknown, trail: string[] = []) {
   if (Array.isArray(value)) {
     value.forEach((item, index) => assertNoSensitiveKeys(item, [...trail, String(index)]));
@@ -101,23 +154,7 @@ test('saved read-only credentials connect and verify all providers with zero fin
       const response = await responsePromise;
       const body = await response.json().catch(() => null) as Record<string, unknown> | null;
       expect(response.status(), JSON.stringify(body)).toBe(200);
-      expect(body).not.toBeNull();
-      assertNoSensitiveKeys(body);
-
-      expect(body?.ok).toBe(true);
-      expect(body?.accountMode).toBe('live');
-      expect(body?.configured).toBe(true);
-      expect(body?.verified).toBe(true);
-      expect(body?.reusedReadonlyCredential).toBe(true);
-      expect(body?.credentialsReturned).toBe(false);
-      expect(body?.liveExecutionActivated).toBe(false);
-      expect(body?.automaticLiveExecutionActivated).toBe(false);
-      expect(body?.orderRequests).toBe(0);
-      expect(body?.cancelRequests).toBe(0);
-      expect(body?.amendRequests).toBe(0);
-      expect(body?.transferRequests).toBe(0);
-      expect(body?.withdrawalRequests).toBe(0);
-      expect(body?.realOrderSubmitted).toBe(false);
+      assertReuseBody(body);
 
       await expect(card).toContainText(/거래키\s*저장됨/, { timeout: 15000 });
       await expect(card).toContainText(/검증됨/, { timeout: 15000 });
@@ -139,14 +176,33 @@ test('saved read-only credentials connect and verify all providers with zero fin
         realOrderSubmitted: false,
       });
     } else {
-      await expect(card).toContainText(/거래키\s*저장됨/);
-      await expect(card).toContainText(/검증됨/);
+      const endpoint = '/api/trade-automation/connections/' + provider + '/reuse-readonly';
+      const token = await productionAccessToken(page);
+      const response = await page.request.post(new URL(endpoint, baseUrl).toString(), {
+        headers: {
+          Accept: 'application/json',
+          Authorization: 'Bearer ' + token,
+          'Content-Type': 'application/json',
+        },
+        data: { confirmed: true },
+        timeout: 30000,
+        failOnStatusCode: false,
+      });
+      const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+      expect(response.status(), JSON.stringify(body)).toBe(200);
+      assertReuseBody(body);
+      observedMutations.push({ method: 'POST', path: endpoint });
+
+      await page.reload({ waitUntil: 'commit' });
+      const refreshedCard = page.getByTestId('live-connection-' + provider);
+      await expect(refreshedCard).toContainText(/거래키\s*저장됨/, { timeout: 15000 });
+      await expect(refreshedCard).toContainText(/검증됨/, { timeout: 15000 });
       evidence.push({
         provider,
         uiAction: 'already-verified',
         configured: true,
         verified: true,
-        reusedReadonlyCredential: null,
+        reusedReadonlyCredential: true,
         credentialsReturned: false,
         liveExecutionActivated: false,
         automaticLiveExecutionActivated: false,
