@@ -52,7 +52,19 @@ test('automatic trading settings surface six Paper-only rule packs without live 
 
   expect(settings).toContain('data-testid="strategy-rule-pack-cards"');
   expect(settings).toContain('수식·파동·보조지표·AI 룰팩');
-  expect(settings).toContain('Paper 연구 가능 · 실자동 승격 차단');
+  expect(settings).toContain('Paper 자동 · 실전 테스트예산');
   expect(settings).toContain("data-testid={'strategy-rule-pack-' + strategy.strategyId}");
-  expect(settings).toContain('이 6개 전략은 이 단계에서 실자동매매로 승격되지 않습니다.');
+  expect(settings).toContain('50만원 소액 실전 검증 프로필입니다.');
+});
+
+
+test('rule-pack pilot profile is visible and keeps live order confirmation explicit', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+  expect(settings).toContain('data-testid="strategy-pilot-risk-summary"');
+  expect(settings).toContain('1회 5만원 · 동시 2개 · 하루 신규 4회');
+  expect(settings).toContain('일손실 1만원 중지');
+  expect(settings).toContain('연속 2회 손실 중지');
+  expect(settings).toContain('선물 2배');
+  expect(settings).toContain('Paper 동시 기록');
+  expect(settings).toContain('실계좌 주문은 최종 확인 필요');
 });
