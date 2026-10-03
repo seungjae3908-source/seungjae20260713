@@ -4887,7 +4887,7 @@ function gradeCandidate(card, backtest) {
   const risk = card.riskScore ?? 101;
   const trusted = card.dataQuality?.state === "TRUSTED" && card.dataQuality.strongSignalAllowed;
   const actionable = card.direction !== "NEUTRAL" && card.pricePlan.riskReward != null && card.pricePlan.riskReward >= 1.5;
-  if (card.strongSignalEligible && trusted && actionable && card.score >= 88 && risk <= 35) return "S";
+  if (card.strongSignalEligible && trusted && actionable && card.score >= 88 && risk <= 35 && card.aiValidation?.status === "PASS") return "S";
   if (trusted && actionable && card.score >= 72 && risk <= 50) return "A";
   return "B";
 }
