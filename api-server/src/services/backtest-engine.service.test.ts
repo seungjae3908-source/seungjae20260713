@@ -154,6 +154,31 @@ test('request validation accepts the three implemented strategies', () => {
   for (const strategy of ['trend_pullback', 'breakout', 'vwap_reclaim'] as const) assert.doesNotThrow(() => validateBacktestRequest(request({ strategy })));
 });
 
+test('four-market direction and leverage policy keeps cash markets long-only at 1x', () => {
+  for (const [market, symbol] of [
+    ['kr-stock', '005930'],
+    ['us-stock', 'AAPL'],
+    ['crypto-spot', 'BTC'],
+  ] as const) {
+    assert.doesNotThrow(() => validateBacktestRequest(request({ market, symbol, side: 'long', leverage: 1 })));
+    assert.throws(
+      () => validateBacktestRequest(request({ market, symbol, side: 'short', leverage: 1 })),
+      (error: unknown) => error instanceof BacktestValidationError && error.code === 'LONG_ONLY_MARKET',
+    );
+    assert.throws(
+      () => validateBacktestRequest(request({ market, symbol, side: 'both', leverage: 1 })),
+      (error: unknown) => error instanceof BacktestValidationError && error.code === 'LONG_ONLY_MARKET',
+    );
+    assert.throws(
+      () => validateBacktestRequest(request({ market, symbol, side: 'long', leverage: 2 })),
+      (error: unknown) => error instanceof BacktestValidationError && error.code === 'INVALID_LEVERAGE',
+    );
+  }
+  assert.doesNotThrow(() => validateBacktestRequest(request({
+    market: 'crypto-futures', symbol: 'BTCUSDT', side: 'both', leverage: 3,
+  })));
+});
+
 test('breakout long signal uses prior completed highs', () => {
   const signals = calculateStrategySignals(request({ side: 'long' }), breakoutFixture('long'));
   assert.ok(signals.some((signal) => signal.side === 'long' && signal.index === 60));
