@@ -62,7 +62,7 @@ test('rule-pack pilot profile is visible and keeps live order confirmation expli
   const settings = source('src/components/trade-automation-settings.tsx');
   expect(settings).toContain('data-testid="strategy-pilot-risk-summary"');
   expect(settings).toContain('최대 진입은 현재 운용금과 함께 증가');
-  expect(settings).toContain('손절거리 Risk Size가 더 작으면 자동 축소');
+  expect(settings).toContain('손절거리 Risk Size가 더 작으면 그 이하만 허용');
   expect(settings).toContain('거래당 위험은 운용금의 최대 0.5%');
   expect(settings).toContain('조건이 좋으면 하루 진입 횟수 제한 없음');
   expect(settings).toContain('하루 손실거래 5회 중지');
