@@ -102,7 +102,7 @@ test.describe('Production Research Center read-only QA', () => {
     await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('research-center-page')).toBeVisible();
     await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-    await expect(page.getByText('READ ONLY', { exact: true })).toBeVisible();
+    await expect(page.getByText('조회 전용', { exact: true })).toBeVisible();
     await expect(page.getByRole('tab')).toHaveCount(4);
     await expect(page.getByRole('tab').allTextContents()).resolves.toEqual(['연구 현황', 'AI 분석실', '검증 리포트', '모의매매']);
 
