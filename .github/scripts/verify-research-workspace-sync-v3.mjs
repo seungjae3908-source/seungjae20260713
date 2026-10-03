@@ -193,6 +193,7 @@ const researchBacktestPaperReviewed=[
  'packages/strategy-hypothesis/src/backtest-paper-handoff.js',
  'packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts',
  'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/src/pages/phase5-backtest-e2e.tsx',
 ];
 const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed,...researchBacktestPaperReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
