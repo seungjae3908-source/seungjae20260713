@@ -1,4 +1,3 @@
-import { authorizedFetch } from '@/lib/auth-fetch';
 import {
   useEffect,
   useMemo,
@@ -23,10 +22,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { BottomNav } from "@/components/bottom-nav";
-import {
-  ChartBroadcastPanel,
-  type ChartBroadcastSignal,
-} from "@/components/chart-broadcast";
+import { ChartBroadcastPanel } from "@/components/chart-broadcast";
 import { CryptoTradingWorkspace } from "@/components/crypto-trading-workspace";
 import { useAssetMode } from "@/lib/asset-mode";
 import {
@@ -47,22 +43,10 @@ import {
   useAnalysisSelection,
   type AnalysisSelection,
 } from "@/lib/analysis-selection";
-import {
-	assessAutoTradeCandidate,
-  closeAutoTradePosition,
-  executeAutoTradeCandidates,
-  loadAutoTradeSettings,
-  monitorAutoTradePositions,
-  saveAutoTradeCandidates,
-  saveAutoTradeSettings,
-  type AutoTradeCandidate,
-  type AutoTradeExitSignal,
-  type AutoTradeSettings,
-} from "@/lib/auto-trading";
 
 type AnyObj = Record<string, unknown>;
 type MarketFilter = "KR" | "US";
-type ScannerViewMode = "condition" | "chart" | "auto";
+type ScannerViewMode = "condition" | "chart";
 type ThresholdOption = number;
 type ScannerTimeframe = "5m" | "15m" | "1H" | "4H" | "1D";
 type SavedSearch = {
@@ -82,28 +66,6 @@ type SavedSearch = {
   maximumRiskScore: number;
   createdAt: string;
   updatedAt: string;
-};
-type AutoTradeJournalEntry = {
-  id: string;
-  ticker: string;
-  name: string;
-  market: "KR" | "US";
-  currency: "KRW" | "USD";
-  exchange: "NASDAQ" | "NYSE" | "AMEX" | null;
-  status: "OPEN" | "TAKE_PROFIT" | "STOP_LOSS" | "MANUAL_CLOSE";
-  quantity: number;
-  entryPrice: number;
-  exitPrice: number | null;
-  stopPrice: number;
-  targetPrice: number;
-  probability: number;
-  entryReasons: string[];
-  entryAnalysis: string;
-  exitReason: string | null;
-  exitAnalysis: string | null;
-  profitPercent: number | null;
-  openedAt: string;
-  closedAt: string | null;
 };
 
 // 지표 찾기 모달에서 제시하는 기본 지표 목록.
@@ -559,16 +521,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
   const [maximumRiskScore, setMaximumRiskScore] = useState(100);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [thresholdOpen, setThresholdOpen] = useState<string | null>(null);
-  const [autoSettings, setAutoSettings] = useState<AutoTradeSettings>(() =>
-    loadAutoTradeSettings(),
-  );
-  const [autoRunning, setAutoRunning] = useState(false);
-  const [autoMessage, setAutoMessage] = useState("");
-  const [exitSignals, setExitSignals] = useState<AutoTradeExitSignal[]>([]);
-  const [closingTicker, setClosingTicker] = useState<string | null>(null);
-  const [candidateListOpen, setCandidateListOpen] = useState(false);
   const [conditionResultsOpen, setConditionResultsOpen] = useState(false);
-  const [chartTradeSignal, setChartTradeSignal] = useState<ChartBroadcastSignal | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>(loadSavedSearches);
   const [savedSearchMessage, setSavedSearchMessage] = useState("");
 
@@ -576,37 +529,10 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
     if (market === "US" && timeframe === "4H") setTimeframe("1H");
   }, [market, timeframe]);
 
-  const autoTradeStatus = useQuery({
-    queryKey: ["auto-trade-status-retired"],
-    queryFn: async (): Promise<{
-      mode: "real" | "mock";
-      enabled: boolean;
-      domesticSupported: boolean;
-      usSupported: boolean;
-      realKeyConfigured: boolean;
-      executionKeyConfigured: boolean;
-    }> => ({
-      mode: "mock",
-      enabled: false,
-      domesticSupported: false,
-      usSupported: false,
-      realKeyConfigured: false,
-      executionKeyConfigured: false,
-    }),
-    enabled: false,
-    staleTime: Infinity,
-  });
-
   // 라우트가 바뀌어 새로 진입하면 다시 왼쪽 탭(조건검색)부터 시작한다.
   useEffect(() => {
     setViewMode("condition");
   }, [location]);
-
-  useEffect(() => {
-    if (viewMode === "auto") {
-      navigate(`/auto-trading?market=${market === "US" ? "us_stock" : "domestic_stock"}`);
-    }
-  }, [market, navigate, viewMode]);
 
   // localStorage에서 저장된 임계값 복원. (시장 선택은 새 진입 시 항상 국내부터)
   useEffect(() => {
@@ -727,249 +653,6 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
     marketCapThreshold,
     timeframe,
   ]);
-
-  const autoCandidates = useMemo<AutoTradeCandidate[]>(() => {
-    const generatedAt = new Date().toISOString();
-    const response = scan.data as
-      | { cards?: AnyObj[]; results?: AnyObj[] }
-      | undefined;
-    const source = response?.cards ?? response?.results ?? [];
-
-    return source.map((card) => {
-      const matched = matchedLabels(card).filter((label) =>
-        selected.includes(label),
-      );
-      const score = scoreOf(card);
-      const changePercent =
-        toNumber(card.changePercent) ?? toNumber(card.changeRate);
-      const price =
-        toNumber(card.price) ??
-        toNumber(card.currentPrice) ??
-        toNumber(card.close);
-      const assessment = assessAutoTradeCandidate({
-        score,
-        matchedCount: matched.length,
-        selectedCount: selected.length,
-        changePercent,
-        breakoutProbability:
-          toNumber(card.breakoutProbability) ??
-          toNumber(card.probability) ??
-          toNumber(card.winProbability),
-		price,
-		volume: toNumber(card.volume),
-		tradingValue: toNumber(card.tradingValue),
-		marketCap: marketCapOf(card),
-		confidence: toNumber(card.confidence),
-		newsScore: toNumber(card.newsScore ?? card.newsSentiment),
-		disclosureScore: toNumber(card.disclosureScore ?? card.filingScore),
-		financialScore: toNumber(card.financialScore ?? card.fundamentalScore),
-		riskLevel: String(card.riskLevel ?? ""),
-		isLeveraged: Boolean(card.isLeveraged),
-		isInverse: Boolean(card.isInverse),
-		isDerivative: Boolean(card.isDerivative),
-      });
-      const ticker = String(card.ticker ?? "").trim().toUpperCase();
-      const name = displayStockName(
-        ticker,
-        String(card.name ?? ticker),
-        cardMarket(card),
-      );
-
-      const chartSignalMatches = chartTradeSignal?.ticker === ticker && chartTradeSignal.market === cardMarket(card);
-      const chartBullish = chartSignalMatches && (chartTradeSignal.signal === "ENTER" || chartTradeSignal.signal === "HOLD");
-      const chartBearish = chartSignalMatches && (chartTradeSignal.signal === "STOP" || chartTradeSignal.signal === "EXIT" || chartTradeSignal.signal === "TAKE_PROFIT");
-      const chartAdjustment = chartBullish
-        ? Math.min(8, Math.round(chartTradeSignal.confidence / 12))
-        : chartBearish
-          ? -Math.min(18, Math.round(chartTradeSignal.confidence / 5))
-          : 0;
-
-      return {
-        ticker,
-        name,
-        market: cardMarket(card),
-        currency: cardCurrency(card),
-		exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
-        rank: 0,
-        score,
-		probability: Math.max(0, Math.min(100, assessment.probability + chartAdjustment)),
-		riskScore: assessment.riskScore,
-		dataCompleteness: assessment.dataCompleteness,
-		price,
-        changePercent,
-        reasons: (
-          matched.length
-            ? matched
-            : [
-                String(card.reason ?? "실시간 시세·AI 점수"),
-                changePercent != null && changePercent > 0
-                  ? "상승 모멘텀"
-                  : "변동성 확인",
-              ]
-        ).concat(
-          chartSignalMatches
-            ? [`차트생중계 ${chartTradeSignal.title}`, ...chartTradeSignal.patterns]
-            : [],
-        ).filter(Boolean).slice(0, 6),
-		factors: assessment.factors,
-        generatedAt,
-      };
-    })
-      .filter((candidate) => candidate.ticker)
-      .sort(
-        (a, b) =>
-          b.probability - a.probability ||
-          b.score - a.score ||
-          a.ticker.localeCompare(b.ticker),
-      )
-      .slice(0, 100)
-      .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
-  }, [chartTradeSignal, scan.data, selectedKey]);
-
-  const autoCandidatesKey = autoCandidates
-    .map((candidate) => `${candidate.ticker}:${candidate.probability}`)
-    .join("|");
-
-  const tradeJournal = useQuery({
-    queryKey: ["auto-trade-journal-retired"],
-    queryFn: async () => [] as AutoTradeJournalEntry[],
-    enabled: false,
-    staleTime: Infinity,
-  });
-
-  const journalAnalysis = useMemo(() => {
-    const entries = tradeJournal.data ?? [];
-    const closed = entries.filter((entry) => entry.status !== "OPEN");
-    const wins = closed.filter((entry) => entry.status === "TAKE_PROFIT");
-    const averageProfit = closed.length
-      ? closed.reduce((sum, entry) => sum + Number(entry.profitPercent ?? 0), 0) /
-        closed.length
-      : 0;
-    const reasonCounts = new Map<string, number>();
-    for (const entry of entries) {
-      for (const reason of entry.entryReasons) {
-        reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
-      }
-    }
-    const topReason = [...reasonCounts.entries()].sort((a, b) => b[1] - a[1])[0];
-
-    return {
-      total: entries.length,
-      open: entries.filter((entry) => entry.status === "OPEN").length,
-      closed: closed.length,
-      winRate: closed.length ? Math.round((wins.length / closed.length) * 100) : 0,
-      averageProfit: Math.round(averageProfit * 100) / 100,
-      topReason: topReason ? `${topReason[0]} (${topReason[1]}회)` : "기록 없음",
-    };
-  }, [tradeJournal.data]);
-
-  useEffect(() => {
-    saveAutoTradeCandidates(autoCandidates);
-  }, [autoCandidatesKey]);
-
-  const updateAutoSettings = (patch: Partial<AutoTradeSettings>) => {
-    setAutoSettings((current) =>
-      saveAutoTradeSettings({
-        ...current,
-        ...patch,
-      }),
-    );
-  };
-
-  const runAutoTrading = async () => {
-    if (autoRunning) return;
-
-    setAutoRunning(true);
-    setAutoMessage("주문계획과 최신 시세를 확인하는 중...");
-
-    try {
-      const result = await executeAutoTradeCandidates(
-        autoCandidates,
-        autoSettings,
-      );
-      const successCount = (result.results ?? []).filter(
-        (item) => item.ok && !item.skipped,
-      ).length;
-      const resultDetails = (result.results ?? [])
-        .filter((item) => item.message)
-        .slice(0, 3)
-        .map((item) => `${item.ticker}: ${item.message}`)
-        .join(" / ");
-      setAutoMessage(
-        successCount > 0
-          ? `${successCount}개 종목 주문을 전송했습니다.${resultDetails ? ` ${resultDetails}` : ""}`
-          : resultDetails || result.message || "신규 주문 대상이 없습니다.",
-      );
-      void tradeJournal.refetch();
-    } catch (error) {
-      setAutoMessage(
-        error instanceof Error ? error.message : "자동매매 주문에 실패했습니다.",
-      );
-    } finally {
-      setAutoRunning(false);
-    }
-  };
-
-  useEffect(() => {
-    if (
-      !autoSettings.enabled ||
-      !autoSettings.liveTrading ||
-      !autoSettings.executionKey.trim()
-    ) {
-      return;
-    }
-
-    const monitor = async () => {
-      try {
-        const result = await monitorAutoTradePositions(autoSettings);
-        const approvalSignals = (result.results ?? [])
-          .filter((item) => Boolean(item.approvalRequired && item.market))
-          .map((item) => ({
-            ticker: item.ticker,
-            market: item.market as "KR" | "US",
-            currentPrice: item.currentPrice,
-            stopPrice: item.stopPrice,
-            targetPrice: item.targetPrice,
-            message: item.message,
-          }));
-        setExitSignals(approvalSignals);
-        if (approvalSignals.length) {
-          const summary = approvalSignals
-            .slice(0, 3)
-            .map((item) => `${item.ticker}: ${item.message ?? "청산 승인 필요"}`)
-            .join(" / ");
-          setAutoMessage(`청산 조건이 감지됐습니다. 아래 매도계획 확인 버튼을 눌러야 주문이 전송됩니다. ${summary}`);
-        }
-      } catch (error) {
-        console.error("auto trade monitor error:", error);
-      }
-    };
-
-    void monitor();
-    const id = window.setInterval(() => void monitor(), 30_000);
-    return () => window.clearInterval(id);
-  }, [
-    autoSettings.enabled,
-    autoSettings.liveTrading,
-    autoSettings.executionKey,
-  ]);
-
-  const approvePositionClose = async (signal: AutoTradeExitSignal) => {
-    if (closingTicker) return;
-    setClosingTicker(signal.ticker);
-    try {
-      const result = await closeAutoTradePosition(autoSettings, signal);
-      setAutoMessage(result.message || (result.ok ? `${signal.ticker} 매도 주문을 전송했습니다.` : "매도 승인을 취소했습니다."));
-      if (result.ok) {
-        setExitSignals((current) => current.filter((item) => !(item.ticker === signal.ticker && item.market === signal.market)));
-        await tradeJournal.refetch();
-      }
-    } catch (error) {
-      setAutoMessage(error instanceof Error ? error.message : "매도 주문 처리에 실패했습니다.");
-    } finally {
-      setClosingTicker(null);
-    }
-  };
 
   const toggleIndicator = (label: string) => {
     setSelected((current) =>
@@ -1096,7 +779,13 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
     return (
       <CryptoTradingWorkspace
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={(nextMode) => {
+          if (nextMode === "auto") {
+            navigate("/auto-trading?market=crypto_futures&section=dashboard");
+            return;
+          }
+          setViewMode(nextMode);
+        }}
         onBackToStock={() => assetMode.setAsset("stock")}
       />
     );
@@ -1208,7 +897,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
       </header>
 
       <main className="space-y-4 p-4 pb-24">
-        {viewMode === "chart" && <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />}
+        {viewMode === "chart" && <ChartBroadcastPanel market={market} />}
 
         {viewMode === "condition" && (
           <>
@@ -1414,427 +1103,6 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
         </section>
 
           </>
-        )}
-
-        {viewMode === "auto" && (
-        <>
-        <ChartBroadcastPanel market={market} onSignalChange={setChartTradeSignal} />
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="text-sm font-extrabold">자동매매 후보 종목</h2>
-              <p className="mt-1 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
-                최대 100개 후보를 모델점수순으로 비교하며, 주문 버튼을 누른 뒤 주문 내용을 한 번 더 승인한 1개 종목만 전송합니다.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                updateAutoSettings({ enabled: !autoSettings.enabled })
-              }
-              className={cn(
-                "shrink-0 rounded-full border px-3 py-1.5 text-xs font-extrabold",
-                autoSettings.enabled
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-card-border bg-background text-muted-foreground",
-              )}
-            >
-              {autoSettings.enabled ? "신호 켜짐" : "신호 꺼짐"}
-            </button>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <label className="rounded-2xl border border-card-border bg-background p-3">
-              <span className="block text-[10px] font-extrabold text-muted-foreground">
-                주문금액 ({market === "US" ? "USD" : "원"})
-              </span>
-              <input
-                type="number"
-                min={0}
-                step={market === "US" ? 10 : 10000}
-                inputMode="numeric"
-                value={autoSettings.investmentPerTrade || ""}
-                onChange={(event) =>
-                  updateAutoSettings({
-                    investmentPerTrade:
-                      event.target.value === ""
-                        ? 0
-                        : Math.max(0, Number(event.target.value)),
-                  })
-                }
-                className="mt-1 w-full bg-transparent text-sm font-extrabold outline-none"
-              />
-            </label>
-            <label className="rounded-2xl border border-card-border bg-background p-3">
-              <span className="block text-[10px] font-extrabold text-muted-foreground">
-                최소 모델점수
-              </span>
-              <div className="mt-1 flex items-center gap-1">
-                <input
-                  type="number"
-                  min={1}
-                  max={99}
-                  value={autoSettings.minProbability || ""}
-                  onChange={(event) =>
-                    updateAutoSettings({
-                      minProbability:
-                        event.target.value === ""
-                          ? 0
-                          : Number(event.target.value),
-                    })
-                  }
-                  className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
-                />
-                <span className="text-xs font-extrabold">점</span>
-              </div>
-            </label>
-            <label className="rounded-2xl border border-card-border bg-background p-3">
-              <span className="block text-[10px] font-extrabold text-muted-foreground">
-                손절 기준
-              </span>
-              <div className="mt-1 flex items-center gap-1">
-                <input
-                  type="number"
-                  min={0.1}
-                  step={0.1}
-                  value={autoSettings.stopLossPercent || ""}
-                  onChange={(event) =>
-                    updateAutoSettings({
-                      stopLossPercent:
-                        event.target.value === ""
-                          ? 0
-                          : Number(event.target.value),
-                    })
-                  }
-                  className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
-                />
-                <span className="text-xs font-extrabold">%</span>
-              </div>
-            </label>
-            <label className="rounded-2xl border border-card-border bg-background p-3">
-              <span className="block text-[10px] font-extrabold text-muted-foreground">
-                목표 수익
-              </span>
-              <div className="mt-1 flex items-center gap-1">
-                <input
-                  type="number"
-                  min={0.1}
-                  step={0.1}
-                  value={autoSettings.takeProfitPercent || ""}
-                  onChange={(event) =>
-                    updateAutoSettings({
-                      takeProfitPercent:
-                        event.target.value === ""
-                          ? 0
-                          : Number(event.target.value),
-                    })
-                  }
-                  className="min-w-0 flex-1 bg-transparent text-sm font-extrabold outline-none"
-                />
-                <span className="text-xs font-extrabold">%</span>
-              </div>
-            </label>
-          </div>
-
-          <label className="mt-2 block rounded-2xl border border-card-border bg-background p-3">
-            <span className="block text-[10px] font-extrabold text-muted-foreground">
-              자동매매 실행키
-            </span>
-            <input
-              type="password"
-              value={autoSettings.executionKey}
-              onChange={(event) =>
-                updateAutoSettings({ executionKey: event.target.value })
-              }
-              placeholder="설정한 실행키 입력"
-              autoComplete="off"
-              className="mt-1 w-full bg-transparent text-sm font-bold outline-none"
-            />
-          </label>
-          <p className="mt-2 break-keep text-[10px] font-semibold leading-4 text-muted-foreground">
-			실행키는 키움 비밀번호가 아닌 주문 보호키이며 이 브라우저 탭이 닫히면 폐기됩니다. 모델점수는 후보 비교용이지 수익확률이 아닙니다. 모든 매수·매도 주문은 주문별 확인 전까지 전송되지 않습니다.
-          </p>
-
-		  <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[10px] font-extrabold">
-			<div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.mode === "real" ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600") }>
-			  서버 · {autoTradeStatus.data?.mode === "real" ? "실전" : "모의/미설정"}
-			</div>
-			<div className={cn("rounded-xl px-2 py-2", autoTradeStatus.data?.enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-secondary text-muted-foreground") }>
-			  주문 서버 · {autoTradeStatus.data?.enabled ? "켜짐" : "꺼짐"}
-			</div>
-		  </div>
-
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-			  onClick={() => {
-				if (autoSettings.liveTrading) {
-				  updateAutoSettings({ liveTrading: false });
-				  return;
-				}
-				const confirmed = window.confirm(
-				  "실제 주문 기능을 켭니다. 켠 뒤에도 각 주문은 종목·수량·금액·손절가·목표가를 확인하고 승인해야 전송됩니다. 계속하시겠습니까?",
-				);
-				if (confirmed) updateAutoSettings({ liveTrading: true });
-			  }}
-              className={cn(
-                "rounded-2xl border px-3 py-3 text-xs font-extrabold",
-                autoSettings.liveTrading
-                  ? "border-destructive bg-destructive/10 text-destructive"
-                  : "border-card-border bg-background text-muted-foreground",
-              )}
-            >
-              {autoSettings.liveTrading ? "주문 승인모드 켜짐" : "실제 주문 꺼짐"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void runAutoTrading()}
-              disabled={autoRunning || autoCandidates.length === 0}
-              className="rounded-2xl bg-primary px-3 py-3 text-xs font-extrabold text-primary-foreground disabled:opacity-50"
-            >
-              {autoRunning ? "확인 중..." : "조건 주문 실행"}
-            </button>
-          </div>
-
-          {autoMessage && (
-            <p className="mt-2 break-keep rounded-2xl bg-secondary/70 px-3 py-2 text-[11px] font-bold leading-5 text-muted-foreground">
-              {autoMessage}
-            </p>
-          )}
-
-          {exitSignals.length > 0 && (
-            <div className="mt-2 space-y-2 rounded-2xl border border-destructive/30 bg-destructive/5 p-3">
-              <p className="text-xs font-extrabold text-destructive">청산 승인 필요</p>
-              {exitSignals.map((signal) => (
-                <div key={`${signal.market}:${signal.ticker}`} className="flex items-center justify-between gap-3 rounded-xl bg-background p-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-extrabold">{signal.ticker} · {signal.market}</p>
-                    <p className="mt-1 break-keep text-[10px] font-bold text-muted-foreground">{signal.message ?? "손절 또는 목표가 조건이 감지됐습니다."}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void approvePositionClose(signal)}
-                    disabled={closingTicker === signal.ticker}
-                    className="shrink-0 rounded-xl bg-destructive px-3 py-2 text-[10px] font-extrabold text-destructive-foreground disabled:opacity-50"
-                  >
-                    {closingTicker === signal.ticker ? "확인 중" : "매도계획 확인"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-3 space-y-2">
-            {autoCandidates.length === 0 ? (
-              <p className="rounded-2xl bg-secondary/70 px-3 py-4 text-center text-xs font-bold text-muted-foreground">
-                AI 검색 결과가 나오면 모델점수순 후보 목록을 표시합니다.
-              </p>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setCandidateListOpen(true)}
-                  className="w-full rounded-2xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm font-extrabold text-primary"
-                >
-                  종목보기 ({autoCandidates.length}개)
-                </button>
-                {autoCandidates.slice(0, 1).map((candidate) => (
-                <button
-                  key={`${candidate.ticker}:${candidate.rank}`}
-                  type="button"
-                  onClick={() =>
-                    navigate(
-                      `/stock/${candidate.ticker}?back=${encodeURIComponent("/scanner")}`,
-                    )
-                  }
-                  className="w-full rounded-2xl border border-card-border bg-background p-3 text-left"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-extrabold">
-                        {candidate.rank}위 · {candidate.name}
-                      </p>
-                      <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">
-                        {candidate.reasons.join(" · ") || "AI 점수 기준"}
-                      </p>
-					  <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						위험 {candidate.riskScore}점 · 데이터 {candidate.dataCompleteness}%
-					  </p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className="text-sm font-black text-primary">
-                        {candidate.probability}점
-                      </p>
-                      <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-						모델점수
-                      </p>
-                    </div>
-                  </div>
-                </button>
-                ))}
-              </>
-            )}
-          </div>
-
-          <div className="mt-5 border-t border-card-border pt-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-extrabold">자동매매 매매일지</h3>
-                <p className="mt-1 text-[10px] font-semibold text-muted-foreground">
-                  진입 근거와 익절·손절 판단을 거래별로 기록합니다.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void tradeJournal.refetch()}
-                disabled={tradeJournal.isFetching}
-                className="rounded-full border border-card-border bg-background px-3 py-1.5 text-[10px] font-extrabold disabled:opacity-50"
-              >
-                {tradeJournal.isFetching ? "갱신 중" : "새로고침"}
-              </button>
-            </div>
-
-            {tradeJournal.isError ? (
-              <p className="mt-3 rounded-2xl bg-destructive/10 px-3 py-4 text-center text-xs font-bold text-destructive">
-                매매일지를 불러오지 못했습니다. 로그인과 서버 연결을 확인하세요.
-              </p>
-            ) : !tradeJournal.data?.length ? (
-              <p className="mt-3 rounded-2xl bg-secondary/70 px-3 py-4 text-center text-xs font-bold text-muted-foreground">
-					아직 기록된 실제 거래가 없습니다.
-              </p>
-            ) : (
-              <div className="mt-3">
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-xl bg-secondary/70 p-2">
-                    <p className="text-[9px] font-bold text-muted-foreground">전체/보유</p>
-                    <p className="mt-1 text-xs font-extrabold">{journalAnalysis.total}건 / {journalAnalysis.open}건</p>
-                  </div>
-                  <div className="rounded-xl bg-secondary/70 p-2">
-                    <p className="text-[9px] font-bold text-muted-foreground">청산 승률</p>
-                    <p className="mt-1 text-xs font-extrabold">{journalAnalysis.closed ? `${journalAnalysis.winRate}%` : "-"}</p>
-                  </div>
-                  <div className="rounded-xl bg-secondary/70 p-2">
-                    <p className="text-[9px] font-bold text-muted-foreground">평균 수익률</p>
-                    <p className={cn("mt-1 text-xs font-extrabold", journalAnalysis.averageProfit > 0 ? "text-emerald-500" : journalAnalysis.averageProfit < 0 ? "text-destructive" : "")}>
-                      {journalAnalysis.closed ? `${journalAnalysis.averageProfit > 0 ? "+" : ""}${journalAnalysis.averageProfit}%` : "-"}
-                    </p>
-                  </div>
-                </div>
-                <p className="mt-2 rounded-xl bg-primary/5 px-3 py-2 text-[10px] font-bold text-muted-foreground">
-                  가장 많이 사용된 진입 근거 · {journalAnalysis.topReason}
-                </p>
-                <div className="mt-2 space-y-2">
-                {tradeJournal.data.map((entry) => {
-                  const positive = entry.status === "TAKE_PROFIT";
-                  const stopped = entry.status === "STOP_LOSS";
-                  return (
-                    <details key={entry.id} className="rounded-2xl border border-card-border bg-background p-3">
-                      <summary className="cursor-pointer list-none">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-extrabold">{entry.name} · {entry.ticker}</p>
-                            <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-							  {entry.market === "US" ? `미국/${entry.exchange ?? "거래소 확인"}` : "국내"} · {new Date(entry.openedAt).toLocaleString("ko-KR")} · {entry.quantity}주
-                            </p>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <p className={cn("text-xs font-black", positive ? "text-emerald-500" : stopped ? "text-destructive" : "text-primary") }>
-                              {positive ? "익절" : stopped ? "손절" : "보유 중"}
-                            </p>
-                            {entry.profitPercent != null && (
-                              <p className="mt-1 text-[11px] font-extrabold">{entry.profitPercent > 0 ? "+" : ""}{entry.profitPercent}%</p>
-                            )}
-                          </div>
-                        </div>
-                      </summary>
-                      <div className="mt-3 space-y-3 border-t border-card-border pt-3 text-[11px] leading-5">
-                        <div>
-                          <p className="font-extrabold text-primary">왜 진입했나요?</p>
-                          <p className="mt-1 break-keep font-semibold text-muted-foreground">{entry.entryAnalysis}</p>
-                          <p className="mt-1 font-bold">근거: {entry.entryReasons.join(" · ") || "AI 조건"}</p>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 text-center">
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">진입가</p><p className="font-extrabold">{formatAppPrice(entry.entryPrice, entry.currency)}</p></div>
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">손절가</p><p className="font-extrabold">{formatAppPrice(entry.stopPrice, entry.currency)}</p></div>
-						  <div className="rounded-xl bg-secondary/70 p-2"><p className="text-[9px] text-muted-foreground">목표가</p><p className="font-extrabold">{formatAppPrice(entry.targetPrice, entry.currency)}</p></div>
-                        </div>
-                        {entry.exitAnalysis && (
-                          <div>
-                            <p className={cn("font-extrabold", positive ? "text-emerald-500" : "text-destructive")}>{positive ? "왜 익절했나요?" : "왜 손절했나요?"}</p>
-                            <p className="mt-1 break-keep font-semibold text-muted-foreground">{entry.exitAnalysis}</p>
-							<p className="mt-1 font-bold">청산가: {entry.exitPrice == null ? "-" : formatAppPrice(entry.exitPrice, entry.currency)} · {entry.exitReason}</p>
-                          </div>
-                        )}
-                      </div>
-                    </details>
-                  );
-                })}
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-        </>
-        )}
-
-        {candidateListOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-5"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="auto-candidate-title"
-            onMouseDown={(event) => {
-              if (event.currentTarget === event.target) setCandidateListOpen(false);
-            }}
-          >
-            <div className="flex max-h-[72vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
-              <div className="flex items-center justify-between border-b border-card-border px-4 py-3">
-                <div>
-                  <h2 id="auto-candidate-title" className="text-sm font-extrabold">
-                    자동매매 후보 {autoCandidates.length}개
-                  </h2>
-                  <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">
-                    모델점수가 높은 순서
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  aria-label="후보 종목 창 닫기"
-                  onClick={() => setCandidateListOpen(false)}
-                  className="rounded-full border border-card-border bg-background p-2"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="overflow-y-auto p-3">
-                <div className="space-y-2">
-                  {autoCandidates.map((candidate) => (
-                    <button
-                      key={`modal:${candidate.ticker}:${candidate.rank}`}
-                      type="button"
-                      onClick={() => {
-                        setCandidateListOpen(false);
-                        navigate(`/stock/${candidate.ticker}?back=${encodeURIComponent("/scanner")}`);
-                      }}
-                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-extrabold">
-                          {candidate.rank}위 · {candidate.name}
-                        </p>
-						<p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						  {candidate.ticker} · {candidate.market}{candidate.exchange ? `/${candidate.exchange}` : ""} · 위험 {candidate.riskScore}점
-						</p>
-                      </div>
-                      <p className="shrink-0 text-sm font-black text-primary">
-                        {candidate.probability}점
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
         )}
 
         {viewMode === "condition" && (
