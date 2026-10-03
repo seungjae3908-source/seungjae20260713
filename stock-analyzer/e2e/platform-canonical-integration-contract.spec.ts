@@ -11,6 +11,9 @@ const crypto = source('src/components/crypto-trading-workspace.tsx');
 const autoTrading = source('src/pages/auto-trading.tsx');
 const tradeAutomationRoute = source('../api-server/src/routes/trade-automation.ts');
 const routeIndex = source('../api-server/src/routes/index.ts');
+const backgroundWorker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
+const journalAdapter = source('../api-server/src/services/trade-automation-unified-journal-adapter.ts');
+const journalPanel = source('src/components/unified-trade-journal-panel.tsx');
 
 test('Scanner carries canonical signal identity into AI Chart and canonical trading workspace', () => {
   expect(scanner).toContain('signalId: String(card.signalId ?? "").trim() || undefined');
@@ -47,4 +50,23 @@ test('canonical integration remains fail-closed and does not add a second browse
   expect(routeIndex).toContain('PRIVATE_EXCHANGE_API_DISABLED');
   expect(autoTrading).toContain('실거래 권한');
   expect(autoTrading).toContain('서버 Gate 필요');
+});
+
+
+test('automatic execution events fan out to journal and Telegram outbox while preserving order authority isolation', () => {
+  expect(backgroundWorker).toContain('syncExecutionEvents?');
+  expect(backgroundWorker).toContain('TradeExecutionEventBridgeService');
+  expect(backgroundWorker).toContain('CanonicalPortfolioSyncSink');
+  expect(backgroundWorker).toContain('executionSyncFailures');
+  expect(backgroundWorker).toContain('Notification/journal fan-out must never change canonical order state');
+});
+
+test('unified journal exposes canonical signal plan order fill lineage', () => {
+  expect(journalAdapter).toContain('canonicalLineage');
+  expect(journalAdapter).toContain('signalIds: plan.signalId ? [plan.signalId] : []');
+  expect(journalAdapter).toContain('planIds: [plan.id]');
+  expect(journalAdapter).toContain('orderIds: [order.id]');
+  expect(journalAdapter).toContain('fillIds: fills.map');
+  expect(journalPanel).toContain('unified-journal-canonical-lineage');
+  expect(journalPanel).toContain('신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.');
 });
