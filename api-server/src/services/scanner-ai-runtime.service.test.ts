@@ -4,6 +4,7 @@ import type { ScannerSignalCard } from './scanner-signal.types';
 import {
   applyScannerAiValidation,
   createScannerAiTransport,
+  enforceScannerAiFinalPromotionPolicy,
   enrichTopScannerCandidatesWithAi,
   scannerAiRuntimeStatus,
 } from './scanner-ai-runtime.service';
@@ -166,4 +167,24 @@ test('scanner provider prompt stays below shared AI chat truncation limit even w
   assert.equal(result.status, 'PASS');
   assert.ok(promptText.length > 0 && promptText.length <= 1_900);
   assert.ok(promptText.includes('"signalId":"signal-long-prompt"'));
+});
+
+
+test('final S-grade output is downgraded unless the candidate has explicit AI PASS', () => {
+  const noAi = card('s-grade-no-ai', 95, 'S');
+  const limited = enforceScannerAiFinalPromotionPolicy([noAi]);
+  assert.equal(limited[0].signalGrade, 'A');
+  assert.ok(limited[0].warnings.some((value) => value.includes('S등급은 외부 AI 공개근거 검토 PASS')));
+
+  const passed = card('s-grade-pass', 95, 'S');
+  passed.aiValidation = {
+    status: 'PASS',
+    provider: 'test-ai',
+    counterEvidence: [],
+    missingData: [],
+    risks: [],
+    explanation: 'passed',
+  };
+  const retained = enforceScannerAiFinalPromotionPolicy([passed]);
+  assert.equal(retained[0].signalGrade, 'S');
 });
