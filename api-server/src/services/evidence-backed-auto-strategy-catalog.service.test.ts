@@ -239,6 +239,34 @@ test('cash rule packs reject SHORT while futures rule pack accepts LONG and SHOR
   }
 });
 
+test('multi-market trend rule pack still enforces BUY-only cash and LONG/SHORT-only futures', () => {
+  const common = {
+    trendRegimeReady: true,
+    pullbackReady: true,
+    reaccelerationReady: true,
+    volumeAccelerationReady: true,
+  };
+
+  for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT'] as const) {
+    const forbidden = baseInput('TREND_PULLBACK_REACCEL_V1', market, 'SHORT', common);
+    const gate = evaluateStrategyRulePackDeterministicGate(forbidden);
+    assert.equal(gate.readyForAiReview, false);
+    assert.ok(gate.blockers.includes('STRATEGY_RULE_PACK_DIRECTION_FORBIDDEN'));
+  }
+
+  const futuresBuy = baseInput('TREND_PULLBACK_REACCEL_V1', 'CRYPTO_FUTURES', 'BUY', common);
+  const futuresBuyGate = evaluateStrategyRulePackDeterministicGate(futuresBuy);
+  assert.equal(futuresBuyGate.readyForAiReview, false);
+  assert.ok(futuresBuyGate.blockers.includes('STRATEGY_RULE_PACK_DIRECTION_FORBIDDEN'));
+
+  for (const direction of ['LONG', 'SHORT'] as const) {
+    const futures = baseInput('TREND_PULLBACK_REACCEL_V1', 'CRYPTO_FUTURES', direction, common);
+    const gate = evaluateStrategyRulePackGate(reviewed(futures, 'PASS'));
+    assert.equal(gate.paperAllowed, true);
+    assert.equal(gate.liveAllowed, false);
+  }
+});
+
 test('unknown existing strategies retain pass-through behavior without AI dependency', () => {
   const result = evaluateStrategyRulePackGate({
     strategyId: 'trend-breakout-v1',
