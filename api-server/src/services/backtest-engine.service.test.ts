@@ -362,7 +362,7 @@ test('warnings document stop-first policy', () => {
 test('warnings document UTC VWAP session', () => {
   const rows = breakoutFixture('long');
   const result = runBacktest(request({ side: 'long', endTime: rows.at(-1)!.timestamp }), rows);
-  assert.ok(result.warnings.some((warning) => warning.includes('UTC 일 단위')));
+  assert.ok(result.warnings.some((warning) => warning.includes('협정세계시 기준 하루 단위')));
 });
 test('performance measurement returns finite duration and memory delta', () => {
   const rows = breakoutFixture('long');
