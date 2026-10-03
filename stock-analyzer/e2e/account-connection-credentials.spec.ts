@@ -351,7 +351,7 @@ test('live Upbit trading key is saved separately with read+orders only and does 
   await expect(panel).toBeVisible();
   await expect(page.getByTestId('live-connection-upbit')).toContainText(/거래키\s*미연결/);
 
-  await page.getByTestId('live-connection-upbit').getByRole('button', { name: '거래키 연결' }).click();
+  await page.getByTestId('live-connection-upbit').getByRole('button', { name: '다른 키 입력' }).click();
   const dialog = page.getByRole('dialog', { name: '실주문 거래키 연결' });
   await expect(dialog).toBeVisible();
 
@@ -376,6 +376,135 @@ test('live Upbit trading key is saved separately with read+orders only and does 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain(accessKey);
   expect(body).not.toContain(secretKey);
+  assertClean(1);
+});
+
+test('saved read-only Upbit key can connect and verify live execution without retyping secrets', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  let reused = false;
+  let reuseRequests = 0;
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path === '/api/accounts/read-only/credentials/status') {
+      return fulfill(route, {
+        ok: true,
+        encryptionConfigured: true,
+        supportedProviders: ['toss', 'upbit', 'bitget'],
+        hiddenProviders: ['kiwoom'],
+        credentialsReturned: false,
+      });
+    }
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (path === '/api/trade-automation/status') {
+      return fulfill(route, {
+        ok: true,
+        policy: {
+          mode: 'automatic',
+          automaticEnabled: true,
+          emergencyStopped: false,
+          marketEnabled: { domestic_stock: true, us_stock: true, crypto_spot: true, crypto_futures: true },
+          stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+          exchangeEnabled: { toss: true, kiwoom: true, upbit: true, bitget: true },
+          enabledAssets: { toss: [], kiwoom: [], upbit: [], bitget: [] },
+          enabledStrategies: [],
+          totalCapitalKrw: 1_000_000,
+          maxOrderKrw: 100_000,
+          dailyLossLimitPercent: 5,
+          maxAssetPercent: 30,
+          maxOpenPositions: 5,
+          maxDailyOrders: 10,
+          maxConsecutiveLosses: 3,
+          bitgetLeverage: 3,
+        },
+        connections: reused ? [{
+          exchange: 'upbit',
+          accountMode: 'live',
+          configured: true,
+          lastVerifiedAt: '2026-10-03T10:00:00.000Z',
+          lastErrorCode: null,
+          credentialsExposed: false,
+        }] : [],
+        emergencyStopped: false,
+        credentialVault: { encryptionConfigured: true, keyValueExposed: false },
+        liveExecutionServerEnabled: { toss: true, kiwoom: true, upbit: true, bitget: true },
+        liveAutomaticExecutionServerEnabled: { toss: true, kiwoom: true, upbit: true, bitget: true },
+        liveExecutionReadiness: {
+          upbit: reused ? {
+            connectionConfigured: true,
+            providerVerified: true,
+            manualServerGateEnabled: true,
+            automaticServerGateEnabled: true,
+            readyForManualOrderEvaluation: true,
+            readyForAutomaticOrderEvaluation: true,
+            blockers: [],
+            orderTimeRiskRecheckRequired: true,
+            orderSubmissionPerformedByStatusRequest: false,
+          } : {
+            connectionConfigured: false,
+            providerVerified: false,
+            manualServerGateEnabled: true,
+            automaticServerGateEnabled: true,
+            readyForManualOrderEvaluation: false,
+            readyForAutomaticOrderEvaluation: false,
+            blockers: ['LIVE_CONNECTION_NOT_CONFIGURED'],
+            orderTimeRiskRecheckRequired: true,
+            orderSubmissionPerformedByStatusRequest: false,
+          },
+        },
+        lastOrder: null,
+      });
+    }
+    if (path === '/api/trade-automation/connections/upbit/reuse-readonly' && method === 'POST') {
+      reuseRequests += 1;
+      expect(route.request().postDataJSON()).toEqual({ confirmed: true });
+      reused = true;
+      return fulfill(route, {
+        ok: true,
+        exchange: 'upbit',
+        accountMode: 'live',
+        configured: true,
+        verified: true,
+        reusedReadonlyCredential: true,
+        lastVerifiedAt: '2026-10-03T10:00:00.000Z',
+        providerRequests: 1,
+        credentialsReturned: false,
+        liveExecutionActivated: false,
+        automaticLiveExecutionActivated: false,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        realOrderSubmitted: false,
+      });
+    }
+    if (path === '/api/user-integrations') {
+      return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    }
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const card = page.getByTestId('live-connection-upbit');
+  await expect(card).toContainText(/거래키\s*미연결/);
+  await expect(card.getByRole('button', { name: '저장된 조회키로 연결·검증' })).toBeVisible();
+  await card.getByRole('button', { name: '저장된 조회키로 연결·검증' }).click();
+
+  await expect(card).toContainText(/거래키\s*저장됨/);
+  await expect(card).toContainText(/provider 검증\s*검증됨/);
+  await expect(card).toContainText(/수동 실주문\s*ON/);
+  await expect(card).toContainText(/자동 실주문\s*ON/);
+  await expect(page.getByRole('status')).toContainText('저장된 실계좌 조회키를 재사용해 provider 검증까지 완료했습니다.');
+  expect(reuseRequests).toBe(1);
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('UPBIT_LIVE_ACCESS_TEST_ONLY');
+  expect(body).not.toContain('UPBIT_LIVE_SECRET_TEST_ONLY');
   assertClean(1);
 });
 
