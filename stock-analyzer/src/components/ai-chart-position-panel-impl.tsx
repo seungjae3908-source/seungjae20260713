@@ -929,6 +929,14 @@ export function AiChartPositionPanel({
     }
   }, [linesVisible, market, onOverlayChange, stockProvider, symbol]);
 
+  useEffect(() => {
+    if (!initialCockpitOpen) return;
+    void loadPosition();
+    // Navigation-triggered trade focus may perform this read-only account refresh,
+    // but it never submits, cancels, or amends an order.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCockpitOpen, market, stockProvider, symbol]);
+
   const toggleLines = useCallback(() => {
     if (state.kind !== 'ready' || !state.position) return;
     const position = state.position;
