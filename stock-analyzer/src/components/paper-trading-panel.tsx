@@ -89,7 +89,7 @@ function paperSideLabel(value: string): string {
 function paperOrderTypeLabel(value: string): string {
   return value === 'market' ? '시장가' : value === 'limit' ? '지정가' : value === 'stop_market' ? '조건부 시장가' : value;
 }
-function exitReasonLabel(value: string): string {
+function exitReasonLabel(value: string | null | undefined): string {
   const labels: Record<string, string> = {
     stop_loss: '손절',
     take_profit: '익절',
