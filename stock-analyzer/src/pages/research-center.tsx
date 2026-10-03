@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, type ReactNode, useMemo, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -21,6 +21,7 @@ import {
   Sparkles,
   TriangleAlert,
   WalletCards,
+  X,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
@@ -88,12 +89,12 @@ function StatusBadge({ status }: { status: ResearchProductStatus }) {
 }
 
 function blockerCopy(card: ResearchPipelineCard): string {
-  if (!card.blocker) return '명시적 blocker 없음';
-  if (card.evidenceState === 'WRONG_SHA') return 'Source SHA 불일치 · 확인 필요';
+  if (!card.blocker) return '막힌 이유 없음';
+  if (card.evidenceState === 'WRONG_SHA') return '연구 버전 불일치 · 확인 필요';
   if (card.status === 'stale') return '오래된 근거 · 재확인 필요';
   if (card.status === 'inactive') return '현재 런타임 미활성';
   if (card.evidenceState === 'MISSING') return '검증 근거 미수집';
-  return '검증 자료 보완 필요';
+  return '검증 자료가 더 필요합니다.';
 }
 
 function exportResearchWorkbook(
@@ -111,22 +112,22 @@ function exportResearchWorkbook(
       rows: [
         ['항목', '값'],
         ['보고서 생성시각', formatDate(Date.now())],
-        ['Research status', overview.research.status],
-        ['Heartbeat', overview.state.runtimeLiveness?.status ?? 'UNKNOWN'],
+        ['연구 상태', overview.research.status],
+        ['자동 연구 상태', overview.state.runtimeLiveness?.status ?? 'UNKNOWN'],
         ['마지막 성공', formatDate(overview.state.runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)],
-        ['Missed cycles', overview.state.runtimeLiveness?.missedCycles ?? 'UNKNOWN'],
-        ['Temporal observations', overview.dataFactory?.temporalCryptoFutures.observationCount ?? 'UNKNOWN'],
-        ['Candidate ID', performance?.candidateId ?? 'UNKNOWN/BLOCKED'],
-        ['Strategy ID', performance?.strategyId ?? 'UNKNOWN/BLOCKED'],
-        ['TRAIN_N', performance?.TRAIN_N ?? 'UNKNOWN/BLOCKED'],
-        ['VALIDATION_N', performance?.VALIDATION_N ?? 'UNKNOWN/BLOCKED'],
-        ['OOS_N', performance?.OOS_N ?? 'UNKNOWN/BLOCKED'],
-        ['Settlement_N', performance?.Settlement_N ?? 'UNKNOWN/BLOCKED'],
-        ['Gross PnL', performance?.Gross_PnL ?? 'UNKNOWN/BLOCKED'],
-        ['Net PnL', performance?.Net_PnL ?? 'UNKNOWN/BLOCKED'],
-        ['FULL_COST_READY', performance?.FULL_COST_READY ?? false],
-        ['PROFITABILITY_PROVEN', performance?.PROFITABILITY_PROVEN ?? false],
-        ['Execution authority', 'NONE'],
+        ['놓친 실행 횟수', overview.state.runtimeLiveness?.missedCycles ?? 'UNKNOWN'],
+        ['시점 표본', overview.dataFactory?.temporalCryptoFutures.observationCount ?? 'UNKNOWN'],
+        ['후보 식별자', performance?.candidateId ?? '자료 없음'],
+        ['전략 식별자', performance?.strategyId ?? '자료 없음'],
+        ['TRAIN_N', performance?.TRAIN_N ?? '자료 없음'],
+        ['VALIDATION_N', performance?.VALIDATION_N ?? '자료 없음'],
+        ['OOS_N', performance?.OOS_N ?? '자료 없음'],
+        ['정산 표본', performance?.Settlement_N ?? '자료 없음'],
+        ['비용 전 손익', performance?.Gross_PnL ?? '자료 없음'],
+        ['비용 후 손익', performance?.Net_PnL ?? '자료 없음'],
+        ['전체 비용 검증', performance?.FULL_COST_READY ?? false],
+        ['수익성 검증', performance?.PROFITABILITY_PROVEN ?? false],
+        ['실거래 권한', 'NONE'],
       ],
     },
     {
@@ -141,7 +142,7 @@ function exportResearchWorkbook(
     {
       name: '연구 피드백',
       rows: [
-        ['단계', '상태', '증거상태', 'Blocker/피드백', '업데이트'],
+        ['단계', '상태', '증거상태', '막힌 이유/피드백', '업데이트'],
         ...cards.map((card) => [
           card.label, statusLabel(card.status), card.evidenceState, card.blocker ?? '없음', formatDate(card.updatedAt),
         ]),
@@ -196,7 +197,7 @@ function ResearchActivityPanel({ overview }: { overview: ResearchCenterOverview 
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5" data-testid="research-activity-24h">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">24h activity</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">24시간 활동</p>
           <h2 className="mt-1 text-base font-black">24시간 연구 활동내역</h2>
         </div>
         <span className="text-[10px] font-bold text-muted-foreground">실제 서버 실행 기록 · 최근 24시간</span>
@@ -231,7 +232,7 @@ function AutoResearchBacktestPanel({ overview }: { overview: ResearchCenterOverv
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5" data-testid="research-auto-backtest">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Automatic research backtest</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">자동 연구 백테스트</p>
           <h2 className="mt-1 text-base font-black">자동 연구 → 백테스터 진행내역</h2>
         </div>
         <StatusBadge status={!auto?.present ? 'unmeasured' : auto.status === 'complete' ? 'normal' : auto.status === 'blocked_data' ? 'attention' : 'running'} />
@@ -306,30 +307,44 @@ function PipelineCard({ card, selected, onOpen }: {
           { label: '표본', value: '미측정', availability: 'MISSING' as const },
         ]).slice(0, 3).map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
       </dl>
-      <p className="mt-2 text-[10px] font-bold text-primary">{selected ? '아래에 이 단계의 설명이 열려 있습니다' : '눌러서 왜 이런 상태인지 보기'}</p>
+      <p className="mt-2 text-[10px] font-bold text-primary">눌러서 상세 보기</p>
     </button>
   );
 }
 
-function StageDetail({ card }: { card: ResearchPipelineCard }) {
+function StageDetail({ card, onClose }: { card: ResearchPipelineCard; onClose: () => void }) {
+  useEffect(() => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
   return (
-    <aside id="research-stage-detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm lg:sticky lg:top-4 lg:self-start" aria-live="polite" data-testid={`research-detail-${card.key}`}>
+    <div
+      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <aside id="research-stage-detail" role="dialog" aria-modal="true" aria-label={`${card.label} 상세`} className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-t-3xl border border-card-border bg-card p-4 shadow-2xl sm:rounded-3xl sm:p-5" aria-live="polite" data-testid={`research-detail-${card.key}`}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">선택한 연구 단계</p>
-          <h2 className="mt-1 text-lg font-black">{card.label}</h2>
+        <div className="min-w-0"><h2 className="text-lg font-black">{card.label}</h2></div>
+        <div className="flex items-center gap-2">
+          <StatusBadge status={card.status} />
+          <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기">
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        <StatusBadge status={card.status} />
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-xs font-black">왜 이런 상태인가요?</p>
+          <p className="text-xs font-black">현재 상태</p>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">{blockerCopy(card)}</p>
         </div>
         <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
+          <p className="text-xs font-black">다음 단계</p>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            {card.blocker ? '필요한 근거가 들어오거나 blocker가 해소되는지 확인하세요.' : '표본과 다음 검증 단계가 증가하는지 확인하면 됩니다.'}
+            {card.blocker ? '필요한 자료가 들어오면 자동으로 다음 단계가 갱신됩니다.' : '표본과 검증 결과가 자동으로 누적됩니다.'}
           </p>
         </div>
       </div>
@@ -342,7 +357,7 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
           <p className="mt-1 font-bold">{formatDate(card.updatedAt)}</p>
         </div>
         <div className="rounded-xl border border-card-border bg-background p-3">
-          <p className="text-muted-foreground">기술 상태 코드</p>
+          <p className="text-muted-foreground">상태</p>
           <p className="mt-1 font-mono font-bold">{card.evidenceState}</p>
         </div>
       </div>
@@ -366,8 +381,8 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
                   <dl className="grid grid-cols-2 gap-2">
                     <div><dt className="text-muted-foreground">기간</dt><dd className="mt-1 break-words font-bold">{record.period}</dd></div>
                     <div><dt className="text-muted-foreground">표본</dt><dd className="mt-1 font-bold">{record.sampleN}</dd></div>
-                    <div><dt className="text-muted-foreground">Dataset</dt><dd className="mt-1 break-all font-mono">{record.datasetId ?? '미측정'}</dd></div>
-                    <div><dt className="text-muted-foreground">Source SHA</dt><dd className="mt-1 break-all font-mono">{record.sourceSha ?? '미측정'}</dd></div>
+                    <div><dt className="text-muted-foreground">데이터셋</dt><dd className="mt-1 break-all font-mono">{record.datasetId ?? '미측정'}</dd></div>
+                    <div><dt className="text-muted-foreground">연구 버전</dt><dd className="mt-1 break-all font-mono">{record.sourceSha ?? '미측정'}</dd></div>
                   </dl>
                   <dl className="mt-3 grid grid-cols-2 gap-2">
                     {record.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
@@ -387,10 +402,11 @@ function StageDetail({ card }: { card: ResearchPipelineCard }) {
         </div>
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-card-border p-4 text-center text-xs text-muted-foreground">
-          상세 canonical record가 현재 read-only API에 공개되지 않았습니다. 없는 값을 만들지 않습니다.
+          상세 기록이 아직 없습니다.
         </div>
       )}
-    </aside>
+      </aside>
+    </div>
   );
 }
 
@@ -428,6 +444,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
   selected: ResearchPipelineKey;
   onSelect: (key: ResearchPipelineKey) => void;
 }) {
+  const [detailOpen, setDetailOpen] = useState(false);
   const selectedCard = cards.find((card) => card.key === selected) ?? cards[0]!;
   const paper = cards.find((card) => card.key === 'paper')!;
   const systemStatus: ResearchProductStatus = overview.safety.forbiddenAuthorityObserved
@@ -450,14 +467,14 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
           ? 'normal'
           : 'unmeasured';
   const updateDetail = runtimeLiveness?.status === 'LIVE'
-    ? `heartbeat 정상 · missed ${runtimeLiveness.missedCycles ?? 0}`
+    ? `자동 연구 정상 · missed ${runtimeLiveness.missedCycles ?? 0}`
     : runtimeLiveness?.status === 'STALE'
-      ? `heartbeat 지연 · missed ${runtimeLiveness.missedCycles ?? 0}`
+      ? `자동 연구 지연 · missed ${runtimeLiveness.missedCycles ?? 0}`
       : runtimeLiveness?.status === 'INVALID'
-        ? 'heartbeat 시각 무결성 오류'
+        ? '자동 연구 시각 오류'
         : staleCount
           ? `오래된 단계 ${staleCount}개`
-          : 'heartbeat 미수집';
+          : '자동 연구 상태 미수집';
   const factory = overview.factory ?? {
     present: false,
     status: 'MISSING' as const,
@@ -501,7 +518,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
                   : '미측정';
   const factoryDetail = factory.present
     ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? 'FIRST_ZERO 미확인'}`
-    : 'Factory runtime status 미수집';
+    : '연구 팩토리 상태 미수집';
   const temporal = overview.dataFactory?.temporalCryptoFutures ?? {
     present: false,
     status: 'MISSING' as const,
@@ -520,9 +537,9 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'attention'
         : 'accumulating';
   const temporalDetail = !temporal.present
-    ? 'Temporal evidence 미수집'
+    ? '시점 자료 미수집'
     : temporal.status === 'INVALID'
-      ? 'Temporal evidence 무결성 확인 필요'
+      ? '시점 자료 확인 필요'
       : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
@@ -551,10 +568,10 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       <ResearchActivityPanel overview={overview} />
       <AutoResearchBacktestPanel overview={overview} />
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+      <div>
         <section className="min-w-0" aria-labelledby="research-pipeline-title">
           <div className="mb-3 flex items-end justify-between gap-3">
-            <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Research pipeline</p><h2 id="research-pipeline-title" className="mt-1 text-base font-black">연구 파이프라인</h2></div>
+            <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">연구 단계</p><h2 id="research-pipeline-title" className="mt-1 text-base font-black">연구 파이프라인</h2></div>
             <p className="text-[10px] text-muted-foreground">카드를 눌러 상세 확인</p>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -565,17 +582,13 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
                 selected={selected === card.key}
                 onOpen={() => {
                   onSelect(card.key);
-                  if (typeof window !== 'undefined' && window.innerWidth < 1024) {
-                    window.requestAnimationFrame(() => {
-                      document.getElementById('research-stage-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    });
-                  }
+                  setDetailOpen(true);
                 }}
               />
             ))}
           </div>
         </section>
-        <StageDetail card={selectedCard} />
+        {detailOpen ? <StageDetail card={selectedCard} onClose={() => setDetailOpen(false)} /> : null}
       </div>
     </section>
   );
@@ -603,18 +616,18 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
   return (
     <section id="research-tab-ai-lab" role="tabpanel" aria-labelledby="research-tab-ai-lab-trigger" className="space-y-4" data-testid="research-ai-lab-tab">
       <div className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Evidence workspace</p><h2 className="mt-1 text-lg font-black">AI 분석실</h2></div><StatusBadge status={debate.actualEvidence ? 'accumulating' : 'unmeasured'} /></div>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">검증 자료</p><h2 className="mt-1 text-lg font-black">AI 분석실</h2></div><StatusBadge status={debate.actualEvidence ? 'accumulating' : 'unmeasured'} /></div>
         <p className="mt-2 text-xs text-muted-foreground">{debate.actualEvidence ? debate.finalLabel : 'AI 분석 근거 미수집'}</p>
-        <p className="mt-1 text-[10px] text-muted-foreground">Evidence timestamp · {formatDate(overview.state.latestCycleAt)} · Source freshness: canonical max-age 미수집 · AI numeric authority 없음</p>
+        <p className="mt-1 text-[10px] text-muted-foreground">Evidence timestamp · {formatDate(overview.state.latestCycleAt)} · 자료 신선도 미측정 · AI 수치 결정권 없음</p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <InsightCard title="AI 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : '실제 AI run evidence가 없어 분석을 생성하지 않습니다.'}</p></InsightCard>
+        <InsightCard title="AI 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : 'AI 분석 자료가 없습니다.'}</p></InsightCard>
         <InsightCard title="모델 간 합의" icon={BadgeCheck}><ul className="space-y-1">{debate.actualEvidence ? preview.support.map((line) => <li key={line}>• {line}</li>) : <li>AI 분석 근거 미수집</li>}</ul></InsightCard>
         <InsightCard title="모델 간 의견 차이" icon={MessageSquareText}><p>{debate.conflictReason ?? (debate.actualEvidence ? '명시적 충돌 근거 없음' : 'AI 분석 근거 미수집')}</p></InsightCard>
-        <InsightCard title="현재 가장 큰 blocker" icon={CircleAlert}><p>{firstBlocker ? `${firstBlocker.label} · ${blockerCopy(firstBlocker)}` : '명시적 blocker 없음'}</p></InsightCard>
+        <InsightCard title="현재 가장 큰 blocker" icon={CircleAlert}><p>{firstBlocker ? `${firstBlocker.label} · ${blockerCopy(firstBlocker)}` : '막힌 이유 없음'}</p></InsightCard>
         <InsightCard title="데이터가 더 필요한 항목" icon={Database}><ul className="space-y-1">{preview.verify.slice(0, 4).map((line) => <li key={line}>• {line}</li>)}</ul></InsightCard>
-        <InsightCard title="다음 연구 후보" icon={FlaskConical}><p>{cards.find((card) => card.status === 'waiting' || card.status === 'insufficient')?.label ?? 'Canonical 후보 미수집'}</p></InsightCard>
+        <InsightCard title="다음 연구 후보" icon={FlaskConical}><p>{cards.find((card) => card.status === 'waiting' || card.status === 'insufficient')?.label ?? '연구 후보 없음'}</p></InsightCard>
       </div>
 
       {debate.actualEvidence ? (
@@ -622,7 +635,7 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
           {[debate.ai1, debate.ai2, ...debate.committee].filter(Boolean).map((review) => (
             <article key={review!.label} className="rounded-2xl border border-card-border bg-card p-4">
               <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-black">{review!.label}</h3><span className="text-[10px] text-muted-foreground">{review!.conclusion ?? '결론 미측정'}</span></div>
-              <p className="mt-1 text-[10px] text-muted-foreground">{[review!.provider, review!.model].filter(Boolean).join(' · ') || 'Provider identity 미측정'}</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">{[review!.provider, review!.model].filter(Boolean).join(' · ') || '분석 출처 미측정'}</p>
               <ul className="mt-3 space-y-2 text-xs text-muted-foreground">{review!.lines.map((line) => <li key={line} className="rounded-xl bg-background p-3">{line}</li>)}</ul>
             </article>
           ))}
@@ -630,8 +643,8 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
       ) : null}
 
       <form onSubmit={submit} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="Canonical 연구 근거 질문">
-        <div className="flex items-center gap-2"><Bot className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">Canonical 근거에 질문하기</h2></div>
-        <p className="mt-1 text-[10px] text-muted-foreground">AI 실행이 아니라 현재 read-only evidence의 결정론적 조회입니다.</p>
+        <div className="flex items-center gap-2"><Bot className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">연구 근거에 질문하기</h2></div>
+        <p className="mt-1 text-[10px] text-muted-foreground">현재 수집된 연구 자료에서 답을 찾습니다.</p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <label className="sr-only" htmlFor="research-question">연구 근거 질문</label>
           <input id="research-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="예: 수익성은 검증됐나요?" className="min-h-11 min-w-0 flex-1 rounded-xl border border-card-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary" />
@@ -675,7 +688,7 @@ function EvidenceTab({ overview, promotion, cards }: {
   return (
     <section id="research-tab-evidence" role="tabpanel" aria-labelledby="research-tab-evidence-trigger" className="space-y-4" data-testid="research-evidence-tab">
       <div className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Audit surface</p><h2 className="mt-1 text-lg font-black">검증 리포트</h2></div><StatusBadge status={wrongSha ? 'attention' : stale ? 'stale' : 'normal'} /></div>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">검증 상세</p><h2 className="mt-1 text-lg font-black">검증 리포트</h2></div><StatusBadge status={wrongSha ? 'attention' : stale ? 'stale' : 'normal'} /></div>
         <p className="mt-2 text-xs text-muted-foreground">Overview에서 숨긴 기술 식별자와 fail-closed 상태를 여기에서 확인합니다.</p>
       </div>
 
@@ -836,10 +849,10 @@ function PaperTab({
   const costRows = buildFullCostRows(performance.fullCostEvidence);
   const fullCostReady = performance.FULL_COST_READY && isFullCostReady(performance.fullCostEvidence);
   const candidateValue = (value: number | null, suffix = '') => value == null
-    ? 'UNKNOWN/BLOCKED'
+    ? '자료 없음'
     : `${formatCanonicalMetric(value)}${suffix}`;
   const candidateRate = (value: number | null) => value == null
-    ? 'UNKNOWN/BLOCKED'
+    ? '자료 없음'
     : `${formatCanonicalMetric(value * 100, { digits: 2 })}%`;
   const openPositionText = !ledger.present || ledger.positionCount == null
     ? '현재 포지션 자료 없음'
@@ -856,7 +869,7 @@ function PaperTab({
     <section id="research-tab-paper" role="tabpanel" aria-labelledby="research-tab-paper-trigger" className="space-y-4" data-testid="research-paper-tab">
       <div className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary"><WalletCards className="h-5 w-5" /></span><div><div className="flex items-center gap-2"><h2 className="text-lg font-black">모의매매</h2><span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">PAPER</span></div><p className="mt-1 text-xs font-bold text-emerald-700 dark:text-emerald-300">실주문 비활성</p></div></div>
+          <div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary"><WalletCards className="h-5 w-5" /></span><div><div className="flex items-center gap-2"><h2 className="text-lg font-black">모의매매</h2><span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">모의</span></div><p className="mt-1 text-xs font-bold text-emerald-700 dark:text-emerald-300">실주문 비활성</p></div></div>
           <StatusBadge status={paper.status} />
         </div>
         <div className="mt-3 grid grid-cols-1 gap-2 text-[10px] sm:grid-cols-5">
@@ -866,13 +879,13 @@ function PaperTab({
 
       <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-candidate-performance">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Frozen Candidate</p><h3 className="mt-1 text-sm font-black">후보별 성과 증거</h3></div>
-          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? 'EVIDENCE PRESENT' : 'UNKNOWN/BLOCKED'}</span>
+          <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">고정 후보</p><h3 className="mt-1 text-sm font-black">후보별 성과 증거</h3></div>
+          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? 'EVIDENCE PRESENT' : '자료 없음'}</span>
         </div>
         <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">candidateId</dt><dd className="mt-1 truncate font-mono font-bold" title={performance.candidateId ?? 'UNKNOWN/BLOCKED'}>{performance.candidateId ?? 'UNKNOWN/BLOCKED'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">strategyId</dt><dd className="mt-1 font-mono font-bold">{performance.strategyId ?? 'UNKNOWN/BLOCKED'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">freezeTimestamp</dt><dd className="mt-1 font-bold">{performance.freezeTimestamp ? formatDate(performance.freezeTimestamp) : 'UNKNOWN/BLOCKED'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">candidateId</dt><dd className="mt-1 truncate font-mono font-bold" title={performance.candidateId ?? '자료 없음'}>{performance.candidateId ?? '자료 없음'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">strategyId</dt><dd className="mt-1 font-mono font-bold">{performance.strategyId ?? '자료 없음'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">freezeTimestamp</dt><dd className="mt-1 font-bold">{performance.freezeTimestamp ? formatDate(performance.freezeTimestamp) : '자료 없음'}</dd></div>
           <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">CURRENT_FIRST_ZERO</dt><dd className="mt-1 break-all font-mono font-bold">{performance.FIRST_ZERO}</dd></div>
         </dl>
         <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-6">
@@ -928,7 +941,7 @@ function PaperTab({
       </div>
 
       <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-full-cost">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">8 components</p><h3 className="mt-1 text-sm font-black">비용 분석</h3></div><span className="text-xs font-black">FULL_COST_READY · {fullCostReady ? '충족' : '자료 부족'}</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">비용 8항목</p><h3 className="mt-1 text-sm font-black">비용 분석</h3></div><span className="text-xs font-black">FULL_COST_READY · {fullCostReady ? '충족' : '자료 부족'}</span></div>
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">{costRows.map((row) => <CostRow key={row.key} row={row} />)}</div>
         <p className="mt-3 text-[10px] text-muted-foreground">각 비용은 MEASURED / MODELED / UNKNOWN / BLOCKED_DATA를 독립 유지하며 unavailable 비용을 0으로 바꾸지 않습니다.</p>
       </article>
@@ -987,10 +1000,6 @@ export default function ResearchCenterPage() {
   }
 
   function selectCard(key: ResearchPipelineKey) {
-    if (key === 'paper') {
-      setTab('paper');
-      return;
-    }
     setSelected(key);
   }
 
@@ -1019,7 +1028,7 @@ export default function ResearchCenterPage() {
           <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"><FlaskConical className="h-5 w-5" aria-hidden="true" /></span>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><h1 className="text-xl font-black sm:text-2xl">연구센터</h1><span className="rounded-full border border-card-border bg-background px-2 py-0.5 text-[10px] font-black text-muted-foreground">READ ONLY</span></div>
+              <div className="flex flex-wrap items-center gap-2"><h1 className="text-xl font-black sm:text-2xl">연구센터</h1><span className="rounded-full border border-card-border bg-background px-2 py-0.5 text-[10px] font-black text-muted-foreground">조회 전용</span></div>
               <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">상태를 먼저 보고, 눌러서 근거를 확인하세요.</p>
             </div>
             <button type="button" aria-label="연구센터 새로고침" onClick={refreshAll} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-card-border bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
