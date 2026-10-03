@@ -52,8 +52,13 @@ export type StrategyRuleEvidenceKey =
 
 export type StrategyPilotProfile = Readonly<{
   mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
-  totalBudgetKrw: number;
-  maxOrderKrw: number;
+  initialOperatingCapitalKrw: number;
+  profitCompoundShare: 0.5;
+  profitReserveShare: 0.5;
+  maxEntryTracksOperatingCapital: true;
+  reserveAutoWithdrawalAllowed: false;
+  highWaterMarkRequired: true;
+  riskPerTradePercentCeiling: 0.5;
   maxConcurrentLivePositions: number;
   maxDailyLiveEntries: null;
   maxDailyLosingTrades: number;
@@ -70,8 +75,13 @@ export type StrategyPilotProfile = Readonly<{
 
 export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM',
-  totalBudgetKrw: 500_000,
-  maxOrderKrw: 50_000,
+  initialOperatingCapitalKrw: 500_000,
+  profitCompoundShare: 0.5,
+  profitReserveShare: 0.5,
+  maxEntryTracksOperatingCapital: true,
+  reserveAutoWithdrawalAllowed: false,
+  highWaterMarkRequired: true,
+  riskPerTradePercentCeiling: 0.5,
   maxConcurrentLivePositions: 2,
   maxDailyLiveEntries: null,
   maxDailyLosingTrades: 5,
@@ -325,6 +335,10 @@ export function evaluateStrategyRulePackGate(input: {
     blockers: Object.freeze(unique),
     definition,
   });
+}
+
+export function isEvidenceBackedAutoStrategyId(value: string): value is StrategyRulePackId {
+  return BY_ID.has(value as StrategyRulePackId);
 }
 
 export function evidenceBackedAutoStrategyCatalog() {
