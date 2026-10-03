@@ -373,12 +373,23 @@ export type StrategyRulePackDeterministicGate = Readonly<{
   definition: StrategyRulePackDefinition | null;
 }>;
 
+function directionAllowedForMarket(market: string, direction: string) {
+  if (market === 'KR_STOCK' || market === 'US_STOCK' || market === 'CRYPTO_SPOT') {
+    return direction === 'BUY';
+  }
+  if (market === 'CRYPTO_FUTURES') {
+    return direction === 'LONG' || direction === 'SHORT';
+  }
+  return false;
+}
+
 function deterministicBlockers(input: StrategyRulePackGateInput, definition: StrategyRulePackDefinition): string[] {
   const blockers: string[] = [];
   if (!definition.markets.includes(input.market as StrategyRulePackMarket)) {
     blockers.push('STRATEGY_RULE_PACK_MARKET_MISMATCH');
   }
-  if (!definition.directions.includes(input.direction as 'BUY' | 'LONG' | 'SHORT')) {
+  if (!directionAllowedForMarket(input.market, input.direction)
+    || !definition.directions.includes(input.direction as 'BUY' | 'LONG' | 'SHORT')) {
     blockers.push('STRATEGY_RULE_PACK_DIRECTION_FORBIDDEN');
   }
 
