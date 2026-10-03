@@ -114,6 +114,12 @@ export async function readTradeAutomationJournalPayloads(
           ? 'LIVE_APP_ORDER_FROM_CANONICAL_EXECUTION_LEDGER'
           : 'SIMULATED_APP_ORDER_FROM_CANONICAL_EXECUTION_LEDGER',
       ],
+      canonicalLineage: {
+        signalIds: plan.signalId ? [plan.signalId] : [],
+        planIds: [plan.id],
+        orderIds: [order.id],
+        fillIds: fills.map((fill) => fill.id).filter(Boolean),
+      },
       technicalSnapshot: {
         snapshotId: `trade-plan:${plan.id}`,
         contextSource: 'PRE_TRADE_SNAPSHOT',

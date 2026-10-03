@@ -8,7 +8,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
 }
 
-async function installRuntime(page: Page) {
+async function installRuntime(page: Page, options: { profileFailure?: boolean } = {}) {
   await page.addInitScript(({ authKey, user, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value))
       .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -35,6 +35,7 @@ async function installRuntime(page: Page) {
   await page.route('**/__e2e-supabase/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/rest/v1/profiles')) {
+      if (options.profileFailure) return fulfill(route, { message: 'profile unavailable' }, 500);
       return fulfill(route, {
         id: USER,
         login_name: 'account-professional-admin',
@@ -154,4 +155,29 @@ test('account connection dialog remains inside a compact mobile viewport', async
   expect(box!.y).toBeGreaterThanOrEqual(-1);
   expect(box!.y + box!.height).toBeLessThanOrEqual(741);
   await expect(page.getByRole('button', { name: '조회 전용 키 저장', exact: true })).toBeVisible();
+});
+
+
+test('account exposes finite bootstrap recovery when member profile hydration fails', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installRuntime(page, { profileFailure: true });
+  await page.goto('/account');
+  const alert = page.getByTestId('account-bootstrap-error');
+  await expect(alert).toBeVisible({ timeout: 15_000 });
+  await expect(alert).toContainText('계정 상태를 불러오지 못했습니다.');
+  await expect(alert.getByRole('button', { name: '다시 확인', exact: true })).toBeVisible();
+  await expect(page.getByText('관리자 승인 대기 중입니다.', { exact: true })).toHaveCount(0);
+});
+
+test('auth sign-in keeps an authenticated session recoverable when profile hydration fails', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/lib/auth.tsx', import.meta.url), 'utf8');
+  const signInStart = source.indexOf('async signIn(loginName, password)');
+  const signUpStart = source.indexOf('async signUp(loginName, password)', signInStart);
+  const signIn = source.slice(signInStart, signUpStart);
+  expect(signIn).toContain('authenticatedSession = await signInWithSupabase');
+  expect(signIn).toContain('reconcileInitialSessionProfile');
+  expect(signIn).toContain('setBootstrapError(authBootstrapErrorMessage(cause))');
+  expect(signIn).toContain('if (!authenticatedSession)');
+  expect(signIn).not.toContain("authenticatedSession && applySession(null)");
 });
