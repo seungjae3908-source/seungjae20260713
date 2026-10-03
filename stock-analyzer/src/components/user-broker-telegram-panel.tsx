@@ -78,6 +78,8 @@ type TelegramRuntimeState = {
   signalFollowupEnabled: boolean;
   memberHoldingsEnabled: boolean;
   marketBriefEnabled: boolean;
+  backgroundWorkersEnabled: boolean;
+  personalWorkerEnabled: boolean;
   orderAuthority: 'NONE';
   privateTradingApiAllowed: false;
   realOrderAllowed: false;
@@ -134,7 +136,7 @@ const essentialExecutionPreferenceKeys: PreferenceKey[] = [
 const policyMarkets = Object.keys(marketLabels) as TelegramPolicyMarket[];
 const policySignalTypes = Object.keys(signalLabels) as TelegramPolicySignalType[];
 const policyPriorities = Object.keys(priorityLabels) as TelegramPolicyPriority[];
-const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'upbit', 'bitget']);
+const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
 const DEFAULT_POLICY_WINDOW_MS = 5 * 60 * 1000;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -198,6 +200,8 @@ function normalizeTelegramRuntime(value: unknown): TelegramRuntimeState {
     signalFollowupEnabled: runtime.signalFollowupEnabled === true,
     memberHoldingsEnabled: runtime.memberHoldingsEnabled === true,
     marketBriefEnabled: runtime.marketBriefEnabled === true,
+    backgroundWorkersEnabled: runtime.backgroundWorkersEnabled === true,
+    personalWorkerEnabled: runtime.personalWorkerEnabled === true,
     orderAuthority: 'NONE',
     privateTradingApiAllowed: false,
     realOrderAllowed: false,
@@ -423,7 +427,12 @@ export function UserBrokerTelegramPanel() {
   const cryptoAlertsOn = Boolean(state?.alertPolicy.markets.includes('CRYPTO_SPOT') && state.alertPolicy.markets.includes('CRYPTO_FUTURES'));
   const holdingAlertsOn = Boolean(state?.alertPolicy.signalTypes.includes('PRICE_TARGET'));
   const executionAlertsOn = Boolean(state && essentialExecutionPreferenceKeys.every((key) => state.preferences[key]));
-  const telegramHealthy = Boolean(state?.telegram.connected && state.telegramRuntime.deliveryReady);
+  const telegramHealthy = Boolean(
+    state?.telegram.connected
+    && state.telegramRuntime.deliveryReady
+    && state.telegramRuntime.backgroundWorkersEnabled
+    && state.telegramRuntime.personalWorkerEnabled
+  );
   const telegramStatusLabel = requestState === 'failure'
     ? '확인 실패'
     : telegramHealthy
@@ -735,13 +744,16 @@ export function UserBrokerTelegramPanel() {
               ))}
             </ul>
           ) : <p className="mt-3 text-xs text-muted-foreground">연결된 계좌 없음</p>}
+          <p className="mt-3 rounded-xl bg-secondary/60 p-3 text-[10px] font-bold leading-5 text-muted-foreground">
+            자동매매 체결 이벤트는 백그라운드에서 매매일지·회원 이벤트·텔레그램 알림 대기열로 자동 동기화됩니다. 아래 버튼은 누락 복구용입니다.
+          </p>
           <button
             type="button"
             onClick={() => void syncExecutionState()}
             disabled={syncing || !state}
-            className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
+            className="mt-2 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
           >
-            {syncing ? '동기화 중…' : '주문 결과 동기화'}
+            {syncing ? '재동기화 중…' : '체결 결과 재동기화'}
           </button>
         </details>
 
