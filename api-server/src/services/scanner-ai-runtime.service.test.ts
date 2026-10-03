@@ -1,0 +1,127 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import type { ScannerSignalCard } from './scanner-signal.types';
+import {
+  applyScannerAiValidation,
+  enrichTopScannerCandidatesWithAi,
+  scannerAiRuntimeStatus,
+} from './scanner-ai-runtime.service';
+
+function card(
+  signalId: string,
+  score: number,
+  grade: 'S' | 'A' | 'B' = 'A',
+): ScannerSignalCard {
+  return {
+    signalId,
+    symbol: signalId.toUpperCase(),
+    assetClass: 'coin_spot',
+    market: 'KRW',
+    strategyMode: 'scalping',
+    direction: 'LONG',
+    score,
+    confidence: score,
+    riskScore: 20,
+    signalGrade: grade,
+    strongSignalEligible: grade !== 'B',
+    signalState: 'WATCHING',
+    dataQuality: { state: 'TRUSTED', score: 95, strongSignalAllowed: true, issues: [] },
+    evidence: [{ key: 'test', label: '테스트 근거', status: 'matched', source: 'test', observedAt: new Date().toISOString(), reasons: ['근거 확인'] }],
+    warnings: [],
+    aiValidation: {
+      status: 'NOT_RUN',
+      provider: null,
+      counterEvidence: [],
+      missingData: [],
+      risks: [],
+      explanation: null,
+    },
+  } as unknown as ScannerSignalCard;
+}
+
+const configuredEnv: NodeJS.ProcessEnv = {
+  AI_CHAT_PROVIDER: 'gemini',
+  AI_CHAT_API_KEY: 'test-key',
+  AI_CHAT_MODEL: 'gemini-test',
+};
+
+test('runtime status is safe and declares canonical bounded scanner wiring', () => {
+  const off = scannerAiRuntimeStatus({});
+  assert.equal(off.configured, false);
+  assert.equal(off.canonicalScannerWired, true);
+  assert.equal(off.executionAuthority, 'NONE');
+  assert.equal(off.orderAllowed, false);
+
+  const on = scannerAiRuntimeStatus(configuredEnv);
+  assert.equal(on.configured, true);
+  assert.equal(on.maxCandidatesPerRequest, 2);
+  assert.equal(on.vetoBlocksStrongSignal, true);
+  assert.equal(JSON.stringify(on).includes('test-key'), false);
+});
+
+test('PASS preserves candidate while PARTIAL and VETO apply bounded caps', () => {
+  const source = card('btc', 94, 'S');
+
+  const pass = applyScannerAiValidation(source, {
+    status: 'PASS', provider: 'gemini/test', counterEvidence: [], missingData: [], risks: [], explanation: 'ok',
+  });
+  assert.equal(pass.score, 94);
+  assert.equal(pass.signalGrade, 'S');
+  assert.equal(pass.strongSignalEligible, true);
+
+  const partial = applyScannerAiValidation(source, {
+    status: 'PARTIAL', provider: 'gemini/test', counterEvidence: [], missingData: ['missing catalyst'], risks: [], explanation: 'partial',
+  });
+  assert.equal(partial.score, 79);
+  assert.equal(partial.signalGrade, 'A');
+  assert.equal(partial.aiValidation?.status, 'PARTIAL');
+
+  const veto = applyScannerAiValidation(source, {
+    status: 'VETO', provider: 'gemini/test', counterEvidence: ['contradiction'], missingData: [], risks: ['event conflict'], explanation: 'veto',
+  });
+  assert.equal(veto.score, 49);
+  assert.equal(veto.signalGrade, 'B');
+  assert.equal(veto.strongSignalEligible, false);
+  assert.equal(veto.signalState, 'WEAKENED');
+});
+
+test('only top S/A candidates are sent to AI and VETO changes final candidate state', async () => {
+  const calls: string[] = [];
+  const validator = {
+    async validate(input: any) {
+      calls.push(input.signalId);
+      return input.signalId === 's1'
+        ? { status: 'VETO' as const, provider: 'test-ai', counterEvidence: ['conflict'], missingData: [], risks: [], explanation: 'veto' }
+        : { status: 'PASS' as const, provider: 'test-ai', counterEvidence: [], missingData: [], risks: [], explanation: 'pass' };
+    },
+  };
+
+  const result = await enrichTopScannerCandidatesWithAi(
+    [card('s1', 95, 'S'), card('s2', 90, 'A'), card('s3', 85, 'A'), card('s4', 80, 'B')],
+    { validator, env: configuredEnv, maxCandidates: 2 },
+  );
+
+  assert.deepEqual(calls, ['s1', 's2']);
+  assert.equal(result[0].aiValidation?.status, 'VETO');
+  assert.equal(result[0].strongSignalEligible, false);
+  assert.equal(result[1].aiValidation?.status, 'PASS');
+  assert.equal(result[2].aiValidation?.status, 'NOT_RUN');
+  assert.equal(result[3].aiValidation?.status, 'NOT_RUN');
+});
+
+test('provider not configured performs zero validation calls and preserves scanner availability', async () => {
+  let calls = 0;
+  const validator = {
+    async validate() {
+      calls += 1;
+      throw new Error('must not run');
+    },
+  };
+  const result = await enrichTopScannerCandidatesWithAi(
+    [card('s1', 95, 'S'), card('s2', 90, 'A')],
+    { validator, env: {} },
+  );
+  assert.equal(calls, 0);
+  assert.equal(result.every((row) => row.aiValidation?.status === 'NOT_RUN'), true);
+  assert.equal(result[0].score, 95);
+});
