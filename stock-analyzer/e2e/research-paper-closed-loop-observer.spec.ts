@@ -286,13 +286,13 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('1건 검증');
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('15.5');
     await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('동일 후보');
-    await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('수익성 증거로 승격하지 않습니다');
+    await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('이 값만으로 수익성 검증 완료 처리하지 않습니다');
     await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('1건 검증');
     await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('동일 후보');
     await expect(page.getByTestId('paper-closed-loop-journal')).toContainText('정산 기록 1/1');
 
     const firstZero = page.getByTestId('paper-closed-loop-first-zero');
-    await expect(firstZero).toContainText('화면 기준 첫 미완료 단계');
+    await expect(firstZero).toContainText('첫 미완료 단계');
     await expect(firstZero).toContainText('관측 범위 완료');
     await expect(firstZero).toContainText('기준 자료에서 확인한 다음 단계');
     await expect(firstZero).toContainText('관측 범위 완료');
