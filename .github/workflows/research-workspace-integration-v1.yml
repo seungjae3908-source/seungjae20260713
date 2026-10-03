@@ -23,8 +23,19 @@ on:
       - .github/workflows/research-workspace-human-rule-digest-binding-v16.yml
       - api-server/scripts/run-research-workspace-one-shot-bind-v16.ts
       - api-server/src/routes/video-research*.ts
+      - api-server/src/services/research-center-readonly-contract.service.ts
+      - api-server/src/services/fast-profitability-activation.service.ts
+      - api-server/src/services/fast-profitability-evidence-runtime.service.ts
+      - api-server/src/services/forward-recommendation-observer.service.ts
+      - api-server/src/services/unified-trade-journal-canonical-binding.service.ts
+      - api-server/src/scripts/run-fast-profitability-collector.ts
+      - market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js
+      - market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js
+      - research-dashboard/**
       - api-server/src/routes/index.ts
       - stock-analyzer/src/components/research-workspace-panel.tsx
+      - stock-analyzer/src/pages/research-center.tsx
+      - stock-analyzer/src/lib/research-center.ts
       - stock-analyzer/src/components/research-workspace-providers.tsx
       - stock-analyzer/src/components/research-workspace-worker.tsx
       - stock-analyzer/src/components/research-workspace-orchestrator.tsx
@@ -232,5 +243,5 @@ jobs:
             ${{ runner.temp }}/research-one-shot-v12-help.log
             ${{ runner.temp }}/research-human-bind-v16-tests.log
             ${{ runner.temp }}/research-human-bind-v16-help.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
