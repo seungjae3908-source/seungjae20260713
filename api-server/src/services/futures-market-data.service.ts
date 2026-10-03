@@ -27,7 +27,7 @@ export type NormalizedCandle = {
   quoteVolume: number | null;
   timeframe: string;
   symbol: string;
-  market: 'crypto-futures';
+  market: 'kr-stock' | 'us-stock' | 'crypto-spot' | 'crypto-futures';
   source: string;
   isClosed: boolean;
   isDelayed: boolean;
