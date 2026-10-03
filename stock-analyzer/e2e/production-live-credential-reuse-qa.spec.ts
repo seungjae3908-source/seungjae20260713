@@ -109,10 +109,15 @@ test('saved read-only credentials connect and verify all providers with zero fin
 
   await requireHealthIdentity(page);
   await loginProductionReadOnly(page, { login, password });
+  const accessToken = await productionAccessToken(page);
   await page.goto('/account', { waitUntil: 'commit', timeout: 20000 });
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 20000 });
 
   const beforeResponse = await page.request.get(new URL('/api/trade-automation/status', baseUrl).toString(), {
+    headers: {
+      Accept: 'application/json',
+      Authorization: 'Bearer ' + accessToken,
+    },
     timeout: 15000,
     failOnStatusCode: false,
   });
@@ -223,6 +228,10 @@ test('saved read-only credentials connect and verify all providers with zero fin
   }
 
   const afterResponse = await page.request.get(new URL('/api/trade-automation/status', baseUrl).toString(), {
+    headers: {
+      Accept: 'application/json',
+      Authorization: 'Bearer ' + accessToken,
+    },
     timeout: 15000,
     failOnStatusCode: false,
   });
