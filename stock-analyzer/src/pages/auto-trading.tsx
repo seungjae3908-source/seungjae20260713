@@ -3,8 +3,8 @@ import { CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards, X } f
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
-import { 모의JournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
-import { 모의TradingPanel } from '@/components/paper-trading-panel';
+import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
+import { PaperTradingPanel } from '@/components/paper-trading-panel';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
@@ -12,7 +12,7 @@ import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
-import { createUser모의Storage } from '@/lib/paper-journal-sync-storage';
+import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
 
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
@@ -95,24 +95,24 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const userId = auth.user?.id ?? auth.profile?.id ?? '';
   const testFixtureAccess = Boolean(fixture);
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
-  const can모의 = testFixtureAccess || auth.can('canAccess모의Trading');
+  const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
   const [mode, setMode] = useState<TradingMode>(initialMode);
   const [market, setMarket] = useState<TradingMarket>('domestic_stock');
   const [section, setSection] = useState<TradingSection>('dashboard');
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
-  const [paperRevision, set모의Revision] = useState(0);
-  const [manual모의Open, setManual모의Open] = useState(false);
+  const [paperRevision, setPaperRevision] = useState(0);
+  const [manualPaperOpen, setManualPaperOpen] = useState(false);
   const paperStorage = useMemo(
-    () => userId ? createUser모의Storage(window.localStorage, userId) : window.localStorage,
+    () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
   );
 
   useEffect(() => {
-    if (mode === 'auto' && !canAuto && can모의) setMode('paper');
-    if (mode === 'paper' && !can모의 && canAuto) setMode('auto');
-  }, [canAuto, can모의, mode]);
+    if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
+    if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
+  }, [canAuto, canPaper, mode]);
 
   useEffect(() => {
     if (fixture) {
@@ -120,7 +120,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       setRuntimeLoading(false);
       return;
     }
-    if (!canAuto && !can모의) return;
+    if (!canAuto && !canPaper) return;
     const controller = new AbortController();
     setRuntimeLoading(true);
     void authorizedFetch('/api/trade-automation/status', { signal: controller.signal })
@@ -136,7 +136,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         if (!controller.signal.aborted) setRuntimeLoading(false);
       });
     return () => controller.abort();
-  }, [canAuto, can모의, fixture]);
+  }, [canAuto, canPaper, fixture]);
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
@@ -153,7 +153,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   const changeMode = (next: TradingMode) => {
     if (next === 'auto' && !canAuto) return;
-    if (next === 'paper' && !can모의) return;
+    if (next === 'paper' && !canPaper) return;
     setMode(next);
     setSection('dashboard');
   };
@@ -262,14 +262,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
       {market === 'crypto_futures' ? (
         <>
-          <button type="button" onClick={() => setManual모의Open(true)} className="min-h-11 w-full rounded-xl border border-card-border bg-card px-4 text-sm font-bold">
+          <button type="button" onClick={() => setManualPaperOpen(true)} className="min-h-11 w-full rounded-xl border border-card-border bg-card px-4 text-sm font-bold">
             수동 모의매매
           </button>
-          {manual모의Open ? (
-            <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManual모의Open(false); }}>
+          {manualPaperOpen ? (
+            <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManualPaperOpen(false); }}>
               <section role="dialog" aria-modal="true" aria-label="수동 모의매매" className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-t-3xl border border-card-border bg-background shadow-2xl sm:rounded-3xl">
-                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-card-border bg-background p-4"><h2 className="text-base font-bold">수동 모의매매</h2><button type="button" onClick={() => setManual모의Open(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기"><X className="h-4 w-4" /></button></div>
-                <div className="[&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0"><모의TradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact /></div>
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-card-border bg-background p-4"><h2 className="text-base font-bold">수동 모의매매</h2><button type="button" onClick={() => setManualPaperOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기"><X className="h-4 w-4" /></button></div>
+                <div className="[&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0"><PaperTradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact /></div>
               </section>
             </div>
           ) : null}
@@ -324,11 +324,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <span aria-hidden className="text-muted-foreground">선택 기능 ⌄</span>
           </summary>
           <div className="border-t border-card-border p-3">
-            <모의JournalSyncAnalyticsPanel
+            <PaperJournalSyncAnalyticsPanel
               userId={userId}
               rootStorage={window.localStorage}
               paperStorage={paperStorage}
-              onLocalStateChanged={() => set모의Revision((value) => value + 1)}
+              onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
             />
           </div>
         </details>
@@ -354,7 +354,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <div className="mx-auto w-full max-w-6xl space-y-3" data-testid="auto-trading-responsive-layout">
           <div className="grid grid-cols-2 gap-2" data-testid="trading-mode-tabs">
             <SegmentedButton active={mode === 'auto'} disabled={!canAuto} onClick={() => changeMode('auto')} testId="trading-mode-auto">자동매매</SegmentedButton>
-            <SegmentedButton active={mode === 'paper'} disabled={!can모의} onClick={() => changeMode('paper')} testId="trading-mode-paper">모의매매</SegmentedButton>
+            <SegmentedButton active={mode === 'paper'} disabled={!canPaper} onClick={() => changeMode('paper')} testId="trading-mode-paper">모의매매</SegmentedButton>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 시장 선택" data-testid="trading-market-tabs">
