@@ -77,61 +77,85 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const active = [];
-            let discoveryExhausted = false;
-            const maxPages = 5;
-            for (let page = 1; page <= maxPages; page += 1) {
-              const response = await github.rest.actions.listWorkflowRuns({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: 'fast-profitability-v1-activation.yml',
-                event: 'issue_comment',
-                status: 'success',
-                per_page: 100,
-                page,
-              });
-              const runs = response.data.workflow_runs ?? [];
-              for (const run of runs) {
-                if (run.conclusion !== 'success') continue;
-                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: run.id,
-                  per_page: 100,
-                });
-                for (const artifact of artifactsResponse.data.artifacts ?? []) {
-                  if (!artifact.expired && /^fast-profitability-v1-activation-[0-9a-f]{40}$/.test(artifact.name)) {
-                    active.push({ artifact, run });
-                  }
-                }
-              }
-              if (runs.length < 100) break;
-              if (page === maxPages) discoveryExhausted = true;
-            }
-            if (active.length === 0 && discoveryExhausted) {
-              core.setFailed('FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED');
-              return;
-            }
-            if (active.length === 0) {
-              core.notice('No active Fast binding; clean no-op.');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1102,
+              per_page: 100,
+            });
+            const activationComments = comments
+              .filter((comment) =>
+                comment.user?.login === 'github-actions[bot]'
+                && String(comment.body ?? '').startsWith('[FAST_PROFITABILITY_V1_ACTIVATED]'))
+              .sort((a, b) => Number(b.id) - Number(a.id));
+            if (activationComments.length === 0) {
+              core.notice('No Fast activation receipt exists; clean no-op.');
               core.setOutput('found', 'false');
               return;
             }
-            if (active.length !== 1 || discoveryExhausted) {
-              core.setFailed(discoveryExhausted
-                ? 'FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED'
-                : 'Ambiguous Fast activation artifacts.');
+            const parseReceipt = (comment) => {
+              const fields = new Map();
+              for (const line of String(comment.body ?? '').split(/\r?\n/u).slice(1)) {
+                const index = line.indexOf('=');
+                if (index <= 0) continue;
+                fields.set(line.slice(0, index).trim(), line.slice(index + 1).trim());
+              }
+              return {
+                targetSha: String(fields.get('target_sha') ?? '').toLowerCase(),
+                activationDigest: String(fields.get('activation_digest') ?? '').toLowerCase(),
+                runId: String(fields.get('activation_run_id') ?? ''),
+              };
+            };
+            const receipt = parseReceipt(activationComments[0]);
+            if (!/^[0-9a-f]{40}$/.test(receipt.targetSha)
+              || !/^[0-9a-f]{64}$/.test(receipt.activationDigest)
+              || (receipt.runId && !/^[1-9][0-9]*$/.test(receipt.runId))) {
+              core.setFailed('FAST_ACTIVATION_RECEIPT_INVALID');
               return;
             }
-            const { artifact: a, run } = active[0];
+            const artifactName = 'fast-profitability-v1-activation-' + receipt.targetSha;
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const artifacts = (response.data.artifacts ?? [])
+              .filter((artifact) => artifact.expired !== true && artifact.name === artifactName)
+              .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''));
+            if (artifacts.length === 0) {
+              core.notice('Latest Fast activation receipt has no non-expired activation artifact; clean no-op.');
+              core.setOutput('found', 'false');
+              return;
+            }
+            if (artifacts.length !== 1) {
+              core.setFailed('FAST_ACTIVATION_ARTIFACT_AMBIGUOUS');
+              return;
+            }
+            const artifact = artifacts[0];
+            const runId = Number(artifact.workflow_run?.id);
+            if (!Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed('FAST_ACTIVATION_ARTIFACT_RUN_ID_INVALID');
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
             if (run.conclusion !== 'success'
-              || !String(run.path).endsWith('fast-profitability-v1-activation.yml')) {
-              core.setFailed('Activation artifact provenance invalid.');
+              || run.event !== 'issue_comment'
+              || String(run.path ?? '') !== '.github/workflows/fast-profitability-v1-activation.yml'
+              || String(run.head_sha ?? '').toLowerCase() !== receipt.targetSha
+              || (receipt.runId && Number(receipt.runId) !== runId)) {
+              core.setFailed('FAST_ACTIVATION_ARTIFACT_PROVENANCE_INVALID');
               return;
             }
             core.setOutput('found', 'true');
-            core.setOutput('name', a.name);
-            core.setOutput('run_id', String(run.id));
+            core.setOutput('name', artifact.name);
+            core.setOutput('run_id', String(runId));
+            core.setOutput('target_sha', receipt.targetSha);
+            core.setOutput('activation_digest', receipt.activationDigest);
 
       - name: Clean no-op without activation
         if: steps.activation.outputs.found != 'true'
@@ -150,6 +174,8 @@ jobs:
       - name: Validate binding
         if: steps.activation.outputs.found == 'true'
         id: binding
+        env:
+          EXPECTED_ACTIVATION_DIGEST: ${{ steps.activation.outputs.activation_digest }}
         run: |
           set -Eeuo pipefail
           node <<'NODE'
@@ -160,6 +186,7 @@ jobs:
             || b?.status !== 'ACTIVE_FUTURE_ONLY'
             || !/^[0-9a-f]{40}$/.test(b.targetSha)
             || !/^[0-9a-f]{64}$/.test(b.activationDigest)
+            || b.activationDigest !== process.env.EXPECTED_ACTIVATION_DIGEST
             || b?.safety?.executionAuthority !== 'NONE'
             || b?.safety?.liveTrading !== false
             || b?.safety?.autoTrading !== false
@@ -218,40 +245,32 @@ jobs:
           STATE_NAME: fast-profitability-v1-state-${{ steps.binding.outputs.activation_digest }}
         with:
           script: |
-            const maxPages = 5;
-            for (let page = 1; page <= maxPages; page += 1) {
-              const response = await github.rest.actions.listWorkflowRuns({
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: process.env.STATE_NAME,
+              per_page: 100,
+            });
+            const artifacts = (response.data.artifacts ?? [])
+              .filter((artifact) => artifact.expired !== true && artifact.name === process.env.STATE_NAME)
+              .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''));
+            for (const artifact of artifacts) {
+              const runId = Number(artifact.workflow_run?.id);
+              if (!Number.isSafeInteger(runId) || runId <= 0) continue;
+              const run = (await github.rest.actions.getWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                workflow_id: 'fast-profitability-v1-collector.yml',
-                event: 'schedule',
-                status: 'success',
-                per_page: 100,
-                page,
-              });
-              const runs = response.data.workflow_runs ?? [];
-              for (const run of runs) {
-                if (run.conclusion !== 'success') continue;
-                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: run.id,
-                  per_page: 100,
-                });
-                const a = (artifactsResponse.data.artifacts ?? [])
-                  .find((item) => !item.expired && item.name === process.env.STATE_NAME);
-                if (!a) continue;
-                core.setOutput('found', 'true');
-                core.setOutput('name', a.name);
-                core.setOutput('run_id', String(run.id));
-                return;
-              }
-              if (runs.length < 100) {
-                core.setOutput('found', 'false');
-                return;
-              }
+                run_id: runId,
+              })).data;
+              if (run.conclusion !== 'success'
+                || run.event !== 'schedule'
+                || String(run.path ?? '') !== '.github/workflows/fast-profitability-v1-collector.yml') continue;
+              core.setOutput('found', 'true');
+              core.setOutput('name', artifact.name);
+              core.setOutput('run_id', String(runId));
+              return;
             }
-            core.setFailed('FAST_STATE_DISCOVERY_WINDOW_EXHAUSTED');
+            core.setOutput('found', 'false');
 
       - name: Download prior cumulative state
         if: steps.activation.outputs.found == 'true' && steps.previous.outputs.found == 'true'
@@ -275,6 +294,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: 'prediction-lab-canonical-shadow-cycle.yml',
+                event: 'schedule',
                 status: 'success',
                 per_page: 100,
                 page,
