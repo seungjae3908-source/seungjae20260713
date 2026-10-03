@@ -197,8 +197,18 @@ function monitorBrowser(page: Page): BrowserEvidence {
   });
   page.on('pageerror', (error) => evidence.pageErrors.push(error.message));
   page.on('requestfailed', (request: Request) => {
+    const failure = request.failure()?.errorText ?? '';
+    const requestUrl = new URL(request.url());
+    const expectedStaleReadOnlyAbort = request.method() === 'GET'
+      && failure === 'net::ERR_ABORTED'
+      && requestUrl.pathname === '/api/market-intelligence/news-disclosure';
+
+    // A market/auth transition may intentionally cancel stale read-only intelligence work.
+    // Keep every other request failure blocking so this cannot hide provider or auth faults.
+    if (expectedStaleReadOnlyAbort) return;
+
     evidence.unexpectedRequestFailures.push(
-      `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`,
+      `${request.method()} ${request.url()} ${failure}`,
     );
   });
   page.on('response', (response) => {
