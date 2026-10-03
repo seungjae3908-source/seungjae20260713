@@ -360,6 +360,7 @@ export type StrategyRulePackGate = Readonly<{
   strategyId: string;
   state: 'PASS_THROUGH' | 'NO_TRADE' | 'PAPER_CANDIDATE';
   paperAllowed: boolean;
+  liveAiEligible: boolean;
   liveAllowed: false;
   blockers: readonly string[];
   definition: StrategyRulePackDefinition | null;
@@ -490,6 +491,7 @@ export function evaluateStrategyRulePackGate(input: StrategyRulePackGateInput): 
       strategyId: input.strategyId,
       state: 'PASS_THROUGH',
       paperAllowed: true,
+      liveAiEligible: false,
       liveAllowed: false,
       blockers: Object.freeze([]),
       definition: null,
@@ -501,11 +503,16 @@ export function evaluateStrategyRulePackGate(input: StrategyRulePackGateInput): 
     ...(deterministic.readyForAiReview ? reviewBlockers(input) : []),
   ];
   const unique = [...new Set(blockers)].sort();
+  const review = record(input.aiReview);
+  const liveAiEligible = unique.length === 0
+    && review?.status === 'READY'
+    && String(review?.decision ?? '').toUpperCase() === 'PASS';
   return Object.freeze({
     recognized: true,
     strategyId: deterministic.strategyId,
     state: unique.length === 0 ? 'PAPER_CANDIDATE' : 'NO_TRADE',
     paperAllowed: unique.length === 0,
+    liveAiEligible,
     liveAllowed: false,
     blockers: Object.freeze(unique),
     definition: deterministic.definition,
