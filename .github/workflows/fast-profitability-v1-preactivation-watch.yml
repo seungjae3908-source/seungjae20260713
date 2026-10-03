@@ -251,42 +251,33 @@ jobs:
           script: |
             const name = 'fast-profitability-v1-preactivation-watch-state-' + process.env.TARGET_SHA;
             const targetSha = String(process.env.TARGET_SHA ?? '').toLowerCase();
-            const maxPages = 5;
-            for (let page = 1; page <= maxPages; page += 1) {
-              const response = await github.rest.actions.listWorkflowRuns({
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name,
+              per_page: 100,
+            });
+            const artifacts = (response.data.artifacts ?? [])
+              .filter((artifact) => artifact.expired !== true && artifact.name === name)
+              .sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''));
+            for (const artifact of artifacts) {
+              const runId = Number(artifact.workflow_run?.id);
+              if (!Number.isSafeInteger(runId) || runId <= 0) continue;
+              const run = (await github.rest.actions.getWorkflowRun({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                workflow_id: 'fast-profitability-v1-preactivation-watch.yml',
-                event: 'schedule',
-                status: 'success',
-                per_page: 100,
-                page,
-              });
-              const runs = response.data.workflow_runs ?? [];
-              for (const run of runs) {
-                if (run.conclusion !== 'success') continue;
-                if (String(run.head_sha ?? '').toLowerCase() !== targetSha) continue;
-                const artifactsResponse = await github.rest.actions.listWorkflowRunArtifacts({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: run.id,
-                  per_page: 100,
-                });
-                const artifact = (artifactsResponse.data.artifacts ?? [])
-                  .find((item) => !item.expired && item.name === name);
-                if (!artifact) continue;
-                core.setOutput('found', 'true');
-                core.setOutput('name', artifact.name);
-                core.setOutput('run_id', String(run.id));
-                return;
-              }
-              if (runs.length < 100) {
-                core.setOutput('found', 'false');
-                return;
-              }
+                run_id: runId,
+              })).data;
+              if (run.conclusion !== 'success'
+                || run.event !== 'schedule'
+                || String(run.path ?? '') !== '.github/workflows/fast-profitability-v1-preactivation-watch.yml'
+                || String(run.head_sha ?? '').toLowerCase() !== targetSha) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('name', artifact.name);
+              core.setOutput('run_id', String(runId));
+              return;
             }
-            core.setFailed('PREACTIVATION_WATCH_STATE_DISCOVERY_WINDOW_EXHAUSTED');
-
+            core.setOutput('found', 'false');
       - name: Download prior exact-SHA watch state
         if: steps.gate.outputs.eligible == 'true' && steps.previous.outputs.found == 'true'
         uses: actions/download-artifact@v4

@@ -151,6 +151,7 @@ const researchCenterIntegrationReviewed=[
  '.github/workflows/prediction-lab-52d-validation.yml',
  '.github/workflows/research-center-predeploy-validation.yml',
  'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs',
+ 'api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs',
  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
  'api-server/src/routes/market-summary-availability.smoke.test.ts',
  'api-server/src/routes/video-research-source-evidence.ts',
