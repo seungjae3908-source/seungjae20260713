@@ -335,13 +335,14 @@ export function sanitizeVideoResearchRuntimeEvidence(value: unknown): SafeEviden
   if (!Array.isArray(value.records) || value.records.length !== value.sourceCount) return null;
   if (!safetyMatches(value.safety)) return null;
   const snapshotProvenance = safeSnapshotProvenance(value.snapshotProvenance);
+  if (!snapshotProvenance) return null;
   const automation = safeAutomation(value.automation, {
     provenance: snapshotProvenance,
     query: value.query,
     sourceCount: value.sourceCount,
   });
   const aiReview = safeAiReview(value.aiReview);
-  if (!snapshotProvenance || (value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
+  if ((value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
 
   const records = value.records.map(safeRecord);
   if (records.some((record) => record === null)) return null;
