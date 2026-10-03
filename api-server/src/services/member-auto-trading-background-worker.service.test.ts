@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
-import type { PaperJournalRepository } from './paper-journal.types';
+import type { PaperJournalRecordKind, PaperJournalRepository, PaperJournalSyncRecord } from './paper-journal.types';
 import {
   STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
   STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA,
@@ -212,10 +212,10 @@ function paperRepository(
   records.set('account:paper-account', account);
 
   return {
-    async getRecord(_userId, kind, id) {
+    async getRecord(_userId: string, kind: PaperJournalRecordKind, id: string) {
       return records.get(kind + ':' + id) ?? null;
     },
-    async upsertRecord(_userId, record, updatedAt) {
+    async upsertRecord(_userId: string, record: PaperJournalSyncRecord, updatedAt: string) {
       const key = record.kind + ':' + record.id;
       const existing = records.get(key);
       const stored = {
