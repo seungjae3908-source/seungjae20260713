@@ -212,6 +212,11 @@ async function validateInvestmentResponse(
 
 export type AuthorizedFetchOptions = {
   /**
+   * Access token already resolved by the owning auth context. Supplying it
+   * avoids putting another Supabase session lookup in a tighter caller budget.
+   */
+  accessToken?: string | null;
+  /**
    * Transport-level abort deadline. `undefined` preserves the normal app API
    * deadline; `null` deliberately leaves transport lifetime to the owning
    * request lifecycle. Authentication/session resolution has its own finite
@@ -230,6 +235,10 @@ export async function authorizedFetch(
   options: AuthorizedFetchOptions = {},
 ): Promise<Response> {
   const headers = new Headers(init.headers);
+  const resolvedAccessToken = options.accessToken?.trim();
+  if (!headers.has('Authorization') && resolvedAccessToken) {
+    headers.set('Authorization', `Bearer ${resolvedAccessToken}`);
+  }
   const signal = init.signal ?? getActiveQuerySignal();
   if (signal?.aborted) throw abortReason(signal);
 

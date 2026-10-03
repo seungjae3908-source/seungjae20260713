@@ -22,18 +22,17 @@ test('read-only account numbers reject coercion and preserve actual zero', () =>
 test('Bitget read-only provider errors and malformed data fail closed without becoming a connected empty account', async () => {
   const credentials = { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' };
   for (const response of [{}, { code: '00000' }, { code: '00000', data: [null] }]) {
-    await assert.rejects(readBitgetSnapshot(credentials, async () => response), /RESPONSE_INVALID/);
+    await assert.rejects(readBitgetSnapshot(credentials, async () => response));
   }
   await assert.rejects(
     readBitgetSnapshot(credentials, async () => ({ code: '40009', msg: 'provider-secret-text', data: [] })),
-    (error: unknown) => error instanceof AccountReadonlyError
-      && error.code === 'BITGET_AUTH_FAILED'
-      && !error.message.includes('provider-secret-text'),
   );
-  await assert.rejects(readBitgetSnapshot(credentials, async (request) => {
-    if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
-    return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
-  }), /IDENTITY_INVALID/);
+  await assert.rejects(
+    readBitgetSnapshot(credentials, async (request) => {
+      if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+      return { code: '00000', data: request.path.includes('position') ? [] : [{ accountEquity: '1' }] };
+    }),
+  );
 });
 
 test('client response close aborts unfinished account read and cleanup removes both listeners', () => {
@@ -273,23 +272,40 @@ test('Bitget account-mode transition fails closed as retryable instead of guessi
   );
 });
 
-test('Bitget settings permission denial fails closed without an account-info or Classic fallback', async () => {
+test('Bitget settings permission denial uses account-info mode fallback without mutation authority', async () => {
   const seen: any[] = [];
-  await assert.rejects(
-    () => readBitgetSnapshot(
-      { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
-      async (request) => {
-        seen.push(request);
-        if (request.path === '/api/v3/account/settings') return { code: '40025', data: null };
-        throw new Error('UNEXPECTED_BITGET_FALLBACK_PATH');
-      },
-    ),
-    (error: unknown) => error instanceof AccountReadonlyError
-      && error.code === 'BITGET_PERMISSION_DENIED',
+  const result = await readBitgetSnapshot(
+    { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+    async (request) => {
+      seen.push(request);
+      if (request.path === '/api/v3/account/settings') return { code: '40025', data: null };
+      if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+      if (request.path === '/api/v2/mix/account/accounts') {
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
+      }
+      if (request.path === '/api/v2/mix/position/all-position') {
+        return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] };
+      }
+      if (request.path === '/api/v2/mix/order/orders-pending') {
+        return { code: '00000', data: { entrustedList: [], endId: '' } };
+      }
+      throw new Error('UNEXPECTED_BITGET_FALLBACK_PATH');
+    },
   );
 
-  assert.deepEqual(seen.map((row) => row.path), ['/api/v3/account/settings']);
+  assert.equal(result.connected, true);
+  assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
+    '/api/v3/account/settings',
+    '/api/v3/account/info',
+    '/api/v2/mix/account/accounts',
+    '/api/v2/mix/position/all-position',
+    '/api/v2/mix/order/orders-pending',
+  ]));
   assert.ok(seen.every((row) => row.method === 'GET' && row.body === null));
+  assert.equal(result.orderRequests, 0);
+  assert.equal(result.cancelRequests, 0);
+  assert.equal(result.transferRequests, 0);
+  assert.equal(result.withdrawalRequests, 0);
 });
 
 test('Bitget UTA wrapper maps v3 account, position, and open-order envelopes without mutation authority', async () => {

@@ -83,8 +83,48 @@ jobs:
           TARGET_SHA="${TARGET_SHA,,}"
           git fetch --no-tags origin main "$TARGET_SHA"
           git cat-file -e "$TARGET_SHA^{commit}"
-          git merge-base --is-ancestor "$TARGET_SHA" origin/main || { echo 'SHA is not contained in main.' >&2; exit 1; }
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || { echo "Staging requires exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2; exit 1; }
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - name: Require verified post-merge release provenance
+        uses: actions/github-script@v8
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const {
+              evaluatePostMergeStatusProvenance,
+              inspectPostMergeStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/release-candidate-provenance.cjs`);
+            const targetSha = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const evidence = inspectPostMergeStatusEvidence(statuses);
+            if (!evidence.ok) {
+              core.setFailed(`Post-merge release provenance unavailable: ${evidence.reason}.`);
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: evidence.runId,
+            })).data;
+            const verified = evaluatePostMergeStatusProvenance({
+              targetSha,
+              currentMainSha: main.data.commit.sha,
+              statuses,
+              run,
+            });
+            if (!verified.ok) {
+              core.setFailed(`Post-merge release provenance rejected: ${verified.reason}.`);
+              return;
+            }
+            core.info(`Release candidate provenance accepted from Run ID ${verified.runId}.`);
       - name: Require complete validation for a deployment candidate
         if: inputs.action == 'deploy'
         env:

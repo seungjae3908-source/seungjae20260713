@@ -34,7 +34,9 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('위험검사');
   expect(page).toContain('data-testid="trading-market-tabs"');
   expect(page).toContain('data-testid="trading-section-tabs"');
-  expect(page).toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
+  expect(page).not.toContain('forcedSource={mode === \'auto\' ? \'APP_AUTO\' : \'APP_PAPER\'}');
+  expect(page).toContain('title="매매일지"');
+  expect(page).toContain('직접매매/자동매매/자동모의매매');
   expect(page).not.toContain('text-[10px]');
   expect(page).not.toContain('text-[11px]');
   expect(page).not.toContain('font-black');
@@ -44,12 +46,13 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
 
-test('automatic trading settings surface the four evidence-backed strategy lanes without granting automatic live promotion', () => {
+
+test('automatic trading settings surface six Paper-only rule packs without live promotion', () => {
   const settings = source('src/components/trade-automation-settings.tsx');
 
-  expect(settings).toContain('data-testid="evidence-backed-auto-strategies"');
-  expect(settings).toContain('연구 기반 자동매매 전략');
-  expect(settings).toContain('기본 상태 {strategy.defaultState} · 자동 실주문 승격 없음');
-  expect(settings).toContain('evidence-strategy-${strategy.strategyId}');
-  expect(settings).toContain('로컬 OOS·Walk-forward·Full Cost·전략건강성 준비도가 확인되기 전에는 NO_TRADE');
+  expect(settings).toContain('data-testid="strategy-rule-pack-cards"');
+  expect(settings).toContain('수식·파동·보조지표·AI 룰팩');
+  expect(settings).toContain('Paper 연구 가능 · 실자동 승격 차단');
+  expect(settings).toContain("data-testid={'strategy-rule-pack-' + strategy.strategyId}");
+  expect(settings).toContain('이 6개 전략은 이 단계에서 실자동매매로 승격되지 않습니다.');
 });

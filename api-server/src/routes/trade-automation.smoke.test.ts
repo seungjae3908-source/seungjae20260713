@@ -1420,8 +1420,8 @@ test('status is authenticated, automatic execution defaults off, and never retur
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
       evidenceBackedStrategies: Array<{
         strategyId: string;
-        defaultState: string;
         automaticLivePromotionAllowed: boolean;
+        paperResearchAllowedWhenReady: boolean;
       }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
@@ -1430,12 +1430,14 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.evidenceBackedStrategies.map((row) => row.strategyId), [
-      'CEX_DEX_ARBITRAGE_V1',
-      'US_STOCKS_IN_PLAY_ORB_V1',
-      'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
-      'KR_ML_CHARTING_V1',
+      'TREND_PULLBACK_REACCEL_V1',
+      'US_EVENT_RVOL_FIRST_PULLBACK_V1',
+      'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+      'KR_PRESSURE_BREAKOUT_V1',
+      'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+      'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
     ]);
-    assert.equal(body.evidenceBackedStrategies.every((row) => row.defaultState === 'NO_TRADE'), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.paperResearchAllowedWhenReady === true), true);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.automaticLivePromotionAllowed === false), true);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
