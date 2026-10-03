@@ -68,24 +68,26 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('auto-trading-runtime-summary')).toContainText('국내주식');
 
     await page.getByTestId('trading-section-settings').click();
+    await page.getByTestId('open-trading-automation-settings').click();
+    await expect(page.getByTestId('trading-automation-settings-dialog')).toBeVisible();
 
     await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveValue('kiwoom');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-us_stock').click();
+    await page.getByTestId('trading-settings-market-us_stock').click();
     await expect(page.getByTestId('auto-market-us_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveValue('kiwoom');
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-crypto_spot').click();
+    await page.getByTestId('trading-settings-market-crypto_spot').click();
     await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-upbit')).toBeVisible();
     await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
     await expect(page.getByLabel('Bitget 레버리지')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-crypto_futures').click();
+    await page.getByTestId('trading-settings-market-crypto_futures').click();
     await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-bitget')).toBeVisible();
     await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
@@ -99,6 +101,8 @@ test('automatic trading keeps standing authorization while settings follow one s
   const failures = captureBrowserFailures(page);
   await page.goto('/__phase12-trade-automation-e2e');
   await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('open-trading-automation-settings').click();
+  await expect(page.getByTestId('trading-automation-settings-dialog')).toBeVisible();
 
   const master = page.getByTestId('automatic-trading-master-toggle');
   await master.click();
@@ -109,7 +113,7 @@ test('automatic trading keeps standing authorization while settings follow one s
   await domesticBroker.selectOption('toss');
   await expect(domesticBroker).toHaveValue('toss');
 
-  await page.getByTestId('trading-market-us_stock').click();
+  await page.getByTestId('trading-settings-market-us_stock').click();
   const usBroker = page.getByTestId('stock-broker-us_stock');
   await expect(usBroker).toHaveValue('kiwoom');
 
@@ -138,7 +142,7 @@ test('automatic trading keeps standing authorization while settings follow one s
   await expect(master).toHaveAttribute('aria-pressed', 'false');
 
   for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
-    await page.getByTestId(`trading-market-${market}`).click();
+    await page.getByTestId(`trading-settings-market-${market}`).click();
     await expect(page.getByTestId(`auto-market-${market}`)).toHaveAttribute('aria-pressed', 'false');
   }
   expectNoBrowserFailures(failures);
