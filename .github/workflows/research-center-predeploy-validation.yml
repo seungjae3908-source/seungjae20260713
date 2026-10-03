@@ -182,7 +182,155 @@ jobs:
           grep -Fq 'Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production' research-dashboard/deploy/research-dashboard.service
           grep -Fq 'NoNewPrivileges=true' research-dashboard/deploy/research-dashboard.service
           grep -Fq 'ProtectSystem=strict' research-dashboard/deploy/research-dashboard.service
-          grep -Fq '^CapabilityBoundingSet=$' research-dashboard/deploy/research-dashboard.service
+          grep -q '^CapabilityBoundingSet=
+          grep -q '^AmbientCapabilities=
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -q '^CapabilityBoundingSet=
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
           grep -Fq '^AmbientCapabilities=$' research-dashboard/deploy/research-dashboard.service
 
           for unit in \
@@ -195,6 +343,2602 @@ jobs:
             grep -Fq 'NoNewPrivileges=true' "$unit"
             grep -Fq 'ProtectSystem=strict' "$unit"
             grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+          grep -q '^AmbientCapabilities=
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+          grep -Fq '^AmbientCapabilities=$' research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -q '^CapabilityBoundingSet=
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+          grep -q '^AmbientCapabilities=
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -q '^CapabilityBoundingSet=
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+          grep -q '^AmbientCapabilities=
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+          grep -q '^AmbientCapabilities=
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -q '^CapabilityBoundingSet=
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -q '^CapabilityBoundingSet=
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const file = '.github/workflows/research-center-predeploy-validation.yml';
+          const source = fs.readFileSync(file, 'utf8');
+          const marker = '      - name: Development-only safety boundary';
+          const markerIndex = source.indexOf(marker);
+          if (markerIndex < 0) throw new Error('RESEARCH_PREDEPLOY_SAFETY_MARKER_MISSING');
+          const executable = source.slice(0, markerIndex);
+          const forbidden = [
+            [/^\s*environment:\s*(?:production|staging)\s*$/mu, 'protected environment'],
+            [/\$\{\{\s*secrets\./u, 'secret reference'],
+            [/(?:merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true)/u, 'mutation authority'],
+          ];
+          for (const [pattern, label] of forbidden) {
+            if (pattern.test(executable)) throw new Error('RESEARCH_PREDEPLOY_FORBIDDEN_' + String(label).toUpperCase().replaceAll(' ', '_'));
+          }
+          NODE
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
+ "$unit"
             ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
           done
 
