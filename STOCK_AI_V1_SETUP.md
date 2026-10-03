@@ -1,8 +1,8 @@
 # 승재주식 AI 앱 1차 설정
 
-## 1. Replit Secrets
+## 1. 서버 환경변수
 
-API 서버용:
+API 서버 런타임 환경변수:
 
 - `KIWOOM_APP_KEY`
 - `KIWOOM_APP_SECRET`
@@ -11,13 +11,13 @@ API 서버용:
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY` 또는 `SUPABASE_SECRET_KEY`
 
-프론트 빌드용:
+프론트 빌드 환경변수:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 - `VITE_VAPID_PUBLIC_KEY` (푸시를 사용할 때)
 
-푸시 서버용:
+푸시 서버 환경변수:
 
 - `VAPID_PUBLIC_KEY`
 - `VAPID_PRIVATE_KEY`
@@ -63,3 +63,10 @@ Authentication > Providers > Email을 활성화합니다.
 `/api/kiwoom/raw-ranking?market=KR&type=volume`
 
 이 주소는 App Key, Secret, 토큰을 반환하지 않습니다.
+
+
+## 운영 원칙
+
+- Replit / Replit Agent는 사용하지 않습니다.
+- 비밀키는 브라우저 번들에 포함하지 않고 서버 런타임의 보호된 환경변수/Secret 저장소에서만 주입합니다.
+- AI Provider, 거래 Provider, 계좌 Provider의 Secret 값은 상태 API·로그·프론트 응답에 노출하지 않습니다.
