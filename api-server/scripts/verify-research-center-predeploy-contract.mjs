@@ -41,6 +41,11 @@ const files = Object.fromEntries(await Promise.all([
   'stock-analyzer/src/App.tsx',
   'stock-analyzer/src/lib/app-navigation.ts',
   'stock-analyzer/src/lib/research-center.ts',
+  'stock-analyzer/src/pages/research-center.tsx',
+  'stock-analyzer/src/lib/excel-export.ts',
+  'stock-analyzer/src/lib/backtest.ts',
+  'stock-analyzer/src/components/backtest-research-panel.tsx',
+  'research-dashboard/server.py',
   'stock-analyzer/src/lib/research-center-product.ts',
   'stock-analyzer/src/lib/research-journal-binding.ts',
   'stock-analyzer/src/lib/strategy-promotion.ts',
@@ -65,6 +70,11 @@ const files = Object.fromEntries(await Promise.all([
 const app = files['stock-analyzer/src/App.tsx'];
 const nav = files['stock-analyzer/src/lib/app-navigation.ts'];
 const researchClient = files['stock-analyzer/src/lib/research-center.ts'];
+const researchPage = files['stock-analyzer/src/pages/research-center.tsx'];
+const excelExport = files['stock-analyzer/src/lib/excel-export.ts'];
+const backtestClient = files['stock-analyzer/src/lib/backtest.ts'];
+const backtestPanel = files['stock-analyzer/src/components/backtest-research-panel.tsx'];
+const dashboardServer = files['research-dashboard/server.py'];
 const product = files['stock-analyzer/src/lib/research-center-product.ts'];
 const journalClient = files['stock-analyzer/src/lib/research-journal-binding.ts'];
 const promotionClient = files['stock-analyzer/src/lib/strategy-promotion.ts'];
@@ -83,6 +93,15 @@ requireText(app, "function ResearchCenterAccess() { return gated('canManageMembe
 requireText(app, '<Route path="/research-center" component={ResearchCenterAccess} />', 'frontend Research Center route');
 requireRegex(nav, /id:\s*'research-center'[\s\S]{0,220}capability:\s*'canManageMembers'/u, 'navigation Research Center capability');
 requireText(researchClient, "authorizedFetch('/api/admin/research/overview'", 'overview client endpoint');
+requireText(dashboardServer, 'build_research_activity', '24h Research activity builder');
+requireText(dashboardServer, 'summarize_auto_backtest', 'automatic Research backtest summary');
+requireText(researchPage, 'data-testid="research-activity-24h"', '24h Research activity UI');
+requireText(researchPage, 'data-testid="research-auto-backtest"', 'automatic Research backtest UI');
+requireText(researchPage, 'data-testid="research-excel-export"', 'Research Excel export control');
+requireText(excelExport, 'application/vnd.ms-excel', 'Excel-compatible workbook export');
+requireText(backtestClient, 'strategyParameters', 'configurable manual backtest parameters');
+requireText(backtestPanel, 'data-testid="automatic-research-backtest"', 'Backtest automatic Research lane');
+requireText(backtestPanel, 'data-testid="backtest-excel-export"', 'Backtest Excel export control');
 
 requireText(admin, 'router.use(requireAuthenticated, requireAdmin);', 'admin auth boundary');
 requireText(admin, "router.get('/research/overview'", 'admin Research overview route');
