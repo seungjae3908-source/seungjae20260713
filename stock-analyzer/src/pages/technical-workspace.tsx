@@ -177,16 +177,16 @@ function MobileWorkspace({ workspace }: { workspace: Workspace }) {
 function DesktopWorkspace({
   workspace,
   builderLayout,
-  canAccessRiskPreview,
+  canAccessAiChart,
 }: {
   workspace: Workspace;
   builderLayout: LoadedScannerLayout;
-  canAccessRiskPreview: boolean;
+  canAccessAiChart: boolean;
 }) {
   if (workspace === 'chart') return <Suspense fallback={<WorkspaceFallback />}><AiChartPage embedded /></Suspense>;
   if (workspace === 'backtest') return <Suspense fallback={<WorkspaceFallback />}><BacktestResearchPanel compact /></Suspense>;
   if (workspace === 'trade') return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage embedded /></Suspense>;
-  if (!canAccessRiskPreview) {
+  if (!canAccessAiChart) {
     return <Suspense fallback={<WorkspaceFallback />}><ScannerSurface desktop showSectionHeader /></Suspense>;
   }
 
@@ -220,13 +220,13 @@ export default function TechnicalWorkspacePage() {
   const [workspace, setWorkspace] = useState<Workspace>('signal');
   const phase11FullCapabilityFixture = import.meta.env.VITE_PHASE11_E2E === 'true'
     && location.startsWith('/__phase11-technical-workspace-e2e');
-  const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview');
+  const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessBasicInfo');
   const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests');
   const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading');
 
   const workspaceAllowed = (value: Workspace) => {
     if (value === 'signal') return true;
-    if (value === 'chart') return canAccessRiskPreview;
+    if (value === 'chart') return canAccessAiChart;
     if (value === 'backtest') return canAccessBacktests;
     return canAccessAutoTrading;
   };
@@ -245,7 +245,7 @@ export default function TechnicalWorkspacePage() {
 
   useEffect(() => {
     if (!workspaceAllowed(workspace)) setWorkspace('signal');
-  }, [canAccessAutoTrading, canAccessBacktests, canAccessRiskPreview, workspace]);
+  }, [canAccessAutoTrading, canAccessBacktests, canAccessAiChart, workspace]);
 
   const desktopLayout = useMemo(() => {
     const raw = readStoredUiBuilderSignalScannerLayout('desktop');
@@ -300,7 +300,7 @@ export default function TechnicalWorkspacePage() {
           <DesktopWorkspace
             workspace={workspace}
             builderLayout={desktopLayout}
-            canAccessRiskPreview={canAccessRiskPreview}
+            canAccessAiChart={canAccessAiChart}
           />
         ) : <MobileWorkspace workspace={workspace} />}
       </div>
