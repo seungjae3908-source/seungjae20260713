@@ -238,6 +238,14 @@ jobs:
             );
             if (!account) return;
 
+            const credentialReuse = await requireQa(
+              'production-live-credential-reuse-qa.yml',
+              'Production Live Credential Reuse QA',
+              () => 'production-live-credential-reuse-' + target,
+              'AUTOMATIC_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED',
+            );
+            if (!credentialReuse) return;
+
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
@@ -287,9 +295,67 @@ jobs:
             core.setOutput('production_run_id', String(production.id));
             core.setOutput('comprehensive_run_id', String(comprehensive.id));
             core.setOutput('account_run_id', String(account.id));
+            core.setOutput('credential_reuse_run_id', String(credentialReuse.id));
             core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
             core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
             core.setOutput('futures_max_leverage', leverage);
+
+      - name: Download exact-SHA live credential reuse QA evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-live-credential-reuse-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/production-live-credential-reuse-qa
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.gate.outputs.credential_reuse_run_id }}
+
+      - name: Require all four live connections reused and verified with zero financial mutation
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          CREDENTIAL_REUSE_EVIDENCE: ${{ runner.temp }}/production-live-credential-reuse-qa/production-live-credential-reuse-qa.json
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const target = String(process.env.TARGET_SHA || '');
+          const evidence = JSON.parse(fs.readFileSync(process.env.CREDENTIAL_REUSE_EVIDENCE, 'utf8'));
+          const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
+          const rows = Array.isArray(evidence?.providers) ? evidence.providers : [];
+          if (evidence?.schemaVersion !== 'production-live-credential-reuse-qa-v1'
+            || evidence?.targetSha !== target
+            || evidence?.orderRequests !== 0
+            || evidence?.cancelRequests !== 0
+            || evidence?.amendRequests !== 0
+            || evidence?.transferRequests !== 0
+            || evidence?.withdrawalRequests !== 0
+            || evidence?.realOrderSubmitted !== false
+            || evidence?.liveTradingAuthorityGranted !== false
+            || evidence?.autoTradingAuthorityGranted !== false
+            || evidence?.credentialsReturned !== false
+            || evidence?.secretValuesRecorded !== false
+            || evidence?.accountValuesRecorded !== false) {
+            throw new Error('AUTOMATIC_TRADING_CREDENTIAL_REUSE_QA_SAFETY_INVALID');
+          }
+          for (const provider of requiredProviders) {
+            const row = rows.find((candidate) => candidate?.provider === provider);
+            if (!row
+              || row.configured !== true
+              || row.verified !== true
+              || row.reusedReadonlyCredential !== true
+              || row.credentialsReturned !== false
+              || row.liveExecutionActivated !== false
+              || row.automaticLiveExecutionActivated !== false
+              || row.orderRequests !== 0
+              || row.cancelRequests !== 0
+              || row.amendRequests !== 0
+              || row.transferRequests !== 0
+              || row.withdrawalRequests !== 0
+              || row.realOrderSubmitted !== false
+              || row.errorCode !== null) {
+              throw new Error('AUTOMATIC_TRADING_CREDENTIAL_REUSE_PROVIDER_NOT_READY:' + provider);
+            }
+          }
+          NODE
 
       - name: Download exact-SHA four-provider Account QA evidence
         uses: actions/download-artifact@v4
