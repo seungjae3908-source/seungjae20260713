@@ -69,9 +69,9 @@ function profilePayload() {
     id: USER_ID,
     login_name: LOGIN_NAME,
     display_name: DISPLAY_NAME,
-    role: 'regular',
+    role: 'associate',
     status: 'approved',
-    membership_level: 'regular',
+    membership_level: 'associate',
     is_active: true,
     permissions_updated_at: '2026-08-05T00:00:00.000Z',
     updated_at: '2026-08-05T00:00:00.000Z',
@@ -303,7 +303,7 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
     await stopIsolatedVite();
   });
 
-  test('storageState restored context reaches direct AI Chart through same-origin profile bootstrap', async ({ browser }) => {
+  test('associate storageState restored context reaches direct AI Chart through same-origin profile bootstrap', async ({ browser }) => {
     const loginCounters: RouteCounters = {
       sameOriginProfile: 0,
       directSupabaseProfile: 0,
