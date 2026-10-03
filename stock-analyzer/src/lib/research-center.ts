@@ -227,6 +227,32 @@ export interface ResearchCenterOverview {
       profile: string | null;
     }>;
   };
+  autoBacktest?: {
+    present: boolean;
+    status: string;
+    cycleId: string | null;
+    generatedAt: number | null;
+    researchSha: string | null;
+    executionAuthority: 'NONE';
+    pipelines: Array<{
+      id: string;
+      status: string;
+      startedAt: number | null;
+      endedAt: number | null;
+      stepCount: number | null;
+      plannedStepCount: number | null;
+      candidatePassed: boolean;
+      automaticHandoffObserved: boolean;
+      feedback: string;
+      steps: Array<{
+        id: string;
+        status: string;
+        reportStatus: string | null;
+        startedAt: number | null;
+        endedAt: number | null;
+      }>;
+    }>;
+  };
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };
