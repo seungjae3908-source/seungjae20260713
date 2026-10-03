@@ -42,6 +42,7 @@ on:
       - 'stock-analyzer/src/lib/excel-export.ts'
       - 'stock-analyzer/src/lib/backtest.ts'
       - 'stock-analyzer/src/components/backtest-research-panel.tsx'
+      - 'stock-analyzer/src/components/paper-closed-loop-observer.tsx'
       - 'stock-analyzer/src/lib/research-center-product.ts'
       - 'stock-analyzer/src/lib/research-journal-binding.ts'
       - 'stock-analyzer/src/lib/strategy-promotion.ts'
