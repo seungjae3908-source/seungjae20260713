@@ -50,6 +50,36 @@ export type StrategyRuleEvidenceKey =
   | 'takerFlowReady'
   | 'fundingRiskReady';
 
+export type StrategyPilotProfile = Readonly<{
+  mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
+  totalBudgetKrw: number;
+  maxOrderKrw: number;
+  maxConcurrentLivePositions: number;
+  maxDailyLiveEntries: number;
+  dailyLossStopKrw: number;
+  maxConsecutiveLosses: number;
+  futuresMaxLeverage: 2;
+  paperMirrorRequired: true;
+  pairedFillComparisonRequired: true;
+  liveOrderRequiresExplicitConfirmation: true;
+  automaticLiveExecutionAllowed: false;
+}>;
+
+export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
+  mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM',
+  totalBudgetKrw: 500_000,
+  maxOrderKrw: 50_000,
+  maxConcurrentLivePositions: 2,
+  maxDailyLiveEntries: 4,
+  dailyLossStopKrw: 10_000,
+  maxConsecutiveLosses: 2,
+  futuresMaxLeverage: 2,
+  paperMirrorRequired: true,
+  pairedFillComparisonRequired: true,
+  liveOrderRequiresExplicitConfirmation: true,
+  automaticLiveExecutionAllowed: false,
+});
+
 export type StrategyRulePackDefinition = Readonly<{
   strategyId: StrategyRulePackId;
   label: string;
@@ -59,6 +89,7 @@ export type StrategyRulePackDefinition = Readonly<{
   rules: readonly string[];
   requiredEvidence: readonly StrategyRuleEvidenceKey[];
   paperResearchAllowedWhenReady: true;
+  pilotProfile: StrategyPilotProfile;
   automaticLivePromotionAllowed: false;
   promotionRequirements: readonly string[];
 }>;
@@ -105,6 +136,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('trendRegimeReady', 'pullbackReady', 'reaccelerationReady', 'volumeAccelerationReady'),
     paperResearchAllowedWhenReady: true,
+    pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
@@ -125,6 +157,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('eventCatalystReady', 'rvolReady', 'firstPullbackReady', 'vwapSupportReady', 'volumeReaccelerationReady'),
     paperResearchAllowedWhenReady: true,
+    pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
@@ -145,6 +178,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('pitUniverseReady', 'first5mRvolReady', 'openingRangeReady', 'retestReady', 'microBreakoutReady'),
     paperResearchAllowedWhenReady: true,
+    pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
@@ -165,6 +199,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('pressureReady', 'compressionReady', 'volumeExpansionReady', 'breakoutReady'),
     paperResearchAllowedWhenReady: true,
+    pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
@@ -185,6 +220,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('orderFlowReady', 'cvdReady', 'takerBuyReady', 'orderbookImbalanceReady', 'mlRankReady', 'modelFrozen'),
     paperResearchAllowedWhenReady: true,
+    pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'FROZEN_MODEL', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
@@ -205,6 +241,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     ]),
     requiredEvidence: req('orderFlowReady', 'oiReady', 'cvdReady', 'takerFlowReady', 'fundingRiskReady'),
     paperResearchAllowedWhenReady: true,
+    pilotProfile: RULE_PACK_PILOT_PROFILE,
     automaticLivePromotionAllowed: false,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
