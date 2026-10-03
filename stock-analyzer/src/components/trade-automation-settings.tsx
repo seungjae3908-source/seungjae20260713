@@ -52,6 +52,20 @@ type Status = {
     summary: string;
     rules: string[];
     paperResearchAllowedWhenReady: true;
+    pilotProfile: {
+      mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
+      totalBudgetKrw: number;
+      maxOrderKrw: number;
+      maxConcurrentLivePositions: number;
+      maxDailyLiveEntries: number;
+      dailyLossStopKrw: number;
+      maxConsecutiveLosses: number;
+      futuresMaxLeverage: 2;
+      paperMirrorRequired: true;
+      pairedFillComparisonRequired: true;
+      liveOrderRequiresExplicitConfirmation: true;
+      automaticLiveExecutionAllowed: false;
+    };
     automaticLivePromotionAllowed: false;
     promotionRequirements: string[];
   }>;
@@ -453,7 +467,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         <div>
           <p className="text-xs font-extrabold">수식·파동·보조지표·AI 룰팩</p>
           <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-            룰 증거가 모두 준비된 전략만 자동모의매매 후보가 됩니다. 이 6개 전략은 이 단계에서 실자동매매로 승격되지 않습니다.
+            50만원 소액 실전 검증 프로필입니다. Paper는 자동으로 병행하고, 실계좌는 같은 신호의 주문안을 만들어 최종 확인 후 실행하는 방식으로 비교합니다.
           </p>
         </div>
         <ShieldAlert className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -477,11 +491,18 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
             </div>
             <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{strategy.summary}</p>
             <p className="mt-2 text-[10px] font-bold text-muted-foreground">
-              Paper 연구 가능 · 실자동 승격 차단
+              Paper 자동 · 실전 테스트예산 {strategy.pilotProfile.totalBudgetKrw.toLocaleString('ko-KR')}원 · 1회 {strategy.pilotProfile.maxOrderKrw.toLocaleString('ko-KR')}원
             </p>
           </button>;
         })}
       </div>
+    </div> : null}
+
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="strategy-pilot-risk-summary">
+      <p className="font-extrabold">50만원 실전 검증 방식</p>
+      <p className="mt-1 leading-5 text-muted-foreground">
+        1회 5만원 · 동시 2개 · 하루 신규 4회 · 일손실 1만원 중지 · 연속 2회 손실 중지 · 선물 2배 · Paper 동시 기록 · 실계좌 주문은 최종 확인 필요
+      </p>
     </div> : null}
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
