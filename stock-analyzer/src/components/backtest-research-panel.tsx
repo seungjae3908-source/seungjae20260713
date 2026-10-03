@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { AlertTriangle, Loader2, PlayCircle, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Download, Loader2, PlayCircle, ShieldCheck } from 'lucide-react';
 import {
   CartesianGrid,
   Line,
@@ -13,6 +13,7 @@ import { CenteredPageHeader } from '@/components/centered-page-header';
 import { Link } from 'wouter';
 import { backtestPaperHandoffPath } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
+import { downloadExcelWorkbook } from '@/lib/excel-export';
 import {
   runBacktest,
   type BacktestFormValues,
@@ -44,6 +45,24 @@ const DEFAULT_VALUES: BacktestFormValues = {
   trailingEnabled: false,
   trailingActivationR: 1,
   trailingDistanceR: 0.5,
+  strategyParameters: {
+    trendPullback: {
+      fastPeriod: 20,
+      slowPeriod: 50,
+      pullbackTolerancePercent: 0.5,
+      volumePeriod: 20,
+      volumeMultiplier: 1,
+    },
+    breakout: {
+      lookback: 20,
+      volumePeriod: 20,
+      volumeMultiplier: 1.2,
+    },
+    vwapReclaim: {
+      volumePeriod: 20,
+      volumeMultiplier: 1.1,
+    },
+  },
 };
 
 type Props = {
@@ -126,6 +145,83 @@ function regimeLabel(value: string): string {
     low_volatility: '저변동성',
     unknown: '미확인',
   });
+}
+
+function exportBacktestWorkbook(values: BacktestFormValues, result: BacktestResult) {
+  const timestamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  downloadExcelWorkbook(`backtest-${result.symbol}-${timestamp}.xls`, [
+    {
+      name: '요약',
+      rows: [
+        ['항목', '값'],
+        ['종목', result.symbol],
+        ['시간봉', result.timeframe],
+        ['전략', result.strategy],
+        ['전략 파라미터', JSON.stringify(values.strategyParameters)],
+        ['초기자본', result.initialCapital],
+        ['최종자산', result.finalCapital],
+        ['총수익률 %', result.totalReturnPercent],
+        ['거래 수', result.totalTrades],
+        ['승률 %', result.winRate],
+        ['기대값', result.expectancy],
+        ['Profit Factor', result.profitFactor ?? 'UNKNOWN'],
+        ['MDD', result.maximumDrawdown],
+        ['MDD %', result.maximumDrawdownPercent],
+        ['평균 R', result.averageRMultiple],
+        ['수수료', result.totalFees],
+        ['슬리피지', result.totalSlippage],
+        ['펀딩비', result.totalFunding],
+        ['계산시각', result.calculatedAt],
+        ['실주문', false],
+      ],
+    },
+    {
+      name: '검증',
+      rows: [
+        ['구간', '거래', '승', '패', '승률', '순손익', '기대값', 'PF', 'MDD', 'MDD %'],
+        ...result.validationPerformance.map((row) => [
+          validationLabel(row.name), row.trades, row.wins, row.losses, row.winRate, row.netPnl,
+          row.expectancy, row.profitFactor ?? 'UNKNOWN', row.maximumDrawdown, row.maximumDrawdownPercent,
+        ]),
+      ],
+    },
+    {
+      name: '워크포워드',
+      rows: [
+        ['시작', '종료', '거래', '순손익', 'MDD', '기대값'],
+        ...result.walkForward.map((row) => [
+          dateTime(row.startTime), dateTime(row.endTime), row.totalTrades, row.netPnl, row.maximumDrawdown, row.expectancy,
+        ]),
+      ],
+    },
+    {
+      name: '거래내역',
+      rows: [
+        ['진입', '청산', '방향', '진입가', '청산가', '수량', 'Gross PnL', 'Net PnL', '수수료', '슬리피지', '펀딩', 'R', '종료이유', '시장상태'],
+        ...result.trades.map((trade) => [
+          dateTime(trade.entryTime), dateTime(trade.exitTime), trade.side, trade.entryPrice, trade.exitPrice,
+          trade.quantity, trade.grossPnl, trade.netPnl, trade.entryFee + trade.exitFee, trade.slippageCost,
+          trade.fundingCost, trade.rMultiple, exitReasonLabel(trade.exitReason), regimeLabel(trade.marketRegime),
+        ]),
+      ],
+    },
+    {
+      name: '월별결과',
+      rows: [
+        ['월', '거래', '순손익', '수익률 %'],
+        ...result.monthlyPerformance.map((row) => [row.month, row.trades, row.netPnl, row.returnPercent]),
+      ],
+    },
+    {
+      name: '피드백',
+      rows: [
+        ['구분', '내용'],
+        ...result.warnings.map((warning) => ['경고/가정', warning]),
+        ['안전', '과거 결과는 미래 수익을 보장하지 않음'],
+        ['안전', 'backtest-only / orderSubmitted=false'],
+      ],
+    },
+  ]);
 }
 
 function initialValuesFromUrl() {
@@ -222,6 +318,22 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
   const update = <K extends keyof BacktestFormValues>(key: K, value: BacktestFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
   };
+  const updateStrategyParameter = (
+    section: keyof BacktestFormValues['strategyParameters'],
+    key: string,
+    value: number,
+  ) => {
+    setValues((current) => ({
+      ...current,
+      strategyParameters: {
+        ...current.strategyParameters,
+        [section]: {
+          ...current.strategyParameters[section],
+          [key]: value,
+        },
+      } as BacktestFormValues['strategyParameters'],
+    }));
+  };
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -306,6 +418,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
               </select>
             </Field>
           </div>
+          <p className="mt-3 text-[10px] text-muted-foreground">BTCUSDT는 기본값일 뿐 고정 종목이 아닙니다. 현재 수동 백테스터는 Bitget 공개 USDT 선물 종목을 입력해 테스트하며, 4시장 자동 연구 결과는 리서치 자동 백테스트 파이프라인에서 별도로 검증합니다.</p>
 
           <details className="mt-4 rounded-2xl border border-border bg-background/50" data-testid="backtest-advanced-settings">
             <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-black [&::-webkit-details-marker]:hidden">
@@ -313,6 +426,46 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
               <span aria-hidden className="text-muted-foreground">⌄</span>
             </summary>
             <div className="grid grid-cols-2 gap-3 border-t border-border p-4 md:grid-cols-4">
+              {values.strategy === 'trend_pullback' ? (
+                <>
+                  <Field label="빠른 EMA">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.trendPullback.fastPeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'fastPeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="느린 EMA">
+                    <input className={inputClass} type="number" min="3" step="1" value={values.strategyParameters.trendPullback.slowPeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'slowPeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="눌림 허용 %">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.trendPullback.pullbackTolerancePercent} onChange={(event) => updateStrategyParameter('trendPullback', 'pullbackTolerancePercent', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.trendPullback.volumePeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'volumePeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 배수">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.trendPullback.volumeMultiplier} onChange={(event) => updateStrategyParameter('trendPullback', 'volumeMultiplier', Number(event.target.value))} />
+                  </Field>
+                </>
+              ) : values.strategy === 'breakout' ? (
+                <>
+                  <Field label="돌파 Lookback">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.breakout.lookback} onChange={(event) => updateStrategyParameter('breakout', 'lookback', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.breakout.volumePeriod} onChange={(event) => updateStrategyParameter('breakout', 'volumePeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 배수">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.breakout.volumeMultiplier} onChange={(event) => updateStrategyParameter('breakout', 'volumeMultiplier', Number(event.target.value))} />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="거래량 기간">
+                    <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.vwapReclaim.volumePeriod} onChange={(event) => updateStrategyParameter('vwapReclaim', 'volumePeriod', Number(event.target.value))} />
+                  </Field>
+                  <Field label="거래량 배수">
+                    <input className={inputClass} type="number" min="0" step="0.1" value={values.strategyParameters.vwapReclaim.volumeMultiplier} onChange={(event) => updateStrategyParameter('vwapReclaim', 'volumeMultiplier', Number(event.target.value))} />
+                  </Field>
+                </>
+              )}
               <Field label="위험률 %">
                 <input className={inputClass} type="number" min="0.01" max="1" step="any" inputMode="decimal" value={values.riskPercent} onChange={(event) => update('riskPercent', Number(event.target.value))} />
               </Field>
@@ -390,6 +543,11 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
 
         {result ? (
           <div className="space-y-4" data-testid="backtest-results">
+            <div className="flex justify-end">
+              <button type="button" onClick={() => exportBacktestWorkbook(values, result)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-card px-3 text-xs font-black hover:border-primary/50" data-testid="backtest-excel-export">
+                <Download className="h-4 w-4" /> 결과 Excel 다운로드
+              </button>
+            </div>
             <section className="rounded-2xl border border-border bg-card p-4" data-testid="backtest-paper-handoff">
               <h3 className="text-sm font-black">같은 후보 Paper 전달</h3>
               <p className="mt-2 text-xs text-muted-foreground">서버 결과의 식별자와 정책 참조를 전달합니다. 현재는 참조 확인만 가능하며 자동 전략 실행·Natural Paper 증거가 아닙니다.</p>
