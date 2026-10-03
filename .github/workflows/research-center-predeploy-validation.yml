@@ -40,6 +40,7 @@ on:
       - 'stock-analyzer/src/pages/research-center*.tsx'
       - 'stock-analyzer/e2e/research-*.spec.ts'
       - 'research-dashboard/**'
+      - 'research-production/**'
   workflow_dispatch:
     inputs:
       expected_sha:
@@ -135,6 +136,106 @@ jobs:
           python3 -m py_compile server.py video_research_readback.py
           python3 test/test_server.py
           python3 test/test_video_research_readback.py
+
+      - name: Validate deploy-time Research services, timers and deterministic plan
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          systemd-analyze verify \
+            research-dashboard/deploy/research-dashboard.service \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-fast-historical.timer \
+            research-production/deploy/research-production-long-history.timer \
+            research-production/deploy/research-production-forward.timer \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-temporal-evidence.timer \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-factory-status.timer \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-ai-review.timer \
+            research-production/deploy/research-production-video-discovery.service \
+            research-production/deploy/research-production-video-discovery.timer
+
+          for calendar in \
+            '*-*-* 02:17:00 UTC' \
+            'Sun *-*-* 03:43:00 UTC' \
+            '*-*-* *:11:00 UTC' \
+            '*-*-* *:05:00 UTC' \
+            '*-*-* *:07:00 UTC' \
+            '*-*-* *:29:00 UTC' \
+            '*-*-* 00,03,06,09,12,15,18,21:52:00 UTC'
+          do
+            systemd-analyze calendar "$calendar" >/dev/null
+          done
+
+          bash -n research-dashboard/deploy/activate-server.sh
+          bash -n research-production/deploy/activate-server.sh
+          bash -n research-production/deploy/install-ai-research-units.sh
+
+          for script in research-production/bin/*.mjs research-production/deploy/*.mjs; do
+            node --check "$script"
+          done
+
+          grep -Fq 'Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1' research-dashboard/deploy/research-dashboard.service
+          grep -Fq 'Environment=RESEARCH_DASHBOARD_PORT=18090' research-dashboard/deploy/research-dashboard.service
+          grep -Fq 'Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production' research-dashboard/deploy/research-dashboard.service
+          grep -Fq 'NoNewPrivileges=true' research-dashboard/deploy/research-dashboard.service
+          grep -Fq 'ProtectSystem=strict' research-dashboard/deploy/research-dashboard.service
+          grep -Fq '^CapabilityBoundingSet=$' research-dashboard/deploy/research-dashboard.service
+          grep -Fq '^AmbientCapabilities=$' research-dashboard/deploy/research-dashboard.service
+
+          for unit in \
+            research-production/deploy/research-production@.service \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-video-discovery.service
+          do
+            grep -Fq 'NoNewPrivileges=true' "$unit"
+            grep -Fq 'ProtectSystem=strict' "$unit"
+            grep -Fq '^CapabilityBoundingSet=$' "$unit"
+            ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$unit"
+          done
+
+          npm --prefix research-production test
+
+          state="$RUNNER_TEMP/research-predeploy-state"
+          rm -rf "$state"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA"
+
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$EXPECTED_SHA" > "$RUNNER_TEMP/research-predeploy-plan.json"
+
+          node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
+          }
+          if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PREDEPLOY_PLAN_AUTHORITY_DRIFT');
+          }
+          NODE
+
+          printf '%s\n' \
+            'RESEARCH_DEPLOY_CONTRACTS=PASS' \
+            'DASHBOARD_LOOPBACK_18090=PASS' \
+            'RESEARCH_PRODUCTION_SYSTEMD=PASS' \
+            'RESEARCH_TIMERS=PASS' \
+            'YOUTUBE_DISCOVERY_TIMER=PASS' \
+            'AI_REVIEW_TIMER=PASS' \
+            'DETERMINISTIC_RESEARCH_PLAN=PASS' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_API=false' \
+            'ORDER_AUTHORITY=false'
 
       - name: Validate exact-head workflow contracts
         run: |
