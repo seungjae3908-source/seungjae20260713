@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server import build_research_overview, summarize_runtime_liveness  # noqa: E402
+from server import build_research_activity, build_research_overview, summarize_runtime_liveness  # noqa: E402
 
 
 def write_json(path, value):
@@ -186,6 +186,39 @@ def valid_candidate_performance():
 
 
 class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
+    def test_activity_window_reads_real_cycle_history_and_latest_workers(self):
+        root = Path(self.temp_dir.name)
+        now_ms = 1_800_000_000_000
+        (root / 'runs' / 'cycle-a').mkdir(parents=True)
+        (root / 'runs' / 'cycle-a' / 'cycle.json').write_text(json.dumps({
+            'cycleId': 'cycle-a',
+            'profile': 'forward',
+            'generatedAt': now_ms - 60_000,
+            'status': 'complete',
+            'successCount': 2,
+            'blockedDataCount': 0,
+            'failedCount': 0,
+        }), encoding='utf-8')
+        (root / 'runs' / 'old').mkdir(parents=True)
+        (root / 'runs' / 'old' / 'cycle.json').write_text(json.dumps({
+            'cycleId': 'old',
+            'profile': 'forward',
+            'generatedAt': now_ms - 25 * 60 * 60 * 1000,
+            'status': 'complete',
+        }), encoding='utf-8')
+        (root / 'latest').mkdir(parents=True)
+        (root / 'latest' / 'temporal-crypto-futures.json').write_text(json.dumps({
+            'generatedAt': now_ms - 30_000,
+            'status': 'complete',
+            'observationCount': 12,
+            'failedCount': 0,
+        }), encoding='utf-8')
+        activity = build_research_activity(root, now_ms=now_ms)
+        self.assertEqual(activity['windowHours'], 24)
+        self.assertEqual([row['source'] for row in activity['entries']], ['temporal', 'research-cycle'])
+        self.assertEqual(activity['entries'][1]['id'], 'cycle-a')
+        self.assertNotIn('old', [row['id'] for row in activity['entries']])
+
     def test_runtime_liveness_detects_missed_cycles_and_clock_skew(self):
         now_ms = 1_800_000_000_000
         live = summarize_runtime_liveness(now_ms - 30 * 60 * 1000, now_ms)
