@@ -78,6 +78,7 @@ test('JSON export creates a download', async ({ page }) => {
 });
 
 for (const viewport of [
+  { name: 'tablet 768x900', width: 768, height: 900 },
   { name: 'mobile 390x844', width: 390, height: 844 },
   { name: 'small mobile 360x740', width: 360, height: 740 },
 ]) {
