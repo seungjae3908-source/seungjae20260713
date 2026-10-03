@@ -350,3 +350,10 @@ test('Telegram settings remain responsive and do not add Telegram-side trade exe
   expect(panel).not.toContain('Telegram에서 LONG 진입');
   expect(panel).not.toContain('Telegram에서 SHORT 진입');
 });
+
+test('healthy status requires the actual personal delivery workers instead of bot-token presence alone', () => {
+  expect(panel).toContain('state.telegramRuntime.backgroundWorkersEnabled');
+  expect(panel).toContain('state.telegramRuntime.personalWorkerEnabled');
+  expect(panel).toContain("? '정상'");
+  expect(panel).toContain("? '확인 필요'");
+});
