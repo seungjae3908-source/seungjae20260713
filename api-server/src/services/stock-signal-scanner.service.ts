@@ -258,15 +258,8 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
-    const provisionalRanking = rankScannerCandidates({
-      cards: broadCandidates,
-      market: request.market,
-      strategy: strategyMode,
-      softMinimumScore: request.filters.minimumScore,
-      limit: 20,
-    });
     const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
-      provisionalRanking.cards,
+      broadCandidates,
       { signal: request.signal },
     );
     const ranking = rankScannerCandidates({
