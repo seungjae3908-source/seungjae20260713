@@ -18,6 +18,7 @@ on:
       - 'api-server/src/routes/strategy-promotion.ts'
       - 'api-server/src/routes/video-research-evidence.ts'
       - 'api-server/src/routes/video-research-source-evidence.ts'
+      - 'api-server/src/routes/market-summary-availability.smoke.test.ts'
       - 'api-server/src/services/research-center-readonly-contract.service.ts'
       - 'api-server/src/services/research-center-readonly-contract.service.test.ts'
       - 'api-server/src/services/research-adoption-review-gate.service.ts'
@@ -113,12 +114,13 @@ jobs:
           pnpm exec esbuild src/services/research-adoption-review-gate.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-adoption-review.test.cjs"
           pnpm exec esbuild src/routes/strategy-promotion.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/strategy-promotion-route.test.cjs"
           pnpm exec esbuild src/routes/paper-journal.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/paper-journal-route.test.cjs"
+          pnpm exec esbuild src/routes/market-summary-availability.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-video-readback.test.cjs"
           pnpm exec esbuild src/services/research-workspace-authorization-v5.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-workspace-auth.test.cjs"
 
       - name: Run focused backend Research Center contracts
         run: |
           set -Eeuo pipefail
-          node --test             "$RUNNER_TEMP/research-center-readonly.test.cjs"             "$RUNNER_TEMP/research-promotion-bridge.test.cjs"             "$RUNNER_TEMP/research-adoption-review.test.cjs"             "$RUNNER_TEMP/strategy-promotion-route.test.cjs"             "$RUNNER_TEMP/paper-journal-route.test.cjs"             "$RUNNER_TEMP/research-workspace-auth.test.cjs"
+          node --test             "$RUNNER_TEMP/research-center-readonly.test.cjs"             "$RUNNER_TEMP/research-promotion-bridge.test.cjs"             "$RUNNER_TEMP/research-adoption-review.test.cjs"             "$RUNNER_TEMP/strategy-promotion-route.test.cjs"             "$RUNNER_TEMP/paper-journal-route.test.cjs"             "$RUNNER_TEMP/research-video-readback.test.cjs"             "$RUNNER_TEMP/research-workspace-auth.test.cjs"
 
       - name: Validate Research Dashboard runtime contract
         working-directory: research-dashboard
