@@ -30,6 +30,7 @@ import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
 import { evidenceBackedAutoStrategyCatalog } from '../services/evidence-backed-auto-strategy-catalog.service';
 import { readRulePackPilotCapitalState } from '../services/trade-rule-pack-pilot-capital.service';
+import { tradeRulePackAiReviewRuntimeStatus } from '../services/trade-rule-pack-ai-review.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -733,6 +734,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       pilotCapitalState,
+      strategyAiReview: tradeRulePackAiReviewRuntimeStatus(),
       evidenceBackedStrategies: evidenceBackedAutoStrategyCatalog().map((strategy) => ({
         strategyId: strategy.strategyId,
         label: strategy.label,
