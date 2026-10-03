@@ -377,6 +377,16 @@ function SignalDetailPanel({
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
           : <p className="mt-2 text-xs text-muted-foreground">검증된 이유 설명이 없습니다. 근거가 없는 설명은 만들지 않습니다.</p>}
       </section>
+      <section data-testid="scanner-ai-validation" className="rounded-2xl border border-card-border bg-background p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-black">외부 AI 공개근거 검토</h3>
+          <span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">{card.aiValidation?.status ?? 'NOT_RUN'}</span>
+        </div>
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          Provider {card.aiValidation?.provider ?? '미실행'} · 상위 후보만 bounded 검토 · AI는 주문·수량·레버리지 권한 없음
+        </p>
+        {card.aiValidation?.explanation ? <p className="mt-2 text-xs leading-5">{card.aiValidation.explanation}</p> : null}
+      </section>
       <div className="grid gap-2 sm:grid-cols-3">
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">일치 근거</h3><div className="mt-2 flex flex-wrap gap-1">{card.matched.length ? card.matched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-positive/10 px-2 py-1 text-[10px] text-positive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
         <section className="rounded-2xl border border-card-border p-3"><h3 className="text-xs font-black">불일치 조건</h3><div className="mt-2 flex flex-wrap gap-1">{card.notMatched.length ? card.notMatched.map((item) => <span key={item} className="max-w-full break-words rounded-lg bg-destructive/10 px-2 py-1 text-[10px] text-destructive">{item}</span>) : <span className="text-[10px] text-muted-foreground">없음</span>}</div></section>
