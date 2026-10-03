@@ -744,13 +744,16 @@ export function UserBrokerTelegramPanel() {
               ))}
             </ul>
           ) : <p className="mt-3 text-xs text-muted-foreground">연결된 계좌 없음</p>}
+          <p className="mt-3 rounded-xl bg-secondary/60 p-3 text-[10px] font-bold leading-5 text-muted-foreground">
+            자동매매 체결 이벤트는 백그라운드에서 매매일지·회원 이벤트·텔레그램 알림 대기열로 자동 동기화됩니다. 아래 버튼은 누락 복구용입니다.
+          </p>
           <button
             type="button"
             onClick={() => void syncExecutionState()}
             disabled={syncing || !state}
-            className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
+            className="mt-2 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
           >
-            {syncing ? '동기화 중…' : '주문 결과 동기화'}
+            {syncing ? '재동기화 중…' : '체결 결과 재동기화'}
           </button>
         </details>
 
