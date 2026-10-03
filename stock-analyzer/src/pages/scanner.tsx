@@ -578,7 +578,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
 
   const autoTradeStatus = useQuery({
     queryKey: ["auto-trade-status-retired"],
-    queryFn: async () => ({ mode: "mock" as const, enabled: false, domesticSupported: false, usSupported: false, realKeyConfigured: false, executionKeyConfigured: false }),
+    queryFn: async () => ({ mode: "mock" as "real" | "mock", enabled: false, domesticSupported: false, usSupported: false, realKeyConfigured: false, executionKeyConfigured: false }),
     enabled: false,
     staleTime: Infinity,
   });
