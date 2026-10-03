@@ -874,7 +874,7 @@ def build_research_activity(root, now_ms=None, maximum_entries=200):
         failed = optional_integer_count(value.get('failedCount'))
         blocked = optional_integer_count(value.get('blockedDataCount'))
         success = optional_integer_count(value.get('successCount'))
-        detail = f"success={success if success is not None else '—'} / blocked={blocked if blocked is not None else '—'} / failed={failed if failed is not None else '—'}"
+        detail = f"성공={success if success is not None else '—'} / 자료부족={blocked if blocked is not None else '—'} / 실패={failed if failed is not None else '—'}"
         entry = _activity_entry(
             value.get('cycleId') or run_dir.name,
             at,
@@ -888,10 +888,10 @@ def build_research_activity(root, now_ms=None, maximum_entries=200):
             entries.append(entry)
 
     latest_sources = [
-        ('temporal', root / 'latest' / 'temporal-crypto-futures.json', 'generatedAt', 'Temporal Evidence'),
-        ('factory', root / 'latest' / 'research-factory.json', 'generatedAt', 'Research Factory'),
-        ('ai-review', root / 'ai-review' / 'latest.json', 'observedAt', 'AI Review'),
-        ('video-discovery', root / 'video-research' / 'latest.json', 'observedAt', 'YouTube Discovery'),
+        ('temporal', root / 'latest' / 'temporal-crypto-futures.json', 'generatedAt', '시점 자료'),
+        ('factory', root / 'latest' / 'research-factory.json', 'generatedAt', '연구 팩토리'),
+        ('ai-review', root / 'ai-review' / 'latest.json', 'observedAt', '인공지능 검토'),
+        ('video-discovery', root / 'video-research' / 'latest.json', 'observedAt', '영상 자료 탐색'),
     ]
     for source, path, time_key, label in latest_sources:
         try:
@@ -912,13 +912,13 @@ def build_research_activity(root, now_ms=None, maximum_entries=200):
         status = value.get('status', 'unknown')
         detail = None
         if source == 'temporal':
-            detail = f"observations={value.get('observationCount', '—')} / failed={value.get('failedCount', '—')}"
+            detail = f"표본={value.get('observationCount', '—')} / 실패={value.get('failedCount', '—')}"
         elif source == 'factory':
-            detail = f"firstZero={value.get('firstZero', '—')}"
+            detail = '연구 상태 갱신'
         elif source == 'ai-review':
-            detail = f"reviews={len(value.get('reviews') or [])} / blocked={len(value.get('blockedProfiles') or [])}"
+            detail = f"검토={len(value.get('reviews') or [])} / 보류={len(value.get('blockedProfiles') or [])}"
         elif source == 'video-discovery':
-            detail = f"sources={value.get('sourceCount', '—')} / next={value.get('nextRequiredStep', '—')}"
+            detail = f"자료={value.get('sourceCount', '—')}"
         entry = _activity_entry(f"{source}:{int(at)}", at, source, label, status, detail)
         if entry:
             entries.append(entry)
