@@ -439,6 +439,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
   const [result, setResult] = useState<BacktestResult | null>(initialResult);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const update = <K extends keyof BacktestFormValues>(key: K, value: BacktestFormValues[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
@@ -567,12 +568,14 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
             </Field>
           </div>
 
-          <details className="mt-4 rounded-2xl border border-border bg-background/50" data-testid="backtest-advanced-settings">
-            <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-black [&::-webkit-details-marker]:hidden">
-              고급 설정
-              <span aria-hidden className="text-muted-foreground">⌄</span>
-            </summary>
-            <div className="grid grid-cols-2 gap-3 border-t border-border p-4 md:grid-cols-4">
+          <button type="button" onClick={() => setAdvancedOpen(true)} className="mt-4 min-h-11 w-full rounded-xl border border-border bg-background px-4 text-sm font-black" data-testid="backtest-advanced-settings">
+            세부 설정
+          </button>
+          {advancedOpen ? (
+            <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdvancedOpen(false); }}>
+              <section role="dialog" aria-modal="true" aria-label="백테스트 세부 설정" className="max-h-[88vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl border border-border bg-card p-4 shadow-2xl sm:rounded-3xl">
+                <div className="mb-4 flex items-center justify-between gap-3"><h3 className="text-base font-black">세부 설정</h3><button type="button" onClick={() => setAdvancedOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-border" aria-label="닫기"><X className="h-4 w-4" /></button></div>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               {values.strategy === 'trend_pullback' ? (
                 <>
                   <Field label="빠른 EMA">
@@ -669,8 +672,11 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                   </Field>
                 </>
               ) : null}
+                </div>
+                <button type="button" onClick={() => setAdvancedOpen(false)} className="mt-4 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground">적용</button>
+              </section>
             </div>
-          </details>
+          ) : null}
 
           <button
             type="submit"
