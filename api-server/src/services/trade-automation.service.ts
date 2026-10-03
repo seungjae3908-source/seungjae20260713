@@ -80,7 +80,7 @@ function withMarketIntelligenceWarnings(decision: TradingRiskDecision, warnings:
 
 export function tradingIdempotencyKey(userId: string, input: TradingPlanInput) {
   return createHash('sha256').update([
-    userId, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
+    userId, input.accountMode, input.exchange, input.stockBroker ?? 'none', input.signalId, input.strategyId, input.market, input.symbol.toUpperCase(), input.side,
   ].join(':')).digest('hex');
 }
 
@@ -155,6 +155,13 @@ export class TradeAutomationService {
   }
 
   private async marketIntelligenceDecision(input: TradingPlanInput) {
+    if (input.reduceOnly === true) {
+      return {
+        allowed: true,
+        blockCode: null,
+        warnings: ['RISK_REDUCING_EXIT_MARKET_INTELLIGENCE_ENTRY_GATE_SKIPPED'],
+      };
+    }
     const intelligence = await fetchTradingPlanMarketIntelligence(input);
     return marketIntelligenceTradeDecision(intelligence, input.accountMode);
   }
@@ -189,6 +196,7 @@ export class TradeAutomationService {
     const now = new Date();
     const plan: TradingPlan = {
       ...input,
+      executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
       id: randomUUID(), userId, idempotencyKey,
       state: 'APPROVAL_PENDING',
       version: 0,
@@ -335,6 +343,8 @@ export class TradeAutomationService {
     if (typeof metadata.exchangeOrderId === 'string') next.exchangeOrderId = metadata.exchangeOrderId;
     if (typeof metadata.filledQuantity === 'number') next.filledQuantity = metadata.filledQuantity;
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
+    if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
+    if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
     if (typeof metadata.errorCode === 'string') next.lastErrorCode = metadata.errorCode;
     if (typeof metadata.preSubmissionCheckedAt === 'string') next.preSubmissionCheckedAt = metadata.preSubmissionCheckedAt;
     if (metadata.preSubmissionDecision && typeof metadata.preSubmissionDecision === 'object') {

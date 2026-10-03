@@ -54,10 +54,11 @@ for (const marker of [
   "startsWith(github.event.comment.body, '/run-staging-auth ')",
   "startsWith(github.event.comment.body, '/run-staging-auth-only ')",
   'Run one read-only PostgreSQL authentication probe',
+  'release-candidate-provenance.cjs',
+  'evaluatePostMergeStatusProvenance',
+  'inspectPostMergeStatusEvidence',
+  'Post-merge release provenance unavailable',
   'STAGING_AUTH_MODE: ${{ steps.command.outputs.mode }}',
-  "process.env.COMMAND_MODE !== 'auth-only'",
-  'Auth-only Required CI 6/6 does not share one coherent provenance run.',
-  'Auth-only Required CI provenance is not an exact successful target run.',
   'Paper-only PostgreSQL authentication succeeded without Staging dispatch.',
   '- Full Staging validation dispatched: `false`',
   '- Paper activation executed: `false`',
@@ -85,11 +86,11 @@ for (const marker of [
 const authIndex = workflow.indexOf('Run one read-only PostgreSQL authentication probe');
 const commandIndex = workflow.indexOf('Parse exact owner command');
 const exactShaIndex = workflow.indexOf('Require exact current main SHA');
-const requiredCiIndex = workflow.indexOf('Require successful verified main CI');
+const provenanceIndex = workflow.indexOf('Require verified post-merge release provenance');
 const dispatchIndex = workflow.indexOf("workflow_id: 'staging-readiness.yml'");
 assert(commandIndex >= 0 && commandIndex < exactShaIndex, 'owner and exact-command validation must execute first');
-assert(exactShaIndex < requiredCiIndex, 'TEST C: stale SHA must stop before Required CI and the PostgreSQL probe');
-assert(requiredCiIndex < authIndex, 'TEST D: incomplete Required CI must stop before the PostgreSQL probe');
+assert(exactShaIndex < provenanceIndex, 'TEST C: stale SHA must stop before release provenance and the PostgreSQL probe');
+assert(provenanceIndex < authIndex, 'TEST D: missing or invalid release provenance must stop before the PostgreSQL probe');
 assert(authIndex >= 0 && dispatchIndex > authIndex, 'staging dispatch must occur only after the authentication probe');
 const authOnlySuccessIndex = workflow.indexOf('if (authOnly) {');
 const authOnlyReturnIndex = workflow.indexOf('              return;', authOnlySuccessIndex);
@@ -152,4 +153,4 @@ assert(
   'Node.js runtime guard must execute before the staging account and browser lifecycle',
 );
 
-console.log('[staging-postgres-auth-contract] exact-SHA owner gate, read-only authentication, Node 22 account lifecycle, redacted diagnostics, success-only staging dispatch, and production isolation verified');
+console.log('[staging-postgres-auth-contract] exact-SHA owner gate, post-merge release provenance, read-only authentication, Node 22 account lifecycle, redacted diagnostics, success-only staging dispatch, and production isolation verified');

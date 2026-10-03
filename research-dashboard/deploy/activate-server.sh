@@ -142,6 +142,7 @@ verify_release() {
   local release="$1"
   [[ -d "$release" ]] || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/server.py" || return 1
+  "${SUDO[@]}" test -f "$release/research-dashboard/video_research_readback.py" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/v3_independence.py" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/deploy/research-dashboard.service" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/public/index.html" || return 1
@@ -191,10 +192,11 @@ PYTHON
 }
 
 probe_dashboard() (
-  local health overview
+  local health overview video
   health="$(mktemp)"
   overview="$(mktemp)"
-  trap 'rm -f "$health" "$overview"' EXIT
+  video="$(mktemp)"
+  trap 'rm -f "$health" "$overview" "$video"' EXIT
   local attempt ready=false
   for attempt in $(seq 1 20); do
     if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$PORT/api/health" -o "$health"; then
@@ -245,6 +247,24 @@ console.log(`V3_CONSUMER_STATUS=${li.status}`);
 NODE
   then
     echo 'Research Dashboard overview contract validation failed.' >&2
+    service_diagnostics
+    return 1
+  fi
+  if ! curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/api/research/video/evidence" -o "$video"; then
+    echo 'Research Dashboard video evidence endpoint request failed.' >&2
+    service_diagnostics
+    return 1
+  fi
+  if ! node - "$video" <<'NODE'
+const fs = require('node:fs');
+const v = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (v?.executionAuthority !== 'NONE' || v?.economicEvidenceCredit !== 0 || v?.profitabilityCredit !== 0) process.exit(1);
+if (v?.available !== true && v?.available !== false) process.exit(1);
+if (v?.automation?.scheduledInvocationObserved === true && v?.automation?.invocationMode !== 'SYSTEMD_TIMER') process.exit(1);
+if (v?.aiReview?.scheduledInvocationObserved === true && v?.aiReview?.invocationMode !== 'SYSTEMD_TIMER') process.exit(1);
+NODE
+  then
+    echo 'Research Dashboard video evidence contract validation failed.' >&2
     service_diagnostics
     return 1
   fi

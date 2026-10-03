@@ -490,7 +490,8 @@ test('automatic live plans require separate global automatic-live authority', as
       false,
     );
     assert.equal(authorizedGate.decision.blockCodes.includes('LIVE_EXECUTION_DISABLED'), false);
-    assert.ok(authorizedGate.decision.blockCodes.includes('AUTOMATIC_ECONOMICS_REQUIRED'));
+    assert.equal(authorizedGate.plan, null);
+    assert.ok(authorizedGate.decision.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
   } finally {
     setTradingPlanMarketIntelligenceRunnerForTests(null);
     for (const [key, value] of Object.entries(previous)) {

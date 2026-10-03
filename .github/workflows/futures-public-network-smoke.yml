@@ -1,9 +1,6 @@
 name: Application CI
 
 on:
-  pull_request:
-    types:
-      - ready_for_review
   workflow_dispatch:
     inputs:
       target_sha:
@@ -15,30 +12,13 @@ on:
         required: false
         type: string
       pr_number:
-        description: Optional pull request number for Ready Gate validation.
+        description: Optional pull request number for pre-merge gate validation.
         required: false
         type: string
       base_ref:
         description: Optional pull request base ref for current-base validation.
         required: false
         type: string
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/futures-public-network-smoke.yml
-      - .github/scripts/**
-      - .github/tests/**
-      - .github/fixtures/**
-      - pnpm-lock.yaml
-      - pnpm-workspace.yaml
-      - package.json
-      - api-server/**
-      - stock-analyzer/**
-      - packages/**
-      - market-intelligence-sidecar/**
-      - market-prediction-lab/**
-      - .github/workflows/public-forward-liquidity-*.yml
 
 permissions:
   actions: read
@@ -92,7 +72,7 @@ jobs:
           echo "checkout_mode=DETACHED"
 
   ready-gate:
-    name: Ready preflight and current-base virtual merge gate
+    name: Pre-merge current-base virtual merge gate
     needs: exact-head
     if: always()
     runs-on: ubuntu-latest
@@ -111,7 +91,7 @@ jobs:
         with:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: ready preflight`, context: 'application-ci/verified' });
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state: 'pending', target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: pre-merge gate`, context: 'application-ci/verified' });
 
       - name: Checkout exact candidate
         uses: actions/checkout@v4
@@ -156,18 +136,38 @@ jobs:
             } while (cursor);
             if (unresolved !== 0) { core.setFailed(`[READY_REVIEW_THREADS_OPEN] ${unresolved}`); return; }
 
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, { owner: context.repo.owner, repo: context.repo.repo, head_sha: targetSha, event: 'pull_request', per_page: 100 });
-            const fastRuns = runs.filter((run) => run.name === 'Application Fast CI' && String(run.head_sha).toLowerCase() === targetSha).sort((a, b) => b.id - a.id);
-            const latestFast = fastRuns[0];
+            const readLatestFast = async () => {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner, repo: context.repo.repo, head_sha: targetSha, event: 'pull_request', per_page: 100,
+              });
+              return runs
+                .filter((run) => run.name === 'Application Fast CI' && String(run.head_sha).toLowerCase() === targetSha)
+                .sort((a, b) => b.id - a.id)[0] ?? null;
+            };
+            let latestFast = await readLatestFast();
+            const terminalFailure = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'stale', 'startup_failure']);
+            for (let attempt = 0; attempt < 45; attempt += 1) {
+              if (latestFast?.conclusion === 'success') break;
+              if (latestFast?.conclusion && terminalFailure.has(latestFast.conclusion)) break;
+              if (attempt === 44) break;
+              core.info(`Fast CI exact-head run is not terminal yet; bounded wait attempt=${attempt + 1}/45 run=${latestFast?.id ?? 'MISSING'} status=${latestFast?.status ?? 'MISSING'}`);
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              const currentPr = await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber });
+              if (String(currentPr.data.head.sha).toLowerCase() !== targetSha) {
+                core.setFailed(`[READY_HEAD_MOVED] expected=${targetSha} actual=${currentPr.data.head.sha}`);
+                return;
+              }
+              latestFast = await readLatestFast();
+            }
             if (!latestFast || latestFast.conclusion !== 'success') {
-              core.setFailed(`[READY_FAST_CI_NOT_GREEN] latest=${latestFast ? `${latestFast.id}:${latestFast.conclusion}` : 'MISSING'}`);
+              core.setFailed(`[READY_FAST_CI_NOT_GREEN] latest=${latestFast ? `${latestFast.id}:${latestFast.status}:${latestFast.conclusion}` : 'MISSING'}`);
               return;
             }
-            core.info(`Ready Gate PASS for PR #${prNumber}, head ${targetSha}, Fast CI ${latestFast.id}.`);
+            core.info(`Pre-merge Gate PASS for PR #${prNumber}, head ${targetSha}, Fast CI ${latestFast.id}.`);
 
       - name: Non-PR dispatch boundary
         if: env.APPLICATION_PR_NUMBER == ''
-        run: echo 'No PR metadata supplied; exact-SHA canonical CI remains allowed for main/manual control paths.'
+        run: echo 'No PR metadata supplied; exact-SHA canonical CI remains available only as a manual recovery path.'
 
       - name: Publish Ready Gate failure
         if: failure() || cancelled()
@@ -176,7 +176,7 @@ jobs:
           script: |
             const sha = process.env.APPLICATION_STATUS_SHA;
             const state = '${{ job.status }}' === 'cancelled' ? 'error' : 'failure';
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: Ready Gate failed`, context: 'application-ci/verified' });
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`, description: `Application CI run ${context.runId}: Pre-merge Gate failed`, context: 'application-ci/verified' });
 
   application-build:
     name: Typecheck and build exact candidate once
@@ -327,7 +327,7 @@ jobs:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
           persist-credentials: false
 
-      - name: Find latest successful main adaptive weights
+      - name: Find latest successful Application CI adaptive weights
         id: adaptive
         uses: actions/github-script@v8
         with:
@@ -336,7 +336,7 @@ jobs:
             const repo = context.repo.repo;
             const workflowId = 'futures-public-network-smoke.yml';
             const { data: runPage } = await github.rest.actions.listWorkflowRuns({
-              owner, repo, workflow_id: workflowId, branch: 'main', event: 'push', status: 'success', per_page: 20,
+              owner, repo, workflow_id: workflowId, event: 'workflow_dispatch', status: 'success', per_page: 50,
             });
             const runs = runPage.workflow_runs ?? [];
             for (const run of runs) {
@@ -357,7 +357,7 @@ jobs:
               return;
             }
             core.setOutput('found', 'false');
-            core.info('No prior successful main adaptive Browser weights; using repository baseline.');
+            core.info('No prior successful Application CI adaptive Browser weights; using repository baseline.');
 
       - name: Download prior adaptive Browser weights
         if: steps.adaptive.outputs.found == 'true'
@@ -377,7 +377,7 @@ jobs:
             adaptive_file="$(find /tmp/browser-prior-adaptive -type f -name 'browser-runtime-weights-next.json' -print -quit)"
             [[ -n "$adaptive_file" ]] || { echo '[ADAPTIVE_BROWSER_WEIGHTS_FILE_MISSING]' >&2; exit 1; }
             cp "$adaptive_file" /tmp/browser-active/browser-runtime-weights-active.json
-            echo 'weight_source=ADAPTIVE_MAIN_ARTIFACT' >> "$GITHUB_STEP_SUMMARY"
+            echo 'weight_source=ADAPTIVE_PREMERGE_ARTIFACT' >> "$GITHUB_STEP_SUMMARY"
             echo 'source_run=${{ steps.adaptive.outputs.run_id }}' >> "$GITHUB_STEP_SUMMARY"
             echo 'source_sha=${{ steps.adaptive.outputs.source_sha }}' >> "$GITHUB_STEP_SUMMARY"
           else

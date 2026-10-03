@@ -2,129 +2,127 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   evidenceBackedAutoStrategyCatalog,
-  evaluateEvidenceBackedAutoStrategyGate,
+  evaluateStrategyRulePackGate,
+  type StrategyRulePackId,
 } from './evidence-backed-auto-strategy-catalog.service';
 
-function readiness(strategyId: string, extra: Record<string, boolean> = {}) {
+function evidence(strategyId: StrategyRulePackId, extra: Record<string, unknown> = {}) {
   return {
-    evidenceBackedStrategyReadiness: {
+    strategyRulePackEvidence: {
       strategyId,
-      publicDataReady: true,
-      sourceFaithfulReplicationReady: true,
-      oosPassed: true,
-      walkForwardPassed: true,
-      fullCostPassed: true,
-      strategyHealthPassed: true,
+      dataReady: true,
+      formulaReady: true,
+      waveStructureReady: true,
+      indicatorReady: true,
+      entryTriggerReady: true,
+      liquidityReady: true,
+      costEvidenceReady: true,
+      riskReady: true,
+      aiReviewReady: true,
+      aiDecision: 'PASS',
       ...extra,
     },
   };
 }
 
-// Node's built-in test runner is used throughout api-server.
+test('registers the six requested rule packs and never grants automatic live promotion', () => {
+  const catalog = evidenceBackedAutoStrategyCatalog();
+  assert.equal(catalog.length, 6);
+  assert.deepEqual(catalog.map((row) => row.strategyId), [
+    'TREND_PULLBACK_REACCEL_V1',
+    'US_EVENT_RVOL_FIRST_PULLBACK_V1',
+    'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+    'KR_PRESSURE_BREAKOUT_V1',
+    'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+    'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+  ]);
+  assert.equal(catalog.every((row) => row.automaticLivePromotionAllowed === false), true);
+});
 
-  test('registers exactly the four requested strategy axes as NO_TRADE by default', () => {
-    const catalog = evidenceBackedAutoStrategyCatalog();
-    assert.deepEqual(catalog.map((row) => row.strategyId), [
-      'CEX_DEX_ARBITRAGE_V1',
-      'US_STOCKS_IN_PLAY_ORB_V1',
-      'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
-      'KR_ML_CHARTING_V1',
-    ]);
-    assert.equal(catalog.every((row) => row.defaultState === 'NO_TRADE'), true);
-    assert.equal(catalog.every((row) => row.automaticLivePromotionAllowed === false), true);
+test('missing rule evidence fails closed before Paper plan creation', () => {
+  const result = evaluateStrategyRulePackGate({
+    strategyId: 'TREND_PULLBACK_REACCEL_V1',
+    market: 'CRYPTO_SPOT',
+    direction: 'BUY',
+    learningSnapshot: null,
   });
+  assert.equal(result.recognized, true);
+  assert.equal(result.state, 'NO_TRADE');
+  assert.equal(result.paperAllowed, false);
+  assert.equal(result.liveAllowed, false);
+  assert.ok(result.blockers.includes('STRATEGY_RULE_PACK_EVIDENCE_REQUIRED'));
+});
 
-  test('fails closed when readiness evidence is absent', () => {
-    const result = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
-      market: 'US_STOCK',
-      learningSnapshot: null,
-    });
-    assert.equal(result.recognized, true);
-    assert.equal(result.state, 'NO_TRADE');
-    assert.equal(result.paperAllowed, false);
-    assert.equal(result.liveAllowed, false);
-    assert.ok(result.blockers.includes('EVIDENCE_STRATEGY_READINESS_REQUIRED'));
+test('trend pullback can enter Paper only after formula wave indicator reacceleration evidence is complete', () => {
+  const result = evaluateStrategyRulePackGate({
+    strategyId: 'TREND_PULLBACK_REACCEL_V1',
+    market: 'CRYPTO_SPOT',
+    direction: 'BUY',
+    learningSnapshot: evidence('TREND_PULLBACK_REACCEL_V1', {
+      trendRegimeReady: true,
+      pullbackReady: true,
+      reaccelerationReady: true,
+      volumeAccelerationReady: true,
+    }),
   });
+  assert.equal(result.state, 'PAPER_CANDIDATE');
+  assert.equal(result.paperAllowed, true);
+  assert.equal(result.liveAllowed, false);
+});
 
-  test('allows US Stocks-in-Play only after exact intraday/OOS/full-cost readiness', () => {
-    const blocked = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
-      market: 'US_STOCK',
-      learningSnapshot: readiness('US_STOCKS_IN_PLAY_ORB_V1', {
-        pitUniverseReady: true,
-        intraday5mReady: false,
-        first5mRvolReady: true,
-        openingRangeReady: true,
-      }),
-    });
-    assert.equal(blocked.paperAllowed, false);
-    assert.equal(blocked.blockers.some((code) => code.includes('INTRADAY5M')), true);
-
-    const ready = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
-      market: 'US_STOCK',
-      learningSnapshot: readiness('US_STOCKS_IN_PLAY_ORB_V1', {
-        pitUniverseReady: true,
-        intraday5mReady: true,
-        first5mRvolReady: true,
-        openingRangeReady: true,
-      }),
-    });
-    assert.equal(ready.state, 'PAPER_CANDIDATE');
-    assert.equal(ready.paperAllowed, true);
-    assert.equal(ready.liveAllowed, false);
+test('AI VETO blocks even when deterministic market conditions are ready', () => {
+  const result = evaluateStrategyRulePackGate({
+    strategyId: 'KR_PRESSURE_BREAKOUT_V1',
+    market: 'KR_STOCK',
+    direction: 'BUY',
+    learningSnapshot: evidence('KR_PRESSURE_BREAKOUT_V1', {
+      pressureReady: true,
+      compressionReady: true,
+      volumeExpansionReady: true,
+      breakoutReady: true,
+      aiDecision: 'VETO',
+    }),
   });
+  assert.equal(result.paperAllowed, false);
+  assert.ok(result.blockers.includes('STRATEGY_RULE_PACK_AI_VETO'));
+});
 
-  test('requires multi-exchange flow and frozen model for Crypto World Order Flow ML', () => {
-    const result = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
-      market: 'CRYPTO_SPOT',
-      learningSnapshot: readiness('CRYPTO_WORLD_ORDER_FLOW_ML_V1', {
-        multiExchangeOrderFlowReady: true,
-        modelFrozen: true,
-      }),
-    });
-    assert.equal(result.paperAllowed, true);
-    assert.equal(result.liveAllowed, false);
+test('cash rule packs reject SHORT while futures flow admits LONG and SHORT', () => {
+  const spot = evaluateStrategyRulePackGate({
+    strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+    market: 'CRYPTO_SPOT',
+    direction: 'SHORT',
+    learningSnapshot: evidence('CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1', {
+      orderFlowReady: true, cvdReady: true, takerBuyReady: true,
+      orderbookImbalanceReady: true, mlRankReady: true, modelFrozen: true,
+    }),
   });
+  assert.equal(spot.paperAllowed, false);
+  assert.ok(spot.blockers.includes('STRATEGY_RULE_PACK_DIRECTION_FORBIDDEN'));
 
-  test('requires PIT universe and frozen model for KR ML Charting', () => {
-    const result = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'KR_ML_CHARTING_V1',
-      market: 'KR_STOCK',
-      learningSnapshot: readiness('KR_ML_CHARTING_V1', {
-        pitUniverseReady: true,
-        modelFrozen: true,
-      }),
-    });
-    assert.equal(result.paperAllowed, true);
-    assert.equal(result.liveAllowed, false);
-  });
-
-  test('keeps CEX↔DEX arbitrage NO_TRADE until the canonical engine supports atomic multi-leg execution', () => {
-    const result = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'CEX_DEX_ARBITRAGE_V1',
+  for (const direction of ['LONG', 'SHORT'] as const) {
+    const futures = evaluateStrategyRulePackGate({
+      strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
       market: 'CRYPTO_FUTURES',
-      learningSnapshot: readiness('CEX_DEX_ARBITRAGE_V1', {
-        dexExecutionProviderReady: true,
-        atomicHedgeReady: true,
-        crossVenueCostReady: true,
-        multiLegExecutionAdapterReady: true,
+      direction,
+      learningSnapshot: evidence('CRYPTO_FUTURES_FLOW_TREND_WAVE_V1', {
+        orderFlowReady: true, oiReady: true, cvdReady: true,
+        takerFlowReady: true, fundingRiskReady: true,
       }),
     });
-    assert.equal(result.paperAllowed, false);
-    assert.equal(result.state, 'NO_TRADE');
-    assert.ok(result.blockers.includes('EVIDENCE_STRATEGY_CROSS_VENUE_ATOMIC_EXECUTION_REQUIRED'));
-  });
+    assert.equal(futures.paperAllowed, true);
+    assert.equal(futures.liveAllowed, false);
+  }
+});
 
-  test('passes unknown strategies through so existing automation behavior is unchanged', () => {
-    const result = evaluateEvidenceBackedAutoStrategyGate({
-      strategyId: 'EXISTING_STRATEGY',
-      market: 'US_STOCK',
-      learningSnapshot: null,
-    });
-    assert.equal(result.recognized, false);
-    assert.equal(result.state, 'PASS_THROUGH');
-    assert.equal(result.paperAllowed, true);
+test('unknown existing strategies pass through unchanged', () => {
+  const result = evaluateStrategyRulePackGate({
+    strategyId: 'trend-breakout-v1',
+    market: 'CRYPTO_SPOT',
+    direction: 'BUY',
+    learningSnapshot: null,
   });
+  assert.equal(result.recognized, false);
+  assert.equal(result.state, 'PASS_THROUGH');
+  assert.equal(result.paperAllowed, true);
+});

@@ -91,7 +91,14 @@ async function withProviderDeadline<T>(
   try {
     return await operation(controller.signal);
   } catch (error) {
-    if (deadlineExpired) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+    if (deadlineExpired) {
+      if (error instanceof AccountReadonlyError
+        && error.code === 'PROVIDER_TIMEOUT'
+        && error.bitgetDiagnostic !== null) {
+        throw error;
+      }
+      throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+    }
     throw error;
   } finally {
     clearTimeout(timer);
@@ -161,12 +168,56 @@ function classifyBitgetHttpFailure(status: number, applicationCode: string | nul
   return new AccountReadonlyError('BITGET_REQUEST_REJECTED');
 }
 
+function classifyBitgetTransportFailure(value: unknown, aborted: boolean) {
+  const root = objectRecord(value);
+  const cause = objectRecord(root?.cause);
+  const rawCode = cause?.code ?? root?.code;
+  const code = typeof rawCode === 'string' ? rawCode.trim().toUpperCase() : '';
+
+  if (aborted || code.includes('TIMEOUT') || code === 'ETIMEDOUT') {
+    return {
+      error: new AccountReadonlyError('PROVIDER_TIMEOUT', true),
+      sanitizedClassification: 'BITGET_TRANSPORT_TIMEOUT',
+    } as const;
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ENODATA') {
+    return {
+      error: new AccountReadonlyError('PROVIDER_UNAVAILABLE', false),
+      sanitizedClassification: 'BITGET_TRANSPORT_DNS',
+    } as const;
+  }
+  if (code.startsWith('ERR_TLS_') || code.includes('CERT') || code.includes('TLS') || code.includes('SSL')) {
+    return {
+      error: new AccountReadonlyError('PROVIDER_UNAVAILABLE', false),
+      sanitizedClassification: 'BITGET_TRANSPORT_TLS',
+    } as const;
+  }
+  if ([
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'EPIPE',
+    'UND_ERR_SOCKET',
+  ].includes(code)) {
+    return {
+      error: new AccountReadonlyError('PROVIDER_UNAVAILABLE', false),
+      sanitizedClassification: 'BITGET_TRANSPORT_CONNECT',
+    } as const;
+  }
+  return {
+    error: new AccountReadonlyError('PROVIDER_UNAVAILABLE', false),
+    sanitizedClassification: 'BITGET_TRANSPORT_NETWORK',
+  } as const;
+}
+
 function withBitgetFailureDiagnostic(
   error: AccountReadonlyError,
   request: PreparedExchangeRequest,
   expectedOrigin: string,
-  httpStatus: number,
+  httpStatus: number | null,
   applicationCode: string | null,
+  sanitizedClassificationOverride?: string,
 ) {
   const metadata = request.bitgetReadonlyDiagnostic;
   if (!metadata || metadata.provider !== 'bitget') return error;
@@ -179,11 +230,12 @@ function withBitgetFailureDiagnostic(
     probe: metadata.probe,
     httpStatus,
     applicationCode,
-    sanitizedClassification: error.code === 'BITGET_AUTH_FAILED'
-      && httpStatus === 401
-      && applicationCode === null
-      ? 'BITGET_HTTP_401_NO_APPLICATION_CODE'
-      : error.code,
+    sanitizedClassification: sanitizedClassificationOverride
+      ?? (error.code === 'BITGET_AUTH_FAILED'
+        && httpStatus === 401
+        && applicationCode === null
+        ? 'BITGET_HTTP_401_NO_APPLICATION_CODE'
+        : error.code),
     fallbackAttempted: metadata.fallbackAttempted === true,
     timestampRejected: error.code === 'BITGET_TIMESTAMP_REJECTED',
     productionHost: expectedOrigin === 'https://api.bitget.com',
@@ -248,6 +300,17 @@ function createReadonlyTransport(
         cache: 'no-store',
       });
     } catch (error) {
+      if (provider === 'bitget') {
+        const failure = classifyBitgetTransportFailure(error, signal?.aborted === true);
+        throw withBitgetFailureDiagnostic(
+          failure.error,
+          request,
+          expectedOrigin,
+          null,
+          null,
+          failure.sanitizedClassification,
+        );
+      }
       if (signal?.aborted) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
       throw error;
     }

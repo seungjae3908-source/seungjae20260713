@@ -47,11 +47,13 @@ type Status = {
   evidenceBackedStrategies?: Array<{
     strategyId: string;
     label: string;
-    market: 'US_STOCK' | 'KR_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' | 'CROSS_VENUE_CRYPTO';
-    researchRole: string;
-    defaultState: 'NO_TRADE';
-    paperRequirements: string[];
+    markets: Array<'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES'>;
+    directions: Array<'BUY' | 'LONG' | 'SHORT'>;
+    summary: string;
+    rules: string[];
+    paperResearchAllowedWhenReady: true;
     automaticLivePromotionAllowed: false;
+    promotionRequirements: string[];
   }>;
 };
 
@@ -199,6 +201,18 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     }));
   }
 
+  function toggleStrategy(strategyId: string) {
+    setDraft((current) => {
+      const selected = current.enabledStrategies.includes(strategyId);
+      return {
+        ...current,
+        enabledStrategies: selected
+          ? current.enabledStrategies.filter((item) => item !== strategyId)
+          : [...current.enabledStrategies, strategyId],
+      };
+    });
+  }
+
   function toggleMarket(market: Market) {
     setDraft((current) => {
       const marketEnabled = { ...current.marketEnabled, [market]: !current.marketEnabled[market] };
@@ -207,18 +221,6 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         mode: 'automatic',
         marketEnabled,
         exchangeEnabled: exchangesForMarkets(marketEnabled, current.stockBrokerByMarket),
-      };
-    });
-  }
-
-  function toggleStrategy(strategyId: string) {
-    setDraft((current) => {
-      const enabled = current.enabledStrategies.includes(strategyId);
-      return {
-        ...current,
-        enabledStrategies: enabled
-          ? current.enabledStrategies.filter((item) => item !== strategyId)
-          : [...current.enabledStrategies, strategyId],
       };
     });
   }
@@ -446,17 +448,17 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
 
-    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="evidence-backed-auto-strategies">
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="strategy-rule-pack-cards">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-extrabold">연구 기반 자동매매 전략</p>
+          <p className="text-xs font-extrabold">수식·파동·보조지표·AI 룰팩</p>
           <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-            전략은 자동매매에 등록되어 있지만, 로컬 OOS·Walk-forward·Full Cost·전략건강성 준비도가 확인되기 전에는 NO_TRADE입니다.
+            룰 증거가 모두 준비된 전략만 자동모의매매 후보가 됩니다. 이 6개 전략은 이 단계에서 실자동매매로 승격되지 않습니다.
           </p>
         </div>
         <ShieldAlert className="h-4 w-4 shrink-0 text-muted-foreground" />
       </div>
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
         {status!.evidenceBackedStrategies!.map((strategy) => {
           const selected = draft.enabledStrategies.includes(strategy.strategyId);
           return <button
@@ -464,7 +466,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
             type="button"
             onClick={() => toggleStrategy(strategy.strategyId)}
             className="rounded-xl border border-card-border bg-card p-3 text-left"
-            data-testid={`evidence-strategy-${strategy.strategyId}`}
+            data-testid={'strategy-rule-pack-' + strategy.strategyId}
             aria-pressed={selected}
           >
             <div className="flex items-center justify-between gap-2">
@@ -473,16 +475,16 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
                 {selected ? '선택됨' : '대기'}
               </span>
             </div>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">{strategy.researchRole}</p>
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{strategy.summary}</p>
             <p className="mt-2 text-[10px] font-bold text-muted-foreground">
-              기본 상태 {strategy.defaultState} · 자동 실주문 승격 없음
+              Paper 연구 가능 · 실자동 승격 차단
             </p>
           </button>;
         })}
       </div>
     </div> : null}
 
-        <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
+    <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       허용 전략
       <input
         aria-label="허용 전략"

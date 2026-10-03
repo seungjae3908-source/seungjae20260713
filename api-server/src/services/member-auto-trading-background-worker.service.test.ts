@@ -6,6 +6,8 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
+  liveBackgroundEnabled,
+  marketMapping,
   resolveMemberStockBroker,
   startMemberAutoTradingBackgroundWorker,
   type MemberAutoTradingBackgroundSource,
@@ -204,10 +206,17 @@ function paperRepository(nowMs: number): PaperJournalRepository {
 function source(
   repository: InMemoryTradingRepository,
   nowMs: number,
-  options: { missingRecentMove?: boolean; tier?: 'pending' | 'associate' } = {},
+  options: {
+    missingRecentMove?: boolean;
+    tier?: 'pending' | 'associate';
+    handoffMissing?: boolean;
+    markPrice?: number;
+  } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
-    async readHandoff() { return handoff(nowMs, options.missingRecentMove) as never; },
+    async readHandoff() {
+      return options.handoffMissing ? null : handoff(nowMs, options.missingRecentMove) as never;
+    },
     async listEligibleMembers() {
       return [{
         userId: USER,
@@ -229,6 +238,18 @@ function source(
         source: 'NATIVE_KRW',
         observedAt: new Date(nowMs).toISOString(),
         stale: false,
+      };
+    },
+    async readLiveAccountSnapshot() {
+      throw new Error('LIVE_ACCOUNT_READ_MUST_NOT_RUN_WHEN_DISABLED');
+    },
+    async readMarketMark() {
+      return {
+        market: 'CRYPTO_SPOT',
+        symbol: 'BTC',
+        price: options.markPrice ?? 100_050,
+        observedAt: new Date(nowMs).toISOString(),
+        source: 'test-public-mark',
       };
     },
   };
@@ -285,6 +306,28 @@ test('member stock broker routing is user-selectable for stocks and fixed away f
   const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
   assert.equal(resolveMemberStockBroker(legacy, 'KR_STOCK'), 'kiwoom');
   assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
+});
+
+test('stock automatic routing uses the selected Toss or Kiwoom provider as the canonical exchange', () => {
+  const base = policy();
+  const toss = normalizeTradingPolicy({
+    ...base,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+    exchangeEnabled: { ...base.exchangeEnabled, toss: true, kiwoom: false },
+  });
+  assert.deepEqual(marketMapping('KR_STOCK', toss), {
+    exchange: 'toss', assetClass: 'domestic_stock', planMarket: 'KR', stockBroker: 'toss',
+  });
+  assert.deepEqual(marketMapping('US_STOCK', toss), {
+    exchange: 'toss', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'toss',
+  });
+  const kiwoom = normalizeTradingPolicy({
+    ...base,
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+    exchangeEnabled: { ...base.exchangeEnabled, toss: false, kiwoom: true },
+  });
+  assert.equal(marketMapping('KR_STOCK', kiwoom).exchange, 'kiwoom');
+  assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
 test('background worker is default OFF without explicit activation flag', () => {
@@ -398,7 +441,99 @@ test('market OFF policy skips candidate without creating a plan', async () => {
 });
 
 
-test('evidence-backed strategy is blocked before plan creation when research readiness is missing', async () => {
+test('live background lane requires every explicit live authority flag', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    assert.equal(liveBackgroundEnabled(), true);
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'false';
+    assert.equal(liveBackgroundEnabled(), false);
+    process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+    process.env.REAL_ORDER_ENABLED = 'false';
+    assert.equal(liveBackgroundEnabled(), false);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only worker never touches live account reader when live lane is disabled', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let liveReads = 0;
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    readLiveAccountSnapshot: async () => {
+      liveReads += 1;
+      throw new Error('LIVE_READ_MUST_NOT_RUN');
+    },
+  });
+  try {
+    for (const key of keys) delete process.env[key];
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(liveReads, 0);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.privateTradingRequests, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+
+test('automatic Paper exit closes a tracked position even when the next handoff is missing', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const firstWorker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { markPrice: 100_050 }));
+  const first = await withFetchMock(() => firstWorker.runOnce(new Date(nowMs)));
+  assert.equal(first.filledOrders, 1);
+  assert.equal(first.paperExitOrders, 0);
+
+  const secondWorker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs + 5_000, { handoffMissing: true, markPrice: 90_000 }),
+  );
+  const second = await withFetchMock(() => secondWorker.runOnce(new Date(nowMs + 5_000)));
+  assert.equal(second.handoffStatus, 'MISSING');
+  assert.equal(second.paperExitOrders, 1);
+  assert.equal(second.liveExitOrders, 0);
+  const plans = await repository.listPlans(USER);
+  const exitPlan = plans.find((plan) => plan.reduceOnly === true);
+  assert.ok(exitPlan);
+  assert.ok(exitPlan.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
+  const orders = await repository.listOrders(USER);
+  const exitOrder = orders.find((order) => order.planId === exitPlan!.id);
+  assert.equal(exitOrder?.state, 'FILLED');
+  assert.equal(exitOrder?.filledQuantity, 0.1);
+});
+
+
+test('new rule-pack signal is blocked before plan creation when deterministic evidence is missing', async () => {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, policy());
@@ -407,54 +542,82 @@ test('evidence-backed strategy is blocked before plan creation when research rea
     ...base,
     async readHandoff() {
       const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
-      value.entries[0].identity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
-      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
       return value;
     },
   });
-
   const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
   assert.equal(result.blocked, 1);
   assert.equal(result.evaluated, 0);
   assert.equal(result.createdPlans, 0);
-  assert.equal((await repository.listPlans(USER)).length, 0);
   assert.equal((await repository.listOrders(USER)).length, 0);
 });
 
-test('evidence-backed strategy can enter canonical Paper lane only after local readiness gates pass', async () => {
+test('complete rule-pack evidence enters canonical Paper but never crosses into live background', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, policy());
+  let liveReads = 0;
   const base = source(repository, nowMs);
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
     async readHandoff() {
       const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
-      value.entries[0].identity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
-      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_WORLD_ORDER_FLOW_ML_V1';
-      value.entries[0].signal.learningSnapshot.evidenceBackedStrategyReadiness = {
-        strategyId: 'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
-        publicDataReady: true,
-        sourceFaithfulReplicationReady: true,
-        oosPassed: true,
-        walkForwardPassed: true,
-        fullCostPassed: true,
-        strategyHealthPassed: true,
-        multiExchangeOrderFlowReady: true,
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.learningSnapshot.strategyRulePackEvidence = {
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        dataReady: true,
+        formulaReady: true,
+        waveStructureReady: true,
+        indicatorReady: true,
+        entryTriggerReady: true,
+        liquidityReady: true,
+        costEvidenceReady: true,
+        riskReady: true,
+        aiReviewReady: true,
+        aiDecision: 'PASS',
+        orderFlowReady: true,
+        cvdReady: true,
+        takerBuyReady: true,
+        orderbookImbalanceReady: true,
+        mlRankReady: true,
         modelFrozen: true,
       };
       return value;
     },
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('RULE_PACK_MUST_NOT_TOUCH_LIVE');
+    },
   });
-
-  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
-  assert.equal(result.blocked, 0);
-  assert.equal(result.evaluated, 1);
-  assert.equal(result.createdPlans, 1);
-  assert.equal(result.filledOrders, 1);
-  const plans = await repository.listPlans(USER);
-  assert.equal(plans.length, 1);
-  assert.ok(plans[0].signalReasons.includes('EVIDENCE_BACKED_STRATEGY:CRYPTO_WORLD_ORDER_FLOW_ML_V1'));
-  assert.ok(plans[0].signalReasons.includes('EVIDENCE_BACKED_GATE:PAPER_CANDIDATE'));
-  assert.equal(plans[0].accountMode, 'paper');
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.createdPlans, 1);
+    assert.equal(result.filledOrders, 1);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.privateTradingRequests, 0);
+    assert.equal(liveReads, 0);
+    const plans = await repository.listPlans(USER);
+    assert.equal(plans[0]?.accountMode, 'paper');
+    assert.ok(plans[0]?.signalReasons.includes('STRATEGY_RULE_PACK:CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1'));
+    assert.ok(plans[0]?.signalReasons.includes('STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE'));
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
