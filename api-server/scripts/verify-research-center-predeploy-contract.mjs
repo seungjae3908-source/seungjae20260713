@@ -162,7 +162,8 @@ requireText(shadowWorkflow, 'jq -sr --arg owner "$recovery_owner" --arg expected
 forbidText(shadowWorkflow, 'comments_json=', 'Shadow buffered Hub history');
 forbidText(shadowWorkflow, '--paginate --slurp', 'Shadow slurped Hub history');
 requireText(shadowTest, 'authoritative', 'Shadow authoritative history regression coverage');
-requireText(shadowTest, 'flatten\\(1\\)', 'Shadow streamed pagination regression coverage');
+requireText(shadowTest, 'canonical predecessor discovery must paginate successful publisher history', 'Shadow successful Publisher pagination regression coverage');
+requireText(shadowTest, 'recovery approval pagination must stream rather than materialize malformed slurped JSON', 'Shadow streamed recovery regression coverage');
 
 const multiMarket = files['.github/workflows/prediction-lab-52d-validation.yml'];
 requireText(multiMarket, 'Record explicit research hold when required temporal evidence is incomplete', 'Multi-Market temporal hold');
