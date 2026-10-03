@@ -42,10 +42,10 @@ test('desktop creates, partially closes, fully closes and journals a paper posit
   await page.getByTestId('confirm-paper-order').click();
   await expect(page.getByTestId('paper-positions').getByText('BTCUSDT 롱')).toBeVisible();
   await page.getByTestId('paper-positions').getByRole('button', { name: '25%' }).click();
-  await expect(page.getByTestId('paper-positions').getByText('partially_closed')).toBeVisible();
+  await expect(page.getByTestId('paper-positions').getByText('부분 청산')).toBeVisible();
   await page.getByTestId('paper-positions').getByRole('button', { name: '전체청산' }).click();
   await expect(page.getByTestId('paper-positions').getByText('열린 모의포지션이 없습니다.')).toBeVisible();
-  await expect(page.getByTestId('paper-journal').getByText(/BTCUSDT long/)).toBeVisible();
+  await expect(page.getByTestId('paper-journal').getByText(/BTCUSDT 롱/)).toBeVisible();
   await expect.poll(() => errors).toEqual([]);
   await assertNoHorizontalOverflow(page);
 });
@@ -55,9 +55,9 @@ test('limit paper order stays pending and can be cancelled', async ({ page }) =>
   await page.getByLabel('주문 유형').selectOption('limit');
   await page.getByTestId('paper-submit').click();
   await page.getByTestId('confirm-paper-order').click();
-  await expect(page.getByTestId('paper-orders').getByText(/pending/)).toBeVisible();
+  await expect(page.getByTestId('paper-orders').getByText(/대기/)).toBeVisible();
   await page.getByTestId('paper-orders').getByRole('button', { name: '취소' }).click();
-  await expect(page.getByTestId('paper-orders').getByText(/cancelled/)).toBeVisible();
+  await expect(page.getByTestId('paper-orders').getByText(/취소됨/)).toBeVisible();
 });
 
 test('state restores after reload', async ({ page }) => {
@@ -69,10 +69,10 @@ test('state restores after reload', async ({ page }) => {
   await expect(page.getByText('BTCUSDT 롱')).toBeVisible();
 });
 
-test('JSON export creates a download', async ({ page }) => {
+test('record export creates a download', async ({ page }) => {
   await openAt(page, 1440, 900);
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'JSON 내보내기' }).click();
+  await page.getByRole('button', { name: '기록 내보내기' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toMatch(/^paper-trading-.*\.json$/);
 });
@@ -110,7 +110,7 @@ test('direct quantity closes only the requested portion', async ({ page }) => {
   await page.getByTestId('confirm-paper-order').click();
   await page.getByLabel('BTCUSDT 직접 청산 수량').fill('0.002');
   await page.getByRole('button', { name: '수량 청산' }).click();
-  await expect(page.getByTestId('paper-positions').getByText('partially_closed')).toBeVisible();
+  await expect(page.getByTestId('paper-positions').getByText('부분 청산')).toBeVisible();
 });
 
 test('execution error clears busy state and renders safe alert', async ({ page }) => {
