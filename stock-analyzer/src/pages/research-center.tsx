@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CircleAlert,
   Database,
+  Download,
   FileCheck2,
   FileSearch,
   FlaskConical,
@@ -41,6 +42,7 @@ import {
 import { buildDebatePreview, extractResearchAiDebate } from '@/lib/research-center-view';
 import { fetchResearchJournalBinding, type ResearchJournalBindingReadback } from '@/lib/research-journal-binding';
 import { fetchStrategyPromotions, type StrategyPromotionResponse } from '@/lib/strategy-promotion';
+import { downloadExcelWorkbook } from '@/lib/excel-export';
 
 type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
 
@@ -92,6 +94,177 @@ function blockerCopy(card: ResearchPipelineCard): string {
   if (card.status === 'inactive') return '현재 런타임 미활성';
   if (card.evidenceState === 'MISSING') return '검증 근거 미수집';
   return '검증 자료 보완 필요';
+}
+
+function exportResearchWorkbook(
+  overview: ResearchCenterOverview,
+  promotion: StrategyPromotionResponse | null,
+  cards: ResearchPipelineCard[],
+) {
+  const performance = overview.paper.candidatePerformance;
+  const activity = overview.activity?.entries ?? [];
+  const autoBacktest = overview.autoBacktest?.pipelines ?? [];
+  const timestamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+  downloadExcelWorkbook(`research-center-${timestamp}.xls`, [
+    {
+      name: '요약',
+      rows: [
+        ['항목', '값'],
+        ['보고서 생성시각', formatDate(Date.now())],
+        ['Research status', overview.research.status],
+        ['Heartbeat', overview.state.runtimeLiveness?.status ?? 'UNKNOWN'],
+        ['마지막 성공', formatDate(overview.state.runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)],
+        ['Missed cycles', overview.state.runtimeLiveness?.missedCycles ?? 'UNKNOWN'],
+        ['Temporal observations', overview.dataFactory?.temporalCryptoFutures.observationCount ?? 'UNKNOWN'],
+        ['Candidate ID', performance?.candidateId ?? 'UNKNOWN/BLOCKED'],
+        ['Strategy ID', performance?.strategyId ?? 'UNKNOWN/BLOCKED'],
+        ['TRAIN_N', performance?.TRAIN_N ?? 'UNKNOWN/BLOCKED'],
+        ['VALIDATION_N', performance?.VALIDATION_N ?? 'UNKNOWN/BLOCKED'],
+        ['OOS_N', performance?.OOS_N ?? 'UNKNOWN/BLOCKED'],
+        ['Settlement_N', performance?.Settlement_N ?? 'UNKNOWN/BLOCKED'],
+        ['Gross PnL', performance?.Gross_PnL ?? 'UNKNOWN/BLOCKED'],
+        ['Net PnL', performance?.Net_PnL ?? 'UNKNOWN/BLOCKED'],
+        ['FULL_COST_READY', performance?.FULL_COST_READY ?? false],
+        ['PROFITABILITY_PROVEN', performance?.PROFITABILITY_PROVEN ?? false],
+        ['Execution authority', 'NONE'],
+      ],
+    },
+    {
+      name: '24시간 활동',
+      rows: [
+        ['시각', '출처', '작업', '상태', '프로필', '상세'],
+        ...activity.map((row) => [
+          formatDate(row.at), row.source, row.label, row.status, row.profile ?? '', row.detail ?? '',
+        ]),
+      ],
+    },
+    {
+      name: '연구 피드백',
+      rows: [
+        ['단계', '상태', '증거상태', 'Blocker/피드백', '업데이트'],
+        ...cards.map((card) => [
+          card.label, statusLabel(card.status), card.evidenceState, card.blocker ?? '없음', formatDate(card.updatedAt),
+        ]),
+        ...((promotion?.items ?? []).flatMap((item) =>
+          item.blockers.map((blocker) => [
+            item.identity.strategyId,
+            item.promotionState,
+            item.identity.market,
+            blocker,
+            item.identity.timeframe,
+          ]),
+        )),
+      ],
+    },
+    {
+      name: '백테스트 결과',
+      rows: [
+        ['파이프라인', '상태', '자동전달', '후보통과', '단계', '단계상태', '리포트상태', '시작', '종료', '피드백'],
+        ...autoBacktest.flatMap((pipeline) => pipeline.steps.length
+          ? pipeline.steps.map((step) => [
+              pipeline.id,
+              pipeline.status,
+              pipeline.automaticHandoffObserved,
+              pipeline.candidatePassed,
+              step.id,
+              step.status,
+              step.reportStatus ?? '',
+              formatDate(step.startedAt),
+              formatDate(step.endedAt),
+              pipeline.feedback,
+            ])
+          : [[
+              pipeline.id,
+              pipeline.status,
+              pipeline.automaticHandoffObserved,
+              pipeline.candidatePassed,
+              '',
+              '',
+              '',
+              formatDate(pipeline.startedAt),
+              formatDate(pipeline.endedAt),
+              pipeline.feedback,
+            ]]),
+      ],
+    },
+  ]);
+}
+
+function ResearchActivityPanel({ overview }: { overview: ResearchCenterOverview }) {
+  const rows = overview.activity?.entries ?? [];
+  return (
+    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5" data-testid="research-activity-24h">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">24h activity</p>
+          <h2 className="mt-1 text-base font-black">24시간 연구 활동내역</h2>
+        </div>
+        <span className="text-[10px] font-bold text-muted-foreground">실제 서버 실행 기록 · 최근 24시간</span>
+      </div>
+      <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-card-border">
+        {rows.length ? (
+          <table className="w-full min-w-[680px] text-left text-xs">
+            <thead className="sticky top-0 bg-muted"><tr><th className="p-2">시각</th><th className="p-2">작업</th><th className="p-2">상태</th><th className="p-2">상세</th></tr></thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.source}:${row.id}`} className="border-t border-card-border">
+                  <td className="whitespace-nowrap p-2">{formatDate(row.at)}</td>
+                  <td className="p-2"><strong>{row.label}</strong><div className="mt-0.5 font-mono text-[9px] text-muted-foreground">{row.profile ?? row.source}</div></td>
+                  <td className="p-2 font-mono font-bold">{row.status}</td>
+                  <td className="p-2 text-muted-foreground">{row.detail ?? '추가 상세 없음'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="p-5 text-center text-xs text-muted-foreground">최근 24시간 실제 실행 이력이 아직 없습니다.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AutoResearchBacktestPanel({ overview }: { overview: ResearchCenterOverview }) {
+  const auto = overview.autoBacktest;
+  const rows = auto?.pipelines ?? [];
+  return (
+    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5" data-testid="research-auto-backtest">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">Automatic research backtest</p>
+          <h2 className="mt-1 text-base font-black">자동 연구 → 백테스터 진행내역</h2>
+        </div>
+        <StatusBadge status={!auto?.present ? 'unmeasured' : auto.status === 'complete' ? 'normal' : auto.status === 'blocked_data' ? 'attention' : 'running'} />
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        후보 생성 단계가 성공하면 같은 서버 연구 cycle 안에서 일반화·비용 반영 PnL·시장국면 검증으로 자동 진행합니다. 실패/데이터 부족은 성공으로 바꾸지 않습니다.
+      </p>
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        {rows.length ? rows.map((pipeline) => (
+          <article key={pipeline.id} className="min-w-0 rounded-2xl border border-card-border bg-background p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div><h3 className="text-xs font-black">{pipeline.id}</h3><p className="mt-1 text-[10px] text-muted-foreground">{pipeline.feedback}</p></div>
+              <span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">{pipeline.status}</span>
+            </div>
+            <div className="mt-3 grid gap-1.5">
+              {pipeline.steps.map((step, index) => (
+                <div key={step.id} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-card-border px-2 py-2 text-[10px]">
+                  <span className="font-black">{index + 1}</span>
+                  <span className="min-w-0 truncate font-mono" title={step.id}>{step.id}</span>
+                  <span className="font-black">{step.status}</span>
+                </div>
+              ))}
+              {!pipeline.steps.length ? <p className="text-[10px] text-muted-foreground">아직 실행된 단계 없음</p> : null}
+            </div>
+            <p className="mt-3 text-[10px] font-bold">
+              자동 전달: {pipeline.automaticHandoffObserved ? '확인됨' : pipeline.candidatePassed ? '후속 단계 대기' : '후보 통과 전'}
+            </p>
+          </article>
+        )) : <p className="col-span-full rounded-xl border border-dashed border-card-border p-5 text-center text-xs text-muted-foreground">자동 백테스트 실행 이력 미수집</p>}
+      </div>
+      <p className="mt-3 text-[10px] text-muted-foreground">이 경로는 연구 전용이며 executionAuthority=NONE입니다. 백테스트 PASS가 실거래 승격을 의미하지 않습니다.</p>
+    </section>
+  );
 }
 
 function MetricValue({ metric, compact = false }: { metric: ProductMetric; compact?: boolean }) {
@@ -353,6 +526,12 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-card-border bg-card p-3 shadow-sm">
+        <div><p className="text-xs font-black">리서치 운영 리포트</p><p className="mt-0.5 text-[10px] text-muted-foreground">현재 상태·24시간 활동·피드백·자동 백테스트 결과</p></div>
+        <button type="button" onClick={() => exportResearchWorkbook(overview, promotion, cards)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-card-border px-3 text-xs font-black hover:border-primary/50" data-testid="research-excel-export">
+          <Download className="h-4 w-4" /> Excel 다운로드
+        </button>
+      </div>
       <section className="grid grid-cols-2 gap-2 lg:grid-cols-7" aria-label="연구 핵심 상태">
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
         <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
@@ -368,6 +547,9 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
           <strong>부분 데이터:</strong> Research Production overview는 연결됐지만 Strategy Promotion API는 사용할 수 없습니다. 연구 단계 값을 0으로 대체하지 않습니다.
         </div>
       ) : null}
+
+      <ResearchActivityPanel overview={overview} />
+      <AutoResearchBacktestPanel overview={overview} />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
         <section className="min-w-0" aria-labelledby="research-pipeline-title">
