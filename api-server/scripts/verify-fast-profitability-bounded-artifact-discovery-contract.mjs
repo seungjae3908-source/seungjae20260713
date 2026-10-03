@@ -14,15 +14,73 @@ const files = [
 ];
 for (const file of files) {
   const text = await read(file);
-  assert(!text.includes('listArtifactsForRepo'), file + ' must not scan the repository-wide artifact collection');
+  const artifactCalls = [...text.matchAll(/listArtifactsForRepo\(\{([\s\S]*?)\}\)/gu)];
+  for (const [, args] of artifactCalls) {
+    assert(/\bname\s*:/u.test(args) || /\bname\s*,/u.test(args), file + ' repository artifact lookup must use an exact name filter');
+    assert(/per_page\s*:\s*100/u.test(args), file + ' exact-name repository artifact lookup must remain bounded to one page');
+  }
   assert(!text.includes('github.paginate(github.rest.actions.listWorkflowRuns'), file + ' must not use unbounded workflow-run pagination');
-  assert(text.includes('listWorkflowRunArtifacts'), file + ' must bind artifact reads to an exact workflow run');
-  assert(text.includes('const maxPages = 5;'), file + ' must use a bounded workflow-run discovery window');
-  assert(text.includes('DISCOVERY_WINDOW_EXHAUSTED'), file + ' must fail closed when bounded discovery is exhausted');
-  assert(text.includes("status: 'success'"), file + ' must ask GitHub for successful runs before artifact inspection');
-  assert(!text.includes("status: 'completed'"), file + ' must not let failed/skipped/cancelled runs consume the bounded discovery window');
+  assert(text.includes('const HUB_ISSUE = 1102;'), file + ' must resolve activation from the canonical Hub receipt');
+  assert(text.includes('const MAX_HUB_COMMENTS = 2500;'), file + ' must preserve the bounded Hub hard limit');
+  assert(text.includes("const RECEIPT_MARKER = '[FAST_PROFITABILITY_V1_ACTIVATED]';"), file + ' must require the canonical activation receipt marker');
+  assert(text.includes("fields.get('activation_run_id')"), file + ' must bind the receipt to an exact activation run');
+  assert(text.includes('github.rest.issues.get'), file + ' must read bounded Hub comment count');
+  assert(text.includes('github.rest.issues.listComments'), file + ' must read canonical Hub receipt history');
+  assert(text.includes('page >= 1; page -= 1'), file + ' must scan Hub receipt pages newest-first within the hard bound');
+  assert(text.includes('github.rest.actions.getWorkflowRun'), file + ' must verify exact activation-run provenance');
+  assert(text.includes('listWorkflowRunArtifacts'), file + ' must bind artifacts to the exact activation run');
+  assert(text.includes("run.path !== '.github/workflows/fast-profitability-v1-activation.yml'"), file + ' must verify activation workflow identity');
+  assert(!text.includes('FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED'), file + ' must not fail because unrelated issue_comment runs pushed the activation outside a run-page window');
 }
+const extractGithubScript = (text, stepName) => {
+  const stepMarker = `- name: ${stepName}`;
+  const start = text.indexOf(stepMarker);
+  assert(start >= 0, stepName + ' step is missing');
+  const next = text.indexOf('\n      - name:', start + stepMarker.length);
+  const block = text.slice(start, next >= 0 ? next : text.length);
+  const scriptMarker = '          script: |\n';
+  const scriptStart = block.indexOf(scriptMarker);
+  assert(scriptStart >= 0, stepName + ' github-script body is missing');
+  return block
+    .slice(scriptStart + scriptMarker.length)
+    .split('\n')
+    .map((line) => line.startsWith('            ') ? line.slice(12) : line)
+    .join('\n');
+};
+
+for (const [file, stepName] of [
+  ['.github/workflows/fast-profitability-v1-activation.yml', 'Reject duplicate active binding'],
+  ['.github/workflows/fast-profitability-v1-activation.yml', 'Locate previous durable preactivation Forward state'],
+  ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate unique active binding'],
+  ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate prior cumulative state'],
+  ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate latest successful Shadow artifact'],
+  ['.github/workflows/fast-profitability-v1-preactivation-watch.yml', 'Resolve exact current main and safety gates'],
+  ['.github/workflows/fast-profitability-v1-preactivation-watch.yml', 'Locate prior exact-SHA watch state'],
+]) {
+  const text = await read(file);
+  const script = extractGithubScript(text, stepName);
+  try {
+    new Function('github', 'context', 'core', 'process', 'return (async () => {\n' + script + '\n})();');
+  } catch (error) {
+    throw new Error('[fast-artifact-discovery-contract] ' + file + ' scheduled github-script syntax invalid: ' + error.message);
+  }
+}
+
+const activation = await read('.github/workflows/fast-profitability-v1-activation.yml');
+assert(activation.includes("'activation_run_id=' + String(process.env.GITHUB_RUN_ID ?? '')"), 'activation receipt must publish exact workflow run id');
 const collector = await read('.github/workflows/fast-profitability-v1-collector.yml');
-assert(collector.includes('run_id: Number(process.env.ACTIVATION_RUN_ID)'), 'OOS key lookup must be scoped to the bound activation run');
-assert(collector.includes('prediction-lab-canonical-shadow-cycle.yml'), 'Shadow lookup must be scoped to the canonical Shadow workflow');
-console.log('[fast-artifact-discovery-contract] bounded run-scoped discovery passed');
+assert(collector.includes('run_id: Number(process.env.ACTIVATION_RUN_ID)'), 'OOS key lookup must remain scoped to the bound activation run');
+assert(collector.includes("name: process.env.STATE_NAME"), 'prior cumulative state must use exact-name artifact discovery');
+assert(!collector.includes('FAST_STATE_DISCOVERY_WINDOW_EXHAUSTED'), 'prior cumulative state must not age out behind a workflow-run window');
+assert(collector.includes("workflow_id: 'prediction-lab-canonical-shadow-cycle.yml'"), 'Shadow lookup must remain scoped to the canonical Shadow workflow');
+assert(collector.includes("event: 'schedule'"), 'Shadow lookup must ignore issue-comment/no-op runs and inspect genuine scheduled cycles');
+
+assert(activation.includes("name: artifactName"), 'activation preflight state must use exact-name artifact discovery');
+assert(!activation.includes('FAST_PREACTIVATION_FORWARD_DISCOVERY_WINDOW_EXHAUSTED'), 'activation preflight state must not age out behind issue-comment history');
+
+const watch = await read('.github/workflows/fast-profitability-v1-preactivation-watch.yml');
+assert(watch.includes('listArtifactsForRepo'), 'preactivation watch must use exact-name artifact discovery for prior state');
+assert(watch.includes('name,'), 'preactivation watch prior state lookup must bind the exact artifact name');
+assert(!watch.includes('PREACTIVATION_WATCH_STATE_DISCOVERY_WINDOW_EXHAUSTED'), 'preactivation watch state must not age out behind scheduled run history');
+
+console.log('[fast-artifact-discovery-contract] canonical receipt + durable exact-name state discovery passed');
