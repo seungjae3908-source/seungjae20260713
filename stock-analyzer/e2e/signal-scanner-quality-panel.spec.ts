@@ -202,6 +202,11 @@ test('desktop Signal Detail exposes server quality, quant and ranking evidence w
   await expect(panel.getByText('• 추세 상위권 유지', { exact: true })).toBeVisible();
   await expect(panel.getByText('• 유동성 통과', { exact: true })).toBeVisible();
   await expect(panel.getByText('차단·경고 이슈 없음', { exact: true })).toBeVisible();
+  const aiReview = desktopDetail.getByTestId('scanner-ai-validation');
+  await expect(aiReview).toBeVisible();
+  await expect(aiReview.getByText('PASS', { exact: true })).toBeVisible();
+  await expect(aiReview.getByText(/Provider fixture-validator/)).toBeVisible();
+  await expect(aiReview.getByText(/AI는 주문·수량·레버리지 권한 없음/)).toBeVisible();
   expect(forbidden).toEqual([]);
 });
 
@@ -227,5 +232,9 @@ test('mobile quality panel fails closed for untrusted and missing evidence', asy
   await expect(panel.getByTestId('scanner-quality-rank')).toHaveText('미확인');
   await expect(panel.getByText('• 차단 · STALE_CANDLES · 캔들 freshness 기준 미충족', { exact: true })).toBeVisible();
   expect(await panel.getByText('미확인', { exact: true }).count()).toBeGreaterThan(5);
+  const aiReview = sheet.getByTestId('scanner-ai-validation');
+  await expect(aiReview).toBeVisible();
+  await expect(aiReview.getByText('PARTIAL', { exact: true })).toBeVisible();
+  await expect(aiReview.getByText(/Provider fixture-validator/)).toBeVisible();
   expect(forbidden).toEqual([]);
 });
