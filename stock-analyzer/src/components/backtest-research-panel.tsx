@@ -804,7 +804,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
               <h3 className="mb-3 text-center text-sm font-black">거래 목록</h3>
               <div className="max-h-96 overflow-auto rounded-xl border border-border" data-testid="trade-list">
                 <table className="w-full min-w-[760px] text-left text-xs">
-                  <thead className="sticky top-0 bg-muted"><tr><th className="p-2">진입</th><th className="p-2">방향</th><th className="p-2">진입가</th><th className="p-2">청산가</th><th className="p-2">순손익</th><th className="p-2">R</th><th className="p-2">종료</th><th className="p-2">시장 상태</th></tr></thead>
+                  <thead className="sticky top-0 bg-muted"><tr><th className="p-2">진입</th><th className="p-2">방향</th><th className="p-2">진입가</th><th className="p-2">청산가</th><th className="p-2">순손익</th><th className="p-2">손익배수</th><th className="p-2">종료</th><th className="p-2">시장 상태</th></tr></thead>
                   <tbody>
                     {result.trades.length ? result.trades.map((trade) => (
                       <tr key={trade.id} className="border-t border-border">
