@@ -188,7 +188,11 @@ export async function enrichStockScannerCardsWithNewsDisclosureIntelligence(
 
   const selected = cards.slice(0, maxCandidates);
   const selectedResults = await Promise.all(selected.map(async (card) => {
-    const strongCandidate = card.strongSignalEligible && (card.signalGrade === 'S' || card.signalGrade === 'A');
+    const strongCandidate = card.strongSignalEligible === true
+      && card.score >= 72
+      && (card.riskScore ?? 101) <= 50
+      && card.dataQuality?.state === 'TRUSTED'
+      && card.dataQuality.strongSignalAllowed === true;
     try {
       const result = await withBudget(collector({
         ticker: card.symbol,
