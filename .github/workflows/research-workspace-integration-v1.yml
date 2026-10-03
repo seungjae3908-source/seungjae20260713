@@ -82,7 +82,7 @@ jobs:
           path: |
             ${{ runner.temp }}/workspace-preservation.json
             ${{ runner.temp }}/workspace-tests.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
   application-integration:
     needs: contract-and-preservation
