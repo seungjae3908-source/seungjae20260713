@@ -439,7 +439,7 @@ jobs:
             }
             if (bool(env, 'AUTO_TRADING') !== expectedAuto
               || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto
-              || bool(env, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED') !== true
               || bool(env, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED') !== expectedAuto) {
               throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
             }
@@ -451,7 +451,7 @@ jobs:
                 ...process.env,
                 AUTO_TRADING: enabled ? 'true' : 'false',
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
-                MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'true',
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 DEPLOY_SHA: target,
               },
@@ -665,7 +665,7 @@ jobs:
               ...process.env,
               AUTO_TRADING: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
-              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'true',
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
               DEPLOY_SHA: target,
             },
@@ -675,7 +675,7 @@ jobs:
           const after = readEnv();
           if (bool(after, 'AUTO_TRADING')
             || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')
-            || bool(after, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || !bool(after, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
             || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')) {
             throw new Error('AUTOMATIC_TRADING_DISABLE_POSTCHECK_FAILED');
           }
@@ -702,9 +702,9 @@ jobs:
                 'target_sha: ' + process.env.TARGET_SHA,
                 'AUTO_TRADING=false',
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
-                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
+                'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=true',
                 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
-                'paper_automatic_execution=false',
+                'paper_automatic_execution=true',
                 'live_automatic_background_execution=false',
                 'manual_spot_and_futures_authority_preserved=true',
                 'REAL_ORDER_SUBMITTED=false',
