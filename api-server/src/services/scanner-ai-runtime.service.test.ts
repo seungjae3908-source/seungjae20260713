@@ -85,7 +85,7 @@ test('PASS preserves candidate while PARTIAL and VETO apply bounded caps', () =>
   assert.equal(veto.signalState, 'WEAKENED');
 });
 
-test('only top S/A candidates are sent to AI and VETO changes final candidate state', async () => {
+test('only top strong trusted candidates are sent to AI even before backtest grade promotion', async () => {
   const calls: string[] = [];
   const validator = {
     async validate(input: any) {
@@ -97,7 +97,7 @@ test('only top S/A candidates are sent to AI and VETO changes final candidate st
   };
 
   const result = await enrichTopScannerCandidatesWithAi(
-    [card('s1', 95, 'S'), card('s2', 90, 'A'), card('s3', 85, 'A'), card('s4', 80, 'B')],
+    [card('s1', 95, 'A'), card('s2', 90, 'A'), card('s3', 85, 'A'), card('s4', 80, 'B')],
     { validator, env: configuredEnv, maxCandidates: 2 },
   );
 
