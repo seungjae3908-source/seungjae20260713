@@ -5,7 +5,6 @@ import {
   BadgeCheck,
   Bot,
   BrainCircuit,
-  ChevronDown,
   ChevronRight,
   CircleAlert,
   Database,
@@ -438,34 +437,29 @@ function StageDetail({ card, onClose }: { card: ResearchPipelineCard; onClose: (
       ) : null}
       {card.records.length ? (
         <div className="mt-4 space-y-2">
-          <h3 className="text-xs font-black">원본 검증 기록</h3>
+          <h3 className="text-xs font-black">검증 기록</h3>
           <div className="max-h-[31rem] space-y-2 overflow-y-auto pr-1">
             {card.records.map((record) => (
-              <details key={record.id} className="group rounded-xl border border-card-border bg-background">
-                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 p-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-                  <span className="min-w-0 truncate font-black">{record.label}</span>
-                  <span className="flex shrink-0 items-center gap-2"><StatusBadge status={record.status} /><ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" /></span>
-                </summary>
-                <div className="border-t border-card-border p-3 text-[11px]">
-                  <dl className="grid grid-cols-2 gap-2">
-                    <div><dt className="text-muted-foreground">기간</dt><dd className="mt-1 break-words font-bold">{record.period}</dd></div>
-                    <div><dt className="text-muted-foreground">표본</dt><dd className="mt-1 font-bold">{record.sampleN}</dd></div>
-                    <div><dt className="text-muted-foreground">데이터</dt><dd className="mt-1 font-bold">{record.datasetId ? '확인됨' : '미측정'}</dd></div>
-                    <div><dt className="text-muted-foreground">연구 버전</dt><dd className="mt-1 font-bold">{record.sourceSha ? '확인됨' : '미측정'}</dd></div>
-                  </dl>
-                  <dl className="mt-3 grid grid-cols-2 gap-2">
-                    {record.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
-                  </dl>
-                  <details className="mt-3 rounded-lg border border-card-border p-2">
-                    <summary className="min-h-8 cursor-pointer font-bold">검증 근거 보기</summary>
-                    <p className="mt-2 text-muted-foreground">출처: {record.source ? '확인됨' : '미측정'}</p>
-                    <p className="mt-1 text-muted-foreground">막힌 이유: {record.blocker ? '검증 자료 확인 필요' : '없음'}</p>
-                    <ul className="mt-2 space-y-1 text-muted-foreground">
-                      {record.provenance.length ? <li>• 출처 기록 {record.provenance.length}건 확인됨</li> : <li>• 출처 기록 미측정</li>}
-                    </ul>
-                  </details>
+              <article key={record.id} className="rounded-xl border border-card-border bg-background p-3 text-[11px]">
+                <div className="flex items-start justify-between gap-2">
+                  <strong className="min-w-0 break-keep text-xs">{record.label}</strong>
+                  <StatusBadge status={record.status} />
                 </div>
-              </details>
+                <dl className="mt-3 grid grid-cols-2 gap-2">
+                  <div><dt className="text-muted-foreground">기간</dt><dd className="mt-1 break-words font-bold">{record.period}</dd></div>
+                  <div><dt className="text-muted-foreground">표본</dt><dd className="mt-1 font-bold">{record.sampleN}</dd></div>
+                  <div><dt className="text-muted-foreground">데이터</dt><dd className="mt-1 font-bold">{record.datasetId ? '확인됨' : '미측정'}</dd></div>
+                  <div><dt className="text-muted-foreground">연구 버전</dt><dd className="mt-1 font-bold">{record.sourceSha ? '확인됨' : '미측정'}</dd></div>
+                </dl>
+                <dl className="mt-3 grid grid-cols-2 gap-2">
+                  {record.metrics.map((metric) => <MetricValue key={metric.label} metric={metric} compact />)}
+                </dl>
+                <div className="mt-3 rounded-lg bg-muted/40 p-2 text-muted-foreground">
+                  <p>출처 · {record.source ? '확인됨' : '미측정'}</p>
+                  <p className="mt-1">막힌 이유 · {record.blocker ? '검증 자료 확인 필요' : '없음'}</p>
+                  <p className="mt-1">출처 기록 · {record.provenance.length ? record.provenance.length + '건 확인됨' : '미측정'}</p>
+                </div>
+              </article>
             ))}
           </div>
         </div>
