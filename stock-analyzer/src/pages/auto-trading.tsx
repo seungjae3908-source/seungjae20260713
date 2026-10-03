@@ -88,6 +88,46 @@ function SegmentedButton({
   );
 }
 
+function PopupPanel({
+  title,
+  open,
+  onClose,
+  children,
+  testId,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: ReactNode;
+  testId?: string;
+}) {
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      data-testid={testId ? `${testId}-overlay` : undefined}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-t-3xl border border-card-border bg-background shadow-2xl sm:rounded-3xl"
+        data-testid={testId}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-card-border bg-background p-4">
+          <h2 className="text-base font-bold">{title}</h2>
+          <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="p-3 sm:p-4">{children}</div>
+      </section>
+    </div>
+  );
+}
+
 export default function AutoTradingPage({ fixture, embedded = false, initialMode = 'auto' }: AutoTradingPageProps) {
   const auth = useAuth();
   const { selection } = useAnalysisSelection();
@@ -104,6 +144,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
   const [paperRevision, setPaperRevision] = useState(0);
   const [manualPaperOpen, setManualPaperOpen] = useState(false);
+  const [settingsPopup, setSettingsPopup] = useState<'automation' | 'telegram' | null>(null);
+  const [paperSyncOpen, setPaperSyncOpen] = useState(false);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
@@ -113,6 +155,17 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
     if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
   }, [canAuto, canPaper, mode]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setManualPaperOpen(false);
+      setSettingsPopup(null);
+      setPaperSyncOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, []);
 
   useEffect(() => {
     if (fixture) {
@@ -278,35 +331,32 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     </div>
   );
 
-  const settings = mode === 'auto' ? (
-    <div className="space-y-3" data-testid="auto-trading-settings-column">
-      <details
-        className="rounded-2xl border border-card-border bg-card"
-        data-testid="auto-trading-advanced-settings"
-        open
-      >
-        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-          <span>{marketMeta.label} · 자동매매 설정</span>
-          <span aria-hidden className="text-muted-foreground">⌄</span>
-        </summary>
-        <div className="border-t border-card-border p-3 sm:p-4">
-          <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
-        </div>
-      </details>
-      <details className="rounded-2xl border border-card-border bg-card">
-        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-          <span>알림 · 텔레그램</span>
-          <span aria-hidden className="text-muted-foreground">⌄</span>
-        </summary>
-        <div className="border-t border-card-border p-3 sm:p-4">
-          <UserBrokerTelegramPanel />
-        </div>
-      </details>
-    </div>
-  ) : (
-    <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-settings">
-      <div className="mb-3 flex items-center gap-2"><Settings2 className="h-4 w-4 text-primary" /><h2 className="text-sm font-bold">{marketMeta.label} 자동 모의매매 설정</h2></div>
-      <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
+  const settings = (
+    <section className="rounded-2xl border border-card-border bg-card p-4" data-testid={mode === 'auto' ? 'auto-trading-settings-column' : 'paper-trading-settings'}>
+      <div className="mb-3 flex items-center gap-2">
+        <Settings2 className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-bold">{mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}</h2>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => setSettingsPopup('automation')}
+          className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-bold"
+          data-testid="open-trading-automation-settings"
+        >
+          {marketMeta.label} 설정
+        </button>
+        {mode === 'auto' ? (
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('telegram')}
+            className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-bold"
+            data-testid="open-trading-telegram-settings"
+          >
+            알림 · 텔레그램
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 
@@ -318,20 +368,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         description={marketMeta.label + ' · 직접매매/자동매매/자동모의매매를 분리하고 기간조회·엑셀 다운로드를 지원합니다. 비용 근거가 없으면 순손익을 임의로 0으로 만들지 않습니다.'}
       />
       {mode === 'paper' && userId ? (
-        <details className="rounded-2xl border border-card-border bg-card" data-testid="paper-journal-sync-tools">
-          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-            <span>로컬 모의기록 동기화·분석</span>
-            <span aria-hidden className="text-muted-foreground">선택 기능 ⌄</span>
-          </summary>
-          <div className="border-t border-card-border p-3">
-            <PaperJournalSyncAnalyticsPanel
-              userId={userId}
-              rootStorage={window.localStorage}
-              paperStorage={paperStorage}
-              onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
-            />
-          </div>
-        </details>
+        <button
+          type="button"
+          onClick={() => setPaperSyncOpen(true)}
+          className="min-h-11 w-full rounded-xl border border-card-border bg-card px-4 text-sm font-bold"
+          data-testid="open-paper-journal-sync"
+        >
+          모의기록 동기화·분석
+        </button>
       ) : null}
     </div>
   );
@@ -378,6 +422,40 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
         </div>
       </main>
+      <PopupPanel
+        title={`${marketMeta.label} · ${mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}`}
+        open={settingsPopup === 'automation'}
+        onClose={() => setSettingsPopup(null)}
+        testId="trading-automation-settings-dialog"
+      >
+        <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
+      </PopupPanel>
+
+      <PopupPanel
+        title="알림 · 텔레그램"
+        open={settingsPopup === 'telegram'}
+        onClose={() => setSettingsPopup(null)}
+        testId="trading-telegram-settings-dialog"
+      >
+        <UserBrokerTelegramPanel />
+      </PopupPanel>
+
+      <PopupPanel
+        title="모의기록 동기화·분석"
+        open={paperSyncOpen}
+        onClose={() => setPaperSyncOpen(false)}
+        testId="paper-journal-sync-dialog"
+      >
+        {userId ? (
+          <PaperJournalSyncAnalyticsPanel
+            userId={userId}
+            rootStorage={window.localStorage}
+            paperStorage={paperStorage}
+            onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
+          />
+        ) : null}
+      </PopupPanel>
+
       {!embedded ? <BottomNav /> : null}
     </div>
   );
