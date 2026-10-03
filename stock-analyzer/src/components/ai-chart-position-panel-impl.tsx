@@ -98,6 +98,8 @@ type Props = {
   symbol: string;
   chartPrice: number | null;
   pricePlan?: AnalysisPricePlan;
+  initialCockpitOpen?: boolean;
+  initialCockpitTab?: CockpitTab;
   onOverlayChange: (overlay: AiChartPositionOverlay | null) => void;
 };
 
@@ -721,7 +723,16 @@ function pnlSourceLabel(source: 'POSITION_QUANTITY' | 'PROVIDER_IMPLIED' | null)
   return '금액 근거 없음';
 }
 
-export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pricePlan, onOverlayChange }: Props) {
+export function AiChartPositionPanel({
+  selection,
+  market,
+  symbol,
+  chartPrice,
+  pricePlan,
+  initialCockpitOpen = false,
+  initialCockpitTab = 'entry',
+  onOverlayChange,
+}: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [stockProvider, setStockProvider] = useState<StockReadOnlyProvider>('toss');
   const [linesVisible, setLinesVisible] = useState(true);
@@ -730,8 +741,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
   const [entryFeeText, setEntryFeeText] = useState('');
   const [exitFeeText, setExitFeeText] = useState('');
   const [targetPercents, setTargetPercents] = useState<Record<number, string>>({});
-  const [cockpitOpen, setCockpitOpen] = useState(false);
-  const [cockpitTab, setCockpitTab] = useState<CockpitTab>('entry');
+  const [cockpitOpen, setCockpitOpen] = useState(initialCockpitOpen);
+  const [cockpitTab, setCockpitTab] = useState<CockpitTab>(initialCockpitTab);
   const [orderDashboard, setOrderDashboard] = useState<OrderDashboardState>({ kind: 'idle' });
   const [orderMessage, setOrderMessage] = useState('');
   const [orderActionId, setOrderActionId] = useState<string | null>(null);
@@ -810,8 +821,8 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setEntryFeeText('');
     setExitFeeText('');
     setTargetPercents({});
-    setCockpitOpen(false);
-    setCockpitTab('entry');
+    setCockpitOpen(initialCockpitOpen);
+    setCockpitTab(initialCockpitTab);
     setOrderDashboard({ kind: 'idle' });
     setOrderMessage('');
     setOrderActionId(null);
@@ -827,7 +838,7 @@ export function AiChartPositionPanel({ selection, market, symbol, chartPrice, pr
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
     onOverlayChange(null);
-  }, [market, onOverlayChange, symbol]);
+  }, [initialCockpitOpen, initialCockpitTab, market, onOverlayChange, symbol]);
 
   useEffect(() => {
     return () => {
