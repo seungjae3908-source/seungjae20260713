@@ -1422,6 +1422,18 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
+      strategyAiReview: {
+        configured: boolean;
+        provider: string | null;
+        model: string | null;
+        fallbackConfigured: boolean;
+        promptVersion: string;
+        producer: string;
+        failClosed: boolean;
+        executionAuthority: string;
+        orderAllowed: boolean;
+        riskOverrideAllowed: boolean;
+      };
       pilotCapitalState: {
         initialOperatingCapitalKrw: number;
         operatingCapitalKrw: number;
@@ -1463,6 +1475,12 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.equal(body.policy.automaticEnabled, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.equal(body.strategyAiReview.failClosed, true);
+    assert.equal(body.strategyAiReview.executionAuthority, 'NONE');
+    assert.equal(body.strategyAiReview.orderAllowed, false);
+    assert.equal(body.strategyAiReview.riskOverrideAllowed, false);
+    assert.equal(body.strategyAiReview.producer, 'AI_CHAT_PROVIDER_SEAM');
+    assert.doesNotMatch(text, /AI_CHAT_API_KEY|GEMINI_API_KEY|GROQ_API_KEY/);
     assert.deepEqual(body.evidenceBackedStrategies.map((row) => row.strategyId), [
       'TREND_PULLBACK_REACCEL_V1',
       'US_EVENT_RVOL_FIRST_PULLBACK_V1',
