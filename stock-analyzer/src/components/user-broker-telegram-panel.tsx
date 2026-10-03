@@ -78,6 +78,8 @@ type TelegramRuntimeState = {
   signalFollowupEnabled: boolean;
   memberHoldingsEnabled: boolean;
   marketBriefEnabled: boolean;
+  backgroundWorkersEnabled: boolean;
+  personalWorkerEnabled: boolean;
   orderAuthority: 'NONE';
   privateTradingApiAllowed: false;
   realOrderAllowed: false;
@@ -134,7 +136,7 @@ const essentialExecutionPreferenceKeys: PreferenceKey[] = [
 const policyMarkets = Object.keys(marketLabels) as TelegramPolicyMarket[];
 const policySignalTypes = Object.keys(signalLabels) as TelegramPolicySignalType[];
 const policyPriorities = Object.keys(priorityLabels) as TelegramPolicyPriority[];
-const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'upbit', 'bitget']);
+const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
 const DEFAULT_POLICY_WINDOW_MS = 5 * 60 * 1000;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -198,6 +200,8 @@ function normalizeTelegramRuntime(value: unknown): TelegramRuntimeState {
     signalFollowupEnabled: runtime.signalFollowupEnabled === true,
     memberHoldingsEnabled: runtime.memberHoldingsEnabled === true,
     marketBriefEnabled: runtime.marketBriefEnabled === true,
+    backgroundWorkersEnabled: runtime.backgroundWorkersEnabled === true,
+    personalWorkerEnabled: runtime.personalWorkerEnabled === true,
     orderAuthority: 'NONE',
     privateTradingApiAllowed: false,
     realOrderAllowed: false,
@@ -423,7 +427,12 @@ export function UserBrokerTelegramPanel() {
   const cryptoAlertsOn = Boolean(state?.alertPolicy.markets.includes('CRYPTO_SPOT') && state.alertPolicy.markets.includes('CRYPTO_FUTURES'));
   const holdingAlertsOn = Boolean(state?.alertPolicy.signalTypes.includes('PRICE_TARGET'));
   const executionAlertsOn = Boolean(state && essentialExecutionPreferenceKeys.every((key) => state.preferences[key]));
-  const telegramHealthy = Boolean(state?.telegram.connected && state.telegramRuntime.deliveryReady);
+  const telegramHealthy = Boolean(
+    state?.telegram.connected
+    && state.telegramRuntime.deliveryReady
+    && state.telegramRuntime.backgroundWorkersEnabled
+    && state.telegramRuntime.personalWorkerEnabled
+  );
   const telegramStatusLabel = requestState === 'failure'
     ? '확인 실패'
     : telegramHealthy
