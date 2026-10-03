@@ -156,7 +156,8 @@ jobs:
           }
           NODE
           git diff --exit-code
-          test -z "$(git status --porcelain=v1)"
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
 
   browser:
     name: Research Center application browser QA
