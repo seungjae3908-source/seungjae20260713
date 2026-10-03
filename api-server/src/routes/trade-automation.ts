@@ -15,7 +15,16 @@ import {
 import type { SplitTradingOrder } from '../services/trade-split-order-materializer.service';
 import type { SplitOrderRepository } from '../services/trade-split-order.repository';
 import { createSupabaseSplitOrderRepository } from '../services/trade-split-order-supabase.repository';
-import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
+import {
+  credentialConfigurationStatus,
+  decryptTradingCredentials,
+  encryptTradingCredentials,
+} from '../services/trade-credential-vault.service';
+import {
+  createAccountReadonlyCredentialRepository,
+  type AccountReadonlyCredentialRepository,
+  type ReadonlyCredentialProvider,
+} from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
@@ -39,6 +48,8 @@ const CANCEL_RECONCILIATION_STATES = new Set([
 ]);
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
 let splitRepositoryFactoryForTests: ((userId: string) => SplitOrderRepository) | null = null;
+let readonlyCredentialRepositoryFactoryForTests:
+  ((userId: string) => Pick<AccountReadonlyCredentialRepository, 'get'>) | null = null;
 type ExitPreviewReaders = ReturnType<typeof createVaultBackedAccountReaders>;
 let exitPreviewReadersFactoryForTests: (() => ExitPreviewReaders) | null = null;
 
@@ -52,6 +63,12 @@ export function setTradeSplitOrderRepositoryFactoryForTests(
   factory: ((userId: string) => SplitOrderRepository) | null,
 ) {
   splitRepositoryFactoryForTests = factory;
+}
+
+export function setTradeReadonlyCredentialRepositoryFactoryForTests(
+  factory: ((userId: string) => Pick<AccountReadonlyCredentialRepository, 'get'>) | null,
+) {
+  readonlyCredentialRepositoryFactoryForTests = factory;
 }
 
 export function setTradeExitPreviewReadersFactoryForTests(factory: (() => ExitPreviewReaders) | null) {
@@ -129,6 +146,44 @@ function liveExecutionReadinessForConnection(
     orderSubmissionPerformedByPreview: false,
     executionAuthorityGrantedByPreview: false,
   };
+}
+
+function readonlyCredentialRepository(userId: string) {
+  return readonlyCredentialRepositoryFactoryForTests?.(userId)
+    ?? createAccountReadonlyCredentialRepository(userId);
+}
+
+export function normalizeReadonlyCredentialsForLiveExecution(
+  exchange: TradingExchange,
+  rawCredentials: Record<string, string>,
+): Record<string, string> {
+  const value = (key: string) => String(rawCredentials[key] ?? '').trim();
+  if (exchange === 'toss') {
+    const clientId = value('clientId');
+    const clientSecret = value('clientSecret');
+    if (!clientId || !clientSecret) throw new Error('READONLY_CREDENTIALS_INCOMPLETE');
+    const accountSeq = value('accountSeq');
+    const normalized: Record<string, string> = { clientId, clientSecret };
+    if (accountSeq) normalized.accountSeq = accountSeq;
+    return normalized;
+  }
+  if (exchange === 'kiwoom') {
+    const appKey = value('appKey');
+    const secretKey = value('appSecret') || value('secretKey');
+    if (!appKey || !secretKey) throw new Error('READONLY_CREDENTIALS_INCOMPLETE');
+    return { appKey, secretKey };
+  }
+  if (exchange === 'upbit') {
+    const accessKey = value('accessKey');
+    const secretKey = value('secretKey');
+    if (!accessKey || !secretKey) throw new Error('READONLY_CREDENTIALS_INCOMPLETE');
+    return { accessKey, secretKey };
+  }
+  const apiKey = value('apiKey');
+  const secretKey = value('secretKey');
+  const passphrase = value('passphrase');
+  if (!apiKey || !secretKey || !passphrase) throw new Error('READONLY_CREDENTIALS_INCOMPLETE');
+  return { apiKey, secretKey, passphrase };
 }
 
 function exitPreviewProvider(value: unknown): AccountProvider {
@@ -802,6 +857,89 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.post('/connections/:exchange/reuse-readonly', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository, execution } = context(req);
+    const exchange = exchangeValue(req.params.exchange);
+    if (req.body?.confirmed !== true) {
+      return res.status(409).json({
+        ok: false,
+        error: 'READONLY_CREDENTIAL_REUSE_CONFIRMATION_REQUIRED',
+        configured: false,
+        verified: false,
+        credentialsReturned: false,
+        liveExecutionActivated: false,
+        automaticLiveExecutionActivated: false,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        realOrderSubmitted: false,
+      });
+    }
+    if (!credentialConfigurationStatus().encryptionConfigured) {
+      throw new Error('TRADING_CREDENTIAL_MASTER_KEY_INVALID');
+    }
+    const readonlyRecord = await readonlyCredentialRepository(userId).get(
+      userId,
+      exchange as ReadonlyCredentialProvider,
+    );
+    if (!readonlyRecord?.configured || !readonlyRecord.encryptedCredentials) {
+      throw new Error('READONLY_CREDENTIAL_NOT_CONFIGURED');
+    }
+    const rawCredentials = decryptTradingCredentials(readonlyRecord.encryptedCredentials);
+    const liveCredentials = normalizeReadonlyCredentialsForLiveExecution(exchange, rawCredentials);
+    const now = new Date().toISOString();
+    await repository.saveConnection({
+      userId,
+      exchange,
+      accountMode: 'live',
+      configured: true,
+      encryptedCredentials: encryptTradingCredentials(liveCredentials),
+      lastVerifiedAt: null,
+      lastErrorCode: 'LIVE_EXECUTION_NOT_VERIFIED',
+      updatedAt: now,
+    });
+
+    try {
+      const verification = await execution.verifyLiveConnection(userId, exchange);
+      return res.json({
+        ok: true,
+        accountMode: 'live',
+        configured: true,
+        reusedReadonlyCredential: true,
+        ...verification,
+        credentialsReturned: false,
+        liveExecutionActivated: false,
+        automaticLiveExecutionActivated: false,
+      });
+    } catch (error) {
+      const errorCode = error instanceof Error
+        ? error.message.split(':')[0]
+        : 'LIVE_EXECUTION_VERIFICATION_FAILED';
+      return res.status(409).json({
+        ok: false,
+        error: errorCode,
+        exchange,
+        accountMode: 'live',
+        configured: true,
+        reusedReadonlyCredential: true,
+        verified: false,
+        credentialsReturned: false,
+        liveExecutionActivated: false,
+        automaticLiveExecutionActivated: false,
+        orderRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        realOrderSubmitted: false,
+      });
+    }
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
@@ -821,8 +959,21 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
       kiwoom: ['appKey', 'secretKey'],
       toss: ['clientId', 'clientSecret', 'accountSeq'],
     };
-    const safeCredentials = Object.fromEntries(allowedKeys[exchange].map((key) => [key, String(credentials[key] ?? '').trim()]));
-    if (Object.values(safeCredentials).some((value) => !value)) throw new Error('CREDENTIALS_INCOMPLETE');
+    const requiredKeys: Record<TradingExchange, string[]> = {
+      bitget: ['apiKey', 'secretKey', 'passphrase'],
+      upbit: ['accessKey', 'secretKey'],
+      kiwoom: ['appKey', 'secretKey'],
+      toss: ['clientId', 'clientSecret'],
+    };
+    const safeCredentials = Object.fromEntries(
+      allowedKeys[exchange].map((key) => [key, String(credentials[key] ?? '').trim()]),
+    );
+    if (requiredKeys[exchange].some((key) => !safeCredentials[key])) {
+      throw new Error('CREDENTIALS_INCOMPLETE');
+    }
+    const storedCredentials = Object.fromEntries(
+      Object.entries(safeCredentials).filter(([, value]) => Boolean(value)),
+    );
     const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
     if (accountMode === 'live') {
       const purpose = String(req.body?.purpose ?? '').trim().toLowerCase();
@@ -837,7 +988,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
     }
     await repository.saveConnection({
       userId, exchange, accountMode, configured: true,
-      encryptedCredentials: encryptTradingCredentials(safeCredentials),
+      encryptedCredentials: encryptTradingCredentials(storedCredentials),
       lastVerifiedAt: null,
       lastErrorCode: accountMode === 'live' ? 'LIVE_EXECUTION_NOT_VERIFIED' : null,
       updatedAt: new Date().toISOString(),

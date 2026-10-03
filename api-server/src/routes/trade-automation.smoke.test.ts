@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import router, {
+  normalizeReadonlyCredentialsForLiveExecution,
   setTradeAutomationRepositoryFactoryForTests,
   setTradeExitPreviewReadersFactoryForTests,
+  setTradeReadonlyCredentialRepositoryFactoryForTests,
 } from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
@@ -14,6 +16,7 @@ import {
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from '../services/trade-market-intelligence.service';
 import type { TradingPlanInput } from '../services/trade-automation.types';
+import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
 import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
@@ -343,6 +346,7 @@ test.beforeEach(async () => {
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradeReadonlyCredentialRepositoryFactoryForTests(null);
   setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
@@ -1532,6 +1536,164 @@ test('persistent global emergency stop requires admin capability and exact confi
     assert.equal(resumed.status, 200);
     assert.equal((await resumed.json() as { automaticTradingEnabledByThisRequest: boolean }).automaticTradingEnabledByThisRequest, false);
   } finally { await close(admin.server); }
+});
+
+test('read-only credentials normalize into live execution shape without requiring Toss accountSeq', () => {
+  assert.deepEqual(
+    normalizeReadonlyCredentialsForLiveExecution('toss', {
+      clientId: 'toss-client',
+      clientSecret: 'toss-secret',
+    }),
+    { clientId: 'toss-client', clientSecret: 'toss-secret' },
+  );
+  assert.deepEqual(
+    normalizeReadonlyCredentialsForLiveExecution('kiwoom', {
+      appKey: 'kiwoom-key',
+      appSecret: 'kiwoom-secret',
+    }),
+    { appKey: 'kiwoom-key', secretKey: 'kiwoom-secret' },
+  );
+  assert.throws(
+    () => normalizeReadonlyCredentialsForLiveExecution('toss', {
+      clientId: 'only-client',
+    }),
+    /READONLY_CREDENTIALS_INCOMPLETE/,
+  );
+});
+
+test('saved read-only Upbit credentials can be reused and verified without secret echo or financial mutation', async () => {
+  process.env.ORDER_EXECUTION_ENABLED = 'true';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
+  process.env.REAL_ORDER_ENABLED = 'true';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
+  process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.LIVE_TRADING = 'true';
+  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
+
+  const accessKey = 'readonly-upbit-access-secret';
+  const secretKey = 'readonly-upbit-signing-secret';
+  const encryptedCredentials = encryptTradingCredentials({ accessKey, secretKey });
+  setTradeReadonlyCredentialRepositoryFactoryForTests(() => ({
+    async get(userId, provider) {
+      if (userId !== USER || provider !== 'upbit') return null;
+      return {
+        userId,
+        provider,
+        configured: true,
+        encryptedCredentials,
+        lastVerifiedAt: '2026-10-03T00:00:00.000Z',
+        lastErrorCode: null,
+        updatedAt: '2026-10-03T00:00:00.000Z',
+      };
+    },
+  }));
+
+  await repository.deleteConnection(USER, 'upbit');
+  const { server, baseUrl } = await startServer();
+  const nativeFetch = globalThis.fetch;
+  let providerMutationRequests = 0;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return nativeFetch(input, init);
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      if (method !== 'GET') providerMutationRequests += 1;
+      if (url.includes('api.upbit.com/v1/accounts') && method === 'GET') {
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`UNEXPECTED_REUSE_VERIFY_REQUEST:${method}:${url}`);
+    };
+
+    const response = await globalThis.fetch(
+      `${baseUrl}/api/trade-automation/connections/upbit/reuse-readonly`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      },
+    );
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.doesNotMatch(text, new RegExp(accessKey));
+    assert.doesNotMatch(text, new RegExp(secretKey));
+    const body = JSON.parse(text) as {
+      configured: boolean;
+      verified: boolean;
+      reusedReadonlyCredential: boolean;
+      credentialsReturned: boolean;
+      liveExecutionActivated: boolean;
+      automaticLiveExecutionActivated: boolean;
+      orderRequests: number;
+      cancelRequests: number;
+      amendRequests: number;
+      transferRequests: number;
+      withdrawalRequests: number;
+      realOrderSubmitted: boolean;
+    };
+    assert.equal(body.configured, true);
+    assert.equal(body.verified, true);
+    assert.equal(body.reusedReadonlyCredential, true);
+    assert.equal(body.credentialsReturned, false);
+    assert.equal(body.liveExecutionActivated, false);
+    assert.equal(body.automaticLiveExecutionActivated, false);
+    assert.equal(body.orderRequests, 0);
+    assert.equal(body.cancelRequests, 0);
+    assert.equal(body.amendRequests, 0);
+    assert.equal(body.transferRequests, 0);
+    assert.equal(body.withdrawalRequests, 0);
+    assert.equal(body.realOrderSubmitted, false);
+    assert.equal(providerMutationRequests, 0);
+
+    const connection = await repository.getConnection(USER, 'upbit');
+    assert.equal(connection?.configured, true);
+    assert.equal(connection?.accountMode, 'live');
+    assert.ok(connection?.lastVerifiedAt);
+    assert.equal(connection?.lastErrorCode, null);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeReadonlyCredentialRepositoryFactoryForTests(null);
+    await close(server);
+    for (const key of [
+      'ORDER_EXECUTION_ENABLED',
+      'LIVE_TRADING_ACTIVATION_APPROVED',
+      'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+      'REAL_ORDER_ENABLED',
+      'PRIVATE_TRADING_API_ALLOWED',
+      'UPBIT_LIVE_ORDER_ENABLED',
+      'LIVE_TRADING',
+      'executionAuthority',
+      'SPOT_LIVE_CAPABILITY_ALLOWLIST',
+      'SPOT_LIVE_MARKET_ALLOWLIST',
+    ]) delete process.env[key];
+  }
+});
+
+test('Toss live connection save keeps accountSeq optional', async () => {
+  const { server, baseUrl } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/trade-automation/connections/toss`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        credentials: { clientId: 'toss-client', clientSecret: 'toss-secret' },
+        accountMode: 'live',
+        purpose: 'live_execution',
+        permissions: ['read', 'orders'],
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.doesNotMatch(text, /toss-client|toss-secret/);
+    const body = JSON.parse(text) as { configured: boolean; accountMode: string };
+    assert.equal(body.configured, true);
+    assert.equal(body.accountMode, 'live');
+  } finally {
+    await repository.deleteConnection(USER, 'toss');
+    await close(server);
+  }
 });
 
 test('connection registration rejects withdrawal permission and does not echo secrets', async () => {
