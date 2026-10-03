@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { ScannerSignalCard } from './scanner-signal.types';
 import {
   applyScannerAiValidation,
+  createScannerAiTransport,
   enrichTopScannerCandidatesWithAi,
   scannerAiRuntimeStatus,
 } from './scanner-ai-runtime.service';
@@ -124,4 +125,45 @@ test('provider not configured performs zero validation calls and preserves scann
   assert.equal(calls, 0);
   assert.equal(result.every((row) => row.aiValidation?.status === 'NOT_RUN'), true);
   assert.equal(result[0].score, 95);
+});
+
+
+test('scanner provider prompt stays below shared AI chat truncation limit even with oversized evidence strings', async () => {
+  let promptText = '';
+  const transport = createScannerAiTransport(async (input) => {
+    promptText = String(input.message ?? '');
+    return {
+      answer: JSON.stringify({
+        status: 'PASS',
+        counterEvidence: [],
+        missingData: [],
+        risks: [],
+        explanation: 'bounded',
+      }),
+      kind: 'answer',
+      model: 'gemini-test',
+      provider: 'google-gemini',
+      fallbackUsed: false,
+      providerLatencyMs: 1,
+      generatedAt: new Date().toISOString(),
+      data: { status: 'not_requested', asOf: null, basis: 'server_collection_time', sources: [], missing: [] },
+    };
+  }, configuredEnv);
+
+  const result = await transport({
+    signalId: 'signal-long-prompt',
+    symbol: 'BTC',
+    market: 'coin_spot',
+    strategy: 'scalping',
+    direction: 'LONG',
+    score: 91,
+    riskScore: 20,
+    dataQualityScore: 95,
+    evidence: Array.from({ length: 24 }, (_, index) => 'evidence-' + index + '-' + 'x'.repeat(300)),
+    warnings: Array.from({ length: 12 }, (_, index) => 'warning-' + index + '-' + 'y'.repeat(300)),
+  }, new AbortController().signal);
+
+  assert.equal(result.status, 'PASS');
+  assert.ok(promptText.length > 0 && promptText.length <= 1_900);
+  assert.ok(promptText.includes('"signalId":"signal-long-prompt"'));
 });
