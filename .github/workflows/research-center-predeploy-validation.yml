@@ -1,0 +1,211 @@
+name: Research Center Predeploy Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/research-center-predeploy-validation.yml'
+      - '.github/workflows/fast-profitability-v1-activation.yml'
+      - '.github/workflows/fast-profitability-v1-collector.yml'
+      - '.github/workflows/fast-profitability-v1-preactivation-watch.yml'
+      - '.github/workflows/prediction-lab-52d-validation.yml'
+      - 'api-server/scripts/verify-research-center-predeploy-contract.mjs'
+      - 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs'
+      - 'api-server/src/routes/admin.ts'
+      - 'api-server/src/routes/index.ts'
+      - 'api-server/src/routes/paper-journal.ts'
+      - 'api-server/src/routes/research-workspace.ts'
+      - 'api-server/src/routes/strategy-promotion.ts'
+      - 'api-server/src/routes/video-research-evidence.ts'
+      - 'api-server/src/routes/video-research-source-evidence.ts'
+      - 'api-server/src/services/research-center-readonly-contract.service.ts'
+      - 'api-server/src/services/research-center-readonly-contract.service.test.ts'
+      - 'api-server/src/services/research-adoption-review-gate.service.ts'
+      - 'api-server/src/services/research-adoption-review-gate.service.test.ts'
+      - 'api-server/src/services/strategy-promotion-research-bridge.service.ts'
+      - 'api-server/src/services/strategy-promotion-research-bridge.service.test.ts'
+      - 'market-prediction-lab/src/frozen-candidate-performance-reader-v1.js'
+      - 'stock-analyzer/src/App.tsx'
+      - 'stock-analyzer/src/lib/app-navigation.ts'
+      - 'stock-analyzer/src/lib/research-center.ts'
+      - 'stock-analyzer/src/lib/research-center-product.ts'
+      - 'stock-analyzer/src/lib/research-journal-binding.ts'
+      - 'stock-analyzer/src/lib/strategy-promotion.ts'
+      - 'stock-analyzer/src/components/research-video-source-panel.tsx'
+      - 'stock-analyzer/src/components/research-workspace-*.tsx'
+      - 'stock-analyzer/src/pages/research-center*.tsx'
+      - 'stock-analyzer/e2e/research-*.spec.ts'
+      - 'research-dashboard/**'
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-character commit SHA to validate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-center-predeploy-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Research Center connection and contract QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify Research Center full connection graph
+        run: |
+          set -Eeuo pipefail
+          node api-server/scripts/verify-research-center-predeploy-contract.mjs
+          node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
+
+      - name: Backend and frontend semantic typecheck
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server run typecheck
+          pnpm --dir stock-analyzer run typecheck
+
+      - name: Bundle focused backend Research Center contracts
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          pnpm exec esbuild src/services/research-center-readonly-contract.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-center-readonly.test.cjs"
+          pnpm exec esbuild src/services/strategy-promotion-research-bridge.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-promotion-bridge.test.cjs"
+          pnpm exec esbuild src/services/research-adoption-review-gate.service.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-adoption-review.test.cjs"
+          pnpm exec esbuild src/routes/strategy-promotion.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/strategy-promotion-route.test.cjs"
+          pnpm exec esbuild src/routes/paper-journal.smoke.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/paper-journal-route.test.cjs"
+          pnpm exec esbuild src/services/research-workspace-authorization-v5.test.ts             --bundle --platform=node --format=cjs --target=node22             --outfile="$RUNNER_TEMP/research-workspace-auth.test.cjs"
+
+      - name: Run focused backend Research Center contracts
+        run: |
+          set -Eeuo pipefail
+          node --test             "$RUNNER_TEMP/research-center-readonly.test.cjs"             "$RUNNER_TEMP/research-promotion-bridge.test.cjs"             "$RUNNER_TEMP/research-adoption-review.test.cjs"             "$RUNNER_TEMP/strategy-promotion-route.test.cjs"             "$RUNNER_TEMP/paper-journal-route.test.cjs"             "$RUNNER_TEMP/research-workspace-auth.test.cjs"
+
+      - name: Validate Research Dashboard runtime contract
+        working-directory: research-dashboard
+        run: |
+          set -Eeuo pipefail
+          npm run check
+          npm test
+          python3 -m py_compile server.py video_research_readback.py
+          python3 test/test_server.py
+          python3 test/test_video_research_readback.py
+
+      - name: Validate exact-head workflow contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/pr-exact-head-workflows.test.mjs
+
+      - name: Development-only safety boundary
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/research-center-predeploy-validation.yml'
+          ! grep -Eq '^\s*environment:\s*(production|staging)\s*$' "$workflow"
+          ! grep -Eq 'secrets\.' "$workflow"
+          ! grep -Eq 'merge_pull_request|deploy-production|LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true' "$workflow"
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"
+
+  browser:
+    name: Research Center application browser QA
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha || github.sha }}
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable detached HEAD
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Research Center overview, evidence, Paper and abort browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts
+
+      - name: Research Video and Workspace browser regressions
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.research-workspace.config.ts
+
+      - name: Retain browser evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-center-predeploy-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Development-only browser boundary
+        if: always()
+        run: |
+          printf '%s\n'             'RESEARCH_CENTER_PREDEPLOY=VALIDATION_ONLY'             'READY_AUTHORITY=false'             'MERGE_AUTHORITY=false'             'DEPLOY_AUTHORITY=false'             'LIVE_TRADING_AUTHORITY=false'             'ORDER_AUTHORITY=false'
