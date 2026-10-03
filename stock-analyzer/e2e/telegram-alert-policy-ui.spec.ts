@@ -80,6 +80,8 @@ function userIntegrationsResponse(connected: boolean) {
       aiExplanationEnabled: false,
       signalFollowupEnabled: false,
       memberHoldingsEnabled: false,
+      backgroundWorkersEnabled: true,
+      personalWorkerEnabled: true,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -254,6 +256,8 @@ test('personal Telegram runtime health is sanitized and visible without trading 
   expect(route).toContain('linkingReady');
   expect(route).toContain('stockRoomReady');
   expect(route).toContain('cryptoRoomReady');
+  expect(route).toContain('backgroundWorkersEnabled');
+  expect(route).toContain('personalWorkerEnabled');
   expect(route).toContain("orderAuthority: 'NONE' as const");
   expect(route).toContain('privateTradingApiAllowed: false as const');
   expect(route).toContain('realOrderAllowed: false as const');
@@ -345,4 +349,11 @@ test('Telegram settings remain responsive and do not add Telegram-side trade exe
   expect(panel).not.toContain('Telegram에서 매도');
   expect(panel).not.toContain('Telegram에서 LONG 진입');
   expect(panel).not.toContain('Telegram에서 SHORT 진입');
+});
+
+test('healthy status requires the actual personal delivery workers instead of bot-token presence alone', () => {
+  expect(panel).toContain('state.telegramRuntime.backgroundWorkersEnabled');
+  expect(panel).toContain('state.telegramRuntime.personalWorkerEnabled');
+  expect(panel).toContain("? '정상'");
+  expect(panel).toContain("? '확인 필요'");
 });
