@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Clock3, Database, RefreshCw, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Database, RefreshCw, TrendingUp, WalletCards, X, MoreHorizontal } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { PROMOTION_STAGE_KO } from '@/lib/labels';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
@@ -17,11 +17,11 @@ function formatDate(value: number | null | undefined) {
 }
 
 function researchState(overview: ResearchCenterOverview) {
-  if (!overview.state.present) return { value: '근거 미수집', detail: '연구 overview 근거가 아직 없습니다.', tone: 'neutral' as const };
+  if (!overview.state.present) return { value: '근거 미수집', detail: '연구 개요 자료가 아직 없습니다.', tone: 'neutral' as const };
   if ((overview.research.failedTasks ?? 0) > 0) return { value: '확인 필요', detail: `실패 작업 ${overview.research.failedTasks}건`, tone: 'warning' as const };
   if ((overview.research.blockedDataTasks ?? 0) > 0) return { value: '근거 수집 중', detail: `데이터 대기 작업 ${overview.research.blockedDataTasks}건`, tone: 'progress' as const };
   if (/collect|running|progress/i.test(overview.research.status)) return { value: '연구 진행 중', detail: '새 근거를 수집하고 있습니다.', tone: 'progress' as const };
-  return { value: '연구 상태 확인됨', detail: '현재 read-only overview가 연결되어 있습니다.', tone: 'normal' as const };
+  return { value: '연구 상태 확인됨', detail: '현재 조회용 연구 개요가 연결되어 있습니다.', tone: 'normal' as const };
 }
 
 function executionState(overview: ResearchCenterOverview) {
@@ -35,9 +35,9 @@ function executionState(overview: ResearchCenterOverview) {
 
 function dataFactoryState(overview: ResearchCenterOverview) {
   const temporal = overview.dataFactory?.temporalCryptoFutures;
-  if (!temporal) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
-  if (!temporal.present) return { value: '미수집', detail: 'Temporal evidence 수집 기록이 없습니다.', tone: 'neutral' as const };
-  if (temporal.status === 'INVALID') return { value: '확인 필요', detail: 'Temporal evidence 무결성 검증에 실패했습니다.', tone: 'warning' as const };
+  if (!temporal) return { value: '미수집', detail: '시점 자료 수집 기록이 없습니다.', tone: 'neutral' as const };
+  if (!temporal.present) return { value: '미수집', detail: '시점 자료 수집 기록이 없습니다.', tone: 'neutral' as const };
+  if (temporal.status === 'INVALID') return { value: '확인 필요', detail: '시점 자료 무결성 검증에 실패했습니다.', tone: 'warning' as const };
   if (temporal.status === 'partial_failure') {
     return {
       value: temporal.observationCount == null ? '부분 실패' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
@@ -47,7 +47,7 @@ function dataFactoryState(overview: ResearchCenterOverview) {
   }
   return {
     value: temporal.observationCount == null ? '누적 중' : `${temporal.observationCount.toLocaleString('ko-KR')}건`,
-    detail: `${temporal.results.length.toLocaleString('ko-KR')}개 심볼 · public temporal evidence`,
+    detail: `${temporal.results.length.toLocaleString('ko-KR')}개 심볼 · 공개 시점 자료`,
     tone: 'progress' as const,
   };
 }
@@ -62,16 +62,16 @@ function factoryRuntimeState(overview: ResearchCenterOverview) {
     return { value: '정책 확정 필요', detail: '후보 수·단계별 축소 정책이 아직 승인되지 않았습니다.', tone: 'warning' as const };
   }
   if (factory.status === 'BLOCKED_NO_READY_PROFILES') {
-    return { value: '연구 데이터 대기', detail: 'Canonical 시장 프로필 근거가 준비되는 중입니다.', tone: 'progress' as const };
+    return { value: '연구 데이터 대기', detail: '시장 프로필 자료가 준비되는 중입니다.', tone: 'progress' as const };
   }
   if (factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_MISSING') {
-    return { value: '개발 진단 필요', detail: '준비된 프로필의 DEVELOPMENT-only 진단 근거가 아직 없습니다.', tone: 'progress' as const };
+    return { value: '개발 진단 필요', detail: '준비된 프로필의 개발 전용 진단 자료가 아직 없습니다.', tone: 'progress' as const };
   }
   if (factory.status === 'BLOCKED_DEVELOPMENT_DIAGNOSTICS_INVALID') {
-    return { value: '개발 진단 오류', detail: '진단값 형식 또는 hindsight 금지 규칙을 확인해야 합니다.', tone: 'warning' as const };
+    return { value: '개발 진단 오류', detail: '진단값 형식 또는 사후정보 사용 금지 규칙을 확인해야 합니다.', tone: 'warning' as const };
   }
   if (factory.status === 'BLOCKED_RUNTIME_BINDINGS') {
-    return { value: '엔진 연결 중', detail: '기존 백테스터·검증 owner 연결 근거를 기다립니다.', tone: 'progress' as const };
+    return { value: '엔진 연결 중', detail: '기존 백테스터·검증 연결 자료를 기다립니다.', tone: 'progress' as const };
   }
   if (factory.status === 'READY_NON_ACTIVATING') {
     return { value: '연구 준비됨', detail: '자동 실행 전 단계까지 검증됐으며 실행 권한은 없습니다.', tone: 'normal' as const };
@@ -83,7 +83,7 @@ function paperSample(overview: ResearchCenterOverview) {
   const value = overview.paper.ledger.sampleCount ?? overview.paper.ledger.settlementCount;
   if (value == null) return { value: '미확인', detail: '모의매매 표본 수 근거가 없습니다.', tone: 'neutral' as const };
   if (value === 0) return { value: '0건', detail: '아직 정산된 모의매매 표본이 없습니다.', tone: 'progress' as const };
-  return { value: `${value.toLocaleString('ko-KR')}건`, detail: '현재 overview가 제공한 표본 수입니다.', tone: 'normal' as const };
+  return { value: `${value.toLocaleString('ko-KR')}건`, detail: '현재 연구 개요가 제공한 표본 수입니다.', tone: 'normal' as const };
 }
 
 function shadowState(overview: ResearchCenterOverview) {
@@ -97,7 +97,7 @@ function shadowState(overview: ResearchCenterOverview) {
 }
 
 function profitabilityState(overview: ResearchCenterOverview) {
-  if (overview.profitability.proven) return { value: '검증 완료', detail: '현재 canonical overview가 수익성 검증 충족을 보고합니다.', tone: 'normal' as const };
+  if (overview.profitability.proven) return { value: '검증 완료', detail: '현재 연구 개요가 수익성 검증 충족을 보고합니다.', tone: 'normal' as const };
   return { value: '검증 중', detail: '미검증은 수익성이 없다는 뜻이 아닙니다.', tone: 'progress' as const };
 }
 
@@ -117,14 +117,14 @@ type FullCostComponentState = ResearchCandidatePerformance['fullCostEvidence']['
 
 function fullCostStateLabel(state: FullCostComponentState) {
   if (state === 'MEASURED') return '관측됨';
-  if (state === 'MODELED') return '모델값 · 경제증거 아님';
+  if (state === '추정') return '추정값 · 실측 아님';
   if (state === 'BLOCKED_DATA') return '데이터 차단';
   return '미확인';
 }
 
 function fullCostStateClass(state: FullCostComponentState) {
   if (state === 'MEASURED') return 'border-positive/25 bg-positive/5 text-positive';
-  if (state === 'MODELED') return 'border-warning/30 bg-warning/5 text-warning';
+  if (state === '추정') return 'border-warning/30 bg-warning/5 text-warning';
   if (state === 'BLOCKED_DATA') return 'border-destructive/25 bg-destructive/5 text-destructive';
   return 'border-card-border bg-muted/40 text-muted-foreground';
 }
@@ -146,7 +146,7 @@ function fullCostEvidenceState(overview: ResearchCenterOverview) {
     };
   });
   const measured = rows.filter((row) => row.state === 'MEASURED').length;
-  const modeled = rows.filter((row) => row.state === 'MODELED').length;
+  const modeled = rows.filter((row) => row.state === '추정').length;
   const blocked = rows.filter((row) => row.state === 'BLOCKED_DATA').length;
   const unknown = rows.filter((row) => row.state === 'UNKNOWN').length;
   const fullCostReady = Boolean(
@@ -161,8 +161,8 @@ function fullCostEvidenceState(overview: ResearchCenterOverview) {
     blocked,
     unknown,
     fullCostReady,
-    settlementN: performance?.Settlement_N ?? null,
-    firstZero: performance?.FIRST_ZERO ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
+    settlementN: performance?.정산_N ?? null,
+    firstZero: performance?.현재 막힌 단계 ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
   };
 }
 
@@ -211,27 +211,25 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick, test
 function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) {
   const cost = fullCostEvidenceState(overview);
   const incomplete = cost.rows.filter((row) => row.state !== 'MEASURED');
-  const ledgerSettlementN = overview.paper.ledger.settlementCount;
+  const ledger정산N = overview.paper.ledger.settlementCount;
   const settlementLabel = cost.settlementN == null
-    ? '후보 Settlement 미확인'
+    ? '후보 정산 미확인'
     : cost.settlementN === 0
-      ? '후보 Settlement 0건 · 미연결'
-      : `후보 Settlement ${cost.settlementN.toLocaleString('ko-KR')}건 연결`;
+      ? '후보 정산 0건 · 미연결'
+      : `후보 정산 ${cost.settlementN.toLocaleString('ko-KR')}건 연결`;
   const reason = cost.fullCostReady
-    ? '8개 비용과 canonical 연결 근거가 모두 FULL_COST_READY로 확인됐습니다.'
+    ? '8개 비용과 기준 연결 근거가 모두 FULL_COST_READY로 확인됐습니다.'
     : incomplete.length > 0
       ? `${incomplete.map((row) => row.label).join(' · ')} 근거가 실측 완료 상태가 아닙니다.`
-      : '8개 비용이 모두 관측돼도 canonical FULL_COST_READY가 false입니다. Settlement·identity·cost-policy 연결 근거를 더 확인해야 합니다.';
+      : '8개 비용이 모두 관측돼도 기준 FULL_COST_READY가 false입니다. 정산·identity·cost-policy 연결 근거를 더 확인해야 합니다.';
 
   return (
-    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="research-full-cost-summary" aria-label="Full Cost 경제증거">
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="research-full-cost-summary" aria-label="전체 비용 경제증거">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Economic evidence</p>
-          <h2 className="mt-1 text-lg font-black">Full Cost 8개 비용</h2>
-          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            같은 후보의 비용·Settlement가 연결돼야 합니다. MODELED 값은 실제 경제증거로 승격하지 않습니다.
-          </p>
+          
+          <h2 className="mt-1 text-lg font-black">비용 8항목</h2>
+          
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${cost.fullCostReady ? TONE.normal : TONE.warning}`}>
           FULL_COST_READY · {cost.fullCostReady ? '충족' : '미충족'}
@@ -252,7 +250,7 @@ function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) 
           <p className="mt-1 text-base font-black tabular-nums">{cost.unknown + cost.blocked}개</p>
         </div>
         <div className="rounded-xl bg-muted/40 p-3">
-          <p className="text-[10px] font-bold text-muted-foreground">Settlement 연결</p>
+          <p className="text-[10px] font-bold text-muted-foreground">정산 연결</p>
           <p className="mt-1 break-keep text-sm font-black">{settlementLabel}</p>
         </div>
       </div>
@@ -260,9 +258,9 @@ function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) 
       <div className="mt-3 rounded-xl border border-warning/25 bg-warning/5 p-3">
         <p className="text-xs font-black">왜 아직 미충족인가요?</p>
         <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{reason}</p>
-        <p className="mt-2 break-all font-mono text-[10px] text-muted-foreground">FIRST_ZERO · {cost.firstZero}</p>
+        <p className="mt-2 text-[10px] text-muted-foreground">현재 막힌 단계 · {cost.firstZero === 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING' ? '후보 성과 자료 필요' : '추가 검증 자료 필요'}</p>
         <p className="mt-1 text-[10px] text-muted-foreground">
-          전체 Paper ledger Settlement · {ledgerSettlementN == null ? '미확인' : `${ledgerSettlementN.toLocaleString('ko-KR')}건`} · 후보별 Settlement와 별도 집계
+          전체 모의매매 기록 정산 · {ledger정산N == null ? '미확인' : `${ledger정산N.toLocaleString('ko-KR')}건`} · 후보별 정산와 별도 집계
         </p>
       </div>
 
@@ -274,10 +272,9 @@ function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) 
               <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${fullCostStateClass(row.state)}`}>{fullCostStateLabel(row.state)}</span>
             </div>
             <p className="mt-2 text-sm font-black tabular-nums">{formatCostValue(row.valuePercent)}</p>
-            <p className="mt-2 break-all text-[10px] leading-4 text-muted-foreground">출처 · {row.provenance ?? '미제공'}</p>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Freshness · API 미제공</p>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">Quality · API 미제공</p>
-            <p className="mt-1 font-mono text-[9px] text-muted-foreground">state={row.state}</p>
+            <p className="mt-2 text-[10px] leading-4 text-muted-foreground">출처 · {row.provenance ? '확인됨' : '미제공'}</p>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">신선도 · 미제공</p>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">품질 · 미제공</p>
           </article>
         ))}
       </div>
@@ -294,7 +291,18 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
   });
 
   const overview = query.data;
-  const [selected, setSelected] = useState<'research' | 'data' | 'paper' | 'profitability'>('research');
+  const [selected, setSelected] = useState<'research' | 'data' | 'paper' | 'profitability' | null>(null);
+  const [otherOpen, setOtherOpen] = useState(false);
+
+  useEffect(() => {
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setSelected(null);
+      setOtherOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="research-general-view">
@@ -304,11 +312,9 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
           <header className="rounded-2xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-primary">Research Center</p>
+                
                 <h1 className="mt-1 text-xl font-black sm:text-2xl">현재 어디까지 왔나요?</h1>
-                <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">
-                  카드 하나를 누르면 왜 그런 상태인지와 다음에 볼 것을 바로 설명합니다.
-                </p>
+                
               </div>
               <button
                 type="button"
@@ -348,7 +354,7 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
             const fullCost = fullCostEvidenceState(overview);
             const paperSummary = {
               ...sample,
-              detail: `${sample.detail} · Full Cost ${fullCost.fullCostReady ? '충족' : `${fullCost.measured}/8 실측`}`,
+              detail: `${sample.detail} · 전체 비용 ${fullCost.fullCostReady ? '충족' : `${fullCost.measured}/8 실측`}`,
             };
             return (
               <>
@@ -382,94 +388,119 @@ export function ResearchCenterGeneral({ onOpenExpert }: { onOpenExpert?: () => v
                   <SummaryCard testId="research-summary-profitability" selected={selected === 'profitability'} onClick={() => setSelected('profitability')} icon={<TrendingUp className="h-5 w-5" />} label="수익성 검증" {...profitability} />
                 </section>
 
-                {(() => {
+                {selected ? (() => {
                   const info = {
                     research: {
                       label: '연구 상태',
                       state: research,
-                      why: '최근 연구 작업과 데이터 대기·실패 상태를 합쳐 보여주는 값입니다.',
-                      next: '실패 작업이 있으면 상세 근거에서 FIRST_ZERO를 확인하고, 데이터 대기면 자연 표본을 기다립니다.',
+                      why: '최근 연구 작업과 데이터 대기·실패 상태를 합쳐 보여줍니다.',
+                      next: '실패 작업이 있으면 상세 검증에서 막힌 단계를 확인하고, 데이터 대기면 자연 표본을 누적합니다.',
                     },
                     data: {
                       label: '데이터 수집',
                       state: dataFactory,
-                      why: '시간 순서 기반 public evidence가 실제로 들어왔는지 보여줍니다.',
-                      next: '표본이 0이면 억지로 채우지 않고 첫 자연 observation이 들어오는지 확인합니다.',
+                      why: '시간 순서 기반 자료가 실제로 들어왔는지 보여줍니다.',
+                      next: '표본이 없으면 임의로 채우지 않고 실제 관측 자료가 들어오는지 확인합니다.',
                     },
                     paper: {
                       label: '모의매매 표본',
                       state: paperSummary,
-                      why: '모의매매 중에서도 canonical ledger가 확인한 표본만 집계하고, 후보별 Full Cost 근거는 별도로 확인합니다.',
-                      next: '아래 8개 비용의 실측 여부와 후보 Settlement 연결을 같이 확인하세요.',
+                      why: '검증된 모의매매 표본만 집계하고 후보별 전체 비용을 별도로 확인합니다.',
+                      next: '비용 8항목의 실측 여부와 후보 정산 연결을 함께 확인합니다.',
                     },
                     profitability: {
                       label: '수익성 검증',
                       state: profitability,
-                      why: '표본·정산·비용·OOS 근거가 모두 충족되기 전에는 검증 중으로 유지합니다.',
-                      next: '미검증을 손실로 해석하지 말고, 다음 evidence 단계가 채워지는지 확인합니다.',
+                      why: '표본·정산·비용·미래검증 자료가 모두 충족되기 전에는 검증 중으로 유지합니다.',
+                      next: '다음 검증 자료가 자연스럽게 누적되는지 확인합니다.',
                     },
                   }[selected];
                   return (
-                    <section className="rounded-2xl border border-primary/25 bg-card p-4 shadow-sm" data-testid="research-general-selected-detail" aria-live="polite">
-                      <p className="text-[11px] font-black text-primary">선택한 항목</p>
-                      <h2 className="mt-1 text-lg font-black">{info.label} · {info.state.value}</h2>
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        <div className="rounded-xl bg-muted/40 p-3">
-                          <p className="text-xs font-black">왜 이렇게 표시되나요?</p>
-                          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.why}</p>
+                    <div
+                      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+                      role="presentation"
+                      onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}
+                      data-testid="research-general-detail-overlay"
+                    >
+                      <section
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={`${info.label} 상세`}
+                        className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl border border-card-border bg-background p-4 shadow-2xl sm:rounded-3xl sm:p-5"
+                        data-testid="research-general-detail-dialog"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h2 className="text-lg font-black">{info.label}</h2>
+                            <p className="mt-1 text-sm font-bold">{info.state.value}</p>
+                          </div>
+                          <button type="button" onClick={() => setSelected(null)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기">
+                            <X className="h-4 w-4" />
+                          </button>
                         </div>
-                        <div className="rounded-xl bg-muted/40 p-3">
-                          <p className="text-xs font-black">다음에 뭘 보면 되나요?</p>
-                          <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.next}</p>
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                          <div className="rounded-xl bg-muted/40 p-3">
+                            <p className="text-xs font-black">현재 상태</p>
+                            <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.why}</p>
+                          </div>
+                          <div className="rounded-xl bg-muted/40 p-3">
+                            <p className="text-xs font-black">다음 단계</p>
+                            <p className="mt-2 break-keep text-sm leading-6 text-muted-foreground">{info.next}</p>
+                          </div>
                         </div>
-                      </div>
-                      {onOpenExpert ? (
-                        <button type="button" onClick={onOpenExpert} className="mt-3 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-4 text-sm font-black text-primary">
-                          상세 근거 보기
-                        </button>
-                      ) : null}
-                    </section>
-                  );
-                })()}
-
-                {selected === 'paper' || selected === 'profitability'
-                  ? <FullCostVisibility overview={overview} />
-                  : null}
-
-                <details className="rounded-2xl border border-card-border bg-card shadow-sm">
-                  <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-black">
-                    <span>기타 상태 보기</span>
-                    <span className="text-xs font-medium text-muted-foreground">팩토리 · Shadow · 실행 권한</span>
-                  </summary>
-                  <div className="grid gap-2 border-t border-card-border p-3 sm:grid-cols-3">
-                    {[
-                      ['리서치 팩토리', factoryRuntime],
-                      ['Shadow 기록', shadow],
-                      ['실행 권한', execution],
-                    ].map(([label, state]) => {
-                      const item = state as typeof research;
-                      return (
-                        <article key={label as string} className="rounded-xl bg-muted/35 p-3">
-                          <p className="text-xs font-bold text-muted-foreground">{label as string}</p>
-                          <p className="mt-2 text-base font-black">{item.value}</p>
-                          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{item.detail}</p>
-                        </article>
-                      );
-                    })}
-                  </div>
-                </details>
-
-                <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <Clock3 className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-                    <div>
-                      <h2 className="text-sm font-black">이 화면은 이렇게 보면 됩니다</h2>
-                      <p className="mt-1 break-keep text-sm leading-6 text-muted-foreground">
-                        위 카드 하나를 누르면 설명이 바뀝니다. SHA·원본 식별자·검증 코드는 필요할 때만 ‘상세 근거 보기’에서 확인하세요.
-                      </p>
+                        {selected === 'paper' || selected === 'profitability'
+                          ? <div className="mt-4"><FullCostVisibility overview={overview} /></div>
+                          : null}
+                        {onOpenExpert ? (
+                          <button type="button" onClick={() => { setSelected(null); onOpenExpert(); }} className="mt-4 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-4 text-sm font-black text-primary">
+                            상세 검증 보기
+                          </button>
+                        ) : null}
+                      </section>
                     </div>
+                  );
+                })() : null}
+
+                <button
+                  type="button"
+                  onClick={() => setOtherOpen(true)}
+                  className="flex min-h-12 w-full items-center justify-between rounded-2xl border border-card-border bg-card px-4 text-sm font-black shadow-sm"
+                  data-testid="research-general-other-open"
+                >
+                  기타 상태 보기
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+
+                {otherOpen ? (
+                  <div
+                    className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4"
+                    role="presentation"
+                    onMouseDown={(event) => { if (event.target === event.currentTarget) setOtherOpen(false); }}
+                  >
+                    <section role="dialog" aria-modal="true" aria-label="기타 연구 상태" className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-t-3xl border border-card-border bg-background p-4 shadow-2xl sm:rounded-3xl sm:p-5" data-testid="research-general-other-dialog">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <h2 className="text-base font-black">기타 연구 상태</h2>
+                        <button type="button" onClick={() => setOtherOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기"><X className="h-4 w-4" /></button>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {[
+                          ['연구 엔진', factoryRuntime],
+                          ['그림자 검증 기록', shadow],
+                          ['실행 권한', execution],
+                        ].map(([label, state]) => {
+                          const item = state as typeof research;
+                          return (
+                            <article key={label as string} className="rounded-xl bg-muted/35 p-3">
+                              <p className="text-xs font-bold text-muted-foreground">{label as string}</p>
+                              <p className="mt-2 text-base font-black">{item.value}</p>
+                              <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{item.detail}</p>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
                   </div>
-                </section>
+                ) : null}
               </>
             );
           })() : null}
