@@ -55,10 +55,13 @@ export type StrategyPilotProfile = Readonly<{
   totalBudgetKrw: number;
   maxOrderKrw: number;
   maxConcurrentLivePositions: number;
-  maxDailyLiveEntries: number;
+  maxDailyLiveEntries: null;
+  maxDailyLosingTrades: number;
   dailyLossStopKrw: number;
   maxConsecutiveLosses: number;
-  futuresMaxLeverage: 2;
+  lossCooldownMinutes: number;
+  sameSymbolReentryRequiresFreshSignal: true;
+  futuresMaxLeverage: 3;
   paperMirrorRequired: true;
   pairedFillComparisonRequired: true;
   liveOrderRequiresExplicitConfirmation: true;
@@ -70,10 +73,13 @@ export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   totalBudgetKrw: 500_000,
   maxOrderKrw: 50_000,
   maxConcurrentLivePositions: 2,
-  maxDailyLiveEntries: 4,
-  dailyLossStopKrw: 10_000,
-  maxConsecutiveLosses: 2,
-  futuresMaxLeverage: 2,
+  maxDailyLiveEntries: null,
+  maxDailyLosingTrades: 5,
+  dailyLossStopKrw: 25_000,
+  maxConsecutiveLosses: 3,
+  lossCooldownMinutes: 30,
+  sameSymbolReentryRequiresFreshSignal: true,
+  futuresMaxLeverage: 3,
   paperMirrorRequired: true,
   pairedFillComparisonRequired: true,
   liveOrderRequiresExplicitConfirmation: true,
