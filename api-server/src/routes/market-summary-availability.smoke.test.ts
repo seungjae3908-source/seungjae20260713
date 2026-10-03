@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import express from 'express';
 import marketSummaryAvailabilityRouter from './market-summary-availability';
-import { createVideoResearchEvidenceRouter } from './video-research-evidence';
+import { createVideoResearchEvidenceRouter, loadVideoResearchRuntimeEvidenceSnapshot } from './video-research-evidence';
 
 type Fixture = {
   status: number;
@@ -183,6 +186,20 @@ function videoEvidenceSnapshot() {
       executionAuthority: 'NONE',
     }],
     safety: VIDEO_SAFETY,
+    automation: {
+      schemaVersion: 'research-video-discovery-scan-v1',
+      status: 'COMPLETE',
+      observedAt: '2026-09-13T00:00:00.000Z',
+      researchSha: 'a'.repeat(40),
+      query: 'TEST_ONLY video strategy',
+      sourceCount: 1,
+      snapshotDigest: 'b'.repeat(64),
+      providerNetworkCalls: 1,
+      invocationMode: 'SYSTEMD_TIMER',
+      scheduledInvocationObserved: true,
+      reason: null,
+      nextRequiredStep: 'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR',
+    },
     snapshotProvenance: {
       schemaVersion: 'video-research-sanitized-snapshot-v1',
       sourceHeadSha: 'a'.repeat(40),
@@ -252,6 +269,10 @@ test('video research evidence reader projects only sanitized official public run
   assert.equal(provenance.observedAt, '2026-09-13T00:00:00.000Z');
   assert.equal(provenance.publisherMode, 'LOCAL_ATOMIC_FILE');
   assert.equal(provenance.executionAuthority, 'NONE');
+  const automation = result.body.automation as Record<string, unknown>;
+  assert.equal(automation.invocationMode, 'SYSTEMD_TIMER');
+  assert.equal(automation.scheduledInvocationObserved, true);
+  assert.equal(automation.snapshotBound, true);
 });
 
 test('video research evidence reader requires exact sanitized snapshot provenance before MEASURED', async () => {
@@ -329,3 +350,73 @@ test('video research evidence reader fails closed on secret-bearing or authority
   assert.equal(authorityResult.body.reason, 'SANITIZED_RUNTIME_EVIDENCE_INVALID');
   assert.equal(Object.prototype.hasOwnProperty.call(authorityResult.body, 'sourceCount'), false);
 });
+
+test('video runtime loader prefers authoritative durable dashboard over an older local snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-priority-'));
+  try {
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
+    const dashboard = {
+      ...videoEvidenceSnapshot(),
+      query: 'NEW_DURABLE_QUERY',
+      automation: { ...videoEvidenceSnapshot().automation, query: 'NEW_DURABLE_QUERY' },
+    };
+    const fakeFetch = (async (input: string | URL | Request) => {
+      assert.equal(String(input), 'http://127.0.0.1:18090/api/research/video/evidence');
+      return new Response(JSON.stringify({ ok: true, available: true, ...dashboard }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath], Date.parse('2026-09-13T01:00:00.000Z')) as Record<string, unknown>;
+    assert.equal(result.query, 'NEW_DURABLE_QUERY');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('video runtime loader uses validated local snapshot only when durable dashboard is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-fallback-'));
+  try {
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
+    const fakeFetch = (async () => { throw new Error('TEST_ONLY_DASHBOARD_DOWN'); }) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath], Date.parse('2026-09-13T01:00:00.000Z')) as Record<string, unknown>;
+    assert.equal(result.query, 'TEST_ONLY video strategy');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('video runtime loader rejects stale local fallback when the durable dashboard is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-stale-fallback-'));
+  try {
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
+    const fakeFetch = (async () => { throw new Error('TEST_ONLY_DASHBOARD_DOWN'); }) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(
+      fakeFetch,
+      [localPath],
+      Date.parse('2026-09-14T01:00:00.000Z'),
+    );
+    assert.equal(result, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('authoritative durable dashboard missing state is not overwritten by stale local snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-authoritative-missing-'));
+  try {
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
+    const fakeFetch = (async () => new Response(JSON.stringify({
+      ok: false, available: false, dataState: 'UNKNOWN', reason: 'VIDEO_RESEARCH_SNAPSHOT_MISSING',
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath], Date.parse('2026-09-13T01:00:00.000Z'));
+    assert.equal(result, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
