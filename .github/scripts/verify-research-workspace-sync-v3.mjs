@@ -143,8 +143,30 @@ const portfolioReviewed=[
  'stock-analyzer/src/pages/phase7-journal-sync-e2e.tsx',
  'stock-analyzer/src/pages/portfolio-v2.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed]);
+const researchCenterIntegrationReviewed=[
+ '.github/tests/pr-exact-head-workflows.test.mjs',
+ '.github/workflows/fast-profitability-v1-activation.yml',
+ '.github/workflows/fast-profitability-v1-collector.yml',
+ '.github/workflows/fast-profitability-v1-preactivation-watch.yml',
+ '.github/workflows/prediction-lab-52d-validation.yml',
+ '.github/workflows/research-center-predeploy-validation.yml',
+ 'api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs',
+ 'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ 'api-server/src/routes/market-summary-availability.smoke.test.ts',
+ 'api-server/src/routes/video-research-source-evidence.ts',
+ 'stock-analyzer/e2e/research-video-intelligence.spec.ts',
+ 'stock-analyzer/src/components/research-video-source-panel.tsx',
+];
+const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
+if(researchCenterChanged.length>0){
+ const requiredIntegrationGuards=[
+  '.github/workflows/research-center-predeploy-validation.yml',
+  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ ];
+ for(const p of requiredIntegrationGuards)if(!changed.includes(p))throw new Error('RESEARCH_CENTER_INTEGRATION_GUARD_MISSING:'+p);
+}
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
 git('merge-base','--is-ancestor',OWNER,'HEAD');
@@ -177,7 +199,7 @@ if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 for(const p of protectedPaths)if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
-  reviewedChangedPaths:changed,protectedPaths,ancestryPreserved:true,mainUpdated:false,
+  reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,protectedPaths,ancestryPreserved:true,mainUpdated:false,
   liveOrders:0,providerCalls:0,fixtureResultsAreEconomicEvidence:false};
 const output=process.argv[2];if(output)writeFileSync(output,JSON.stringify(proof,null,2)+'\n');
 console.log(JSON.stringify(proof,null,2));
