@@ -327,9 +327,11 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
   await captureScreenshot(page, 'after-desktop-ai-lab.png');
 
   await page.getByRole('tab', { name: '검증 리포트' }).click();
-  await expect(page.getByTestId('research-evidence-tab')).toContainText(RESEARCH_SHA);
-  await expect(page.getByTestId('research-evidence-tab')).toContainText('Research runtime SHA');
-  await expect(page.getByTestId('research-evidence-tab')).toContainText('미수집');
+  const evidenceTab = page.getByTestId('research-evidence-tab');
+  await expect(evidenceTab).toContainText('연구 소스 버전');
+  await expect(evidenceTab).toContainText('확인됨');
+  await expect(evidenceTab).not.toContainText(RESEARCH_SHA);
+  await expect(evidenceTab).toContainText('미수집');
   await captureScreenshot(page, 'after-desktop-validation-report.png');
   await expectNoHorizontalOverflow(page);
   await assertClean();
@@ -454,6 +456,6 @@ test('actual canonical AI evidence is rendered without granting AI trading autho
   await expect(lab).toContainText('AI 의견이 충돌했습니다');
   await expect(lab).toContainText('google-gemini');
   await expect(lab).toContainText('groq');
-  await expect(lab).toContainText('자료에 없는 수치는 만들지 않습니다');
+  await expect(lab).toContainText('AI는 수익성 수치나 자동매매 승인을 만들지 않습니다');
   await assertClean();
 });
