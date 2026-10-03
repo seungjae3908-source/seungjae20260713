@@ -244,8 +244,7 @@ export function applyScannerAiValidation<T extends ScannerSignalCard>(
       ? (card.signalGrade === 'S' || card.signalGrade === 'A' ? 'B' : card.signalGrade)
       : card.signalGrade === 'S' ? 'A' : card.signalGrade,
     warnings: [...new Set([...card.warnings, warning])],
-   as T;
-}
+  } as T;
 }
 
 function notRun<T extends ScannerSignalCard>(card: T, reason: string): T {
@@ -269,8 +268,7 @@ export function enforceScannerAiFinalPromotionPolicy<T extends ScannerSignalCard
         ...card.warnings,
         'S등급은 외부 AI 공개근거 검토 PASS가 있어야 하므로 A등급으로 제한했습니다.',
       ])],
-     as T;
-}
+    } as T;
   });
 }
 
