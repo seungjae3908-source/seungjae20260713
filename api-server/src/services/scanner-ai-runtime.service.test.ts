@@ -50,14 +50,22 @@ const configuredEnv: NodeJS.ProcessEnv = {
 test('runtime status is safe and declares canonical bounded scanner wiring', () => {
   const off = scannerAiRuntimeStatus({});
   assert.equal(off.configured, false);
+  assert.equal(off.providerSeam, 'BOUNDED_AI_JSON_PROVIDER');
   assert.equal(off.canonicalScannerWired, true);
   assert.equal(off.executionAuthority, 'NONE');
   assert.equal(off.orderAllowed, false);
 
   const on = scannerAiRuntimeStatus(configuredEnv);
   assert.equal(on.configured, true);
+  assert.equal(on.providerSeam, 'BOUNDED_AI_JSON_PROVIDER');
+  assert.equal(on.provider, 'google-gemini');
+  assert.equal(on.model, 'gemini-test');
   assert.equal(on.maxCandidatesPerRequest, 2);
   assert.equal(on.vetoBlocksStrongSignal, true);
+  assert.equal(on.schedulerCircuitOpen, false);
+  assert.equal(on.schedulerPending, 0);
+  assert.equal(on.schedulerActive, 0);
+  assert.equal(on.providerFailures >= 0, true);
   assert.equal(JSON.stringify(on).includes('test-key'), false);
 });
 
