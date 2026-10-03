@@ -158,6 +158,7 @@ test('bound fresh PASS review admits Paper candidate while live stays disabled',
   const result = evaluateStrategyRulePackGate(reviewed(input, 'PASS'));
   assert.equal(result.state, 'PAPER_CANDIDATE');
   assert.equal(result.paperAllowed, true);
+  assert.equal(result.liveAiEligible, true);
   assert.equal(result.liveAllowed, false);
 });
 
@@ -171,6 +172,7 @@ test('ABSTAIN remains non-directional support and can continue only when determi
   });
   const result = evaluateStrategyRulePackGate(reviewed(input, 'ABSTAIN'));
   assert.equal(result.paperAllowed, true);
+  assert.equal(result.liveAiEligible, false);
   assert.equal(result.liveAllowed, false);
 });
 
@@ -183,6 +185,7 @@ test('AI VETO blocks even when deterministic evidence is complete', () => {
   });
   const result = evaluateStrategyRulePackGate(reviewed(input, 'VETO'));
   assert.equal(result.paperAllowed, false);
+  assert.equal(result.liveAiEligible, false);
   assert.ok(result.blockers.includes('STRATEGY_RULE_PACK_AI_VETO'));
 });
 
@@ -235,6 +238,7 @@ test('cash rule packs reject SHORT while futures rule pack accepts LONG and SHOR
     });
     const result = evaluateStrategyRulePackGate(reviewed(futures, 'PASS'));
     assert.equal(result.paperAllowed, true);
+    assert.equal(result.liveAiEligible, true);
     assert.equal(result.liveAllowed, false);
   }
 });
@@ -263,6 +267,7 @@ test('multi-market trend rule pack still enforces BUY-only cash and LONG/SHORT-o
     const futures = baseInput('TREND_PULLBACK_REACCEL_V1', 'CRYPTO_FUTURES', direction, common);
     const gate = evaluateStrategyRulePackGate(reviewed(futures, 'PASS'));
     assert.equal(gate.paperAllowed, true);
+    assert.equal(gate.liveAiEligible, true);
     assert.equal(gate.liveAllowed, false);
   }
 });
@@ -277,4 +282,5 @@ test('unknown existing strategies retain pass-through behavior without AI depend
   assert.equal(result.recognized, false);
   assert.equal(result.state, 'PASS_THROUGH');
   assert.equal(result.paperAllowed, true);
+  assert.equal(result.liveAiEligible, false);
 });
