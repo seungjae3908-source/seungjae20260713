@@ -29,6 +29,14 @@ test("stranded recovery approval requires an exact lowercase 40-char SHA", () =>
   assert.equal(parseCanonicalShadowRecoveryApprovalV1(`/activate-canonical-shadow ${sha}`), null);
 });
 
+test("recovery workflow distinguishes failed Publisher receipt artifacts from authoritative successful history", () => {
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/prediction-lab-canonical-shadow-cycle.yml", import.meta.url), "utf8");
+  assert.match(workflow, /NR==FNR \{ successful\[\$1\]=1; next \}/);
+  assert.match(workflow, /\$5 ~ \/\^canonical-shadow-publication-receipt-\/ && successful\[\$4\]/);
+  assert.match(workflow, /seen\[\$4\]=1/);
+  assert.match(workflow, /for \(run in seen\) count\+\+/);
+});
+
 test("runtime request IDs distinguish activation from hourly schedule", () => {
   assert.deepEqual(canonicalShadowRuntimeRequestV1("activate-5423752984"), { kind: "ACTIVATION", id: "5423752984", value: "activate-5423752984" });
   assert.deepEqual(canonicalShadowRuntimeRequestV1("hourly-32955082719"), { kind: "HOURLY", id: "32955082719", value: "hourly-32955082719" });
@@ -135,7 +143,7 @@ test("stranded recovery workflow is approval-gated, one-shot, and refuses a seco
   assert.match(workflow, /agent_hub_rollover_v2\.py resolve/);
   assert.doesNotMatch(workflow, /issues\/(?:660|838)\/comments\?per_page=100/);
   assert.doesNotMatch(workflow, /issue\?\.number !== (?:660|838)/);
-  assert.match(workflow, /--paginate --slurp/);
+  assert.doesNotMatch(workflow, /--paginate --slurp/, "Hub recovery approval pagination must remain streaming-safe");
   assert.match(workflow, /approve-canonical-shadow-recovery/);
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
   assert.ok(
@@ -147,10 +155,17 @@ test("stranded recovery workflow is approval-gated, one-shot, and refuses a seco
     "canonical predecessor discovery must not truncate at the first 100 successful publisher runs",
   );
   assert.match(workflow, /publication_receipt_count/);
+  assert.match(workflow, /successful_publisher_runs/);
+  assert.match(workflow, /runs\?status=success&per_page=100/);
+  assert.match(workflow, /A receipt artifact is authoritative history only when its owning Publisher run succeeded/);
+  assert.match(workflow, /canonical-shadow-publication-receipt-/);
+  assert.match(workflow, /successful\[\$4\]/);
   assert.match(workflow, /recovery_approval_claim_count/);
   assert.match(workflow, /canonical-shadow-recovery-attempt-/);
   assert.match(workflow, /Recovery approval comment .* already claimed/);
-  assert.match(workflow, /Canonical publication receipt history exists but no valid predecessor/);
+  assert.match(workflow, /Authoritative successful Publisher receipt history exists but no valid predecessor/);
+  assert.ok(!workflow.includes('gh api --paginate --slurp "repos/$REPOSITORY/issues/$HUB_ISSUE_NUMBER/comments?per_page=100"'), "recovery approval pagination must stream rather than materialize malformed slurped JSON");
+  assert.match(workflow, /jq -sr --arg owner/);
   assert.match(workflow, /canonicalStrandedBootstrapRecoveryAllowedV1/);
   assert.match(workflow, /canonicalRuntimeBootstrapRecovery/);
   assert.match(workflow, /legacy_state/);

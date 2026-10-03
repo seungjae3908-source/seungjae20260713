@@ -67,6 +67,7 @@ type DiscoveryAutomation = {
   scheduledInvocationObserved: boolean;
   reason: string | null;
   nextRequiredStep: string;
+  snapshotBound: boolean;
 };
 
 type AiReviewStatus = {
@@ -157,7 +158,8 @@ function parseDiscoveryAutomation(value: unknown): DiscoveryAutomation | null {
     || (value.sourceCount !== null && (typeof value.sourceCount !== 'number' || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 0 || value.sourceCount > 5))
     || (value.snapshotDigest !== null && (typeof value.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(value.snapshotDigest)))
     || (value.reason !== null && (typeof value.reason !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.reason)))
-    || typeof value.nextRequiredStep !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.nextRequiredStep)) return null;
+    || typeof value.nextRequiredStep !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.nextRequiredStep)
+    || typeof value.snapshotBound !== 'boolean') return null;
   return value as unknown as DiscoveryAutomation;
 }
 
@@ -354,13 +356,15 @@ export function ResearchVideoPanel() {
   const aiReview = aiReviewReadback ?? runtimeEvidence?.aiReview ?? null;
   const automationState = !automation
     ? 'UNKNOWN — 운영 자동수집 readback 없음'
-    : automation.status === 'COMPLETE' && automation.scheduledInvocationObserved
-      ? `TIMER-MODE 실행 확인 · ${formatAutomationTime(automation.observedAt)}`
-      : automation.status === 'COMPLETE'
-        ? `MANUAL 실행 확인 · ${formatAutomationTime(automation.observedAt)}`
-        : automation.status === 'BLOCKED'
-          ? `BLOCKED · ${automation.reason ?? '원인 미확인'}`
-          : '설정 대기';
+    : automation.status === 'COMPLETE' && !automation.snapshotBound
+      ? `실행 기록 확인 · 현재 snapshot과 lineage 미결합 · ${formatAutomationTime(automation.observedAt)}`
+      : automation.status === 'COMPLETE' && automation.scheduledInvocationObserved
+        ? `TIMER-MODE 실행 확인 · ${formatAutomationTime(automation.observedAt)}`
+        : automation.status === 'COMPLETE'
+          ? `MANUAL 실행 확인 · ${formatAutomationTime(automation.observedAt)}`
+          : automation.status === 'BLOCKED'
+            ? `BLOCKED · ${automation.reason ?? '원인 미확인'}`
+            : '설정 대기';
   const aiReviewState = !aiReview
     ? 'UNKNOWN — AI review readback 없음'
     : aiReview.status === 'WAITING_FOR_FREE_AI'
@@ -390,7 +394,13 @@ export function ResearchVideoPanel() {
         ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
         ['Browser credential', 'NOT_EXPOSED'],
         ['최근 discovery evidence', runtimeEvidence ? `${runtimeEvidence.status} · ${runtimeEvidence.query}` : runtimeState],
-        ['자동 수집', automation?.scheduledInvocationObserved ? '최근 TIMER-MODE 실행 증거 있음' : automation ? '실행은 확인됐지만 timer 증거 없음' : 'UNKNOWN'],
+        ['자동 수집', automation?.snapshotBound && automation.scheduledInvocationObserved
+          ? '현재 snapshot과 결합된 TIMER-MODE 실행 증거 있음'
+          : automation?.snapshotBound
+            ? '현재 snapshot과 결합됐지만 timer 증거 없음'
+            : automation
+              ? '실행 기록은 있으나 현재 snapshot과 lineage 미결합'
+              : 'UNKNOWN'],
         ['Schedule', automationState],
         ['Quota', runtimeEvidence?.quotaState ?? 'UNKNOWN — sanitized runtime snapshot unavailable'],
       ],

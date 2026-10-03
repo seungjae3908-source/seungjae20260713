@@ -393,6 +393,121 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      - name: Record explicit research hold when required temporal evidence is incomplete
+        id: research_hold
+        if: always() && github.event_name != 'pull_request' && steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.market_suite.outputs.research_ready != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HOLD_STATE_PATH: ${{ runner.temp }}/research-hold-state.json
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          set -Eeuo pipefail
+          result='market-prediction-lab/docs/market-suite-result.json'
+          test -s "$result"
+
+          previous_dir="$RUNNER_TEMP/research-hold-previous"
+          rm -rf "$previous_dir"
+          mkdir -p "$previous_dir"
+          previous_line="$(
+            gh api "repos/$REPOSITORY/actions/artifacts?per_page=100" --jq '
+              .artifacts[]
+              | select(.expired == false)
+              | select(.name | startswith("prediction-lab-research-hold-state-"))
+              | [.created_at, .workflow_run.id, .name]
+              | @tsv
+            ' 2>/dev/null | sort -r | head -n 1 || true
+          )"
+          previous_state=''
+          if [[ -n "$previous_line" ]]; then
+            IFS=$'\t' read -r _ previous_run previous_name <<<"$previous_line"
+            if [[ "$previous_run" =~ ^[1-9][0-9]*$ ]] && [[ -n "$previous_name" ]]; then
+              if gh run download "$previous_run" --repo "$REPOSITORY" -n "$previous_name" -D "$previous_dir" >/dev/null 2>&1; then
+                previous_state="$(find "$previous_dir" -type f -name research-hold-state.json -print -quit)"
+              fi
+            fi
+          fi
+
+          RESULT_PATH="$result" PREVIOUS_HOLD_STATE="$previous_state" node <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const value = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, 'utf8'));
+          if (value?.status !== 'data_blocked'
+            || value?.stage !== 'required_inference_evidence_preflight'
+            || !Array.isArray(value?.blockers)
+            || value.blockers.length === 0
+            || value?.inferenceEvaluation?.syntheticImputationUsed !== false
+            || value?.inferenceEvaluation?.zeroImputationUsed !== false
+            || value?.safety?.usesAccountOrOrderApi !== false
+            || value?.safety?.modelDeployment !== false) {
+            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_CLASSIFICATION_INVALID');
+          }
+          const blockers = [...new Set(value.blockers.map(String))].sort();
+          if (blockers.some((item) => !item.startsWith('MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:'))) {
+            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_UNEXPECTED_BLOCKER');
+          }
+          const fingerprint = crypto.createHash('sha256').update(JSON.stringify(blockers)).digest('hex');
+          const now = Date.now();
+          let firstSeenAtMs = now;
+          let consecutiveHoldCycles = 1;
+          const previousPath = String(process.env.PREVIOUS_HOLD_STATE || '');
+          if (previousPath) {
+            try {
+              const previous = JSON.parse(fs.readFileSync(previousPath, 'utf8'));
+              if (previous?.schemaVersion === 'prediction-lab-research-hold-state-v1'
+                && previous?.blockerFingerprint === fingerprint
+                && Number.isSafeInteger(previous?.firstSeenAtMs)
+                && Number.isSafeInteger(previous?.consecutiveHoldCycles)
+                && previous.firstSeenAtMs > 0
+                && previous.firstSeenAtMs <= now
+                && previous.consecutiveHoldCycles > 0) {
+                firstSeenAtMs = previous.firstSeenAtMs;
+                consecutiveHoldCycles = previous.consecutiveHoldCycles + 1;
+              }
+            } catch {}
+          }
+          const holdAgeHours = Math.max(0, (now - firstSeenAtMs) / 3_600_000);
+          const starvationState = holdAgeHours >= 72 ? 'STARVED' : holdAgeHours >= 24 ? 'WARNING' : 'NORMAL';
+          const state = {
+            schemaVersion: 'prediction-lab-research-hold-state-v1',
+            classification: 'RESEARCH_HOLD_TEMPORAL_EVIDENCE',
+            blockerFingerprint: fingerprint,
+            blockers,
+            firstSeenAtMs,
+            lastCheckedAtMs: now,
+            holdAgeHours: Number(holdAgeHours.toFixed(2)),
+            consecutiveHoldCycles,
+            starvationState,
+            researchSha: process.env.RESEARCH_SHA,
+            technicalFailure: false,
+            syntheticImputationUsed: false,
+            zeroImputationUsed: false,
+          };
+          fs.writeFileSync(process.env.HOLD_STATE_PATH, JSON.stringify(state, null, 2) + '\n');
+          console.log('RESEARCH_HOLD_TEMPORAL_EVIDENCE=' + blockers.join(','));
+          console.log('RESEARCH_HOLD_AGE_HOURS=' + state.holdAgeHours);
+          console.log('RESEARCH_HOLD_CONSECUTIVE_CYCLES=' + consecutiveHoldCycles);
+          console.log('RESEARCH_HOLD_STARVATION=' + starvationState);
+          NODE
+          {
+            echo '## Prediction Lab research hold'
+            echo '- classification: RESEARCH_HOLD_TEMPORAL_EVIDENCE'
+            echo '- technical failure: false'
+            echo '- missing temporal evidence remains fail-closed; no zero/synthetic imputation'
+            echo '- durable model publication remains blocked because research_ready != true'
+            node -e 'const s=require(process.env.HOLD_STATE_PATH); console.log("- hold age hours: "+s.holdAgeHours); console.log("- consecutive hold cycles: "+s.consecutiveHoldCycles); console.log("- starvation: "+s.starvationState)'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Persist temporal research hold age
+        if: steps.research_hold.outcome == 'success' && steps.market_suite.outputs.research_ready != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-research-hold-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/research-hold-state.json
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Assert immutable checkout HEAD
         shell: bash
         env:
@@ -400,7 +515,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome == 'failure' || steps.market_suite.outcome == 'failure' || steps.futures_generalization_suite.outcome == 'failure' || steps.futures_pnl_suite.outcome == 'failure' || steps.futures_regime_suite.outcome == 'failure' || steps.upbit_spot_suite.outcome == 'failure' || steps.upbit_spot_pnl_suite.outcome == 'failure' || steps.upbit_spot_alternative_suite.outcome == 'failure' || steps.stock_suite.outcome == 'failure' || steps.stock_pnl_suite.outcome == 'failure' || steps.stock_generalization_suite.outcome == 'failure' || steps.us_pullback_suite.outcome == 'failure' || steps.stock_regime_suite.outcome == 'failure' || steps.derivatives_suite.outcome == 'failure' || steps.structure_suite.outcome == 'failure' || (github.event_name != 'pull_request' && steps.market_suite.outputs.research_ready != 'true'))
+        if: always() && (steps.validate.outcome == 'failure' || steps.market_suite.outcome == 'failure' || steps.futures_generalization_suite.outcome == 'failure' || steps.futures_pnl_suite.outcome == 'failure' || steps.futures_regime_suite.outcome == 'failure' || steps.upbit_spot_suite.outcome == 'failure' || steps.upbit_spot_pnl_suite.outcome == 'failure' || steps.upbit_spot_alternative_suite.outcome == 'failure' || steps.stock_suite.outcome == 'failure' || steps.stock_pnl_suite.outcome == 'failure' || steps.stock_generalization_suite.outcome == 'failure' || steps.us_pullback_suite.outcome == 'failure' || steps.stock_regime_suite.outcome == 'failure' || steps.derivatives_suite.outcome == 'failure' || steps.structure_suite.outcome == 'failure' || steps.research_hold.outcome == 'failure')
         run: exit 1
 
   durable-policy-preflight:

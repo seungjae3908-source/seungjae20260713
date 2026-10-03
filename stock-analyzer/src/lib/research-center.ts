@@ -175,6 +175,15 @@ export interface ResearchCenterOverview {
   state: {
     present: boolean;
     latestCycleAt: number | null;
+    runtimeLiveness?: {
+      status: 'UNKNOWN' | 'LIVE' | 'STALE' | 'INVALID';
+      lastSuccessAt: number | null;
+      expectedNextAt: number | null;
+      ageMs: number | null;
+      missedCycles: number | null;
+      stale: boolean;
+      cadenceMs: number;
+    };
   };
   safety: {
     readOnlyDashboard: true;

@@ -592,6 +592,39 @@ function sanitizeFactoryRuntimeSummary(value: unknown) {
   };
 }
 
+function emptyRuntimeLiveness() {
+  return {
+    status: 'UNKNOWN' as const,
+    lastSuccessAt: null,
+    expectedNextAt: null,
+    ageMs: null,
+    missedCycles: null,
+    stale: false,
+    cadenceMs: 60 * 60 * 1000,
+  };
+}
+
+function sanitizeRuntimeLiveness(value: unknown) {
+  if (value === undefined || value === null) return emptyRuntimeLiveness();
+  const input = record(value);
+  if (!input) return null;
+  const status = safeTextOrNull(input.status, 24);
+  const lastSuccessAt = finiteOrNull(input.lastSuccessAt);
+  const expectedNextAt = finiteOrNull(input.expectedNextAt);
+  const ageMs = finiteOrNull(input.ageMs);
+  const missedCycles = countOrNull(input.missedCycles);
+  const cadenceMs = finiteOrNull(input.cadenceMs);
+  if (!status || !new Set(['UNKNOWN', 'LIVE', 'STALE', 'INVALID']).has(status)
+    || lastSuccessAt === undefined || expectedNextAt === undefined || ageMs === undefined
+    || missedCycles === undefined || cadenceMs == null || cadenceMs <= 0
+    || typeof input.stale !== 'boolean'
+    || (ageMs != null && ageMs < 0)
+    || (status === 'UNKNOWN' && (lastSuccessAt != null || expectedNextAt != null || ageMs != null || missedCycles != null || input.stale))
+    || (status === 'STALE' && input.stale !== true)
+    || (status === 'LIVE' && input.stale !== false)) return null;
+  return { status, lastSuccessAt, expectedNextAt, ageMs, missedCycles, stale: input.stale, cadenceMs };
+}
+
 function sanitizeShadowGroup(value: unknown) {
   const group = record(value);
   const name = safeTextOrNull(group?.name, 120);
@@ -624,6 +657,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const profitability = record(payload?.profitability);
   const dataFactory = record(payload?.dataFactory);
   const factory = sanitizeFactoryRuntimeSummary(payload?.factory);
+  const runtimeLiveness = sanitizeRuntimeLiveness(state?.runtimeLiveness);
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
   const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
@@ -631,7 +665,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !records || !liquidityIndependence) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -654,7 +688,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   return {
     schemaVersion: RESEARCH_OVERVIEW_SCHEMA,
     generatedAt,
-    state: { present: state.present, latestCycleAt },
+    state: { present: state.present, latestCycleAt, runtimeLiveness },
     safety: {
       readOnlyDashboard: true,
       liveTrading: false,
