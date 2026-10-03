@@ -111,6 +111,36 @@ for (const width of [360, 390, 430]) {
   });
 }
 
+test('US Toss read-only provider identity is preserved in the orderbook UI', async ({ page }) => {
+  await mockOrderbook(page, {
+    ...readyFixture,
+    market: 'US',
+    symbol: 'AAPL',
+    ticker: 'AAPL',
+    currency: 'USD',
+    provider: 'toss',
+    asks: [
+      { rank: 1, price: 225.12, quantity: 120, cumulativeQuantity: 120 },
+      { rank: 2, price: 225.13, quantity: 80, cumulativeQuantity: 200 },
+    ],
+    bids: [
+      { rank: 1, price: 225.11, quantity: 140, cumulativeQuantity: 140 },
+      { rank: 2, price: 225.10, quantity: 60, cumulativeQuantity: 200 },
+    ],
+    bestAsk: 225.12,
+    bestBid: 225.11,
+    spread: 0.01,
+  });
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/__phase13-orderbook-e2e?ticker=AAPL&market=US&assetClass=stock');
+
+  const dialog = page.getByRole('dialog', { name: /AAPL 호가창/ });
+  await expect(dialog.getByText('Toss read-only')).toBeVisible();
+  await expect(dialog.getByText('Provider unavailable')).toHaveCount(0);
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('225.12');
+  await expect(dialog.getByTestId('bid-level-1')).toContainText('225.11');
+});
+
 test('desktop displays stale status without promoting depth imbalance to a signal', async ({ page }) => {
   const calls = await mockOrderbook(page, {
     ...readyFixture,
