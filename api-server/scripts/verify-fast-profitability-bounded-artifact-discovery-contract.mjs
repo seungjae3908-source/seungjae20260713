@@ -28,6 +28,36 @@ for (const file of files) {
   assert(text.includes("run.path !== '.github/workflows/fast-profitability-v1-activation.yml'"), file + ' must verify activation workflow identity');
   assert(!text.includes('FAST_ACTIVATION_DISCOVERY_WINDOW_EXHAUSTED'), file + ' must not fail because unrelated issue_comment runs pushed the activation outside a run-page window');
 }
+const extractGithubScript = (text, stepName) => {
+  const stepMarker = `- name: ${stepName}`;
+  const start = text.indexOf(stepMarker);
+  assert(start >= 0, stepName + ' step is missing');
+  const next = text.indexOf('\n      - name:', start + stepMarker.length);
+  const block = text.slice(start, next >= 0 ? next : text.length);
+  const scriptMarker = '          script: |\n';
+  const scriptStart = block.indexOf(scriptMarker);
+  assert(scriptStart >= 0, stepName + ' github-script body is missing');
+  return block
+    .slice(scriptStart + scriptMarker.length)
+    .split('\n')
+    .map((line) => line.startsWith('            ') ? line.slice(12) : line)
+    .join('\n');
+};
+
+for (const [file, stepName] of [
+  ['.github/workflows/fast-profitability-v1-activation.yml', 'Reject duplicate active binding'],
+  ['.github/workflows/fast-profitability-v1-collector.yml', 'Locate unique active binding'],
+  ['.github/workflows/fast-profitability-v1-preactivation-watch.yml', 'Resolve exact current main and safety gates'],
+]) {
+  const text = await read(file);
+  const script = extractGithubScript(text, stepName);
+  try {
+    new Function('github', 'context', 'core', 'process', 'return (async () => {\n' + script + '\n})();');
+  } catch (error) {
+    throw new Error('[fast-artifact-discovery-contract] ' + file + ' scheduled github-script syntax invalid: ' + error.message);
+  }
+}
+
 const activation = await read('.github/workflows/fast-profitability-v1-activation.yml');
 assert(activation.includes("'activation_run_id=' + String(process.env.GITHUB_RUN_ID ?? '')"), 'activation receipt must publish exact workflow run id');
 const collector = await read('.github/workflows/fast-profitability-v1-collector.yml');
