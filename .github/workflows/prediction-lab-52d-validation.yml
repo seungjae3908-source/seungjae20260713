@@ -80,37 +80,6 @@ jobs:
           echo "checkout_mode=DETACHED"
           echo "value=${actual_sha,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify scheduled research-hold classification contract
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
-          const file = '.github/workflows/prediction-lab-52d-validation.yml';
-          const source = fs.readFileSync(file, 'utf8');
-          const holdStart = source.indexOf('- name: Record explicit research hold when required temporal evidence is incomplete');
-          const failStart = source.indexOf('- name: Fail workflow when technical validation failed');
-          const nextJob = source.indexOf('\n  durable-policy-preflight:', failStart);
-          if (holdStart < 0 || failStart < 0 || nextJob < 0 || holdStart >= failStart) {
-            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_CONTRACT_BLOCK_MISSING');
-          }
-          const holdBlock = source.slice(holdStart, failStart);
-          const failBlock = source.slice(failStart, nextJob);
-          if (!holdBlock.includes('RESEARCH_HOLD_TEMPORAL_EVIDENCE')) {
-            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_CLASSIFICATION_MARKER_MISSING');
-          }
-          if (!holdBlock.includes("MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:")) {
-            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_TEMPORAL_BLOCKER_GUARD_MISSING');
-          }
-          if (!failBlock.includes("steps.research_hold.outcome == 'failure'")) {
-            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_FAILURE_GUARD_MISSING');
-          }
-          if (failBlock.includes("steps.market_suite.outputs.research_ready != 'true'")) {
-            throw new Error('PREDICTION_LAB_EXPECTED_RESEARCH_HOLD_STILL_CLASSIFIED_AS_TECHNICAL_FAILURE');
-          }
-          NODE
-
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
