@@ -1176,7 +1176,7 @@ export class MemberAutoTradingBackgroundWorker {
               }
             }
 
-            if (liveBackgroundEnabled() && !(rulePackGate.recognized && !rulePackGate.liveAllowed)) {
+            if (liveBackgroundEnabled() && !deterministicGate.recognized) {
               const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
               const liveSeed = await buildLivePlanInput({
