@@ -7,6 +7,7 @@ import {
 } from './bounded-scanner.service';
 import { buildContext, type ScanFilters } from './signal.service';
 import { rankScannerCandidates } from './scanner-candidate-ranking.service';
+import { enforceScannerAiFinalPromotionPolicy, enrichTopScannerCandidatesWithAi } from './scanner-ai-runtime.service';
 import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
@@ -257,19 +258,15 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
-    const ranking = rankScannerCandidates({
+    const preliminaryRanking = rankScannerCandidates({
       cards: broadCandidates,
       market: request.market,
       strategy: strategyMode,
       softMinimumScore: request.filters.minimumScore,
       limit: 10,
     });
-    const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
-      ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
-      : card);
-    const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
     const intelligenceBudgetMs = Math.max(0, Math.min(1_200, 9_300 - (Date.now() - startedAt)));
-    const intelligenceCards = await enrichStockScannerCardsWithNewsDisclosureIntelligence(lifecycle.cards, {
+    const intelligenceCandidates = await enrichStockScannerCardsWithNewsDisclosureIntelligence(preliminaryRanking.cards, {
       market: request.market,
       enabled: !publicCoreOnly,
       ...(publicCoreOnly ? { disabledReason: 'PUBLIC_CORE_RECURSION_GUARD' } : {}),
@@ -277,6 +274,22 @@ export const StockSignalScannerService = {
       budgetMs: intelligenceBudgetMs,
       signal: request.signal,
     });
+    const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
+      intelligenceCandidates,
+      { signal: request.signal },
+    );
+    const ranking = rankScannerCandidates({
+      cards: aiReviewedCandidates,
+      market: request.market,
+      strategy: strategyMode,
+      softMinimumScore: request.filters.minimumScore,
+      limit: 10,
+    });
+    const rankedCards = enforceScannerAiFinalPromotionPolicy(ranking.cards).map((card) => card.signalGrade === 'B'
+      ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
+      : card);
+    const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
+    const intelligenceCards = lifecycle.cards;
     const visibleTradeReviewCount = intelligenceCards.filter((card) => card.direction === 'LONG').length;
     const discovery = buildScannerDiscoveryView(broadCandidates, {
       tradeReviewCount: visibleTradeReviewCount,

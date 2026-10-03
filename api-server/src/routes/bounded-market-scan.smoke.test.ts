@@ -130,9 +130,10 @@ async function withServer(
   scanner: StockScannerRunner,
   run: (baseUrl: string) => Promise<void>,
   deadlineMs?: number,
+  profile: MemberProfile = member(),
 ): Promise<void> {
   const app = express();
-  app.use(inject(member()));
+  app.use(inject(profile));
   app.use('/api/market/scan', createBoundedMarketScanRouter({
     scanner,
     guard: new ScannerRequestGuard(),
@@ -156,6 +157,71 @@ test('stock scanner server response budget remains below the browser app API dea
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS > 0);
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < browserDeadlineMs);
   assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
+});
+
+test('associate may explicitly request and receive S-grade scanner results', async () => {
+  const associate: MemberProfile = {
+    id: 'member-associate-smoke',
+    login_name: 'associate-smoke',
+    display_name: 'associate-smoke',
+    role: 'associate',
+    status: 'approved',
+    membership_level: 'associate',
+    is_active: true,
+  };
+  const sCard = {
+    signalId: 'signal-associate-s',
+    assetClass: 'stock',
+    market: 'KR',
+    exchange: 'KRX',
+    symbol: '005930',
+    name: '삼성전자',
+    currency: 'KRW',
+    assetType: 'stock',
+    listingStatus: 'LISTED',
+    price: 75000,
+    changePercent: 2,
+    direction: 'LONG',
+    signalState: 'CONFIRMED',
+    signalGrade: 'S',
+    score: 92,
+    confidence: 90,
+    dataCompleteness: 100,
+    riskScore: 20,
+    riskLevel: 'LOW',
+    liquidity: 1_000_000,
+    volume: 100_000,
+    tradingValue: 7_500_000_000,
+    spreadPercent: 0.05,
+    volatilityPercent: 2,
+    matched: ['trend'],
+    notMatched: [],
+    unverified: [],
+    evidence: [],
+    pricePlan: { entryZone: { from: 74000, to: 75000 }, invalidation: 72000, stopLoss: 72000, targets: [80000], riskReward: 2 },
+    dataState: 'complete',
+    dataSources: ['fixture'],
+    observedAt: '2026-10-03T00:00:00.000Z',
+    expiresAt: '2026-10-03T00:05:00.000Z',
+    strongSignalEligible: true,
+    warnings: [],
+    strategyMode: 'swing',
+  } as ScannerResponse['cards'][number];
+
+  await withServer(
+    { scan: async () => completeResult({ cards: [sCard] }) },
+    async (baseUrl) => {
+      const response = await fetch(baseUrl + '/api/market/scan?market=KR&grade=S');
+      assert.equal(response.status, 200);
+      const body = await response.json() as ScannerResponse;
+      assert.deepEqual(body.cards.map((card) => card.signalGrade), ['S']);
+      assert.deepEqual(body.cards.map((card) => card.symbol), ['005930']);
+      assert.equal(body.orderSubmitted, false);
+      assert.equal(body.exchangeRequestSent, false);
+    },
+    undefined,
+    associate,
+  );
 });
 
 test('normal zero-match scan returns HTTP 200 empty with provider health', async () => {

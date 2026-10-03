@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
-import type { PaperJournalRepository } from './paper-journal.types';
+import type { PaperJournalRecordKind, PaperJournalRepository, PaperJournalSyncRecord } from './paper-journal.types';
+import {
+  STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
+  STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA,
+} from './evidence-backed-auto-strategy-catalog.service';
+import { buildTradeRulePackAiEvidenceDigest } from './trade-rule-pack-ai-review.service';
 import {
   MemberAutoTradingBackgroundWorker,
   liveBackgroundEnabled,
@@ -183,22 +188,52 @@ function handoff(nowMs: number, missingRecentMove = false) {
   } as const;
 }
 
-function paperRepository(nowMs: number): PaperJournalRepository {
+function paperRepository(
+  nowMs: number,
+  auditSink: Array<Record<string, unknown>> = [],
+): PaperJournalRepository {
+  const serverTime = new Date(nowMs).toISOString();
+  const records = new Map<string, any>();
+  const account = {
+    kind: 'account',
+    id: 'paper-account',
+    version: 1,
+    updatedAt: serverTime,
+    deletedAt: null,
+    createdAt: serverTime,
+    serverUpdatedAt: serverTime,
+    payload: {
+      id: 'paper-account',
+      equity: 1_000_000,
+      cashBalance: 1_000_000,
+      availableMargin: 1_000_000,
+    },
+  };
+  records.set('account:paper-account', account);
+
   return {
+    async getRecord(_userId: string, kind: PaperJournalRecordKind, id: string) {
+      return records.get(kind + ':' + id) ?? null;
+    },
+    async upsertRecord(_userId: string, record: PaperJournalSyncRecord, updatedAt: string) {
+      const key = record.kind + ':' + record.id;
+      const existing = records.get(key);
+      const stored = {
+        ...record,
+        createdAt: existing?.createdAt ?? updatedAt,
+        serverUpdatedAt: updatedAt,
+      };
+      records.set(key, stored);
+      if (record.kind === 'journal') auditSink.push(record.payload);
+      return stored;
+    },
     async listSnapshot() {
-      return [{
-        kind: 'account',
-        id: 'paper-account',
-        version: 1,
-        updatedAt: new Date(nowMs).toISOString(),
-        deletedAt: null,
-        payload: {
-          id: 'paper-account',
-          equity: 1_000_000,
-          cashBalance: 1_000_000,
-          availableMargin: 1_000_000,
-        },
-      }];
+      return [...records.values()];
+    },
+    async listJournalPayloads() {
+      return [...records.values()]
+        .filter((record) => record.kind === 'journal' && record.deletedAt == null)
+        .map((record) => record.payload);
     },
   } as unknown as PaperJournalRepository;
 }
@@ -211,6 +246,7 @@ function source(
     tier?: 'pending' | 'associate';
     handoffMissing?: boolean;
     markPrice?: number;
+    auditSink?: Array<Record<string, unknown>>;
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
@@ -230,7 +266,7 @@ function source(
       }];
     },
     tradingRepositoryFor() { return repository; },
-    paperJournalRepositoryFor() { return paperRepository(nowMs); },
+    paperJournalRepositoryFor() { return paperRepository(nowMs, options.auditSink); },
     async resolveFx() {
       return {
         market: 'CRYPTO_SPOT',
@@ -250,6 +286,76 @@ function source(
         price: options.markPrice ?? 100_050,
         observedAt: new Date(nowMs).toISOString(),
         source: 'test-public-mark',
+      };
+    },
+  };
+}
+
+function passingRulePackAiReviewer(decision: 'PASS' | 'ABSTAIN' | 'VETO' = 'PASS') {
+  return {
+    async review(entry: any, nowMs: number) {
+      return {
+        schemaVersion: STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA,
+        status: 'READY' as const,
+        decision,
+        strategyId: entry.identity.strategyId,
+        signalId: entry.identity.signalId,
+        market: entry.identity.market,
+        direction: entry.identity.direction,
+        symbol: entry.identity.symbol,
+        timeframe: entry.identity.timeframe,
+        evidenceDigest: buildTradeRulePackAiEvidenceDigest(entry),
+        promptVersion: STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
+        provider: 'google-gemini',
+        model: 'test-model',
+        generatedAt: new Date(nowMs - 100).toISOString(),
+        expiresAt: new Date(nowMs + 20_000).toISOString(),
+        reasons: ['test review'],
+        cacheHit: false,
+        fallbackUsed: false,
+        providerLatencyMs: 1,
+        safety: {
+          executionAuthority: 'NONE' as const,
+          orderAllowed: false as const,
+          riskOverrideAllowed: false as const,
+          positionSizeAuthority: false as const,
+          leverageAuthority: false as const,
+        },
+      };
+    },
+  };
+}
+
+function unavailableRulePackAiReviewer() {
+  return {
+    async review(entry: any, nowMs: number) {
+      return {
+        schemaVersion: STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA,
+        status: 'UNAVAILABLE' as const,
+        decision: null,
+        strategyId: entry.identity.strategyId,
+        signalId: entry.identity.signalId,
+        market: entry.identity.market,
+        direction: entry.identity.direction,
+        symbol: entry.identity.symbol,
+        timeframe: entry.identity.timeframe,
+        evidenceDigest: buildTradeRulePackAiEvidenceDigest(entry),
+        promptVersion: STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
+        provider: null,
+        model: null,
+        generatedAt: new Date(nowMs).toISOString(),
+        expiresAt: new Date(nowMs + 5_000).toISOString(),
+        reasons: ['AI_REVIEW_PROVIDER_NOT_CONFIGURED'],
+        cacheHit: false,
+        fallbackUsed: false,
+        providerLatencyMs: null,
+        safety: {
+          executionAuthority: 'NONE' as const,
+          orderAllowed: false as const,
+          riskOverrideAllowed: false as const,
+          positionSizeAuthority: false as const,
+          leverageAuthority: false as const,
+        },
       };
     },
   };
@@ -530,4 +636,241 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
   const exitOrder = orders.find((order) => order.planId === exitPlan!.id);
   assert.equal(exitOrder?.state, 'FILLED');
   assert.equal(exitOrder?.filledQuantity, 0.1);
+});
+
+
+test('new rule-pack signal is blocked before plan creation when deterministic evidence is missing', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      return value;
+    },
+  });
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.blocked, 1);
+  assert.equal(result.evaluated, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('complete rule-pack evidence enters canonical Paper but never crosses into live background', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let liveReads = 0;
+  const auditSink: Array<Record<string, unknown>> = [];
+  const base = source(repository, nowMs, { auditSink });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.learningSnapshot.strategyRulePackEvidence = {
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        dataReady: true,
+        formulaReady: true,
+        waveStructureReady: true,
+        indicatorReady: true,
+        entryTriggerReady: true,
+        liquidityReady: true,
+        costEvidenceReady: true,
+        riskReady: true,
+        orderFlowReady: true,
+        cvdReady: true,
+        takerBuyReady: true,
+        orderbookImbalanceReady: true,
+        mlRankReady: true,
+        modelFrozen: true,
+      };
+      return value;
+    },
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('RULE_PACK_MUST_NOT_TOUCH_LIVE');
+    },
+  }, passingRulePackAiReviewer());
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.createdPlans, 1);
+    assert.equal(result.filledOrders, 1);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.privateTradingRequests, 0);
+    assert.equal(result.aiAuditWritten, 1);
+    assert.equal(result.aiAuditFailures, 0);
+    assert.equal(liveReads, 0);
+    assert.equal(auditSink.length, 1);
+    assert.equal(auditSink[0]?.recordType, 'trade_rule_pack_ai_review');
+    assert.equal(auditSink[0]?.decision, 'PASS');
+    assert.equal(auditSink[0]?.rawPromptStored, false);
+    assert.equal(auditSink[0]?.credentialsStored, false);
+    const plans = await repository.listPlans(USER);
+    assert.equal(plans[0]?.accountMode, 'paper');
+    assert.ok(plans[0]?.signalReasons.includes('STRATEGY_RULE_PACK:CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1'));
+    assert.ok(plans[0]?.signalReasons.includes('STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE'));
+    assert.ok(plans[0]?.signalReasons.includes('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'));
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+
+test('runtime AI provider unavailable blocks a complete rule-pack before any Paper plan is created', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.learningSnapshot.strategyRulePackEvidence = {
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        dataReady: true,
+        formulaReady: true,
+        waveStructureReady: true,
+        indicatorReady: true,
+        entryTriggerReady: true,
+        liquidityReady: true,
+        costEvidenceReady: true,
+        riskReady: true,
+        orderFlowReady: true,
+        cvdReady: true,
+        takerBuyReady: true,
+        orderbookImbalanceReady: true,
+        mlRankReady: true,
+        modelFrozen: true,
+      };
+      return value;
+    },
+  }, unavailableRulePackAiReviewer());
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.aiReviewCalls, 1);
+  assert.equal(result.aiReviewBlocked, 1);
+  assert.equal(result.aiAuditWritten, 1);
+  assert.equal(result.aiAuditFailures, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listOrders(USER)).length, 0);
+});
+
+test('runtime AI VETO blocks a complete rule-pack and is counted separately', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.learningSnapshot.strategyRulePackEvidence = {
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        dataReady: true,
+        formulaReady: true,
+        waveStructureReady: true,
+        indicatorReady: true,
+        entryTriggerReady: true,
+        liquidityReady: true,
+        costEvidenceReady: true,
+        riskReady: true,
+        orderFlowReady: true,
+        cvdReady: true,
+        takerBuyReady: true,
+        orderbookImbalanceReady: true,
+        mlRankReady: true,
+        modelFrozen: true,
+      };
+      return value;
+    },
+  }, passingRulePackAiReviewer('VETO'));
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.aiReviewCalls, 1);
+  assert.equal(result.aiReviewVeto, 1);
+  assert.equal(result.aiAuditWritten, 1);
+  assert.equal(result.aiAuditFailures, 0);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.blocked, 1);
+});
+
+
+test('rule-pack AI audit persistence failure blocks Paper planning before any order can be created', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs);
+  const basePaper = paperRepository(nowMs);
+
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      const value = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+      value.entries[0].identity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.strategyIdentity.strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+      value.entries[0].signal.learningSnapshot.strategyRulePackEvidence = {
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        dataReady: true,
+        formulaReady: true,
+        waveStructureReady: true,
+        indicatorReady: true,
+        entryTriggerReady: true,
+        liquidityReady: true,
+        costEvidenceReady: true,
+        riskReady: true,
+        orderFlowReady: true,
+        cvdReady: true,
+        takerBuyReady: true,
+        orderbookImbalanceReady: true,
+        mlRankReady: true,
+        modelFrozen: true,
+      };
+      return value;
+    },
+    paperJournalRepositoryFor() {
+      return {
+        ...basePaper,
+        async upsertRecord() {
+          throw new Error('JOURNAL_STORAGE_UNAVAILABLE');
+        },
+      } as PaperJournalRepository;
+    },
+  }, passingRulePackAiReviewer('PASS'));
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.aiReviewCalls, 1);
+  assert.equal(result.aiAuditWritten, 0);
+  assert.equal(result.aiAuditFailures, 1);
+  assert.equal(result.aiReviewBlocked, 1);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
 });

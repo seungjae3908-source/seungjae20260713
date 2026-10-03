@@ -1422,12 +1422,141 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
+      strategyAiReview: {
+        configured: boolean;
+        provider: string | null;
+        model: string | null;
+        fallbackConfigured: boolean;
+        promptVersion: string;
+        producer: string;
+        failClosed: boolean;
+        cacheSize: number;
+        cacheMaxEntries: number;
+        cacheHits: number;
+        cacheEvictions: number;
+        reviewCalls: number;
+        pass: number;
+        abstain: number;
+        veto: number;
+        blocked: number;
+        unavailable: number;
+        providerCalls: number;
+        providerSuccesses: number;
+        providerFailures: number;
+        providerFallbackSuccesses: number;
+        providerLastSuccessAt: string | null;
+        providerLastErrorCode: string | null;
+        providerAverageLatencyMs: number | null;
+        providerMaxLatencyMs: number | null;
+        executionAuthority: string;
+        orderAllowed: boolean;
+        riskOverrideAllowed: boolean;
+      };
+      strategyAiReviewAudit: {
+        schemaVersion: string;
+        storage: string;
+        requiredBeforePlan: boolean;
+        failurePolicy: string;
+        rawPromptStored: boolean;
+        credentialsStored: boolean;
+      };
+      scannerAiReview: {
+        configured: boolean;
+        providerSeam: string;
+        schedulerCircuitOpen: boolean;
+        schedulerPending: number;
+        schedulerActive: number;
+        executionAuthority: string;
+        orderAllowed: boolean;
+      };
+      pilotCapitalState: {
+        initialOperatingCapitalKrw: number;
+        operatingCapitalKrw: number;
+        reserveKrw: number;
+        highWaterMarkKrw: number;
+        maxEntryKrw: number;
+        settlementReady: boolean;
+        reserveWithdrawalAutomatic: boolean;
+      };
+      evidenceBackedStrategies: Array<{
+        strategyId: string;
+        automaticLivePromotionAllowed: boolean;
+        paperResearchAllowedWhenReady: boolean;
+        pilotProfile: {
+          initialOperatingCapitalKrw: number;
+          profitCompoundShare: number;
+          profitReserveShare: number;
+          maxEntryTracksOperatingCapital: boolean;
+          reserveAutoWithdrawalAllowed: boolean;
+          highWaterMarkRequired: boolean;
+          riskPerTradePercentCeiling: number;
+          maxConcurrentLivePositions: number;
+          maxDailyLiveEntries: number | null;
+          maxDailyLosingTrades: number;
+          dailyLossStopKrw: number;
+          maxConsecutiveLosses: number;
+          lossCooldownMinutes: number;
+          sameSymbolReentryRequiresFreshSignal: boolean;
+          futuresMaxLeverage: number;
+          paperMirrorRequired: boolean;
+          pairedFillComparisonRequired: boolean;
+          liveOrderRequiresExplicitConfirmation: boolean;
+          automaticLiveExecutionAllowed: boolean;
+        };
+      }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.equal(body.strategyAiReview.failClosed, true);
+    assert.equal(body.strategyAiReview.executionAuthority, 'NONE');
+    assert.equal(body.strategyAiReview.orderAllowed, false);
+    assert.equal(body.strategyAiReview.riskOverrideAllowed, false);
+    assert.equal(body.strategyAiReview.producer, 'BOUNDED_AI_JSON_PROVIDER');
+    assert.ok(body.strategyAiReview.cacheSize <= body.strategyAiReview.cacheMaxEntries);
+    assert.equal(body.strategyAiReview.providerFailures >= 0, true);
+    assert.equal(body.scannerAiReview.providerSeam, 'BOUNDED_AI_JSON_PROVIDER');
+    assert.equal(body.scannerAiReview.executionAuthority, 'NONE');
+    assert.equal(body.scannerAiReview.orderAllowed, false);
+    assert.equal(body.strategyAiReviewAudit.requiredBeforePlan, true);
+    assert.equal(body.strategyAiReviewAudit.failurePolicy, 'BLOCK_ENTRY');
+    assert.equal(body.strategyAiReviewAudit.rawPromptStored, false);
+    assert.equal(body.strategyAiReviewAudit.credentialsStored, false);
+    assert.doesNotMatch(text, /AI_CHAT_API_KEY|GEMINI_API_KEY|GROQ_API_KEY/);
+    assert.deepEqual(body.evidenceBackedStrategies.map((row) => row.strategyId), [
+      'TREND_PULLBACK_REACCEL_V1',
+      'US_EVENT_RVOL_FIRST_PULLBACK_V1',
+      'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+      'KR_PRESSURE_BREAKOUT_V1',
+      'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+      'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    ]);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.paperResearchAllowedWhenReady === true), true);
+    assert.equal(body.pilotCapitalState.operatingCapitalKrw, 500_000);
+    assert.equal(body.pilotCapitalState.reserveKrw, 0);
+    assert.equal(body.pilotCapitalState.maxEntryKrw, 500_000);
+    assert.equal(body.pilotCapitalState.settlementReady, true);
+    assert.equal(body.pilotCapitalState.reserveWithdrawalAutomatic, false);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.initialOperatingCapitalKrw === 500_000), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.profitCompoundShare === 0.5), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.profitReserveShare === 0.5), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxEntryTracksOperatingCapital === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.reserveAutoWithdrawalAllowed === false), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.highWaterMarkRequired === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.riskPerTradePercentCeiling === 0.5), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxConcurrentLivePositions === 2), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxDailyLiveEntries === null), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxDailyLosingTrades === 5), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.dailyLossStopKrw === 25_000), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxConsecutiveLosses === 3), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.lossCooldownMinutes === 30), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.sameSymbolReentryRequiresFreshSignal === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.futuresMaxLeverage === 3), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.liveOrderRequiresExplicitConfirmation === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.automaticLiveExecutionAllowed === false), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.automaticLivePromotionAllowed === false), true);
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });

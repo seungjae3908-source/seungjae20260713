@@ -8,6 +8,20 @@ on:
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts
+      - api-server/src/services/evidence-backed-auto-strategy-catalog.service.test.ts
+      - api-server/src/services/trade-rule-pack-ai-review.service.ts
+      - api-server/src/services/trade-rule-pack-ai-review.service.test.ts
+      - api-server/src/services/bounded-ai-json-provider.service.ts
+      - api-server/src/services/bounded-ai-json-provider.service.test.ts
+      - api-server/src/services/scanner-ai-runtime.service.ts
+      - api-server/src/services/scanner-ai-runtime.service.test.ts
+      - api-server/src/services/scanner-ai-provider.service.ts
+      - api-server/src/services/scanner-access-control.service.ts
+      - api-server/src/services/scanner-access-control.service.test.ts
+      - api-server/src/routes/signal-scanner-auth.smoke.test.ts
+      - api-server/src/services/stock-signal-scanner.service.ts
+      - api-server/src/routes/crypto-signal-scan.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
@@ -224,6 +238,14 @@ jobs:
             );
             if (!account) return;
 
+            const credentialReuse = await requireQa(
+              'production-live-credential-reuse-qa.yml',
+              'Production Live Credential Reuse QA',
+              () => 'production-live-credential-reuse-' + target,
+              'AUTOMATIC_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED',
+            );
+            if (!credentialReuse) return;
+
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
@@ -252,7 +274,7 @@ jobs:
                 && body.includes('status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL')
                 && body.includes('target_sha: ' + target)
                 && body.includes('provider: bitget')
-                && /max_leverage:\s*(2|3)/u.test(body)
+                && /max_leverage:\s*3/u.test(body)
                 && body.includes('margin_mode: isolated')
                 && body.includes('FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED')
                 && body.includes('AUTO_TRADING=false')
@@ -263,7 +285,7 @@ jobs:
               core.setFailed('AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED:' + target);
               return;
             }
-            const leverage = /max_leverage:\s*(2|3)/u.exec(String(futuresReceipt.body || ''))?.[1];
+            const leverage = /max_leverage:\s*(3)/u.exec(String(futuresReceipt.body || ''))?.[1];
             if (!leverage) {
               core.setFailed('AUTOMATIC_TRADING_FUTURES_LEVERAGE_RECEIPT_INVALID');
               return;
@@ -273,9 +295,67 @@ jobs:
             core.setOutput('production_run_id', String(production.id));
             core.setOutput('comprehensive_run_id', String(comprehensive.id));
             core.setOutput('account_run_id', String(account.id));
+            core.setOutput('credential_reuse_run_id', String(credentialReuse.id));
             core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
             core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
             core.setOutput('futures_max_leverage', leverage);
+
+      - name: Download exact-SHA live credential reuse QA evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-live-credential-reuse-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/production-live-credential-reuse-qa
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.gate.outputs.credential_reuse_run_id }}
+
+      - name: Require all four live connections reused and verified with zero financial mutation
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          CREDENTIAL_REUSE_EVIDENCE: ${{ runner.temp }}/production-live-credential-reuse-qa/production-live-credential-reuse-qa.json
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const target = String(process.env.TARGET_SHA || '');
+          const evidence = JSON.parse(fs.readFileSync(process.env.CREDENTIAL_REUSE_EVIDENCE, 'utf8'));
+          const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
+          const rows = Array.isArray(evidence?.providers) ? evidence.providers : [];
+          if (evidence?.schemaVersion !== 'production-live-credential-reuse-qa-v1'
+            || evidence?.targetSha !== target
+            || evidence?.orderRequests !== 0
+            || evidence?.cancelRequests !== 0
+            || evidence?.amendRequests !== 0
+            || evidence?.transferRequests !== 0
+            || evidence?.withdrawalRequests !== 0
+            || evidence?.realOrderSubmitted !== false
+            || evidence?.liveTradingAuthorityGranted !== false
+            || evidence?.autoTradingAuthorityGranted !== false
+            || evidence?.credentialsReturned !== false
+            || evidence?.secretValuesRecorded !== false
+            || evidence?.accountValuesRecorded !== false) {
+            throw new Error('AUTOMATIC_TRADING_CREDENTIAL_REUSE_QA_SAFETY_INVALID');
+          }
+          for (const provider of requiredProviders) {
+            const row = rows.find((candidate) => candidate?.provider === provider);
+            if (!row
+              || row.configured !== true
+              || row.verified !== true
+              || row.reusedReadonlyCredential !== true
+              || row.credentialsReturned !== false
+              || row.liveExecutionActivated !== false
+              || row.automaticLiveExecutionActivated !== false
+              || row.orderRequests !== 0
+              || row.cancelRequests !== 0
+              || row.amendRequests !== 0
+              || row.transferRequests !== 0
+              || row.withdrawalRequests !== 0
+              || row.realOrderSubmitted !== false
+              || row.errorCode !== null) {
+              throw new Error('AUTOMATIC_TRADING_CREDENTIAL_REUSE_PROVIDER_NOT_READY:' + provider);
+            }
+          }
+          NODE
 
       - name: Download exact-SHA four-provider Account QA evidence
         uses: actions/download-artifact@v4
@@ -365,7 +445,7 @@ jobs:
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
-          if (!['2', '3'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
+          if (expectedLeverage !== '3') throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_MUST_BE_3X');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
           if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
 
@@ -406,11 +486,19 @@ jobs:
             futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
             futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
             futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || '').toLowerCase(),
+            tossAccountRead: bool(env, 'TOSS_ACCOUNT_READ_ENABLED'),
+            kiwoomAccountRead: bool(env, 'KIWOOM_ACCOUNT_READ_ENABLED'),
+            upbitAccountRead: bool(env, 'UPBIT_ACCOUNT_READ_ENABLED'),
+            bitgetAccountRead: bool(env, 'BITGET_ACCOUNT_READ_ENABLED'),
           });
           const assertAllFourManual = (env, expectedAuto) => {
             const manual = manualState(env);
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
+            }
+            if (!manual.tossAccountRead || !manual.kiwoomAccountRead
+              || !manual.upbitAccountRead || !manual.bitgetAccountRead) {
+              throw new Error('AUTOMATIC_TRADING_ACCOUNT_READ_PROVIDERS_NOT_READY');
             }
             if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
               || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {

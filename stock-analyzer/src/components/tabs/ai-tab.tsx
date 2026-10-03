@@ -75,6 +75,9 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
   return (
     <div className="space-y-3">
       <Panel title="AI 투자 의견">
+        <p data-testid="stock-detail-ai-engine-kind" className="mb-3 rounded-xl border border-card-border bg-background px-3 py-2 text-[11px] font-bold text-muted-foreground">
+          현재 종목 상세 분석은 실제 시세·재무·기술·뉴스 근거를 계산하는 결정론적 엔진입니다. 외부 LLM이 매수·매도 의견이나 수치를 새로 만들지 않습니다.
+        </p>
         <div className="flex items-center justify-between">
           <div className="space-y-2">
             <RatingBadge rating={data.opinion} size="md" />

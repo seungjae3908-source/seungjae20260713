@@ -62,10 +62,17 @@ test('Toss existing-order history uses CLOSED read-only endpoint', () => {
 test('four-market automatic gate couples live auto and paper worker and consumes QA v2', () => {
   const handoff = read('market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js');
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const aiGate = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
+  const aiProducer = read('api-server/src/services/trade-rule-pack-ai-review.service.ts');
+  const boundedAi = read('api-server/src/services/bounded-ai-json-provider.service.ts');
+  const scannerAi = read('api-server/src/services/scanner-ai-runtime.service.ts');
+  const stockScanner = read('api-server/src/services/stock-signal-scanner.service.ts');
+  const cryptoScanner = read('api-server/src/routes/crypto-signal-scan.ts');
   const index = read('api-server/src/index.ts');
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
   const verifier = read('api-server/scripts/verify-production-automatic-trading-gate.mjs');
+  const credentialReuseQa = read('stock-analyzer/e2e/production-live-credential-reuse-qa.spec.ts');
   const deploy = read('ops/deploy-production.sh');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
     assert.ok(handoff.includes(market), market);
@@ -84,6 +91,22 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
+  assert.ok(gate.includes('AUTOMATIC_TRADING_ACCOUNT_READ_PROVIDERS_NOT_READY'));
+  for (const flag of [
+    'TOSS_ACCOUNT_READ_ENABLED',
+    'KIWOOM_ACCOUNT_READ_ENABLED',
+    'UPBIT_ACCOUNT_READ_ENABLED',
+    'BITGET_ACCOUNT_READ_ENABLED',
+  ]) assert.ok(gate.includes(flag), flag);
+  assert.ok(gate.includes("expectedLeverage !== '3'"));
+  assert.ok(gate.includes('AUTOMATIC_TRADING_FUTURES_LEVERAGE_MUST_BE_3X'));
+  assert.ok(worker.includes('liveBackgroundEnabled() && !deterministicGate.recognized'));
+  assert.ok(aiGate.includes('directionAllowedForMarket'));
+  assert.ok(aiGate.includes("market === 'KR_STOCK' || market === 'US_STOCK' || market === 'CRYPTO_SPOT'"));
+  assert.ok(aiGate.includes("market === 'CRYPTO_FUTURES'"));
+  assert.ok(credentialReuseQa.includes("const providers = ['toss', 'kiwoom', 'upbit', 'bitget'] as const"));
+  assert.ok(credentialReuseQa.includes('Credential reuse provider failures:'));
+  assert.ok(credentialReuseQa.includes('failures.push({ provider, status: response.status(), errorCode })'));
   assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V2_MISSING'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
@@ -91,4 +114,55 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(worker.includes('readMarketMark'));
   assert.ok(worker.includes('paperExitOrders'));
   assert.ok(worker.includes('liveExitOrders'));
+  assert.ok(worker.includes('evaluateStrategyRulePackDeterministicGate'));
+  assert.ok(worker.includes('tradeRulePackAiReviewer'));
+  assert.ok(worker.includes('AI_REVIEW_DECISION:'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_REVIEW_REQUIRED'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_EVIDENCE_DIGEST_MISMATCH'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_REVIEW_STALE'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_SAFETY_INVALID'));
+  assert.ok(aiProducer.includes("producer: 'BOUNDED_AI_JSON_PROVIDER'"));
+  assert.ok(aiProducer.includes("executionAuthority: 'NONE'"));
+  assert.ok(aiProducer.includes('riskOverrideAllowed: false'));
+  assert.ok(aiProducer.includes('AI_REVIEW_PROVIDER_NOT_CONFIGURED'));
+  assert.ok(aiProducer.includes('TRADE_RULE_PACK_AI_REVIEW_CACHE_MAX_ENTRIES'));
+  assert.ok(aiProducer.includes('cacheEvictions'));
+  assert.ok(worker.includes('trade_rule_pack_ai_review'));
+  assert.ok(worker.includes('rawPromptStored: false'));
+  assert.ok(worker.includes('credentialsStored: false'));
+  assert.ok(worker.includes('aiAuditFailures'));
+  assert.ok(aiGate.includes('liveAiEligible'));
+  assert.ok(aiGate.includes("String(review?.decision ?? '').toUpperCase() === 'PASS'"));
+  assert.ok(boundedAi.includes('bounded public-evidence classifier'));
+  assert.ok(boundedAi.includes("Never override deterministic risk"));
+  assert.ok(boundedAi.includes("fallbackUsed: true"));
+  assert.ok(boundedAi.includes("providerSeam: 'BOUNDED_AI_JSON_PROVIDER'"));
+  assert.ok(boundedAi.includes("responseMimeType: 'application/json'"));
+  assert.ok(boundedAi.includes("response_format: { type: 'json_object' }"));
+  assert.ok(boundedAi.includes('fallbackSuccesses'));
+  assert.ok(scannerAi.includes("canonicalScannerWired: true"));
+  assert.ok(scannerAi.includes("providerSeam: 'BOUNDED_AI_JSON_PROVIDER'"));
+  assert.ok(scannerAi.includes('schedulerCircuitOpen'));
+  assert.ok(scannerAi.includes("executionAuthority: 'NONE'"));
+  assert.ok(scannerAi.includes('vetoBlocksStrongSignal: true'));
+  assert.ok(scannerAi.includes('DEFAULT_MAX_CANDIDATES = 2'));
+  assert.ok(scannerAi.includes('enforceScannerAiFinalPromotionPolicy'));
+  assert.ok(scannerAi.includes("card.aiValidation?.status === 'PASS'"));
+  assert.ok(stockScanner.includes('enrichTopScannerCandidatesWithAi'));
+  assert.ok(stockScanner.includes('enforceScannerAiFinalPromotionPolicy'));
+  assert.ok(cryptoScanner.includes('enrichTopScannerCandidatesWithAi'));
+  const stockNewsIndex = stockScanner.indexOf('enrichStockScannerCardsWithNewsDisclosureIntelligence');
+  const stockAiIndex = stockScanner.lastIndexOf('enrichTopScannerCandidatesWithAi');
+  const stockFinalRankIndex = stockScanner.lastIndexOf('rankScannerCandidates');
+  assert.ok(stockNewsIndex >= 0 && stockAiIndex > stockNewsIndex && stockFinalRankIndex > stockAiIndex);
+  const cryptoMarketIndex = cryptoScanner.indexOf('enrichScannerCardsWithMarketIntelligence');
+  const cryptoEventIndex = cryptoScanner.indexOf('enrichCryptoScannerCardsWithPublicEventContext');
+  const cryptoAiIndex = cryptoScanner.lastIndexOf('enrichTopScannerCandidatesWithAi');
+  const cryptoFinalRankIndex = cryptoScanner.lastIndexOf('rankScannerCandidates');
+  assert.ok(
+    cryptoMarketIndex >= 0
+      && cryptoEventIndex > cryptoMarketIndex
+      && cryptoAiIndex > cryptoEventIndex
+      && cryptoFinalRankIndex > cryptoAiIndex,
+  );
 });

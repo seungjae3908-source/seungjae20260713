@@ -32,6 +32,7 @@ function snapshot(now: Date): TradingMarketSnapshot {
     accountValueKrw: 5_000_000,
     dailyPnlPercent: 0,
     assetExposurePercent: 0,
+    accountExposureKrw: 0,
     openPositionCount: 0,
     dailyOrderCount: 0,
     consecutiveLosses: 0,
@@ -62,7 +63,7 @@ function plan(now: Date, version = 1): TradingPlan {
     updatedAt: now.toISOString(),
     exchange: 'upbit',
     accountMode: 'live',
-    strategyId: 'breakout-v1',
+    strategyId: 'TREND_PULLBACK_REACCEL_V1',
     signalId: 'signal-1',
     symbol: 'BTC',
     market: 'KRW',
@@ -72,7 +73,7 @@ function plan(now: Date, version = 1): TradingPlan {
     quoteAmount: 20_000,
     limitPrice: null,
     estimatedKrw: 20_000,
-    stopPrice: 95_000,
+    stopPrice: 96_000,
     targetPrices: [110_000],
     splitRatios: [100],
     signalReasons: ['trend'],
@@ -189,6 +190,35 @@ test('changed plan version invalidates the approval captured by the order', asyn
     (error: unknown) => {
       assert.ok(error instanceof TradePreSubmissionRiskError);
       assert.ok(error.result.blockCodes.includes('APPROVAL_VERSION_CHANGED'));
+      return true;
+    },
+  );
+});
+
+
+test('rule-pack live entry above current operating-capital ceiling fails closed', async () => {
+  const now = new Date();
+  const { repository, currentPlan, currentOrder, service } = await setup(now);
+  const oversized = { ...currentPlan, estimatedKrw: 510_000, quoteAmount: 510_000 };
+  oversized.riskEnvelope = buildRiskEnvelope(
+    oversized,
+    { ...DEFAULT_TRADING_POLICY, maxOrderKrw: 1_000_000 },
+    oversized.approvedAt!,
+  );
+  await repository.savePlan(oversized);
+
+  await assert.rejects(
+    () => service.evaluate({
+      userId: USER_ID,
+      expectedPlan: oversized,
+      order: currentOrder,
+      snapshot: snapshot(now),
+      serverLiveEnabled: true,
+      now,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof TradePreSubmissionRiskError);
+      assert.ok(error.result.blockCodes.includes('PILOT_DYNAMIC_ENTRY_LIMIT'));
       return true;
     },
   );

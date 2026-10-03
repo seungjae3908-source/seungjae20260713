@@ -28,6 +28,10 @@ import {
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
+import { evidenceBackedAutoStrategyCatalog } from '../services/evidence-backed-auto-strategy-catalog.service';
+import { readRulePackPilotCapitalState } from '../services/trade-rule-pack-pilot-capital.service';
+import { tradeRulePackAiReviewer } from '../services/trade-rule-pack-ai-review.service';
+import { scannerAiRuntimeStatus } from '../services/scanner-ai-runtime.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -684,6 +688,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     ]);
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
     const vaultStatus = credentialConfigurationStatus();
+    const pilotCapitalState = await readRulePackPilotCapitalState(repository, userId, new Date());
     const liveExecutionReadiness = Object.fromEntries(
       [...EXCHANGES].map((exchange) => {
         const connection = connections.find((row) => row.exchange === exchange) ?? null;
@@ -729,6 +734,29 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       futuresLiveLimited: futuresLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
+      pilotCapitalState,
+      strategyAiReview: tradeRulePackAiReviewer.runtimeStatus(),
+      scannerAiReview: scannerAiRuntimeStatus(),
+      strategyAiReviewAudit: {
+        schemaVersion: 'trade-rule-pack-ai-audit-v1',
+        storage: 'paper_journal_entries',
+        requiredBeforePlan: true,
+        failurePolicy: 'BLOCK_ENTRY',
+        rawPromptStored: false,
+        credentialsStored: false,
+      },
+      evidenceBackedStrategies: evidenceBackedAutoStrategyCatalog().map((strategy) => ({
+        strategyId: strategy.strategyId,
+        label: strategy.label,
+        markets: strategy.markets,
+        directions: strategy.directions,
+        summary: strategy.summary,
+        rules: strategy.rules,
+        paperResearchAllowedWhenReady: strategy.paperResearchAllowedWhenReady,
+        pilotProfile: strategy.pilotProfile,
+        automaticLivePromotionAllowed: strategy.automaticLivePromotionAllowed,
+        promotionRequirements: strategy.promotionRequirements,
+      })),
       lastOrder: orders[0] ?? null,
       actualOrderSubmittedByStatusRequest: false,
     });

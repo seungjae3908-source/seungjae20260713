@@ -45,3 +45,60 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} />');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
+
+
+test('automatic trading settings surface six Paper-only rule packs without live promotion', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+
+  expect(settings).toContain('data-testid="strategy-rule-pack-cards"');
+  expect(settings).toContain('수식·파동·보조지표·AI 룰팩');
+  expect(settings).toContain('Paper 자동 · 초기 운용금');
+  expect(settings).toContain("data-testid={'strategy-rule-pack-' + strategy.strategyId}");
+  expect(settings).toContain('50만원 소액 실전 검증 프로필입니다.');
+});
+
+
+test('six-strategy AI review connectivity is visible and explicitly fail-closed', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+  expect(settings).toContain('data-testid="strategy-ai-review-status"');
+  expect(settings).toContain('6전략 AI Review 연결');
+  expect(settings).toContain('AI Provider 미설정 · FAIL-CLOSED');
+  expect(settings).toContain('결정론적 Evidence 통과 후에만 AI를 호출');
+  expect(settings).toContain('주문 없음 · Risk override 없음 · 실행권한 NONE');
+  expect(settings).toContain('Provider Health');
+  expect(settings).toContain('최근 성공');
+  expect(settings).toContain('최근 오류');
+  expect(settings).toContain('Cache');
+  expect(settings).toContain('Scanner AI');
+  expect(settings).toContain('PASS-only 사전계약 · 현재 6전략 자동 Live는 비활성');
+  expect(settings).toContain('AI 감사 Journal');
+  expect(settings).toContain('주문계획 전 필수 저장');
+  expect(settings).toContain('원문 Prompt/Secret 저장 안 함');
+});
+
+test('rule-pack pilot profile is visible and keeps live order confirmation explicit', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+  expect(settings).toContain('data-testid="strategy-pilot-risk-summary"');
+  expect(settings).toContain('최대 진입은 현재 운용금과 함께 증가');
+  expect(settings).toContain('손절거리 Risk Size가 더 작으면 그 이하만 허용');
+  expect(settings).toContain('거래당 위험은 운용금의 최대 0.5%');
+  expect(settings).toContain('조건이 좋으면 하루 진입 횟수 제한 없음');
+  expect(settings).toContain('하루 손실거래 5회 중지');
+  expect(settings).toContain('연속 3회 손실 시 중지');
+  expect(settings).toContain('동일 종목 손실 후 30분 + 새 신호 필요');
+  expect(settings).toContain('비상 일손실 2.5만원');
+  expect(settings).toContain('선물 3배(위험예산 증액 금지)');
+  expect(settings).toContain('Paper 동시 기록');
+  expect(settings).toContain('실계좌 주문은 최종 확인 필요');
+});
+
+
+test('pilot capital cards expose dynamic operating capital reserve and HWM', () => {
+  const settings = source('src/components/trade-automation-settings.tsx');
+  expect(settings).toContain('data-testid="strategy-pilot-capital-state"');
+  expect(settings).toContain('현재 운용금');
+  expect(settings).toContain('최대 진입 상한');
+  expect(settings).toContain('Reserve');
+  expect(settings).toContain('High-Water Mark');
+  expect(settings).toContain('Reserve 자동출금 금지');
+});

@@ -16,6 +16,10 @@ const memberAccessSource = fs.readFileSync(
   path.resolve(process.cwd(), '../packages/member-access/src/index.js'),
   'utf8',
 );
+const signalScannerSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/signal-scanner.tsx'),
+  'utf8',
+);
 
 function technicalItem(id: string) {
   const group = APP_NAVIGATION.find((item) => item.id === 'technical');
@@ -24,7 +28,7 @@ function technicalItem(id: string) {
   return item;
 }
 
-test('associate scanner access uses the unified workspace while advanced capabilities stay fail closed', () => {
+test('associate scanner and AI chart access are enabled while advanced trading capabilities stay fail closed', () => {
   const associateBlock = memberAccessSource.match(/const ASSOCIATE = Object\.freeze\(\{([\s\S]*?)\}\);\nconst REGULAR/)?.[1] ?? '';
   expect(associateBlock).toContain('canAccessBasicInfo: true');
   expect(associateBlock).toContain('canAccessSpot: true');
@@ -35,17 +39,17 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(associateBlock).not.toContain('canPlaceOrders: true');
 
   expect(technicalItem('scanner').capability).toBe('canAccessBasicInfo');
-  expect(technicalItem('ai-chart').capability).toBe('canAccessRiskPreview');
+  expect(technicalItem('ai-chart').capability).toBe('canAccessBasicInfo');
   expect(technicalItem('auto-trading').capability).toBe('canAccessAutoTrading');
 
   expect(appSource).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(appSource).not.toContain('function BasicScannerWorkspace()');
   expect(appSource).not.toContain('scanner-workspace-basic');
 
-  expect(technicalWorkspaceSource).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
+  expect(technicalWorkspaceSource).toContain("const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessBasicInfo')");
   expect(technicalWorkspaceSource).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
   expect(technicalWorkspaceSource).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
-  expect(technicalWorkspaceSource).toContain('if (!canAccessRiskPreview)');
+  expect(technicalWorkspaceSource).toContain('if (!canAccessAiChart)');
   expect(technicalWorkspaceSource).toContain("import.meta.env.VITE_PHASE11_E2E === 'true'");
   expect(technicalWorkspaceSource).toContain("location.startsWith('/__phase11-technical-workspace-e2e')");
 
@@ -54,10 +58,23 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(responsiveTabsSource).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");
 
   const aiChartAccess = appSource.match(/function AiChartAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
-  expect(aiChartAccess).toContain("gated('canAccessRiskPreview'");
+  expect(aiChartAccess).toContain("gated('canAccessBasicInfo'");
   expect(aiChartAccess).toContain("builder('AI_CHART', <AiChartPage />)");
 
   const autoTradingAccess = appSource.match(/function AutoTradingAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
   expect(autoTradingAccess).toContain("gated('canAccessAutoTrading'");
   expect(autoTradingAccess).toContain("builder('AUTO_TRADING', <AutoTradingPage />)");
+});
+
+
+test('associate S-grade scanner policy is server-visible while pending remains fail closed', () => {
+  const accessControl = fs.readFileSync(
+    path.resolve(process.cwd(), '../api-server/src/services/scanner-access-control.service.ts'),
+    'utf8',
+  );
+  expect(accessControl).toContain("tier === 'associate' || tier === 'regular' || tier === 'admin'");
+  expect(accessControl).not.toContain("tier === 'admin' || grade !== 'S'");
+  expect(signalScannerSource).toContain('data-testid="scanner-member-grade-policy"');
+  expect(signalScannerSource).toContain('승인된 준회원부터 S/A/B 포함 전체 신호 등급 열람 가능');
+  expect(signalScannerSource).toContain('주문 권한은 별도');
 });

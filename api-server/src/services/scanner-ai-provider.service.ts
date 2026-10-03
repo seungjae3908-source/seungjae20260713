@@ -6,7 +6,7 @@ export interface ScannerAiValidationInput {
   signalId: string;
   symbol: string;
   market: string;
-  strategy: 'scalping' | 'swing';
+  strategy: 'scalping' | 'swing' | 'position';
   direction: 'LONG' | 'SHORT' | 'NEUTRAL';
   score: number;
   riskScore: number | null;
@@ -228,6 +228,16 @@ interface QueueItem {
   reject(reason: unknown): void;
 }
 
+export type ScannerAiSchedulerHealth = Readonly<{
+  providerName: string;
+  pendingCount: number;
+  activeCount: number;
+  consecutiveFailures: number;
+  circuitOpen: boolean;
+  circuitOpenedAt: number | null;
+  circuitResetMs: number;
+}>;
+
 export interface ScannerAiSchedulerOptions {
   concurrency?: number;
   maxRetries?: number;
@@ -307,6 +317,19 @@ export class ScannerAiProviderScheduler {
 
   get activeCount(): number {
     return this.active;
+  }
+
+  get health(): ScannerAiSchedulerHealth {
+    const open = this.circuitOpen();
+    return Object.freeze({
+      providerName: this.providerName,
+      pendingCount: this.queue.length,
+      activeCount: this.active,
+      consecutiveFailures: this.consecutiveFailures,
+      circuitOpen: open,
+      circuitOpenedAt: this.circuitOpenedAt,
+      circuitResetMs: this.circuitResetMs,
+    });
   }
 
   validate(input: ScannerAiValidationInput, signal?: AbortSignal): Promise<ScannerAiValidation> {

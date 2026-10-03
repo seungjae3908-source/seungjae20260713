@@ -179,36 +179,34 @@ test('Williams condition stays read-only, maps base scan to breakout and invokes
   assert.equal(overlayCalls, 1);
 });
 
-test('non-admin grade=S query tampering fails closed while admin may request S', async () => {
-  const scanner = { scan: async () => response('stock') };
-  for (const level of ['associate', 'regular'] as const) {
-    let scanCalls = 0;
+test('associate regular and admin may request S grade across stock spot and futures scanners', async () => {
+  for (const level of ['associate', 'regular', 'admin'] as const) {
     await withServer(
       (app) => {
         app.use(inject(member(level)));
         app.use('/api/market/scan', createBoundedMarketScanRouter({
-          scanner: { scan: async () => { scanCalls += 1; return response('stock'); } },
+          scanner: { scan: async () => response('stock') },
+          guard: new ScannerRequestGuard(),
+        }));
+        app.use('/api/scanner/crypto', createCryptoSignalScanRouter({
+          scanner: {
+            scan: async (request) => response(request.market === 'spot' ? 'coin_spot' : 'coin_futures'),
+          },
           guard: new ScannerRequestGuard(),
         }));
       },
       async (baseUrl) => {
-        const result = await fetch(`${baseUrl}/api/market/scan?market=KR&grade=S`);
-        assert.equal(result.status, 403);
-        assert.equal((await result.json() as { error: string }).error, 'SCANNER_GRADE_FORBIDDEN');
+        const stock = await fetch(baseUrl + '/api/market/scan?market=KR&grade=S');
+        assert.equal(stock.status, 200, level + ':stock');
+
+        const spot = await fetch(baseUrl + '/api/scanner/crypto/spot?strategy=scalping&timeframe=5m&grade=S');
+        assert.equal(spot.status, 200, level + ':spot');
+
+        const futures = await fetch(baseUrl + '/api/scanner/crypto/futures?strategy=scalping&timeframe=5m&grade=S');
+        assert.equal(futures.status, 200, level + ':futures');
       },
     );
-    assert.equal(scanCalls, 0);
   }
-  await withServer(
-    (app) => {
-      app.use(inject(member('admin')));
-      app.use('/api/market/scan', createBoundedMarketScanRouter({ scanner, guard: new ScannerRequestGuard() }));
-    },
-    async (baseUrl) => {
-      const result = await fetch(`${baseUrl}/api/market/scan?market=KR&grade=S`);
-      assert.equal(result.status, 200);
-    },
-  );
 });
 
 test('same member and same conditions receive duplicate 409 while first scan is active', async () => {

@@ -15,6 +15,7 @@ import {
   type CryptoPricePrecisionService as CryptoPricePrecisionServiceContract,
 } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
+import { enforceScannerAiFinalPromotionPolicy, enrichTopScannerCandidatesWithAi } from '../services/scanner-ai-runtime.service';
 import { buildScannerDiscoveryView } from '../services/scanner-discovery-view.service';
 import {
   scannerStrategyForTimeframe,
@@ -175,19 +176,16 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const result = await precision.align(market, scanned, controller.signal);
       if (controller.signal.aborted || res.writableEnded) return;
 
-      const ranking = rankScannerCandidates({
+      const preliminaryRanking = rankScannerCandidates({
         cards: result.cards,
         market: result.market,
         strategy: strategyMode,
         softMinimumScore,
         limit: 10,
       });
-      const baseRankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
-        ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
-        : card);
       const overlay = selectedCondition === 'williams'
-        ? await williamsOverlay.apply({ market, cards: baseRankedCards, signal: controller.signal })
-        : { cards: baseRankedCards, matchedCount: 0, unavailableCount: 0 };
+        ? await williamsOverlay.apply({ market, cards: preliminaryRanking.cards, signal: controller.signal })
+        : { cards: preliminaryRanking.cards, matchedCount: 0, unavailableCount: 0 };
       if (controller.signal.aborted || res.writableEnded) return;
       const directionFilteredCards = overlay.cards.filter((card) => (
         market === 'spot'
@@ -199,12 +197,27 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         dependencies.marketIntelligence,
       );
       if (controller.signal.aborted || res.writableEnded) return;
-      const rankedCards = await enrichCryptoScannerCardsWithPublicEventContext(intelligenceCards, {
+      const eventCandidates = await enrichCryptoScannerCardsWithPublicEventContext(intelligenceCards, {
         market,
         maxCandidates: 2,
         budgetMs: 800,
         signal: controller.signal,
       });
+      if (controller.signal.aborted || res.writableEnded) return;
+      const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
+        eventCandidates,
+        { signal: controller.signal },
+      );
+      const ranking = rankScannerCandidates({
+        cards: aiReviewedCandidates,
+        market: result.market,
+        strategy: strategyMode,
+        softMinimumScore,
+        limit: 10,
+      });
+      const rankedCards = enforceScannerAiFinalPromotionPolicy(ranking.cards).map((card) => card.signalGrade === 'B'
+        ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
+        : card);
       if (controller.signal.aborted || res.writableEnded) return;
       const discovery = buildScannerDiscoveryView(result.cards, {
         tradeReviewCount: rankedCards.length,
@@ -219,9 +232,16 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const aGradeCount = rankedCards.filter((card) => card.signalGrade === 'A').length;
       const bGradeCount = rankedCards.filter((card) => card.signalGrade === 'B').length;
       const actionableCount = rankedCards.filter((card) => actionableIds.has(card.signalId)).length;
-      const intelligenceReadyCount = rankedCards.filter((card) => card.marketIntelligence.status === 'READY').length;
+      const intelligenceBySignalId = new Map(
+        eventCandidates.map((card) => [card.signalId, card.marketIntelligence] as const),
+      );
+      const intelligenceReadyCount = rankedCards.filter(
+        (card) => intelligenceBySignalId.get(card.signalId)?.status === 'READY',
+      ).length;
       const intelligenceUnavailableCount = rankedCards.length - intelligenceReadyCount;
-      const intelligenceBlockedCount = rankedCards.filter((card) => card.marketIntelligence.autoTrading.mode === 'BLOCKED_RISK').length;
+      const intelligenceBlockedCount = rankedCards.filter(
+        (card) => intelligenceBySignalId.get(card.signalId)?.autoTrading.mode === 'BLOCKED_RISK',
+      ).length;
       const insufficientDataCount = result.failures.filter((failure) => failure.reason === 'invalid_data').length;
       const providerAcceptedCount = result.execution.completedCount;
       const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);

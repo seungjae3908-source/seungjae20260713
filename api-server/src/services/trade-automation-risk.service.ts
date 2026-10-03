@@ -1,5 +1,9 @@
 import { evaluateTradingOptimization } from './trade-automation-optimization.service';
 import {
+  isEvidenceBackedAutoStrategyId,
+  RULE_PACK_PILOT_PROFILE,
+} from './evidence-backed-auto-strategy-catalog.service';
+import {
   DEFAULT_TRADING_POLICY,
   type TradingAssetClass,
   type TradingMarketSnapshot,
@@ -175,10 +179,12 @@ export function evaluateTradingPlan(
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
   const riskReducing = plan.reduceOnly === true;
+  const rulePackPilot = isEvidenceBackedAutoStrategyId(plan.strategyId);
 
   if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
   if (policy.newEntriesStopped && !riskReducing) add(blockCodes, 'NEW_ENTRIES_STOPPED');
-  if (!finitePositive(plan.estimatedKrw) || (!riskReducing && plan.estimatedKrw > policy.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
+  if (!finitePositive(plan.estimatedKrw)
+    || (!riskReducing && !rulePackPilot && plan.estimatedKrw > policy.maxOrderKrw)) add(blockCodes, 'MAX_ORDER_AMOUNT');
   if (!riskReducing && snapshot.dailyPnlPercent <= -policy.dailyLossLimitPercent) add(blockCodes, 'DAILY_LOSS_LIMIT');
   if (!riskReducing && Number.isFinite(snapshot.weeklyPnlPercent) && Number(snapshot.weeklyPnlPercent) <= -policy.weeklyLossLimitPercent) add(blockCodes, 'WEEKLY_LOSS_LIMIT');
   if (!riskReducing && snapshot.assetExposurePercent > policy.maxAssetPercent) add(blockCodes, 'ASSET_EXPOSURE_LIMIT');
@@ -201,8 +207,13 @@ export function evaluateTradingPlan(
   const openRiskLimitKrw = capitalBase * policy.totalDailyLossLimitPercent / 100;
   if (!riskReducing && openRiskKrw != null && thisPlanRiskKrw != null && openRiskKrw + thisPlanRiskKrw > openRiskLimitKrw) add(blockCodes, 'OPEN_RISK_LIMIT');
 
-  if (!riskReducing && snapshot.openPositionCount >= policy.maxOpenPositions) add(blockCodes, 'OPEN_POSITION_LIMIT');
-  if (!riskReducing && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
+  if (!riskReducing && rulePackPilot
+    && snapshot.openPositionCount >= RULE_PACK_PILOT_PROFILE.maxConcurrentLivePositions) {
+    add(blockCodes, 'PILOT_CONCURRENT_POSITION_LIMIT');
+  } else if (!riskReducing && snapshot.openPositionCount >= policy.maxOpenPositions) {
+    add(blockCodes, 'OPEN_POSITION_LIMIT');
+  }
+  if (!riskReducing && !rulePackPilot && snapshot.dailyOrderCount >= policy.maxDailyOrders) add(blockCodes, 'DAILY_ORDER_LIMIT');
   if (!riskReducing && snapshot.consecutiveLosses >= policy.maxConsecutiveLosses) add(blockCodes, 'CONSECUTIVE_LOSS_LIMIT');
   if (snapshot.halted) add(blockCodes, 'MARKET_HALTED');
 
@@ -265,6 +276,8 @@ export function evaluateTradingPlan(
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
     if (plan.leverage !== 2 && plan.leverage !== 3) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if (plan.marginMode !== 'crossed' && plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_MARGIN_MODE_REQUIRED');
+    if (rulePackPilot && plan.leverage !== RULE_PACK_PILOT_PROFILE.futuresMaxLeverage) add(blockCodes, 'PILOT_FUTURES_LEVERAGE_REQUIRED');
+    if (rulePackPilot && plan.marginMode !== 'isolated') add(blockCodes, 'PILOT_FUTURES_ISOLATED_REQUIRED');
     if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !plan.reduceOnly) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
     const requiredMargin = plan.estimatedKrw / Math.max(1, plan.leverage ?? 1);
     if (!riskReducing && snapshot.availableBalance < requiredMargin) add(blockCodes, 'INSUFFICIENT_MARGIN');

@@ -44,6 +44,130 @@ type Status = {
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  strategyAiReview?: {
+    configured: boolean;
+    provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    model: string | null;
+    fallbackConfigured: boolean;
+    fallbackProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    fallbackModel: string | null;
+    promptVersion: string;
+    producer: 'BOUNDED_AI_JSON_PROVIDER';
+    failClosed: true;
+    cacheEnabled: true;
+    cacheSize: number;
+    cacheMaxEntries: number;
+    cacheHits: number;
+    cacheEvictions: number;
+    reviewCalls: number;
+    pass: number;
+    abstain: number;
+    veto: number;
+    blocked: number;
+    unavailable: number;
+    lastDecisionAt: string | null;
+    providerCalls: number;
+    providerSuccesses: number;
+    providerFailures: number;
+    providerFallbackSuccesses: number;
+    providerLastSuccessAt: string | null;
+    providerLastErrorAt: string | null;
+    providerLastErrorCode: string | null;
+    providerLastProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    providerAverageLatencyMs: number | null;
+    providerMaxLatencyMs: number | null;
+    maxTtlMs: number;
+    executionAuthority: 'NONE';
+    orderAllowed: false;
+    riskOverrideAllowed: false;
+  };
+  strategyAiReviewAudit?: {
+    schemaVersion: 'trade-rule-pack-ai-audit-v1';
+    storage: 'paper_journal_entries';
+    requiredBeforePlan: true;
+    failurePolicy: 'BLOCK_ENTRY';
+    rawPromptStored: false;
+    credentialsStored: false;
+  };
+  scannerAiReview?: {
+    configured: boolean;
+    providerSeam: 'BOUNDED_AI_JSON_PROVIDER';
+    provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    model: string | null;
+    fallbackConfigured: boolean;
+    fallbackProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    canonicalScannerWired: true;
+    maxCandidatesPerRequest: number;
+    failSoftForDisplay: true;
+    vetoBlocksStrongSignal: true;
+    providerCalls: number;
+    providerSuccesses: number;
+    providerFailures: number;
+    providerFallbackSuccesses: number;
+    providerLastSuccessAt: string | null;
+    providerLastErrorAt: string | null;
+    providerLastErrorCode: string | null;
+    providerAverageLatencyMs: number | null;
+    providerMaxLatencyMs: number | null;
+    schedulerPending: number;
+    schedulerActive: number;
+    schedulerConsecutiveFailures: number;
+    schedulerCircuitOpen: boolean;
+    schedulerCircuitOpenedAt: number | null;
+    schedulerCircuitResetMs: number;
+    executionAuthority: 'NONE';
+    orderAllowed: false;
+    positionSizeAuthority: false;
+    leverageAuthority: false;
+  };
+  pilotCapitalState?: {
+    initialOperatingCapitalKrw: number;
+    operatingCapitalKrw: number;
+    reserveKrw: number;
+    highWaterMarkKrw: number;
+    maxEntryKrw: number;
+    realizedNetPnlKrw: number;
+    compoundedProfitKrw: number;
+    dailyRealizedPnlKrw: number;
+    dailyLosingTrades: number;
+    consecutiveLosses: number;
+    settlementReady: boolean;
+    blockers: string[];
+    reserveWithdrawalAutomatic: false;
+  };
+  evidenceBackedStrategies?: Array<{
+    strategyId: string;
+    label: string;
+    markets: Array<'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES'>;
+    directions: Array<'BUY' | 'LONG' | 'SHORT'>;
+    summary: string;
+    rules: string[];
+    paperResearchAllowedWhenReady: true;
+    pilotProfile: {
+      mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
+      initialOperatingCapitalKrw: number;
+      profitCompoundShare: 0.5;
+      profitReserveShare: 0.5;
+      maxEntryTracksOperatingCapital: true;
+      reserveAutoWithdrawalAllowed: false;
+      highWaterMarkRequired: true;
+      riskPerTradePercentCeiling: 0.5;
+      maxConcurrentLivePositions: number;
+      maxDailyLiveEntries: null;
+      maxDailyLosingTrades: number;
+      dailyLossStopKrw: number;
+      maxConsecutiveLosses: number;
+      lossCooldownMinutes: number;
+      sameSymbolReentryRequiresFreshSignal: true;
+      futuresMaxLeverage: 3;
+      paperMirrorRequired: true;
+      pairedFillComparisonRequired: true;
+      liveOrderRequiresExplicitConfirmation: true;
+      automaticLiveExecutionAllowed: false;
+    };
+    automaticLivePromotionAllowed: false;
+    promotionRequirements: string[];
+  }>;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
@@ -188,6 +312,18 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       automaticEnabled: !current.automaticEnabled,
       emergencyStopped: false,
     }));
+  }
+
+  function toggleStrategy(strategyId: string) {
+    setDraft((current) => {
+      const selected = current.enabledStrategies.includes(strategyId);
+      return {
+        ...current,
+        enabledStrategies: selected
+          ? current.enabledStrategies.filter((item) => item !== strategyId)
+          : [...current.enabledStrategies, strategyId],
+      };
+    });
   }
 
   function toggleMarket(market: Market) {
@@ -424,6 +560,101 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <NumberField label="일일 주문 수" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
+
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="strategy-ai-review-status">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-extrabold">6전략 AI Review 연결</p>
+          <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            결정론적 Evidence 통과 후에만 AI를 호출하며, 실패·만료·신원 불일치·형식 오류는 신규 진입을 차단합니다.
+          </p>
+        </div>
+        <span className={cn(
+          'rounded-full border px-2 py-1 text-[10px] font-black',
+          status?.strategyAiReview?.configured
+            ? 'border-positive/30 bg-positive/10 text-positive'
+            : 'border-warning/30 bg-warning/10 text-warning',
+        )}>
+          {status?.strategyAiReview?.configured ? 'AI 연결 준비됨' : 'AI Provider 미설정 · FAIL-CLOSED'}
+        </span>
+      </div>
+      <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+        <dt className="font-bold">Provider</dt><dd>{status?.strategyAiReview?.provider ?? '미설정'} · {status?.strategyAiReview?.model ?? '모델 미설정'}</dd>
+        <dt className="font-bold">Fallback</dt><dd>{status?.strategyAiReview?.fallbackConfigured ? `${status.strategyAiReview.fallbackProvider ?? '구성됨'} / ${status.strategyAiReview.fallbackModel ?? '기본모델'}` : '없음'}</dd>
+        <dt className="font-bold">Provider Health</dt><dd>호출 {status?.strategyAiReview?.providerCalls ?? 0} · 성공 {status?.strategyAiReview?.providerSuccesses ?? 0} · 실패 {status?.strategyAiReview?.providerFailures ?? 0} · Fallback {status?.strategyAiReview?.providerFallbackSuccesses ?? 0}</dd>
+        <dt className="font-bold">최근 성공</dt><dd>{status?.strategyAiReview?.providerLastSuccessAt ?? '아직 없음'}{status?.strategyAiReview?.providerAverageLatencyMs != null ? ` · 평균 ${status.strategyAiReview.providerAverageLatencyMs}ms / 최대 ${status.strategyAiReview.providerMaxLatencyMs ?? 0}ms` : ''}</dd>
+        <dt className="font-bold">최근 오류</dt><dd>{status?.strategyAiReview?.providerLastErrorCode ?? '없음'}{status?.strategyAiReview?.providerLastErrorAt ? ` · ${status.strategyAiReview.providerLastErrorAt}` : ''}</dd>
+        <dt className="font-bold">판정</dt><dd>PASS {status?.strategyAiReview?.pass ?? 0} · ABSTAIN {status?.strategyAiReview?.abstain ?? 0} · VETO {status?.strategyAiReview?.veto ?? 0} · 차단 {status?.strategyAiReview?.blocked ?? 0} · 공급불가 {status?.strategyAiReview?.unavailable ?? 0}</dd>
+        <dt className="font-bold">Cache</dt><dd>{status?.strategyAiReview?.cacheSize ?? 0}/{status?.strategyAiReview?.cacheMaxEntries ?? 0} · hit {status?.strategyAiReview?.cacheHits ?? 0} · eviction {status?.strategyAiReview?.cacheEvictions ?? 0}</dd>
+        <dt className="font-bold">Scanner AI</dt><dd>{status?.scannerAiReview?.configured ? '연결됨' : '미설정'} · circuit {status?.scannerAiReview?.schedulerCircuitOpen ? 'OPEN' : 'CLOSED'} · active {status?.scannerAiReview?.schedulerActive ?? 0} · pending {status?.scannerAiReview?.schedulerPending ?? 0}</dd>
+        <dt className="font-bold">TTL</dt><dd>최대 {Math.round((status?.strategyAiReview?.maxTtlMs ?? 0) / 1000)}초</dd>
+        <dt className="font-bold">Live AI 정책</dt><dd>PASS-only 사전계약 · 현재 6전략 자동 Live는 비활성</dd>
+        <dt className="font-bold">AI 감사 Journal</dt><dd>{status?.strategyAiReviewAudit?.requiredBeforePlan ? '주문계획 전 필수 저장' : '미확인'} · 실패 시 {status?.strategyAiReviewAudit?.failurePolicy === 'BLOCK_ENTRY' ? '진입 차단' : '미확인'} · 원문 Prompt/Secret 저장 안 함</dd>
+        <dt className="font-bold">권한</dt><dd>주문 없음 · Risk override 없음 · 실행권한 NONE</dd>
+      </dl>
+    </div> : null}
+
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="strategy-rule-pack-cards">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-extrabold">수식·파동·보조지표·AI 룰팩</p>
+          <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            50만원 소액 실전 검증 프로필입니다. Paper는 자동으로 병행하고, 실계좌는 같은 신호의 주문안을 만들어 최종 확인 후 실행하는 방식으로 비교합니다.
+          </p>
+        </div>
+        <ShieldAlert className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+        {status!.evidenceBackedStrategies!.map((strategy) => {
+          const selected = draft.enabledStrategies.includes(strategy.strategyId);
+          return <button
+            key={strategy.strategyId}
+            type="button"
+            onClick={() => toggleStrategy(strategy.strategyId)}
+            className="rounded-xl border border-card-border bg-card p-3 text-left"
+            data-testid={'strategy-rule-pack-' + strategy.strategyId}
+            aria-pressed={selected}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-extrabold">{strategy.label}</span>
+              <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-bold">
+                {selected ? '선택됨' : '대기'}
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{strategy.summary}</p>
+            <p className="mt-2 text-[10px] font-bold text-muted-foreground">
+              Paper 자동 · 초기 운용금 {strategy.pilotProfile.initialOperatingCapitalKrw.toLocaleString('ko-KR')}원 · 신규 순이익 50% 복리 / 50% Reserve
+            </p>
+          </button>;
+        })}
+      </div>
+    </div> : null}
+
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="strategy-pilot-risk-summary">
+      <p className="font-extrabold">50만원 실전 검증 방식</p>
+      <p className="mt-1 leading-5 text-muted-foreground">
+        최대 진입은 현재 운용금과 함께 증가 · 손절거리 Risk Size가 더 작으면 그 이하만 허용 · 거래당 위험은 운용금의 최대 0.5% · 동시 2개 · 조건이 좋으면 하루 진입 횟수 제한 없음 · 하루 손실거래 5회 중지 · 연속 3회 손실 시 중지 · 동일 종목 손실 후 30분 + 새 신호 필요 · 비상 일손실 2.5만원 · 선물 3배(위험예산 증액 금지) · Paper 동시 기록 · Reserve 자동출금 금지 · 실계좌 주문은 최종 확인 필요
+      </p>
+    </div> : null}
+
+    {status?.pilotCapitalState ? <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="strategy-pilot-capital-state">
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">현재 운용금</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.operatingCapitalKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">최대 진입 상한</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.maxEntryKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">Reserve</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.reserveKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">High-Water Mark</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.highWaterMarkKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+    </div> : null}
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       허용 전략
