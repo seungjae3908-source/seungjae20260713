@@ -7,6 +7,7 @@ import {
 } from './bounded-scanner.service';
 import { buildContext, type ScanFilters } from './signal.service';
 import { rankScannerCandidates } from './scanner-candidate-ranking.service';
+import { enrichTopScannerCandidatesWithAi } from './scanner-ai-runtime.service';
 import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
@@ -257,8 +258,19 @@ export const StockSignalScannerService = {
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
-    const ranking = rankScannerCandidates({
+    const provisionalRanking = rankScannerCandidates({
       cards: broadCandidates,
+      market: request.market,
+      strategy: strategyMode,
+      softMinimumScore: request.filters.minimumScore,
+      limit: 20,
+    });
+    const aiReviewedCandidates = await enrichTopScannerCandidatesWithAi(
+      provisionalRanking.cards,
+      { signal: request.signal },
+    );
+    const ranking = rankScannerCandidates({
+      cards: aiReviewedCandidates,
       market: request.market,
       strategy: strategyMode,
       softMinimumScore: request.filters.minimumScore,
