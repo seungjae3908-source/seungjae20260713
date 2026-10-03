@@ -4,6 +4,7 @@ import type {
   ScannerSignalCard,
   ScannerSignalState,
 } from './scanner-signal.types';
+import { telegramMarketRoomChatId, telegramMarketRoomForLane } from './telegram-market-room.service';
 import {
   createTelegramSignalFollowupRepository,
   validateStoredTelegramSignalFollowupState,
@@ -315,9 +316,18 @@ function editedSignalMessage(
 }
 
 function destinationFor(card: ScannerSignalCard): string | null {
-  return card.assetClass === 'stock'
-    ? process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null
-    : process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  const lane = card.assetClass === 'coin_spot'
+    ? 'CRYPTO_SPOT'
+    : card.assetClass === 'coin_futures'
+      ? 'CRYPTO_FUTURES'
+      : card.market.trim().toUpperCase().includes('US')
+        ? 'US_STOCK'
+        : 'KR_STOCK';
+  return telegramMarketRoomChatId(
+    telegramMarketRoomForLane(lane),
+    process.env,
+    { allowLegacyFallback: true },
+  );
 }
 
 export async function deliverScannerTelegramFollowups(
