@@ -20,6 +20,9 @@ import {
   prepareBitgetPendingOrders,
   prepareBitgetPositions,
   prepareBitgetTicker,
+  prepareBitgetUtaAssets,
+  prepareBitgetUtaPositions,
+  prepareKiwoomAccountNumber,
   prepareKiwoomOrder,
   prepareKiwoomOrderable,
   prepareKiwoomToken,
@@ -631,16 +634,34 @@ export class TradeExecutionService {
           PREFLIGHT_TIMEOUT_MS,
         ));
       } else if (exchange === 'bitget') {
-        assertBitgetSuccess(await request(() => sendExchangeRequest(
-          BASE_URLS.bitget,
-          prepareBitgetAccount(credentials as BitgetCredentials),
-          PREFLIGHT_TIMEOUT_MS,
-        )));
-        assertBitgetSuccess(await request(() => sendExchangeRequest(
-          BASE_URLS.bitget,
-          prepareBitgetPositions(credentials as BitgetCredentials),
-          PREFLIGHT_TIMEOUT_MS,
-        )));
+        const bitget = credentials as BitgetCredentials;
+        try {
+          assertBitgetSuccess(await request(() => sendExchangeRequest(
+            BASE_URLS.bitget,
+            prepareBitgetAccount(bitget),
+            PREFLIGHT_TIMEOUT_MS,
+          )));
+          assertBitgetSuccess(await request(() => sendExchangeRequest(
+            BASE_URLS.bitget,
+            prepareBitgetPositions(bitget),
+            PREFLIGHT_TIMEOUT_MS,
+          )));
+        } catch (classicError) {
+          try {
+            assertBitgetSuccess(await request(() => sendExchangeRequest(
+              BASE_URLS.bitget,
+              prepareBitgetUtaAssets(bitget),
+              PREFLIGHT_TIMEOUT_MS,
+            )));
+            assertBitgetSuccess(await request(() => sendExchangeRequest(
+              BASE_URLS.bitget,
+              prepareBitgetUtaPositions(bitget),
+              PREFLIGHT_TIMEOUT_MS,
+            )));
+          } catch {
+            throw classicError;
+          }
+        }
       } else if (exchange === 'kiwoom') {
         const kiwoom = credentials as KiwoomCredentials;
         const tokenPayload = assertKiwoomSuccess(await request(() => sendExchangeRequest(
@@ -650,9 +671,12 @@ export class TradeExecutionService {
         )));
         const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
         if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
+        // Credential verification must remain a read-only account probe.
+        // kt00010 is orderability-specific and can reject otherwise valid
+        // credentials before live authority is enabled.
         assertKiwoomSuccess(await request(() => sendExchangeRequest(
           BASE_URLS.kiwoom,
-          prepareKiwoomOrderable({ ...kiwoom, accessToken: token }),
+          prepareKiwoomAccountNumber({ ...kiwoom, accessToken: token }),
           PREFLIGHT_TIMEOUT_MS,
         )));
       } else {
