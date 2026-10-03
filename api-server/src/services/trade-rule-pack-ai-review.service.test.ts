@@ -101,10 +101,12 @@ test('runtime status exposes provider identity and safety state without credenti
   assert.equal(JSON.stringify(status).includes('test-provider-key'), false);
 });
 
-test('fresh public evidence produces bound PASS review with digest and freshness-bounded expiry', async () => {
+test('fresh public evidence produces bound PASS review with digest and bounded prompt', async () => {
   let calls = 0;
-  const reviewer = new TradeRulePackAiReviewer(async () => {
+  let promptText = '';
+  const reviewer = new TradeRulePackAiReviewer(async (input) => {
     calls += 1;
+    promptText = String(input.message ?? '');
     return answer('PASS');
   }, env());
   const candidate = entry();
@@ -116,6 +118,8 @@ test('fresh public evidence produces bound PASS review with digest and freshness
   assert.equal(result.strategyId, candidate.identity.strategyId);
   assert.equal(result.signalId, candidate.identity.signalId);
   assert.equal(result.evidenceDigest, buildTradeRulePackAiEvidenceDigest(candidate));
+  assert.ok(promptText.length > 0 && promptText.length <= 1_900);
+  assert.ok(promptText.includes('evidenceDigest=' + result.evidenceDigest));
   assert.equal(result.provider, 'google-gemini');
   assert.equal(result.model, 'gemini-test-model');
   assert.equal(result.safety.executionAuthority, 'NONE');
