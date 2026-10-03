@@ -94,6 +94,10 @@ requireText(routeIndex, "router.use('/research/video/evidence', requireCapabilit
 requireText(videoRouter, "router.use('/workspace', workspaceRouter);", 'video workspace child mount');
 requireText(videoRouter, "router.use('/', sourceEvidenceRouter);", 'video source child mount');
 requireText(videoSource, "router.get('/', async (_req, res) => {", 'video source GET-only route');
+requireText(videoSource, "fetchImpl('http://127.0.0.1:18090/api/research/video/evidence'", 'durable video dashboard readback');
+requireText(videoSource, 'snapshotBound', 'video automation lineage binding');
+requireText(videoClient, 'snapshotBound', 'browser video lineage parser');
+requireText(videoClient, '현재 snapshot과 lineage 미결합', 'browser stale automation fail-closed state');
 forbidText(videoSource, "router.post('/',", 'video source write route');
 forbidText(videoSource, "router.put('/',", 'video source write route');
 forbidText(videoSource, "router.delete('/',", 'video source write route');
