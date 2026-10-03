@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards, X } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
-import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
-import { PaperTradingPanel } from '@/components/paper-trading-panel';
+import { 모의JournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
+import { 모의TradingPanel } from '@/components/paper-trading-panel';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
@@ -12,7 +12,7 @@ import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
-import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
+import { createUser모의Storage } from '@/lib/paper-journal-sync-storage';
 
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
@@ -95,23 +95,24 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const userId = auth.user?.id ?? auth.profile?.id ?? '';
   const testFixtureAccess = Boolean(fixture);
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
-  const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
+  const can모의 = testFixtureAccess || auth.can('canAccess모의Trading');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
   const [mode, setMode] = useState<TradingMode>(initialMode);
   const [market, setMarket] = useState<TradingMarket>('domestic_stock');
   const [section, setSection] = useState<TradingSection>('dashboard');
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
-  const [paperRevision, setPaperRevision] = useState(0);
+  const [paperRevision, set모의Revision] = useState(0);
+  const [manual모의Open, setManual모의Open] = useState(false);
   const paperStorage = useMemo(
-    () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
+    () => userId ? createUser모의Storage(window.localStorage, userId) : window.localStorage,
     [userId],
   );
 
   useEffect(() => {
-    if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
-    if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
-  }, [canAuto, canPaper, mode]);
+    if (mode === 'auto' && !canAuto && can모의) setMode('paper');
+    if (mode === 'paper' && !can모의 && canAuto) setMode('auto');
+  }, [canAuto, can모의, mode]);
 
   useEffect(() => {
     if (fixture) {
@@ -119,7 +120,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       setRuntimeLoading(false);
       return;
     }
-    if (!canAuto) return;
+    if (!canAuto && !can모의) return;
     const controller = new AbortController();
     setRuntimeLoading(true);
     void authorizedFetch('/api/trade-automation/status', { signal: controller.signal })
@@ -135,24 +136,24 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         if (!controller.signal.aborted) setRuntimeLoading(false);
       });
     return () => controller.abort();
-  }, [canAuto, fixture]);
+  }, [canAuto, can모의, fixture]);
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
   const policy = runtimeStatus?.policy;
   const marketEnabled = Boolean(policy?.marketEnabled?.[market]);
-  const selectedProvider = market === 'crypto_spot'
+  const selected거래사 = market === 'crypto_spot'
     ? 'upbit'
     : market === 'crypto_futures'
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
-  const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
+  const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selected거래사);
   const lastOrder = runtimeStatus?.lastOrder;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
 
   const changeMode = (next: TradingMode) => {
     if (next === 'auto' && !canAuto) return;
-    if (next === 'paper' && !canPaper) return;
+    if (next === 'paper' && !can모의) return;
     setMode(next);
     setSection('dashboard');
   };
@@ -170,7 +171,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <h2 className="text-sm font-bold">자동매매 실행 방식</h2>
           </div>
           <span className="rounded-full border border-primary/20 bg-background px-2.5 py-1 text-xs font-bold">
-            {runtimeLoading ? '확인 중' : policy?.automaticEnabled ? '자동 실행 ON' : '자동 실행 OFF'}
+            {runtimeLoading ? '확인 중' : policy?.automaticEnabled ? '자동 실행 켜짐' : '자동 실행 꺼짐'}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
@@ -179,7 +180,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
         <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-          4시장 개별 ON/OFF로 시장별 자동 실행을 제어하며, 주문마다 승인을 요청하지 않습니다. 실제 주문 권한은 서버 Gate를 통과해야 합니다.
+          4시장 개별 켜짐/OFF로 시장별 자동 실행을 제어하며, 주문마다 승인을 요청하지 않습니다. 실제 주문 권한은 서버 Gate를 통과해야 합니다.
         </p>
       </section>
 
@@ -193,35 +194,28 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             'rounded-full px-2.5 py-1 text-xs font-bold',
             marketEnabled && !emergencyStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
           ].join(' ')}>
-            {marketEnabled && !emergencyStopped ? '시장 ON' : '시장 OFF'}
+            {marketEnabled && !emergencyStopped ? '시장 켜짐' : '시장 꺼짐'}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
           <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
           <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
+          <StatusItem label="실거래" value="별도 승인 필요" />
         </div>
       </section>
     </div>
   ) : (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-bold">Canonical 모의매매 · {marketMeta.label}</h2>
-          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
-            국내주식·미국주식·코인현물·코인선물 모두 동일한 서버 검증형 Paper 경로를 사용합니다.
-          </p>
-        </div>
-        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">
-          실제 주문 0
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-bold">자동 모의매매 · {marketMeta.label}</h2>
+        <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-700">실주문 없음</span>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatusItem label="시장" value={marketMeta.label} />
-        <StatusItem label="Provider" value={marketMeta.provider} />
-        <StatusItem label="선택 종목" value={selectionMatchesMarket ? selection?.ticker ?? '선택됨' : '미선택'} />
-        <StatusItem label="경제적 증거" value="Settlement 후 판정" />
+        <StatusItem label="자동 실행" value={policy?.automaticEnabled && marketEnabled ? '켜짐' : '꺼짐'} />
+        <StatusItem label="시장" value={marketEnabled ? '켜짐' : '꺼짐'} />
+        <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
+        <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
       </div>
     </section>
   );
@@ -234,9 +228,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatusItem label="최근 상태" value={lastOrder?.state ?? '주문 없음'} />
-        <StatusItem label="Provider" value={marketMeta.provider} />
+        <StatusItem label="거래사" value={marketMeta.provider} />
         <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
-        <StatusItem label="자동 실행" value={policy?.automaticEnabled && marketEnabled ? 'ON' : 'OFF'} />
+        <StatusItem label="자동 실행" value={policy?.automaticEnabled && marketEnabled ? '켜짐' : '꺼짐'} />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/scanner')}>신호 확인</button>
@@ -258,7 +252,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <h2 className="text-sm font-bold">{marketMeta.label} 모의 포지션 준비</h2>
           </div>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            AI 검색기에서 {marketMeta.label} 종목을 선택하면 동일 신호 identity와 위험·비용 evidence를 서버에서 다시 검증해 Paper 포지션을 준비합니다.
+            AI 검색기에서 {marketMeta.label} 종목을 선택하면 동일 신호 identity와 위험·비용 evidence를 서버에서 다시 검증해 모의 포지션을 준비합니다.
           </p>
           <button type="button" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground" onClick={() => navigate('/scanner')}>
             {marketMeta.label} 신호 선택하기
@@ -267,15 +261,19 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       )}
 
       {market === 'crypto_futures' ? (
-        <details className="rounded-2xl border border-card-border bg-card">
-          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-xs font-bold [&::-webkit-details-marker]:hidden">
-            <span>기존 코인선물 수동 시뮬레이터</span>
-            <span className="text-muted-foreground">선택 기능 ⌄</span>
-          </summary>
-          <div className="border-t border-card-border p-2 [&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0">
-            <PaperTradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact />
-          </div>
-        </details>
+        <>
+          <button type="button" onClick={() => setManual모의Open(true)} className="min-h-11 w-full rounded-xl border border-card-border bg-card px-4 text-sm font-bold">
+            수동 모의매매
+          </button>
+          {manual모의Open ? (
+            <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManual모의Open(false); }}>
+              <section role="dialog" aria-modal="true" aria-label="수동 모의매매" className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-t-3xl border border-card-border bg-background shadow-2xl sm:rounded-3xl">
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-card-border bg-background p-4"><h2 className="text-base font-bold">수동 모의매매</h2><button type="button" onClick={() => setManual모의Open(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기"><X className="h-4 w-4" /></button></div>
+                <div className="[&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0"><모의TradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact /></div>
+              </section>
+            </div>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -307,15 +305,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     </div>
   ) : (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-settings">
-      <div className="flex items-center gap-2">
-        <Settings2 className="h-4 w-4 text-primary" />
-        <h2 className="text-sm font-bold">모의매매 설정</h2>
-      </div>
-      <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
-        <p>시장 선택은 상단 4시장 버튼에서 통합 관리합니다.</p>
-        <p>Canonical Paper는 실제 거래소 주문을 전송하지 않으며, 수량·레버리지·진입가격은 서버 evidence가 결정합니다.</p>
-        <p>코인선물 수동 시뮬레이터는 포지션·주문 탭에서만 선택적으로 열 수 있습니다.</p>
-      </div>
+      <div className="mb-3 flex items-center gap-2"><Settings2 className="h-4 w-4 text-primary" /><h2 className="text-sm font-bold">{marketMeta.label} 자동 모의매매 설정</h2></div>
+      <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
     </section>
   );
 
@@ -333,11 +324,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <span aria-hidden className="text-muted-foreground">선택 기능 ⌄</span>
           </summary>
           <div className="border-t border-card-border p-3">
-            <PaperJournalSyncAnalyticsPanel
+            <모의JournalSyncAnalyticsPanel
               userId={userId}
               rootStorage={window.localStorage}
               paperStorage={paperStorage}
-              onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
+              onLocalStateChanged={() => set모의Revision((value) => value + 1)}
             />
           </div>
         </details>
@@ -363,7 +354,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <div className="mx-auto w-full max-w-6xl space-y-3" data-testid="auto-trading-responsive-layout">
           <div className="grid grid-cols-2 gap-2" data-testid="trading-mode-tabs">
             <SegmentedButton active={mode === 'auto'} disabled={!canAuto} onClick={() => changeMode('auto')} testId="trading-mode-auto">자동매매</SegmentedButton>
-            <SegmentedButton active={mode === 'paper'} disabled={!canPaper} onClick={() => changeMode('paper')} testId="trading-mode-paper">모의매매</SegmentedButton>
+            <SegmentedButton active={mode === 'paper'} disabled={!can모의} onClick={() => changeMode('paper')} testId="trading-mode-paper">모의매매</SegmentedButton>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 시장 선택" data-testid="trading-market-tabs">
@@ -384,14 +375,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           {sectionContent}
 
-          <section className="rounded-2xl border border-card-border bg-card p-3 text-xs text-muted-foreground" data-testid="trading-workspace-safety-note">
-            <div className="flex items-start gap-2">
-              <BookOpenCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <p className="break-keep leading-5">
-                자동매매와 모의매매는 같은 4시장 UI와 매매일지를 사용하지만 실행 권한은 분리됩니다. LIVE/AUTO/REAL/Private API Gate는 이 UI 변경으로 켜지지 않습니다.
-              </p>
-            </div>
-          </section>
+
         </div>
       </main>
       {!embedded ? <BottomNav /> : null}
