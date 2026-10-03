@@ -189,8 +189,44 @@ test('multiple entries and partial exits form one cycle, while a flat re-entry s
   assert.equal(first.netPnl, -64);
   assert.equal(first.costEvidence.status, 'READY');
   assert.equal(first.status, 'CLOSED');
+  assert.deepEqual(first.canonicalLineage, undefined);
   assert.notEqual(first.id, second.id);
   assert.equal(second.grossPnl, 100);
+});
+
+test('canonical lineage merges signal plan order and fill identities across one trade cycle', () => {
+  const result = buildUnifiedTradeJournal([
+    order({
+      brokerOrderId: 'lineage-entry',
+      canonicalLineage: {
+        signalIds: ['signal-1'],
+        planIds: ['plan-entry'],
+        orderIds: ['order-entry'],
+        fillIds: ['fill-entry'],
+      },
+    }),
+    order({
+      brokerOrderId: 'lineage-exit',
+      side: 'SELL',
+      positionEffect: 'CLOSE',
+      filledAt: '2026-08-10T02:00:00.000Z',
+      observedAt: '2026-08-10T02:00:01.000Z',
+      averageFillPrice: 110,
+      canonicalLineage: {
+        signalIds: ['signal-1'],
+        planIds: ['plan-exit'],
+        orderIds: ['order-exit'],
+        fillIds: ['fill-exit'],
+      },
+    }),
+  ], { range: 'ALL' }, NOW);
+  assert.equal(result.trades.length, 1);
+  assert.deepEqual(result.trades[0]?.canonicalLineage, {
+    signalIds: ['signal-1'],
+    planIds: ['plan-entry', 'plan-exit'],
+    orderIds: ['order-entry', 'order-exit'],
+    fillIds: ['fill-entry', 'fill-exit'],
+  });
 });
 
 test('Kiwoom US read-only fills enter the journal while missing costs keep net metrics unknown', () => {
