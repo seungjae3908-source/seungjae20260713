@@ -1,4 +1,5 @@
 import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
+import { isEvidenceBackedAutoStrategyId } from './evidence-backed-auto-strategy-catalog.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -64,6 +65,7 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
+  const rulePackPilot = isEvidenceBackedAutoStrategyId(plan.strategyId);
   const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
     now,
     maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
@@ -135,7 +137,8 @@ export function evaluateTradingOptimization(
     ? 0 : policy.pilotStage === 'limited-50' ? 50_000 : policy.maxOrderKrw;
   if (plan.accountMode === 'live') {
     if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
-    else if (plan.estimatedKrw > stageMaximum) add(blockCodes, 'PILOT_ORDER_LIMIT');
+    else if (!rulePackPilot && plan.estimatedKrw > stageMaximum) add(blockCodes, 'PILOT_ORDER_LIMIT');
+    else if (rulePackPilot) warnings.push('RULE_PACK_DYNAMIC_HWM_LIMIT_RECHECKED_PRE_SUBMISSION');
   }
   if (!policy.riskOptimizationEnabled) add(blockCodes, 'RISK_OPTIMIZATION_DISABLED');
 
