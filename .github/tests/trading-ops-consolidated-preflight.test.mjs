@@ -62,6 +62,8 @@ test('Toss existing-order history uses CLOSED read-only endpoint', () => {
 test('four-market automatic gate couples live auto and paper worker and consumes QA v2', () => {
   const handoff = read('market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js');
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const aiGate = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
+  const aiProducer = read('api-server/src/services/trade-rule-pack-ai-review.service.ts');
   const index = read('api-server/src/index.ts');
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
@@ -91,4 +93,15 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(worker.includes('readMarketMark'));
   assert.ok(worker.includes('paperExitOrders'));
   assert.ok(worker.includes('liveExitOrders'));
+  assert.ok(worker.includes('evaluateStrategyRulePackDeterministicGate'));
+  assert.ok(worker.includes('tradeRulePackAiReviewer'));
+  assert.ok(worker.includes('AI_REVIEW_DECISION:'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_REVIEW_REQUIRED'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_EVIDENCE_DIGEST_MISMATCH'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_REVIEW_STALE'));
+  assert.ok(aiGate.includes('STRATEGY_RULE_PACK_AI_SAFETY_INVALID'));
+  assert.ok(aiProducer.includes("producer: 'AI_CHAT_PROVIDER_SEAM'"));
+  assert.ok(aiProducer.includes("executionAuthority: 'NONE'"));
+  assert.ok(aiProducer.includes('riskOverrideAllowed: false'));
+  assert.ok(aiProducer.includes('AI_REVIEW_PROVIDER_NOT_CONFIGURED'));
 });
