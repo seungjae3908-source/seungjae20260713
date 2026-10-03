@@ -89,6 +89,39 @@ function tradingAssetClassForPlan(plan: Pick<TradingPlan, 'exchange' | 'market'>
   return 'domestic_stock';
 }
 
+const PENDING_ORDER_STATES = new Set<TradingOrder['state']>([
+  'PLANNED',
+  'APPROVAL_PENDING',
+  'SUBMITTED',
+  'ACCEPTED',
+  'PARTIALLY_FILLED',
+  'CANCEL_REQUESTED',
+  'RECOVERY_REQUIRED',
+]);
+
+function kstDayKey(value: string | number): string | null {
+  const time = typeof value === 'number' ? value : Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  return new Date(time + (9 * 60 * 60 * 1000)).toISOString().slice(0, 10);
+}
+
+type MarketActivitySummary = {
+  pendingOrders: number;
+  recoveryRequiredOrders: number;
+  todayOrders: number;
+  todayFilledOrders: number;
+  lastActivityAt: string | null;
+};
+
+function emptyMarketActivity(): Record<TradingAssetClass, MarketActivitySummary> {
+  return {
+    domestic_stock: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
+    us_stock: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
+    crypto_spot: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
+    crypto_futures: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
+  };
+}
+
 function context(req: AuthenticatedRequest) {
   if (!req.member?.id) throw new Error('LOGIN_REQUIRED');
   const userId = req.member.id;
@@ -700,11 +733,19 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       crypto_spot: null,
       crypto_futures: null,
     };
+    const marketActivityByMarket = emptyMarketActivity();
+    const todayKst = kstDayKey(Date.now());
     for (const order of orders) {
       const plan = plansById.get(order.planId);
       if (!plan) continue;
       const assetClass = tradingAssetClassForPlan(plan);
       if (lastOrderByMarket[assetClass] == null) lastOrderByMarket[assetClass] = order;
+      const activity = marketActivityByMarket[assetClass];
+      if (PENDING_ORDER_STATES.has(order.state)) activity.pendingOrders += 1;
+      if (order.state === 'RECOVERY_REQUIRED') activity.recoveryRequiredOrders += 1;
+      if (todayKst && kstDayKey(order.createdAt) === todayKst) activity.todayOrders += 1;
+      if (todayKst && order.state === 'FILLED' && kstDayKey(order.updatedAt) === todayKst) activity.todayFilledOrders += 1;
+      if (!activity.lastActivityAt || order.updatedAt > activity.lastActivityAt) activity.lastActivityAt = order.updatedAt;
     }
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
     const vaultStatus = credentialConfigurationStatus();
@@ -755,6 +796,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       liveExecutionReadiness,
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
+      marketActivityByMarket,
       actualOrderSubmittedByStatusRequest: false,
     });
   } catch (error) {
