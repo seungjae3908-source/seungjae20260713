@@ -1,0 +1,342 @@
+/*
+ * UI vNext functional preview
+ * ---------------------------
+ * Preview-only visual layer. The real React pages, chart renderer, search,
+ * research, portfolio, account and trading components remain mounted.
+ * Activated only when VITE_UI_VNEXT_PREVIEW=true.
+ */
+
+html[data-ui-vnext-preview='true'] {
+  --background: 219 30% 10% !important;
+  --foreground: 213 28% 96% !important;
+  --card: 218 30% 14% !important;
+  --card-foreground: 213 28% 96% !important;
+  --card-border: 216 24% 24% !important;
+  --border: 216 22% 22% !important;
+  --input: 216 22% 22% !important;
+  --muted: 217 20% 19% !important;
+  --muted-foreground: 215 16% 69% !important;
+  --secondary: 217 22% 19% !important;
+  --accent: 216 24% 21% !important;
+  --primary: 216 92% 64% !important;
+  --ring: 216 92% 64% !important;
+  --bg-alpha: 0.985 !important;
+  --card-alpha: 0.97 !important;
+  background: #0a1220;
+}
+
+html[data-ui-vnext-preview='true'] body {
+  background:
+    radial-gradient(1100px 520px at 48% -180px, rgb(67 121 220 / 0.20), transparent 66%),
+    linear-gradient(180deg, #0b1423 0%, #08111e 52%, #07101b 100%);
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='member-privacy-watermark'] {
+  display: none !important;
+}
+
+html[data-ui-vnext-preview='true'] body::after {
+  content: 'UI vNext · 기능형 Preview · 거래변경 차단';
+  position: fixed;
+  right: 14px;
+  bottom: 82px;
+  z-index: 120;
+  padding: 7px 10px;
+  border: 1px solid rgb(105 151 224 / 0.28);
+  border-radius: 999px;
+  background: rgb(12 24 42 / 0.92);
+  color: #b9d0f3;
+  box-shadow: 0 12px 36px rgb(0 0 0 / 0.22);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  backdrop-filter: blur(14px);
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='app-shell'] {
+  background: transparent !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='app-shell'] > div.relative.z-10 {
+  width: 100% !important;
+  max-width: 100% !important;
+  background: rgb(10 18 32 / 0.78) !important;
+}
+
+/* Cleaner global cards without erasing existing feature hierarchy. */
+html[data-ui-vnext-preview='true'] .rounded-3xl.border.border-card-border.bg-card,
+html[data-ui-vnext-preview='true'] .rounded-2xl.border.border-card-border.bg-card {
+  border-color: hsl(var(--card-border) / 0.86) !important;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.12) !important;
+}
+
+html[data-ui-vnext-preview='true'] .font-black {
+  font-weight: 750 !important;
+}
+
+html[data-ui-vnext-preview='true'] [class~='text-[9px]'],
+html[data-ui-vnext-preview='true'] [class~='text-[10px]'] {
+  font-size: 0.72rem !important;
+  line-height: 1rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [class~='text-[11px]'] {
+  font-size: 0.75rem !important;
+  line-height: 1.05rem !important;
+}
+
+/* HOME — wider workspace, less phone-like on desktop. */
+html[data-ui-vnext-preview='true'] [data-testid='home-desktop-workspace'] {
+  gap: 1.1rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='home-desktop-workspace'] > div,
+html[data-ui-vnext-preview='true'] [data-testid='home-desktop-workspace'] > aside {
+  min-width: 0 !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='home-professional-overview'],
+html[data-ui-vnext-preview='true'] [data-testid='home-market-summary'],
+html[data-ui-vnext-preview='true'] [data-testid='home-signal-summary'],
+html[data-ui-vnext-preview='true'] [data-testid='home-watchlist-summary'],
+html[data-ui-vnext-preview='true'] [data-testid='home-portfolio-summary'] {
+  border-radius: 1.1rem !important;
+}
+
+html[data-ui-vnext-preview='true'] main:has([data-testid='home-desktop-workspace']) > div {
+  max-width: 92rem !important;
+}
+
+/* AI CHART — preserve the actual lightweight-charts renderer and give it priority. */
+html[data-ui-vnext-preview='true'] [data-testid='unified-analysis-chart'] {
+  gap: 0.85rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='unified-analysis-chart'] > section {
+  border-radius: 1rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='unified-analysis-chart'] > section.overflow-hidden > div.min-h-\[390px\] {
+  min-height: 500px !important;
+}
+
+html[data-ui-vnext-preview='true'] div:has(> header h1[aria-label='AI 차트 생중계 · AI 차트 2.0']) > main.mx-auto.grid {
+  width: 100% !important;
+  max-width: 96rem !important;
+  gap: 1.1rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='ai-chart-v3-evidence-status'] {
+  opacity: 0.9;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='scanner-price-plan-chart'] {
+  border-color: hsl(var(--primary) / 0.28) !important;
+}
+
+/* RESEARCH — user status first, internal detail second. */
+html[data-ui-vnext-preview='true'] [data-testid='research-center-workspace'] > div:first-child {
+  padding-block: 0.7rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='research-workspace-tabs'] {
+  max-width: 72rem !important;
+  border-radius: 1rem !important;
+  padding: 0.32rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='research-workspace-selection'] {
+  display: none !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='research-center-page'],
+html[data-ui-vnext-preview='true'] [data-testid='research-workspace-panel'] {
+  max-width: 94rem !important;
+  margin-inline: auto !important;
+}
+
+/* ACCOUNT / CONNECTIONS — keep real provider controls but improve density. */
+html[data-ui-vnext-preview='true'] [data-testid='brokerage-account-connections'],
+html[data-ui-vnext-preview='true'] [data-testid='trade-execution-connections'] {
+  border-radius: 1rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='brokerage-account-connections'] [class*='grid-cols'],
+html[data-ui-vnext-preview='true'] [data-testid='trade-execution-connections'] [class*='grid-cols'] {
+  gap: 0.75rem !important;
+}
+
+/* AUTO / PAPER — wider real workspace, no functional replacement. */
+html[data-ui-vnext-preview='true'] [data-testid='auto-trading-responsive-layout'] {
+  max-width: 92rem !important;
+  gap: 0.9rem !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='trading-mode-tabs'],
+html[data-ui-vnext-preview='true'] [data-testid='trading-market-tabs'],
+html[data-ui-vnext-preview='true'] [data-testid='trading-section-tabs'] {
+  gap: 0.45rem !important;
+}
+
+/* SETTINGS — avoid huge empty lower half on desktop. */
+html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
+  max-width: 84rem !important;
+}
+
+/* Bottom navigation stays functional; desktop gets a compact professional dock. */
+@media (min-width: 1200px) {
+  html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] {
+    width: min(58rem, calc(100vw - 3rem)) !important;
+    margin: 0 auto 0.65rem !important;
+    border: 1px solid hsl(var(--card-border) / 0.9) !important;
+    border-radius: 1.15rem !important;
+    padding: 0.35rem 0.7rem !important;
+    background: rgb(14 27 46 / 0.94) !important;
+    box-shadow: 0 18px 44px rgb(0 0 0 / 0.24) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] > div:last-child {
+    max-width: 54rem !important;
+  }
+
+  html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] button {
+    min-height: 46px !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='home-desktop-workspace'] {
+    grid-template-columns: minmax(0, 1.62fr) minmax(21rem, 0.78fr) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] div:has(> header h1[aria-label='AI 차트 생중계 · AI 차트 2.0']) > main.mx-auto.grid {
+    grid-template-columns: minmax(0, 2.25fr) minmax(21rem, 0.82fr) !important;
+  }
+}
+
+/* Tablet: two-column where useful, touch-first controls, no squeezed five-column rows. */
+@media (min-width: 768px) and (max-width: 1199px) {
+  html[data-ui-vnext-preview='true'] body::after {
+    bottom: 76px;
+  }
+
+  html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='home-market-summary'] div[class~='md:grid-cols-5'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='brokerage-account-connections'] [class~='lg:grid-cols-4'],
+  html[data-ui-vnext-preview='true'] [data-testid='trade-execution-connections'] [class~='lg:grid-cols-4'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] div:has(> header h1[aria-label='AI 차트 생중계 · AI 차트 2.0']) > main.mx-auto.grid {
+    display: block !important;
+    max-width: 68rem !important;
+  }
+
+  html[data-ui-vnext-preview='true'] div:has(> header h1[aria-label='AI 차트 생중계 · AI 차트 2.0']) > main.mx-auto.grid > aside {
+    margin-top: 1rem !important;
+    position: static !important;
+  }
+}
+
+/* Mobile: retain real functions, remove squeeze/overflow, use 44px+ controls. */
+@media (max-width: 767px) {
+  html[data-ui-vnext-preview='true'] body::after {
+    right: 8px;
+    bottom: 78px;
+    max-width: calc(100vw - 16px);
+    font-size: 10px;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='app-shell'] > div.relative.z-10 {
+    background: hsl(var(--background)) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] {
+    border-top-color: hsl(var(--card-border)) !important;
+    background: rgb(9 19 33 / 0.97) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] button,
+  html[data-ui-vnext-preview='true'] button[role='tab'],
+  html[data-ui-vnext-preview='true'] [data-testid='trading-mode-tabs'] button,
+  html[data-ui-vnext-preview='true'] [data-testid='trading-market-tabs'] button,
+  html[data-ui-vnext-preview='true'] [data-testid='trading-section-tabs'] button {
+    min-height: 44px !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='home-desktop-workspace'] {
+    display: block !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='home-desktop-workspace'] > aside {
+    margin-top: 0.75rem !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='unified-analysis-chart'] > section.overflow-hidden > div.min-h-\[390px\] {
+    min-height: 390px !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='research-workspace-tabs'] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    overflow: hidden !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='research-workspace-tabs'] button {
+    min-width: 0 !important;
+    padding-inline: 0.35rem !important;
+    font-size: 0.72rem !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='brokerage-account-connections'] [class*='grid-cols'],
+  html[data-ui-vnext-preview='true'] [data-testid='trade-execution-connections'] [class*='grid-cols'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='auto-trading-responsive-layout'] {
+    padding-inline: 0.1rem !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='trading-market-tabs'],
+  html[data-ui-vnext-preview='true'] [data-testid='trading-section-tabs'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+
+/* Preview command bar */
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] {
+  min-height: 64px !important;
+  height: 64px !important;
+  padding-inline: clamp(18px, 2.2vw, 34px) !important;
+  gap: 14px !important;
+  border-bottom-color: hsl(var(--card-border) / 0.92) !important;
+  background:
+    linear-gradient(180deg, rgb(16 31 52 / 0.98), rgb(12 24 41 / 0.96)) !important;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.14) !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] > button:first-child {
+  border: 1px solid hsl(var(--card-border) / 0.8) !important;
+  background: hsl(var(--card) / 0.72) !important;
+  padding-inline: 10px !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] [data-testid='professional-network-status'],
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] [data-testid='professional-query-status'] {
+  background: hsl(var(--card) / 0.68) !important;
+  border-color: hsl(var(--card-border) / 0.9) !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] button[aria-label='계정 열기'] {
+  background: hsl(var(--card) / 0.72) !important;
+  border-color: hsl(var(--card-border) / 0.9) !important;
+}
