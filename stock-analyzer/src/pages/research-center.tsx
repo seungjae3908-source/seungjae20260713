@@ -265,6 +265,26 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         ? 'normal'
         : 'insufficient';
   const staleCount = cards.filter((card) => card.status === 'stale').length;
+  const runtimeLiveness = overview.state.runtimeLiveness;
+  const runtimeStale = runtimeLiveness?.stale === true;
+  const updateStatus: ResearchProductStatus = runtimeLiveness?.status === 'INVALID'
+    ? 'error'
+    : runtimeStale || staleCount > 0
+      ? 'stale'
+      : runtimeLiveness?.status === 'LIVE'
+        ? 'normal'
+        : overview.state.latestCycleAt
+          ? 'normal'
+          : 'unmeasured';
+  const updateDetail = runtimeLiveness?.status === 'LIVE'
+    ? `heartbeat 정상 · missed ${runtimeLiveness.missedCycles ?? 0}`
+    : runtimeLiveness?.status === 'STALE'
+      ? `heartbeat 지연 · missed ${runtimeLiveness.missedCycles ?? 0}`
+      : runtimeLiveness?.status === 'INVALID'
+        ? 'heartbeat 시각 무결성 오류'
+        : staleCount
+          ? `오래된 단계 ${staleCount}개`
+          : 'heartbeat 미수집';
   const factory = overview.factory ?? {
     present: false,
     status: 'MISSING' as const,
@@ -340,7 +360,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
-        <TopStatus label="마지막 업데이트" value={formatDate(overview.state.latestCycleAt)} status={staleCount ? 'stale' : overview.state.latestCycleAt ? 'normal' : 'unmeasured'} detail={staleCount ? `오래된 단계 ${staleCount}개` : '명시적 stale 상태 기준'} />
+        <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
       </section>
 
       {!promotion ? (
@@ -467,6 +487,7 @@ function EvidenceTab({ overview, promotion, cards }: {
     ?? '미수집';
   const datasets = new Set(cards.flatMap((card) => card.records.map((record) => record.datasetId).filter(Boolean)));
   const stale = cards.filter((card) => card.status === 'stale').length;
+  const runtimeLiveness = overview.state.runtimeLiveness;
   const wrongSha = cards.filter((card) => card.evidenceState === 'WRONG_SHA').length;
   const champion = cards.find((card) => card.key === 'champion')!;
   return (
@@ -487,7 +508,17 @@ function EvidenceTab({ overview, promotion, cards }: {
         <EvidenceItem label="Canonical receipt" value={liquidity?.reportDigest ?? '미수집'} state={liquidity?.reportDigest ? 'verified' : 'unmeasured'} />
         <EvidenceItem label="Research SHA binding" value={researchShaBinding} state={researchShaBinding === 'PRESENT' ? 'verified' : researchShaBinding === 'WRONG_SHA' ? 'attention' : 'unmeasured'} />
         <EvidenceItem label="Publication timestamp" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
-        <EvidenceItem label="Freshness" value={stale ? `STALE ${stale}개` : 'Canonical max-age 미수집'} state={stale ? 'stale' : 'unmeasured'} />
+        <EvidenceItem
+          label="Freshness"
+          value={runtimeLiveness?.status === 'LIVE'
+            ? `LIVE · age ${Math.round((runtimeLiveness.ageMs ?? 0) / 60000)}분 · missed ${runtimeLiveness.missedCycles ?? 0}`
+            : runtimeLiveness?.status === 'STALE'
+              ? `STALE · age ${Math.round((runtimeLiveness.ageMs ?? 0) / 60000)}분 · missed ${runtimeLiveness.missedCycles ?? 0}`
+              : runtimeLiveness?.status === 'INVALID'
+                ? 'INVALID heartbeat'
+                : stale ? `STALE ${stale}개` : 'Heartbeat 미수집'}
+          state={runtimeLiveness?.status === 'INVALID' ? 'error' : runtimeLiveness?.stale ? 'stale' : runtimeLiveness?.status === 'LIVE' ? 'verified' : stale ? 'stale' : 'unmeasured'}
+        />
         <EvidenceItem label="SHA binding" value={wrongSha ? `WRONG_SHA ${wrongSha}개` : '명시적 mismatch 없음'} state={wrongSha ? 'attention' : 'normal'} />
         <EvidenceItem label="Replay exclusion" value="미수집" />
         <EvidenceItem label="Backfill exclusion" value="미수집" />
@@ -527,16 +558,43 @@ function PaperKpi({ label, value, state }: { label: string; value: string; state
 }
 
 function CostRow({ row }: { row: CostDisplayRow }) {
-  const status: ResearchProductStatus = row.state === 'measured'
+  const measuredBasis = row.quality === 'OBSERVED'
+    ? 'observed'
+    : row.quality === 'DOCUMENTED'
+      ? 'documented'
+      : row.quality === 'ESTIMATED'
+        ? 'estimated'
+        : null;
+  const status: ResearchProductStatus = row.state === 'measured' && measuredBasis === 'observed'
     ? 'verified'
-    : row.state === 'modeled'
-      ? 'attention'
-    : row.state === 'not-applicable'
-      ? 'inactive'
-      : row.state === 'unmeasured'
-        ? 'unmeasured'
-        : 'insufficient';
-  const label = row.state === 'measured' ? '측정됨' : row.state === 'modeled' ? '모델값' : row.state === 'not-applicable' ? '적용없음' : row.state === 'unmeasured' ? '미측정' : '자료 부족';
+    : row.state === 'measured' && measuredBasis === 'documented'
+      ? 'normal'
+      : row.state === 'measured' && measuredBasis === 'estimated'
+        ? 'attention'
+        : row.state === 'measured'
+          ? 'normal'
+          : row.state === 'modeled'
+            ? 'attention'
+            : row.state === 'not-applicable'
+              ? 'inactive'
+              : row.state === 'unmeasured'
+                ? 'unmeasured'
+                : 'insufficient';
+  const label = row.state === 'measured' && measuredBasis === 'observed'
+    ? '실측'
+    : row.state === 'measured' && measuredBasis === 'documented'
+      ? '문서기반'
+      : row.state === 'measured' && measuredBasis === 'estimated'
+        ? '추정'
+        : row.state === 'measured'
+          ? '측정값'
+          : row.state === 'modeled'
+            ? '모델값'
+            : row.state === 'not-applicable'
+              ? '적용없음'
+              : row.state === 'unmeasured'
+                ? '미측정'
+                : '자료 부족';
   return (
     <div className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-card-border bg-background p-3">
       <div className="min-w-0"><p className="text-xs font-black">{row.label}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{row.quality ?? 'Canonical quality 미수집'}</p></div>
