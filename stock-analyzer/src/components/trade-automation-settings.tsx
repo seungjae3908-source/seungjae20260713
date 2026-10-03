@@ -44,6 +44,20 @@ type Status = {
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  strategyAiReview?: {
+    configured: boolean;
+    provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    model: string | null;
+    fallbackConfigured: boolean;
+    promptVersion: string;
+    producer: 'AI_CHAT_PROVIDER_SEAM';
+    failClosed: true;
+    cacheEnabled: true;
+    maxTtlMs: number;
+    executionAuthority: 'NONE';
+    orderAllowed: false;
+    riskOverrideAllowed: false;
+  };
   pilotCapitalState?: {
     initialOperatingCapitalKrw: number;
     operatingCapitalKrw: number;
@@ -484,6 +498,32 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <NumberField label="일일 주문 수" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
+
+    {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="strategy-ai-review-status">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-extrabold">6전략 AI Review 연결</p>
+          <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+            결정론적 Evidence 통과 후에만 AI를 호출하며, 실패·만료·신원 불일치·형식 오류는 신규 진입을 차단합니다.
+          </p>
+        </div>
+        <span className={cn(
+          'rounded-full border px-2 py-1 text-[10px] font-black',
+          status?.strategyAiReview?.configured
+            ? 'border-positive/30 bg-positive/10 text-positive'
+            : 'border-warning/30 bg-warning/10 text-warning',
+        )}>
+          {status?.strategyAiReview?.configured ? 'AI 연결 준비됨' : 'AI Provider 미설정 · FAIL-CLOSED'}
+        </span>
+      </div>
+      <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+        <dt className="font-bold">Provider</dt><dd>{status?.strategyAiReview?.provider ?? '미설정'}</dd>
+        <dt className="font-bold">Model</dt><dd className="break-all">{status?.strategyAiReview?.model ?? '미설정'}</dd>
+        <dt className="font-bold">Fallback</dt><dd>{status?.strategyAiReview?.fallbackConfigured ? '구성됨' : '없음'}</dd>
+        <dt className="font-bold">TTL</dt><dd>최대 {Math.round((status?.strategyAiReview?.maxTtlMs ?? 0) / 1000)}초</dd>
+        <dt className="font-bold">권한</dt><dd>주문 없음 · Risk override 없음 · 실행권한 NONE</dd>
+      </dl>
+    </div> : null}
 
     {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="strategy-rule-pack-cards">
       <div className="flex items-start justify-between gap-3">
