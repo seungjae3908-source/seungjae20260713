@@ -1547,16 +1547,17 @@ test('read-only credentials normalize into live execution shape without requirin
 });
 
 test('saved read-only Upbit credentials can be reused and verified without secret echo or financial mutation', async () => {
-  process.env.ORDER_EXECUTION_ENABLED = 'true';
-  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
-  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'true';
-  process.env.REAL_ORDER_ENABLED = 'true';
-  process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
-  process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
-  process.env.LIVE_TRADING = 'true';
-  process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
-  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ';
-  process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
+  // This must work before any live execution authority is enabled.
+  process.env.ORDER_EXECUTION_ENABLED = 'false';
+  process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'false';
+  process.env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED = 'false';
+  process.env.REAL_ORDER_ENABLED = 'false';
+  process.env.PRIVATE_TRADING_API_ALLOWED = 'false';
+  process.env.UPBIT_LIVE_ORDER_ENABLED = 'false';
+  process.env.LIVE_TRADING = 'false';
+  process.env.executionAuthority = 'NONE';
+  process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = '';
+  process.env.SPOT_LIVE_MARKET_ALLOWLIST = '';
 
   const accessKey = 'readonly-upbit-access-secret';
   const secretKey = 'readonly-upbit-signing-secret';
