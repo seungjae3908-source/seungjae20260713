@@ -248,6 +248,9 @@ test('unified trade journal separates performance, quality, snapshots, and free-
   await expect(page.getByTestId('unified-journal-detail')).toContainText('성과 점수');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('매매 품질');
   await expect(page.getByTestId('unified-journal-detail')).toContainText('0.2 USDT');
+  const lineage = page.getByTestId('unified-journal-canonical-lineage');
+  await expect(lineage).toContainText('snapshotId');
+  await expect(lineage).toContainText('journalId');
   const researchBinding = page.getByTestId('unified-journal-research-binding');
   await expect(researchBinding).toContainText('Research lineage');
   await expect(researchBinding).toContainText('VERIFIED');
