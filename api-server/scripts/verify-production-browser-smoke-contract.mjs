@@ -73,7 +73,9 @@ for (const marker of [
   assert(spec.includes(marker), `browser evidence marker missing: ${marker}`);
 }
 assert(spec.includes("getByTestId('page-fallback')"), 'browser smoke must prove global loading terminates');
-assert(spec.includes("getByTestId('open-journal-sync')"), 'browser smoke must prove the real paper workspace becomes ready');
+assert(spec.includes("getByTestId('paper-trading-shell')"), 'browser smoke must prove the real paper workspace shell becomes ready');
+assert(spec.includes("getByTestId('trading-mode-paper')"), 'browser smoke must prove Paper mode is active');
+assert(spec.includes("getByTestId('paper-trading-dashboard')"), 'browser smoke must prove the Paper dashboard becomes ready');
 assert(spec.includes("getByTestId('paper-trading-route-skeleton')"), 'browser smoke must prove the paper skeleton terminates');
 assert(spec.includes('installProductionReadOnlyPolicy'), 'browser smoke must install fail-closed request policy');
 assert(spec.includes('isIgnorableProductionRequestFailure'), 'browser smoke must use the narrowly tested request-failure classifier');

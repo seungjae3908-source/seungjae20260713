@@ -54,6 +54,40 @@ type SnapshotProvenance = {
   executionAuthority: 'NONE';
 };
 
+type DiscoveryAutomation = {
+  schemaVersion: 'research-video-discovery-scan-v1';
+  status: 'COMPLETE' | 'BLOCKED' | 'WAITING_CONFIGURATION';
+  observedAt: string;
+  researchSha: string;
+  query: string | null;
+  sourceCount: number | null;
+  snapshotDigest: string | null;
+  providerNetworkCalls: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+  reason: string | null;
+  nextRequiredStep: string;
+};
+
+type AiReviewStatus = {
+  status: 'WAITING_FOR_FREE_AI' | 'PARTIAL_AI_UNAVAILABLE' | 'COMPLETE' | 'NO_NEW_EVIDENCE';
+  observedAt: number;
+  researchSha: string;
+  provider: 'groq' | 'gemini' | null;
+  model: 'openai/gpt-oss-20b' | 'gemini-3.1-flash-lite' | null;
+  reason: string;
+  providerNetworkCalls: number;
+  cacheHits: number;
+  reviewCount: number;
+  proposerReviewCount: number;
+  criticReviewCount: number;
+  missingProfileCount: number;
+  blockedProfileCount: number;
+  deferredProfileCount: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+};
+
 type RuntimeEvidence = {
   available: true;
   dataState: 'MEASURED';
@@ -84,6 +118,8 @@ type RuntimeEvidence = {
     transcriptDownloadEnabled: false;
   };
   snapshotProvenance: SnapshotProvenance;
+  automation: DiscoveryAutomation | null;
+  aiReview: AiReviewStatus | null;
   economicEvidenceCredit: 0;
   profitabilityCredit: 0;
   executionAuthority: 'NONE';
@@ -105,6 +141,45 @@ function canonicalIsoTimestamp(value: unknown): value is string {
 
 function canonicalYoutubeUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
+function parseDiscoveryAutomation(value: unknown): DiscoveryAutomation | null {
+  if (value == null) return null;
+  if (!isRecord(value) || value.schemaVersion !== 'research-video-discovery-scan-v1') return null;
+  if (value.status !== 'COMPLETE' && value.status !== 'BLOCKED' && value.status !== 'WAITING_CONFIGURATION') return null;
+  if (!canonicalIsoTimestamp(value.observedAt)
+    || typeof value.researchSha !== 'string' || !/^[0-9a-f]{40}$/u.test(value.researchSha)
+    || (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER')
+    || typeof value.scheduledInvocationObserved !== 'boolean'
+    || typeof value.providerNetworkCalls !== 'number' || !Number.isSafeInteger(value.providerNetworkCalls)
+    || value.providerNetworkCalls < 0 || value.providerNetworkCalls > 1
+    || (value.query !== null && (typeof value.query !== 'string' || !value.query.trim() || value.query.length > 120))
+    || (value.sourceCount !== null && (typeof value.sourceCount !== 'number' || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 0 || value.sourceCount > 5))
+    || (value.snapshotDigest !== null && (typeof value.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(value.snapshotDigest)))
+    || (value.reason !== null && (typeof value.reason !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.reason)))
+    || typeof value.nextRequiredStep !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.nextRequiredStep)) return null;
+  return value as unknown as DiscoveryAutomation;
+}
+
+function parseAiReview(value: unknown): AiReviewStatus | null {
+  if (value == null) return null;
+  if (!isRecord(value)) return null;
+  const statuses = new Set(['WAITING_FOR_FREE_AI','PARTIAL_AI_UNAVAILABLE','COMPLETE','NO_NEW_EVIDENCE']);
+  if (!statuses.has(String(value.status ?? ''))) return null;
+  if (typeof value.observedAt !== 'number' || !Number.isSafeInteger(value.observedAt) || value.observedAt <= 0) return null;
+  if (typeof value.researchSha !== 'string' || !/^[0-9a-f]{40}$/u.test(value.researchSha)) return null;
+  if (value.provider !== null && value.provider !== 'groq' && value.provider !== 'gemini') return null;
+  if (value.model !== null && value.model !== 'openai/gpt-oss-20b' && value.model !== 'gemini-3.1-flash-lite') return null;
+  if (typeof value.reason !== 'string' || !/^[A-Z0-9_.:-]{1,160}$/u.test(value.reason)) return null;
+  if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
+  if (typeof value.scheduledInvocationObserved !== 'boolean') return null;
+  const keys = ['providerNetworkCalls','cacheHits','reviewCount','proposerReviewCount','criticReviewCount','missingProfileCount','blockedProfileCount','deferredProfileCount'] as const;
+  if (keys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || (value[key] as number) < 0 || (value[key] as number) > 3)) return null;
+  const reviewCount = value.reviewCount as number;
+  const proposerReviewCount = value.proposerReviewCount as number;
+  const criticReviewCount = value.criticReviewCount as number;
+  if (proposerReviewCount + criticReviewCount !== reviewCount) return null;
+  return value as unknown as AiReviewStatus;
 }
 
 function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
@@ -129,6 +204,9 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   if (typeof provenance.sourceHeadSha !== 'string' || !/^[0-9a-f]{40}$/u.test(provenance.sourceHeadSha)) return null;
   if (!canonicalIsoTimestamp(provenance.observedAt)) return null;
   if (provenance.economicEvidenceCredit !== 0 || provenance.profitabilityCredit !== 0 || provenance.executionAuthority !== 'NONE') return null;
+  const automation = parseDiscoveryAutomation(value.automation);
+  const aiReview = parseAiReview(value.aiReview);
+  if ((value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
 
   for (const record of value.records) {
     if (!isRecord(record)) return null;
@@ -142,7 +220,27 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
     if (typeof record.sourceTrustTier !== 'string' || !SOURCE_TRUST_TIERS.has(record.sourceTrustTier)) return null;
     if (record.contentAuthority !== 'UNTRUSTED_EXTERNAL_DATA' || record.economicEvidenceCredit !== 0 || record.profitabilityCredit !== 0 || record.executionAuthority !== 'NONE') return null;
   }
-  return value as unknown as RuntimeEvidence;
+  return { ...(value as unknown as RuntimeEvidence), automation, aiReview };
+}
+
+function formatEpochTime(value: number) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '시간 미확인';
+  return new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Asia/Seoul',
+  }).format(date);
+}
+
+function formatAutomationTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '시간 미확인';
+  return new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Asia/Seoul',
+  }).format(date);
 }
 
 function uniqueSorted(values: string[]) {
@@ -207,6 +305,8 @@ const truthBadges = [
 
 export function ResearchVideoPanel() {
   const [runtimeEvidence, setRuntimeEvidence] = useState<RuntimeEvidence | null>(null);
+  const [automationReadback, setAutomationReadback] = useState<DiscoveryAutomation | null>(null);
+  const [aiReviewReadback, setAiReviewReadback] = useState<AiReviewStatus | null>(null);
   const [readerSettled, setReaderSettled] = useState(false);
 
   useEffect(() => {
@@ -219,12 +319,17 @@ export function ResearchVideoPanel() {
       .then(async (response) => response.ok ? response.json() as Promise<unknown> : null)
       .then((payload) => {
         if (controller.signal.aborted) return;
-        setRuntimeEvidence(parseRuntimeEvidence(payload));
+        const measured = parseRuntimeEvidence(payload);
+        setRuntimeEvidence(measured);
+        setAutomationReadback(isRecord(payload) ? parseDiscoveryAutomation(payload.automation) : null);
+        setAiReviewReadback(isRecord(payload) ? parseAiReview(payload.aiReview) : null);
         setReaderSettled(true);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
         setRuntimeEvidence(null);
+        setAutomationReadback(null);
+        setAiReviewReadback(null);
         setReaderSettled(true);
       });
     return () => controller.abort();
@@ -245,9 +350,30 @@ export function ResearchVideoPanel() {
   const compilerState = runtimeEvidence?.records.some((record) => record.transcriptStatus === 'AVAILABLE')
     ? 'NOT_EVALUATED — source-bound TESTABLE strategy evidence required'
     : 'BLOCKED — authorized transcript required before strategy extraction/compiler';
+  const automation = automationReadback ?? runtimeEvidence?.automation ?? null;
+  const aiReview = aiReviewReadback ?? runtimeEvidence?.aiReview ?? null;
+  const automationState = !automation
+    ? 'UNKNOWN — 운영 자동수집 readback 없음'
+    : automation.status === 'COMPLETE' && automation.scheduledInvocationObserved
+      ? `TIMER-MODE 실행 확인 · ${formatAutomationTime(automation.observedAt)}`
+      : automation.status === 'COMPLETE'
+        ? `MANUAL 실행 확인 · ${formatAutomationTime(automation.observedAt)}`
+        : automation.status === 'BLOCKED'
+          ? `BLOCKED · ${automation.reason ?? '원인 미확인'}`
+          : '설정 대기';
+  const aiReviewState = !aiReview
+    ? 'UNKNOWN — AI review readback 없음'
+    : aiReview.status === 'WAITING_FOR_FREE_AI'
+      ? `설정 대기 · ${aiReview.reason}`
+      : aiReview.status === 'PARTIAL_AI_UNAVAILABLE'
+        ? `PARTIAL · blocked ${aiReview.blockedProfileCount} · ${formatEpochTime(aiReview.observedAt)}`
+        : aiReview.scheduledInvocationObserved
+          ? `TIMER 실행 확인 · ${aiReview.provider ?? 'provider 없음'} · review ${aiReview.reviewCount} · ${formatEpochTime(aiReview.observedAt)}`
+          : `${aiReview.status} · timer 증거 없음 · review ${aiReview.reviewCount} · ${formatEpochTime(aiReview.observedAt)}`;
 
   const statusRows = [
-    ['Video discovery', '수동 / 공식 public API runtime'],
+    ['Video discovery', automationState],
+    ['AI review', aiReviewState],
     ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.provider} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
     ['Runtime evidence', runtimeState],
     ['Transcript access', transcriptAccessState],
@@ -264,8 +390,8 @@ export function ResearchVideoPanel() {
         ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
         ['Browser credential', 'NOT_EXPOSED'],
         ['최근 discovery evidence', runtimeEvidence ? `${runtimeEvidence.status} · ${runtimeEvidence.query}` : runtimeState],
-        ['자동 수집', 'OFF'],
-        ['Schedule', 'INACTIVE'],
+        ['자동 수집', automation?.scheduledInvocationObserved ? '최근 TIMER-MODE 실행 증거 있음' : automation ? '실행은 확인됐지만 timer 증거 없음' : 'UNKNOWN'],
+        ['Schedule', automationState],
         ['Quota', runtimeEvidence?.quotaState ?? 'UNKNOWN — sanitized runtime snapshot unavailable'],
       ],
     },
@@ -311,6 +437,8 @@ export function ResearchVideoPanel() {
         ['Cross-validation', 'NOT_CHECKED'],
         ['Compiler', compilerState],
         ['Backtester candidate', 'NOT_EVALUATED'],
+        ['AI Review Worker', aiReviewState],
+        ['AI Proposer / Critic', aiReview ? `${aiReview.proposerReviewCount} / ${aiReview.criticReviewCount}` : 'UNKNOWN'],
         ['Economic Evidence', '0'],
         ['Profitability Credit', '0'],
       ],
@@ -413,7 +541,7 @@ export function ResearchVideoPanel() {
         </div>
 
         <footer className="rounded-2xl border border-card-border bg-card p-4 text-xs leading-5 text-muted-foreground" data-testid="video-phase2-safety-footer">
-          Official public provider only · Browser credential NOT_EXPOSED · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Economic Evidence Credit 0 · Execution Authority NONE
+          Official public provider only · Browser credential NOT_EXPOSED · Provider runtime has no scheduler authority · Research Production timer evidence proven from systemd trigger correlation · No downloader bypass · No new Backtester · Existing canonical compiler only · Economic Evidence Credit 0 · Execution Authority NONE
         </footer>
       </div>
     </section>

@@ -1,12 +1,44 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { TradingPlanInput } from './trade-automation.types';
 
+export type BitgetReadonlyEndpointFamily = 'UTA_V3' | 'CLASSIC';
+export type BitgetReadonlyProbe = 'ACCOUNT_SETTINGS' | 'ACCOUNT_INFO' | 'ASSETS' | 'POSITIONS' | 'OPEN_ORDERS';
+export type BitgetReadonlyCredentialPresence = {
+  key: boolean;
+  secret: boolean;
+  passphrase: boolean;
+};
+
+export type BitgetReadonlyRequestDiagnostic = {
+  provider: 'bitget';
+  endpointFamily: BitgetReadonlyEndpointFamily;
+  probe: BitgetReadonlyProbe;
+  credentialPresence: BitgetReadonlyCredentialPresence;
+  fallbackAttempted?: boolean;
+};
+
+export type BitgetReadonlyDiagnostic = {
+  provider: 'bitget';
+  requestMethod: 'GET';
+  requestPath: string;
+  endpointFamily: BitgetReadonlyEndpointFamily;
+  probe: BitgetReadonlyProbe;
+  httpStatus: number | null;
+  applicationCode: string | null;
+  sanitizedClassification: string;
+  fallbackAttempted: boolean;
+  timestampRejected: boolean;
+  productionHost: boolean;
+  credentialPresence: BitgetReadonlyCredentialPresence;
+};
+
 export type PreparedExchangeRequest = {
   method: 'GET' | 'POST' | 'DELETE';
   path: string;
   query: string;
   headers: Record<string, string>;
   body: string | null;
+  bitgetReadonlyDiagnostic?: BitgetReadonlyRequestDiagnostic;
 };
 
 export type BitgetCredentials = { apiKey: string; secretKey: string; passphrase: string };
@@ -211,6 +243,23 @@ export function buildBitgetSignature(
     .digest('base64');
 }
 
+function bitgetReadonlyDiagnostic(
+  credentials: BitgetCredentials,
+  endpointFamily: BitgetReadonlyEndpointFamily,
+  probe: BitgetReadonlyProbe,
+): BitgetReadonlyRequestDiagnostic {
+  return {
+    provider: 'bitget',
+    endpointFamily,
+    probe,
+    credentialPresence: {
+      key: credentials.apiKey.trim().length > 0,
+      secret: credentials.secretKey.trim().length > 0,
+      passphrase: credentials.passphrase.trim().length > 0,
+    },
+  };
+}
+
 function bitgetRequest(
   credentials: BitgetCredentials,
   method: 'GET' | 'POST',
@@ -218,6 +267,7 @@ function bitgetRequest(
   data: Record<string, unknown> | null,
   query = '',
   timestamp = Date.now().toString(),
+  readonlyDiagnostic?: BitgetReadonlyRequestDiagnostic,
 ): PreparedExchangeRequest {
   const body = data ? jsonBody(data) : '';
   return {
@@ -225,6 +275,7 @@ function bitgetRequest(
     path,
     query,
     body: body || null,
+    ...(readonlyDiagnostic ? { bitgetReadonlyDiagnostic: readonlyDiagnostic } : {}),
     headers: {
       'ACCESS-KEY': credentials.apiKey,
       'ACCESS-SIGN': buildBitgetSignature(credentials.secretKey, timestamp, method, path, query, body),
@@ -357,11 +408,17 @@ export function prepareBitgetOrderQuery(
 }
 
 export function prepareBitgetAccount(credentials: BitgetCredentials, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v2/mix/account/accounts', null, 'productType=USDT-FUTURES', timestamp);
+  return bitgetRequest(
+    credentials, 'GET', '/api/v2/mix/account/accounts', null, 'productType=USDT-FUTURES', timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'CLASSIC', 'ASSETS'),
+  );
 }
 
 export function prepareBitgetPositions(credentials: BitgetCredentials, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v2/mix/position/all-position', null, 'productType=USDT-FUTURES&marginCoin=USDT', timestamp);
+  return bitgetRequest(
+    credentials, 'GET', '/api/v2/mix/position/all-position', null, 'productType=USDT-FUTURES&marginCoin=USDT', timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'CLASSIC', 'POSITIONS'),
+  );
 }
 
 export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbol?: string, timestamp?: string) {
@@ -370,7 +427,10 @@ export function prepareBitgetPendingOrders(credentials: BitgetCredentials, symbo
     'productType=USDT-FUTURES',
     ...(normalizedSymbol ? [`symbol=${encodeURIComponent(normalizedSymbol)}`] : []),
   ].join('&');
-  return bitgetRequest(credentials, 'GET', '/api/v2/mix/order/orders-pending', null, query, timestamp);
+  return bitgetRequest(
+    credentials, 'GET', '/api/v2/mix/order/orders-pending', null, query, timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'CLASSIC', 'OPEN_ORDERS'),
+  );
 }
 
 export function prepareBitgetHistoryPositions(
@@ -391,15 +451,24 @@ export function prepareBitgetHistoryPositions(
 }
 
 export function prepareBitgetUtaAccountSettings(credentials: BitgetCredentials, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v3/account/settings', null, '', timestamp);
+  return bitgetRequest(
+    credentials, 'GET', '/api/v3/account/settings', null, '', timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'UTA_V3', 'ACCOUNT_SETTINGS'),
+  );
 }
 
 export function prepareBitgetUtaAccountInfo(credentials: BitgetCredentials, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v3/account/info', null, '', timestamp);
+  return bitgetRequest(
+    credentials, 'GET', '/api/v3/account/info', null, '', timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'UTA_V3', 'ACCOUNT_INFO'),
+  );
 }
 
 export function prepareBitgetUtaAssets(credentials: BitgetCredentials, timestamp?: string) {
-  return bitgetRequest(credentials, 'GET', '/api/v3/account/assets', null, '', timestamp);
+  return bitgetRequest(
+    credentials, 'GET', '/api/v3/account/assets', null, '', timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'UTA_V3', 'ASSETS'),
+  );
 }
 
 export function prepareBitgetUtaPositions(credentials: BitgetCredentials, timestamp?: string) {
@@ -410,6 +479,7 @@ export function prepareBitgetUtaPositions(credentials: BitgetCredentials, timest
     null,
     'category=USDT-FUTURES',
     timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'UTA_V3', 'POSITIONS'),
   );
 }
 
@@ -421,6 +491,7 @@ export function prepareBitgetUtaPendingOrders(credentials: BitgetCredentials, ti
     null,
     'category=USDT-FUTURES',
     timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'UTA_V3', 'OPEN_ORDERS'),
   );
 }
 

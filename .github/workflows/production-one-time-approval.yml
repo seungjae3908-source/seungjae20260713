@@ -12,10 +12,13 @@ on:
       - .github/workflows/production-one-time-approval.yml
       - .github/workflows/production-deploy.yml
       - .github/workflows/futures-public-network-smoke.yml
+      - .github/workflows/post-merge-release-provenance.yml
       - .github/workflows/staging-readiness.yml
       - .github/workflows/staging-postgres-auth-gate.yml
       - api-server/scripts/production-approval-target.cjs
       - api-server/scripts/production-ci-provenance.cjs
+      - api-server/scripts/release-candidate-provenance.cjs
+      - api-server/scripts/release-candidate-provenance.test.cjs
       - api-server/scripts/verify-production-ci-provenance-contract.mjs
       - api-server/scripts/verify-production-data-plane-probe-contract.mjs
       - api-server/scripts/verify-production-one-time-approval.mjs
@@ -44,7 +47,7 @@ jobs:
           node-version: "20"
       - name: Verify one-time production approval contract
         run: node api-server/scripts/verify-production-one-time-approval.mjs
-      - name: Verify Production CI provenance contract
+      - name: Verify release candidate provenance contract
         run: node api-server/scripts/verify-production-ci-provenance-contract.mjs
       - name: Verify Production data-plane probe contract
         run: node api-server/scripts/verify-production-data-plane-probe-contract.mjs
@@ -155,17 +158,17 @@ jobs:
               ].join('\n'),
             });
 
-      - name: Require exact Application CI 6/6 provenance
-        id: ci-provenance
+      - name: Require verified post-merge release provenance
+        id: release-provenance
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         with:
           script: |
             const {
-              evaluateProductionCiProvenance,
-              inspectRequiredStatusEvidence,
-            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/production-ci-provenance.cjs`);
+              evaluatePostMergeStatusProvenance,
+              inspectPostMergeStatusEvidence,
+            } = require(`${process.env.GITHUB_WORKSPACE}/api-server/scripts/release-candidate-provenance.cjs`);
             const targetSha = process.env.TARGET_SHA;
             const mainResponse = await github.rest.repos.getBranch({
               owner: context.repo.owner,
@@ -174,7 +177,7 @@ jobs:
             });
             const currentMainSha = mainResponse.data.commit.sha;
             if (currentMainSha !== targetSha) {
-              core.setFailed(`Approval target became stale before CI verification: target=${targetSha} current-main=${currentMainSha}.`);
+              core.setFailed(`Approval target became stale before release provenance verification: target=${targetSha} current-main=${currentMainSha}.`);
               return;
             }
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
@@ -183,28 +186,28 @@ jobs:
               ref: targetSha,
               per_page: 100,
             });
-            const evidence = inspectRequiredStatusEvidence(statuses);
+            const evidence = inspectPostMergeStatusEvidence(statuses);
             if (!evidence.ok) {
-              core.setFailed(`Required CI status provenance rejected: ${evidence.reason}.`);
+              core.setFailed(`Post-merge release provenance unavailable: ${evidence.reason}.`);
               return;
             }
-            const runResponse = await github.rest.actions.getWorkflowRun({
+            const run = (await github.rest.actions.getWorkflowRun({
               owner: context.repo.owner,
               repo: context.repo.repo,
               run_id: evidence.runId,
-            });
-            const verified = evaluateProductionCiProvenance({
+            })).data;
+            const verified = evaluatePostMergeStatusProvenance({
               targetSha,
               currentMainSha,
               statuses,
-              run: runResponse.data,
+              run,
             });
             if (!verified.ok) {
-              core.setFailed(`Application CI provenance rejected: ${verified.reason}.`);
+              core.setFailed(`Post-merge release provenance rejected: ${verified.reason}.`);
               return;
             }
             core.setOutput('run_id', String(verified.runId));
-            core.info(`Required CI 6/6 verified by exact Application CI Run ID ${verified.runId} (${verified.event}).`);
+            core.info(`Pre-merge Full CI + exact merged tree verified by Post-Merge Provenance Run ID ${verified.runId}.`);
 
       - name: Require successful exact-SHA PostgreSQL Auth Gate
         id: postgres-gate
@@ -419,7 +422,7 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
           CURRENT_MAIN_SHA: ${{ steps.target.outputs.main_sha }}
-          CI_RUN_ID: ${{ steps.ci-provenance.outputs.run_id }}
+          PROVENANCE_RUN_ID: ${{ steps.release-provenance.outputs.run_id }}
           POSTGRES_GATE_RUN_ID: ${{ steps.postgres-gate.outputs.run_id }}
           POSTGRES_GATE_ARTIFACT_ID: ${{ steps.postgres-gate.outputs.artifact_id }}
           STAGING_RUN_ID: ${{ steps.verdict-artifact.outputs.run_id }}
@@ -437,7 +440,7 @@ jobs:
             actor: process.env.APPROVAL_ACTOR,
             targetSha: process.env.TARGET_SHA,
             currentMainSha: process.env.CURRENT_MAIN_SHA,
-            applicationCiRunId: process.env.CI_RUN_ID,
+            postMergeProvenanceRunId: process.env.PROVENANCE_RUN_ID,
             postgresGateRunId: process.env.POSTGRES_GATE_RUN_ID,
             postgresGateArtifactId: process.env.POSTGRES_GATE_ARTIFACT_ID,
             stagingRunId: process.env.STAGING_RUN_ID,
@@ -462,7 +465,7 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
           CURRENT_MAIN_SHA: ${{ steps.target.outputs.main_sha }}
-          CI_RUN_ID: ${{ steps.ci-provenance.outputs.run_id }}
+          PROVENANCE_RUN_ID: ${{ steps.release-provenance.outputs.run_id }}
           POSTGRES_GATE_RUN_ID: ${{ steps.postgres-gate.outputs.run_id }}
           STAGING_RUN_ID: ${{ steps.verdict-artifact.outputs.run_id }}
           STAGING_ARTIFACT_ID: ${{ steps.verdict-artifact.outputs.artifact_id }}
@@ -482,7 +485,7 @@ jobs:
                 `- Actor: \`${context.actor}\``,
                 `- Target SHA: \`${process.env.TARGET_SHA}\``,
                 `- Current main SHA: \`${process.env.CURRENT_MAIN_SHA}\``,
-                `- Application CI Run ID: \`${process.env.CI_RUN_ID}\``,
+                `- Post-Merge Provenance Run ID: \`${process.env.PROVENANCE_RUN_ID}\``,
                 `- PostgreSQL Auth Gate Run ID: \`${process.env.POSTGRES_GATE_RUN_ID}\``,
                 `- Staging Readiness Run ID: \`${process.env.STAGING_RUN_ID}\``,
                 `- Staging artifact ID: \`${process.env.STAGING_ARTIFACT_ID}\``,
