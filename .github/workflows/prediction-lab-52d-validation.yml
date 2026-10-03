@@ -80,6 +80,19 @@ jobs:
           echo "checkout_mode=DETACHED"
           echo "value=${actual_sha,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify scheduled research-hold classification contract
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file='.github/workflows/prediction-lab-52d-validation.yml'
+          grep -Fq 'RESEARCH_HOLD_TEMPORAL_EVIDENCE' "$file"
+          grep -Fq "steps.research_hold.outcome == 'failure'" "$file"
+          if grep -Fq "github.event_name != 'pull_request' && steps.market_suite.outputs.research_ready != 'true'))" "$file"; then
+            echo 'Expected temporal evidence research hold must not be classified as a technical workflow failure.' >&2
+            exit 1
+          fi
+
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
@@ -393,6 +406,41 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      - name: Record explicit research hold when required temporal evidence is incomplete
+        id: research_hold
+        if: always() && github.event_name != 'pull_request' && steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.market_suite.outputs.research_ready != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          result='market-prediction-lab/docs/market-suite-result.json'
+          test -s "$result"
+          node - "$result" <<'NODE'
+          const fs = require('node:fs');
+          const file = process.argv[2];
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (value?.status !== 'data_blocked'
+            || value?.stage !== 'required_inference_evidence_preflight'
+            || !Array.isArray(value?.blockers)
+            || value.blockers.length === 0
+            || value?.inferenceEvaluation?.syntheticImputationUsed !== false
+            || value?.inferenceEvaluation?.zeroImputationUsed !== false
+            || value?.safety?.usesAccountOrOrderApi !== false
+            || value?.safety?.modelDeployment !== false) {
+            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_CLASSIFICATION_INVALID');
+          }
+          if (value.blockers.some((item) => !String(item).startsWith('MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:'))) {
+            throw new Error('PREDICTION_LAB_RESEARCH_HOLD_UNEXPECTED_BLOCKER');
+          }
+          console.log('RESEARCH_HOLD_TEMPORAL_EVIDENCE=' + value.blockers.join(','));
+          NODE
+          {
+            echo '## Prediction Lab scheduled research hold'
+            echo '- classification: RESEARCH_HOLD_TEMPORAL_EVIDENCE'
+            echo '- technical failure: false'
+            echo '- missing temporal evidence remains fail-closed; no zero/synthetic imputation'
+            echo '- durable model publication remains blocked because research_ready != true'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Assert immutable checkout HEAD
         shell: bash
         env:
@@ -400,7 +448,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome == 'failure' || steps.market_suite.outcome == 'failure' || steps.futures_generalization_suite.outcome == 'failure' || steps.futures_pnl_suite.outcome == 'failure' || steps.futures_regime_suite.outcome == 'failure' || steps.upbit_spot_suite.outcome == 'failure' || steps.upbit_spot_pnl_suite.outcome == 'failure' || steps.upbit_spot_alternative_suite.outcome == 'failure' || steps.stock_suite.outcome == 'failure' || steps.stock_pnl_suite.outcome == 'failure' || steps.stock_generalization_suite.outcome == 'failure' || steps.us_pullback_suite.outcome == 'failure' || steps.stock_regime_suite.outcome == 'failure' || steps.derivatives_suite.outcome == 'failure' || steps.structure_suite.outcome == 'failure' || (github.event_name != 'pull_request' && steps.market_suite.outputs.research_ready != 'true'))
+        if: always() && (steps.validate.outcome == 'failure' || steps.market_suite.outcome == 'failure' || steps.futures_generalization_suite.outcome == 'failure' || steps.futures_pnl_suite.outcome == 'failure' || steps.futures_regime_suite.outcome == 'failure' || steps.upbit_spot_suite.outcome == 'failure' || steps.upbit_spot_pnl_suite.outcome == 'failure' || steps.upbit_spot_alternative_suite.outcome == 'failure' || steps.stock_suite.outcome == 'failure' || steps.stock_pnl_suite.outcome == 'failure' || steps.stock_generalization_suite.outcome == 'failure' || steps.us_pullback_suite.outcome == 'failure' || steps.stock_regime_suite.outcome == 'failure' || steps.derivatives_suite.outcome == 'failure' || steps.structure_suite.outcome == 'failure' || steps.research_hold.outcome == 'failure')
         run: exit 1
 
   durable-policy-preflight:
