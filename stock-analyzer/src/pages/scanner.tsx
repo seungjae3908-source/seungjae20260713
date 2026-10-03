@@ -522,7 +522,6 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [thresholdOpen, setThresholdOpen] = useState<string | null>(null);
   const [conditionResultsOpen, setConditionResultsOpen] = useState(false);
-  const [chartTradeSignal, setChartTradeSignal] = useState<ChartBroadcastSignal | null>(null);
   const [savedSearches, setSavedSearches] = useState<SavedSearch[]>(loadSavedSearches);
   const [savedSearchMessage, setSavedSearchMessage] = useState("");
 
