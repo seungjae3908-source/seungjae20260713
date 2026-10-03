@@ -139,6 +139,19 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
       <Metric label="보유 시간" value={trade.holdingTimeMs == null ? '진행 중' : `${number.format(trade.holdingTimeMs / 60_000)}분`} />
     </div>
 
+    {trade.canonicalLineage ? (
+      <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-canonical-lineage">
+        <h4 className="text-sm font-bold">Canonical 연결 추적</h4>
+        <p className="mt-1 text-[10px] text-muted-foreground">신호 → 계획 → 주문 → 체결 ID를 같은 거래 사이클에서 추적합니다.</p>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Metric label="signalId" value={trade.canonicalLineage.signalIds.join(' · ') || 'N/A'} />
+          <Metric label="planId" value={trade.canonicalLineage.planIds.join(' · ') || 'N/A'} />
+          <Metric label="orderId" value={trade.canonicalLineage.orderIds.join(' · ') || 'N/A'} />
+          <Metric label="fillId" value={trade.canonicalLineage.fillIds.join(' · ') || 'N/A'} />
+        </div>
+      </section>
+    ) : null}
+
     <div className="grid min-w-0 gap-3 lg:grid-cols-3">
       <section className="min-w-0 rounded-xl border border-border p-3">
         <h4 className="text-sm font-bold text-emerald-700">잘한 점</h4>
@@ -153,6 +166,24 @@ function TradeDetail({ trade }: { trade: UnifiedTradeCycle }) {
         {trade.review.improvements.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">{trade.review.improvements.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-muted-foreground">현재 규칙을 유지하세요.</p>}
       </section>
     </div>
+
+    {trade.canonicalLineage && (
+      trade.canonicalLineage.signalIds.length
+      || trade.canonicalLineage.planIds.length
+      || trade.canonicalLineage.orderIds.length
+      || trade.canonicalLineage.fillIds.length
+    ) ? (
+      <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-canonical-lineage">
+        <h4 className="text-sm font-bold">Canonical 거래 연결</h4>
+        <p className="mt-1 text-[10px] text-muted-foreground">신호 → 계획 → 주문 → 체결 → 매매일지 연결 ID입니다.</p>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Metric label="signalId" value={trade.canonicalLineage.signalIds.join(' · ') || 'N/A'} />
+          <Metric label="planId" value={trade.canonicalLineage.planIds.join(' · ') || 'N/A'} />
+          <Metric label="orderId" value={trade.canonicalLineage.orderIds.join(' · ') || 'N/A'} />
+          <Metric label="fillId" value={trade.canonicalLineage.fillIds.join(' · ') || 'N/A'} />
+        </div>
+      </section>
+    ) : null}
 
     {trade.source === 'APP_PAPER' ? (
       <section className="min-w-0 rounded-xl border border-border p-3" data-testid="unified-journal-research-binding">
