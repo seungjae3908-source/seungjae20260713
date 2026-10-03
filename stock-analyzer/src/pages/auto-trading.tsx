@@ -33,10 +33,10 @@ const MARKETS: Array<{
   selectionMarket: 'KR' | 'US' | 'UPBIT' | 'BITGET';
   provider: string;
 }> = [
-  { value: 'domestic_stock', label: '국내주식', journalMarket: 'KR_STOCK', selectionMarket: 'KR', provider: 'Toss / Kiwoom' },
-  { value: 'us_stock', label: '미국주식', journalMarket: 'US_STOCK', selectionMarket: 'US', provider: 'Toss / Kiwoom' },
-  { value: 'crypto_spot', label: '코인현물', journalMarket: 'CRYPTO_SPOT', selectionMarket: 'UPBIT', provider: 'Upbit' },
-  { value: 'crypto_futures', label: '코인선물', journalMarket: 'CRYPTO_FUTURES', selectionMarket: 'BITGET', provider: 'Bitget' },
+  { value: 'domestic_stock', label: '국내주식', journalMarket: 'KR_STOCK', selectionMarket: 'KR', provider: '토스 / 키움' },
+  { value: 'us_stock', label: '미국주식', journalMarket: 'US_STOCK', selectionMarket: 'US', provider: '토스 / 키움' },
+  { value: 'crypto_spot', label: '코인현물', journalMarket: 'CRYPTO_SPOT', selectionMarket: 'UPBIT', provider: '업비트' },
+  { value: 'crypto_futures', label: '코인선물', journalMarket: 'CRYPTO_FUTURES', selectionMarket: 'BITGET', provider: '비트겟' },
 ];
 
 const SECTIONS: Array<{ value: TradingSection; label: string }> = [
@@ -232,9 +232,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="시장 제어" value="4시장" />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
-        <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-          4시장 개별 켜짐/OFF로 시장별 자동 실행을 제어하며, 주문마다 승인을 요청하지 않습니다. 실제 주문 권한은 서버 Gate를 통과해야 합니다.
-        </p>
+        
       </section>
 
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-runtime-summary">
@@ -290,9 +288,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/ai-chart')}>AI 차트·포지션</button>
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/account')}>실계좌 연결</button>
       </div>
-      <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">
-        주문·취소·정정은 기존 canonical OMS와 서버 Gate를 그대로 사용합니다. 이 화면은 별도 실행 권한을 만들지 않습니다.
-      </p>
+      
     </section>
   ) : (
     <div className="space-y-3" data-testid="paper-trading-orders">
@@ -305,7 +301,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <h2 className="text-sm font-bold">{marketMeta.label} 모의 포지션 준비</h2>
           </div>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            AI 검색기에서 {marketMeta.label} 종목을 선택하면 동일 신호 identity와 위험·비용 evidence를 서버에서 다시 검증해 모의 포지션을 준비합니다.
+            AI 검색기에서 {marketMeta.label} 종목을 선택하면 신호와 위험·비용을 다시 검증해 모의 포지션을 준비합니다.
           </p>
           <button type="button" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground" onClick={() => navigate('/scanner')}>
             {marketMeta.label} 신호 선택하기
