@@ -143,13 +143,65 @@ export function TradeExecutionConnections({
     setAcknowledged(false);
   }
 
+  async function reuseReadonlyConnection(provider: Provider) {
+    setBusy(provider);
+    setMessage('');
+    try {
+      const response = await authorizedFetch(`/api/trade-automation/connections/${provider}/reuse-readonly`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true }),
+      });
+      const payload = await response.json() as {
+        error?: string;
+        configured?: boolean;
+        verified?: boolean;
+        reusedReadonlyCredential?: boolean;
+        credentialsReturned?: boolean;
+        liveExecutionActivated?: boolean;
+        automaticLiveExecutionActivated?: boolean;
+        orderRequests?: number;
+        cancelRequests?: number;
+        amendRequests?: number;
+        transferRequests?: number;
+        withdrawalRequests?: number;
+        realOrderSubmitted?: boolean;
+      };
+      if (!response.ok || payload.configured !== true || payload.verified !== true
+        || payload.reusedReadonlyCredential !== true) {
+        throw new Error(payload.error ?? '저장된 조회키로 실주문 연결 검증에 실패했습니다.');
+      }
+      if (payload.credentialsReturned !== false
+        || payload.liveExecutionActivated !== false
+        || payload.automaticLiveExecutionActivated !== false
+        || payload.orderRequests !== 0
+        || payload.cancelRequests !== 0
+        || payload.amendRequests !== 0
+        || payload.transferRequests !== 0
+        || payload.withdrawalRequests !== 0
+        || payload.realOrderSubmitted !== false) {
+        throw new Error('LIVE_READONLY_REUSE_SAFETY_CONTRACT_FAILED');
+      }
+      await load();
+      setMessage('저장된 실계좌 조회키를 재사용해 provider 검증까지 완료했습니다. 키 원문은 다시 입력하거나 표시하지 않습니다.');
+    } catch (error) {
+      await load();
+      setMessage(error instanceof Error ? error.message : '저장된 조회키로 실주문 연결 검증에 실패했습니다.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function saveConnection(provider: Provider) {
     if (!acknowledged) {
       setMessage('조회 + 주문 권한만 사용하고 출금/이체 권한은 주지 않는다는 확인이 필요합니다.');
       return;
     }
     const credentials = providerCredentials(provider, secrets);
-    if (Object.values(credentials).some((value) => !String(value).trim())) {
+    const requiredValues = provider === 'toss'
+      ? [credentials.clientId, credentials.clientSecret]
+      : Object.values(credentials);
+    if (requiredValues.some((value) => !String(value).trim())) {
       setMessage('필수 거래키 정보를 모두 입력해 주세요.');
       return;
     }
@@ -324,35 +376,78 @@ export function TradeExecutionConnections({
             준비 blocker: {readiness.blockers.join(' · ')}
           </p>}
           <div className="mt-3 grid grid-cols-3 gap-2">
-            {connected && <button
-              type="button"
-              disabled={busy === provider}
-              onClick={() => void verifyConnection(provider)}
-              className="min-h-10 rounded-xl border border-positive/30 px-2 text-[11px] font-extrabold text-positive disabled:opacity-50"
-            >
-              {busy === provider ? '검증 중' : '실계좌 검증'}
-            </button>}
-            <button
-              type="button"
-              onClick={() => openSetup(provider)}
-              className={`min-h-10 rounded-xl bg-primary px-2 text-[11px] font-extrabold text-primary-foreground ${connected ? '' : 'col-span-3'}`}
-            >
-              {connected ? '거래키 교체' : '거래키 연결'}
-            </button>
-            {connected && disconnectConfirm !== provider ? <button
-              type="button"
-              onClick={() => setDisconnectConfirm(provider)}
-              className="min-h-10 rounded-xl border border-destructive/30 px-2 text-[11px] font-extrabold text-destructive"
-            >
-              연결 해제
-            </button> : connected ? <button
-              type="button"
-              disabled={busy === provider}
-              onClick={() => void disconnect(provider)}
-              className="min-h-10 rounded-xl bg-destructive px-2 text-[11px] font-extrabold text-white disabled:opacity-50"
-            >
-              {busy === provider ? '해제 중' : '해제 확인'}
-            </button> : null}
+            {!connected ? <>
+              <button
+                type="button"
+                disabled={busy === provider}
+                onClick={() => void reuseReadonlyConnection(provider)}
+                className="col-span-2 min-h-10 rounded-xl bg-primary px-2 text-[11px] font-extrabold text-primary-foreground disabled:opacity-50"
+              >
+                {busy === provider ? '연결·검증 중' : '저장된 조회키로 연결·검증'}
+              </button>
+              <button
+                type="button"
+                disabled={busy === provider}
+                onClick={() => openSetup(provider)}
+                className="min-h-10 rounded-xl border border-card-border px-2 text-[11px] font-extrabold disabled:opacity-50"
+              >
+                다른 키 입력
+              </button>
+            </> : !providerVerified ? <>
+              <button
+                type="button"
+                disabled={busy === provider}
+                onClick={() => void reuseReadonlyConnection(provider)}
+                className="min-h-10 rounded-xl bg-primary px-2 text-[11px] font-extrabold text-primary-foreground disabled:opacity-50"
+              >
+                {busy === provider ? '재연결 중' : '조회키로 재연결'}
+              </button>
+              <button
+                type="button"
+                disabled={busy === provider}
+                onClick={() => void verifyConnection(provider)}
+                className="min-h-10 rounded-xl border border-positive/30 px-2 text-[11px] font-extrabold text-positive disabled:opacity-50"
+              >
+                {busy === provider ? '검증 중' : 'provider 검증'}
+              </button>
+              <button
+                type="button"
+                onClick={() => openSetup(provider)}
+                className="min-h-10 rounded-xl border border-card-border px-2 text-[11px] font-extrabold"
+              >
+                다른 키 입력
+              </button>
+            </> : <>
+              <button
+                type="button"
+                disabled={busy === provider}
+                onClick={() => void verifyConnection(provider)}
+                className="min-h-10 rounded-xl border border-positive/30 px-2 text-[11px] font-extrabold text-positive disabled:opacity-50"
+              >
+                {busy === provider ? '검증 중' : 'provider 재검증'}
+              </button>
+              <button
+                type="button"
+                onClick={() => openSetup(provider)}
+                className="min-h-10 rounded-xl bg-primary px-2 text-[11px] font-extrabold text-primary-foreground"
+              >
+                다른 키로 교체
+              </button>
+              {disconnectConfirm !== provider ? <button
+                type="button"
+                onClick={() => setDisconnectConfirm(provider)}
+                className="min-h-10 rounded-xl border border-destructive/30 px-2 text-[11px] font-extrabold text-destructive"
+              >
+                연결 해제
+              </button> : <button
+                type="button"
+                disabled={busy === provider}
+                onClick={() => void disconnect(provider)}
+                className="min-h-10 rounded-xl bg-destructive px-2 text-[11px] font-extrabold text-white disabled:opacity-50"
+              >
+                {busy === provider ? '해제 중' : '해제 확인'}
+              </button>}
+            </>}
           </div>
           {disconnectConfirm === provider && <button
             type="button"
@@ -394,7 +489,7 @@ export function TradeExecutionConnections({
             className="mt-1 h-4 w-4 shrink-0"
           />
           <span>
-            이 키에는 <strong>조회 + 주문 권한만</strong> 부여하고 출금/이체 권한은 부여하지 않습니다. 저장만으로 실주문 서버게이트가 켜지지 않는 것을 확인합니다.
+            이 키에는 <strong>조회 + 주문 권한만</strong> 부여하고 출금/이체 권한은 부여하지 않습니다. 기존 실계좌 조회키가 있으면 위 카드의 <strong>저장된 조회키로 연결·검증</strong>을 우선 사용하세요.
           </span>
         </label>
         <button
