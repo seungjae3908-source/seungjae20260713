@@ -401,6 +401,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HOLD_STATE_PATH: ${{ runner.temp }}/research-hold-state.json
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
         run: |
           set -Eeuo pipefail
           result='market-prediction-lab/docs/market-suite-result.json'
@@ -478,7 +479,7 @@ jobs:
             holdAgeHours: Number(holdAgeHours.toFixed(2)),
             consecutiveHoldCycles,
             starvationState,
-            researchSha: process.env.GITHUB_SHA,
+            researchSha: process.env.RESEARCH_SHA,
             technicalFailure: false,
             syntheticImputationUsed: false,
             zeroImputationUsed: false,
