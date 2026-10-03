@@ -32,6 +32,7 @@ import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
   ExchangeConnection,
+  TradingAssetClass,
   TradingExchange,
   TradingOrder,
   TradingPlan,
@@ -76,6 +77,16 @@ export function setTradeExitPreviewReadersFactoryForTests(factory: (() => ExitPr
 
 function planVersion(plan: TradingPlan) {
   return Number.isInteger(plan.version) && Number(plan.version) >= 0 ? Number(plan.version) : 0;
+}
+
+function tradingAssetClassForPlan(plan: Pick<TradingPlan, 'exchange' | 'market'>): TradingAssetClass {
+  if (plan.exchange === 'upbit') return 'crypto_spot';
+  if (plan.exchange === 'bitget') return 'crypto_futures';
+  const market = String(plan.market ?? '').trim().toUpperCase();
+  if (market.includes('US') || market.includes('NASDAQ') || market.includes('NYSE') || market.includes('AMEX')) {
+    return 'us_stock';
+  }
+  return 'domestic_stock';
 }
 
 function context(req: AuthenticatedRequest) {
@@ -678,10 +689,23 @@ function approvalQueueItem(plan: TradingPlan, order: TradingOrder | null, now = 
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const [policy, connections, orders, persistentGlobalStop] = await Promise.all([
+    const [policy, connections, orders, plans, persistentGlobalStop] = await Promise.all([
       repository.getPolicy(userId), repository.getConnections(userId), repository.listOrders(userId),
-      repository.getGlobalEmergencyStop(),
+      repository.listPlans(userId), repository.getGlobalEmergencyStop(),
     ]);
+    const plansById = new Map(plans.map((plan) => [plan.id, plan] as const));
+    const lastOrderByMarket: Record<TradingAssetClass, TradingOrder | null> = {
+      domestic_stock: null,
+      us_stock: null,
+      crypto_spot: null,
+      crypto_futures: null,
+    };
+    for (const order of orders) {
+      const plan = plansById.get(order.planId);
+      if (!plan) continue;
+      const assetClass = tradingAssetClassForPlan(plan);
+      if (lastOrderByMarket[assetClass] == null) lastOrderByMarket[assetClass] = order;
+    }
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
     const vaultStatus = credentialConfigurationStatus();
     const liveExecutionReadiness = Object.fromEntries(
@@ -730,6 +754,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       lastOrder: orders[0] ?? null,
+      lastOrderByMarket,
       actualOrderSubmittedByStatusRequest: false,
     });
   } catch (error) {
