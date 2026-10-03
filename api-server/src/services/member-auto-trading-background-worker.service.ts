@@ -119,6 +119,8 @@ export type MemberAutoTradingBackgroundRunResult = {
   aiReviewAbstain: number;
   aiReviewVeto: number;
   aiReviewBlocked: number;
+  aiAuditWritten: number;
+  aiAuditFailures: number;
 };
 
 function finite(value: unknown): value is number {
@@ -273,6 +275,58 @@ function strategyRulePackGate(
   nowMs: number,
 ) {
   return evaluateStrategyRulePackGate(rulePackGateInput(entry, nowMs, aiReview));
+}
+
+async function persistTradeRulePackAiAudit(
+  paper: PaperJournalRepository,
+  userId: string,
+  entry: MemberAutoTradingPaperHandoffEntry,
+  review: TradeRulePackAiReview | null,
+  nowMs: number,
+  failureCode: string | null = null,
+): Promise<void> {
+  const gateInput = rulePackGateInput(entry, nowMs, review);
+  const evidenceDigest = String(gateInput.expectedAiEvidenceDigest ?? '');
+  const id = 'trade-rule-pack-ai-review:' + evidenceDigest;
+  const existing = await paper.getRecord(userId, 'journal', id);
+  const updatedAt = new Date(nowMs).toISOString();
+  await paper.upsertRecord(userId, {
+    kind: 'journal',
+    id,
+    version: Math.max(1, Number(existing?.version ?? 0) + 1),
+    updatedAt,
+    deletedAt: null,
+    payload: {
+      recordType: 'trade_rule_pack_ai_review',
+      schemaVersion: 'trade-rule-pack-ai-audit-v1',
+      strategyId: entry.identity.strategyId,
+      signalId: entry.identity.signalId,
+      market: entry.identity.market,
+      direction: entry.identity.direction,
+      symbol: entry.identity.symbol,
+      timeframe: entry.identity.timeframe,
+      status: review?.status ?? 'UNAVAILABLE',
+      decision: review?.decision ?? null,
+      evidenceDigest,
+      promptVersion: review?.promptVersion ?? STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
+      provider: review?.provider ?? null,
+      model: review?.model ?? null,
+      generatedAt: review?.generatedAt ?? updatedAt,
+      expiresAt: review?.expiresAt ?? null,
+      reasons: review?.reasons ?? (failureCode ? [failureCode] : []),
+      cacheHit: review?.cacheHit ?? false,
+      fallbackUsed: review?.fallbackUsed ?? false,
+      providerLatencyMs: review?.providerLatencyMs ?? null,
+      failureCode,
+      executionAuthority: 'NONE',
+      orderAllowed: false,
+      riskOverrideAllowed: false,
+      positionSizeAuthority: false,
+      leverageAuthority: false,
+      rawPromptStored: false,
+      credentialsStored: false,
+    },
+  }, updatedAt);
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -604,6 +658,7 @@ function buildPlanInput(
           'AI_REVIEW_PROMPT:' + aiReview.promptVersion,
           'AI_REVIEW_EVIDENCE:' + aiReview.evidenceDigest,
           'AI_REVIEW_EXPIRES:' + aiReview.expiresAt,
+          'AI_REVIEW_LIVE_ELIGIBLE:' + (rulePackGate.liveAiEligible ? 'PASS_ONLY_ELIGIBLE' : 'NO'),
         ] : []),
       ] : []),
       'TOP_OF_BOOK_GAP_PROXY',
@@ -997,6 +1052,8 @@ export class MemberAutoTradingBackgroundWorker {
       aiReviewAbstain: 0,
       aiReviewVeto: 0,
       aiReviewBlocked: 0,
+      aiAuditWritten: 0,
+      aiAuditFailures: 0,
     };
     if (this.running) return result;
     this.running = true;
@@ -1112,11 +1169,35 @@ export class MemberAutoTradingBackgroundWorker {
             result.aiReviewCalls += 1;
             try {
               aiReview = await this.aiReviewer.review(entry, nowMs);
-            } catch {
+            } catch (error) {
+              try {
+                await persistTradeRulePackAiAudit(
+                  paper,
+                  member.userId,
+                  entry,
+                  null,
+                  nowMs,
+                  errorCode(error),
+                );
+                result.aiAuditWritten += 1;
+              } catch {
+                result.aiAuditFailures += 1;
+              }
               result.aiReviewBlocked += 1;
               result.blocked += 1;
               continue;
             }
+
+            try {
+              await persistTradeRulePackAiAudit(paper, member.userId, entry, aiReview, nowMs);
+              result.aiAuditWritten += 1;
+            } catch {
+              result.aiAuditFailures += 1;
+              result.aiReviewBlocked += 1;
+              result.blocked += 1;
+              continue;
+            }
+
             if (aiReview.cacheHit) result.aiReviewCacheHits += 1;
             if (aiReview.status !== 'READY' || aiReview.decision == null) {
               result.aiReviewBlocked += 1;
