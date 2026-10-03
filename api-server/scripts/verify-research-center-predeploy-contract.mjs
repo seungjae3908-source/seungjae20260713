@@ -21,7 +21,11 @@ const extractFrozenArray = (text, name) => {
   const marker = markers.find((candidate) => text.includes(candidate));
   if (!marker) fail(name + ' array start not found');
   const start = text.indexOf(marker) + marker.length;
-  const end = text.indexOf(']);', start);
+  const ends = [
+    text.indexOf('] as const);', start),
+    text.indexOf(']);', start),
+  ].filter((value) => value >= 0);
+  const end = ends.length ? Math.min(...ends) : -1;
   if (end < 0) fail(name + ' array end not found');
   return [...text.slice(start, end).matchAll(/['"]([^'"]+)['"]/gu)].map((row) => row[1]);
 };
