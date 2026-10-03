@@ -1422,13 +1422,27 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
+      pilotCapitalState: {
+        initialOperatingCapitalKrw: number;
+        operatingCapitalKrw: number;
+        reserveKrw: number;
+        highWaterMarkKrw: number;
+        maxEntryKrw: number;
+        settlementReady: boolean;
+        reserveWithdrawalAutomatic: boolean;
+      };
       evidenceBackedStrategies: Array<{
         strategyId: string;
         automaticLivePromotionAllowed: boolean;
         paperResearchAllowedWhenReady: boolean;
         pilotProfile: {
-          totalBudgetKrw: number;
-          maxOrderKrw: number;
+          initialOperatingCapitalKrw: number;
+          profitCompoundShare: number;
+          profitReserveShare: number;
+          maxEntryTracksOperatingCapital: boolean;
+          reserveAutoWithdrawalAllowed: boolean;
+          highWaterMarkRequired: boolean;
+          riskPerTradePercentCeiling: number;
           maxConcurrentLivePositions: number;
           maxDailyLiveEntries: number | null;
           maxDailyLosingTrades: number;
@@ -1458,8 +1472,18 @@ test('status is authenticated, automatic execution defaults off, and never retur
       'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
     ]);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.paperResearchAllowedWhenReady === true), true);
-    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.totalBudgetKrw === 500_000), true);
-    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxOrderKrw === 50_000), true);
+    assert.equal(body.pilotCapitalState.operatingCapitalKrw, 500_000);
+    assert.equal(body.pilotCapitalState.reserveKrw, 0);
+    assert.equal(body.pilotCapitalState.maxEntryKrw, 500_000);
+    assert.equal(body.pilotCapitalState.settlementReady, true);
+    assert.equal(body.pilotCapitalState.reserveWithdrawalAutomatic, false);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.initialOperatingCapitalKrw === 500_000), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.profitCompoundShare === 0.5), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.profitReserveShare === 0.5), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxEntryTracksOperatingCapital === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.reserveAutoWithdrawalAllowed === false), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.highWaterMarkRequired === true), true);
+    assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.riskPerTradePercentCeiling === 0.5), true);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxConcurrentLivePositions === 2), true);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxDailyLiveEntries === null), true);
     assert.equal(body.evidenceBackedStrategies.every((row) => row.pilotProfile.maxDailyLosingTrades === 5), true);
