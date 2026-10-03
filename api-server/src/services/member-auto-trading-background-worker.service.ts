@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
+import { deriveMemberTier, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import {
   validateMemberAutoTradingPaperHandoff,
   type MemberAutoTradingPaperHandoff,
@@ -45,6 +45,11 @@ import {
   readMemberAutoTradingMarketMark,
   type MemberAutoTradingMarketMark,
 } from './member-auto-trading-market-mark.service';
+import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
+import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
+import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
+import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -53,6 +58,11 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+const executionProjectionTransport: TelegramTransport = {
+  async send() {
+    return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
+  },
+};
 type EligibleMember = Readonly<{
   userId: string;
   profile: MemberAccessProfile;
@@ -82,6 +92,12 @@ export interface MemberAutoTradingBackgroundSource {
     market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
     symbol: string,
   ): Promise<MemberAutoTradingMarketMark>;
+  syncExecutionEvents?(input: {
+    userId: string;
+    profile: MemberAccessProfile;
+    repository: TradingRepository;
+    paperJournalRepository: PaperJournalRepository;
+  }): Promise<{ inserted: number; deliveryQueued: number; missingReferences: number }>;
 }
 
 export type MemberAutoTradingBackgroundRunResult = {
@@ -103,6 +119,10 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveExitOrders: number;
   exitBlocked: number;
   privateTradingRequests: number;
+  executionEventsInserted: number;
+  notificationDeliveriesQueued: number;
+  executionSyncMissingReferences: number;
+  executionSyncFailures: number;
 };
 
 function finite(value: unknown): value is number {
@@ -922,6 +942,10 @@ export class MemberAutoTradingBackgroundWorker {
       liveExitOrders: 0,
       exitBlocked: 0,
       privateTradingRequests: 0,
+      executionEventsInserted: 0,
+      notificationDeliveriesQueued: 0,
+      executionSyncMissingReferences: 0,
+      executionSyncFailures: 0,
     };
     if (this.running) return result;
     this.running = true;
@@ -1135,6 +1159,23 @@ export class MemberAutoTradingBackgroundWorker {
             else result.failures += 1;
           }
         }
+
+        if (this.source.syncExecutionEvents) {
+          try {
+            const synced = await this.source.syncExecutionEvents({
+              userId: member.userId,
+              profile: member.profile,
+              repository,
+              paperJournalRepository: paper,
+            });
+            result.executionEventsInserted += synced.inserted;
+            result.notificationDeliveriesQueued += synced.deliveryQueued;
+            result.executionSyncMissingReferences += synced.missingReferences;
+          } catch {
+            // Notification/journal fan-out must never change canonical order state.
+            result.executionSyncFailures += 1;
+          }
+        }
       }
       return result;
     } finally {
@@ -1194,6 +1235,26 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   paperJournalRepositoryFor(userId: string) {
     return createServiceRolePaperJournalRepository(userId, this.client);
+  }
+
+  async syncExecutionEvents(input: {
+    userId: string;
+    profile: MemberAccessProfile;
+    repository: TradingRepository;
+    paperJournalRepository: PaperJournalRepository;
+  }) {
+    const integration = new UserBrokerTelegramService(
+      createSupabaseUserBrokerTelegramRepository(),
+      executionProjectionTransport,
+      new CanonicalPortfolioSyncSink(input.paperJournalRepository, input.userId),
+    );
+    const result = await new TradeExecutionEventBridgeService(input.repository, integration)
+      .syncUser(input.userId, deriveMemberTier(input.profile));
+    return {
+      inserted: result.inserted,
+      deliveryQueued: result.deliveryQueued,
+      missingReferences: result.missingReferences,
+    };
   }
 
   resolveFx(market: MemberAutoTradingPaperHandoffEntry['identity']['market'], nowMs: number) {
