@@ -64,6 +64,9 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
   const aiGate = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
   const aiProducer = read('api-server/src/services/trade-rule-pack-ai-review.service.ts');
+  const scannerAi = read('api-server/src/services/scanner-ai-runtime.service.ts');
+  const stockScanner = read('api-server/src/services/stock-signal-scanner.service.ts');
+  const cryptoScanner = read('api-server/src/routes/crypto-signal-scan.ts');
   const index = read('api-server/src/index.ts');
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
@@ -104,4 +107,10 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(aiProducer.includes("executionAuthority: 'NONE'"));
   assert.ok(aiProducer.includes('riskOverrideAllowed: false'));
   assert.ok(aiProducer.includes('AI_REVIEW_PROVIDER_NOT_CONFIGURED'));
+  assert.ok(scannerAi.includes("canonicalScannerWired: true"));
+  assert.ok(scannerAi.includes("executionAuthority: 'NONE'"));
+  assert.ok(scannerAi.includes('vetoBlocksStrongSignal: true'));
+  assert.ok(scannerAi.includes('DEFAULT_MAX_CANDIDATES = 2'));
+  assert.ok(stockScanner.includes('enrichTopScannerCandidatesWithAi'));
+  assert.ok(cryptoScanner.includes('enrichTopScannerCandidatesWithAi'));
 });
