@@ -337,8 +337,13 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
   await assertClean();
 });
 
-for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }]) {
-  test(`Research Center V2 mobile ${viewport.width} has no clipping or bottom-nav overlap`, async ({ page }) => {
+for (const viewport of [
+  { width: 390, height: 844, device: '모바일' },
+  { width: 430, height: 932, device: '모바일' },
+  { width: 768, height: 1024, device: '태블릿' },
+  { width: 1024, height: 1366, device: '태블릿' },
+]) {
+  test(`Research Center V2 ${viewport.device} ${viewport.width} has no clipping or bottom-nav overlap`, async ({ page }) => {
     const { assertClean } = await installAdmin(page, overview());
     await page.setViewportSize(viewport);
     await openExpertResearch(page);
