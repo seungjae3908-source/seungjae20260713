@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server import build_research_overview  # noqa: E402
+from server import build_research_overview, summarize_runtime_liveness  # noqa: E402
 
 
 def write_json(path, value):
@@ -186,6 +186,22 @@ def valid_candidate_performance():
 
 
 class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
+    def test_runtime_liveness_detects_missed_cycles_and_clock_skew(self):
+        now_ms = 1_800_000_000_000
+        live = summarize_runtime_liveness(now_ms - 30 * 60 * 1000, now_ms)
+        self.assertEqual(live['status'], 'LIVE')
+        self.assertEqual(live['missedCycles'], 0)
+        self.assertFalse(live['stale'])
+
+        stale = summarize_runtime_liveness(now_ms - 3 * 60 * 60 * 1000, now_ms)
+        self.assertEqual(stale['status'], 'STALE')
+        self.assertGreaterEqual(stale['missedCycles'], 2)
+        self.assertTrue(stale['stale'])
+
+        skew = summarize_runtime_liveness(now_ms + 10 * 60 * 1000, now_ms)
+        self.assertEqual(skew['status'], 'INVALID')
+        self.assertTrue(skew['stale'])
+
     def fixture(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
