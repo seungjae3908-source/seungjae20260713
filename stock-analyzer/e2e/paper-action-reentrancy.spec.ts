@@ -35,7 +35,7 @@ test('paper actions reject same-tick reentrancy and release the guard after comp
   )).toBe(before + 1);
 
   await page.getByTestId('paper-positions').getByRole('button', { name: '25%' }).click();
-  await expect(page.getByTestId('paper-positions').getByText('partially_closed')).toBeVisible();
+  await expect(page.getByTestId('paper-positions').getByText('부분 청산')).toBeVisible();
   await expect.poll(() => page.evaluate(
     () => (window as typeof window & { __paperAction120msCalls?: number }).__paperAction120msCalls ?? 0,
   )).toBe(before + 2);
