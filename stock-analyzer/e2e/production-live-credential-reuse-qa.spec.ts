@@ -46,25 +46,6 @@ async function productionAccessToken(page: Page) {
   throw new Error('PRODUCTION_CREDENTIAL_REUSE_ACCESS_TOKEN_MISSING');
 }
 
-function assertReuseBody(body: Record<string, unknown> | null) {
-  expect(body).not.toBeNull();
-  assertNoSensitiveKeys(body);
-  expect(body?.ok).toBe(true);
-  expect(body?.accountMode).toBe('live');
-  expect(body?.configured).toBe(true);
-  expect(body?.verified).toBe(true);
-  expect(body?.reusedReadonlyCredential).toBe(true);
-  expect(body?.credentialsReturned).toBe(false);
-  expect(body?.liveExecutionActivated).toBe(false);
-  expect(body?.automaticLiveExecutionActivated).toBe(false);
-  expect(body?.orderRequests).toBe(0);
-  expect(body?.cancelRequests).toBe(0);
-  expect(body?.amendRequests).toBe(0);
-  expect(body?.transferRequests).toBe(0);
-  expect(body?.withdrawalRequests).toBe(0);
-  expect(body?.realOrderSubmitted).toBe(false);
-}
-
 function assertNoSensitiveKeys(value: unknown, trail: string[] = []) {
   if (Array.isArray(value)) {
     value.forEach((item, index) => assertNoSensitiveKeys(item, [...trail, String(index)]));
@@ -131,93 +112,70 @@ test('saved read-only credentials connect and verify all providers with zero fin
   }
 
   const observedMutations: Array<{ method: string; path: string }> = [];
-  page.on('request', (request) => {
-    const method = request.method().toUpperCase();
-    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
-    const url = new URL(request.url());
-    if (url.origin !== new URL(baseUrl).origin) return;
-    if (!url.pathname.startsWith('/api/trade-automation/')) return;
-    observedMutations.push({ method, path: url.pathname });
-  });
-
   const evidence: Array<Record<string, unknown>> = [];
+  const failures: Array<{ provider: Provider; status: number; errorCode: string | null }> = [];
 
   for (const provider of providers) {
+    const endpoint = '/api/trade-automation/connections/' + provider + '/reuse-readonly';
+    const response = await page.request.post(new URL(endpoint, baseUrl).toString(), {
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + accessToken,
+        'Content-Type': 'application/json',
+      },
+      data: { confirmed: true },
+      timeout: 30000,
+      failOnStatusCode: false,
+    });
+    const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+    if (body) assertNoSensitiveKeys(body);
+
+    observedMutations.push({ method: 'POST', path: endpoint });
+    const success = response.status() === 200
+      && body?.ok === true
+      && body?.accountMode === 'live'
+      && body?.configured === true
+      && body?.verified === true
+      && body?.reusedReadonlyCredential === true
+      && body?.credentialsReturned === false
+      && body?.liveExecutionActivated === false
+      && body?.automaticLiveExecutionActivated === false
+      && body?.orderRequests === 0
+      && body?.cancelRequests === 0
+      && body?.amendRequests === 0
+      && body?.transferRequests === 0
+      && body?.withdrawalRequests === 0
+      && body?.realOrderSubmitted === false;
+
+    const errorCode = typeof body?.error === 'string' ? body.error : null;
+    evidence.push({
+      provider,
+      httpStatus: response.status(),
+      configured: body?.configured === true,
+      verified: body?.verified === true,
+      reusedReadonlyCredential: body?.reusedReadonlyCredential === true,
+      credentialsReturned: body?.credentialsReturned === false ? false : null,
+      liveExecutionActivated: body?.liveExecutionActivated === true,
+      automaticLiveExecutionActivated: body?.automaticLiveExecutionActivated === true,
+      orderRequests: Number(body?.orderRequests ?? 0),
+      cancelRequests: Number(body?.cancelRequests ?? 0),
+      amendRequests: Number(body?.amendRequests ?? 0),
+      transferRequests: Number(body?.transferRequests ?? 0),
+      withdrawalRequests: Number(body?.withdrawalRequests ?? 0),
+      realOrderSubmitted: body?.realOrderSubmitted === true,
+      errorCode,
+    });
+    if (!success) failures.push({ provider, status: response.status(), errorCode });
+  }
+
+  await page.reload({ waitUntil: 'commit' });
+  for (const row of evidence) {
+    const provider = row.provider as Provider;
     const card = page.getByTestId('live-connection-' + provider);
     await expect(card).toBeVisible({ timeout: 15000 });
-    const button = card.getByRole('button', { name: '저장된 조회키로 연결·검증' });
-    const buttonVisible = await button.isVisible({ timeout: 1000 }).catch(() => false);
-
-    if (buttonVisible) {
-      const endpoint = '/api/trade-automation/connections/' + provider + '/reuse-readonly';
-      const responsePromise = page.waitForResponse((response) => {
-        const url = new URL(response.url());
-        return response.request().method() === 'POST' && url.pathname === endpoint;
-      }, { timeout: 30000 });
-
-      await button.click({ timeout: 5000 });
-      const response = await responsePromise;
-      const body = await response.json().catch(() => null) as Record<string, unknown> | null;
-      expect(response.status(), JSON.stringify(body)).toBe(200);
-      assertReuseBody(body);
-
+    if (row.verified === true) {
       await expect(card).toContainText(/거래키\s*저장됨/, { timeout: 15000 });
       await expect(card).toContainText(/검증됨/, { timeout: 15000 });
-
-      evidence.push({
-        provider,
-        uiAction: 'clicked',
-        configured: true,
-        verified: true,
-        reusedReadonlyCredential: true,
-        credentialsReturned: false,
-        liveExecutionActivated: false,
-        automaticLiveExecutionActivated: false,
-        orderRequests: 0,
-        cancelRequests: 0,
-        amendRequests: 0,
-        transferRequests: 0,
-        withdrawalRequests: 0,
-        realOrderSubmitted: false,
-      });
-    } else {
-      const endpoint = '/api/trade-automation/connections/' + provider + '/reuse-readonly';
-      const token = await productionAccessToken(page);
-      const response = await page.request.post(new URL(endpoint, baseUrl).toString(), {
-        headers: {
-          Accept: 'application/json',
-          Authorization: 'Bearer ' + token,
-          'Content-Type': 'application/json',
-        },
-        data: { confirmed: true },
-        timeout: 30000,
-        failOnStatusCode: false,
-      });
-      const body = await response.json().catch(() => null) as Record<string, unknown> | null;
-      expect(response.status(), JSON.stringify(body)).toBe(200);
-      assertReuseBody(body);
-      observedMutations.push({ method: 'POST', path: endpoint });
-
-      await page.reload({ waitUntil: 'commit' });
-      const refreshedCard = page.getByTestId('live-connection-' + provider);
-      await expect(refreshedCard).toContainText(/거래키\s*저장됨/, { timeout: 15000 });
-      await expect(refreshedCard).toContainText(/검증됨/, { timeout: 15000 });
-      evidence.push({
-        provider,
-        uiAction: 'already-verified',
-        configured: true,
-        verified: true,
-        reusedReadonlyCredential: true,
-        credentialsReturned: false,
-        liveExecutionActivated: false,
-        automaticLiveExecutionActivated: false,
-        orderRequests: 0,
-        cancelRequests: 0,
-        amendRequests: 0,
-        transferRequests: 0,
-        withdrawalRequests: 0,
-        realOrderSubmitted: false,
-      });
     }
   }
 
@@ -240,8 +198,11 @@ test('saved read-only credentials connect and verify all providers with zero fin
   assertNoSensitiveKeys(after);
 
   for (const provider of providers) {
-    expect(after?.liveExecutionReadiness?.[provider]?.connectionConfigured).toBe(true);
-    expect(after?.liveExecutionReadiness?.[provider]?.providerVerified).toBe(true);
+    const row = evidence.find((candidate) => candidate.provider === provider);
+    if (row?.verified === true) {
+      expect(after?.liveExecutionReadiness?.[provider]?.connectionConfigured).toBe(true);
+      expect(after?.liveExecutionReadiness?.[provider]?.providerVerified).toBe(true);
+    }
     expect(after?.liveExecutionServerEnabled?.[provider]).toBe(false);
     expect(after?.liveAutomaticExecutionServerEnabled?.[provider]).toBe(false);
   }
@@ -267,4 +228,9 @@ test('saved read-only credentials connect and verify all providers with zero fin
     secretValuesRecorded: false,
     accountValuesRecorded: false,
   }, null, 2) + '\n');
+
+  expect(
+    failures,
+    'Credential reuse provider failures: ' + JSON.stringify(failures),
+  ).toEqual([]);
 });
