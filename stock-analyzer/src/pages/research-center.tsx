@@ -613,7 +613,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? '연구 개요 연결됨' : '연구 자료 미수집'} />
         <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
         <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
-        <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
+        <TopStatus label="실거래" value="비활성" status="inactive" detail="실거래 권한 없음" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
         <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
@@ -621,7 +621,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
 
       {!promotion ? (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs" role="status" data-testid="research-partial-state">
-          <strong>부분 데이터:</strong> Research Production overview는 연결됐지만 Strategy Promotion API는 사용할 수 없습니다. 연구 단계 값을 0으로 대체하지 않습니다.
+          <strong>부분 데이터:</strong> 연구 개요는 연결됐지만 전략 승격 자료를 사용할 수 없습니다.
         </div>
       ) : null}
 
@@ -842,6 +842,17 @@ function PaperKpi({ label, value, state }: { label: string; value: string; state
   );
 }
 
+const COST_LABELS_KO: Record<CostDisplayRow['key'], string> = {
+  commission: '수수료',
+  tax: '세금',
+  spread: '스프레드',
+  slippage: '슬리피지',
+  funding: '펀딩비',
+  latency: '지연 비용',
+  liquidityImpact: '유동성 영향',
+  partialFillImpact: '부분체결 영향',
+};
+
 function CostRow({ row }: { row: CostDisplayRow }) {
   const measuredBasis = row.quality === 'OBSERVED'
     ? 'observed'
@@ -882,7 +893,7 @@ function CostRow({ row }: { row: CostDisplayRow }) {
                 : '자료 부족';
   return (
     <div className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-card-border bg-background p-3">
-      <div className="min-w-0"><p className="text-xs font-black">{row.label}</p></div>
+      <div className="min-w-0"><p className="text-xs font-black">{COST_LABELS_KO[row.key]}</p></div>
       <div className="text-right"><p className="text-xs font-black tabular-nums">{row.value}</p><span className={`mt-1 inline-block rounded-full border px-2 py-0.5 text-[9px] font-black ${STATUS_STYLE[status]}`}>{label}</span></div>
     </div>
   );
@@ -973,10 +984,10 @@ function PaperTab({
           <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? '자료 있음' : '자료 없음'}</span>
         </div>
         <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">후보 식별자</dt><dd className="mt-1 truncate font-mono font-bold" title={performance.candidateId ?? '자료 없음'}>{performance.candidateId ?? '자료 없음'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">전략 식별자</dt><dd className="mt-1 font-mono font-bold">{performance.strategyId ?? '자료 없음'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">후보 식별</dt><dd className="mt-1 font-bold">{performance.candidateId ? '확인됨' : '자료 없음'}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">전략 식별</dt><dd className="mt-1 font-bold">{performance.strategyId ? '확인됨' : '자료 없음'}</dd></div>
           <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">고정 시각</dt><dd className="mt-1 font-bold">{performance.freezeTimestamp ? formatDate(performance.freezeTimestamp) : '자료 없음'}</dd></div>
-          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">현재 막힌 단계</dt><dd className="mt-1 break-all font-mono font-bold">{performance.FIRST_ZERO}</dd></div>
+          <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">현재 막힌 단계</dt><dd className="mt-1 font-bold">{performance.FIRST_ZERO === 'NONE' ? '없음' : '추가 검증 자료 필요'}</dd></div>
         </dl>
         <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-6">
           {[
