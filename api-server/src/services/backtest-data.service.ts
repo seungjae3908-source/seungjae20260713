@@ -336,7 +336,7 @@ function finalize(
   }
   let gapCount = 0;
   for (let index = 1; index < candles.length; index += 1) {
-    if (candles[index].timestamp - candles[index - 1].timestamp > timeframeMs * 3) gapCount += 1;
+    if (candles[index].timestamp - candles[index - 1].timestamp > timeframeMs * 1.5) gapCount += 1;
   }
   if (gapCount) warnings.push(`캔들 누락 구간 ${gapCount}개를 감지했으며 임의 데이터로 채우지 않았습니다.`);
   if (!candles.length) warnings.push('요청 기간에 사용할 수 있는 완료 캔들이 없습니다.');
