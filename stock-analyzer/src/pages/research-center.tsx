@@ -181,21 +181,21 @@ function exportResearchWorkbook(
         ['항목', '값'],
         ['보고서 생성시각', formatDate(Date.now())],
         ['연구 상태', overview.research.status],
-        ['자동 연구 상태', overview.state.runtimeLiveness?.status ?? 'UNKNOWN'],
+        ['자동 연구 상태', overview.state.runtimeLiveness?.status ?? '자료 없음'],
         ['마지막 성공', formatDate(overview.state.runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)],
-        ['놓친 실행 횟수', overview.state.runtimeLiveness?.missedCycles ?? 'UNKNOWN'],
-        ['시점 표본', overview.dataFactory?.temporalCryptoFutures.observationCount ?? 'UNKNOWN'],
+        ['놓친 실행 횟수', overview.state.runtimeLiveness?.missedCycles ?? '자료 없음'],
+        ['시점 표본', overview.dataFactory?.temporalCryptoFutures.observationCount ?? '자료 없음'],
         ['후보 식별자', performance?.candidateId ?? '자료 없음'],
         ['전략 식별자', performance?.strategyId ?? '자료 없음'],
-        ['TRAIN_N', performance?.TRAIN_N ?? '자료 없음'],
-        ['VALIDATION_N', performance?.VALIDATION_N ?? '자료 없음'],
-        ['OOS_N', performance?.OOS_N ?? '자료 없음'],
+        ['학습 표본', performance?.TRAIN_N ?? '자료 없음'],
+        ['검증 표본', performance?.VALIDATION_N ?? '자료 없음'],
+        ['미래 검증 표본', performance?.OOS_N ?? '자료 없음'],
         ['정산 표본', performance?.Settlement_N ?? '자료 없음'],
         ['비용 전 손익', performance?.Gross_PnL ?? '자료 없음'],
         ['비용 후 손익', performance?.Net_PnL ?? '자료 없음'],
         ['전체 비용 검증', performance?.FULL_COST_READY ?? false],
         ['수익성 검증', performance?.PROFITABILITY_PROVEN ?? false],
-        ['실거래 권한', 'NONE'],
+        ['실거래 권한', '없음'],
       ],
     },
     {
@@ -305,10 +305,7 @@ function AutoResearchBacktestPanel({ overview }: { overview: ResearchCenterOverv
         </div>
         <StatusBadge status={!auto?.present ? 'unmeasured' : auto.status === 'complete' ? 'normal' : auto.status === 'blocked_data' ? 'attention' : 'running'} />
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        후보 통과 시 다음 검증으로 자동 진행합니다.
-      </p>
-      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+            <div className="mt-3 grid gap-3 lg:grid-cols-3">
         {rows.length ? rows.map((pipeline) => (
           <article key={pipeline.id} className="min-w-0 rounded-2xl border border-card-border bg-background p-3">
             <div className="flex items-start justify-between gap-2">
@@ -530,9 +527,9 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
           ? 'normal'
           : 'unmeasured';
   const updateDetail = runtimeLiveness?.status === 'LIVE'
-    ? `자동 연구 정상 · missed ${runtimeLiveness.missedCycles ?? 0}`
+    ? `자동 연구 정상 · 놓친 실행 ${runtimeLiveness.missedCycles ?? 0}`
     : runtimeLiveness?.status === 'STALE'
-      ? `자동 연구 지연 · missed ${runtimeLiveness.missedCycles ?? 0}`
+      ? `자동 연구 지연 · 놓친 실행 ${runtimeLiveness.missedCycles ?? 0}`
       : runtimeLiveness?.status === 'INVALID'
         ? '자동 연구 시각 오류'
         : staleCount
@@ -580,7 +577,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
                   ? '근거 오류'
                   : '미측정';
   const factoryDetail = factory.present
-    ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? 'FIRST_ZERO 미확인'}`
+    ? `시장 ${factory.readyMarketCount ?? '—'}/4 · 프로필 ${factory.readyProfileCount ?? '—'}/12 · ${factory.firstZero ?? '막힌 단계 미확인'}`
     : '연구 팩토리 상태 미수집';
   const temporal = overview.dataFactory?.temporalCryptoFutures ?? {
     present: false,
@@ -607,13 +604,13 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-card-border bg-card p-3 shadow-sm">
-        <div><p className="text-xs font-black">리서치 운영 리포트</p><p className="mt-0.5 text-[10px] text-muted-foreground">현재 상태·24시간 활동·피드백·자동 백테스트 결과</p></div>
+        <div><p className="text-xs font-black">연구 운영 현황</p></div>
         <button type="button" onClick={() => exportResearchWorkbook(overview, promotion, cards)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-card-border px-3 text-xs font-black hover:border-primary/50" data-testid="research-excel-export">
-          <Download className="h-4 w-4" /> Excel 다운로드
+          <Download className="h-4 w-4" /> 엑셀 다운로드
         </button>
       </div>
       <section className="grid grid-cols-2 gap-2 lg:grid-cols-7" aria-label="연구 핵심 상태">
-        <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
+        <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? '연구 개요 연결됨' : '연구 자료 미수집'} />
         <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
         <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
@@ -707,8 +704,7 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
 
       <form onSubmit={submit} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" aria-label="연구 근거 질문">
         <div className="flex items-center gap-2"><Bot className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">연구 근거에 질문하기</h2></div>
-        <p className="mt-1 text-[10px] text-muted-foreground">현재 수집된 연구 자료에서 답을 찾습니다.</p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <label className="sr-only" htmlFor="research-question">연구 근거 질문</label>
           <input id="research-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="예: 수익성은 검증됐나요?" className="min-h-11 min-w-0 flex-1 rounded-xl border border-card-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary" />
           <button type="submit" className="min-h-11 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">근거에서 찾기</button>
@@ -916,7 +912,7 @@ function PaperTab({
     identity14Verified: false,
     fullCostEvidence: {
       fullCostReady: false as const,
-      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'].map((key) => [key, { state: 'UNKNOWN', valuePercent: null, provenance: null }])) as ResearchCandidatePerformance['fullCostEvidence']['components'],
+      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'].map((key) => [key, { state: '자료 없음', valuePercent: null, provenance: null }])) as ResearchCandidatePerformance['fullCostEvidence']['components'],
     },
     candidateMatchedN: null,
     LONG_SIGNAL_N: null,
@@ -952,12 +948,12 @@ function PaperTab({
     ? '현재 포지션 자료 없음'
     : ledger.positionCount === 0
       ? '열린 모의 포지션 없음'
-      : `열린 모의 포지션 ${formatCanonicalMetric(ledger.positionCount)}건 · 상세 canonical 레코드 미공개`;
+      : `열린 모의 포지션 ${formatCanonicalMetric(ledger.positionCount)}건 · 상세 기록 미공개`;
   const settlementText = !ledger.present || ledger.settlementCount == null
-    ? 'Settlement 자료 없음'
+    ? '정산 자료 없음'
     : ledger.settlementCount === 0
-      ? '최근 Settlement 없음 · 표본 없음'
-      : `Settlement ${formatCanonicalMetric(ledger.settlementCount)}건 · 상세 canonical 레코드 미공개`;
+      ? '최근 정산 없음 · 표본 없음'
+      : `정산 ${formatCanonicalMetric(ledger.settlementCount)}건 · 상세 기록 미공개`;
   const countState = (value: number | null | undefined): ResearchProductStatus => value == null ? 'unmeasured' : value === 0 ? 'waiting' : 'accumulating';
   return (
     <section id="research-tab-paper" role="tabpanel" aria-labelledby="research-tab-paper-trigger" className="space-y-4" data-testid="research-paper-tab">
@@ -974,7 +970,7 @@ function PaperTab({
       <article className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="paper-candidate-performance">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">고정 후보</p><h3 className="mt-1 text-sm font-black">후보별 성과 증거</h3></div>
-          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? 'EVIDENCE PRESENT' : '자료 없음'}</span>
+          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${performance.status === 'PRESENT' ? STATUS_STYLE.accumulating : STATUS_STYLE.unmeasured}`}>{performance.status === 'PRESENT' ? '자료 있음' : '자료 없음'}</span>
         </div>
         <dl className="mt-3 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-xl border border-card-border bg-background p-3"><dt className="text-[10px] font-bold text-muted-foreground">후보 식별자</dt><dd className="mt-1 truncate font-mono font-bold" title={performance.candidateId ?? '자료 없음'}>{performance.candidateId ?? '자료 없음'}</dd></div>
@@ -984,18 +980,18 @@ function PaperTab({
         </dl>
         <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4 xl:grid-cols-6">
           {[
-            ['effective independent N', independentN],
-            ['candidateMatchedN', performance.candidateMatchedN],
-            ['LONG signal N', performance.LONG_SIGNAL_N],
-            ['SHORT signal N', performance.SHORT_SIGNAL_N],
-            ['NO TRADE N', performance.NO_TRADE_N],
-            ['Entry', performance.Entry_N],
-            ['Position', performance.Position_N],
-            ['Position obs.', performance.PositionObservation_N],
-            ['Settlement', performance.Settlement_N],
-            ['TRAIN N', performance.TRAIN_N],
-            ['Validation N', performance.VALIDATION_N],
-            ['OOS N', performance.OOS_N],
+            ['독립 표본', independentN],
+            ['후보 일치 표본', performance.candidateMatchedN],
+            ['롱 신호', performance.LONG_SIGNAL_N],
+            ['숏 신호', performance.SHORT_SIGNAL_N],
+            ['거래 없음', performance.NO_TRADE_N],
+            ['진입', performance.Entry_N],
+            ['포지션', performance.Position_N],
+            ['포지션 관찰', performance.PositionObservation_N],
+            ['정산', performance.Settlement_N],
+            ['학습 표본', performance.TRAIN_N],
+            ['검증 표본', performance.VALIDATION_N],
+            ['미래 검증 표본', performance.OOS_N],
           ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-card-border bg-background p-2"><p className="text-[9px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-xs font-black tabular-nums">{candidateValue(value as number | null)}</p></div>)}
         </div>
         <p className="mt-3 text-[10px] text-muted-foreground">시장 독립 표본과 후보별 거래 수를 분리합니다.</p>
@@ -1010,16 +1006,16 @@ function PaperTab({
 
       <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심 KPI">
         <PaperKpi label="모의 평가금액" value="미측정" state="unmeasured" />
-        <PaperKpi label="Gross PnL" value={candidateValue(performance.Gross_PnL)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="비용 전 손익" value={candidateValue(performance.Gross_PnL)} state={countState(performance.Settlement_N)} />
         <PaperKpi label="미실현손익" value="미측정" state="unmeasured" />
-        <PaperKpi label="Net PnL" value={candidateValue(performance.Net_PnL)} state="unmeasured" />
+        <PaperKpi label="비용 후 손익" value={candidateValue(performance.Net_PnL)} state="unmeasured" />
         <PaperKpi label="진입 수" value={candidateValue(performance.Entry_N)} state={countState(performance.Entry_N)} />
         <PaperKpi label="후보 포지션" value={candidateValue(performance.Position_N)} state={countState(performance.Position_N)} />
-        <PaperKpi label="후보 Settlement" value={candidateValue(performance.Settlement_N)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="후보 정산" value={candidateValue(performance.Settlement_N)} state={countState(performance.Settlement_N)} />
         <PaperKpi label="승률" value={candidateRate(performance.WIN_RATE)} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="Profit Factor" value={candidateValue(performance.PF)} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="MDD" value={candidateValue(performance.MDD, '%')} state={countState(performance.Settlement_N)} />
-        <PaperKpi label="후보 매치 N" value={candidateValue(performance.candidateMatchedN)} state={countState(performance.candidateMatchedN)} />
+        <PaperKpi label="손익비" value={candidateValue(performance.PF)} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="최대 낙폭" value={candidateValue(performance.MDD, '%')} state={countState(performance.Settlement_N)} />
+        <PaperKpi label="후보 일치 표본" value={candidateValue(performance.candidateMatchedN)} state={countState(performance.candidateMatchedN)} />
         <PaperKpi label="마지막 업데이트" value={formatDate(overview.state.latestCycleAt)} state={overview.state.latestCycleAt ? 'normal' : 'unmeasured'} />
       </section>
 
@@ -1123,8 +1119,7 @@ export default function ResearchCenterPage() {
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"><FlaskConical className="h-5 w-5" aria-hidden="true" /></span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2"><h1 className="text-xl font-black sm:text-2xl">연구센터</h1><span className="rounded-full border border-card-border bg-background px-2 py-0.5 text-[10px] font-black text-muted-foreground">조회 전용</span></div>
-              <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">상태를 먼저 보고, 눌러서 근거를 확인하세요.</p>
-            </div>
+                          </div>
             <button type="button" aria-label="연구센터 새로고침" onClick={refreshAll} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-card-border bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" /></button>
           </div>
         </header>
