@@ -26,12 +26,22 @@ export type BacktestFormValues = {
   trailingActivationR: number;
   trailingDistanceR: number;
   strategyParameters: {
-    fastPeriod: number;
-    slowPeriod: number;
-    pullbackTolerancePercent: number;
-    lookback: number;
-    volumePeriod: number;
-    volumeMultiplier: number;
+    trendPullback: {
+      fastPeriod: number;
+      slowPeriod: number;
+      pullbackTolerancePercent: number;
+      volumePeriod: number;
+      volumeMultiplier: number;
+    };
+    breakout: {
+      lookback: number;
+      volumePeriod: number;
+      volumeMultiplier: number;
+    };
+    vwapReclaim: {
+      volumePeriod: number;
+      volumeMultiplier: number;
+    };
   };
 };
 export type BacktestPerformance = {
@@ -109,18 +119,11 @@ function dateToUtc(value: string, endOfDay = false) {
 }
 
 export function toBacktestRequest(values: BacktestFormValues) {
-  const p = values.strategyParameters;
   const parameters: Record<string, number | boolean> = values.strategy === 'trend_pullback'
-    ? {
-        fastPeriod: p.fastPeriod,
-        slowPeriod: p.slowPeriod,
-        pullbackTolerancePercent: p.pullbackTolerancePercent,
-        volumePeriod: p.volumePeriod,
-        volumeMultiplier: p.volumeMultiplier,
-      }
+    ? { ...values.strategyParameters.trendPullback }
     : values.strategy === 'breakout'
-      ? { lookback: p.lookback, volumePeriod: p.volumePeriod, volumeMultiplier: p.volumeMultiplier }
-      : { volumePeriod: p.volumePeriod, volumeMultiplier: p.volumeMultiplier };
+      ? { ...values.strategyParameters.breakout }
+      : { ...values.strategyParameters.vwapReclaim };
   return {
     market: 'crypto-futures' as const,
     symbol: values.symbol.trim().toUpperCase(),
