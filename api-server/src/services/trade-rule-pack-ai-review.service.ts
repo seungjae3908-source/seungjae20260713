@@ -1,6 +1,9 @@
 import type { MemberAutoTradingPaperHandoffEntry } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 import { AiChatError, type AiChatResult } from './ai-chat.service';
-import { answerBoundedAiJson } from './bounded-ai-json-provider.service';
+import {
+  answerBoundedAiJson,
+  boundedAiJsonProviderRuntimeStatus,
+} from './bounded-ai-json-provider.service';
 import {
   STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS,
   STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
@@ -47,10 +50,33 @@ export type TradeRulePackAiReviewRuntimeStatus = Readonly<{
   provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
   model: string | null;
   fallbackConfigured: boolean;
+  fallbackProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  fallbackModel: string | null;
   promptVersion: typeof STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION;
-  producer: 'AI_CHAT_PROVIDER_SEAM';
+  producer: 'BOUNDED_AI_JSON_PROVIDER';
   failClosed: true;
   cacheEnabled: true;
+  cacheSize: number;
+  cacheMaxEntries: number;
+  cacheHits: number;
+  cacheEvictions: number;
+  reviewCalls: number;
+  pass: number;
+  abstain: number;
+  veto: number;
+  blocked: number;
+  unavailable: number;
+  lastDecisionAt: string | null;
+  providerCalls: number;
+  providerSuccesses: number;
+  providerFailures: number;
+  providerFallbackSuccesses: number;
+  providerLastSuccessAt: string | null;
+  providerLastErrorAt: string | null;
+  providerLastErrorCode: string | null;
+  providerLastProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+  providerAverageLatencyMs: number | null;
+  providerMaxLatencyMs: number | null;
   maxTtlMs: number;
   executionAuthority: 'NONE';
   orderAllowed: false;
@@ -75,6 +101,9 @@ const SAFETY = Object.freeze({
 const DEFAULT_TTL_MS = 60_000;
 const MIN_TTL_MS = 5_000;
 const DEFAULT_TIMEOUT_MS = 12_000;
+const DEFAULT_CACHE_MAX_ENTRIES = 500;
+const MIN_CACHE_MAX_ENTRIES = 10;
+const MAX_CACHE_MAX_ENTRIES = 5_000;
 const AI_CHAT_PROMPT_LIMIT = 1_900;
 const UNSAFE_OUTPUT = /(?:guaranteed|certain profit|buy now|sell now|enter long|enter short|increase leverage|withdraw|transfer|api\s*key|secret|token|수익\s*보장|확정\s*매수|반드시\s*(?:매수|매도)|레버리지.{0,16}(?:확대|증가)|출금|송금)/i;
 
@@ -89,42 +118,61 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.trunc(parsed))) : fallback;
 }
 
-function configuredProvider(env: NodeJS.ProcessEnv): {
-  configured: boolean;
-  provider: TradeRulePackAiReviewRuntimeStatus['provider'];
-  model: string | null;
-  fallbackConfigured: boolean;
-} {
-  const selected = String(env.AI_CHAT_PROVIDER ?? '').trim().toLowerCase();
-  const geminiKey = Boolean(String(env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? '').trim());
-  const groqKey = Boolean(String(env.GROQ_API_KEY ?? '').trim());
-  const genericKey = Boolean(String(env.AI_CHAT_API_KEY ?? '').trim());
-  const geminiModel = String(env.AI_CHAT_MODEL ?? env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite').trim();
-  const groqModel = String(env.AI_CHAT_MODEL ?? env.GROQ_MODEL ?? 'openai/gpt-oss-20b').trim();
+type ReviewRuntimeSnapshot = Readonly<{
+  cacheSize: number;
+  cacheMaxEntries: number;
+  cacheHits: number;
+  cacheEvictions: number;
+  reviewCalls: number;
+  pass: number;
+  abstain: number;
+  veto: number;
+  blocked: number;
+  unavailable: number;
+  lastDecisionAt: string | null;
+}>;
 
-  if (['gemini', 'google', 'google-gemini'].includes(selected)) {
-    return { configured: (genericKey || geminiKey) && Boolean(geminiModel), provider: 'google-gemini', model: geminiModel || null, fallbackConfigured: groqKey };
-  }
-  if (selected === 'groq') {
-    return { configured: (genericKey || groqKey) && Boolean(groqModel), provider: 'groq', model: groqModel || null, fallbackConfigured: false };
-  }
-  if (selected === 'openai-compatible') {
-    const model = String(env.AI_CHAT_MODEL ?? '').trim();
-    return { configured: genericKey && Boolean(model), provider: 'openai-compatible', model: model || null, fallbackConfigured: false };
-  }
-  if (selected) return { configured: false, provider: null, model: null, fallbackConfigured: false };
-  if (geminiKey) return { configured: Boolean(geminiModel), provider: 'google-gemini', model: geminiModel || null, fallbackConfigured: groqKey };
-  if (groqKey) return { configured: Boolean(groqModel), provider: 'groq', model: groqModel || null, fallbackConfigured: false };
-  return { configured: false, provider: null, model: null, fallbackConfigured: false };
-}
+const EMPTY_RUNTIME_SNAPSHOT: ReviewRuntimeSnapshot = Object.freeze({
+  cacheSize: 0,
+  cacheMaxEntries: 500,
+  cacheHits: 0,
+  cacheEvictions: 0,
+  reviewCalls: 0,
+  pass: 0,
+  abstain: 0,
+  veto: 0,
+  blocked: 0,
+  unavailable: 0,
+  lastDecisionAt: null,
+});
 
-export function tradeRulePackAiReviewRuntimeStatus(env: NodeJS.ProcessEnv = process.env): TradeRulePackAiReviewRuntimeStatus {
+export function tradeRulePackAiReviewRuntimeStatus(
+  env: NodeJS.ProcessEnv = process.env,
+  snapshot: ReviewRuntimeSnapshot = EMPTY_RUNTIME_SNAPSHOT,
+): TradeRulePackAiReviewRuntimeStatus {
+  const provider = boundedAiJsonProviderRuntimeStatus(env);
   return Object.freeze({
-    ...configuredProvider(env),
+    configured: provider.configured,
+    provider: provider.provider,
+    model: provider.model,
+    fallbackConfigured: provider.fallbackConfigured,
+    fallbackProvider: provider.fallbackProvider,
+    fallbackModel: provider.fallbackModel,
     promptVersion: STRATEGY_RULE_PACK_AI_REVIEW_PROMPT_VERSION,
-    producer: 'AI_CHAT_PROVIDER_SEAM' as const,
+    producer: 'BOUNDED_AI_JSON_PROVIDER' as const,
     failClosed: true as const,
     cacheEnabled: true as const,
+    ...snapshot,
+    providerCalls: provider.calls,
+    providerSuccesses: provider.successes,
+    providerFailures: provider.failures,
+    providerFallbackSuccesses: provider.fallbackSuccesses,
+    providerLastSuccessAt: provider.lastSuccessAt,
+    providerLastErrorAt: provider.lastErrorAt,
+    providerLastErrorCode: provider.lastErrorCode,
+    providerLastProvider: provider.lastProvider,
+    providerAverageLatencyMs: provider.averageLatencyMs,
+    providerMaxLatencyMs: provider.maxLatencyMs,
     maxTtlMs: STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS,
     executionAuthority: 'NONE' as const,
     orderAllowed: false as const,
@@ -248,23 +296,120 @@ function unavailable(entry: MemberAutoTradingPaperHandoffEntry, nowMs: number, d
 
 export class TradeRulePackAiReviewer {
   private readonly cache = new Map<string, TradeRulePackAiReview>();
-  constructor(private readonly invoke: AiInvoker = answerBoundedAiJson, private readonly env: NodeJS.ProcessEnv = process.env) {}
+  private readonly cacheMaxEntries: number;
+  private cacheHits = 0;
+  private cacheEvictions = 0;
+  private reviewCalls = 0;
+  private pass = 0;
+  private abstain = 0;
+  private veto = 0;
+  private blocked = 0;
+  private unavailableCount = 0;
+  private lastDecisionAt: string | null = null;
 
-  runtimeStatus(): TradeRulePackAiReviewRuntimeStatus { return tradeRulePackAiReviewRuntimeStatus(this.env); }
-  clearCache(): void { this.cache.clear(); }
+  constructor(
+    private readonly invoke: AiInvoker = answerBoundedAiJson,
+    private readonly env: NodeJS.ProcessEnv = process.env,
+  ) {
+    this.cacheMaxEntries = boundedInteger(
+      env.TRADE_RULE_PACK_AI_REVIEW_CACHE_MAX_ENTRIES,
+      DEFAULT_CACHE_MAX_ENTRIES,
+      MIN_CACHE_MAX_ENTRIES,
+      MAX_CACHE_MAX_ENTRIES,
+    );
+  }
 
-  async review(entry: MemberAutoTradingPaperHandoffEntry, nowMs = Date.now(), signal?: AbortSignal): Promise<TradeRulePackAiReview> {
-    const digest = buildTradeRulePackAiEvidenceDigest(entry);
-    if (!isEvidenceBackedAutoStrategyId(entry.identity.strategyId)) return unavailable(entry, nowMs, digest, 'AI_REVIEW_STRATEGY_NOT_REGISTERED', 'BLOCKED');
-    const ttlMs = boundedInteger(this.env.TRADE_RULE_PACK_AI_REVIEW_TTL_MS, DEFAULT_TTL_MS, MIN_TTL_MS, STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS);
-    const deadline = freshnessDeadline(entry, nowMs, ttlMs);
-    if (deadline == null) return unavailable(entry, nowMs, digest, 'AI_REVIEW_PUBLIC_EVIDENCE_NOT_FRESH', 'BLOCKED');
+  private runtimeSnapshot(): ReviewRuntimeSnapshot {
+    return Object.freeze({
+      cacheSize: this.cache.size,
+      cacheMaxEntries: this.cacheMaxEntries,
+      cacheHits: this.cacheHits,
+      cacheEvictions: this.cacheEvictions,
+      reviewCalls: this.reviewCalls,
+      pass: this.pass,
+      abstain: this.abstain,
+      veto: this.veto,
+      blocked: this.blocked,
+      unavailable: this.unavailableCount,
+      lastDecisionAt: this.lastDecisionAt,
+    });
+  }
 
+  runtimeStatus(): TradeRulePackAiReviewRuntimeStatus {
+    this.pruneExpired(Date.now());
+    return tradeRulePackAiReviewRuntimeStatus(this.env, this.runtimeSnapshot());
+  }
+
+  clearCache(): void {
+    this.cache.clear();
+  }
+
+  private pruneExpired(nowMs: number): void {
+    for (const [key, review] of this.cache.entries()) {
+      if (Date.parse(review.expiresAt) <= nowMs) this.cache.delete(key);
+    }
+  }
+
+  private cachedReview(digest: string, nowMs: number): TradeRulePackAiReview | null {
+    this.pruneExpired(nowMs);
     const cached = this.cache.get(digest);
-    if (cached && Date.parse(cached.expiresAt) > nowMs) return Object.freeze({ ...cached, cacheHit: true });
-    if (cached) this.cache.delete(digest);
+    if (!cached) return null;
+    this.cache.delete(digest);
+    this.cache.set(digest, cached);
+    this.cacheHits += 1;
+    return Object.freeze({ ...cached, cacheHit: true });
+  }
 
-    if (!this.runtimeStatus().configured) return unavailable(entry, nowMs, digest, 'AI_REVIEW_PROVIDER_NOT_CONFIGURED');
+  private remember(digest: string, review: TradeRulePackAiReview, nowMs: number): void {
+    this.pruneExpired(nowMs);
+    if (this.cache.has(digest)) this.cache.delete(digest);
+    while (this.cache.size >= this.cacheMaxEntries) {
+      const oldest = this.cache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.cache.delete(oldest);
+      this.cacheEvictions += 1;
+    }
+    this.cache.set(digest, review);
+  }
+
+  private observe(review: TradeRulePackAiReview): TradeRulePackAiReview {
+    if (review.status === 'BLOCKED') this.blocked += 1;
+    else if (review.status === 'UNAVAILABLE') this.unavailableCount += 1;
+    else if (review.decision === 'PASS') this.pass += 1;
+    else if (review.decision === 'ABSTAIN') this.abstain += 1;
+    else if (review.decision === 'VETO') this.veto += 1;
+    if (review.status === 'READY' && review.decision) this.lastDecisionAt = review.generatedAt;
+    return review;
+  }
+
+  async review(
+    entry: MemberAutoTradingPaperHandoffEntry,
+    nowMs = Date.now(),
+    signal?: AbortSignal,
+  ): Promise<TradeRulePackAiReview> {
+    this.reviewCalls += 1;
+    const digest = buildTradeRulePackAiEvidenceDigest(entry);
+    if (!isEvidenceBackedAutoStrategyId(entry.identity.strategyId)) {
+      return this.observe(unavailable(entry, nowMs, digest, 'AI_REVIEW_STRATEGY_NOT_REGISTERED', 'BLOCKED'));
+    }
+
+    const ttlMs = boundedInteger(
+      this.env.TRADE_RULE_PACK_AI_REVIEW_TTL_MS,
+      DEFAULT_TTL_MS,
+      MIN_TTL_MS,
+      STRATEGY_RULE_PACK_AI_REVIEW_MAX_TTL_MS,
+    );
+    const deadline = freshnessDeadline(entry, nowMs, ttlMs);
+    if (deadline == null) {
+      return this.observe(unavailable(entry, nowMs, digest, 'AI_REVIEW_PUBLIC_EVIDENCE_NOT_FRESH', 'BLOCKED'));
+    }
+
+    const cached = this.cachedReview(digest, nowMs);
+    if (cached) return this.observe(cached);
+
+    if (!boundedAiJsonProviderRuntimeStatus(this.env).configured) {
+      return this.observe(unavailable(entry, nowMs, digest, 'AI_REVIEW_PROVIDER_NOT_CONFIGURED'));
+    }
 
     let result: AiChatResult;
     try {
@@ -275,17 +420,34 @@ export class TradeRulePackAiReviewer {
         boundedInteger(this.env.TRADE_RULE_PACK_AI_REVIEW_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 30_000),
       );
     } catch (cause) {
-      return unavailable(entry, nowMs, digest, cause instanceof AiChatError ? cause.code : 'AI_REVIEW_PROVIDER_ERROR');
+      return this.observe(unavailable(
+        entry,
+        nowMs,
+        digest,
+        cause instanceof AiChatError ? cause.code : 'AI_REVIEW_PROVIDER_ERROR',
+      ));
     }
-    if (result.kind !== 'answer' || !result.model || !result.provider) return unavailable(entry, nowMs, digest, 'AI_REVIEW_PROVIDER_RESPONSE_UNUSABLE');
+    if (result.kind !== 'answer' || !result.model || !result.provider) {
+      return this.observe(unavailable(entry, nowMs, digest, 'AI_REVIEW_PROVIDER_RESPONSE_UNUSABLE'));
+    }
 
     let parsed: ReturnType<typeof parseStrictDecision>;
-    try { parsed = parseStrictDecision(result.answer); }
-    catch (cause) { return unavailable(entry, nowMs, digest, cause instanceof Error ? cause.message : 'AI_REVIEW_INVALID_RESPONSE'); }
+    try {
+      parsed = parseStrictDecision(result.answer);
+    } catch (cause) {
+      return this.observe(unavailable(
+        entry,
+        nowMs,
+        digest,
+        cause instanceof Error ? cause.message : 'AI_REVIEW_INVALID_RESPONSE',
+      ));
+    }
 
     const generatedAtMs = nowMs;
     const expiresAtMs = Math.min(deadline, generatedAtMs + ttlMs);
-    if (expiresAtMs <= generatedAtMs) return unavailable(entry, nowMs, digest, 'AI_REVIEW_EXPIRED_BEFORE_PUBLICATION', 'BLOCKED');
+    if (expiresAtMs <= generatedAtMs) {
+      return this.observe(unavailable(entry, nowMs, digest, 'AI_REVIEW_EXPIRED_BEFORE_PUBLICATION', 'BLOCKED'));
+    }
 
     const review: TradeRulePackAiReview = Object.freeze({
       schemaVersion: STRATEGY_RULE_PACK_AI_REVIEW_SCHEMA,
@@ -309,8 +471,8 @@ export class TradeRulePackAiReviewer {
       providerLatencyMs: result.providerLatencyMs,
       safety: SAFETY,
     });
-    this.cache.set(digest, review);
-    return review;
+    this.remember(digest, review, nowMs);
+    return this.observe(review);
   }
 }
 
