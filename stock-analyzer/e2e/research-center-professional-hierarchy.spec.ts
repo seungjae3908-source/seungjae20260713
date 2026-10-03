@@ -198,20 +198,24 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     const paperCard = page.getByTestId('research-summary-paper');
     await expect(paperCard).toContainText('모의매매 표본');
     await paperCard.click();
-    await expect(page.getByTestId('research-general-selected-detail')).toContainText('다음에 뭘 보면 되나요?');
-    const fullCost = page.getByTestId('research-full-cost-summary');
+    const detailDialog = page.getByTestId('research-general-detail-dialog');
+    await expect(detailDialog).toBeVisible();
+    await expect(detailDialog).toContainText('다음 단계');
+    const fullCost = detailDialog.getByTestId('research-full-cost-summary');
     await expect(fullCost).toBeVisible();
-    await expect(fullCost).toContainText('FULL_COST_READY · 미충족');
+    await expect(fullCost).toContainText('전체 비용 검증 · 미충족');
     await expect(fullCost).toContainText('4/8');
-    await expect(fullCost).toContainText('후보 Settlement 3건 연결');
-    await expect(fullCost).toContainText('CANONICAL_SUPPLEMENTAL_COST_EVIDENCE_MISSING');
-    await expect(page.getByTestId('research-full-cost-commission')).toContainText('관측됨');
-    await expect(page.getByTestId('research-full-cost-commission')).toContainText('public:commission');
-    await expect(page.getByTestId('research-full-cost-slippage')).toContainText('모델값 · 경제증거 아님');
-    await expect(page.getByTestId('research-full-cost-latency')).toContainText('미확인');
-    await expect(page.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Freshness · API 미제공');
-    await expect(page.getByTestId('research-full-cost-partialFillImpact')).toContainText('Quality · API 미제공');
+    await expect(fullCost).toContainText('후보 정산 3건 연결');
+    await expect(fullCost).toContainText('현재 막힌 단계 · 추가 검증 자료 필요');
+    await expect(detailDialog.getByTestId('research-full-cost-commission')).toContainText('관측됨');
+    await expect(detailDialog.getByTestId('research-full-cost-commission')).toContainText('출처 · 확인됨');
+    await expect(detailDialog.getByTestId('research-full-cost-slippage')).toContainText('추정값 · 실측 아님');
+    await expect(detailDialog.getByTestId('research-full-cost-latency')).toContainText('미확인');
+    await expect(detailDialog.getByTestId('research-full-cost-liquidityImpact')).toContainText('데이터 차단');
+    await expect(detailDialog.getByTestId('research-full-cost-partialFillImpact')).toContainText('신선도 · 미제공');
+    await expect(detailDialog.getByTestId('research-full-cost-partialFillImpact')).toContainText('품질 · 미제공');
+    await detailDialog.getByRole('button', { name: '닫기' }).click();
+    await expect(detailDialog).toHaveCount(0);
     await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
 
     const overflow = await page.evaluate(() => Math.max(
@@ -235,9 +239,9 @@ test('expert view preserves the canonical research evidence surface', async ({ p
   await expect(page.getByRole('tab', { name: '검증 리포트', exact: true })).toBeVisible();
 
   await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
-  await expect(page.getByText('Research source SHA', { exact: true })).toBeVisible();
-  await expect(page.getByText('Dataset identity', { exact: true })).toBeVisible();
-  await expect(page.getByText('Profitability proof', { exact: true })).toBeVisible();
+  await expect(page.getByText('연구 소스 버전', { exact: true })).toBeVisible();
+  await expect(page.getByText('데이터셋 연결', { exact: true })).toBeVisible();
+  await expect(page.getByText('수익성 검증', { exact: true })).toBeVisible();
 });
 
 test('copilot entry keeps the established button contract', async ({ page }) => {
