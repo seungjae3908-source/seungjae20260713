@@ -923,7 +923,9 @@ test('live connection verification authenticates the three spot providers with z
         });
       }
       if (url.includes('openapi.tossinvest.com/api/v1/accounts')) {
-        return new Response(JSON.stringify({ result: [] }), {
+        return new Response(JSON.stringify({
+          result: [{ accountSeq: 'account-1', accountType: 'brokerage' }],
+        }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }
