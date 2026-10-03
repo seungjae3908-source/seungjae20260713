@@ -536,7 +536,7 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     await openScanner(page, state);
 
     await page.getByRole('button', { name: '자동매매', exact: true }).click();
-    await expect(page).toHaveURL(/\/auto-trading$/);
+    await expect(page).toHaveURL(/\/auto-trading\?market=domestic_stock$/);
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: '자동매매', level: 1 })).toBeVisible();
     const safety = page.getByTestId('auto-trading-safety-summary');
