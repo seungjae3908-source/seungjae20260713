@@ -14,13 +14,16 @@ const requireRegex = (text, regex, label) => {
   if (!regex.test(text)) fail(label + ' did not match ' + regex);
 };
 const extractFrozenArray = (text, name) => {
-  const pattern = new RegExp(
-    String.raw`(?:export\\s+)?const\\s+${name}\\s*=\\s*Object\\.freeze\\(\\[([\\s\\S]*?)\\](?:\\s+as\\s+const)?\\)`,
-    'u',
-  );
-  const match = text.match(pattern);
-  if (!match) fail(name + ' array not found');
-  return [...match[1].matchAll(/['"]([^'"]+)['"]/gu)].map((row) => row[1]);
+  const markers = [
+    `export const ${name} = Object.freeze([`,
+    `const ${name} = Object.freeze([`,
+  ];
+  const marker = markers.find((candidate) => text.includes(candidate));
+  if (!marker) fail(name + ' array start not found');
+  const start = text.indexOf(marker) + marker.length;
+  const end = text.indexOf(']);', start);
+  if (end < 0) fail(name + ' array end not found');
+  return [...text.slice(start, end).matchAll(/['"]([^'"]+)['"]/gu)].map((row) => row[1]);
 };
 const assertSameSet = (actual, expected, label) => {
   const left = [...new Set(actual)].sort();
