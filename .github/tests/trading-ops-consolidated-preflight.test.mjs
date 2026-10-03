@@ -64,6 +64,7 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
   const aiGate = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
   const aiProducer = read('api-server/src/services/trade-rule-pack-ai-review.service.ts');
+  const boundedAi = read('api-server/src/services/bounded-ai-json-provider.service.ts');
   const scannerAi = read('api-server/src/services/scanner-ai-runtime.service.ts');
   const stockScanner = read('api-server/src/services/stock-signal-scanner.service.ts');
   const cryptoScanner = read('api-server/src/routes/crypto-signal-scan.ts');
@@ -107,6 +108,9 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(aiProducer.includes("executionAuthority: 'NONE'"));
   assert.ok(aiProducer.includes('riskOverrideAllowed: false'));
   assert.ok(aiProducer.includes('AI_REVIEW_PROVIDER_NOT_CONFIGURED'));
+  assert.ok(boundedAi.includes('bounded public-evidence classifier'));
+  assert.ok(boundedAi.includes("Never override deterministic risk"));
+  assert.ok(boundedAi.includes("fallbackUsed: true"));
   assert.ok(scannerAi.includes("canonicalScannerWired: true"));
   assert.ok(scannerAi.includes("executionAuthority: 'NONE'"));
   assert.ok(scannerAi.includes('vetoBlocksStrongSignal: true'));
