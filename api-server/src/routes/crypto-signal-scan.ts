@@ -232,9 +232,16 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const aGradeCount = rankedCards.filter((card) => card.signalGrade === 'A').length;
       const bGradeCount = rankedCards.filter((card) => card.signalGrade === 'B').length;
       const actionableCount = rankedCards.filter((card) => actionableIds.has(card.signalId)).length;
-      const intelligenceReadyCount = rankedCards.filter((card) => card.marketIntelligence.status === 'READY').length;
+      const intelligenceBySignalId = new Map(
+        eventCandidates.map((card) => [card.signalId, card.marketIntelligence] as const),
+      );
+      const intelligenceReadyCount = rankedCards.filter(
+        (card) => intelligenceBySignalId.get(card.signalId)?.status === 'READY',
+      ).length;
       const intelligenceUnavailableCount = rankedCards.length - intelligenceReadyCount;
-      const intelligenceBlockedCount = rankedCards.filter((card) => card.marketIntelligence.autoTrading.mode === 'BLOCKED_RISK').length;
+      const intelligenceBlockedCount = rankedCards.filter(
+        (card) => intelligenceBySignalId.get(card.signalId)?.autoTrading.mode === 'BLOCKED_RISK',
+      ).length;
       const insufficientDataCount = result.failures.filter((failure) => failure.reason === 'invalid_data').length;
       const providerAcceptedCount = result.execution.completedCount;
       const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);
