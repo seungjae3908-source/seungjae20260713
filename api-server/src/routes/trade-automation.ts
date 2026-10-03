@@ -29,6 +29,7 @@ import { normalizeTradingPolicy } from '../services/trade-automation-risk.servic
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
 import { evidenceBackedAutoStrategyCatalog } from '../services/evidence-backed-auto-strategy-catalog.service';
+import { readRulePackPilotCapitalState } from '../services/trade-rule-pack-pilot-capital.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -685,6 +686,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     ]);
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
     const vaultStatus = credentialConfigurationStatus();
+    const pilotCapitalState = await readRulePackPilotCapitalState(repository, userId, new Date());
     const liveExecutionReadiness = Object.fromEntries(
       [...EXCHANGES].map((exchange) => {
         const connection = connections.find((row) => row.exchange === exchange) ?? null;
@@ -730,6 +732,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       futuresLiveLimited: futuresLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
+      pilotCapitalState,
       evidenceBackedStrategies: evidenceBackedAutoStrategyCatalog().map((strategy) => ({
         strategyId: strategy.strategyId,
         label: strategy.label,
