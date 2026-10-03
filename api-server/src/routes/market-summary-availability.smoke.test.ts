@@ -368,7 +368,7 @@ test('video runtime loader prefers authoritative durable dashboard over an older
         headers: { 'content-type': 'application/json' },
       });
     }) as typeof fetch;
-    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath]) as Record<string, unknown>;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath], Date.parse('2026-09-13T01:00:00.000Z')) as Record<string, unknown>;
     assert.equal(result.query, 'NEW_DURABLE_QUERY');
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -381,8 +381,25 @@ test('video runtime loader uses validated local snapshot only when durable dashb
     const localPath = join(root, 'video.json');
     await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
     const fakeFetch = (async () => { throw new Error('TEST_ONLY_DASHBOARD_DOWN'); }) as typeof fetch;
-    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath]) as Record<string, unknown>;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath], Date.parse('2026-09-13T01:00:00.000Z')) as Record<string, unknown>;
     assert.equal(result.query, 'TEST_ONLY video strategy');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('video runtime loader rejects stale local fallback when the durable dashboard is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'video-readback-stale-fallback-'));
+  try {
+    const localPath = join(root, 'video.json');
+    await writeFile(localPath, JSON.stringify(videoEvidenceSnapshot()));
+    const fakeFetch = (async () => { throw new Error('TEST_ONLY_DASHBOARD_DOWN'); }) as typeof fetch;
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(
+      fakeFetch,
+      [localPath],
+      Date.parse('2026-09-14T01:00:00.000Z'),
+    );
+    assert.equal(result, null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -396,7 +413,7 @@ test('authoritative durable dashboard missing state is not overwritten by stale 
     const fakeFetch = (async () => new Response(JSON.stringify({
       ok: false, available: false, dataState: 'UNKNOWN', reason: 'VIDEO_RESEARCH_SNAPSHOT_MISSING',
     }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
-    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath]);
+    const result = await loadVideoResearchRuntimeEvidenceSnapshot(fakeFetch, [localPath], Date.parse('2026-09-13T01:00:00.000Z'));
     assert.equal(result, null);
   } finally {
     await rm(root, { recursive: true, force: true });
