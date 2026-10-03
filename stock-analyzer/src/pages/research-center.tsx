@@ -912,7 +912,7 @@ function PaperTab({
     identity14Verified: false,
     fullCostEvidence: {
       fullCostReady: false as const,
-      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'].map((key) => [key, { state: '자료 없음', valuePercent: null, provenance: null }])) as ResearchCandidatePerformance['fullCostEvidence']['components'],
+      components: Object.fromEntries(['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'].map((key) => [key, { state: 'UNKNOWN', valuePercent: null, provenance: null }])) as ResearchCandidatePerformance['fullCostEvidence']['components'],
     },
     candidateMatchedN: null,
     LONG_SIGNAL_N: null,
