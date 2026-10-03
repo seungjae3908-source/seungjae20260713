@@ -148,6 +148,51 @@ test('hard data-quality failure is never relaxed to fill top ten', () => {
   assert.equal(result.diagnostics.hardFilterRejectedCount, 1);
 });
 
+test('final S-grade promotion requires explicit AI PASS in addition to backtest and signal quality', () => {
+  const withoutAi = card('NOAI', 94);
+  const noAiResult = rankScannerCandidates({
+    cards: [withoutAi],
+    market: 'KR',
+    strategy: 'swing',
+    backtests: { NOAI: verified() },
+  });
+  assert.equal(noAiResult.cards[0].signalGrade, 'A');
+
+  const pass = card('PASSAI', 94);
+  pass.aiValidation = {
+    status: 'PASS',
+    provider: 'test-ai',
+    counterEvidence: [],
+    missingData: [],
+    risks: [],
+    explanation: 'validated',
+  };
+  const passResult = rankScannerCandidates({
+    cards: [pass],
+    market: 'KR',
+    strategy: 'swing',
+    backtests: { PASSAI: verified() },
+  });
+  assert.equal(passResult.cards[0].signalGrade, 'S');
+
+  const partial = card('PARTIALAI', 94);
+  partial.aiValidation = {
+    status: 'PARTIAL',
+    provider: 'test-ai',
+    counterEvidence: [],
+    missingData: ['event evidence'],
+    risks: [],
+    explanation: 'partial',
+  };
+  const partialResult = rankScannerCandidates({
+    cards: [partial],
+    market: 'KR',
+    strategy: 'swing',
+    backtests: { PARTIALAI: verified() },
+  });
+  assert.equal(partialResult.cards[0].signalGrade, 'A');
+});
+
 test('top ten is a maximum and does not synthesize extra candidates', () => {
   const cards = Array.from({ length: 13 }, (_, index) => card(`S${index}`, 70 + index));
   const result = rankScannerCandidates({ cards, market: 'KR', strategy: 'swing', limit: 10 });
