@@ -62,6 +62,7 @@ jobs:
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
           grep -Fq "LIVE_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED" "$workflow"
           grep -Fq "LIVE_TRADING_EXACT_ACCOUNT_QA_REQUIRED" "$workflow"
+          grep -Fq 'name.startsWith(`${workflowName} ${target} `)' "$workflow"
           grep -Fq 'production-comprehensive-readonly-${run.id}' "$workflow"
           grep -Fq 'production-account-readonly-live-${target}' "$workflow"
           grep -Fq 'actions/download-artifact@v4' "$workflow"
@@ -271,8 +272,10 @@ jobs:
                 status: 'completed',
                 per_page: 100,
               });
+              const runNameMatches = (name) => name === workflowName
+                || name.startsWith(`${workflowName} ${target} `);
               const run = runs
-                .filter((candidate) => candidate.name === workflowName
+                .filter((candidate) => runNameMatches(candidate.name)
                   && candidate.path === `.github/workflows/${workflowId}`
                   && candidate.head_sha === target
                   && candidate.head_branch === 'main'
