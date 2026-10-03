@@ -222,12 +222,12 @@ function validationInput(card: ScannerSignalCard): ScannerAiValidationInput {
   };
 }
 
-export function applyScannerAiValidation(
-  card: ScannerSignalCard,
+export function applyScannerAiValidation<T extends ScannerSignalCard>(
+  card: T,
   validation: ScannerAiValidation,
-): ScannerSignalCard {
-  if (validation.status === 'NOT_RUN') return { ...card, aiValidation: validation };
-  if (validation.status === 'PASS') return { ...card, aiValidation: validation };
+): T {
+  if (validation.status === 'NOT_RUN') return { ...card, aiValidation: validation } as T;
+  if (validation.status === 'PASS') return { ...card, aiValidation: validation } as T;
 
   const warning = validation.status === 'VETO'
     ? 'AI 공개근거 검토에서 구체적 반대근거가 확인되어 강신호 자격을 차단했습니다.'
@@ -244,10 +244,11 @@ export function applyScannerAiValidation(
       ? (card.signalGrade === 'S' || card.signalGrade === 'A' ? 'B' : card.signalGrade)
       : card.signalGrade === 'S' ? 'A' : card.signalGrade,
     warnings: [...new Set([...card.warnings, warning])],
-  };
+   as T;
+}
 }
 
-function notRun(card: ScannerSignalCard, reason: string): ScannerSignalCard {
+function notRun<T extends ScannerSignalCard>(card: T, reason: string): T {
   return applyScannerAiValidation(card, {
     status: 'NOT_RUN',
     provider: null,
@@ -258,7 +259,7 @@ function notRun(card: ScannerSignalCard, reason: string): ScannerSignalCard {
   });
 }
 
-export function enforceScannerAiFinalPromotionPolicy(cards: ScannerSignalCard[]): ScannerSignalCard[] {
+export function enforceScannerAiFinalPromotionPolicy<T extends ScannerSignalCard>(cards: T[]): T[] {
   return cards.map((card) => {
     if (card.signalGrade !== 'S' || card.aiValidation?.status === 'PASS') return card;
     return {
@@ -268,19 +269,20 @@ export function enforceScannerAiFinalPromotionPolicy(cards: ScannerSignalCard[])
         ...card.warnings,
         'S등급은 외부 AI 공개근거 검토 PASS가 있어야 하므로 A등급으로 제한했습니다.',
       ])],
-    };
+     as T;
+}
   });
 }
 
-export async function enrichTopScannerCandidatesWithAi(
-  cards: ScannerSignalCard[],
+export async function enrichTopScannerCandidatesWithAi<T extends ScannerSignalCard>(
+  cards: T[],
   options: {
     signal?: AbortSignal;
     validator?: Validator;
     env?: NodeJS.ProcessEnv;
     maxCandidates?: number;
   } = {},
-): Promise<ScannerSignalCard[]> {
+): Promise<T[]> {
   const env = options.env ?? process.env;
   if (!configured(env) || options.signal?.aborted) {
     return cards.map((card) => card.aiValidation?.status && card.aiValidation.status !== 'NOT_RUN'
