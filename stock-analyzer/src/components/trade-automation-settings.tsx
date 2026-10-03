@@ -44,6 +44,13 @@ type Status = {
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
   lastOrderByMarket?: Record<Market, { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null>;
+  marketActivityByMarket?: Record<Market, {
+    pendingOrders: number;
+    recoveryRequiredOrders: number;
+    todayOrders: number;
+    todayFilledOrders: number;
+    lastActivityAt: string | null;
+  }>;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
 };
 
