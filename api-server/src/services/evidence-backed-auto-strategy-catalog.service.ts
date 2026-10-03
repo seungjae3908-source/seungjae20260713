@@ -1,134 +1,208 @@
-export type EvidenceBackedAutoStrategyMarket =
-  | 'US_STOCK'
+export type StrategyRulePackMarket =
   | 'KR_STOCK'
+  | 'US_STOCK'
   | 'CRYPTO_SPOT'
-  | 'CRYPTO_FUTURES'
-  | 'CROSS_VENUE_CRYPTO';
+  | 'CRYPTO_FUTURES';
 
-export type EvidenceBackedAutoStrategyId =
-  | 'CEX_DEX_ARBITRAGE_V1'
-  | 'US_STOCKS_IN_PLAY_ORB_V1'
-  | 'CRYPTO_WORLD_ORDER_FLOW_ML_V1'
-  | 'KR_ML_CHARTING_V1';
+export type StrategyRulePackId =
+  | 'TREND_PULLBACK_REACCEL_V1'
+  | 'US_EVENT_RVOL_FIRST_PULLBACK_V1'
+  | 'US_STOCKS_IN_PLAY_ORB_RETEST_V1'
+  | 'KR_PRESSURE_BREAKOUT_V1'
+  | 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1'
+  | 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1';
 
-type StrategyReadinessKey =
-  | 'publicDataReady'
-  | 'sourceFaithfulReplicationReady'
-  | 'oosPassed'
-  | 'walkForwardPassed'
-  | 'fullCostPassed'
-  | 'strategyHealthPassed'
+export type StrategyRuleEvidenceKey =
+  | 'dataReady'
+  | 'formulaReady'
+  | 'waveStructureReady'
+  | 'indicatorReady'
+  | 'entryTriggerReady'
+  | 'liquidityReady'
+  | 'costEvidenceReady'
+  | 'riskReady'
+  | 'aiReviewReady'
+  | 'trendRegimeReady'
+  | 'pullbackReady'
+  | 'reaccelerationReady'
+  | 'volumeAccelerationReady'
+  | 'eventCatalystReady'
+  | 'rvolReady'
+  | 'firstPullbackReady'
+  | 'vwapSupportReady'
+  | 'volumeReaccelerationReady'
   | 'pitUniverseReady'
-  | 'intraday5mReady'
   | 'first5mRvolReady'
   | 'openingRangeReady'
-  | 'multiExchangeOrderFlowReady'
+  | 'retestReady'
+  | 'microBreakoutReady'
+  | 'pressureReady'
+  | 'compressionReady'
+  | 'volumeExpansionReady'
+  | 'breakoutReady'
+  | 'orderFlowReady'
+  | 'cvdReady'
+  | 'takerBuyReady'
+  | 'orderbookImbalanceReady'
+  | 'mlRankReady'
   | 'modelFrozen'
-  | 'dexExecutionProviderReady'
-  | 'atomicHedgeReady'
-  | 'crossVenueCostReady'
-  | 'multiLegExecutionAdapterReady';
+  | 'oiReady'
+  | 'takerFlowReady'
+  | 'fundingRiskReady';
 
-function readinessRequirements(...keys: StrategyReadinessKey[]): readonly StrategyReadinessKey[] {
-  return Object.freeze(keys);
-}
-
-export type EvidenceBackedAutoStrategyDefinition = Readonly<{
-  strategyId: EvidenceBackedAutoStrategyId;
+export type StrategyRulePackDefinition = Readonly<{
+  strategyId: StrategyRulePackId;
   label: string;
-  market: EvidenceBackedAutoStrategyMarket;
-  researchRole: string;
-  defaultState: 'NO_TRADE';
-  paperRequirements: readonly StrategyReadinessKey[];
-  livePromotionAlwaysServerAttested: true;
+  markets: readonly StrategyRulePackMarket[];
+  directions: readonly ('BUY' | 'LONG' | 'SHORT')[];
+  summary: string;
+  rules: readonly string[];
+  requiredEvidence: readonly StrategyRuleEvidenceKey[];
+  paperResearchAllowedWhenReady: true;
   automaticLivePromotionAllowed: false;
+  promotionRequirements: readonly string[];
 }>;
 
-export const EVIDENCE_BACKED_AUTO_STRATEGIES: readonly EvidenceBackedAutoStrategyDefinition[] =
-  Object.freeze([
-    Object.freeze({
-      strategyId: 'CEX_DEX_ARBITRAGE_V1',
-      label: 'CEX↔DEX Arbitrage',
-      market: 'CROSS_VENUE_CRYPTO',
-      researchRole: 'market-neutral cross-venue arbitrage',
-      defaultState: 'NO_TRADE',
-      paperRequirements: readinessRequirements(
-        'publicDataReady',
-        'sourceFaithfulReplicationReady',
-        'oosPassed',
-        'walkForwardPassed',
-        'fullCostPassed',
-        'strategyHealthPassed',
-        'dexExecutionProviderReady',
-        'atomicHedgeReady',
-        'crossVenueCostReady',
-        'multiLegExecutionAdapterReady',
-      ),
-      livePromotionAlwaysServerAttested: true,
-      automaticLivePromotionAllowed: false,
-    }),
-    Object.freeze({
-      strategyId: 'US_STOCKS_IN_PLAY_ORB_V1',
-      label: 'US Stocks-in-Play ORB',
-      market: 'US_STOCK',
-      researchRole: 'intraday candidate selection + opening-range continuation',
-      defaultState: 'NO_TRADE',
-      paperRequirements: readinessRequirements(
-        'publicDataReady',
-        'sourceFaithfulReplicationReady',
-        'oosPassed',
-        'walkForwardPassed',
-        'fullCostPassed',
-        'strategyHealthPassed',
-        'pitUniverseReady',
-        'intraday5mReady',
-        'first5mRvolReady',
-        'openingRangeReady',
-      ),
-      livePromotionAlwaysServerAttested: true,
-      automaticLivePromotionAllowed: false,
-    }),
-    Object.freeze({
-      strategyId: 'CRYPTO_WORLD_ORDER_FLOW_ML_V1',
-      label: 'Crypto World Order Flow ML',
-      market: 'CRYPTO_SPOT',
-      researchRole: 'multi-exchange order-flow candidate ranker + selective long',
-      defaultState: 'NO_TRADE',
-      paperRequirements: readinessRequirements(
-        'publicDataReady',
-        'sourceFaithfulReplicationReady',
-        'oosPassed',
-        'walkForwardPassed',
-        'fullCostPassed',
-        'strategyHealthPassed',
-        'multiExchangeOrderFlowReady',
-        'modelFrozen',
-      ),
-      livePromotionAlwaysServerAttested: true,
-      automaticLivePromotionAllowed: false,
-    }),
-    Object.freeze({
-      strategyId: 'KR_ML_CHARTING_V1',
-      label: 'KR ML Charting',
-      market: 'KR_STOCK',
-      researchRole: 'Korea nonlinear chart ranker + selective long',
-      defaultState: 'NO_TRADE',
-      paperRequirements: readinessRequirements(
-        'publicDataReady',
-        'sourceFaithfulReplicationReady',
-        'oosPassed',
-        'walkForwardPassed',
-        'fullCostPassed',
-        'strategyHealthPassed',
-        'pitUniverseReady',
-        'modelFrozen',
-      ),
-      livePromotionAlwaysServerAttested: true,
-      automaticLivePromotionAllowed: false,
-    }),
-  ]);
+const COMMON: readonly StrategyRuleEvidenceKey[] = Object.freeze([
+  'dataReady',
+  'formulaReady',
+  'waveStructureReady',
+  'indicatorReady',
+  'entryTriggerReady',
+  'liquidityReady',
+  'costEvidenceReady',
+  'riskReady',
+  'aiReviewReady',
+]);
 
-const BY_ID = new Map(EVIDENCE_BACKED_AUTO_STRATEGIES.map((item) => [item.strategyId, item]));
+function req(...keys: StrategyRuleEvidenceKey[]) {
+  return Object.freeze([...COMMON, ...keys]);
+}
+
+export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object.freeze([
+  Object.freeze({
+    strategyId: 'TREND_PULLBACK_REACCEL_V1',
+    label: '추세 눌림 재가속',
+    markets: Object.freeze(['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']),
+    directions: Object.freeze(['BUY', 'LONG', 'SHORT']),
+    summary: '상위 추세 + 눌림 + 구조 유지 + 거래량 재가속 + 재돌파',
+    rules: Object.freeze([
+      '1H EMA20/EMA60 추세 방향 일치',
+      '15m VWAP 방향 일치',
+      '5m HH-HL 또는 선물 SHORT의 LL-LH 구조',
+      'EMA20/VWAP 눌림 뒤 구조 미이탈',
+      'RSI 중립대 재가속 + MACD histogram 재확대',
+      'RVOL/거래량 재가속 후 micro swing 재돌파',
+      'AI는 방향결정이 아니라 VETO/ABSTAIN 보조만 수행',
+    ]),
+    requiredEvidence: req('trendRegimeReady', 'pullbackReady', 'reaccelerationReady', 'volumeAccelerationReady'),
+    paperResearchAllowedWhenReady: true,
+    automaticLivePromotionAllowed: false,
+    promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
+  }),
+  Object.freeze({
+    strategyId: 'US_EVENT_RVOL_FIRST_PULLBACK_V1',
+    label: '미국 Event + RVOL 첫 눌림',
+    markets: Object.freeze(['US_STOCK']),
+    directions: Object.freeze(['BUY']),
+    summary: '실제 재료 + RVOL + VWAP/EMA20 첫 눌림 + 거래량 재가속',
+    rules: Object.freeze([
+      '신선한 뉴스/공시/실적/가이던스 등 직접 catalyst 확인',
+      'RVOL >= 2 후보 우선',
+      '가격 > VWAP 및 단기 추세 상승',
+      '첫 impulse 이후 첫 눌림만 인정',
+      'VWAP/EMA20 지지 + Higher Low',
+      '거래량 재가속과 micro high 재돌파',
+      '오래된 뉴스/루머/재료-가격 충돌 시 AI VETO',
+    ]),
+    requiredEvidence: req('eventCatalystReady', 'rvolReady', 'firstPullbackReady', 'vwapSupportReady', 'volumeReaccelerationReady'),
+    paperResearchAllowedWhenReady: true,
+    automaticLivePromotionAllowed: false,
+    promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
+  }),
+  Object.freeze({
+    strategyId: 'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+    label: '미국 Stocks-in-Play ORB Retest',
+    markets: Object.freeze(['US_STOCK']),
+    directions: Object.freeze(['BUY']),
+    summary: 'Stocks-in-Play + 첫 5분 RVOL + OR 돌파 후 Retest 재돌파',
+    rules: Object.freeze([
+      '가격 > $5, 최근 유동성/ATR 조건 통과',
+      '첫 5분 RVOL >= 1 및 상위 후보',
+      'Opening Range High 돌파를 즉시 추격하지 않음',
+      'OR High 또는 VWAP Retest 지지',
+      'Higher Low 이후 거래량 재가속',
+      'micro high 재돌파 시 진입 후보',
+      'PIT universe/비용 증거가 없으면 fail-closed',
+    ]),
+    requiredEvidence: req('pitUniverseReady', 'first5mRvolReady', 'openingRangeReady', 'retestReady', 'microBreakoutReady'),
+    paperResearchAllowedWhenReady: true,
+    automaticLivePromotionAllowed: false,
+    promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
+  }),
+  Object.freeze({
+    strategyId: 'KR_PRESSURE_BREAKOUT_V1',
+    label: '국내 PRESSURE → Breakout',
+    markets: Object.freeze(['KR_STOCK']),
+    directions: Object.freeze(['BUY']),
+    summary: '고점 인접 압축 + 거래대금 가속 + 저점상승 + 거래량 팽창 돌파',
+    rules: Object.freeze([
+      '5m EMA20 > EMA60 및 가격 > VWAP',
+      '최근 고점까지 거리 제한 + 아직 돌파 전',
+      '최근 3~5봉 거래대금 증가 기울기 양수',
+      '저점 상승 + 가격 변동폭 압축',
+      'RVOL/거래량 팽창',
+      '압축 상단 돌파 및 돌파선 위 유지',
+      '뉴스/공시 원인이 불명확하거나 충돌하면 AI VETO',
+    ]),
+    requiredEvidence: req('pressureReady', 'compressionReady', 'volumeExpansionReady', 'breakoutReady'),
+    paperResearchAllowedWhenReady: true,
+    automaticLivePromotionAllowed: false,
+    promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
+  }),
+  Object.freeze({
+    strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+    label: '코인현물 Order Flow + ML LONG',
+    markets: Object.freeze(['CRYPTO_SPOT']),
+    directions: Object.freeze(['BUY']),
+    summary: '추세 + CVD/Taker/Orderbook + frozen ML ranking, 현물 LONG only',
+    rules: Object.freeze([
+      '1H EMA20 > EMA60 및 15m 상승 추세',
+      'CVD slope 양수',
+      'Taker Buy 우세',
+      'Orderbook bid imbalance/깊이 정상',
+      '5m HH-HL + VWAP reclaim',
+      'frozen ML은 후보 순위만 조정하고 Rule Gate를 우회하지 않음',
+      'Spread/Depth/BTC regime 충돌 시 NO_TRADE',
+    ]),
+    requiredEvidence: req('orderFlowReady', 'cvdReady', 'takerBuyReady', 'orderbookImbalanceReady', 'mlRankReady', 'modelFrozen'),
+    paperResearchAllowedWhenReady: true,
+    automaticLivePromotionAllowed: false,
+    promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'FROZEN_MODEL', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
+  }),
+  Object.freeze({
+    strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    label: '코인선물 Flow + Trend + Wave',
+    markets: Object.freeze(['CRYPTO_FUTURES']),
+    directions: Object.freeze(['LONG', 'SHORT']),
+    summary: '추세/파동 + OI/CVD/Taker flow + 눌림/반등 실패 재돌파',
+    rules: Object.freeze([
+      'LONG: 1H EMA20>EMA60, 15m HH-HL / SHORT는 반대',
+      'Price 방향과 OI 증가가 일치',
+      'CVD와 Taker flow가 방향 일치',
+      'VWAP/EMA20 눌림 또는 반등 실패 후 구조 재확인',
+      '전고/전저 재돌파에서만 진입 후보',
+      'Funding 극단/비정상 spread/depth/liquidation chase는 VETO',
+      'isolated margin, 2~3x 상한은 별도 Risk Engine이 강제',
+    ]),
+    requiredEvidence: req('orderFlowReady', 'oiReady', 'cvdReady', 'takerFlowReady', 'fundingRiskReady'),
+    paperResearchAllowedWhenReady: true,
+    automaticLivePromotionAllowed: false,
+    promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
+  }),
+]);
+
+const BY_ID = new Map(STRATEGY_RULE_PACKS.map((row) => [row.strategyId, row]));
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -136,37 +210,23 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readinessSnapshot(learningSnapshot: unknown) {
-  const learning = record(learningSnapshot);
-  return record(learning?.evidenceBackedStrategyReadiness);
-}
-
-function marketCompatible(
-  definition: EvidenceBackedAutoStrategyDefinition,
-  market: string,
-) {
-  if (definition.market === 'CROSS_VENUE_CRYPTO') {
-    return market === 'CRYPTO_SPOT' || market === 'CRYPTO_FUTURES';
-  }
-  return definition.market === market;
-}
-
-export type EvidenceBackedAutoStrategyGate = Readonly<{
+export type StrategyRulePackGate = Readonly<{
   recognized: boolean;
   strategyId: string;
   state: 'PASS_THROUGH' | 'NO_TRADE' | 'PAPER_CANDIDATE';
   paperAllowed: boolean;
   liveAllowed: false;
   blockers: readonly string[];
-  definition: EvidenceBackedAutoStrategyDefinition | null;
+  definition: StrategyRulePackDefinition | null;
 }>;
 
-export function evaluateEvidenceBackedAutoStrategyGate(input: {
+export function evaluateStrategyRulePackGate(input: {
   strategyId: string;
   market: string;
+  direction: string;
   learningSnapshot?: unknown;
-}): EvidenceBackedAutoStrategyGate {
-  const definition = BY_ID.get(input.strategyId as EvidenceBackedAutoStrategyId) ?? null;
+}): StrategyRulePackGate {
+  const definition = BY_ID.get(input.strategyId as StrategyRulePackId) ?? null;
   if (!definition) {
     return Object.freeze({
       recognized: false,
@@ -180,27 +240,28 @@ export function evaluateEvidenceBackedAutoStrategyGate(input: {
   }
 
   const blockers: string[] = [];
-  if (!marketCompatible(definition, input.market)) {
-    blockers.push('EVIDENCE_STRATEGY_MARKET_MISMATCH');
+  if (!definition.markets.includes(input.market as StrategyRulePackMarket)) {
+    blockers.push('STRATEGY_RULE_PACK_MARKET_MISMATCH');
+  }
+  if (!definition.directions.includes(input.direction as 'BUY' | 'LONG' | 'SHORT')) {
+    blockers.push('STRATEGY_RULE_PACK_DIRECTION_FORBIDDEN');
   }
 
-  const readiness = readinessSnapshot(input.learningSnapshot);
-  if (!readiness) {
-    blockers.push('EVIDENCE_STRATEGY_READINESS_REQUIRED');
+  const learning = record(input.learningSnapshot);
+  const evidence = record(learning?.strategyRulePackEvidence);
+  if (!evidence) {
+    blockers.push('STRATEGY_RULE_PACK_EVIDENCE_REQUIRED');
   } else {
-    if (readiness.strategyId !== definition.strategyId) {
-      blockers.push('EVIDENCE_STRATEGY_READINESS_ID_MISMATCH');
+    if (evidence.strategyId !== definition.strategyId) blockers.push('STRATEGY_RULE_PACK_ID_MISMATCH');
+    for (const key of definition.requiredEvidence) {
+      if (evidence[key] !== true) blockers.push('STRATEGY_RULE_PACK_' + key.replace(/[A-Z]/g, (m) => '_' + m).toUpperCase() + '_REQUIRED');
     }
-    for (const key of definition.paperRequirements) {
-      if (readiness[key] !== true) blockers.push(`EVIDENCE_STRATEGY_${key.replace(/[A-Z]/g, (value) => `_${value}`).toUpperCase()}_REQUIRED`);
+    const aiDecision = String(evidence.aiDecision ?? '').toUpperCase();
+    if (!['PASS', 'ABSTAIN'].includes(aiDecision)) {
+      blockers.push(aiDecision === 'VETO'
+        ? 'STRATEGY_RULE_PACK_AI_VETO'
+        : 'STRATEGY_RULE_PACK_AI_REVIEW_UNUSABLE');
     }
-  }
-
-  // The current canonical trade engine is single-plan/single-provider. A true
-  // CEX↔DEX hedge is intentionally blocked until a multi-leg execution adapter
-  // and DEX provider are bound; this prevents accidental one-legged exposure.
-  if (definition.strategyId === 'CEX_DEX_ARBITRAGE_V1') {
-    blockers.push('EVIDENCE_STRATEGY_CROSS_VENUE_ATOMIC_EXECUTION_REQUIRED');
   }
 
   const unique = [...new Set(blockers)].sort();
@@ -216,5 +277,5 @@ export function evaluateEvidenceBackedAutoStrategyGate(input: {
 }
 
 export function evidenceBackedAutoStrategyCatalog() {
-  return EVIDENCE_BACKED_AUTO_STRATEGIES;
+  return STRATEGY_RULE_PACKS;
 }
