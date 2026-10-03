@@ -79,12 +79,20 @@ function req(...keys: StrategyRuleEvidenceKey[]) {
   return Object.freeze([...COMMON, ...keys]);
 }
 
+function markets(...values: StrategyRulePackMarket[]): readonly StrategyRulePackMarket[] {
+  return Object.freeze(values);
+}
+
+function directions(...values: ('BUY' | 'LONG' | 'SHORT')[]): readonly ('BUY' | 'LONG' | 'SHORT')[] {
+  return Object.freeze(values);
+}
+
 export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object.freeze([
   Object.freeze({
     strategyId: 'TREND_PULLBACK_REACCEL_V1',
     label: '추세 눌림 재가속',
-    markets: Object.freeze(['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']),
-    directions: Object.freeze(['BUY', 'LONG', 'SHORT']),
+    markets: markets('KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'),
+    directions: directions('BUY', 'LONG', 'SHORT'),
     summary: '상위 추세 + 눌림 + 구조 유지 + 거래량 재가속 + 재돌파',
     rules: Object.freeze([
       '1H EMA20/EMA60 추세 방향 일치',
@@ -103,8 +111,8 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
   Object.freeze({
     strategyId: 'US_EVENT_RVOL_FIRST_PULLBACK_V1',
     label: '미국 Event + RVOL 첫 눌림',
-    markets: Object.freeze(['US_STOCK']),
-    directions: Object.freeze(['BUY']),
+    markets: markets('US_STOCK'),
+    directions: directions('BUY'),
     summary: '실제 재료 + RVOL + VWAP/EMA20 첫 눌림 + 거래량 재가속',
     rules: Object.freeze([
       '신선한 뉴스/공시/실적/가이던스 등 직접 catalyst 확인',
@@ -123,8 +131,8 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
   Object.freeze({
     strategyId: 'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
     label: '미국 Stocks-in-Play ORB Retest',
-    markets: Object.freeze(['US_STOCK']),
-    directions: Object.freeze(['BUY']),
+    markets: markets('US_STOCK'),
+    directions: directions('BUY'),
     summary: 'Stocks-in-Play + 첫 5분 RVOL + OR 돌파 후 Retest 재돌파',
     rules: Object.freeze([
       '가격 > $5, 최근 유동성/ATR 조건 통과',
@@ -143,8 +151,8 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
   Object.freeze({
     strategyId: 'KR_PRESSURE_BREAKOUT_V1',
     label: '국내 PRESSURE → Breakout',
-    markets: Object.freeze(['KR_STOCK']),
-    directions: Object.freeze(['BUY']),
+    markets: markets('KR_STOCK'),
+    directions: directions('BUY'),
     summary: '고점 인접 압축 + 거래대금 가속 + 저점상승 + 거래량 팽창 돌파',
     rules: Object.freeze([
       '5m EMA20 > EMA60 및 가격 > VWAP',
@@ -163,8 +171,8 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
   Object.freeze({
     strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
     label: '코인현물 Order Flow + ML LONG',
-    markets: Object.freeze(['CRYPTO_SPOT']),
-    directions: Object.freeze(['BUY']),
+    markets: markets('CRYPTO_SPOT'),
+    directions: directions('BUY'),
     summary: '추세 + CVD/Taker/Orderbook + frozen ML ranking, 현물 LONG only',
     rules: Object.freeze([
       '1H EMA20 > EMA60 및 15m 상승 추세',
@@ -183,8 +191,8 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
   Object.freeze({
     strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
     label: '코인선물 Flow + Trend + Wave',
-    markets: Object.freeze(['CRYPTO_FUTURES']),
-    directions: Object.freeze(['LONG', 'SHORT']),
+    markets: markets('CRYPTO_FUTURES'),
+    directions: directions('LONG', 'SHORT'),
     summary: '추세/파동 + OI/CVD/Taker flow + 눌림/반등 실패 재돌파',
     rules: Object.freeze([
       'LONG: 1H EMA20>EMA60, 15m HH-HL / SHORT는 반대',
