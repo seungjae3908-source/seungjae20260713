@@ -832,6 +832,111 @@ def summarize_runtime_liveness(last_success_at, now_ms=None):
     }
 
 
+def _activity_entry(identifier, at, source, label, status, detail=None, profile=None):
+    if not isinstance(at, (int, float)) or isinstance(at, bool) or not math.isfinite(at) or at <= 0:
+        return None
+    return {
+        'id': str(identifier)[:180],
+        'at': int(at),
+        'source': str(source)[:80],
+        'label': str(label)[:160],
+        'status': str(status)[:80],
+        'detail': str(detail)[:300] if detail is not None else None,
+        'profile': str(profile)[:80] if profile is not None else None,
+    }
+
+
+def build_research_activity(root, now_ms=None, maximum_entries=200):
+    now_ms = int(__import__('time').time() * 1000) if now_ms is None else int(now_ms)
+    cutoff = now_ms - 24 * 60 * 60 * 1000
+    entries = []
+
+    runs_root = root / 'runs'
+    try:
+        run_dirs = [path for path in runs_root.iterdir() if path.is_dir() and not path.is_symlink()]
+    except FileNotFoundError:
+        run_dirs = []
+    for run_dir in run_dirs[-500:]:
+        try:
+            value = read_json_optional(run_dir / 'cycle.json')
+        except RuntimeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        at = finite_number(value.get('generatedAt'))
+        if at is None or at < cutoff or at > now_ms + RUNTIME_CLOCK_SKEW_MS:
+            continue
+        profile = value.get('profile') if isinstance(value.get('profile'), str) else 'unknown'
+        failed = optional_integer_count(value.get('failedCount'))
+        blocked = optional_integer_count(value.get('blockedDataCount'))
+        success = optional_integer_count(value.get('successCount'))
+        detail = f"success={success if success is not None else '—'} / blocked={blocked if blocked is not None else '—'} / failed={failed if failed is not None else '—'}"
+        entry = _activity_entry(
+            value.get('cycleId') or run_dir.name,
+            at,
+            'research-cycle',
+            profile,
+            value.get('status', 'unknown'),
+            detail,
+            profile,
+        )
+        if entry:
+            entries.append(entry)
+
+    latest_sources = [
+        ('temporal', root / 'latest' / 'temporal-crypto-futures.json', 'generatedAt', 'Temporal Evidence'),
+        ('factory', root / 'latest' / 'research-factory.json', 'generatedAt', 'Research Factory'),
+        ('ai-review', root / 'ai-review' / 'latest.json', 'observedAt', 'AI Review'),
+        ('video-discovery', root / 'video-research' / 'latest.json', 'observedAt', 'YouTube Discovery'),
+    ]
+    for source, path, time_key, label in latest_sources:
+        try:
+            value = read_json_optional(path)
+        except RuntimeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        raw_at = value.get(time_key)
+        if isinstance(raw_at, str):
+            try:
+                raw_at = __import__('datetime').datetime.fromisoformat(raw_at.replace('Z', '+00:00')).timestamp() * 1000
+            except Exception:
+                raw_at = None
+        at = finite_number(raw_at)
+        if at is None or at < cutoff or at > now_ms + RUNTIME_CLOCK_SKEW_MS:
+            continue
+        status = value.get('status', 'unknown')
+        detail = None
+        if source == 'temporal':
+            detail = f"observations={value.get('observationCount', '—')} / failed={value.get('failedCount', '—')}"
+        elif source == 'factory':
+            detail = f"firstZero={value.get('firstZero', '—')}"
+        elif source == 'ai-review':
+            detail = f"reviews={len(value.get('reviews') or [])} / blocked={len(value.get('blockedProfiles') or [])}"
+        elif source == 'video-discovery':
+            detail = f"sources={value.get('sourceCount', '—')} / next={value.get('nextRequiredStep', '—')}"
+        entry = _activity_entry(f"{source}:{int(at)}", at, source, label, status, detail)
+        if entry:
+            entries.append(entry)
+
+    entries.sort(key=lambda item: (-item['at'], item['source'], item['id']))
+    deduped = []
+    seen = set()
+    for entry in entries:
+        key = (entry['source'], entry['id'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+        if len(deduped) >= maximum_entries:
+            break
+    return {
+        'windowHours': 24,
+        'generatedAt': now_ms,
+        'entries': deduped,
+    }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
     cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
@@ -845,6 +950,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     candidate_performance = read_candidate_performance(root)
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
+    activity = build_research_activity(root)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -904,6 +1010,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         },
         'dataFactory': {'temporalCryptoFutures': temporal_crypto},
         'factory': factory_runtime,
+        'activity': activity,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {
