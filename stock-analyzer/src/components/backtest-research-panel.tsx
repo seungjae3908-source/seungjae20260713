@@ -509,14 +509,8 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
         {!compact ? (
           <CenteredPageHeader
             title="백테스트"
-            eyebrow="코인 선물 연구"
+            eyebrow="4시장 연구"
             className="rounded-2xl border border-card-border"
-            infoTitle="백테스트 안내"
-            infoItems={[
-              '완료된 봉의 신호를 계산하고 다음 봉 시가부터 체결합니다.',
-              '수수료·슬리피지·펀딩비와 보수적인 봉 내부 체결 가정을 반영합니다.',
-              '과거 결과는 미래 수익을 보장하지 않으며 실제 주문을 실행하지 않습니다.',
-            ]}
           />
         ) : null}
 
@@ -582,10 +576,10 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               {values.strategy === 'trend_pullback' ? (
                 <>
-                  <Field label="빠른 EMA">
+                  <Field label="빠른 이동평균">
                     <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.trendPullback.fastPeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'fastPeriod', Number(event.target.value))} />
                   </Field>
-                  <Field label="느린 EMA">
+                  <Field label="느린 이동평균">
                     <input className={inputClass} type="number" min="3" step="1" value={values.strategyParameters.trendPullback.slowPeriod} onChange={(event) => updateStrategyParameter('trendPullback', 'slowPeriod', Number(event.target.value))} />
                   </Field>
                   <Field label="눌림 허용 %">
@@ -600,7 +594,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 </>
               ) : values.strategy === 'breakout' ? (
                 <>
-                  <Field label="돌파 Lookback">
+                  <Field label="돌파 확인 기간">
                     <input className={inputClass} type="number" min="2" step="1" value={values.strategyParameters.breakout.lookback} onChange={(event) => updateStrategyParameter('breakout', 'lookback', Number(event.target.value))} />
                   </Field>
                   <Field label="거래량 기간">
