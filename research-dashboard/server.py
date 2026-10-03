@@ -43,6 +43,9 @@ DIGEST64_PATTERN = __import__('re').compile(r'^[0-9a-f]{64}$')
 TEMPORAL_SYMBOL_PATTERN = __import__('re').compile(r'^[A-Z0-9]{3,30}$')
 CANDIDATE_ID_PATTERN = __import__('re').compile(r'^(?:phase3-candidate:sha256:|paper-candidate-v1:)[0-9a-f]{64}$')
 SAFE_ID_PATTERN = __import__('re').compile(r'^[A-Za-z0-9._:-]{1,160}$')
+RUNTIME_CYCLE_CADENCE_MS = 60 * 60 * 1000
+RUNTIME_STALE_AFTER_MS = 2 * RUNTIME_CYCLE_CADENCE_MS + 15 * 60 * 1000
+RUNTIME_CLOCK_SKEW_MS = 5 * 60 * 1000
 CANDIDATE_COUNT_KEYS = (
     'effectiveIndependentMarketN', 'candidateMatchedN', 'LONG_SIGNAL_N', 'SHORT_SIGNAL_N', 'NO_TRADE_N',
     'Entry_N', 'Position_N', 'PositionObservation_N', 'Settlement_N',
@@ -790,6 +793,45 @@ def read_factory_runtime_summary(root):
         return empty_factory_runtime_summary('INVALID', True)
 
 
+def summarize_runtime_liveness(last_success_at, now_ms=None):
+    now_ms = int(__import__('time').time() * 1000) if now_ms is None else now_ms
+    if not isinstance(now_ms, int) or isinstance(now_ms, bool) or now_ms <= 0:
+        raise ValueError('runtime liveness now_ms must be a positive integer')
+    if last_success_at is None:
+        return {
+            'status': 'UNKNOWN', 'lastSuccessAt': None, 'expectedNextAt': None,
+            'ageMs': None, 'missedCycles': None, 'stale': False,
+            'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+        }
+    if not isinstance(last_success_at, (int, float)) or isinstance(last_success_at, bool) or not math.isfinite(last_success_at) or last_success_at <= 0:
+        return {
+            'status': 'INVALID', 'lastSuccessAt': None, 'expectedNextAt': None,
+            'ageMs': None, 'missedCycles': None, 'stale': True,
+            'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+        }
+    last_success_at = int(last_success_at)
+    if last_success_at > now_ms + RUNTIME_CLOCK_SKEW_MS:
+        return {
+            'status': 'INVALID', 'lastSuccessAt': last_success_at,
+            'expectedNextAt': last_success_at + RUNTIME_CYCLE_CADENCE_MS,
+            'ageMs': 0, 'missedCycles': None, 'stale': True,
+            'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+        }
+    age_ms = max(0, now_ms - last_success_at)
+    expected_next_at = last_success_at + RUNTIME_CYCLE_CADENCE_MS
+    missed_cycles = 0 if now_ms <= expected_next_at else int((now_ms - expected_next_at) // RUNTIME_CYCLE_CADENCE_MS) + 1
+    stale = age_ms > RUNTIME_STALE_AFTER_MS
+    return {
+        'status': 'STALE' if stale else 'LIVE',
+        'lastSuccessAt': last_success_at,
+        'expectedNextAt': expected_next_at,
+        'ageMs': age_ms,
+        'missedCycles': missed_cycles,
+        'stale': stale,
+        'cadenceMs': RUNTIME_CYCLE_CADENCE_MS,
+    }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
     cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
@@ -815,6 +857,13 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     )
     timestamps = [finite_number(cycle.get('generatedAt')) or 0 for cycle in cycles]
     latest_cycle_at = max(timestamps) if timestamps and max(timestamps) > 0 else None
+    successful_timestamps = [
+        finite_number(cycle.get('generatedAt')) or 0
+        for cycle in cycles
+        if cycle.get('present') and cycle.get('failedCount') == 0
+    ]
+    last_success_at = max(successful_timestamps) if successful_timestamps and max(successful_timestamps) > 0 else None
+    runtime_liveness = summarize_runtime_liveness(last_success_at)
     research_status = (
         'safety_block' if forbidden_authority_observed
         else 'safety_evidence_incomplete' if not authority_evidence_complete
@@ -823,6 +872,8 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             or candidate_performance.get('status') == 'INVALID'
             or temporal_crypto.get('status') in ('INVALID', 'partial_failure')
             or factory_runtime.get('status') in ('INVALID', 'BLOCKED_POLICY_INVALID')
+            or runtime_liveness.get('status') == 'INVALID'
+            or runtime_liveness.get('stale') is True
         )
         else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
         else 'attention' if failed_tasks > 0
@@ -834,6 +885,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'state': {
             'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present') or candidate_performance.get('present') or temporal_crypto.get('present') or factory_runtime.get('present'),
             'latestCycleAt': latest_cycle_at,
+            'runtimeLiveness': runtime_liveness,
         },
         'safety': {
             'readOnlyDashboard': True,
