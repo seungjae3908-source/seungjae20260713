@@ -117,14 +117,14 @@ type FullCostComponentState = ResearchCandidatePerformance['fullCostEvidence']['
 
 function fullCostStateLabel(state: FullCostComponentState) {
   if (state === 'MEASURED') return '관측됨';
-  if (state === '추정') return '추정값 · 실측 아님';
+  if (state === 'MODELED') return '추정값 · 실측 아님';
   if (state === 'BLOCKED_DATA') return '데이터 차단';
   return '미확인';
 }
 
 function fullCostStateClass(state: FullCostComponentState) {
   if (state === 'MEASURED') return 'border-positive/25 bg-positive/5 text-positive';
-  if (state === '추정') return 'border-warning/30 bg-warning/5 text-warning';
+  if (state === 'MODELED') return 'border-warning/30 bg-warning/5 text-warning';
   if (state === 'BLOCKED_DATA') return 'border-destructive/25 bg-destructive/5 text-destructive';
   return 'border-card-border bg-muted/40 text-muted-foreground';
 }
@@ -146,7 +146,7 @@ function fullCostEvidenceState(overview: ResearchCenterOverview) {
     };
   });
   const measured = rows.filter((row) => row.state === 'MEASURED').length;
-  const modeled = rows.filter((row) => row.state === '추정').length;
+  const modeled = rows.filter((row) => row.state === 'MODELED').length;
   const blocked = rows.filter((row) => row.state === 'BLOCKED_DATA').length;
   const unknown = rows.filter((row) => row.state === 'UNKNOWN').length;
   const fullCostReady = Boolean(
@@ -161,8 +161,8 @@ function fullCostEvidenceState(overview: ResearchCenterOverview) {
     blocked,
     unknown,
     fullCostReady,
-    settlementN: performance?.정산_N ?? null,
-    firstZero: performance?.현재 막힌 단계 ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
+    settlementN: performance?.Settlement_N ?? null,
+    firstZero: performance?.FIRST_ZERO ?? 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING',
   };
 }
 
@@ -211,20 +211,20 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick, test
 function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) {
   const cost = fullCostEvidenceState(overview);
   const incomplete = cost.rows.filter((row) => row.state !== 'MEASURED');
-  const ledger정산N = overview.paper.ledger.settlementCount;
+  const ledgerSettlementN = overview.paper.ledger.settlementCount;
   const settlementLabel = cost.settlementN == null
     ? '후보 정산 미확인'
     : cost.settlementN === 0
       ? '후보 정산 0건 · 미연결'
       : `후보 정산 ${cost.settlementN.toLocaleString('ko-KR')}건 연결`;
   const reason = cost.fullCostReady
-    ? '8개 비용과 기준 연결 근거가 모두 FULL_COST_READY로 확인됐습니다.'
+    ? '비용 8항목과 후보 연결 자료가 모두 확인됐습니다.'
     : incomplete.length > 0
       ? `${incomplete.map((row) => row.label).join(' · ')} 근거가 실측 완료 상태가 아닙니다.`
-      : '8개 비용이 모두 관측돼도 기준 FULL_COST_READY가 false입니다. 정산·identity·cost-policy 연결 근거를 더 확인해야 합니다.';
+      : '비용 8항목이 모두 관측돼도 후보 정산·식별·비용정책 연결 자료가 더 필요합니다.';
 
   return (
-    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="research-full-cost-summary" aria-label="전체 비용 경제증거">
+    <section className="rounded-2xl border border-card-border bg-card p-4 shadow-sm" data-testid="research-full-cost-summary" aria-label="전체 비용 검증">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           
@@ -232,7 +232,7 @@ function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) 
           
         </div>
         <span className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${cost.fullCostReady ? TONE.normal : TONE.warning}`}>
-          FULL_COST_READY · {cost.fullCostReady ? '충족' : '미충족'}
+          전체 비용 검증 · {cost.fullCostReady ? '충족' : '미충족'}
         </span>
       </div>
 
@@ -260,7 +260,7 @@ function FullCostVisibility({ overview }: { overview: ResearchCenterOverview }) 
         <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">{reason}</p>
         <p className="mt-2 text-[10px] text-muted-foreground">현재 막힌 단계 · {cost.firstZero === 'CANDIDATE_PERFORMANCE_EVIDENCE_MISSING' ? '후보 성과 자료 필요' : '추가 검증 자료 필요'}</p>
         <p className="mt-1 text-[10px] text-muted-foreground">
-          전체 모의매매 기록 정산 · {ledger정산N == null ? '미확인' : `${ledger정산N.toLocaleString('ko-KR')}건`} · 후보별 정산와 별도 집계
+          전체 모의매매 정산 · {ledgerSettlementN == null ? '미확인' : `${ledgerSettlementN.toLocaleString('ko-KR')}건`} · 후보별 정산과 별도 집계
         </p>
       </div>
 
