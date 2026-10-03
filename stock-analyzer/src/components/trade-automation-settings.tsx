@@ -49,14 +49,68 @@ type Status = {
     provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
     model: string | null;
     fallbackConfigured: boolean;
+    fallbackProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    fallbackModel: string | null;
     promptVersion: string;
-    producer: 'AI_CHAT_PROVIDER_SEAM';
+    producer: 'BOUNDED_AI_JSON_PROVIDER';
     failClosed: true;
     cacheEnabled: true;
+    cacheSize: number;
+    cacheMaxEntries: number;
+    cacheHits: number;
+    cacheEvictions: number;
+    reviewCalls: number;
+    pass: number;
+    abstain: number;
+    veto: number;
+    blocked: number;
+    unavailable: number;
+    lastDecisionAt: string | null;
+    providerCalls: number;
+    providerSuccesses: number;
+    providerFailures: number;
+    providerFallbackSuccesses: number;
+    providerLastSuccessAt: string | null;
+    providerLastErrorAt: string | null;
+    providerLastErrorCode: string | null;
+    providerLastProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    providerAverageLatencyMs: number | null;
+    providerMaxLatencyMs: number | null;
     maxTtlMs: number;
     executionAuthority: 'NONE';
     orderAllowed: false;
     riskOverrideAllowed: false;
+  };
+  scannerAiReview?: {
+    configured: boolean;
+    providerSeam: 'BOUNDED_AI_JSON_PROVIDER';
+    provider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    model: string | null;
+    fallbackConfigured: boolean;
+    fallbackProvider: 'google-gemini' | 'groq' | 'openai-compatible' | null;
+    canonicalScannerWired: true;
+    maxCandidatesPerRequest: number;
+    failSoftForDisplay: true;
+    vetoBlocksStrongSignal: true;
+    providerCalls: number;
+    providerSuccesses: number;
+    providerFailures: number;
+    providerFallbackSuccesses: number;
+    providerLastSuccessAt: string | null;
+    providerLastErrorAt: string | null;
+    providerLastErrorCode: string | null;
+    providerAverageLatencyMs: number | null;
+    providerMaxLatencyMs: number | null;
+    schedulerPending: number;
+    schedulerActive: number;
+    schedulerConsecutiveFailures: number;
+    schedulerCircuitOpen: boolean;
+    schedulerCircuitOpenedAt: number | null;
+    schedulerCircuitResetMs: number;
+    executionAuthority: 'NONE';
+    orderAllowed: false;
+    positionSizeAuthority: false;
+    leverageAuthority: false;
   };
   pilotCapitalState?: {
     initialOperatingCapitalKrw: number;
@@ -517,10 +571,16 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         </span>
       </div>
       <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-        <dt className="font-bold">Provider</dt><dd>{status?.strategyAiReview?.provider ?? '미설정'}</dd>
-        <dt className="font-bold">Model</dt><dd className="break-all">{status?.strategyAiReview?.model ?? '미설정'}</dd>
-        <dt className="font-bold">Fallback</dt><dd>{status?.strategyAiReview?.fallbackConfigured ? '구성됨' : '없음'}</dd>
+        <dt className="font-bold">Provider</dt><dd>{status?.strategyAiReview?.provider ?? '미설정'} · {status?.strategyAiReview?.model ?? '모델 미설정'}</dd>
+        <dt className="font-bold">Fallback</dt><dd>{status?.strategyAiReview?.fallbackConfigured ? `${status.strategyAiReview.fallbackProvider ?? '구성됨'} / ${status.strategyAiReview.fallbackModel ?? '기본모델'}` : '없음'}</dd>
+        <dt className="font-bold">Provider Health</dt><dd>호출 {status?.strategyAiReview?.providerCalls ?? 0} · 성공 {status?.strategyAiReview?.providerSuccesses ?? 0} · 실패 {status?.strategyAiReview?.providerFailures ?? 0} · Fallback {status?.strategyAiReview?.providerFallbackSuccesses ?? 0}</dd>
+        <dt className="font-bold">최근 성공</dt><dd>{status?.strategyAiReview?.providerLastSuccessAt ?? '아직 없음'}{status?.strategyAiReview?.providerAverageLatencyMs != null ? ` · 평균 ${status.strategyAiReview.providerAverageLatencyMs}ms / 최대 ${status.strategyAiReview.providerMaxLatencyMs ?? 0}ms` : ''}</dd>
+        <dt className="font-bold">최근 오류</dt><dd>{status?.strategyAiReview?.providerLastErrorCode ?? '없음'}{status?.strategyAiReview?.providerLastErrorAt ? ` · ${status.strategyAiReview.providerLastErrorAt}` : ''}</dd>
+        <dt className="font-bold">판정</dt><dd>PASS {status?.strategyAiReview?.pass ?? 0} · ABSTAIN {status?.strategyAiReview?.abstain ?? 0} · VETO {status?.strategyAiReview?.veto ?? 0} · 차단 {status?.strategyAiReview?.blocked ?? 0} · 공급불가 {status?.strategyAiReview?.unavailable ?? 0}</dd>
+        <dt className="font-bold">Cache</dt><dd>{status?.strategyAiReview?.cacheSize ?? 0}/{status?.strategyAiReview?.cacheMaxEntries ?? 0} · hit {status?.strategyAiReview?.cacheHits ?? 0} · eviction {status?.strategyAiReview?.cacheEvictions ?? 0}</dd>
+        <dt className="font-bold">Scanner AI</dt><dd>{status?.scannerAiReview?.configured ? '연결됨' : '미설정'} · circuit {status?.scannerAiReview?.schedulerCircuitOpen ? 'OPEN' : 'CLOSED'} · active {status?.scannerAiReview?.schedulerActive ?? 0} · pending {status?.scannerAiReview?.schedulerPending ?? 0}</dd>
         <dt className="font-bold">TTL</dt><dd>최대 {Math.round((status?.strategyAiReview?.maxTtlMs ?? 0) / 1000)}초</dd>
+        <dt className="font-bold">Live AI 정책</dt><dd>PASS-only 사전계약 · 현재 6전략 자동 Live는 비활성</dd>
         <dt className="font-bold">권한</dt><dd>주문 없음 · Risk override 없음 · 실행권한 NONE</dd>
       </dl>
     </div> : null}
