@@ -56,7 +56,16 @@ requireText(workflow, 'REAL_ORDER_SUBMITTED=false', 'AUTO_GATE_NO_ORDER_RECEIPT_
 requireText(workflow, "manual.spotAuthority !== 'SPOT_LIVE_LIMITED'", 'AUTO_GATE_SPOT_AUTHORITY_RECHECK_MISSING');
 requireText(workflow, "manual.futuresAuthority !== 'FUTURES_LIVE_LIMITED'", 'AUTO_GATE_FUTURES_AUTHORITY_RECHECK_MISSING');
 requireText(workflow, "manual.futuresMarginMode !== 'isolated'", 'AUTO_GATE_ISOLATED_RECHECK_MISSING');
-requireText(workflow, "['2', '3'].includes(expectedLeverage)", 'AUTO_GATE_LEVERAGE_BOUND_MISSING');
+requireText(workflow, "expectedLeverage !== '3'", 'AUTO_GATE_3X_BOUND_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_ACCOUNT_READ_PROVIDERS_NOT_READY', 'AUTO_GATE_ACCOUNT_READ_RECHECK_MISSING');
+for (const flag of [
+  'TOSS_ACCOUNT_READ_ENABLED',
+  'KIWOOM_ACCOUNT_READ_ENABLED',
+  'UPBIT_ACCOUNT_READ_ENABLED',
+  'BITGET_ACCOUNT_READ_ENABLED',
+]) {
+  requireText(workflow, flag, 'AUTO_GATE_ACCOUNT_READ_FLAG_MISSING');
+}
 
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
 forbid(workflow, /WITHDRAW[^\n]*true/i, 'AUTO_GATE_WITHDRAW_ENABLE_FORBIDDEN');
@@ -97,6 +106,7 @@ for (const token of [
   'readMarketMark',
   'paperExitOrders',
   'liveExitOrders',
+  'liveBackgroundEnabled() && !deterministicGate.recognized',
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
