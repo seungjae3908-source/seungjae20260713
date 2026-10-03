@@ -36,8 +36,13 @@ test('registers the six requested rule packs and never grants automatic live pro
     'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
     'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
   ]);
-  assert.equal(catalog.every((row) => row.pilotProfile.totalBudgetKrw === 500_000), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.maxOrderKrw === 50_000), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.initialOperatingCapitalKrw === 500_000), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.profitCompoundShare === 0.5), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.profitReserveShare === 0.5), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.maxEntryTracksOperatingCapital === true), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.reserveAutoWithdrawalAllowed === false), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.highWaterMarkRequired === true), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.riskPerTradePercentCeiling === 0.5), true);
   assert.equal(catalog.every((row) => row.pilotProfile.maxConcurrentLivePositions === 2), true);
   assert.equal(catalog.every((row) => row.pilotProfile.maxDailyLiveEntries === null), true);
   assert.equal(catalog.every((row) => row.pilotProfile.maxDailyLosingTrades === 5), true);
