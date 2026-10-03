@@ -199,7 +199,7 @@ export function TradeExecutionConnections({
     }
     const credentials = providerCredentials(provider, secrets);
     const requiredValues = provider === 'toss'
-      ? [credentials.clientId, credentials.clientSecret]
+      ? [secrets.first.trim(), secrets.second.trim()]
       : Object.values(credentials);
     if (requiredValues.some((value) => !String(value).trim())) {
       setMessage('필수 거래키 정보를 모두 입력해 주세요.');
