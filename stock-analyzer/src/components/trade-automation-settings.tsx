@@ -44,6 +44,21 @@ type Status = {
   credentialVault: { encryptionConfigured: boolean; keyValueExposed: false };
   lastOrder: { exchange: Exchange; state: string; updatedAt: string; lastErrorCode: string | null } | null;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  pilotCapitalState?: {
+    initialOperatingCapitalKrw: number;
+    operatingCapitalKrw: number;
+    reserveKrw: number;
+    highWaterMarkKrw: number;
+    maxEntryKrw: number;
+    realizedNetPnlKrw: number;
+    compoundedProfitKrw: number;
+    dailyRealizedPnlKrw: number;
+    dailyLosingTrades: number;
+    consecutiveLosses: number;
+    settlementReady: boolean;
+    blockers: string[];
+    reserveWithdrawalAutomatic: false;
+  };
   evidenceBackedStrategies?: Array<{
     strategyId: string;
     label: string;
@@ -54,8 +69,13 @@ type Status = {
     paperResearchAllowedWhenReady: true;
     pilotProfile: {
       mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
-      totalBudgetKrw: number;
-      maxOrderKrw: number;
+      initialOperatingCapitalKrw: number;
+      profitCompoundShare: 0.5;
+      profitReserveShare: 0.5;
+      maxEntryTracksOperatingCapital: true;
+      reserveAutoWithdrawalAllowed: false;
+      highWaterMarkRequired: true;
+      riskPerTradePercentCeiling: 0.5;
       maxConcurrentLivePositions: number;
       maxDailyLiveEntries: null;
       maxDailyLosingTrades: number;
@@ -494,7 +514,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
             </div>
             <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{strategy.summary}</p>
             <p className="mt-2 text-[10px] font-bold text-muted-foreground">
-              Paper 자동 · 실전 테스트예산 {strategy.pilotProfile.totalBudgetKrw.toLocaleString('ko-KR')}원 · 1회 {strategy.pilotProfile.maxOrderKrw.toLocaleString('ko-KR')}원
+              Paper 자동 · 초기 운용금 {strategy.pilotProfile.initialOperatingCapitalKrw.toLocaleString('ko-KR')}원 · 신규 순이익 50% 복리 / 50% Reserve
             </p>
           </button>;
         })}
@@ -504,8 +524,27 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     {(status?.evidenceBackedStrategies?.length ?? 0) > 0 ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="strategy-pilot-risk-summary">
       <p className="font-extrabold">50만원 실전 검증 방식</p>
       <p className="mt-1 leading-5 text-muted-foreground">
-        1회 5만원 · 동시 2개 · 조건이 좋으면 하루 진입 횟수 제한 없음 · 하루 손실거래 5회 중지 · 연속 3회 손실 시 중지 · 동일 종목 손실 후 30분 + 새 신호 필요 · 비상 일손실 2.5만원 · 선물 3배 · Paper 동시 기록 · 실계좌 주문은 최종 확인 필요
+        최대 진입은 현재 운용금과 함께 증가 · 손절거리 Risk Size가 더 작으면 자동 축소 · 거래당 위험은 운용금의 최대 0.5% · 동시 2개 · 조건이 좋으면 하루 진입 횟수 제한 없음 · 하루 손실거래 5회 중지 · 연속 3회 손실 시 중지 · 동일 종목 손실 후 30분 + 새 신호 필요 · 비상 일손실 2.5만원 · 선물 3배(위험예산 증액 금지) · Paper 동시 기록 · Reserve 자동출금 금지 · 실계좌 주문은 최종 확인 필요
       </p>
+    </div> : null}
+
+    {status?.pilotCapitalState ? <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="strategy-pilot-capital-state">
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">현재 운용금</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.operatingCapitalKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">최대 진입 상한</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.maxEntryKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">Reserve</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.reserveKrw.toLocaleString('ko-KR')}원</p>
+      </div>
+      <div className="rounded-xl border border-card-border bg-background p-3">
+        <p className="text-[10px] text-muted-foreground">High-Water Mark</p>
+        <p className="mt-1 text-xs font-extrabold">{status.pilotCapitalState.highWaterMarkKrw.toLocaleString('ko-KR')}원</p>
+      </div>
     </div> : null}
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
