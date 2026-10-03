@@ -212,7 +212,17 @@ test("expensive research lanes retain path filters and report failures", () => {
 test("multi-market PR data blocks stay truthful without weakening full dispatch validation", () => {
   assert.match(documents.multiMarket, /research_ready:\s*\$\{\{ steps\.market_suite\.outputs\.research_ready \}\}/u);
   assert.match(documents.multiMarket, /steps\.market_suite\.outputs\.research_ready == 'true'/u);
-  assert.match(documents.multiMarket, /github\.event_name != 'pull_request' && steps\.market_suite\.outputs\.research_ready != 'true'/u);
+  assert.match(documents.multiMarket, /Record explicit research hold when required temporal evidence is incomplete/u);
+  assert.match(documents.multiMarket, /RESEARCH_HOLD_TEMPORAL_EVIDENCE/u);
+  assert.match(documents.multiMarket, /MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:/u);
+
+  const failStart = documents.multiMarket.indexOf("- name: Fail workflow when technical validation failed");
+  const nextJob = documents.multiMarket.indexOf("\n  durable-policy-preflight:", failStart);
+  assert.ok(failStart >= 0 && nextJob > failStart, "multi-market technical failure block must remain present");
+  const technicalFailureBlock = documents.multiMarket.slice(failStart, nextJob);
+  assert.match(technicalFailureBlock, /steps\.research_hold\.outcome == 'failure'/u);
+  assert.doesNotMatch(technicalFailureBlock, /steps\.market_suite\.outputs\.research_ready != 'true'/u);
+
   assert.match(documents.multiMarket, /github\.event_name == 'workflow_dispatch'[\s\S]*needs\.validate-and-train\.outputs\.research_ready == 'true'/u);
 });
 
