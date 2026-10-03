@@ -80,7 +80,7 @@ type OpenPosition = {
 export class BacktestValidationError extends Error {
   constructor(public readonly code: string, message: string) { super(message); this.name = 'BacktestValidationError'; }
 }
-export const BACKTEST_LIMITS = Object.freeze({ minimumCandles: 60, maximumCandles: 20_000, maximumDurationMs: 366 * 24 * 60 * 60_000, maximumConcurrentPositions: 5, maximumTradesPerDay: 100, maximumLeverage: 10 });
+export const BACKTEST_LIMITS = Object.freeze({ minimumCandles: 60, maximumCandles: 20_000, maximumDurationMs: 366 * 24 * 60 * 60_000, maximumConcurrentPositions: 5, maximumTradesPerDay: 100, maximumLeverage: 3 });
 const IMPLEMENTED_STRATEGIES = new Set<BacktestStrategyType>(['trend_pullback', 'breakout', 'vwap_reclaim']);
 const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -113,7 +113,7 @@ export function validateBacktestRequest(request: BacktestRequest) {
   if (!finite(request.riskPercent) || request.riskPercent <= 0 || request.riskPercent > 1) throw new BacktestValidationError('INVALID_RISK_PERCENT', '거래당 위험률은 0% 초과 1% 이하여야 합니다.');
   const maximumLeverage = request.market === 'crypto-futures' ? BACKTEST_LIMITS.maximumLeverage : 1;
   if (!finite(request.leverage) || request.leverage < 1 || request.leverage > maximumLeverage) {
-    throw new BacktestValidationError('INVALID_LEVERAGE', request.market === 'crypto-futures' ? '코인선물 레버리지 값이 올바르지 않습니다.' : '현물·주식 백테스트는 1배만 지원합니다.');
+    throw new BacktestValidationError('INVALID_LEVERAGE', request.market === 'crypto-futures' ? '코인선물 레버리지는 1~3배만 지원합니다.' : '현물·주식 백테스트는 1배만 지원합니다.');
   }
   for (const rate of [request.entryFeeRate, request.exitFeeRate, request.slippageRate]) if (!finite(rate) || rate < 0 || rate >= 1) throw new BacktestValidationError('INVALID_COST_RATE', '수수료와 슬리피지 비율이 올바르지 않습니다.');
   if (!finite(request.stopLossValue) || request.stopLossValue <= 0) throw new BacktestValidationError('INVALID_STOP_LOSS', '손절 값은 0보다 커야 합니다.');
