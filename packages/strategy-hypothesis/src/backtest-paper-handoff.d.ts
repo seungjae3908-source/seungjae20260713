@@ -5,10 +5,10 @@ export interface BacktestPaperHandoff {
   readonly candidateId: string | null;
   readonly strategyId: string | null;
   readonly parameterHash: string | null;
-  readonly market: 'CRYPTO_FUTURES' | null;
+  readonly market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' | null;
   readonly symbol: string | null;
   readonly timeframe: string | null;
-  readonly side: 'LONG' | 'SHORT' | null;
+  readonly side: 'BUY' | 'LONG' | 'SHORT' | null;
   readonly leverage: number | null;
   readonly riskPolicyRef: string | null;
   readonly costPolicyRef: string | null;
