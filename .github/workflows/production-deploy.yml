@@ -28,6 +28,9 @@ on:
       - .github/scripts/build-production-postdeploy-context.mjs
       - .github/scripts/build-production-postdeploy-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+      - api-server/src/features/account-readonly/account-readonly.contract.ts
+      - api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts
       - .github/scripts/verify-production-postdeploy-qa-contract.mjs
       - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/post-merge-release-provenance.yml

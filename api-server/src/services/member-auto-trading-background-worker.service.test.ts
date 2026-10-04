@@ -339,7 +339,8 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
-test('Bitget futures worker preserves a validated 7x policy and evidence into the plan', async () => {
+test('Bitget futures worker preserves every validated 4x-7x policy and evidence into the plan', async () => {
+  for (const expectedLeverage of [4, 5, 6, 7]) {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
   const futuresPolicy = normalizeTradingPolicy({
@@ -351,7 +352,7 @@ test('Bitget futures worker preserves a validated 7x policy and evidence into th
       crypto_futures: true,
     },
     exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
-    bitgetLeverage: 7,
+    bitgetLeverage: expectedLeverage,
   });
   await repository.savePolicy(USER, futuresPolicy);
 
@@ -367,7 +368,7 @@ test('Bitget futures worker preserves a validated 7x policy and evidence into th
   entry.execution.dataEvidence = {
     ...entry.execution.dataEvidence,
     provider: 'bitget',
-    leverage: 7,
+    leverage: expectedLeverage,
     marginMode: 'isolated',
     marketStatus: 'TRADABLE',
     tickSize: 0.1,
@@ -414,8 +415,9 @@ test('Bitget futures worker preserves a validated 7x policy and evidence into th
   const plans = await repository.listPlans(USER);
   assert.equal(plans.length, 1);
   assert.equal(plans[0]?.exchange, 'bitget');
-  assert.equal(plans[0]?.leverage, 7);
+  assert.equal(plans[0]?.leverage, expectedLeverage);
   assert.equal(plans[0]?.marginMode, 'isolated');
+  }
 });
 
 test('background worker is default OFF without explicit activation flag', () => {
