@@ -37,10 +37,15 @@ function directionLabel(value: string) {
 function yesNo(value: boolean) { return value ? '예' : '아니오'; }
 
 function copilotStatusLabel(status: string) {
-  if (status === 'needs_context') return '추가 근거 필요';
+  const normalized = String(status ?? '').toUpperCase();
+  if (status === 'needs_context') return '추가 자료 필요';
   if (status === 'ready') return '사용 가능';
   if (status === 'blocked') return '차단됨';
-  return status;
+  if (['BLOCKED_DATA', 'MISSING_EVIDENCE', 'MISSING', 'NOT_EVALUABLE'].includes(normalized)) return '자료 부족';
+  if (['FAILED', 'FAIL', 'INVALID', 'BLOCKED'].includes(normalized)) return '차단됨';
+  if (['PENDING', 'QUEUED', 'RUNNING', 'COLLECTING'].includes(normalized)) return '진행 중';
+  if (['COMPLETED', 'PASS', 'PRESENT', 'READY', 'READBACK_VERIFIED'].includes(normalized)) return '완료';
+  return '확인 필요';
 }
 
 function aiReasonLabel(reason: string | null | undefined) {
@@ -137,15 +142,15 @@ export function ResearchCopilotPanel() {
         <p className="text-xs font-bold text-primary">연구 전용 · 실행 권한 없음</p>
         <h1 className="mt-2 text-2xl font-black">인공지능 연구 도우미</h1>
         <p className="mt-1 text-xs font-bold text-muted-foreground"></p>
-        <p className="mt-3 text-sm leading-6 text-foreground/80">가설과 검증 절차를 설명합니다. 수익성·승격·실거래는 결정하지 않습니다.</p>
+        <p className="mt-3 text-sm leading-6 text-foreground/80">가설과 검증 절차를 설명합니다.</p>
       </header>
       {snapshot.isPending ? <p role="status">연구 자료를 불러오는 중…</p> : null}
       {snapshot.isError ? <div role="alert" className="rounded-xl border border-destructive p-4"><p>연구 자료를 불러오지 못했습니다.</p><button className={button} onClick={() => void snapshot.refetch()}>다시 조회</button></div> : null}
       {data ? <>
         <section aria-label="연구 자료와 인공지능 한도" className="rounded-2xl border border-border bg-card p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold text-muted-foreground">현재 증거</p><h2 className="mt-1 font-bold">{copilotStatusLabel(data.status)}</h2></div><button className={button} disabled={busy || snapshot.isFetching} onClick={() => void snapshot.refetch()}>증거 새로고침</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold text-muted-foreground">현재 자료</p><h2 className="mt-1 font-bold">{copilotStatusLabel(data.status)}</h2></div><button className={button} disabled={busy || snapshot.isFetching} onClick={() => void snapshot.refetch()}>자료 새로고침</button></div>
           <p className="mt-2 text-sm">기준 시각: {data.timestamp === null ? '미수집' : new Date(data.timestamp).toLocaleString('ko-KR')} · {evidenceStatusLabel(data.freshness)}</p>
-          <p className="mt-2 text-xs text-muted-foreground">확인된 출처 {data.data_sources.length}개 · 자료 지문 확인됨</p>
+          <p className="mt-2 text-xs text-muted-foreground">확인된 자료 출처 {data.data_sources.length}개 · 자료 지문 확인됨</p>
           <p className="mt-2 text-sm">인공지능 요청 {data.ai.calls}회 · 캐시 적중 {data.ai.cacheHits}회</p>
           <p className="mt-2 text-sm">{data.ai.available ? '명시 요청에만 인공지능을 호출합니다.' : aiReasonLabel(data.ai.reason)}</p>{!data.ai.available ? <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-sm"><p className="font-black">왜 버튼을 누를 수 없나요?</p><p className="mt-1 break-keep text-muted-foreground">현재 인공지능 사용 조건이 확인되지 않아 요청 기능을 꺼두었습니다.</p><details className="mt-2 text-xs"><summary className="cursor-pointer font-bold">기술 상태 코드 보기</summary><p className="mt-2 break-all font-mono text-muted-foreground">{data.ai.reason}</p></details></div> : null}
           <div className="mt-4 flex flex-wrap gap-2">{ACTIONS.map(([task, label]) => <button key={task} className={button} disabled={busy || snapshot.isError || snapshot.isFetching || !data.ai.available} onClick={() => ask(task)}>{label}</button>)}</div>
@@ -160,10 +165,10 @@ export function ResearchCopilotPanel() {
             <h3 className="font-bold">{hypothesis.hypothesisId}</h3><p className="mt-2 text-sm">{hypothesis.thesis}</p>
             <p className="mt-2 text-sm">반증 조건: {hypothesis.falsification}</p><p className="mt-2 text-sm">필요 증거: {hypothesis.requiredEvidence.join(' · ')}</p>
           </article>)}
-          <p className="mt-3 text-sm">신뢰 확률·성과 수치: 미생성. 후보 가설은 검증된 전략이 아닙니다.</p>
+          <p className="mt-3 text-sm">후보 가설은 검증 전 상태입니다.</p>
         </section> : null}
         <section aria-label="연구 단계" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <p className="text-sm sm:col-span-2 lg:col-span-3">전체 전략의 검증 진행상태입니다. 서로 다른 전략의 결과를 합치지 않습니다.</p>
+          <p className="text-sm sm:col-span-2 lg:col-span-3">전략별 검증 진행상태입니다.</p>
           {data.stages.map(stage => <article key={stage.key} className="min-w-0 rounded-2xl border border-border bg-card p-4">
             <h2 className="font-bold">{stage.label}</h2><p className="mt-2 text-sm font-black text-amber-600">{copilotStatusLabel(stage.status)}</p>
             <p className="mt-2 text-xs">검증 자료가 있는 전략: {stage.verifiedReceiptCount}개</p>
@@ -173,7 +178,7 @@ export function ResearchCopilotPanel() {
         </section>
         <section aria-label="수식 검증" className="rounded-2xl border border-border bg-card p-4">
           <h2 className="font-bold">안전 수식 검증</h2>
-          <p className="mt-2 text-sm text-muted-foreground">지원된 수식만 검사합니다. 수식 통과가 수익성 통과를 뜻하지 않습니다.</p>
+          <p className="mt-2 text-sm text-muted-foreground">지원 가능한 수식만 검사합니다.</p>
           <label htmlFor="research-dsl" className="mt-4 block text-sm font-bold">연구 수식 입력</label>
           <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); setSameCandidate(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
           <button className={button + ' mt-3'} disabled={busy || !dsl.trim()} onClick={validate}>수식 검증</button>
