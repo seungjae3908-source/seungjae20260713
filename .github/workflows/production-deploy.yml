@@ -22,6 +22,12 @@ on:
       - .github/workflows/production-deploy.yml
       - .github/workflows/production-one-time-approval.yml
       - .github/workflows/production-postdeploy-qa.yml
+      - .github/scripts/run-production-readonly-qa.sh
+      - .github/scripts/verify-production-qa-receipt.cjs
+      - .github/scripts/verify-production-deploy-execution.cjs
+      - .github/scripts/build-production-postdeploy-context.mjs
+      - .github/scripts/build-production-postdeploy-evidence.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/scripts/verify-production-postdeploy-qa-contract.mjs
       - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/post-merge-release-provenance.yml
@@ -237,14 +243,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: approval-gate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 150
     environment: production
     env:
-      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-      SSH_USER: ${{ secrets.PROD_SSH_USER }}
-      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       TARGET_SHA: ${{ needs.approval-gate.outputs.target_sha }}
       DATA_PROBE_PATH: ${{ inputs.data_probe_path }}
       FORCE_REBUILD: ${{ inputs.force_rebuild }}
@@ -256,39 +257,29 @@ jobs:
           ref: ${{ env.TARGET_SHA }}
           persist-credentials: false
       - name: Validate production secrets
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
         run: |
           set -Eeuo pipefail
           [[ -n "$SSH_HOST" ]] || { echo 'Missing PROD_SSH_HOST' >&2; exit 1; }
           [[ -n "$SSH_USER" ]] || { echo 'Missing PROD_SSH_USER' >&2; exit 1; }
           [[ -n "$SSH_PRIVATE_KEY" ]] || { echo 'Missing PROD_SSH_PRIVATE_KEY' >&2; exit 1; }
-      - name: Provision isolated approval-free read-only QA credential scope
-        env:
-          GH_TOKEN: ${{ secrets.AGENT_HUB_GITHUB_TOKEN }}
-          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
-          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
-        run: |
-          set -Eeuo pipefail
-          [[ -n "$GH_TOKEN" ]] || { echo 'Missing QA environment administrator token' >&2; exit 1; }
           [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
             echo 'Missing Production read-only QA credential' >&2
             exit 1
           }
-          echo "::add-mask::$GH_TOKEN"
           echo "::add-mask::$PRODUCTION_QA_LOGIN"
           echo "::add-mask::$PRODUCTION_QA_PASSWORD"
-          gh api --method PUT "repos/${GITHUB_REPOSITORY}/environments/production-readonly-qa" >/dev/null
-          printf '%s' "$PRODUCTION_QA_LOGIN" \
-            | gh secret set PRODUCTION_QA_LOGIN --env production-readonly-qa --repo "$GITHUB_REPOSITORY"
-          printf '%s' "$PRODUCTION_QA_PASSWORD" \
-            | gh secret set PRODUCTION_QA_PASSWORD --env production-readonly-qa --repo "$GITHUB_REPOSITORY"
-          protection_count="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-readonly-qa" --jq '.protection_rules | length')"
-          secret_names="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-readonly-qa/secrets" --jq '[.secrets[].name] | sort | join(",")')"
-          [[ "$protection_count" == "0" ]] || { echo 'Read-only QA environment must not require reviewers' >&2; exit 1; }
-          [[ "$secret_names" == "PRODUCTION_QA_LOGIN,PRODUCTION_QA_PASSWORD" ]] || {
-            echo 'Read-only QA environment contains a forbidden secret scope' >&2
-            exit 1
-          }
       - name: Configure SSH
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         run: |
           set -Eeuo pipefail
           umask 077
@@ -301,6 +292,9 @@ jobs:
           fi
       - name: Require canonical Production trade schema before application mutation
         env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
           PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: |
           set -Eeuo pipefail
@@ -343,6 +337,10 @@ jobs:
           fi
 
       - name: Deploy exact approved revision
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q DATA_PROBE_PATH=%q FORCE_REBUILD=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q' \
@@ -390,7 +388,180 @@ jobs:
             CANARY_PORT="$CANARY_PORT" DATA_PROBE_PATH="$DATA_PROBE_PATH" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
             "$DEPLOY_SCRIPT" "$TARGET_SHA"
           REMOTE
-      - name: Deployment summary
+      - name: Record successful deployment boundary
+        run: |
+          set -Eeuo pipefail
+          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "DEPLOYMENT_COMPLETED_AT=$completed_at" >> "$GITHUB_ENV"
+          echo "QA_STARTED_AT=$completed_at" >> "$GITHUB_ENV"
+
+      - name: Destroy deployment authority before read-only QA
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          if [[ -f "$HOME/.ssh/id_ed25519" ]]; then
+            chmod u+w "$HOME/.ssh/id_ed25519"
+            rm -f -- "$HOME/.ssh/id_ed25519"
+          fi
+          test ! -e "$HOME/.ssh/id_ed25519"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install exact-SHA QA dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install isolated Chromium runtime
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Pre-QA identity, authority, and gate-conflict check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+        run: >-
+          node .github/scripts/build-production-postdeploy-context.mjs
+          postdeploy-evidence/production-postdeploy-context.json
+          "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
+
+      - name: 1 · Comprehensive Production read-only QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+        run: bash .github/scripts/run-production-readonly-qa.sh comprehensive
+
+      - name: Upload Comprehensive QA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-comprehensive-readonly-${{ github.run_id }}
+          path: stock-analyzer/production-comprehensive-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 2 · Four-provider Account Production read-only QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+          PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: bitget,kiwoom,toss,upbit
+        run: bash .github/scripts/run-production-readonly-qa.sh account
+
+      - name: Upload Four-provider Account QA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-account-readonly-live-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 3 · Production Credential Reuse QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+        run: bash .github/scripts/run-production-readonly-qa.sh credential
+
+      - name: Upload Credential Reuse QA evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-credential-reuse-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-live-credential-reuse-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Final exact-SHA identity, safety, and gate-conflict check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+        run: >-
+          node .github/scripts/build-production-postdeploy-context.mjs
+          postdeploy-evidence/production-postdeploy-context.json
+          "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
+
+      - name: Assemble exact-run post-deploy evidence
+        run: |
+          set -Eeuo pipefail
+          cp stock-analyzer/production-comprehensive-artifacts/production-comprehensive-readonly-qa.json postdeploy-evidence/
+          cp stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json postdeploy-evidence/
+          cp stock-analyzer/production-live-credential-reuse-artifacts/production-live-credential-reuse-qa.json postdeploy-evidence/
+          node .github/scripts/build-production-postdeploy-evidence.cjs postdeploy-evidence "$TARGET_SHA" "$GITHUB_RUN_ID"
+
+      - name: Upload immutable ACTIVATION_READY evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-postdeploy-activation-ready-${{ env.TARGET_SHA }}
+          path: postdeploy-evidence/production-postdeploy-activation-ready-${{ env.TARGET_SHA }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Deployment and post-deploy QA summary
         if: success()
         run: |
           {
@@ -403,4 +574,10 @@ jobs:
             echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
             echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'
+            echo '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
+            echo '- orders/cancels/amends/transfers/withdrawals: `0/0/0/0/0`'
+            echo '- liveTradingAuthorityGranted: `false`'
+            echo '- autoTradingAuthorityGranted: `false`'
+            echo '- active conflicting trading gates: `0`'
+            echo '- ACTIVATION_READY: `true`'
           } >> "$GITHUB_STEP_SUMMARY"

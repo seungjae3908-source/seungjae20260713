@@ -62,6 +62,7 @@ export function buildProductionComprehensiveReadonlyReceipt({
     amendRequests: 0,
     transferRequests: 0,
     withdrawalRequests: 0,
+    realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,
     secretValuesRecorded: false,

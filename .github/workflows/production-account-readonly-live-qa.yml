@@ -16,6 +16,8 @@ on:
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
       - '.github/workflows/production-postdeploy-qa.yml'
       - '.github/scripts/verify-production-postdeploy-qa-contract.mjs'
+      - '.github/scripts/run-production-readonly-qa.sh'
+      - '.github/scripts/verify-production-qa-receipt.cjs'
   workflow_dispatch:
     inputs:
       sha:
@@ -85,7 +87,7 @@ jobs:
           };
           requireText(workflow, 'run-name: Production Account Read-only Live QA', 'LIVE_QA_TARGETED_RUN_NAME_REQUIRED');
           requireText(live, "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'", 'LIVE_QA_MUST_BE_DISPATCH_OR_ORCHESTRATOR_CALL_ONLY');
-          requireText(live, 'environment: production-readonly-qa', 'LIVE_QA_MUST_USE_READONLY_ENVIRONMENT');
+          requireText(live, 'environment: production', 'LIVE_QA_PROTECTED_CREDENTIAL_SOURCE_REQUIRED');
           if (live.includes('PROD_SSH_') || live.includes('PROD_DATABASE_URL')) throw new Error('LIVE_QA_DEPLOY_AUTHORITY_FORBIDDEN');
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
           requireText(live, 'ref: ' + '$' + '{{ inputs.sha }}', 'LIVE_QA_EXACT_SHA_CHECKOUT_REQUIRED');
@@ -141,8 +143,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: production-readonly-qa
+    environment: production
     env:
+      GH_TOKEN: ${{ github.token }}
       PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
@@ -151,6 +154,7 @@ jobs:
       EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
       PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
       PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ${{ inputs.providers }}
+      PRODUCTION_DEPLOY_MODE: completed
     steps:
       - uses: actions/checkout@v4
         with:
@@ -271,8 +275,7 @@ jobs:
         run: pnpm exec playwright install chromium
 
       - name: Run authenticated real-account read-only QA
-        working-directory: stock-analyzer
-        run: pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+        run: bash .github/scripts/run-production-readonly-qa.sh account
 
       - name: Verify sanitized immutable QA evidence
         shell: bash
@@ -309,6 +312,7 @@ jobs:
             || value?.amendRequests !== 0
             || value?.transferRequests !== 0
             || value?.withdrawalRequests !== 0
+            || value?.realOrderSubmitted !== false
             || value?.blockedMutationRequests !== 0
             || value?.observedAppMutationRequests !== 0
             || value?.liveTradingAuthorityGranted !== false
