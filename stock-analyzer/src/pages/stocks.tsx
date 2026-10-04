@@ -9,7 +9,10 @@ import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
 import { requireMarketMoversResponse, type MarketMoversResponse } from '@/lib/market-movers-response';
-import { requireRecommendationResponse } from '@/lib/recommendation-response';
+import {
+  recommendationQueryKey,
+  requireRecommendationResponse,
+} from '@/lib/recommendation-response';
 import { requireThemesData } from '@/lib/theme-response';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
@@ -93,7 +96,7 @@ export default function StocksPage() {
   const useMovers = isStock && (category === 'tradingValue' || category === 'volume' || category === 'gainers' || category === 'losers');
 
   const recommendations = useQuery({
-    queryKey: ['stocks-cat-reco', mode.stockMarket],
+    queryKey: recommendationQueryKey(mode.stockMarket),
     queryFn: async () =>
       requireRecommendationResponse<RecoResponse>(
         await apiGet<unknown>(`/market/recommendations?market=${mode.stockMarket}`),

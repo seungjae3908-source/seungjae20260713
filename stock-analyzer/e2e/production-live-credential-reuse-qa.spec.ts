@@ -8,6 +8,7 @@ const baseUrl = process.env.PRODUCTION_BASE_URL?.trim() ?? '';
 const login = process.env.PRODUCTION_QA_LOGIN?.trim() ?? '';
 const password = process.env.PRODUCTION_QA_PASSWORD ?? '';
 const expectedSha = process.env.EXPECTED_DEPLOY_SHA?.trim().toLowerCase() ?? '';
+const productionDeployRunId = Number(process.env.EXPECTED_PRODUCTION_DEPLOY_RUN_ID ?? 0);
 const artifactDir = path.resolve(process.env.PRODUCTION_LIVE_CREDENTIAL_REUSE_ARTIFACT_DIR ?? 'production-live-credential-reuse-artifacts');
 const providers = ['toss', 'kiwoom', 'upbit', 'bitget'] as const;
 type Provider = typeof providers[number];
@@ -103,7 +104,8 @@ test.skip(!enabled, 'Production credential reuse QA is disabled');
 
 test('saved read-only credentials connect and verify all providers with zero financial mutation', async ({ page }) => {
   test.setTimeout(4 * 60_000);
-  if (!baseUrl || !login || !password || !/^[0-9a-f]{40}$/.test(expectedSha)) {
+  if (!baseUrl || !login || !password || !/^[0-9a-f]{40}$/.test(expectedSha)
+    || !Number.isSafeInteger(productionDeployRunId) || productionDeployRunId <= 0) {
     throw new Error('PRODUCTION_CREDENTIAL_REUSE_QA_ENV_INCOMPLETE');
   }
 
@@ -250,6 +252,8 @@ test('saved read-only credentials connect and verify all providers with zero fin
   fs.writeFileSync(path.join(artifactDir, 'production-live-credential-reuse-qa.json'), JSON.stringify({
     schemaVersion: 'production-live-credential-reuse-qa-v1',
     targetSha: expectedSha,
+    productionDeployRunId,
+    generatedAt: new Date().toISOString(),
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
     providers: evidence,

@@ -28,6 +28,7 @@ import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
+import RecommendationsPage from '@/pages/recommendations';
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -68,7 +69,6 @@ const AccountPage = lazy(loadAccountPage);
 const AdminPage = lazy(() => import('@/pages/admin'));
 const AgentHubControlPage = lazy(() => import('@/pages/agent-hub-control'));
 const InstallPage = lazy(() => import('@/pages/install'));
-const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const loadBacktestsPage = () => import('@/pages/backtests');
 const BacktestsPage = lazy(loadBacktestsPage);
 const loadPaperTradingPage = () => import('@/pages/paper-trading');
