@@ -162,6 +162,13 @@ export class TradeAutomationService {
         warnings: ['RISK_REDUCING_EXIT_MARKET_INTELLIGENCE_ENTRY_GATE_SKIPPED'],
       };
     }
+    if (input.executionMode === 'manual') {
+      return {
+        allowed: true,
+        blockCode: null,
+        warnings: ['EXPLICIT_MANUAL_ENTRY_MARKET_INTELLIGENCE_STRATEGY_GATE_SKIPPED'],
+      };
+    }
     const intelligence = await fetchTradingPlanMarketIntelligence(input);
     return marketIntelligenceTradeDecision(intelligence, input.accountMode);
   }
