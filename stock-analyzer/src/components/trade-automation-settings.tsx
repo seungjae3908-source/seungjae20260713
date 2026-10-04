@@ -75,9 +75,9 @@ const MARKET_LABELS: Record<Market, string> = {
 
 const MARKET_DESCRIPTIONS: Record<Market, string> = {
   domestic_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
-  us_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
+  us_stock: 'Kiwoom 고정 · LONG only',
   crypto_spot: 'Upbit 고정 · 모의매매 지원',
-  crypto_futures: 'Bitget 고정 · LONG/SHORT, 2~3배 제한',
+  crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated 2~7배',
 };
 
 const DEFAULT_MARKETS: MarketSwitches = {
@@ -116,7 +116,7 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
   };
   const stockBrokerByMarket: StockBrokerByMarket = {
     domestic_stock: policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom',
-    us_stock: policy.stockBrokerByMarket?.us_stock === 'toss' ? 'toss' : 'kiwoom',
+    us_stock: 'kiwoom',
   };
   return {
     ...policy,
@@ -128,8 +128,7 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
       upbit: marketEnabled.crypto_spot,
       kiwoom: (marketEnabled.domestic_stock && stockBrokerByMarket.domestic_stock === 'kiwoom')
         || (marketEnabled.us_stock && stockBrokerByMarket.us_stock === 'kiwoom'),
-      toss: (marketEnabled.domestic_stock && stockBrokerByMarket.domestic_stock === 'toss')
-        || (marketEnabled.us_stock && stockBrokerByMarket.us_stock === 'toss'),
+      toss: marketEnabled.domestic_stock && stockBrokerByMarket.domestic_stock === 'toss',
     },
     enabledAssets: {
       bitget: policy.enabledAssets.bitget ?? [],
@@ -149,8 +148,7 @@ function exchangesForMarkets(
     upbit: markets.crypto_spot,
     kiwoom: (markets.domestic_stock && brokers.domestic_stock === 'kiwoom')
       || (markets.us_stock && brokers.us_stock === 'kiwoom'),
-    toss: (markets.domestic_stock && brokers.domestic_stock === 'toss')
-      || (markets.us_stock && brokers.us_stock === 'toss'),
+    toss: markets.domestic_stock && brokers.domestic_stock === 'toss',
   };
 }
 
@@ -212,7 +210,10 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
 
   function selectStockBroker(market: StockMarket, broker: StockBroker) {
     setDraft((current) => {
-      const stockBrokerByMarket = { ...current.stockBrokerByMarket, [market]: broker };
+      const stockBrokerByMarket = {
+        ...current.stockBrokerByMarket,
+        [market]: market === 'us_stock' ? 'kiwoom' : broker,
+      } as StockBrokerByMarket;
       return {
         ...current,
         stockBrokerByMarket,
@@ -354,7 +355,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     {!selectedMarket || selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock' ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
       <p className="text-xs font-extrabold">주식 증권사 선택</p>
       <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-        국내·미국주식은 사용자마다 Toss 또는 Kiwoom을 선택합니다. 코인현물은 Upbit, 코인선물은 Bitget으로 고정됩니다.
+        국내주식은 Toss 또는 Kiwoom을 선택하고, 미국주식은 Kiwoom으로 고정합니다. 코인현물은 Upbit, 코인선물은 Bitget으로 고정됩니다.
       </p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {((selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock') ? [selectedMarket] : ['domestic_stock', 'us_stock'] as StockMarket[]).map((market) => (
@@ -365,10 +366,11 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
               aria-label={`${MARKET_LABELS[market]} 증권사`}
               value={draft.stockBrokerByMarket[market]}
               onChange={(event) => selectStockBroker(market, event.target.value === 'toss' ? 'toss' : 'kiwoom')}
+              disabled={market === 'us_stock'}
               className="mt-2 h-10 w-full rounded-xl border border-card-border bg-background px-3 text-xs"
             >
               <option value="kiwoom">Kiwoom</option>
-              <option value="toss">Toss</option>
+              {market === 'domestic_stock' ? <option value="toss">Toss</option> : null}
             </select>
           </label>
         ))}

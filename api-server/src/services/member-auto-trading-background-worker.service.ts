@@ -150,7 +150,7 @@ export function resolveMemberStockBroker(
   market: MemberAutoTradingPaperHandoffEntry['identity']['market'],
 ): 'kiwoom' | 'toss' | null {
   if (market === 'KR_STOCK') return policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
-  if (market === 'US_STOCK') return policy.stockBrokerByMarket?.us_stock ?? 'kiwoom';
+  if (market === 'US_STOCK') return 'kiwoom';
   return null;
 }
 
