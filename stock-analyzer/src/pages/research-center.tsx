@@ -48,7 +48,7 @@ type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
 
 const TABS: Array<{ key: ResearchTab; label: string; icon: typeof Activity }> = [
   { key: 'overview', label: '연구 현황', icon: Activity },
-  { key: 'ai-lab', label: 'AI 분석실', icon: BrainCircuit },
+  { key: 'ai-lab', label: '인공지능 분석실', icon: BrainCircuit },
   { key: 'evidence', label: '검증 리포트', icon: FileSearch },
   { key: 'paper', label: '모의매매', icon: WalletCards },
 ];
@@ -676,7 +676,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
         <TopStatus label="실거래" value="비활성" status="inactive" detail="실거래 권한 없음" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
-        <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
+        <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="자료 축적 중" />
         <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
       </section>
 
@@ -1067,7 +1067,7 @@ function PaperTab({
             ['미래 검증 표본', performance.OOS_N],
           ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-card-border bg-background p-2"><p className="text-[9px] font-bold text-muted-foreground">{label}</p><p className="mt-1 text-xs font-black tabular-nums">{candidateValue(value as number | null)}</p></div>)}
         </div>
-        <p className="mt-3 text-[10px] text-muted-foreground">시장 독립 표본과 후보별 거래 수를 분리합니다.</p>
+        
       </article>
 
       <PaperClosedLoopObserver
