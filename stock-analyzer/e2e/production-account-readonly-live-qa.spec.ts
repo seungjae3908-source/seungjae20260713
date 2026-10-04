@@ -65,6 +65,16 @@ type SafetySnapshot = {
   stale: boolean;
   errorCode: string | null;
   openOrders: unknown[] | null;
+  positions: Array<{
+    symbol: string;
+    quantity: number | null;
+    currentPrice: number | null;
+    leverage: number | null;
+    liquidationPrice: number | null;
+    marginMode: string | null;
+    side: string | null;
+  }> | null;
+  positionMode?: 'one_way_mode' | 'hedge_mode' | null;
   orderRequests: number;
   cancelRequests: number;
   amendRequests: number;
@@ -74,6 +84,38 @@ type SafetySnapshot = {
   liveTradingEnabled: boolean;
   autoTradingEnabled: boolean;
 };
+
+type LocalOrderSnapshot = {
+  ok?: boolean;
+  dashboardItems?: Array<{
+    accountMode?: string | null;
+    state?: string;
+    clientOrderId?: string | null;
+    exchangeOrderId?: string | null;
+    updatedAt?: string;
+  }>;
+  orderSubmitted?: boolean;
+  orderCanceled?: boolean;
+  orderAmended?: boolean;
+  privateTradingRequestSent?: boolean;
+};
+
+type ApprovalQueueSnapshot = {
+  ok?: boolean;
+  items?: Array<{
+    accountMode?: string;
+    state?: string;
+    approvalExpiresAt?: string | null;
+    approval?: { approvalEnabled?: boolean; expiresAt?: string | null };
+  }>;
+  orderSubmitted?: boolean;
+  orderCanceled?: boolean;
+  privateTradingRequestSent?: boolean;
+};
+
+const ACTIVE_ORDER_STATES = new Set(['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED']);
+const STALE_ACTIVE_ORDER_MS = 15 * 60_000;
+const MIN_LIQUIDATION_DISTANCE_PERCENT = 5;
 
 type CredentialStatus = {
   ok?: boolean;
@@ -254,6 +296,103 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(credentialStatus?.liveTradingEnabled).toBe(false);
   expect(credentialStatus?.autoTradingEnabled).toBe(false);
 
+  const runtimeState = await page.evaluate(async () => {
+    const read = async (url: string) => {
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}`);
+      return response.json() as Promise<unknown>;
+    };
+    const [orders, approvalQueue] = await Promise.all([
+      read('/api/trade-automation/orders'),
+      read('/api/trade-automation/approval-queue'),
+    ]);
+    return { orders, approvalQueue };
+  }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot };
+
+  expect(runtimeState.orders.ok).toBe(true);
+  expect(runtimeState.orders.orderSubmitted).toBe(false);
+  expect(runtimeState.orders.orderCanceled).toBe(false);
+  expect(runtimeState.orders.orderAmended).toBe(false);
+  expect(runtimeState.orders.privateTradingRequestSent).toBe(false);
+  expect(runtimeState.approvalQueue.ok).toBe(true);
+  expect(runtimeState.approvalQueue.orderSubmitted).toBe(false);
+  expect(runtimeState.approvalQueue.orderCanceled).toBe(false);
+  expect(runtimeState.approvalQueue.privateTradingRequestSent).toBe(false);
+
+  const now = Date.now();
+  const localOrders = Array.isArray(runtimeState.orders.dashboardItems)
+    ? runtimeState.orders.dashboardItems.filter((order) => order.accountMode === 'live')
+    : [];
+  const activeLocalOrders = localOrders.filter((order) => ACTIVE_ORDER_STATES.has(String(order.state ?? '')));
+  const localOrderIdentities = new Set(localOrders.flatMap((order) => [
+    String(order.clientOrderId ?? '').trim(),
+    String(order.exchangeOrderId ?? '').trim(),
+  ]).filter(Boolean));
+  const clientOrderIds = localOrders.map((order) => String(order.clientOrderId ?? '').trim()).filter(Boolean);
+  const duplicateClientOrderIdCount = clientOrderIds.length - new Set(clientOrderIds).size;
+  const staleLocalOrderCount = activeLocalOrders.filter((order) => {
+    const updatedAt = Date.parse(String(order.updatedAt ?? ''));
+    return !Number.isFinite(updatedAt) || now - updatedAt > STALE_ACTIVE_ORDER_MS;
+  }).length;
+  const approvalItems = Array.isArray(runtimeState.approvalQueue.items)
+    ? runtimeState.approvalQueue.items
+    : [];
+  const stalePlanCount = approvalItems.filter((item) => {
+    if (item.accountMode !== 'live') return false;
+    if (String(item.state ?? '') !== 'APPROVAL_PENDING') return false;
+    const expiresAt = Date.parse(String(item.approvalExpiresAt ?? item.approval?.expiresAt ?? ''));
+    return item.approval?.approvalEnabled !== true || !Number.isFinite(expiresAt) || expiresAt <= now;
+  }).length;
+
+  const providerOpenOrders = providers.flatMap((provider) => {
+    const openOrders = snapshots.get(provider)?.openOrders;
+    return Array.isArray(openOrders) ? openOrders : [];
+  });
+  const orphanOrderCount = providerOpenOrders.filter((order) => {
+    if (order === null || typeof order !== 'object') return true;
+    const id = String((order as { id?: unknown }).id ?? '').trim();
+    return !id || !localOrderIdentities.has(id);
+  }).length;
+  const bitgetSnapshot = snapshots.get('bitget');
+  const bitgetPositions = Array.isArray(bitgetSnapshot?.positions)
+    ? bitgetSnapshot.positions.filter((position) => Math.abs(Number(position.quantity ?? 0)) > 0)
+    : [];
+  const sidesBySymbol = new Map<string, Set<string>>();
+  for (const position of bitgetPositions) {
+    const symbol = String(position.symbol ?? '').trim().toUpperCase();
+    const side = String(position.side ?? '').trim().toLowerCase();
+    const sides = sidesBySymbol.get(symbol) ?? new Set<string>();
+    if (side) sides.add(side);
+    sidesBySymbol.set(symbol, sides);
+  }
+  const oppositePositionDuplicateCount = [...sidesBySymbol.values()]
+    .filter((sides) => sides.has('long') && sides.has('short')).length;
+  const nonIsolatedPositionCount = bitgetPositions
+    .filter((position) => String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated').length;
+  const outOfPolicyLeveragePositionCount = bitgetPositions.filter((position) => {
+    const leverage = Number(position.leverage);
+    return !Number.isInteger(leverage) || leverage < 2 || leverage > 7;
+  }).length;
+  const liquidationRiskPositionCount = bitgetPositions.filter((position) => {
+    const currentPrice = Number(position.currentPrice);
+    const liquidationPrice = Number(position.liquidationPrice);
+    if (!(currentPrice > 0) || !(liquidationPrice > 0)) return true;
+    return Math.abs(currentPrice - liquidationPrice) / currentPrice * 100 <= MIN_LIQUIDATION_DISTANCE_PERCENT;
+  }).length;
+  const safetyCounters = {
+    openOrderCount: providerOpenOrders.length,
+    orphanOrderCount,
+    activeLocalOrderCount: activeLocalOrders.length,
+    staleLocalOrderCount,
+    duplicateClientOrderIdCount,
+    stalePlanCount,
+    bitgetActivePositionCount: bitgetPositions.length,
+    oppositePositionDuplicateCount,
+    nonIsolatedPositionCount,
+    outOfPolicyLeveragePositionCount,
+    liquidationRiskPositionCount,
+  };
+
   const sanitizedProviders = providers.map((provider) => {
     const snapshot = snapshots.get(provider);
     const checkedAtPresent = typeof snapshot?.checkedAt === 'string' && Number.isFinite(Date.parse(snapshot.checkedAt));
@@ -270,6 +409,7 @@ test('Production real-account read-only providers return fresh connected snapsho
       checkedAtPresent,
       lastGoodAtPresent,
       fresh,
+      openOrderCount: Array.isArray(snapshot?.openOrders) ? snapshot.openOrders.length : -1,
       reconciliation: reconciliationPassed ? 'PASS' : 'FAIL',
       reconciliationPassed,
       diagnosticReadAccepted: snapshot !== undefined && providerReadErrorAccepted(
@@ -286,7 +426,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   // Production failure identifies the exact provider status/error without retaining
   // account values, credentials, traces, screenshots, or mutation payloads.
   writeEvidence({
-    schemaVersion: 'production-account-readonly-live-qa-v2',
+    schemaVersion: 'production-account-readonly-live-qa-v3',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -295,6 +435,8 @@ test('Production real-account read-only providers return fresh connected snapsho
     credentialVaultEncryptionConfigured: credentialStatus?.encryptionConfigured === true,
     testedProviders,
     providers: sanitizedProviders,
+    safetyCounters,
+    bitgetPositionMode: bitgetSnapshot?.positionMode ?? null,
     secretValuesRecorded: false,
     accountValuesRecorded: false,
     orderRequests: Number(credentialStatus?.orderRequests ?? -1),
@@ -363,6 +505,13 @@ test('Production real-account read-only providers return fresh connected snapsho
   }
   if (blocked.length > 0) providerFailures.push(`blocked mutation requests=${blocked.length}`);
   if (observedAppMutations.length > 0) providerFailures.push(`observed app mutations=${observedAppMutations.length}`);
+  for (const [name, value] of Object.entries(safetyCounters)) {
+    if (name === 'bitgetActivePositionCount') continue;
+    if (value !== 0) providerFailures.push(`${name}=${value}`);
+  }
+  if (bitgetSnapshot?.positionMode !== 'one_way_mode') {
+    providerFailures.push(`bitget positionMode=${bitgetSnapshot?.positionMode ?? 'unknown'}`);
+  }
 
   expect(
     providerFailures,

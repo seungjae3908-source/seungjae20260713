@@ -69,7 +69,7 @@ jobs:
           grep -Fq "executionAuthority: 'NONE'" "$file"
           grep -Fq "pnpm exec playwright test --config=playwright.production-account-readonly.config.ts" "$file"
           grep -Fq 'PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: "toss,kiwoom,upbit,bitget"' "$file"
-          grep -Fq "production-account-readonly-live-qa-v2" "$file"
+          grep -Fq "production-account-readonly-live-qa-v3" "$file"
           grep -Fq "UPBIT_OPEN_ORDERS_UPBIT_PERMISSION_DENIED" "$file"
           grep -Fq "Rollback provider read flags after downstream failure" "$file"
           grep -Fq "key_value_exposed: false" "$file"
@@ -719,7 +719,12 @@ jobs:
           const providers = Array.isArray(value?.providers) ? value.providers : [];
           const requiredProviders = ['bitget', 'kiwoom', 'toss', 'upbit'];
           const testedProviders = Array.isArray(value?.testedProviders) ? value.testedProviders : [];
-          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
+          const zeroSafetyCounters = [
+            'openOrderCount', 'orphanOrderCount', 'activeLocalOrderCount', 'staleLocalOrderCount',
+            'duplicateClientOrderIdCount', 'stalePlanCount', 'oppositePositionDuplicateCount',
+            'nonIsolatedPositionCount', 'outOfPolicyLeveragePositionCount', 'liquidationRiskPositionCount',
+          ];
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v3'
             || value?.targetSha !== expectedSha
             || value?.officialProductionOrigin !== true
             || value?.authenticatedProductionSession !== true
@@ -735,6 +740,8 @@ jobs:
             || value?.observedAppMutationRequests !== 0
             || value?.liveTradingAuthorityGranted !== false
             || value?.autoTradingAuthorityGranted !== false
+            || value?.bitgetPositionMode !== 'one_way_mode'
+            || zeroSafetyCounters.some((key) => value?.safetyCounters?.[key] !== 0)
             || JSON.stringify(testedProviders) !== JSON.stringify(requiredProviders)) {
             throw new Error('ACCOUNT_READ_ACTIVATION_QA_EVIDENCE_CONTRACT_FAILED');
           }
@@ -743,7 +750,7 @@ jobs:
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
               || row.stale !== false || row.errorCode !== null
               || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true
-              || row.reconciliationPassed !== true) {
+              || row.reconciliationPassed !== true || row.openOrderCount !== 0) {
               throw new Error('ACCOUNT_READ_ACTIVATION_QA_PROVIDER_FAILED_' + provider.toUpperCase());
             }
           }

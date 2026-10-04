@@ -50,8 +50,8 @@ type Props = {
 
 type AnyObj = Record<string, any>;
 type Direction = "LONG" | "SHORT" | "WAIT";
-type PositionMode = "one_way_mode" | "hedge_mode";
-type MarginMode = "isolated" | "crossed";
+type PositionMode = "one_way_mode";
+type MarginMode = "isolated";
 type Timeframe = "1m" | "3m" | "5m" | "15m" | "30m" | "1H" | "4H" | "1D" | "1W";
 type OverlayKey = "ma5" | "ma20" | "ma60" | "bollinger" | "vwap" | "volume" | "levels" | "arrows";
 type ScannerCategory = "tradingValue" | "volume" | "gainers" | "losers";
@@ -692,11 +692,17 @@ function analyze(
   };
 }
 
-function loadSettings() {
+function loadSettings(): AutoSettings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
   try {
     const parsed = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) ?? "{}") as Partial<AutoSettings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      positionMode: "one_way_mode",
+      marginMode: "isolated",
+      leverage: clamp(Math.round(numberOf(parsed.leverage ?? DEFAULT_SETTINGS.leverage)), 2, 7),
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -1601,7 +1607,6 @@ export function CryptoTradingWorkspace({
   const accountEquityUSDT = accountRow ? numberOf(accountRow.accountEquity) : null;
   const unrealizedPLUSDT = accountRow ? numberOf(accountRow.unrealizedPL) : null;
   const isolatedAvailableUSDT = accountRow ? numberOf(accountRow.isolatedMaxAvailable) : null;
-  const crossedAvailableUSDT = accountRow ? numberOf(accountRow.crossedMaxAvailable) : null;
   const accountUpdatedAt = String(account.data?.updatedAt ?? "");
   const aiTradeView = currentAnalysis ? buildAiTradeView(currentAnalysis, timeframe) : null;
   const planKind = String(pendingPlan?.plan?.kind ?? watchPlan?.kind ?? "");
@@ -2012,9 +2017,9 @@ export function CryptoTradingWorkspace({
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <SelectField label="포지션 모드" value={settings.positionMode} onChange={(value) => updateSettings({ positionMode: value as PositionMode })} options={[{ value: "one_way_mode", label: "단방향" }, { value: "hedge_mode", label: "헤지" }]} />
-            <SelectField label="마진 모드" value={settings.marginMode} onChange={(value) => updateSettings({ marginMode: value as MarginMode })} options={[{ value: "isolated", label: "격리" }, { value: "crossed", label: "교차" }]} />
-            <NumberField label="레버리지" value={settings.leverage} min={1} max={20} step={1} suffix="배" onChange={(value) => updateSettings({ leverage: clamp(Math.round(value), 1, 20) })} />
+            <SelectField label="포지션 모드" value={settings.positionMode} onChange={() => updateSettings({ positionMode: "one_way_mode" })} options={[{ value: "one_way_mode", label: "단방향" }]} />
+            <SelectField label="마진 모드" value={settings.marginMode} onChange={() => updateSettings({ marginMode: "isolated" })} options={[{ value: "isolated", label: "격리" }]} />
+            <NumberField label="레버리지" value={settings.leverage} min={2} max={7} step={1} suffix="배" onChange={(value) => updateSettings({ leverage: clamp(Math.round(value), 2, 7) })} />
             <NumberField label="1회 증거금" value={settings.marginAmountUSDT} min={5} max={500} step={1} suffix="USDT" onChange={(value) => updateSettings({ marginAmountUSDT: clamp(value, 5, 500) })} />
             <NumberField label="최소 신호점수" value={settings.minScore} min={50} max={95} step={1} suffix="점" onChange={(value) => updateSettings({ minScore: clamp(Math.round(value), 50, 95) })} />
             <NumberField label="손절률" value={settings.stopLossPercent} min={0.2} max={15} step={0.1} suffix="%" onChange={(value) => updateSettings({ stopLossPercent: clamp(value, 0.2, 15) })} />
@@ -2095,7 +2100,7 @@ export function CryptoTradingWorkspace({
             <Metric label="실제 USDT 사용가능" value={availableUSDT == null ? (account.isFetching ? "조회 중" : "조회 필요") : `${formatPrice(availableUSDT)} USDT`} />
             <Metric label="실제 계좌 평가" value={accountEquityUSDT == null ? (account.isFetching ? "조회 중" : "조회 필요") : `${formatPrice(accountEquityUSDT)} USDT`} />
             <Metric label="미실현 손익" value={unrealizedPLUSDT == null ? "조회 필요" : `${formatPrice(unrealizedPLUSDT)} USDT`} />
-            <Metric label={settings.marginMode === "isolated" ? "격리 사용가능" : "교차 사용가능"} value={`${formatPrice(settings.marginMode === "isolated" ? isolatedAvailableUSDT : crossedAvailableUSDT)} USDT`} />
+            <Metric label="격리 사용가능" value={`${formatPrice(isolatedAvailableUSDT)} USDT`} />
             <Metric label="현재 보유" value={`${positions.length}/${settings.maxOpenPositions}개`} />
             <Metric label="오늘 주문" value={`${numberOf(autoStatus.data?.todayOrders)}/${settings.maxDailyOrders}회`} />
           </div>
