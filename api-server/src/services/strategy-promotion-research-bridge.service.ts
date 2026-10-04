@@ -227,16 +227,35 @@ export function buildResearchPromotionBridge(
   if (!candidatePerformance || candidatePerformance.present === false || candidatePerformance.status === 'MISSING') {
     return base('NO_CANDIDATE', ['RESEARCH_CANDIDATE_NOT_PRESENT'], generatedAt);
   }
+  const fullCostReady = candidatePerformance.FULL_COST_READY;
+  const netAlphaProven = candidatePerformance.NET_ALPHA_PROVEN;
+  const profitabilityProven = candidatePerformance.PROFITABILITY_PROVEN;
+  const trainDiagnosticOnly = candidatePerformance.TRAIN_DIAGNOSTIC_ONLY;
+  const validationComplete = candidatePerformance.VALIDATION_COMPLETE;
+  const oosComplete = candidatePerformance.OOS_COMPLETE;
+  const netPnl = candidatePerformance.Net_PnL;
+  const validationN = count(candidatePerformance.VALIDATION_N);
+  const oosN = count(candidatePerformance.OOS_N);
+  const settlementN = count(candidatePerformance.Settlement_N);
+  const booleanEvidence = [fullCostReady, netAlphaProven, profitabilityProven, trainDiagnosticOnly, validationComplete, oosComplete];
+  const hierarchyInvalid = booleanEvidence.some((value) => typeof value !== 'boolean')
+    || (validationComplete === true && (validationN ?? 0) <= 0)
+    || (oosComplete === true && (validationComplete !== true || (oosN ?? 0) <= 0))
+    || (fullCostReady === true && typeof netPnl !== 'number')
+    || (fullCostReady === false && netPnl !== null)
+    || (netAlphaProven === true && (fullCostReady !== true || oosComplete !== true || typeof netPnl !== 'number'))
+    || (profitabilityProven === true && (
+      netAlphaProven !== true
+      || validationComplete !== true
+      || oosComplete !== true
+      || fullCostReady !== true
+      || (settlementN ?? 0) <= 0
+      || typeof netPnl !== 'number'
+    ));
   if (candidatePerformance.status !== 'PRESENT'
     || candidatePerformance.schemaVersion !== 'frozen-candidate-performance-reader-v1'
     || candidatePerformance.identity14Verified !== true
-    || candidatePerformance.FULL_COST_READY !== false
-    || candidatePerformance.NET_ALPHA_PROVEN !== false
-    || candidatePerformance.PROFITABILITY_PROVEN !== false
-    || candidatePerformance.TRAIN_DIAGNOSTIC_ONLY !== true
-    || candidatePerformance.VALIDATION_COMPLETE !== false
-    || candidatePerformance.OOS_COMPLETE !== false
-    || candidatePerformance.Net_PnL !== null
+    || hierarchyInvalid
     || candidatePerformance.executionAuthority !== 'NONE') {
     return base('INVALID', ['RESEARCH_CANDIDATE_EVIDENCE_INVALID'], generatedAt);
   }
@@ -246,19 +265,19 @@ export function buildResearchPromotionBridge(
 
   const evidence = {
     trainN: count(candidatePerformance.TRAIN_N),
-    validationN: count(candidatePerformance.VALIDATION_N),
-    oosN: count(candidatePerformance.OOS_N),
-    settlementN: count(candidatePerformance.Settlement_N),
-    fullCostReady: false,
-    validationComplete: false,
-    oosComplete: false,
-    profitabilityProven: false,
+    validationN,
+    oosN,
+    settlementN,
+    fullCostReady,
+    validationComplete,
+    oosComplete,
+    profitabilityProven,
   };
 
   const blockers: string[] = [];
   if (!SHA40.test(currentSha)) blockers.push('CURRENT_APP_SHA_REQUIRED');
   if (candidate.researchCodeSha !== currentSha.toLowerCase()) blockers.push('RESEARCH_CODE_SHA_NOT_CURRENT');
-  if (candidatePerformance.TRAIN_DIAGNOSTIC_ONLY === true) blockers.push('TRAIN_DIAGNOSTIC_ONLY');
+  if (trainDiagnosticOnly === true && !evidence.validationComplete) blockers.push('TRAIN_DIAGNOSTIC_ONLY');
   if (!evidence.validationComplete) blockers.push('VALIDATION_NOT_COMPLETE');
   if (!evidence.oosComplete) blockers.push('OOS_NOT_COMPLETE');
   if (!evidence.fullCostReady) blockers.push('FULL_COST_NOT_READY');
