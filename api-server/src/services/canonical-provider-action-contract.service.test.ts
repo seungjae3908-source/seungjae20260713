@@ -13,13 +13,22 @@ import {
   validateTossOrderContract,
 } from './toss-openapi-contract.service';
 
-test('Toss owns KR and US stock actions', () => {
+test('Toss owns KR stock actions while US execution remains unavailable', () => {
   assert.equal(providerSupportsMarket('toss', 'KR_STOCK'), true);
-  assert.equal(providerSupportsMarket('toss', 'US_STOCK'), true);
+  assert.equal(providerSupportsMarket('toss', 'US_STOCK'), false);
   assert.equal(providerSupportsDirection('toss', 'BUY'), true);
   assert.equal(providerSupportsDirection('toss', 'LONG'), false);
   assert.equal(providerSupportsAction('toss', 'ORDER_MODIFY'), true);
   assert.equal(providerSupportsAction('toss', 'ORDER_CANCEL_REPLACE'), false);
+});
+
+test('Kiwoom owns US stock execution and also supports KR stock', () => {
+  assert.equal(providerSupportsMarket('kiwoom', 'KR_STOCK'), true);
+  assert.equal(providerSupportsMarket('kiwoom', 'US_STOCK'), true);
+  assert.equal(providerSupportsDirection('kiwoom', 'BUY'), true);
+  assert.equal(providerSupportsDirection('kiwoom', 'SHORT'), false);
+  assert.equal(providerSupportsAction('kiwoom', 'ORDER_CREATE'), true);
+  assert.equal(providerSupportsAction('kiwoom', 'ORDER_MODIFY'), true);
 });
 
 test('Toss order contract remains official-provider scoped and fail closed', () => {
