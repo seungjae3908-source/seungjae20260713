@@ -1,0 +1,16 @@
+#!/usr/bin/env node
+import process from 'node:process';
+import { processFormulaAutoBacktestQueueV1 } from '../src/formula-auto-backtest-queue-v1.js';
+
+const stateRoot = String(process.env.FORMULA_BACKTEST_STATE_ROOT ?? '').trim();
+if (!stateRoot) {
+  console.error('FORMULA_BACKTEST_STATE_ROOT_REQUIRED');
+  process.exit(1);
+}
+try {
+  const summary = await processFormulaAutoBacktestQueueV1({ stateRoot });
+  process.stdout.write(JSON.stringify(summary) + '\n');
+} catch (error) {
+  console.error(String(error?.stack ?? error));
+  process.exit(1);
+}
