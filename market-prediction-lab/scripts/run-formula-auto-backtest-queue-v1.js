@@ -7,8 +7,13 @@ if (!stateRoot) {
   console.error('FORMULA_BACKTEST_STATE_ROOT_REQUIRED');
   process.exit(1);
 }
+const researchCodeSha = String(process.env.RESEARCH_CODE_SHA ?? '').trim().toLowerCase();
+if (!/^[0-9a-f]{40}$/u.test(researchCodeSha)) {
+  console.error('RESEARCH_CODE_SHA_REQUIRED');
+  process.exit(1);
+}
 try {
-  const summary = await processFormulaAutoBacktestQueueV1({ stateRoot });
+  const summary = await processFormulaAutoBacktestQueueV1({ stateRoot, researchCodeSha });
   process.stdout.write(JSON.stringify(summary) + '\n');
 } catch (error) {
   console.error(String(error?.stack ?? error));
