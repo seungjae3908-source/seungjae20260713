@@ -44,6 +44,13 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).not.toContain('approvalFixture');
   expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} />');
   expect(page).toContain('<UserBrokerTelegramPanel />');
+  expect(page).not.toContain('<details');
+  expect(page).toContain('testId="trading-automation-settings-dialog"');
+  expect(page).toContain('testId="trading-telegram-settings-dialog"');
+  expect(page).toContain('testId="paper-journal-sync-dialog"');
+  expect(page).toContain('data-testid={testId}');
+  expect(page).toContain('role="dialog"');
+  expect(page).toContain('aria-label="닫기"');
 });
 
 

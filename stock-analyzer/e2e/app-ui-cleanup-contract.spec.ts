@@ -81,7 +81,7 @@ test('백테스트와 자동매매는 기본 상태를 먼저 보이고 고급 �
   const backtest = source('src/components/backtest-research-panel.tsx');
   const autoTrading = source('src/pages/auto-trading.tsx');
   expect(backtest).toContain('data-testid="backtest-advanced-settings"');
-  expect(backtest).toContain('고급 설정');
+  expect(backtest).toContain('세부 설정');
   expect(autoTrading).toContain('data-testid="auto-trading-safety-summary"');
   expect(autoTrading).toContain('data-testid="auto-trading-advanced-settings"');
   expect(autoTrading).toContain('!embedded ? <BottomNav /> : null');

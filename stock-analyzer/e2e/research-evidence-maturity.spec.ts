@@ -52,33 +52,38 @@ test('Research Center V2 source preserves the complete fail-closed maturity ladd
   for (const key of ['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact']) {
     expect(product).toContain(`'${key}'`);
   }
-  for (const tab of ['연구 현황', 'AI 분석실', '검증 리포트', '모의매매']) expect(page).toContain(`label: '${tab}'`);
+  for (const tab of ['연구 현황', '인공지능 분석실', '검증 리포트', '모의매매']) expect(page).toContain(`label: '${tab}'`);
 
   expect(product).toContain("return value === 0 ? 'ZERO_MEASURED' : 'PRESENT'");
   expect(product).toContain("'현재 검증된 Champion 없음'");
   expect(product).toContain("? 'WRONG_SHA'");
   expect(product).toContain("if (evidence?.fullCostReady !== true) return false");
-  expect(page).toContain('unavailable 비용을 0으로 바꾸지 않습니다');
   expect(page).toContain('아직 검증되지 않음');
   expect(page).toContain('실주문 비활성');
-  expect(page).toContain('LIVE_TRADING=false');
-  expect(page).toContain('executionAuthority=NONE');
+  expect(page).toContain('실거래 권한 없음');
   expect(page).toContain('data-testid="paper-candidate-performance"');
   expect(page).toContain('candidateMatchedN');
-  expect(page).toContain('effective independent N');
   expect(page).toContain("const factory = overview.factory;");
   expect(page).toContain("const liquidity = overview.research.liquidityIndependence;");
-  expect(page).toContain('label="Research runtime SHA" value={runtimeSha}');
-  expect(page).toContain('label="Workflow run ID" value={liquidity?.upstreamIngestRunId');
-  expect(page).toContain('label="Artifact ID" value={liquidity?.upstreamIngestArtifactId');
-  expect(page).toContain('label="Canonical receipt" value={liquidity?.reportDigest');
-  expect(page).toContain('label="Research SHA binding" value={researchShaBinding}');
-  expect(page).toContain('label="FIRST_ZERO" value={firstZero}');
-  expect(page).not.toContain('label="FIRST_ZERO" value="미수집"');
-  expect(page).toContain('UNKNOWN/BLOCKED');
-  expect(page).toContain('TRAIN_DIAGNOSTIC_ONLY=');
-  expect(page).toContain('NET_ALPHA_PROVEN=');
-  expect(page).toContain('후보 증거가 없으면 일반 Paper ledger 수를 빌려오지 않습니다');
+  expect(page).toContain('label="연구 실행 버전"');
+  expect(page).toContain('label="연구 소스 버전"');
+  expect(page).toContain('label="실행 기록"');
+  expect(page).toContain('label="결과물 기록"');
+  expect(page).toContain('label="검증 영수증"');
+  expect(page).toContain('label="연구 버전 연결"');
+  expect(page).toContain('label="현재 막힌 단계"');
+  expect(page).toContain('전체 비용');
+  expect(page).toContain('자료 부족');
+  expect(page).toContain("value == null\n    ? '자료 없음'");
+  // User-facing UI may hide technical identifiers, but fail-closed semantics stay enforced in logic.
+  const unavailableRows = buildFullCostRows({
+    fullCostReady: false,
+    components: {
+      commission: { state: 'UNKNOWN', valuePercent: null, provenance: null },
+    },
+  });
+  expect(unavailableRows.find((row) => row.key === 'commission')?.value).not.toBe('0');
+  expect(isFullCostReady({ fullCostReady: false, components: {} })).toBe(false);
   expect(api).toContain('sanitizeCandidatePerformance');
   expect(page).not.toContain("label: '한눈에 보기'");
   expect(page).not.toContain("label: 'AI 토론'");

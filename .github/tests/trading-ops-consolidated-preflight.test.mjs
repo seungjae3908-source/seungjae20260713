@@ -72,20 +72,21 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   }
   assert.ok(worker.includes("accountMode: 'paper'"));
   assert.ok(worker.includes('persistMemberAutoTradingPaperPositionBridge'));
-  assert.ok(worker.includes("process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true'"));
+  assert.ok(worker.includes("process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'false'"));
   assert.ok(index.includes('startMemberAutoTradingBackgroundWorker()'));
   assert.ok(execution.includes("plan.accountMode === 'paper'"));
   assert.ok(execution.includes('PAPER_BROKER_FILLED'));
   assert.ok(gate.includes('/activate-production-auto-trading '));
   assert.ok(gate.includes('all4'));
   assert.ok(gate.includes('production-account-readonly-live-qa-v2'));
-  assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
+  assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'true'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
-  assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));
+  assert.ok(gate.includes("'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=true'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
   assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V2_MISSING'));
-  assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
+  assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=true'));
+  assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
   assert.ok(worker.includes('buildAutomaticExitPlanInput'));
   assert.ok(worker.includes('readMarketMark'));

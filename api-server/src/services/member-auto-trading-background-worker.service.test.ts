@@ -339,14 +339,25 @@ test('stock automatic routing uses the selected Toss or Kiwoom provider as the c
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
-test('background worker is default OFF without explicit activation flag', () => {
-  const previous = process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
+test('background Paper worker is default enabled and only explicit false disables it', () => {
+  const previousFlag = process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
+  const previousSupabaseUrl = process.env.SUPABASE_URL;
+  const previousServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   try {
+    // Default-on reaches the service-role prerequisite instead of stopping on an absent Paper flag.
+    assert.equal(startMemberAutoTradingBackgroundWorker(), null);
+    process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = 'false';
     assert.equal(startMemberAutoTradingBackgroundWorker(), null);
   } finally {
-    if (previous == null) delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
-    else process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = previous;
+    if (previousFlag == null) delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
+    else process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = previousFlag;
+    if (previousSupabaseUrl == null) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousSupabaseUrl;
+    if (previousServiceKey == null) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previousServiceKey;
   }
 });
 
