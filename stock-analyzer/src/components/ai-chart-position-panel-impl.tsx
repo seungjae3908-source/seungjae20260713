@@ -473,12 +473,15 @@ type LiveEntryDraftState =
   | { kind: 'unavailable'; code: string };
 
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
+type StockProviderSelection = 'auto' | StockReadOnlyProvider;
 type CockpitTab = 'entry' | 'orders' | 'exit';
 
-function providerForMarket(market: AnalysisMarket, stockProvider: StockReadOnlyProvider): Snapshot['provider'] {
+const ORDER_DASHBOARD_POLL_MS = 3_000;
+
+function providerForMarket(market: AnalysisMarket, stockProvider: StockProviderSelection): Snapshot['provider'] {
   if (market === 'UPBIT') return 'upbit';
   if (market === 'BITGET') return 'bitget';
-  return stockProvider;
+  return stockProvider === 'auto' ? 'toss' : stockProvider;
 }
 
 function normalizedSymbol(value: string): string {
@@ -734,7 +737,7 @@ export function AiChartPositionPanel({
   onOverlayChange,
 }: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
-  const [stockProvider, setStockProvider] = useState<StockReadOnlyProvider>('toss');
+  const [stockProvider, setStockProvider] = useState<StockProviderSelection>('auto');
   const [linesVisible, setLinesVisible] = useState(true);
   const [additionalValueText, setAdditionalValueText] = useState('');
   const [additionalPriceText, setAdditionalPriceText] = useState('');
@@ -857,7 +860,6 @@ export function AiChartPositionPanel({
   }, []);
 
   const loadPosition = useCallback(async () => {
-    const provider = providerForMarket(market, stockProvider);
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
@@ -875,30 +877,23 @@ export function AiChartPositionPanel({
     setExitExecutionPackageState({ kind: 'idle' });
     setExitSubmissionGateState({ kind: 'idle' });
     onOverlayChange(null);
-    try {
+
+    const readSnapshot = async (provider: Snapshot['provider']) => {
       const response = await authorizedFetch(`/api/accounts/read-only/${provider}`, {
         cache: 'no-store',
         signal: controller.signal,
       });
       const payload = await response.json().catch(() => null) as Snapshot | { errorCode?: string } | null;
-      if (controller.signal.aborted || sequence !== requestSequenceRef.current) return;
       if (!response.ok) {
-        setState({ kind: 'unavailable', code: payload && 'errorCode' in payload && payload.errorCode ? payload.errorCode : `HTTP_${response.status}` });
-        return;
+        const code = payload && 'errorCode' in payload && payload.errorCode ? payload.errorCode : `HTTP_${response.status}`;
+        throw new Error(code);
       }
       const candidate = payload as Partial<Snapshot> | null;
       if (!candidate || candidate.readOnly !== true || !Array.isArray(candidate.positions)) {
-        setState({ kind: 'unavailable', code: 'ACCOUNT_SNAPSHOT_INVALID' });
-        return;
+        throw new Error('ACCOUNT_SNAPSHOT_INVALID');
       }
-      if (candidate.provider !== provider) {
-        setState({ kind: 'unavailable', code: 'ACCOUNT_SNAPSHOT_PROVIDER_MISMATCH' });
-        return;
-      }
-      if (candidate.connected !== true) {
-        setState({ kind: 'unavailable', code: candidate.errorCode || candidate.status || 'ACCOUNT_NOT_CONNECTED' });
-        return;
-      }
+      if (candidate.provider !== provider) throw new Error('ACCOUNT_SNAPSHOT_PROVIDER_MISMATCH');
+      if (candidate.connected !== true) throw new Error(candidate.errorCode || candidate.status || 'ACCOUNT_NOT_CONNECTED');
       const snapshot = candidate as Snapshot;
       if (
         snapshot.orderRequests !== 0
@@ -908,22 +903,51 @@ export function AiChartPositionPanel({
         || snapshot.withdrawalRequests !== 0
         || snapshot.liveTradingEnabled !== false
         || snapshot.autoTradingEnabled !== false
-      ) {
-        setState({ kind: 'unavailable', code: 'ACCOUNT_SNAPSHOT_SAFETY_MISMATCH' });
-        return;
-      }
+      ) throw new Error('ACCOUNT_SNAPSHOT_SAFETY_MISMATCH');
       const selected = selectPosition(market, symbol, snapshot.positions);
-      if (selected.ambiguous) {
-        setState({ kind: 'unavailable', code: 'MULTIPLE_MATCHING_POSITIONS' });
+      if (selected.ambiguous) throw new Error('MULTIPLE_MATCHING_POSITIONS');
+      return { provider, snapshot, position: selected.position };
+    };
+
+    try {
+      const providers: Snapshot['provider'][] = (market === 'KR' || market === 'US') && stockProvider === 'auto'
+        ? ['toss', 'kiwoom']
+        : [providerForMarket(market, stockProvider)];
+      const results = await Promise.allSettled(providers.map((provider) => readSnapshot(provider)));
+      if (controller.signal.aborted || sequence !== requestSequenceRef.current) return;
+      const successful = results
+        .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof readSnapshot>>> => result.status === 'fulfilled')
+        .map((result) => result.value);
+      const withPosition = successful.filter((result) => result.position != null);
+
+      if (withPosition.length > 1) {
+        setState({ kind: 'unavailable', code: 'MULTIPLE_PROVIDER_POSITIONS' });
         return;
       }
-      setState({ kind: 'ready', snapshot, position: selected.position });
-      if (selected.position && linesVisible) {
-        onOverlayChange({ provider, position: selected.position, stale: snapshot.stale, checkedAt: snapshot.checkedAt ?? null });
+
+      const chosen = withPosition[0] ?? successful[0] ?? null;
+      if (!chosen) {
+        const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+        const reason = firstFailure?.reason;
+        setState({ kind: 'unavailable', code: reason instanceof Error ? reason.message : 'ACCOUNT_READ_FAILED' });
+        return;
+      }
+
+      if ((market === 'KR' || market === 'US') && (chosen.provider === 'toss' || chosen.provider === 'kiwoom')) {
+        setStockProvider(chosen.provider);
+      }
+      setState({ kind: 'ready', snapshot: chosen.snapshot, position: chosen.position });
+      if (chosen.position && linesVisible) {
+        onOverlayChange({
+          provider: chosen.provider,
+          position: chosen.position,
+          stale: chosen.snapshot.stale,
+          checkedAt: chosen.snapshot.checkedAt ?? null,
+        });
       }
     } catch (error) {
       if (controller.signal.aborted || sequence !== requestSequenceRef.current) return;
-      setState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'ACCOUNT_READ_FAILED' });
+      setState({ kind: 'unavailable', code: error instanceof Error ? error.message : 'ACCOUNT_READ_FAILED' });
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
@@ -945,7 +969,7 @@ export function AiChartPositionPanel({
     });
   }, [onOverlayChange, state]);
 
-  const changeStockProvider = useCallback((next: StockReadOnlyProvider) => {
+  const changeStockProvider = useCallback((next: StockProviderSelection) => {
     if (next === stockProvider) return;
     requestSequenceRef.current += 1;
     abortRef.current?.abort();
@@ -1064,12 +1088,12 @@ export function AiChartPositionPanel({
           : exitPreviewState.kind === 'unavailable' ? '재검증 실패'
             : '재검증 필요';
 
-  const loadOrderDashboard = useCallback(async (preserveMessage = false) => {
+  const loadOrderDashboard = useCallback(async (preserveMessage = false, background = false) => {
     const controller = new AbortController();
     orderAbortRef.current?.abort();
     orderAbortRef.current = controller;
     const sequence = ++orderSequenceRef.current;
-    setOrderDashboard({ kind: 'loading' });
+    if (!background) setOrderDashboard({ kind: 'loading' });
     if (!preserveMessage) setOrderMessage('');
     try {
       const query = new URLSearchParams({
@@ -1104,9 +1128,9 @@ export function AiChartPositionPanel({
         && ((market === 'KR' || market === 'US') || item.exchange === provider)
       ));
       setOrderDashboard({ kind: 'ready', items });
-      setAmendDrafts(Object.fromEntries(items.map((item) => [
+      setAmendDrafts((current) => Object.fromEntries(items.map((item) => [
         item.id,
-        {
+        current[item.id] ?? {
           price: finite(item.currentLimitPrice)?.toString() ?? '',
           quantity: finite(item.remainingQuantity ?? item.requestedQuantity)?.toString() ?? '',
         },
@@ -1118,6 +1142,23 @@ export function AiChartPositionPanel({
       if (orderAbortRef.current === controller) orderAbortRef.current = null;
     }
   }, [market, provider, symbol]);
+
+  useEffect(() => {
+    if (!cockpitOpen || cockpitTab !== 'orders' || orderDashboard.kind !== 'ready' || orderActionId) return;
+    const active = orderDashboard.items.some((item) => (
+      ['SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED'].includes(item.state)
+    ));
+    if (!active) return;
+    const timer = window.setInterval(() => {
+      void loadOrderDashboard(true, true);
+    }, ORDER_DASHBOARD_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [cockpitOpen, cockpitTab, loadOrderDashboard, orderActionId, orderDashboard]);
+
+  useEffect(() => {
+    if (!cockpitOpen || cockpitTab !== 'orders' || orderDashboard.kind !== 'idle') return;
+    void loadOrderDashboard();
+  }, [cockpitOpen, cockpitTab, loadOrderDashboard, orderDashboard.kind]);
 
   const cancelOrder = useCallback(async (item: OrderDashboardItem) => {
     if (!canCancelOrder(item) || orderActionId) return;
@@ -2133,7 +2174,7 @@ export function AiChartPositionPanel({
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <p className="text-[10px] font-black">현재 종목 주문 상태</p>
-                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">자동 조회·자동 취소·자동 정정 없음</p>
+                      <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">미체결 상태만 3초 자동 갱신 · 자동 취소/정정 없음</p>
                     </div>
                     <button
                       type="button"
@@ -2648,17 +2689,17 @@ export function AiChartPositionPanel({
       </div>
 
       {(market === 'KR' || market === 'US') && (
-        <div data-testid="ai-chart-stock-provider-picker" className="mt-2 grid grid-cols-2 gap-1.5">
-          {(['toss', 'kiwoom'] as const).map((item) => (
+        <div data-testid="ai-chart-stock-provider-picker" className="mt-2 grid grid-cols-3 gap-1.5">
+          {(['auto', 'toss', 'kiwoom'] as const).map((item) => (
             <button
               key={item}
               type="button"
               data-testid={`ai-chart-stock-provider-${item}`}
               aria-pressed={stockProvider === item}
               onClick={() => changeStockProvider(item)}
-              className={`min-h-10 rounded-xl border px-3 text-[10px] font-black ${stockProvider === item ? 'border-primary bg-primary/10 text-primary' : 'border-card-border text-muted-foreground'}`}
+              className={`min-h-10 rounded-xl border px-2 text-[10px] font-black ${stockProvider === item ? 'border-primary bg-primary/10 text-primary' : 'border-card-border text-muted-foreground'}`}
             >
-              {providerLabel(item)} 조회
+              {item === 'auto' ? '보유계좌 자동찾기' : `${providerLabel(item)} 조회`}
             </button>
           ))}
         </div>
