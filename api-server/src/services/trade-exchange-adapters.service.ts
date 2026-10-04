@@ -503,7 +503,7 @@ export function prepareBitgetMarginMode(
   }, '', timestamp);
 }
 
-export function prepareBitgetLeverage(credentials: BitgetCredentials, symbol: string, leverage: 2 | 3, timestamp?: string) {
+export function prepareBitgetLeverage(credentials: BitgetCredentials, symbol: string, leverage: 2 | 3 | 4 | 5 | 6 | 7, timestamp?: string) {
   return bitgetRequest(credentials, 'POST', '/api/v2/mix/account/set-leverage', {
     symbol: symbol.toUpperCase(), productType: 'USDT-FUTURES', marginCoin: 'USDT', leverage: String(leverage),
   }, '', timestamp);
