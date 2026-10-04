@@ -275,8 +275,9 @@ export function classifyFormulaAutoBacktestResultV1(tournament) {
   return 'EXCLUDE';
 }
 
-export function buildFormulaPaperStrategyRegistryV1(rows = []) {
+export function buildFormulaPaperStrategyRegistryV1(rows = [], { researchCodeSha = null } = {}) {
   if (!Array.isArray(rows)) throw new TypeError('FORMULA_PAPER_REGISTRY_ROWS_ARRAY_REQUIRED');
+  if (researchCodeSha != null && !/^[0-9a-f]{40}$/iu.test(researchCodeSha)) throw new TypeError('FORMULA_PAPER_REGISTRY_RESEARCH_SHA_INVALID');
   const entries = [];
   const seen = new Set();
   for (const row of rows) {
@@ -305,6 +306,7 @@ export function buildFormulaPaperStrategyRegistryV1(rows = []) {
       entries.push(Object.freeze({
         registryId,
         source: 'FORMULA_AUTO_BACKTEST_PASS',
+        researchCodeSha: researchCodeSha == null ? null : researchCodeSha.toLowerCase(),
         registeredAt: row.evaluatedAt ?? null,
         itemDigest: row.itemDigest ?? null,
         tournamentId: row.tournamentId ?? row.tournament?.tournamentId ?? null,
@@ -337,6 +339,7 @@ export function buildFormulaPaperStrategyRegistryV1(rows = []) {
   return Object.freeze({
     schemaVersion: 1,
     contract: FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
+    researchCodeSha: researchCodeSha == null ? null : researchCodeSha.toLowerCase(),
     generatedAt: new Date().toISOString(),
     entryCount: entries.length,
     entries: Object.freeze(entries),
@@ -423,6 +426,7 @@ async function atomicJson(path, value) {
 export async function processFormulaAutoBacktestQueueV1({
   stateRoot,
   maximumItems = 50,
+  researchCodeSha = null,
 } = {}) {
   const root = ensureStateRoot(stateRoot);
   const inbox = join(root, 'formula-backtest', 'inbox');
@@ -480,7 +484,7 @@ export async function processFormulaAutoBacktestQueueV1({
   const counts = Object.fromEntries(FORMULA_AUTO_BACKTEST_STATES_V1.map((state) => [
     state, rows.filter((row) => row.state === state).length,
   ]));
-  const paperRegistry = buildFormulaPaperStrategyRegistryV1(rows);
+  const paperRegistry = buildFormulaPaperStrategyRegistryV1(rows, { researchCodeSha });
   const summary = {
     schemaVersion: 1,
     contract: FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1,
