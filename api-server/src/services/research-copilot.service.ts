@@ -18,15 +18,15 @@ export const COPILOT_AUTHORITY = Object.freeze({
 const TASKS = new Set<CopilotTask>(['propose_candidates', 'interpret_evidence', 'compare_strategies', 'explain_health']);
 const STAGES: Array<[string, string, RegExp]> = [
   ['candidate', '전략 후보', /formula|candidate/i],
-  ['dsl', 'DSL / Formula 검증', /dsl|formula.*valid/i],
+  ['dsl', '수식 검증', /dsl|formula.*valid/i],
   ['backtest', '백테스트', /backtest|historical/i],
-  ['oos', 'OOS', /\boos\b|out.of.sample/i],
-  ['walk-forward', 'Purged Walk Forward', /walk.forward/i],
-  ['holdout', 'Final Holdout', /holdout/i],
-  ['leakage', '과최적화 / 누수 검증', /firewall|leakage|overfit/i],
+  ['oos', '미래 검증', /\boos\b|out.of.sample/i],
+  ['walk-forward', '순차 검증', /walk.forward/i],
+  ['holdout', '최종 독립 검증', /holdout/i],
+  ['leakage', '과최적화·누수 검증', /firewall|leakage|overfit/i],
   ['comparison', '전략 비교', /tournament|comparison/i],
-  ['shadow', 'Shadow / Forward 인계', /shadow|forward/i],
-  ['health', 'Strategy Health', /strategy.health/i],
+  ['shadow', '실시간 관찰·미래검증 인계', /shadow|forward/i],
+  ['health', '전략 상태', /strategy.health/i],
 ];
 const CANONICAL_STAGE: Record<string, string> = {
   backtest: 'HISTORICAL_BACKTEST', oos: 'OUT_OF_SAMPLE',
@@ -87,8 +87,8 @@ export function buildCopilotSnapshot(raw: unknown, now: number, promotions?: Str
       key, label, status: !safe || freshness !== 'FRESH' ? 'BLOCKED_DATA' : verifiedReceiptCount > 0 ? 'READY' : 'MISSING_EVIDENCE',
       verifiedReceiptCount,
       reason: verifiedReceiptCount > 0
-        ? '기존 canonical 평가자가 통과시킨 receipt를 조회할 수 있습니다. 다른 전략·단계의 통과나 승격을 의미하지 않습니다.'
-        : '작업 성공은 검증 통과가 아닙니다. 전략·데이터셋·분할·비용 정책에 연결된 canonical 검증 receipt가 필요합니다.',
+        ? '이 전략에 연결된 검증 자료를 확인했습니다. 다른 전략의 통과나 승격을 의미하지 않습니다.'
+        : '전략·데이터셋·분할·비용 정책이 연결된 검증 자료가 더 필요합니다.',
       observedTasks: tasks.filter(task => pattern.test(task.id)),
     };
   });
@@ -120,7 +120,7 @@ export function buildCopilotSnapshot(raw: unknown, now: number, promotions?: Str
     freshness, stages, missing_data: missing,
     health: { status: health.status, reasons: health.reasons, source: health.evaluator },
     comparisons, comparisonMode: 'IDENTITY_ONLY_NO_PERFORMANCE_RANKING',
-    next_action: '후보 가설 → canonical DSL 검증 → 데이터·분할·비용 정책 고정 → 기존 백테스터 → OOS/WF/최종 Holdout receipt → 별도 Shadow/Forward 승인',
+    next_action: '후보 가설 → 수식 검증 → 데이터·분할·비용 정책 고정 → 백테스트 → 미래·순차·최종 독립 검증 → 실시간 관찰',
     ai: { available: false, reason: 'NOT_CONFIGURED', provider: null, calls: 0, cacheHits: 0, tokenUsage: null, quotaRemaining: null },
     authority: COPILOT_AUTHORITY,
   };
