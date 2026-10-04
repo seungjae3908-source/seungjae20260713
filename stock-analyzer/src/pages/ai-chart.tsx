@@ -68,22 +68,6 @@ const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.k
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
 const DIRECT_AI_CHART_COLD_ROUTE = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');
 
-// On a direct /ai-chart document, this route module is already requested ahead
-// of the wider app graph by main.tsx. Start the renderer chunk request as soon
-// as this module evaluates, without turning the renderer into a static import.
-// React.lazy below remains the canonical render boundary and the browser module
-// cache shares the same module fetch.
-const directAiChartRendererPrewarm = import.meta.glob('../components/unified-analysis-chart.tsx');
-if (DIRECT_AI_CHART_COLD_ROUTE) {
-  const existingModulePreloads = new Set(
-    document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'),
-  );
-  void directAiChartRendererPrewarm['../components/unified-analysis-chart.tsx']?.();
-  for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]')) {
-    if (!existingModulePreloads.has(link)) link.setAttribute('fetchpriority', 'high');
-  }
-}
-
 const LazyAiChartV2IntelligencePanel = lazy(() =>
   import('@/components/ai-chart-v2-intelligence-panel').then(({ AiChartV2IntelligencePanel }) => ({
     default: AiChartV2IntelligencePanel,
