@@ -62,7 +62,7 @@ import {
   unifiedMarketLabel,
   type UnifiedChartTimeframe,
 } from '@/lib/unified-chart-data';
-import { tradeActionFromSearch, tradeFocusFromSearch } from '@/lib/trade-navigation';
+import { tradeActionFromSearch, tradeFocusFromSearch, tradeOrderPrefillFromSearch } from '@/lib/trade-navigation';
 import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
@@ -434,6 +434,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const initialSearchRef = useRef(currentBrowserSearch());
   const tradeFocusRef = useRef(tradeFocusFromSearch(initialSearchRef.current));
   const tradeActionRef = useRef(tradeActionFromSearch(initialSearchRef.current));
+  const tradeOrderPrefillRef = useRef(tradeOrderPrefillFromSearch(initialSearchRef.current));
   const tradeRouteRequested = tradeFocusRef.current !== null;
   const routeModeRef = useRef(chartWindowRouteModeFromSearch(initialSearchRef.current));
   const routeSelectionRef = useRef(supportedSelection(chartSelectionFromSearch(initialSearchRef.current)));
@@ -828,6 +829,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             onOverlayChange={ignorePositionOverlay}
             initialCockpitOpen
             initialCockpitTab={tradeFocusRef.current ?? 'entry'}
+            initialOrderPrefill={tradeOrderPrefillRef.current}
           />
         </Suspense>
       ) : null}
@@ -924,6 +926,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
                     onOverlayChange={ignorePositionOverlay}
                     initialCockpitOpen={tradeRouteRequested}
                     initialCockpitTab={tradeFocusRef.current ?? 'entry'}
+                    initialOrderPrefill={tradeOrderPrefillRef.current}
                   />
                 ) : emptyState}
               </section>
