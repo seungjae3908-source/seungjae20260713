@@ -425,14 +425,16 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         <h2 className="text-sm font-bold">{mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}</h2>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => setSettingsPopup('automation')}
-          className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-bold"
-          data-testid="auto-trading-advanced-settings"
-        >
-          {marketMeta.label} 설정
-        </button>
+        <div data-testid="auto-trading-advanced-settings">
+          <button
+            type="button"
+            onClick={() => setSettingsPopup('automation')}
+            className="min-h-11 w-full rounded-xl border border-card-border px-4 text-sm font-bold"
+            data-testid="open-trading-automation-settings"
+          >
+            {marketMeta.label} 설정
+          </button>
+        </div>
         {mode === 'auto' ? (
           <button
             type="button"
