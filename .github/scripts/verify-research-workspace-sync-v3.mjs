@@ -278,6 +278,8 @@ const protectedPathExceptions=new Map([
  ['research-production',new Set([
   'research-production/src/engine.mjs',
   'research-production/test/research-engine.test.mjs',
+  'research-production/test/historical-pipelines.test.mjs',
+  'research-production/test/paper-risk-policy-transport.test.mjs',
  ])],
  ['research-dashboard',new Set([
   'research-dashboard/server.py',
