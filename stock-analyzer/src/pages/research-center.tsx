@@ -744,7 +744,7 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <InsightCard title="인공지능 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : 'AI 분석 자료가 없습니다.'}</p></InsightCard>
+        <InsightCard title="인공지능 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : '인공지능 분석 자료가 없습니다.'}</p></InsightCard>
         <InsightCard title="모델 간 합의" icon={BadgeCheck}><ul className="space-y-1">{debate.actualEvidence ? preview.support.map((line) => <li key={line}>• {line}</li>) : <li>인공지능 분석 근거 미수집</li>}</ul></InsightCard>
         <InsightCard title="모델 간 의견 차이" icon={MessageSquareText}><p>{debate.conflictReason ?? (debate.actualEvidence ? '명시적 충돌 근거 없음' : '인공지능 분석 근거 미수집')}</p></InsightCard>
         <InsightCard title="현재 가장 큰 막힘" icon={CircleAlert}><p>{firstBlocker ? `${firstBlocker.label} · ${blockerCopy(firstBlocker)}` : '막힌 이유 없음'}</p></InsightCard>
