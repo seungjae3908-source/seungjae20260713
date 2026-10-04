@@ -183,6 +183,7 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/src/components/backtest-research-panel.tsx',
  'stock-analyzer/src/pages/research-center.tsx',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
  'stock-analyzer/src/components/research-center-general.tsx',
  'stock-analyzer/src/pages/research-center-workspace.tsx',
