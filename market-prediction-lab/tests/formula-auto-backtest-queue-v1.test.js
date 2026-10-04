@@ -7,6 +7,8 @@ import test from 'node:test';
 import { compiledMomentumFormula, compiledFuturesMomentumFormula } from './research-bundle-formula-fixture.js';
 import {
   FORMULA_AUTO_BACKTEST_QUEUE_ITEM_CONTRACT_V1,
+  FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
+  buildFormulaPaperStrategyRegistryV1,
   evaluateFormulaAutoBacktestQueueItemV1,
   processFormulaAutoBacktestQueueV1,
 } from '../src/formula-auto-backtest-queue-v1.js';
@@ -141,6 +143,56 @@ test('structurally invalid formula is excluded but never deleted', async () => {
   assert.equal(result.tournament, null);
 });
 
+test('only PASS research survivors enter the Paper strategy registry and never trade immediately', () => {
+  const { formula } = compiledMomentumFormula();
+  const generatedCandidate = {
+    generatedCandidateId: 'generated-paper-pass-v1',
+    formulaCandidateId: formula.candidateId,
+    formulaHash: formula.formulaHash,
+    parameterIdentity: 'a'.repeat(64),
+    selectedParameters: Object.fromEntries(formula.parameterSpace.map((row) => [row.name, row.min])),
+    safety: { executionAuthority: 'NONE' },
+  };
+  const survivor = {
+    formulaCandidate: formula,
+    generatedCandidate,
+    formulaCandidateId: formula.candidateId,
+    generatedCandidateId: generatedCandidate.generatedCandidateId,
+    strategyHash: formula.formulaHash,
+    parameterIdentity: generatedCandidate.parameterIdentity,
+    strategyFamily: formula.strategyFamily,
+    market: formula.market,
+    timeframe: formula.timeframe,
+    direction: formula.direction,
+    researchSurvivor: true,
+    failure: null,
+    tradingAuthority: false,
+    safety: { executionAuthority: 'NONE' },
+  };
+  const pass = {
+    state: 'PASS',
+    itemDigest: 'b'.repeat(64),
+    evaluatedAt: new Date().toISOString(),
+    tournamentId: 'tournament-pass-v1',
+    tournament: { candidates: [survivor] },
+  };
+  const registry = buildFormulaPaperStrategyRegistryV1([
+    pass,
+    { ...pass, state: 'HOLD' },
+    { ...pass, state: 'RESERVE' },
+    { ...pass, state: 'EXCLUDE' },
+  ]);
+  assert.equal(registry.contract, FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1);
+  assert.equal(registry.entryCount, 1);
+  assert.equal(registry.entries[0].paperState, 'REGISTERED_WAITING_FUTURE_SIGNAL');
+  assert.equal(registry.entries[0].futureSignalRequired, true);
+  assert.equal(registry.entries[0].canonicalPaperAdmissionRequired, true);
+  assert.equal(registry.entries[0].directTradeOnBacktestPass, false);
+  assert.equal(registry.entries[0].executionAuthority, 'NONE');
+  assert.deepEqual(registry.rejectedSourceStates, ['HOLD', 'RESERVE', 'EXCLUDE']);
+  assert.equal(registry.realOrder, false);
+});
+
 test('queue persists immutable audit results and repeated processing is idempotent', async () => {
   const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-'));
   const inbox = join(root, 'formula-backtest', 'inbox');
@@ -152,6 +204,11 @@ test('queue persists immutable audit results and repeated processing is idempote
   assert.equal(first.counts.HOLD, 1);
   assert.equal(first.deletionAllowed, false);
   assert.equal(first.executionAuthority, 'NONE');
+  assert.equal(first.paperRegisteredCount, 0);
+  const paperRegistry = JSON.parse(await readFile(join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
+  assert.equal(paperRegistry.contract, FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1);
+  assert.equal(paperRegistry.entryCount, 0);
+  assert.equal(paperRegistry.executionAuthority, 'NONE');
 
   const resultFiles = (await readdir(join(root, 'formula-backtest', 'results'))).filter((name) => name.endsWith('.json'));
   assert.equal(resultFiles.length, 1);
