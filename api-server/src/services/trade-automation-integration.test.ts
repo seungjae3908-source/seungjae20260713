@@ -294,8 +294,8 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
   }
 });
 
-test('Bitget allows 2x-7x, blocks 8x and opposite duplicate positions, and keeps reduce-only explicit', () => {
-  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite duplicate, and keeps reduce-only explicit', () => {
+  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 });
   const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
     quoteAmount: null, estimatedKrw: 100_000, leverage: 8, marginMode: 'isolated',
     marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: 'long' } });
@@ -306,6 +306,12 @@ test('Bitget allows 2x-7x, blocks 8x and opposite duplicate positions, and keeps
     marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
   policy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.equal(maxAllowed.blockCodes.includes('BITGET_LEVERAGE_LIMIT'), false);
+  assert.equal(maxAllowed.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'), false);
+  const memberPolicyLimit = evaluateTradingPlan({ ...input, leverage: 7,
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 3 }),
+  { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(memberPolicyLimit.blockCodes.includes('BITGET_LEVERAGE_POLICY_LIMIT'));
   const liquidationRisk = evaluateTradingPlan({ ...input, leverage: 3,
     marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null, liquidationDistancePercent: 4 } },
   policy, { emergencyStopped: false, serverLiveEnabled: true });
