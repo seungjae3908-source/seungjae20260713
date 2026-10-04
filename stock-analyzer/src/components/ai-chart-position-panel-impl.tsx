@@ -919,9 +919,14 @@ export function AiChartPositionPanel({
         .filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof readSnapshot>>> => result.status === 'fulfilled')
         .map((result) => result.value);
       const withPosition = successful.filter((result) => result.position != null);
+      const providerReadFailed = results.some((result) => result.status === 'rejected');
 
       if (withPosition.length > 1) {
         setState({ kind: 'unavailable', code: 'MULTIPLE_PROVIDER_POSITIONS' });
+        return;
+      }
+      if ((market === 'KR' || market === 'US') && stockProvider === 'auto' && withPosition.length === 0 && providerReadFailed) {
+        setState({ kind: 'unavailable', code: 'STOCK_PROVIDER_HOLDINGS_INCOMPLETE' });
         return;
       }
 
