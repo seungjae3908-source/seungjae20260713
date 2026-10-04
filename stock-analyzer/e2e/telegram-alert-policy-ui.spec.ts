@@ -23,7 +23,7 @@ function fulfill(routeHandler: Route, body: unknown, status = 200) {
   });
 }
 
-function userIntegrationsResponse(connected: boolean) {
+function userIntegrationsResponse(connected: boolean, deliveries: unknown[] = []) {
   return {
     ok: true,
     brokerConnections: [],
@@ -49,7 +49,7 @@ function userIntegrationsResponse(connected: boolean) {
       STOP_FILLED: false,
       MANUAL_PORTFOLIO_ENTRY: false,
     },
-    deliveries: [],
+    deliveries,
     telegramStorageAvailable: true,
     telegramStorageErrorCode: null,
     alertPolicy: {
@@ -338,6 +338,28 @@ test('actual Account UI clicks Telegram link on mobile and test-message on deskt
 
   expect(runtime.counters().integrationReads).toBeGreaterThanOrEqual(2);
   expect(runtime.unexpectedMutations).toEqual([]);
+});
+
+test('Telegram delivery health summarizes durable outbox states without creating trade authority', async ({ page }) => {
+  await installTelegramButtonRuntime(page);
+  await page.route('**/api/user-integrations', async (routeHandler) => {
+    return fulfill(routeHandler, userIntegrationsResponse(true, [
+      { id: 'd1', state: 'PENDING', attempts: 0, updatedAt: '2026-08-30T00:00:01.000Z', lastErrorCode: null },
+      { id: 'd2', state: 'RETRY_SCHEDULED', attempts: 1, updatedAt: '2026-08-30T00:00:02.000Z', lastErrorCode: 'TELEGRAM_TIMEOUT' },
+      { id: 'd3', state: 'SENT', attempts: 1, updatedAt: '2026-08-30T00:00:03.000Z', lastErrorCode: null },
+      { id: 'd4', state: 'FAILED', attempts: 3, updatedAt: '2026-08-30T00:00:04.000Z', lastErrorCode: 'TELEGRAM_FORBIDDEN' },
+    ]));
+  });
+
+  await page.goto('/account');
+  const health = page.getByTestId('telegram-delivery-health');
+  await expect(health).toBeVisible();
+  await expect(health).toContainText('대기');
+  await expect(health).toContainText('재시도');
+  await expect(health).toContainText('실패');
+  await expect(health).toContainText('마지막 성공');
+  await expect(page.getByTestId('telegram-delivery-last-error')).toContainText('TELEGRAM_FORBIDDEN');
+  await expect(page.getByTestId('user-broker-telegram-panel')).toContainText('전송 오류');
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
