@@ -26,7 +26,7 @@ type Policy = {
   maxOpenPositions: number;
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
-  bitgetLeverage: 2 | 3;
+  bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
 };
 
 type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
@@ -454,12 +454,16 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         value={draft.bitgetLeverage}
         onChange={(event) => setDraft((value) => ({
           ...value,
-          bitgetLeverage: Number(event.target.value) === 3 ? 3 : 2,
+          bitgetLeverage: Math.min(7, Math.max(2, Number(event.target.value))) as 2 | 3 | 4 | 5 | 6 | 7,
         }))}
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3"
       >
         <option value="2">2배 (기본)</option>
         <option value="3">3배</option>
+        <option value="4">4배</option>
+        <option value="5">5배</option>
+        <option value="6">6배</option>
+        <option value="7">7배 (최대)</option>
       </select>
     </label> : null}
 
