@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - .github/workflows/production-futures-live-trading-gate.yml
+      - .github/scripts/production-preactivation-prerequisites.cjs
+      - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/workflows/production-account-readonly-live-qa.yml
       - .github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml
       - api-server/src/services/futures-live-limited-capability.service.ts
@@ -15,6 +18,7 @@ on:
       - api-server/src/services/trade-order-amendment.service.ts
       - api-server/src/services/trade-order-recovery.service.ts
       - ops/deploy-production.sh
+      - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
   issue_comment:
     types: [created]
 
@@ -121,7 +125,55 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\nmax_leverage=${match[2]}\n`);
           NODE
 
+      - name: Require exact post-merge provenance and inline post-deploy evidence
+        id: preactivation
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const { inspectProductionPreactivationPrerequisites } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-preactivation-prerequisites.cjs`
+            );
+            try {
+              const result = await inspectProductionPreactivationPrerequisites({
+                github, context, targetSha: process.env.TARGET_SHA,
+              });
+              core.setOutput('postmerge_run_id', String(result.postMergeProvenanceRunId));
+              core.setOutput('production_run_id', String(result.productionDeployRunId));
+              core.setOutput('deployment_completed_at', result.productionDeployCompletedAt);
+            } catch (error) {
+              core.setFailed(error instanceof Error ? error.message : 'FUTURES_LIVE_PREACTIVATION_PREREQUISITES_FAILED');
+            }
+
+      - name: Download exact Production post-deploy evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: production-*
+          path: ${{ runner.temp }}/production-preactivation-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.preactivation.outputs.production_run_id }}
+
+      - name: Verify exact Production post-deploy evidence
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_RUN_ID: ${{ steps.preactivation.outputs.production_run_id }}
+          DEPLOYMENT_COMPLETED_AT: ${{ steps.preactivation.outputs.deployment_completed_at }}
+        run: |
+          set -Eeuo pipefail
+          root="${{ runner.temp }}/production-preactivation-evidence"
+          comprehensive="$(find "$root" -name production-comprehensive-readonly-qa.json -print -quit)"
+          account="$(find "$root" -name production-account-readonly-live-qa.json -print -quit)"
+          credential="$(find "$root" -name production-live-credential-reuse-qa.json -print -quit)"
+          activation="$(find "$root" -name "production-postdeploy-activation-ready-${TARGET_SHA}.json" -print -quit)"
+          [[ -n "$comprehensive" && -n "$account" && -n "$credential" && -n "$activation" ]]
+          node .github/scripts/verify-production-preactivation-evidence.cjs \
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" \
+            "$comprehensive" "$account" "$credential" "$activation"
+
       - name: Require exact current main and coherent Required CI 6/6
+        if: ${{ false }}
         id: gate
         uses: actions/github-script@v7
         env:
@@ -166,6 +218,7 @@ jobs:
             core.setOutput('ci_run_id', String([...runIds][0]));
 
       - name: Require exact-SHA Production deploy and post-deploy read-only QA
+        if: ${{ false }}
         id: prerequisites
         uses: actions/github-script@v7
         env:
@@ -238,6 +291,7 @@ jobs:
             core.setOutput('account_run_id', String(account.id));
 
       - name: Require successful post-deploy four-provider Credential Reuse QA
+        if: ${{ false }}
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
@@ -306,6 +360,7 @@ jobs:
             }
 
       - name: Download exact Bitget account QA evidence
+        if: ${{ false }}
         uses: actions/download-artifact@v4
         with:
           name: production-account-readonly-live-${{ steps.command.outputs.sha }}
@@ -314,6 +369,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Validate Bitget account QA evidence
+        if: ${{ false }}
         shell: bash
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
@@ -446,6 +502,9 @@ jobs:
               activationApproved: bool('LIVE_TRADING_ACTIVATION_APPROVED'),
               spotApproved: bool('SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
               automaticLive: bool('LIVE_AUTOMATIC_TRADING_ENABLED'),
+              legacyCryptoAuto: bool('CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED'),
+              cryptoAuto: bool('CRYPTO_AUTO_TRADE_ENABLED'),
+              bitgetAuto: bool('BITGET_AUTO_TRADE_ENABLED'),
               upbitSpot: bool('UPBIT_LIVE_ORDER_ENABLED'),
               kiwoomSpot: bool('KIWOOM_LIVE_ORDER_ENABLED'),
               tossSpot: bool('TOSS_LIVE_ORDER_ENABLED'),
@@ -465,6 +524,7 @@ jobs:
             || pre.live !== true || pre.auto !== false || pre.real !== true || pre.privateApi !== true
             || pre.orderExecution !== true || pre.activationApproved !== true
             || pre.spotApproved !== true || pre.automaticLive !== false
+            || pre.legacyCryptoAuto !== false || pre.cryptoAuto !== false || pre.bitgetAuto !== false
             || pre.upbitSpot !== true || pre.kiwoomSpot !== true || pre.tossSpot !== true
             || pre.spotAuthority !== 'SPOT_LIVE_LIMITED') {
             throw new Error('FUTURES_LIVE_REQUIRES_ACTIVE_UPBIT_SPOT_LIMITED_SAME_SHA');
@@ -509,6 +569,9 @@ jobs:
                   LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
                   MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
                   MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+                  CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
+                  CRYPTO_AUTO_TRADE_ENABLED: 'false',
+                  BITGET_AUTO_TRADE_ENABLED: 'false',
                   FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',
                   BITGET_FUTURES_LIVE_ORDER_ENABLED: 'true',
                   FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED',
@@ -528,6 +591,7 @@ jobs:
               || post.live !== true || post.auto !== false || post.real !== true || post.privateApi !== true
               || post.orderExecution !== true || post.activationApproved !== true
               || post.spotApproved !== true || post.automaticLive !== false
+              || post.legacyCryptoAuto !== false || post.cryptoAuto !== false || post.bitgetAuto !== false
               || post.upbitSpot !== true || post.kiwoomSpot !== true || post.tossSpot !== true
               || post.spotAuthority !== 'SPOT_LIVE_LIMITED'
               || post.futuresApproved !== true || post.bitgetFutures !== true
@@ -580,10 +644,10 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           MAX_LEVERAGE: ${{ steps.command.outputs.max_leverage }}
-          CI_RUN_ID: ${{ steps.gate.outputs.ci_run_id }}
-          PRODUCTION_RUN_ID: ${{ steps.prerequisites.outputs.production_run_id }}
-          COMPREHENSIVE_QA_RUN_ID: ${{ steps.prerequisites.outputs.comprehensive_run_id }}
-          ACCOUNT_QA_RUN_ID: ${{ steps.prerequisites.outputs.account_run_id }}
+          CI_RUN_ID: ${{ steps.preactivation.outputs.postmerge_run_id }}
+          PRODUCTION_RUN_ID: ${{ steps.preactivation.outputs.production_run_id }}
+          COMPREHENSIVE_QA_RUN_ID: ${{ steps.preactivation.outputs.production_run_id }}
+          ACCOUNT_QA_RUN_ID: ${{ steps.preactivation.outputs.production_run_id }}
         with:
           script: |
             await github.rest.issues.createComment({
