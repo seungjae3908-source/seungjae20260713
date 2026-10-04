@@ -508,11 +508,11 @@ function buildPlanInput(
       || leverageEvidence !== member.policy.bitgetLeverage) {
       throw new Error('BACKGROUND_LEVERAGE_EVIDENCE_MISMATCH');
     }
-    if (marginModeEvidence !== 'crossed' && marginModeEvidence !== 'isolated') {
-      throw new Error('BACKGROUND_MARGIN_MODE_EVIDENCE_REQUIRED');
+    if (marginModeEvidence !== 'isolated') {
+      throw new Error('BACKGROUND_ISOLATED_MARGIN_EVIDENCE_REQUIRED');
     }
     leverage = leverageEvidence;
-    marginMode = marginModeEvidence;
+    marginMode = 'isolated';
   }
 
   const side = sideFor(entry.identity.direction);
