@@ -224,7 +224,7 @@ async function journalRiskContext(input: {
   const activePlans = input.plans.filter((plan) => plan.accountMode === 'live' && ACTIVE_STATES.has(plan.state));
   const planBySymbol = new Map(activePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
-  for (const position of input.accountSnapshot.positions ?? []) {
+  for (const position of accountSnapshot.positions ?? []) {
     const quantity = Number(position.quantity);
     if (!Number.isFinite(quantity) || Math.abs(quantity) <= 0) continue;
     const plan = planBySymbol.get(normalizedSymbol(position.symbol));
@@ -282,7 +282,7 @@ export async function prepareManualEntry(input: {
   repository: TradingRepository;
   execution: TradeExecutionService;
   userId: string;
-  accountSnapshot: CanonicalAccountSnapshot;
+  accountSnapshotFor: (exchange: TradingExchange) => Promise<CanonicalAccountSnapshot>;
   instruction: ManualEntryInstruction;
   now?: Date;
 }): Promise<ManualEntryPrepared> {
@@ -297,7 +297,8 @@ export async function prepareManualEntry(input: {
   if (policy.mode !== 'approval') throw new Error('MANUAL_ENTRY_APPROVAL_MODE_REQUIRED');
 
   const { exchange, stockBroker } = exchangeFor(input.instruction.market, policy);
-  validateAccountSnapshot(input.accountSnapshot, exchange);
+  const accountSnapshot = await input.accountSnapshotFor(exchange);
+  validateAccountSnapshot(accountSnapshot, exchange);
   const symbol = planSymbol(input.instruction.market, input.instruction.symbol);
   const side = sideFor(input.instruction.market, input.instruction.side);
   const asset = assetClass(input.instruction.market);
@@ -306,7 +307,7 @@ export async function prepareManualEntry(input: {
   const manualSignal = `manual:${input.userId}:${input.instruction.market}:${symbol}:${side}`;
   const observedAt = now.toISOString();
 
-  if ((input.accountSnapshot.positions ?? []).some((position) => positionMatchesSymbol(position, symbol))
+  if ((accountSnapshot.positions ?? []).some((position) => positionMatchesSymbol(position, symbol))
     && exposure.instrumentExposureKrw <= 0) {
     throw new Error('MANUAL_ENTRY_EXTERNAL_POSITION_SAME_SYMBOL');
   }
@@ -399,7 +400,7 @@ export async function prepareManualEntry(input: {
     now,
     accountValueKrw,
     plans,
-    accountSnapshot: input.accountSnapshot,
+    accountSnapshot,
   });
   const referencePrice = finitePositive(seed.limitPrice ?? preview.snapshot.currentPrice);
   if (referencePrice == null) throw new Error('MANUAL_ENTRY_REFERENCE_PRICE_UNAVAILABLE');
