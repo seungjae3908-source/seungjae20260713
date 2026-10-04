@@ -340,7 +340,7 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
 });
 
 test('Bitget futures worker preserves every validated 4x-7x policy and evidence into the plan', async () => {
-  for (const expectedLeverage of [4, 5, 6, 7]) {
+  for (const expectedLeverage of [4, 5, 6, 7] as const) {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
   const futuresPolicy = normalizeTradingPolicy({
