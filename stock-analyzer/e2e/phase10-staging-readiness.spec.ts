@@ -1270,9 +1270,11 @@ async function finishAuthFault(
 }
 
 async function expectBootstrapTerminalError(page: Page) {
-  await expect(page.getByTestId('error-state')).toBeVisible({ timeout: 10_500 });
+  const alert = page.getByTestId('account-bootstrap-error');
+  await expect(alert).toBeVisible({ timeout: 10_500 });
   await expect(page.getByTestId('page-fallback')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '다시 시도', exact: true })).toBeVisible();
+  await expect(alert).toContainText('계정 상태를 불러오지 못했습니다.');
+  await expect(alert.getByRole('button', { name: '다시 확인', exact: true })).toBeVisible();
 }
 
 function performanceSummary(values: number[]): PerformanceSummary {
