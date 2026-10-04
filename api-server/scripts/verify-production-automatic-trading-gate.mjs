@@ -6,6 +6,7 @@ const manualSpotGate = read('.github/workflows/production-live-trading-gate.yml'
 const manualFuturesGate = read('.github/workflows/production-futures-live-trading-gate.yml');
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 
 const requireText = (source, token, code) => {
@@ -41,7 +42,7 @@ requireText(workflow, 'production-live-credential-reuse-', 'AUTO_GATE_CREDENTIAL
 requireText(workflow, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
 requireText(workflow, "name.startsWith(workflowName + ' ' + target + ' ')", 'AUTO_GATE_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
 requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
-requireText(workflow, "production-account-readonly-live-qa-v2", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V2_MISSING');
+requireText(workflow, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
 
 requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
@@ -51,6 +52,7 @@ requireText(workflow, "AUTO_TRADING: 'false'", 'AUTO_GATE_AUTO_DISABLE_MISSING')
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'AUTO_GATE_LIVE_AUTO_DISABLE_MISSING');
 requireText(workflow, "MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'", 'AUTO_GATE_PAPER_WORKER_DISABLE_MISSING');
 requireText(workflow, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'", 'AUTO_GATE_LIVE_WORKER_DISABLE_MISSING');
+requireText(workflow, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'AUTO_GATE_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(workflow, 'AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK', 'AUTO_GATE_ROLLBACK_RECEIPT_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLED_ALL4_MANUAL_LIVE_PRESERVED', 'AUTO_GATE_DISABLE_RECEIPT_MISSING');
 requireText(workflow, 'REAL_ORDER_SUBMITTED=false', 'AUTO_GATE_NO_ORDER_RECEIPT_MISSING');
@@ -67,6 +69,7 @@ forbid(workflow, /TRANSFER[^\n]*true/i, 'AUTO_GATE_TRANSFER_ENABLE_FORBIDDEN');
 requireText(manualSpotGate, "AUTO_TRADING: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP_AUTO_FALSE');
 requireText(manualSpotGate, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP_LIVE_AUTO_FALSE');
 requireText(manualSpotGate, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
+requireText(manualSpotGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_SPOT_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualSpotGate, "const allowed = new Set(['toss', 'kiwoom', 'upbit']);", 'MANUAL_SPOT_THREE_PROVIDER_SET_DRIFT');
 requireText(manualSpotGate, 'name.startsWith(`${workflowName} ${target} `)', 'MANUAL_SPOT_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
 
@@ -76,6 +79,7 @@ requireText(manualFuturesGate, "FUTURES_LIVE_MARGIN_MODE: 'isolated'", 'MANUAL_F
 requireText(manualFuturesGate, 'AUTO_TRADING=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_AUTO_FALSE');
 requireText(manualFuturesGate, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_AUTO_FALSE');
 requireText(manualFuturesGate, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
+requireText(manualFuturesGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_FUTURES_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualFuturesGate, 'run.name.startsWith(`${name} ${target} `)', 'MANUAL_FUTURES_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
 
 const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled[\s\S]*?\r?\n}\r?\n/);
@@ -108,6 +112,26 @@ requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPE
 requireText(deploy, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'DEPLOY_LIVE_WORKER_RESET_MISSING');
 requireText(deploy, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'DEPLOY_LIVE_AUTO_RESET_MISSING');
 requireText(deploy, 'FUTURES_LIVE_EXECUTION_AUTHORITY=NONE', 'DEPLOY_FUTURES_RESET_MISSING');
+requireText(deploy, 'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false', 'DEPLOY_LEGACY_CRYPTO_RESET_MISSING');
+
+for (const token of [
+  "'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED'",
+  "'LIVE_TRADING'",
+  "'AUTO_TRADING'",
+  "'LIVE_AUTOMATIC_TRADING_ENABLED'",
+  "'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'",
+  "'BITGET_FUTURES_LIVE_ORDER_ENABLED'",
+  "'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED'",
+  "'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED'",
+  "String(process.env.FUTURES_LIVE_MARGIN_MODE ?? '') === 'isolated'",
+  'requestedLeverage < 2 || requestedLeverage > 7',
+  'const leverage = requestedLeverage',
+  'const leverage = plan.leverage',
+]) {
+  requireText(legacyCryptoRoute, token, 'LEGACY_CRYPTO_FAIL_CLOSED_CONTRACT_DRIFT');
+}
+forbid(legacyCryptoRoute, /type PositionMode =[^\n]*hedge_mode/, 'LEGACY_CRYPTO_HEDGE_MODE_FORBIDDEN');
+forbid(legacyCryptoRoute, /type MarginMode =[^\n]*crossed/, 'LEGACY_CRYPTO_CROSSED_MARGIN_FORBIDDEN');
 
 console.log(JSON.stringify({
   ok: true,
@@ -121,5 +145,5 @@ console.log(JSON.stringify({
   paperBackgroundWorkerCoupled: true,
   liveBackgroundWorkerCoupled: true,
   automaticExitClosedLoop: true,
-  accountQaSchemaVersion: 'v2',
+  accountQaSchemaVersion: 'v3',
 }));

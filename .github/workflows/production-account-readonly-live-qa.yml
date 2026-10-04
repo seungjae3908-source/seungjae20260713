@@ -296,7 +296,12 @@ jobs:
             throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_SET_INVALID');
           }
           const providers = Array.isArray(value?.providers) ? value.providers : [];
-          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
+          const zeroSafetyCounters = [
+            'openOrderCount', 'orphanOrderCount', 'activeLocalOrderCount', 'staleLocalOrderCount',
+            'duplicateClientOrderIdCount', 'stalePlanCount', 'oppositePositionDuplicateCount',
+            'nonIsolatedPositionCount', 'outOfPolicyLeveragePositionCount', 'liquidationRiskPositionCount',
+          ];
+          if (value?.schemaVersion !== 'production-account-readonly-live-qa-v3'
             || value?.targetSha !== expectedSha
             || value?.productionDeployRunId !== Number(productionDeployRunId)
             || !Number.isFinite(Date.parse(String(value?.generatedAt ?? '')))
@@ -316,7 +321,9 @@ jobs:
             || value?.blockedMutationRequests !== 0
             || value?.observedAppMutationRequests !== 0
             || value?.liveTradingAuthorityGranted !== false
-            || value?.autoTradingAuthorityGranted !== false) {
+            || value?.autoTradingAuthorityGranted !== false
+            || value?.bitgetPositionMode !== 'one_way_mode'
+            || zeroSafetyCounters.some((key) => value?.safetyCounters?.[key] !== 0)) {
             throw new Error('PRODUCTION_ACCOUNT_QA_EVIDENCE_CONTRACT_FAILED');
           }
           if (!providers.some((item) => item?.provider === 'bitget')) {
@@ -327,7 +334,8 @@ jobs:
             if (!row || row.connected !== true || row.status !== 'CONNECTED'
               || row.stale !== false || row.fresh !== true || row.errorCode !== null
               || row.checkedAtPresent !== true || row.lastGoodAtPresent !== true
-              || row.reconciliation !== 'PASS' || row.reconciliationPassed !== true) {
+              || row.reconciliation !== 'PASS' || row.reconciliationPassed !== true
+              || row.openOrderCount !== 0) {
               throw new Error('PRODUCTION_ACCOUNT_QA_TARGET_PROVIDER_FAILED_' + provider.toUpperCase());
             }
           }

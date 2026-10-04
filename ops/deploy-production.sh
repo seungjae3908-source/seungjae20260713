@@ -243,6 +243,9 @@ process.stdout.write([
   bool("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED"),
   bool("FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED"),
   bool("BITGET_FUTURES_LIVE_ORDER_ENABLED"),
+  bool("CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED"),
+  bool("CRYPTO_AUTO_TRADE_ENABLED"),
+  bool("BITGET_AUTO_TRADE_ENABLED"),
   bool("BITGET_LIVE_ORDER_ENABLED"),
   bool("UPBIT_LIVE_ORDER_ENABLED"),
   bool("KIWOOM_LIVE_ORDER_ENABLED"),
@@ -281,6 +284,11 @@ const activeFlags = [
   "LIVE_AUTOMATIC_TRADING_ENABLED",
   "MEMBER_AUTO_TRADING_BACKGROUND_ENABLED",
   "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED",
+  "FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED",
+  "BITGET_FUTURES_LIVE_ORDER_ENABLED",
+  "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED",
+  "CRYPTO_AUTO_TRADE_ENABLED",
+  "BITGET_AUTO_TRADE_ENABLED",
   "BITGET_LIVE_ORDER_ENABLED",
   "UPBIT_LIVE_ORDER_ENABLED",
   "KIWOOM_LIVE_ORDER_ENABLED",
@@ -346,6 +354,7 @@ restart_application_preserving_telegram() {
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false \
     ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
     FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED=false BITGET_FUTURES_LIVE_ORDER_ENABLED=false \
+    CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false CRYPTO_AUTO_TRADE_ENABLED=false BITGET_AUTO_TRADE_ENABLED=false \
     FUTURES_LIVE_CAPABILITY_ALLOWLIST= FUTURES_LIVE_MARKET_ALLOWLIST= FUTURES_LIVE_MAX_LEVERAGE= FUTURES_LIVE_MARGIN_MODE= \
     FUTURES_LIVE_EXECUTION_AUTHORITY=NONE \
     SPOT_LIVE_CAPABILITY_ALLOWLIST= SPOT_LIVE_MARKET_ALLOWLIST= \
@@ -354,9 +363,9 @@ restart_application_preserving_telegram() {
 }
 
 application_runtime_ready() {
-  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" spot_live_approved="" live_auto="" member_background="" member_live_background="" futures_approved="" bitget_futures_live="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" capability_allowlist="" market_allowlist="" authority=""
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" spot_live_approved="" live_auto="" member_background="" member_live_background="" futures_approved="" bitget_futures_live="" legacy_crypto_auto="" crypto_auto="" bitget_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" capability_allowlist="" market_allowlist="" authority=""
   snapshot="$(pm2_runtime_snapshot)" || return 1
-  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved spot_live_approved live_auto member_background member_live_background futures_approved bitget_futures_live bitget_live upbit_live kiwoom_live toss_live capability_allowlist market_allowlist authority <<< "$snapshot"
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved spot_live_approved live_auto member_background member_live_background futures_approved bitget_futures_live legacy_crypto_auto crypto_auto bitget_auto bitget_live upbit_live kiwoom_live toss_live capability_allowlist market_allowlist authority <<< "$snapshot"
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
   [[ "$cwd" == "$LIVE_DIR" ]] || return 1
   [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
@@ -365,6 +374,7 @@ application_runtime_ready() {
   [[ "$order_execution" == false && "$live_approved" == false && "$spot_live_approved" == false && "$live_auto" == false ]] || return 1
   [[ "$member_background" == false && "$member_live_background" == false ]] || return 1
   [[ "$futures_approved" == false && "$bitget_futures_live" == false ]] || return 1
+  [[ "$legacy_crypto_auto" == false && "$crypto_auto" == false && "$bitget_auto" == false ]] || return 1
   [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
   [[ "$capability_allowlist" == - && "$market_allowlist" == - ]] || return 1
   [[ "$authority" == NONE ]] || return 1
@@ -513,6 +523,7 @@ rm -f "$PM2_JSON"
     LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false \
     ORDER_EXECUTION_ENABLED=false LIVE_TRADING_ACTIVATION_APPROVED=false SPOT_LIVE_LIMITED_ACTIVATION_APPROVED=false LIVE_AUTOMATIC_TRADING_ENABLED=false \
     FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED=false BITGET_FUTURES_LIVE_ORDER_ENABLED=false \
+    CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false CRYPTO_AUTO_TRADE_ENABLED=false BITGET_AUTO_TRADE_ENABLED=false \
     FUTURES_LIVE_CAPABILITY_ALLOWLIST= FUTURES_LIVE_MARKET_ALLOWLIST= FUTURES_LIVE_MAX_LEVERAGE= FUTURES_LIVE_MARGIN_MODE= \
     FUTURES_LIVE_EXECUTION_AUTHORITY=NONE \
     SPOT_LIVE_CAPABILITY_ALLOWLIST= SPOT_LIVE_MARKET_ALLOWLIST= \
