@@ -76,9 +76,15 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
     activationAtMs: 12345,
     env: { RUNTIME_DIRECTORY: runtimeDirectory },
   });
+  const formulaQueue = plan.find((task) => task.id === 'formula-backtest-queue');
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
-  assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward']);
+  assert.deepEqual(plan.map((task) => task.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
+  assert.equal(formulaQueue.env.FORMULA_BACKTEST_STATE_ROOT, resolve(stateRoot));
+  assert.equal(formulaQueue.env.LIVE_TRADING, 'false');
+  assert.equal(formulaQueue.env.PRIVATE_API_ENABLED, 'false');
+  assert.equal(formulaQueue.env.ORDER_AUTHORITY, 'false');
+  assert.equal(formulaQueue.sharedPackages, undefined);
   assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
