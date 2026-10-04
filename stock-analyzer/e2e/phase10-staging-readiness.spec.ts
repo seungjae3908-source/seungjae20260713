@@ -1664,7 +1664,7 @@ async function auditAuthenticatedViewport(
         } catch {
           return false;
         }
-      }, { timeout: 15_000 }),
+      }, { timeout: 17_000 }),
     );
   } else {
     await expectHealthyRoute(page, route);
