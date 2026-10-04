@@ -317,7 +317,7 @@ test('member stock broker routing is user-selectable for stocks and fixed away f
   assert.equal(resolveMemberStockBroker(legacy, 'US_STOCK'), 'kiwoom');
 });
 
-test('stock automatic routing uses the selected Toss or Kiwoom provider as the canonical exchange', () => {
+test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom', () => {
   const base = policy();
   const toss = normalizeTradingPolicy({
     ...base,
@@ -328,7 +328,7 @@ test('stock automatic routing uses the selected Toss or Kiwoom provider as the c
     exchange: 'toss', assetClass: 'domestic_stock', planMarket: 'KR', stockBroker: 'toss',
   });
   assert.deepEqual(marketMapping('US_STOCK', toss), {
-    exchange: 'toss', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'toss',
+    exchange: 'kiwoom', assetClass: 'us_stock', planMarket: 'US', stockBroker: 'kiwoom',
   });
   const kiwoom = normalizeTradingPolicy({
     ...base,
