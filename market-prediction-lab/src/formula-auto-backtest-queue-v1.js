@@ -204,13 +204,6 @@ function historicalDependencies(validated) {
       };
     },
     async runHistoricalBacktest({ generatedCandidate, datasetIdentity }) {
-      if (formulaCandidate.market === 'CRYPTO_FUTURES') {
-        return {
-          status: 'MISSING_EVIDENCE',
-          failureCode: 'REQUIRED_DATA_MISSING',
-          failureReason: 'DERIVATIVES_SAFE_DSL_EVALUATOR_NOT_ENABLED',
-        };
-      }
       const { signalEvaluator, evaluatorContract } = createEvidenceBackedFormulaSignalEvaluatorV1({
         formulaCandidate,
         generatedCandidate,
