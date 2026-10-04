@@ -4,7 +4,10 @@ import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, RefreshCw, ShieldAlert, TrendingUp } from 'lucide-react';
 import { apiGet } from '@/lib/api';
-import { requireRecommendationResponse } from '@/lib/recommendation-response';
+import {
+  recommendationQueryKey,
+  requireRecommendationResponse,
+} from '@/lib/recommendation-response';
 import { cn } from '@/lib/utils';
 import { BottomNav } from '@/components/bottom-nav';
 import {
@@ -77,7 +80,7 @@ export default function RecommendationsPage() {
   const [category, setCategory] = useState<Category>('undervalued');
 
   const query = useQuery({
-    queryKey: ['recommendations', market],
+    queryKey: recommendationQueryKey(market),
     queryFn: async () =>
       requireRecommendationResponse<RecoResponse>(
         await apiGet<unknown>(`/market/recommendations?market=${market}`),
@@ -93,6 +96,7 @@ export default function RecommendationsPage() {
   return (
     <div
       className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      data-loading={query.isLoading ? 'true' : 'false'}
       data-testid="recommendations-shell"
     >
       <div
@@ -191,7 +195,7 @@ export default function RecommendationsPage() {
 
           <div className="mt-3">
             {query.isLoading && (
-              <StateBox>실데이터를 수집해 추천을 계산하는 중입니다.</StateBox>
+              <StateBox loading>실데이터를 수집해 추천을 계산하는 중입니다.</StateBox>
             )}
             {query.isError && (
               <StateBox error>추천 산출에 실패했습니다. 데이터 공급 상태를 확인한 뒤 다시 시도해 주세요.</StateBox>
@@ -222,18 +226,23 @@ export default function RecommendationsPage() {
 function StateBox({
   children,
   error,
+  loading,
 }: {
   children: React.ReactNode;
   error?: boolean;
+  loading?: boolean;
 }) {
   return (
     <div
+      aria-live={loading ? 'polite' : undefined}
       className={cn(
         'rounded-2xl border p-5 text-center text-sm font-medium leading-6',
         error
           ? 'border-destructive/40 bg-destructive/10 text-destructive'
           : 'border-card-border bg-card text-muted-foreground',
       )}
+      data-testid={loading ? 'recommendations-loading-state' : undefined}
+      role={loading ? 'status' : undefined}
     >
       {children}
     </div>
