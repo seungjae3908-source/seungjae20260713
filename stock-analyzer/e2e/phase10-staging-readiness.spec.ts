@@ -142,6 +142,7 @@ const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const recentConfirmedRouteTransitions = new WeakMap<Page, RecentRouteTransitionObservation>();
+const verifierOwnedContextTeardowns = new WeakMap<Page, string>();
 const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
@@ -385,6 +386,24 @@ function isExpectedRecentAiChartCandleAbortIdentity(input: {
   return ageMs >= 0
     && ageMs <= recentAiChartCandleAbortWindowMs
     && isExpectedLateAiChartCandleAbortIdentity(input);
+}
+
+function isExpectedVerifierContextTeardownCandleAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  errorText: string | undefined;
+  origin: string;
+}) {
+  try {
+    const parsed = new URL(input.rawUrl);
+    return input.method === 'GET'
+      && input.errorText === 'net::ERR_ABORTED'
+      && parsed.origin === input.origin
+      && parsed.searchParams.size === 0
+      && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function isExpectedRouteTransitionAbort(
@@ -668,6 +687,19 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     })) {
       if (chartIdentity) successfulPrimary?.delete(chartIdentity);
       diagnostics.expected_stock_chart_hedge_aborts.push(diagnostic);
+      return;
+    }
+    const teardownOrigin = verifierOwnedContextTeardowns.get(page);
+    if (teardownOrigin && isExpectedVerifierContextTeardownCandleAbortIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      errorText: request.failure()?.errorText,
+      origin: teardownOrigin,
+    })) {
+      diagnostics.expected_route_transition_aborts.push({
+        ...diagnostic,
+        detail: `verifier-owned context teardown: ${diagnostic.detail}`,
+      });
       return;
     }
     const routeObservation = activeRouteTransitionObservations.get(page);
@@ -1514,6 +1546,7 @@ async function runAuthenticatedAiChartCertification(
     });
     const page = await context.newPage();
     attachDiagnostics(page, testInfo);
+    let verifierOwnedTeardownSafe = false;
     try {
       const coldStarted = Date.now();
       const response = await page.goto('/ai-chart', { waitUntil: 'domcontentloaded' });
@@ -1574,8 +1607,16 @@ async function runAuthenticatedAiChartCertification(
       diagnostics.authenticated_ai_chart.sessions.push(timing);
       await expectHealthyRoute(page, '/');
       await waitForBrowserNetworkQuiescence(page);
+      verifierOwnedTeardownSafe = true;
     } finally {
-      await context.close();
+      if (verifierOwnedTeardownSafe) {
+        verifierOwnedContextTeardowns.set(page, new URL(page.url()).origin);
+      }
+      try {
+        await context.close();
+      } finally {
+        verifierOwnedContextTeardowns.delete(page);
+      }
     }
   }
 
@@ -1900,6 +1941,30 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   expect(isExpectedRecentAiChartCandleAbortIdentity({
     ...recentLateCandleAbort,
     observation: { ...recentLateCandleAbort.observation, fromRoute: '/scanner' },
+  })).toBe(false);
+
+  const verifierTeardownCandleAbort = {
+    method: 'GET',
+    rawUrl: `${origin}/api/stocks/AAPL/candles`,
+    errorText: 'net::ERR_ABORTED',
+    origin,
+  };
+  expect(isExpectedVerifierContextTeardownCandleAbortIdentity(verifierTeardownCandleAbort)).toBe(true);
+  expect(isExpectedVerifierContextTeardownCandleAbortIdentity({
+    ...verifierTeardownCandleAbort,
+    method: 'POST',
+  })).toBe(false);
+  expect(isExpectedVerifierContextTeardownCandleAbortIdentity({
+    ...verifierTeardownCandleAbort,
+    rawUrl: `${origin}/api/stocks/AAPL/chart`,
+  })).toBe(false);
+  expect(isExpectedVerifierContextTeardownCandleAbortIdentity({
+    ...verifierTeardownCandleAbort,
+    rawUrl: 'https://other.example.test/api/stocks/AAPL/candles',
+  })).toBe(false);
+  expect(isExpectedVerifierContextTeardownCandleAbortIdentity({
+    ...verifierTeardownCandleAbort,
+    errorText: 'net::ERR_FAILED',
   })).toBe(false);
 });
 
