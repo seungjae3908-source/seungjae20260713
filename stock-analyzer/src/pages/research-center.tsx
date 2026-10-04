@@ -693,7 +693,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       <div>
         <section className="min-w-0" aria-labelledby="research-pipeline-title">
           <div className="mb-3 flex items-end justify-between gap-3">
-            <div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">연구 단계</p><h2 id="research-pipeline-title" className="mt-1 text-base font-black">연구 파이프라인</h2></div>
+            <div><h2 id="research-pipeline-title" className="text-base font-black">연구 단계</h2></div>
             <p className="text-[10px] text-muted-foreground">카드를 눌러 상세 확인</p>
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
