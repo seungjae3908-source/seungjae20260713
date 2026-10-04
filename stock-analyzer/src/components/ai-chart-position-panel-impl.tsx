@@ -2056,6 +2056,11 @@ export function AiChartPositionPanel({
     setManualPlanState({ kind: 'idle' });
   }, []);
 
+  const invalidateManualEntryForEdit = useCallback(() => {
+    invalidateManualEntry();
+    setManualIntentId(newManualIntentId());
+  }, [invalidateManualEntry]);
+
   const resetManualEntry = useCallback(() => {
     invalidateManualEntry();
     setManualIntentId(newManualIntentId());
