@@ -2,6 +2,7 @@ export const AUTH_SESSION_BOOTSTRAP_TIMEOUT_MS = 8_000;
 export const AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS = 8_000;
 export const APP_API_SESSION_TIMEOUT_MS = 8_000;
 export const APP_API_REQUEST_TIMEOUT_MS = 12_000;
+export const SCANNER_API_REQUEST_TIMEOUT_MS = 15_000;
 
 export type AuthBootstrapTimeoutCode =
   | 'AUTH_SESSION_TIMEOUT'
