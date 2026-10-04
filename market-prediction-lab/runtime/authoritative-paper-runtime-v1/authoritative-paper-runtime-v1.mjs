@@ -12,7 +12,7 @@ var TRADING_RISK_POLICY = Object.freeze({
   defaultMaintenanceMarginRate: 5e-3,
   minimumStopLiquidationBufferPercent: 0.5,
   maximumAdjustmentIterations: 1e3,
-  cryptoFuturesAppMaximumLeverage: 7
+  cryptoFuturesAppMaximumLeverage: 10
 });
 var DATA_STATUSES = /* @__PURE__ */ new Set([
   "live",
@@ -209,10 +209,7 @@ function calculateTradingRisk(input, now = /* @__PURE__ */ new Date()) {
     result3.warnings = ["입력값을 수정한 뒤 다시 계산하세요."];
     return result3;
   }
-  const appMaximumLeverage = input.market === "crypto-futures" ? Math.min(
-    input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage,
-    TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage
-  ) : input.appMaximumLeverage ?? null;
+  const appMaximumLeverage = input.market === "crypto-futures" ? input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage : input.appMaximumLeverage ?? null;
   result3.appMaximumLeverage = appMaximumLeverage;
   result3.exchangeMaximumLeverage = input.maximumLeverage ?? null;
   if (appMaximumLeverage != null && input.leverage > appMaximumLeverage) {
