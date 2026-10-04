@@ -234,6 +234,10 @@ const researchBacktestPaperReviewed=[
  'stock-analyzer/src/components/trade-automation-settings.tsx',
  'stock-analyzer/src/components/paper-trading-panel.tsx',
  'stock-analyzer/e2e/paper-action-reentrancy.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/scanner-chart-broadcast.spec.ts',
+ 'stock-analyzer/e2e/platform-canonical-integration-contract.spec.ts',
+ 'stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts',
 ];
 const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed,...researchBacktestPaperReviewed]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
