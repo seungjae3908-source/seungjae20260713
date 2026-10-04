@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { tradeActionFromSearch, tradeChartPath, tradeFocusFromSearch } from '../src/lib/trade-navigation';
@@ -6,6 +6,82 @@ import { tradeActionFromSearch, tradeChartPath, tradeFocusFromSearch } from '../
 const stockInfoPath = fileURLToPath(new URL('../src/pages/stock-info.tsx', import.meta.url));
 const aiChartPath = fileURLToPath(new URL('../src/pages/ai-chart.tsx', import.meta.url));
 const positionPanelPath = fileURLToPath(new URL('../src/components/ai-chart-position-panel-impl.tsx', import.meta.url));
+
+
+const E2E_USER_ID = '44444444-4444-4444-8444-444444444444';
+const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
+const NOW = '2026-10-04T00:00:00.000Z';
+
+async function installApprovedSession(page: Page) {
+  await page.addInitScript(({ storageKey, userId, now }) => {
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
+      .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    const expiresAt = 4_102_444_800;
+    const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: userId, role: 'authenticated', exp: expiresAt })}.e2e`;
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      access_token: accessToken,
+      refresh_token: 'stock-info-trade-actions-refresh',
+      expires_in: 3600,
+      expires_at: expiresAt,
+      token_type: 'bearer',
+      user: {
+        id: userId,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'stock-trade-actions@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: 'Trade Actions Admin' },
+        identities: [],
+        created_at: now,
+      },
+    }));
+  }, { storageKey: E2E_AUTH_STORAGE_KEY, userId: E2E_USER_ID, now: NOW });
+
+  await page.route('**/__e2e-supabase/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const body = pathname.endsWith('/rest/v1/profiles')
+      ? { id: E2E_USER_ID, login_name: 'trade-actions-admin', display_name: 'Trade Actions Admin', role: 'admin', status: 'approved', membership_level: 'admin', is_active: true, permissions_updated_at: NOW, updated_at: NOW }
+      : pathname.endsWith('/auth/v1/user')
+        ? { id: E2E_USER_ID, aud: 'authenticated', role: 'authenticated', email: 'stock-trade-actions@accounts.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { display_name: 'Trade Actions Admin' }, identities: [], created_at: NOW }
+        : pathname.endsWith('/rest/v1/portfolio_holdings')
+          ? []
+          : { ok: true };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
+}
+
+async function mockStockTradeSurface(page: Page, privateAccountReads: string[]) {
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.startsWith('/api/accounts/read-only/')) privateAccountReads.push(url.pathname);
+
+    if (url.pathname === '/api/stocks/005930/quote') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ticker: '005930',
+          name: '삼성전자',
+          market: 'KR',
+          price: 74500,
+          changePercent: 1.2,
+          currency: 'KRW',
+          updatedAt: NOW,
+        }),
+      });
+      return;
+    }
+    if (url.pathname === '/api/trade-automation/approval-queue') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, items: [], count: 0, updatedAt: NOW, orderSubmitted: false, orderCanceled: false, privateTradingRequestSent: false }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+}
 
 test('stock tab trade navigation preserves market policy and never invents spot or stock short entry', () => {
   const stockBuy = new URL(tradeChartPath({
@@ -104,4 +180,35 @@ test('stock and coin detail expose trade actions only through the canonical AI c
 
   expect(positionPanel).toContain('setCockpitOpen(initialCockpitOpen)');
   expect(positionPanel).toContain('setCockpitTab(initialCockpitTab)');
+});
+
+
+test('stock detail buy and sell buttons open the canonical cockpit without implicit private-account reads', async ({ page }) => {
+  const privateAccountReads: string[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApprovedSession(page);
+  await mockStockTradeSurface(page, privateAccountReads);
+
+  await page.goto('/stock-info?asset=stock&market=KR&ticker=005930');
+  await expect(page.getByTestId('stock-info-buy')).toBeVisible();
+  await page.getByTestId('stock-info-buy').click();
+  await expect(page).toHaveURL(/\/ai-chart\?.*trade=entry/);
+  expect(new URL(page.url()).searchParams.get('action')).toBe('BUY');
+  await expect(page.getByTestId('ai-chart-mobile-position')).toBeVisible();
+  const entryCockpit = page.getByTestId('ai-chart-trading-cockpit');
+  await expect(entryCockpit).toBeVisible();
+  expect(await entryCockpit.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(true);
+  await expect(entryCockpit.getByRole('tab', { name: '진입', exact: true })).toHaveAttribute('aria-selected', 'true');
+  expect(privateAccountReads).toEqual([]);
+
+  await page.goto('/stock-info?asset=stock&market=KR&ticker=005930');
+  await expect(page.getByTestId('stock-info-sell')).toBeVisible();
+  await page.getByTestId('stock-info-sell').click();
+  await expect(page).toHaveURL(/\/ai-chart\?.*trade=exit/);
+  expect(new URL(page.url()).searchParams.get('action')).toBe('SELL');
+  await expect(page.getByTestId('ai-chart-mobile-position')).toBeVisible();
+  const exitCockpit = page.getByTestId('ai-chart-trading-cockpit');
+  await expect(exitCockpit.getByRole('tab', { name: '종료', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(exitCockpit.getByTestId('ai-chart-exit-dashboard-unchecked')).toContainText('아직 실계좌 보유상태를 조회하지 않았습니다');
+  expect(privateAccountReads).toEqual([]);
 });
