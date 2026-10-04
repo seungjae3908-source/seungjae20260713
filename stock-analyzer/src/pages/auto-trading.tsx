@@ -169,7 +169,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const [paperRevision, setPaperRevision] = useState(0);
   const [manualPaperOpen, setManualPaperOpen] = useState(false);
   const [settingsPopup, setSettingsPopup] = useState<'automation' | 'telegram' | null>(null);
-  const [settingsMarket, setSettingsMarket] = useState<TradingMarket>('domestic_stock');
   const [paperSyncOpen, setPaperSyncOpen] = useState(false);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
@@ -307,9 +306,10 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <StatusItem label="주문별 승인" value="불필요" />
-          <StatusItem label="시장 제어" value="4시장" />
+          <StatusItem label="시장 제어" value="4시장 개별 ON/OFF" />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">주문마다 승인을 요청하지 않습니다.</p>
         
       </section>
 
@@ -330,7 +330,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
           <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
           <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래" value="별도 승인 필요" />
+          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
           <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
@@ -427,9 +427,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       <div className="grid gap-2 sm:grid-cols-2">
         <button
           type="button"
-          onClick={() => { setSettingsMarket(market); setSettingsPopup('automation'); }}
+          onClick={() => setSettingsPopup('automation')}
           className="min-h-11 rounded-xl border border-card-border px-4 text-sm font-bold"
-          data-testid="open-trading-automation-settings"
+          data-testid="auto-trading-advanced-settings"
         >
           {marketMeta.label} 설정
         </button>
@@ -510,24 +510,12 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
       </main>
       <PopupPanel
-        title={`${mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}`}
+        title={`${marketMeta.label} · ${mode === 'auto' ? '자동매매 설정' : '자동 모의매매 설정'}`}
         open={settingsPopup === 'automation'}
         onClose={() => setSettingsPopup(null)}
         testId="trading-automation-settings-dialog"
       >
-        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="설정 시장 선택">
-          {MARKETS.map((item) => (
-            <SegmentedButton
-              key={item.value}
-              active={settingsMarket === item.value}
-              onClick={() => setSettingsMarket(item.value)}
-              testId={`trading-settings-market-${item.value}`}
-            >
-              {item.label}
-            </SegmentedButton>
-          ))}
-        </div>
-        <TradeAutomationSettings fixture={fixture} selectedMarket={settingsMarket} />
+        <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
       </PopupPanel>
 
       <PopupPanel
