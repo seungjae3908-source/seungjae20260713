@@ -25,7 +25,7 @@ const completeEvidence: ProviderPredeployEvidence = {
 test('canonical provider mapping remains fixed', () => {
   assert.deepEqual(CANONICAL_PROVIDER_BY_MARKET, {
     KR_STOCK: 'toss',
-    US_STOCK: 'toss',
+    US_STOCK: 'kiwoom',
     CRYPTO_SPOT: 'upbit',
     CRYPTO_FUTURES: 'bitget',
   });

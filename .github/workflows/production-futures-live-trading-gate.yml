@@ -507,8 +507,6 @@ jobs:
                   ...process.env,
                   AUTO_TRADING: 'false',
                   LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
-              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
-              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
                   MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
                   MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
                   FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'true',

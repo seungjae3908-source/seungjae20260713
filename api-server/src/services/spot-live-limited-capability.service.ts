@@ -60,7 +60,7 @@ const PROVIDER_MARKETS: Record<TradingExchange, ReadonlySet<SpotLiveMarket>> = {
   bitget: new Set(),
   upbit: new Set(['CRYPTO_SPOT']),
   kiwoom: new Set(['KR_STOCK', 'US_STOCK']),
-  toss: new Set(['KR_STOCK', 'US_STOCK']),
+  toss: new Set(['KR_STOCK']),
 };
 
 function unique(values: string[]) {
@@ -108,7 +108,7 @@ export function spotLiveMarketForPlan(
   if ((plan.exchange === 'kiwoom' || plan.exchange === 'toss') && plan.market.toUpperCase() === 'KR') {
     return 'KR_STOCK';
   }
-  if ((plan.exchange === 'kiwoom' || plan.exchange === 'toss') && plan.market.toUpperCase() === 'US') {
+  if (plan.exchange === 'kiwoom' && plan.market.toUpperCase() === 'US') {
     return 'US_STOCK';
   }
   return null;

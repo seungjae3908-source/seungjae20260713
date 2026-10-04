@@ -7,7 +7,7 @@ import { TradeExecutionService } from './trade-execution.service';
 import { setTradingPlanMarketIntelligenceRunnerForTests } from './trade-market-intelligence.service';
 import { encryptTradingCredentials, decryptTradingCredentials } from './trade-credential-vault.service';
 import {
-  buildBitgetSignature, buildUpbitJwt, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
+  buildBitgetSignature, buildUpbitJwt, prepareBitgetLeverage, prepareBitgetOrder, prepareBitgetTicker, prepareKiwoomOrder,
   prepareUpbitOrder, redactPreparedRequest, validateBitgetContractRules,
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
@@ -144,12 +144,12 @@ test('spot live permanently rejects futures, margin, short, leverage, and denied
   assert.ok(denied.blockCodes.includes('SPOT_LIVE_DENIED_CAPABILITY_REQUESTED'));
 });
 
-test('spot live supports only the three spot market/provider combinations', () => {
+test('spot live supports KR Toss/Kiwoom, US Kiwoom, and Upbit spot only', () => {
   const cases: Array<[Partial<TradingPlanInput>, boolean]> = [
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'KR' }, true],
     [{ exchange: 'kiwoom', stockBroker: 'kiwoom', market: 'US' }, true],
     [{ exchange: 'toss', stockBroker: 'toss', market: 'KR' }, true],
-    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, true],
+    [{ exchange: 'toss', stockBroker: 'toss', market: 'US' }, false],
     [{ exchange: 'upbit', stockBroker: null, market: 'KRW' }, true],
     [{ exchange: 'upbit', stockBroker: null, market: 'USDT' }, false],
   ];
@@ -194,6 +194,12 @@ test('spot live runtime status publishes every permanent deny as false', () => {
 test('stock broker selection is per market, backward compatible, and enforced for automatic stock Paper plans', () => {
   const legacy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, stockBrokerByMarket: undefined });
   assert.deepEqual(legacy.stockBrokerByMarket, { domestic_stock: 'kiwoom', us_stock: 'kiwoom' });
+
+  const legacyUsToss = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    stockBrokerByMarket: { domestic_stock: 'toss', us_stock: 'toss' },
+  });
+  assert.deepEqual(legacyUsToss.stockBrokerByMarket, { domestic_stock: 'toss', us_stock: 'kiwoom' });
 
   const policy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -330,6 +336,16 @@ test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite
   const ticker = prepareBitgetTicker('BTCUSDT');
   assert.equal(ticker.path, '/api/v2/mix/market/ticker');
   assert.equal(Object.keys(ticker.headers).some((key) => key.startsWith('ACCESS-')), false);
+  for (const leverage of [2, 3, 4, 5, 6, 7] as const) {
+    const prepared = prepareBitgetLeverage(
+      { apiKey: 'key', secretKey: 'secret', passphrase: 'pass' },
+      'BTCUSDT',
+      leverage,
+      '1000',
+    );
+    assert.equal(prepared.path, '/api/v2/mix/account/set-leverage');
+    assert.equal(JSON.parse(prepared.body ?? '{}').leverage, String(leverage));
+  }
 });
 
 test('Upbit enforces KRW spot, no short, 5,000 KRW minimum, and market buy/sell units', () => {
