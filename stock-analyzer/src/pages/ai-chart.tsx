@@ -62,7 +62,7 @@ import {
   unifiedMarketLabel,
   type UnifiedChartTimeframe,
 } from '@/lib/unified-chart-data';
-import { tradeFocusFromSearch } from '@/lib/trade-navigation';
+import { tradeActionFromSearch, tradeFocusFromSearch } from '@/lib/trade-navigation';
 import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
@@ -433,6 +433,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const desktop = useDesktopChartLayout();
   const initialSearchRef = useRef(currentBrowserSearch());
   const tradeFocusRef = useRef(tradeFocusFromSearch(initialSearchRef.current));
+  const tradeActionRef = useRef(tradeActionFromSearch(initialSearchRef.current));
   const tradeRouteRequested = tradeFocusRef.current !== null;
   const routeModeRef = useRef(chartWindowRouteModeFromSearch(initialSearchRef.current));
   const routeSelectionRef = useRef(supportedSelection(chartSelectionFromSearch(initialSearchRef.current)));
@@ -441,12 +442,16 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const externalPairId = chartPairIdFromSearch(initialSearchRef.current);
   const invalidRoute = routeModeRef.current === 'invalid'
     || (hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current)
+    || (tradeRouteRequested && !tradeActionRef.current)
     || (externalMode && (!externalSyncId || !externalPairId));
   const initialSelectionRef = useRef<AnalysisSelection>((() => {
     const storedSelection = supportedSelection(state.selection);
-    return mergeChartRouteSelection(routeSelectionRef.current, storedSelection)
+    const base = mergeChartRouteSelection(routeSelectionRef.current, storedSelection)
       ?? storedSelection
       ?? emptySelection();
+    return tradeRouteRequested && tradeActionRef.current
+      ? { ...base, action: tradeActionRef.current }
+      : base;
   })());
   const initialSelection = initialSelectionRef.current;
 
