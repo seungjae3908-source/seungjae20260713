@@ -176,6 +176,52 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     [userId],
   );
 
+  const fixtureMarketLoader = testFixtureAccess
+    ? async (symbol: string) => ({
+        symbol,
+        price: 100000,
+        markPrice: 100000,
+        indexPrice: 100000,
+        change24hPercent: 1.2,
+        volume24h: 1000,
+        quoteVolume24h: 100000000,
+        bidPrice: 99990,
+        askPrice: 100010,
+        spreadPercent: 0.02,
+        openInterest: 1000000,
+        previousOpenInterest: 990000,
+        openInterestChangePercent: 1.01,
+        fundingRate: 0.0001,
+        nextFundingAt: new Date(Date.now() + 8 * 60 * 60_000).toISOString(),
+        basis: 0,
+        basisPercent: 0,
+        source: 'e2e-fixture',
+        status: 'live' as const,
+        isDelayed: false,
+        updatedAt: new Date().toISOString(),
+        warnings: [],
+      })
+    : undefined;
+  const fixtureRulesLoader = testFixtureAccess
+    ? async (symbol: string) => ({
+        symbol,
+        source: 'bitget' as const,
+        quantityStep: 0.001,
+        minimumQuantity: 0.001,
+        minimumNotional: 5,
+        quantityPrecision: 3,
+        pricePrecision: 2,
+        priceStep: 0.01,
+        minimumLeverage: 1,
+        maximumLeverage: 3,
+        maintenanceMarginRate: 0.005,
+        contractSize: 1,
+        status: 'live' as const,
+        updatedAt: new Date().toISOString(),
+        warnings: [],
+      })
+    : undefined;
+
   useEffect(() => {
     if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
     if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
@@ -356,7 +402,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/45 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setManualPaperOpen(false); }}>
               <section role="dialog" aria-modal="true" aria-label="수동 모의매매" className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-t-3xl border border-card-border bg-background shadow-2xl sm:rounded-3xl">
                 <div className="sticky top-0 z-10 flex items-center justify-between border-b border-card-border bg-background p-4"><h2 className="text-base font-bold">수동 모의매매</h2><button type="button" onClick={() => setManualPaperOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-card-border" aria-label="닫기"><X className="h-4 w-4" /></button></div>
-                <div className="[&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0"><PaperTradingPanel key={userId + ':' + paperRevision} storage={paperStorage} futuresEnabled={canFutures} compact /></div>
+                <div className="[&>main]:!h-auto [&>main]:!overflow-visible [&>main]:!pb-0"><PaperTradingPanel
+                  key={userId + ':' + paperRevision}
+                  storage={paperStorage}
+                  futuresEnabled={canFutures}
+                  compact
+                  loadMarket={fixtureMarketLoader}
+                  loadRules={fixtureRulesLoader}
+                /></div>
               </section>
             </div>
           ) : null}
