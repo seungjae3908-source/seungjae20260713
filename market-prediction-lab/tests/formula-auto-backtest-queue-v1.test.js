@@ -181,9 +181,11 @@ test('only PASS research survivors enter the Paper strategy registry and never t
     { ...pass, state: 'HOLD' },
     { ...pass, state: 'RESERVE' },
     { ...pass, state: 'EXCLUDE' },
-  ]);
+  ], { researchCodeSha: 'c'.repeat(40) });
   assert.equal(registry.contract, FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1);
   assert.equal(registry.entryCount, 1);
+  assert.equal(registry.researchCodeSha, 'c'.repeat(40));
+  assert.equal(registry.entries[0].researchCodeSha, 'c'.repeat(40));
   assert.equal(registry.entries[0].paperState, 'REGISTERED_WAITING_FUTURE_SIGNAL');
   assert.equal(registry.entries[0].futureSignalRequired, true);
   assert.equal(registry.entries[0].canonicalPaperAdmissionRequired, true);
@@ -199,7 +201,7 @@ test('queue persists immutable audit results and repeated processing is idempote
   await import('node:fs/promises').then(({ mkdir }) => mkdir(inbox, { recursive: true }));
   await writeFile(join(inbox, 'candidate.json'), JSON.stringify(queueItem()), { encoding: 'utf8', mode: 0o600 });
 
-  const first = await processFormulaAutoBacktestQueueV1({ stateRoot: root });
+  const first = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: 'd'.repeat(40) });
   assert.equal(first.scanned, 1);
   assert.equal(first.counts.HOLD, 1);
   assert.equal(first.deletionAllowed, false);
@@ -208,6 +210,7 @@ test('queue persists immutable audit results and repeated processing is idempote
   const paperRegistry = JSON.parse(await readFile(join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
   assert.equal(paperRegistry.contract, FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1);
   assert.equal(paperRegistry.entryCount, 0);
+  assert.equal(paperRegistry.researchCodeSha, 'd'.repeat(40));
   assert.equal(paperRegistry.executionAuthority, 'NONE');
 
   const resultFiles = (await readdir(join(root, 'formula-backtest', 'results'))).filter((name) => name.endsWith('.json'));
@@ -217,7 +220,7 @@ test('queue persists immutable audit results and repeated processing is idempote
   assert.equal(stored.deleted, false);
   assert.equal(stored.realOrder, false);
 
-  const second = await processFormulaAutoBacktestQueueV1({ stateRoot: root });
+  const second = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: 'd'.repeat(40) });
   assert.equal(second.scanned, 1);
   const repeatedFiles = (await readdir(join(root, 'formula-backtest', 'results'))).filter((name) => name.endsWith('.json'));
   assert.deepEqual(repeatedFiles, resultFiles);
