@@ -542,7 +542,7 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     const safety = page.getByTestId('auto-trading-safety-summary');
     await expect(safety).toContainText('주문별 승인');
     await expect(safety).toContainText('불필요');
-    await expect(safety).toContainText('4시장 개별 ON/OFF');
+    await expect(safety).toContainText('4시장 개별 켜기·끄기');
     await expect(page.getByRole('heading', { name: '차트 불러오기', level: 2 })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toHaveCount(0);
     await page.waitForTimeout(750);
