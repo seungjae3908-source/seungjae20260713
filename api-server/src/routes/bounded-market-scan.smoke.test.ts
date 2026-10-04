@@ -114,15 +114,15 @@ function inject(profile: MemberProfile): RequestHandler {
   };
 }
 
-function appApiRequestTimeoutMs(): number {
+function scannerApiRequestTimeoutMs(): number {
   const source = readFileSync(
     path.resolve(process.cwd(), 'stock-analyzer/src/lib/auth-bootstrap.ts'),
     'utf8',
   );
-  const match = source.match(/APP_API_REQUEST_TIMEOUT_MS\s*=\s*([\d_]+)/);
-  assert.ok(match, 'frontend App API request deadline must remain explicit');
+  const match = source.match(/SCANNER_API_REQUEST_TIMEOUT_MS\s*=\s*([\d_]+)/);
+  assert.ok(match, 'frontend scanner API request deadline must remain explicit');
   const parsed = Number(match[1].replaceAll('_', ''));
-  assert.ok(Number.isFinite(parsed) && parsed > 0, 'frontend App API request deadline must be finite');
+  assert.ok(Number.isFinite(parsed) && parsed > 0, 'frontend scanner API request deadline must be finite');
   return parsed;
 }
 
@@ -151,11 +151,11 @@ async function withServer(
   }
 }
 
-test('stock scanner server response budget remains below the browser app API deadline', () => {
-  const browserDeadlineMs = appApiRequestTimeoutMs();
+test('stock scanner server response budget leaves auth/network headroom below the scanner browser deadline', () => {
+  const browserDeadlineMs = scannerApiRequestTimeoutMs();
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS > 0);
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < browserDeadlineMs);
-  assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
+  assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 4_000);
 });
 
 test('normal zero-match scan returns HTTP 200 empty with provider health', async () => {
