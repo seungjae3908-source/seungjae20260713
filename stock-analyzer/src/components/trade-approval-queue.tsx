@@ -250,12 +250,14 @@ export function TradeApprovalQueue({
     window.addEventListener('focus', refresh);
     window.addEventListener('online', refresh);
     window.addEventListener('offline', onOffline);
+    window.addEventListener('trade-approval-queue-refresh', refresh);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       window.clearInterval(interval);
       window.removeEventListener('focus', refresh);
       window.removeEventListener('online', refresh);
       window.removeEventListener('offline', onOffline);
+      window.removeEventListener('trade-approval-queue-refresh', refresh);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [fixture, load]);
