@@ -504,7 +504,7 @@ jobs:
           sensitive=()
           for path in "${changed_all[@]}"; do
             case "$path" in
-              market-prediction-lab/*paper*|research-production/*|ops/*paper*|api-server/*paper*|packages/*paper*|.github/workflows/*paper*|.github/workflows/authoritative-paper-*)
+              market-prediction-lab/*paper*|research-production/*paper*|research-production/src/engine.mjs|research-production/test/research-engine.test.mjs|ops/*paper*|api-server/*paper*|packages/*paper*|.github/workflows/*paper*|.github/workflows/authoritative-paper-*)
                 sensitive+=("$path")
                 ;;
               api-server/src/services/member-auto-trading-background-worker.service.ts|api-server/src/services/member-auto-trading-background-worker.service.test.ts)
