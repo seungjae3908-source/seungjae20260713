@@ -13,6 +13,7 @@ test('direct AI Chart prioritizes the route request without adding document-leve
   const appEntry = '<script type="module" src="/src/main.tsx"></script>';
   const appImport = "import('./App')";
   const routeImport = "import('@/pages/ai-chart')";
+  const authBootstrapImport = "import('@/lib/auth-initial-bootstrap')";
 
   expect(html.match(/<script\s+type="module"\s+src="\/src\/main\.tsx"><\/script>/g)).toHaveLength(1);
   expect(html).toContain(appEntry);
@@ -20,11 +21,16 @@ test('direct AI Chart prioritizes the route request without adding document-leve
   expect(html).not.toMatch(/rel="modulepreload"[^>]+href="[^"]+\.tsx(?:\?|\")/);
   expect(main.match(/import\('\.\/App'\)/g)).toHaveLength(1);
   expect(main.match(/import\('@\/pages\/ai-chart'\)/g)).toHaveLength(1);
+  expect(main.match(/import\('@\/lib\/auth-initial-bootstrap'\)/g)).toHaveLength(1);
   expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(appImport));
+  expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(authBootstrapImport));
   expect(main).toContain("querySelectorAll<HTMLLinkElement>('link[rel=\"modulepreload\"]')");
   expect(main).toContain("setAttribute('fetchpriority', 'high')");
   expect(main).toContain('function startApplicationGraph()');
-  expect(main).toMatch(/if \(directAiChartColdRoute\) \{\s*window\.setTimeout\(startApplicationGraph, 0\);\s*\} else \{\s*startApplicationGraph\(\);\s*\}/);
+  expect(main).toContain('const AI_CHART_APP_GRAPH_HEAD_START_MS = 750;');
+  expect(main).toContain('window.setTimeout(startApplicationGraph, AI_CHART_APP_GRAPH_HEAD_START_MS)');
+  expect(main).toContain('directAiChartRoutePromise.then(startAfterRouteSettles, startAfterRouteSettles)');
+  expect(main).toContain('if (applicationGraphStarted) return;');
 });
 
 test('direct desktop cold route defers non-critical evidence chunks until the critical chart renderer mounts', () => {
@@ -36,6 +42,8 @@ test('direct desktop cold route defers non-critical evidence chunks until the cr
   expect(page).toContain('const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);');
   expect(page).toContain('setCriticalRendererMounted(true);');
   expect(page).toContain('onAnalysisChange={handleAnalysisChange}');
+  expect(page).toContain('const existingModulePreloads = new Set(');
+  expect(page).toContain("if (!existingModulePreloads.has(link)) link.setAttribute('fetchpriority', 'high');");
   expect(page).toMatch(/const deferNonCriticalEvidence = DIRECT_AI_CHART_COLD_ROUTE\s*&& desktop\s*&& !embedded\s*&& !externalMode\s*&& !criticalRendererMounted;/);
   expect(page).toContain('hasSelection && !deferNonCriticalEvidence');
   expect(page).toContain('data-testid="ai-chart-cold-evidence-deferred"');
