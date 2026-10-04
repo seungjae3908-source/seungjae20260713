@@ -86,6 +86,10 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
   assert.equal(formulaQueue.env.ORDER_AUTHORITY, 'false');
   assert.equal(formulaQueue.sharedPackages, undefined);
   assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
+  assert.equal(
+    paper.env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH,
+    join(resolve(stateRoot), 'latest', 'formula-paper-strategy-registry.json'),
+  );
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
   assert.equal(
