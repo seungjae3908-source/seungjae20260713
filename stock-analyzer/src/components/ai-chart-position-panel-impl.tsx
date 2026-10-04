@@ -4,6 +4,7 @@ import { ScannerApprovalComposer } from '@/components/scanner-approval-composer'
 import { TradeApprovalQueue } from '@/components/trade-approval-queue';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { safeTradeErrorMessage } from '@/lib/trade-approval-ui';
+import type { TradeOrderPrefill } from '@/lib/trade-navigation';
 import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
 import {
   buildPositionGuidance,
@@ -100,6 +101,7 @@ type Props = {
   pricePlan?: AnalysisPricePlan;
   initialCockpitOpen?: boolean;
   initialCockpitTab?: CockpitTab;
+  initialOrderPrefill?: TradeOrderPrefill | null;
   onOverlayChange: (overlay: AiChartPositionOverlay | null) => void;
 };
 
@@ -471,6 +473,78 @@ type LiveEntryDraftState =
   | { kind: 'loading' }
   | { kind: 'ready'; draft: LiveEntryDraft }
   | { kind: 'unavailable'; code: string };
+
+type ManualEntryDecision = {
+  allowed: boolean;
+  blockCodes: string[];
+  warnings: string[];
+};
+
+type ManualEntryPreview = {
+  exchange: 'toss' | 'kiwoom' | 'upbit' | 'bitget';
+  stockBroker: 'toss' | 'kiwoom' | null;
+  market: string;
+  symbol: string;
+  side: 'buy' | 'long' | 'short';
+  orderType: 'market' | 'limit';
+  quantity: number | null;
+  quoteAmount: number | null;
+  limitPrice: number | null;
+  estimatedKrw: number;
+  stopPrice: number;
+  targetPrices: number[];
+  leverage: number | null;
+  currentPrice: number | null;
+  spreadPercent: number;
+  estimatedSlippagePercent: number | null;
+  estimatedFeePercent: number | null;
+  availableBalance: number;
+  accountValueKrw: number;
+  dailyPnlPercent: number;
+  weeklyPnlPercent: number | null;
+  accountExposureKrw: number | null;
+  instrumentExposureKrw: number | null;
+  openPositionCount: number;
+  dailyOrderCount: number;
+  marketStatus: string;
+  source: string | null;
+  fxSource: string;
+  fxAsOf: string | null;
+};
+
+type ManualEntryPreviewState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; preview: ManualEntryPreview; decision: ManualEntryDecision }
+  | { kind: 'unavailable'; code: string };
+
+type ManualEntryPlanState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; planId: string; duplicate: boolean }
+  | { kind: 'unavailable'; code: string };
+
+function newManualIntentId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `manual-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function manualEntryErrorLabel(code: string) {
+  const labels: Record<string, string> = {
+    LOGIN_REQUIRED: '로그인이 만료되었습니다. 다시 로그인한 뒤 같은 종목에서 다시 검증하세요.',
+    CAPABILITY_REQUIRED: '실주문 권한이 없는 계정입니다.',
+    MANUAL_ENTRY_APPROVAL_MODE_REQUIRED: '수동 주문은 승인 모드에서만 사용할 수 있습니다.',
+    MANUAL_ENTRY_ACCOUNT_UNAVAILABLE: '실계좌 상태를 확인하지 못했습니다.',
+    MANUAL_ENTRY_EXTERNAL_POSITION_SAME_SYMBOL: '앱 밖에서 같은 종목 보유가 확인되어 중복진입을 차단했습니다.',
+    MANUAL_ENTRY_RISK_BLOCKED: '현재 계좌·시장 위험조건 때문에 수동주문 계획을 만들 수 없습니다.',
+    MANUAL_ENTRY_INTENT_ALREADY_USED: '이미 사용한 주문 요청입니다. 새 주문 입력을 눌러 다시 시작하세요.',
+    MANUAL_ENTRY_LONG_STOP_TARGET_INVALID: '매수/LONG은 손절가가 진입가보다 낮고 목표가가 높아야 합니다.',
+    MANUAL_ENTRY_SHORT_STOP_TARGET_INVALID: 'SHORT는 손절가가 진입가보다 높고 목표가가 낮아야 합니다.',
+    MANUAL_ENTRY_SERVER_NOTIONAL_UNAVAILABLE: '서버에서 실제 주문금액을 계산하지 못했습니다.',
+    OFFLINE: '네트워크가 오프라인입니다. 연결 후 다시 시도하세요.',
+  };
+  return labels[code] ?? safeTradeErrorMessage(code, code);
+}
 
 type StockReadOnlyProvider = 'toss' | 'kiwoom';
 type StockProviderSelection = 'auto' | StockReadOnlyProvider;
