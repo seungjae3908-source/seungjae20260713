@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
+import type { TradeOrderPrefill } from '@/lib/trade-navigation';
 
 export type {
   AiChartAccountPosition,
@@ -14,6 +15,7 @@ type Props = {
   pricePlan?: AnalysisPricePlan;
   initialCockpitOpen?: boolean;
   initialCockpitTab?: 'entry' | 'orders' | 'exit';
+  initialOrderPrefill?: TradeOrderPrefill | null;
   onOverlayChange: (
     overlay: import('./ai-chart-position-panel-impl').AiChartPositionOverlay | null,
   ) => void;
