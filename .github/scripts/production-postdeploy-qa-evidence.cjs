@@ -52,20 +52,16 @@ function providerRows(value, prefix) {
   return rows;
 }
 
-function buildProductionPostdeployQaEvidence({
-  targetSha,
-  productionDeployRunId,
-  comprehensive,
-  account,
-  credential,
-  context,
-  generatedAt = new Date().toISOString(),
-}) {
+function normalizeReceiptContext(targetSha, productionDeployRunId) {
   const sha = String(targetSha ?? '').trim().toLowerCase();
   const deployRunId = Number(productionDeployRunId);
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('POSTDEPLOY_QA_TARGET_SHA_INVALID');
   if (!Number.isSafeInteger(deployRunId) || deployRunId <= 0) throw new Error('POSTDEPLOY_QA_DEPLOY_RUN_ID_INVALID');
+  return { sha, deployRunId };
+}
 
+function assertComprehensiveReceipt(comprehensive, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   if (comprehensive?.schemaVersion !== 'production-comprehensive-readonly-qa-v1'
     || comprehensive?.complete !== true
     || comprehensive?.identityMatch !== true
@@ -73,12 +69,18 @@ function buildProductionPostdeployQaEvidence({
     || comprehensive?.recommendationsDesktop1440?.fallbackTimedOut !== false
     || comprehensive?.recommendationsDesktop1440?.busyAfter5s !== 0
     || !Number.isFinite(comprehensive?.recommendationsDesktop1440?.loadMs)
-    || comprehensive.recommendationsDesktop1440.loadMs >= 5_000) {
+    || comprehensive.recommendationsDesktop1440.loadMs >= 5_000
+    || comprehensive?.secretValuesRecorded !== false
+    || comprehensive?.realOrderSubmitted !== false) {
     throw new Error('POSTDEPLOY_QA_COMPREHENSIVE_INVALID');
   }
   requireExactSha(comprehensive.targetSha, sha, 'POSTDEPLOY_QA_COMPREHENSIVE_SHA_MISMATCH');
   requireZeroAuthority(comprehensive, 'POSTDEPLOY_QA_COMPREHENSIVE');
+  assertNoForbiddenEvidenceKeys(comprehensive);
+}
 
+function assertAccountReceipt(account, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   if (account?.schemaVersion !== 'production-account-readonly-live-qa-v2'
     || account?.productionDeployRunId !== deployRunId
     || account?.officialProductionOrigin !== true
@@ -88,6 +90,7 @@ function buildProductionPostdeployQaEvidence({
     || account?.accountValuesRecorded !== false
     || account?.blockedMutationRequests !== 0
     || account?.observedAppMutationRequests !== 0
+    || account?.realOrderSubmitted !== false
     || JSON.stringify(account?.testedProviders) !== JSON.stringify(REQUIRED_PROVIDERS)) {
     throw new Error('POSTDEPLOY_QA_ACCOUNT_INVALID');
   }
@@ -102,7 +105,11 @@ function buildProductionPostdeployQaEvidence({
       throw new Error(`POSTDEPLOY_QA_ACCOUNT_PROVIDER_FAILED:${row.provider}`);
     }
   }
+  assertNoForbiddenEvidenceKeys(account);
+}
 
+function assertCredentialReceipt(credential, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   if (credential?.schemaVersion !== 'production-live-credential-reuse-qa-v1'
     || credential?.productionDeployRunId !== deployRunId
     || credential?.officialProductionOrigin !== true
@@ -138,14 +145,52 @@ function buildProductionPostdeployQaEvidence({
     }
     requireZeroCounters(row, `POSTDEPLOY_QA_CREDENTIAL_PROVIDER_${String(row.provider).toUpperCase()}`);
   }
+  assertNoForbiddenEvidenceKeys(credential);
+}
+
+function buildProductionPostdeployQaEvidence({
+  targetSha,
+  productionDeployRunId,
+  comprehensive,
+  account,
+  credential,
+  context,
+  generatedAt = new Date().toISOString(),
+}) {
+  const sha = String(targetSha ?? '').trim().toLowerCase();
+  const deployRunId = Number(productionDeployRunId);
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('POSTDEPLOY_QA_TARGET_SHA_INVALID');
+  if (!Number.isSafeInteger(deployRunId) || deployRunId <= 0) throw new Error('POSTDEPLOY_QA_DEPLOY_RUN_ID_INVALID');
+
+  assertComprehensiveReceipt(comprehensive, { targetSha: sha, productionDeployRunId: deployRunId });
+  assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });
+  assertCredentialReceipt(credential, { targetSha: sha, productionDeployRunId: deployRunId });
 
   requireExactSha(context?.mainSha, sha, 'POSTDEPLOY_QA_MAIN_SHA_MISMATCH');
   requireExactSha(context?.productionDeploySha, sha, 'POSTDEPLOY_QA_PRODUCTION_SHA_MISMATCH');
   requireExactSha(context?.processDeploySha, sha, 'POSTDEPLOY_QA_PROCESS_SHA_MISMATCH');
   requireExactSha(context?.deployMarkerSha, sha, 'POSTDEPLOY_QA_MARKER_SHA_MISMATCH');
-  requireExactSha(context?.latestSuccessfulDeploySha, sha, 'POSTDEPLOY_QA_LATEST_DEPLOY_SHA_MISMATCH');
-  if (context?.identityMatch !== true || context?.latestSuccessfulDeployRunId !== deployRunId) {
+  requireExactSha(context?.productionDeployHeadSha, sha, 'POSTDEPLOY_QA_DEPLOY_HEAD_SHA_MISMATCH');
+  if (context?.schemaVersion !== 'production-postdeploy-context-v2'
+    || context?.identityMatch !== true
+    || context?.productionDeployRunId !== deployRunId
+    || context?.deploymentStepSucceeded !== true
+    || context?.deploymentSafetyVerified !== true) {
     throw new Error('POSTDEPLOY_QA_PRODUCTION_IDENTITY_INVALID');
+  }
+  if (context?.deploymentVerificationMode === 'inline-approved-job') {
+    if (context?.productionDeployStatus !== 'in_progress' || context?.productionDeployConclusion !== null) {
+      throw new Error('POSTDEPLOY_QA_INLINE_DEPLOY_STATE_INVALID');
+    }
+  } else if (context?.deploymentVerificationMode === 'completed-successful-run') {
+    requireExactSha(context?.latestSuccessfulDeploySha, sha, 'POSTDEPLOY_QA_LATEST_DEPLOY_SHA_MISMATCH');
+    if (context?.productionDeployStatus !== 'completed'
+      || context?.productionDeployConclusion !== 'success'
+      || context?.latestSuccessfulDeployRunId !== deployRunId) {
+      throw new Error('POSTDEPLOY_QA_COMPLETED_DEPLOY_STATE_INVALID');
+    }
+  } else {
+    throw new Error('POSTDEPLOY_QA_DEPLOYMENT_VERIFICATION_MODE_INVALID');
   }
   if (!Array.isArray(context?.activeConflictingTradingGates)
     || context.activeConflictingTradingGates.length !== 0) {
@@ -167,7 +212,7 @@ function buildProductionPostdeployQaEvidence({
   assertNoForbiddenEvidenceKeys({ comprehensive, account, credential });
 
   return {
-    schemaVersion: 'production-postdeploy-activation-ready-v1',
+    schemaVersion: 'production-postdeploy-activation-ready-v2',
     targetSha: sha,
     mainSha: sha,
     productionSha: sha,
@@ -182,6 +227,7 @@ function buildProductionPostdeployQaEvidence({
     amendRequests: 0,
     transferRequests: 0,
     withdrawalRequests: 0,
+    realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,
     activeConflictingTradingGates: 0,
@@ -193,5 +239,8 @@ module.exports = {
   REQUIRED_PROVIDERS,
   REQUIRED_CREDENTIAL_REUSE_PATHS,
   ZERO_COUNTERS,
+  assertAccountReceipt,
+  assertComprehensiveReceipt,
+  assertCredentialReceipt,
   buildProductionPostdeployQaEvidence,
 };
