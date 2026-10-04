@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart prioritizes the route request while keeping one canonical app entry', () => {
+test('direct AI Chart prioritizes the route and renderer requests while keeping one canonical app entry', () => {
   const html = fs
     .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
     .replace(/\r\n?/g, '\n');
@@ -12,6 +12,7 @@ test('direct AI Chart prioritizes the route request while keeping one canonical 
   const appEntry = '<script type="module" src="/src/main.tsx"></script>';
   const appImport = "import('./App')";
   const routeImport = "import('@/pages/ai-chart')";
+  const rendererImport = "import('@/components/unified-analysis-chart')";
   const root = '<div id="root"></div>';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
 
@@ -27,7 +28,8 @@ test('direct AI Chart prioritizes the route request while keeping one canonical 
   expect(main).toContain("window.location.pathname.endsWith('/ai-chart')");
   expect(main.indexOf(appImport)).toBeGreaterThanOrEqual(0);
   expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(appImport));
-  expect(main).not.toMatch(/import\(['"]@\/components\/unified-analysis-chart['"]\)/);
+  expect(main.indexOf(routeImport)).toBeLessThan(main.indexOf(rendererImport));
+  expect(main.indexOf(rendererImport)).toBeLessThan(main.indexOf(appImport));
 });
 
 test('direct AI Chart shell does not statically wait for the chart renderer graph', () => {
@@ -38,8 +40,6 @@ test('direct AI Chart shell does not statically wait for the chart renderer grap
 
   expect(source).not.toMatch(/import\s+\{\s*UnifiedAnalysisChart\s*\}\s+from\s+['"]@\/components\/unified-analysis-chart['"]/);
   expect(source.match(/import\(['"]@\/components\/unified-analysis-chart['"]\)/g)).toHaveLength(1);
-  expect(source).toContain("document.querySelectorAll<HTMLLinkElement>('link[rel=\"modulepreload\"]')");
-  expect(source).toContain("if (!existingModulePreloads.has(link)) link.setAttribute('fetchpriority', 'high');");
   expect(source).toContain(`const LazyUnifiedAnalysisChart = lazy(() =>\n  ${rendererImport}`);
   expect(source).toContain('aria-label="AI 차트 생중계 · AI 차트 2.0"');
   expect(source).toContain('data-testid="ai-chart-renderer-loading"');
@@ -47,29 +47,38 @@ test('direct AI Chart shell does not statically wait for the chart renderer grap
   expect(source).not.toMatch(/data-testid=["']unified-chart-canvas["'][\s\S]{0,500}차트 데이터와 렌더러를 준비/);
 });
 
-test('direct AI Chart route priority cannot block the app and auth bootstrap indefinitely', async ({ page }) => {
+test('direct AI Chart route and renderer priority cannot block the app and auth bootstrap indefinitely', async ({ page }) => {
   let releaseRoute = () => {};
   let markRouteRequested = () => {};
   let markRouteResponded = () => {};
+  let markRendererRequested = () => {};
   let markAuthBootstrapRequested = () => {};
   let markAppRequested = () => {};
   const routeRelease = new Promise<void>((resolve) => { releaseRoute = resolve; });
   const routeRequested = new Promise<void>((resolve) => { markRouteRequested = resolve; });
   const routeResponded = new Promise<void>((resolve) => { markRouteResponded = resolve; });
+  const rendererRequested = new Promise<void>((resolve) => { markRendererRequested = resolve; });
   const authBootstrapRequested = new Promise<void>((resolve) => { markAuthBootstrapRequested = resolve; });
   const appRequested = new Promise<void>((resolve) => { markAppRequested = resolve; });
   const requestOrder: string[] = [];
   let routeRequestedAt = 0;
+  let rendererRequestedAt = 0;
   let appRequestedAt = 0;
 
   await page.route('**/src/pages/ai-chart.tsx*', async (route) => {
     routeRequestedAt = Date.now();
+    requestOrder.push('route');
     markRouteRequested();
     await routeRelease;
     await route.continue();
   });
   page.on('request', (request) => {
     const pathname = new URL(request.url()).pathname;
+    if (pathname.endsWith('/src/components/unified-analysis-chart.tsx')) {
+      requestOrder.push('renderer');
+      rendererRequestedAt = Date.now();
+      markRendererRequested();
+    }
     if (pathname.endsWith('/src/lib/auth-initial-bootstrap.ts')) {
       requestOrder.push('auth');
       markAuthBootstrapRequested();
@@ -88,6 +97,10 @@ test('direct AI Chart route priority cannot block the app and auth bootstrap ind
     await page.goto('/ai-chart', { waitUntil: 'domcontentloaded' });
     await routeRequested;
     const bootstrapStartedAt = Date.now();
+    const rendererState = await Promise.race([
+      rendererRequested.then(() => 'started'),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 1_000)),
+    ]);
     const authBootstrapState = await Promise.race([
       authBootstrapRequested.then(() => 'started'),
       new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 1_000)),
@@ -96,11 +109,15 @@ test('direct AI Chart route priority cannot block the app and auth bootstrap ind
       appRequested.then(() => 'started'),
       new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 2_000)),
     ]);
+    expect(rendererState).toBe('started');
     expect(authBootstrapState).toBe('started');
     expect(appState).toBe('started');
     expect(Date.now() - bootstrapStartedAt).toBeLessThan(2_000);
+    expect(requestOrder.indexOf('route')).toBeLessThan(requestOrder.indexOf('renderer'));
+    expect(requestOrder.indexOf('renderer')).toBeLessThan(requestOrder.indexOf('app'));
     expect(requestOrder.indexOf('auth')).toBeLessThan(requestOrder.indexOf('app'));
-    expect(appRequestedAt - routeRequestedAt).toBeGreaterThanOrEqual(500);
+    expect(rendererRequestedAt - routeRequestedAt).toBeLessThan(1_000);
+    expect(appRequestedAt - routeRequestedAt).toBeGreaterThanOrEqual(1_000);
     expect(appRequestedAt - routeRequestedAt).toBeLessThan(2_000);
   } finally {
     releaseRoute();
