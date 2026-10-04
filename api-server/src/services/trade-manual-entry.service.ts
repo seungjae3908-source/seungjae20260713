@@ -24,6 +24,7 @@ const FX_MAX_AGE_MS = 72 * 60 * 60_000;
 export type ManualEntryMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
 
 export type ManualEntryInstruction = {
+  clientIntentId: string;
   market: ManualEntryMarket;
   symbol: string;
   side: 'BUY' | 'LONG' | 'SHORT';
@@ -253,6 +254,9 @@ async function journalRiskContext(input: {
 }
 
 function validateInstruction(instruction: ManualEntryInstruction) {
+  if (!/^[A-Za-z0-9_-]{8,80}$/u.test(String(instruction.clientIntentId ?? ''))) {
+    throw new Error('MANUAL_ENTRY_INTENT_ID_INVALID');
+  }
   if (!['KR', 'US', 'UPBIT', 'BITGET'].includes(instruction.market)) throw new Error('MANUAL_ENTRY_MARKET_UNSUPPORTED');
   if (!['market', 'limit'].includes(instruction.orderType)) throw new Error('MANUAL_ENTRY_ORDER_TYPE_INVALID');
   if (finitePositive(instruction.estimatedKrw) == null) throw new Error('MANUAL_ENTRY_ESTIMATED_KRW_REQUIRED');
@@ -304,7 +308,7 @@ export async function prepareManualEntry(input: {
   const asset = assetClass(input.instruction.market);
   const exposure = exposureContext({ plans, orders, policy, exchange, symbol, asset, side, now });
   const fx = await fxEvidence(input.instruction.market, now);
-  const manualSignal = `manual:${input.userId}:${input.instruction.market}:${symbol}:${side}`;
+  const manualSignal = `manual:${input.userId}:${input.instruction.clientIntentId}`;
   const observedAt = now.toISOString();
 
   if ((accountSnapshot.positions ?? []).some((position) => positionMatchesSymbol(position, symbol))
