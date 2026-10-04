@@ -227,19 +227,31 @@ export function buildResearchPromotionBridge(
   if (!candidatePerformance || candidatePerformance.present === false || candidatePerformance.status === 'MISSING') {
     return base('NO_CANDIDATE', ['RESEARCH_CANDIDATE_NOT_PRESENT'], generatedAt);
   }
-  const fullCostReady = candidatePerformance.FULL_COST_READY;
-  const netAlphaProven = candidatePerformance.NET_ALPHA_PROVEN;
-  const profitabilityProven = candidatePerformance.PROFITABILITY_PROVEN;
-  const trainDiagnosticOnly = candidatePerformance.TRAIN_DIAGNOSTIC_ONLY;
-  const validationComplete = candidatePerformance.VALIDATION_COMPLETE;
-  const oosComplete = candidatePerformance.OOS_COMPLETE;
+  const rawFullCostReady = candidatePerformance.FULL_COST_READY;
+  const rawNetAlphaProven = candidatePerformance.NET_ALPHA_PROVEN;
+  const rawProfitabilityProven = candidatePerformance.PROFITABILITY_PROVEN;
+  const rawTrainDiagnosticOnly = candidatePerformance.TRAIN_DIAGNOSTIC_ONLY;
+  const rawValidationComplete = candidatePerformance.VALIDATION_COMPLETE;
+  const rawOosComplete = candidatePerformance.OOS_COMPLETE;
+  if (typeof rawFullCostReady !== 'boolean'
+    || typeof rawNetAlphaProven !== 'boolean'
+    || typeof rawProfitabilityProven !== 'boolean'
+    || typeof rawTrainDiagnosticOnly !== 'boolean'
+    || typeof rawValidationComplete !== 'boolean'
+    || typeof rawOosComplete !== 'boolean') {
+    return base('INVALID', ['RESEARCH_CANDIDATE_EVIDENCE_INVALID'], generatedAt);
+  }
+  const fullCostReady = rawFullCostReady;
+  const netAlphaProven = rawNetAlphaProven;
+  const profitabilityProven = rawProfitabilityProven;
+  const trainDiagnosticOnly = rawTrainDiagnosticOnly;
+  const validationComplete = rawValidationComplete;
+  const oosComplete = rawOosComplete;
   const netPnl = candidatePerformance.Net_PnL;
   const validationN = count(candidatePerformance.VALIDATION_N);
   const oosN = count(candidatePerformance.OOS_N);
   const settlementN = count(candidatePerformance.Settlement_N);
-  const booleanEvidence = [fullCostReady, netAlphaProven, profitabilityProven, trainDiagnosticOnly, validationComplete, oosComplete];
-  const hierarchyInvalid = booleanEvidence.some((value) => typeof value !== 'boolean')
-    || (validationComplete === true && (validationN ?? 0) <= 0)
+  const hierarchyInvalid = (validationComplete === true && (validationN ?? 0) <= 0)
     || (oosComplete === true && (validationComplete !== true || (oosN ?? 0) <= 0))
     || (fullCostReady === true && typeof netPnl !== 'number')
     || (fullCostReady === false && netPnl !== null)
