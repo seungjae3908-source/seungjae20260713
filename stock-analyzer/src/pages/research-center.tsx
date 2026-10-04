@@ -48,7 +48,7 @@ type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
 
 const TABS: Array<{ key: ResearchTab; label: string; icon: typeof Activity }> = [
   { key: 'overview', label: '연구 현황', icon: Activity },
-  { key: 'ai-lab', label: 'AI 분석실', icon: BrainCircuit },
+  { key: 'ai-lab', label: '인공지능 분석실', icon: BrainCircuit },
   { key: 'evidence', label: '검증 리포트', icon: FileSearch },
   { key: 'paper', label: '모의매매', icon: WalletCards },
 ];
@@ -676,22 +676,22 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
   return (
     <section id="research-tab-ai-lab" role="tabpanel" aria-labelledby="research-tab-ai-lab-trigger" className="space-y-4" data-testid="research-ai-lab-tab">
       <div className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">검증 자료</p><h2 className="mt-1 text-lg font-black">AI 분석실</h2></div><StatusBadge status={debate.actualEvidence ? 'accumulating' : 'unmeasured'} /></div>
-        <p className="mt-2 text-xs text-muted-foreground">{debate.actualEvidence ? debate.finalLabel : 'AI 분석 근거 미수집'}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary">검증 자료</p><h2 className="mt-1 text-lg font-black">인공지능 분석실</h2></div><StatusBadge status={debate.actualEvidence ? 'accumulating' : 'unmeasured'} /></div>
+        <p className="mt-2 text-xs text-muted-foreground">{debate.actualEvidence ? debate.finalLabel : '인공지능 분석 근거 미수집'}</p>
         <p className="mt-1 text-[10px] text-muted-foreground">검증 시각 · {formatDate(overview.state.latestCycleAt)} · 자료 신선도 미측정</p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <InsightCard title="AI 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : 'AI 분석 자료가 없습니다.'}</p></InsightCard>
-        <InsightCard title="모델 간 합의" icon={BadgeCheck}><ul className="space-y-1">{debate.actualEvidence ? preview.support.map((line) => <li key={line}>• {line}</li>) : <li>AI 분석 근거 미수집</li>}</ul></InsightCard>
-        <InsightCard title="모델 간 의견 차이" icon={MessageSquareText}><p>{debate.conflictReason ?? (debate.actualEvidence ? '명시적 충돌 근거 없음' : 'AI 분석 근거 미수집')}</p></InsightCard>
+        <InsightCard title="인공지능 연구 요약" icon={Sparkles}><p>{debate.actualEvidence ? debate.finalLabel : 'AI 분석 자료가 없습니다.'}</p></InsightCard>
+        <InsightCard title="모델 간 합의" icon={BadgeCheck}><ul className="space-y-1">{debate.actualEvidence ? preview.support.map((line) => <li key={line}>• {line}</li>) : <li>인공지능 분석 근거 미수집</li>}</ul></InsightCard>
+        <InsightCard title="모델 간 의견 차이" icon={MessageSquareText}><p>{debate.conflictReason ?? (debate.actualEvidence ? '명시적 충돌 근거 없음' : '인공지능 분석 근거 미수집')}</p></InsightCard>
         <InsightCard title="현재 가장 큰 막힘" icon={CircleAlert}><p>{firstBlocker ? `${firstBlocker.label} · ${blockerCopy(firstBlocker)}` : '막힌 이유 없음'}</p></InsightCard>
         <InsightCard title="데이터가 더 필요한 항목" icon={Database}><ul className="space-y-1">{preview.verify.slice(0, 4).map((line) => <li key={line}>• {line}</li>)}</ul></InsightCard>
         <InsightCard title="다음 연구 후보" icon={FlaskConical}><p>{cards.find((card) => card.status === 'waiting' || card.status === 'insufficient')?.label ?? '연구 후보 없음'}</p></InsightCard>
       </div>
 
       {debate.actualEvidence ? (
-        <section className="grid gap-3 md:grid-cols-2" aria-label="실제 AI 분석 자료">
+        <section className="grid gap-3 md:grid-cols-2" aria-label="실제 인공지능 분석 자료">
           {[debate.ai1, debate.ai2, ...debate.committee].filter(Boolean).map((review) => (
             <article key={review!.label} className="rounded-2xl border border-card-border bg-card p-4">
               <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-black">{review!.label}</h3><span className="text-[10px] text-muted-foreground">{review!.conclusion ?? '결론 미측정'}</span></div>
@@ -710,7 +710,7 @@ function AiLabTab({ overview, cards }: { overview: ResearchCenterOverview; cards
           <button type="submit" className="min-h-11 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">근거에서 찾기</button>
         </div>
         <output className="mt-3 block rounded-xl border border-card-border bg-background p-3 text-xs leading-5" aria-live="polite">{answer}</output>
-        <p className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-muted-foreground">AI는 수익성 수치나 자동매매 승인을 만들지 않습니다.</p>
+        <p className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-muted-foreground">인공지능은 수익성 수치나 자동매매 승인을 만들지 않습니다.</p>
       </form>
     </section>
   );
@@ -1015,7 +1015,7 @@ function PaperTab({
         journalBindingError={journalBindingError}
       />
 
-      <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심 KPI">
+      <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6" aria-label="모의매매 핵심지표">
         <PaperKpi label="모의 평가금액" value="미측정" state="unmeasured" />
         <PaperKpi label="비용 전 손익" value={candidateValue(performance.Gross_PnL)} state={countState(performance.Settlement_N)} />
         <PaperKpi label="미실현손익" value="미측정" state="unmeasured" />
