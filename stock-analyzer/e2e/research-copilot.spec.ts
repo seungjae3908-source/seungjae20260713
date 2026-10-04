@@ -138,7 +138,7 @@ test('failed refresh removes previous evidence instead of retaining a fresh-look
   await page.goto('/research-center');
   await page.getByRole('button', { name: '인공지능 도우미', exact: true }).click();
   await expect(page.getByRole('region', { name: '연구 단계' })).toBeVisible();
-  await page.getByRole('button', { name: '증거 새로고침' }).click();
+  await page.getByRole('button', { name: '자료 새로고침' }).click();
   await expect(page.getByRole('alert')).toContainText('연구 자료를 불러오지 못했습니다.');
   await expect(page.getByRole('region', { name: '연구 단계' })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '전략 상태와 인계' })).toHaveCount(0);
@@ -240,7 +240,7 @@ test('manual AI review disables duplicate submission and remains advisory', asyn
   await expect(action).toBeDisabled();
   await expect(page.getByRole('region', { name: '인공지능 연구 제안' })).toContainText('검증 전 제안');
   expect(diagnostics.reviewRequests()).toBe(1);
-  await expect(page.getByText('신뢰 확률·성과 수치: 미생성.', { exact: false })).toBeVisible();
+  await expect(page.getByText('후보 가설은 검증 전 상태입니다.', { exact: false })).toBeVisible();
   diagnostics.clean();
 });
 for (const key of ['modelIdentityDigest', 'featureOrderDigest', 'preprocessingVersion'] as const) test(`readback rejects a response that substitutes ${key}`, async ({ page }) => {
