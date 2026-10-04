@@ -253,6 +253,26 @@ export interface ResearchCenterOverview {
       }>;
     }>;
   };
+  formulaBacktestQueue?: {
+    present: boolean;
+    generatedAt: number | null;
+    scanned: number;
+    counts: { PASS: number; HOLD: number; RESERVE: number; EXCLUDE: number };
+    deletionAllowed: false;
+    executionAuthority: 'NONE';
+    rows: Array<{
+      formulaId: string;
+      itemDigest: string;
+      state: 'PASS' | 'HOLD' | 'RESERVE' | 'EXCLUDE';
+      reason: string;
+      evaluatedAt: string | null;
+      tournamentId: string | null;
+      candidateCount: number;
+      researchSurvivorCount: number;
+      blockers: string[];
+      retainedForAudit: boolean;
+    }>;
+  };
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };
