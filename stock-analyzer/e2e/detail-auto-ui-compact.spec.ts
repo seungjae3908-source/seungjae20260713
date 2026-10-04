@@ -97,7 +97,7 @@ test('desktop settings open as a closable popup and follow only the selected mar
   await expect(page.getByTestId('trading-automation-settings-dialog')).toBeVisible();
   await expect(page.getByTestId('auto-market-crypto_futures')).toBeVisible();
   await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
-  await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
+  await expect(page.getByLabel('비트겟 레버리지')).toBeVisible();
   await expect(page.getByTestId('connection-bitget')).toBeVisible();
   await expect(page.getByTestId('connection-kiwoom')).toHaveCount(0);
 
