@@ -239,6 +239,10 @@ process.stdout.write([
   bool("LIVE_TRADING_ACTIVATION_APPROVED"),
   bool("SPOT_LIVE_LIMITED_ACTIVATION_APPROVED"),
   bool("LIVE_AUTOMATIC_TRADING_ENABLED"),
+  bool("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED"),
+  bool("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED"),
+  bool("FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED"),
+  bool("BITGET_FUTURES_LIVE_ORDER_ENABLED"),
   bool("BITGET_LIVE_ORDER_ENABLED"),
   bool("UPBIT_LIVE_ORDER_ENABLED"),
   bool("KIWOOM_LIVE_ORDER_ENABLED"),
@@ -350,15 +354,17 @@ restart_application_preserving_telegram() {
 }
 
 application_runtime_ready() {
-  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" spot_live_approved="" live_auto="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" capability_allowlist="" market_allowlist="" authority=""
+  local snapshot="" pid="" status="" cwd="" exec_path="" watched="" live="" auto="" real="" private_api="" order_execution="" live_approved="" spot_live_approved="" live_auto="" member_background="" member_live_background="" futures_approved="" bitget_futures_live="" bitget_live="" upbit_live="" kiwoom_live="" toss_live="" capability_allowlist="" market_allowlist="" authority=""
   snapshot="$(pm2_runtime_snapshot)" || return 1
-  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved spot_live_approved live_auto bitget_live upbit_live kiwoom_live toss_live capability_allowlist market_allowlist authority <<< "$snapshot"
+  IFS=$'\t' read -r pid status cwd exec_path watched live auto real private_api order_execution live_approved spot_live_approved live_auto member_background member_live_background futures_approved bitget_futures_live bitget_live upbit_live kiwoom_live toss_live capability_allowlist market_allowlist authority <<< "$snapshot"
   [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$status" == online ]] || return 1
   [[ "$cwd" == "$LIVE_DIR" ]] || return 1
   [[ "$(readlink -m "$exec_path")" == "$LIVE_DIR/api-server/dist/index.mjs" ]] || return 1
   [[ "$watched" == false ]] || return 1
   [[ "$live" == false && "$auto" == false && "$real" == false && "$private_api" == false ]] || return 1
   [[ "$order_execution" == false && "$live_approved" == false && "$spot_live_approved" == false && "$live_auto" == false ]] || return 1
+  [[ "$member_background" == false && "$member_live_background" == false ]] || return 1
+  [[ "$futures_approved" == false && "$bitget_futures_live" == false ]] || return 1
   [[ "$bitget_live" == false && "$upbit_live" == false && "$kiwoom_live" == false && "$toss_live" == false ]] || return 1
   [[ "$capability_allowlist" == - && "$market_allowlist" == - ]] || return 1
   [[ "$authority" == NONE ]] || return 1
