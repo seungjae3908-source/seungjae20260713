@@ -22,7 +22,7 @@ const MUST_REVALIDATE_FILES = new Set([
   'manifest.webmanifest',
 ]);
 const WARMABLE_ASSET_EXTENSIONS = new Set(['.js', '.css']);
-const CRITICAL_WARMUP_CHUNK = /(ai-chart|backtests|paper-trading)/i;
+const CRITICAL_WARMUP_CHUNK = /(ai-chart|unified-analysis-chart|unified-chart-data|lightweight-charts|backtests|paper-trading)/i;
 
 type FrontendWarmupOptions = {
   maxFiles?: number;
