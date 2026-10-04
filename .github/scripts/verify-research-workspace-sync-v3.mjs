@@ -281,6 +281,9 @@ const protectedPathExceptions=new Map([
   'market-prediction-lab/src/formula-auto-backtest-queue-v1.js',
   'market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js',
   'market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js',
+  'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
+  'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
+  'market-prediction-lab/tests/research-bundle-formula-fixture.js',
  ])],
  ['research-production',new Set([
   'research-production/src/engine.mjs',
