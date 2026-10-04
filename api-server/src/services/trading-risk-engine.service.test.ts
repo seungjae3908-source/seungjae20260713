@@ -276,6 +276,12 @@ test('live data permits an otherwise valid scenario', () => {
   assert.equal(result.allowed, true);
 });
 
+test('crypto futures hard cap stays at 7x even when a caller requests a higher app cap', () => {
+  const result = calculateTradingRisk(baseInput({ leverage: 8, appMaximumLeverage: 20 }));
+  assert.equal(result.appMaximumLeverage, 7);
+  assert.ok(result.blockCodes.includes('LEVERAGE_EXCEEDS_APP_LIMIT'));
+});
+
 test('calculates long liquidation approximation', () => {
   const result = calculateTradingRisk(baseInput({ leverage: 10, maintenanceMarginRate: 0.005 }));
   closeTo(result.estimatedLiquidationPrice, 90.5);
