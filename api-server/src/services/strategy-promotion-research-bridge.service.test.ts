@@ -150,18 +150,50 @@ test('unsafe Dashboard authority fails closed', () => {
   assert.equal(bridge.orderAllowed, false);
 });
 
-test('missing candidate is explicit and frozen-candidate authority escalation is rejected', () => {
+test('missing candidate is explicit and inconsistent future proof still fails closed', () => {
   const missing = buildResearchPromotionBridge(researchOverview(null), SHA, NOW.toISOString());
   assert.equal(missing.status, 'NO_CANDIDATE');
   assert.equal(missing.candidate, null);
 
-  const escalated = buildResearchPromotionBridge(
+  const inconsistent = buildResearchPromotionBridge(
     researchOverview(trainingCandidate({ FULL_COST_READY: true, PROFITABILITY_PROVEN: true })),
     SHA,
     NOW.toISOString(),
   );
-  assert.equal(escalated.status, 'INVALID');
-  assert.ok(escalated.blockers.includes('RESEARCH_CANDIDATE_EVIDENCE_INVALID'));
-  assert.equal(escalated.automaticAdoptionAllowed, false);
-  assert.equal(escalated.paperHandoffAllowed, false);
+  assert.equal(inconsistent.status, 'INVALID');
+  assert.ok(inconsistent.blockers.includes('RESEARCH_CANDIDATE_EVIDENCE_INVALID'));
+  assert.equal(inconsistent.automaticAdoptionAllowed, false);
+  assert.equal(inconsistent.paperHandoffAllowed, false);
+});
+
+test('coherent future Validation OOS Full Cost and profitability proof reaches review readiness without automatic authority', () => {
+  const bridge = buildResearchPromotionBridge(
+    researchOverview(trainingCandidate({
+      VALIDATION_N: 40,
+      OOS_N: 30,
+      Settlement_N: 25,
+      VALIDATION_COMPLETE: true,
+      OOS_COMPLETE: true,
+      FULL_COST_READY: true,
+      NET_ALPHA_PROVEN: true,
+      PROFITABILITY_PROVEN: true,
+      Net_PnL: 125.5,
+      TRAIN_DIAGNOSTIC_ONLY: true,
+    })),
+    SHA,
+    NOW.toISOString(),
+  );
+  assert.equal(bridge.status, 'PAPER_ADOPTION_REVIEW_READY');
+  assert.equal(bridge.evidence.validationComplete, true);
+  assert.equal(bridge.evidence.oosComplete, true);
+  assert.equal(bridge.evidence.fullCostReady, true);
+  assert.equal(bridge.evidence.profitabilityProven, true);
+  assert.ok(bridge.blockers.includes('SEPARATE_HUMAN_ADOPTION_REVIEW_REQUIRED'));
+  assert.ok(!bridge.blockers.includes('TRAIN_DIAGNOSTIC_ONLY'));
+  assert.equal(bridge.automaticAdoptionAllowed, false);
+  assert.equal(bridge.paperHandoffAllowed, false);
+  assert.equal(bridge.scannerMutationAllowed, false);
+  assert.equal(bridge.liveTradingAllowed, false);
+  assert.equal(bridge.orderAllowed, false);
+  assert.equal(bridge.executionAuthority, 'NONE');
 });
