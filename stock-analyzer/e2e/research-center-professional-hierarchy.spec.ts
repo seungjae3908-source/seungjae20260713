@@ -183,7 +183,7 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     const generalButton = page.getByRole('button', { name: '요약', exact: true });
     await expect(generalButton).toHaveAttribute('aria-pressed', 'true');
     await expect(expertButton).toBeVisible();
-    await expect(page.getByRole('button', { name: 'AI 도우미', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '인공지능 도우미', exact: true })).toBeVisible();
 
     const general = page.getByTestId('research-general-view');
     await expect(general).toContainText('근거 수집 중');
@@ -249,7 +249,7 @@ test('copilot entry keeps the established button contract', async ({ page }) => 
   await installRuntime(page);
   await page.goto('/research-center');
 
-  const copilot = page.getByRole('button', { name: 'AI 도우미', exact: true });
+  const copilot = page.getByRole('button', { name: '인공지능 도우미', exact: true });
   await expect(copilot).toBeVisible();
   await copilot.click();
   await expect(page.getByTestId('research-general-view')).toHaveCount(0);
