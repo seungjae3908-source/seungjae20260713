@@ -234,6 +234,7 @@ export type TradingEconomics = {
 };
 
 export type TradingPlanInput = {
+  executionMode?: 'manual' | 'automatic';
   exchange: TradingExchange;
   accountMode: TradingAccountMode;
   stockBroker?: StockBroker | null;
