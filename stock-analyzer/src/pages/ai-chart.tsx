@@ -75,7 +75,13 @@ const DIRECT_AI_CHART_COLD_ROUTE = typeof window !== 'undefined' && window.locat
 // cache shares the same module fetch.
 const directAiChartRendererPrewarm = import.meta.glob('../components/unified-analysis-chart.tsx');
 if (DIRECT_AI_CHART_COLD_ROUTE) {
+  const existingModulePreloads = new Set(
+    document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'),
+  );
   void directAiChartRendererPrewarm['../components/unified-analysis-chart.tsx']?.();
+  for (const link of document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]')) {
+    if (!existingModulePreloads.has(link)) link.setAttribute('fetchpriority', 'high');
+  }
 }
 
 const LazyAiChartV2IntelligencePanel = lazy(() =>
