@@ -38,7 +38,7 @@ async function primeSelection(page: Page) {
   }, selectionFixture());
 }
 
-test('AI Chart source keeps desktop dense and mobile summary-first', () => {
+test('AI Chart source keeps desktop dense and mobile summary-first except explicit trade handoff', () => {
   const pageSource = source('src/pages/ai-chart.tsx');
 
   expect(pageSource).toContain("type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';");
@@ -46,7 +46,8 @@ test('AI Chart source keeps desktop dense and mobile summary-first', () => {
   expect(pageSource).toContain("{ value: 'chart', label: '차트' }");
   expect(pageSource).toContain("{ value: 'position', label: '내 포지션' }");
   expect(pageSource).toContain("{ value: 'details', label: '상세' }");
-  expect(pageSource).toContain("const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');");
+  expect(pageSource).toContain("const [mobileTab, setMobileTab] = useState<MobileChartTab>(() => tradeRouteRequested ? 'position' : 'summary');");
+  expect(pageSource).toContain("const tradeRouteRequested = tradeFocusRef.current !== null;");
   expect(pageSource).toContain('lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]');
   expect(pageSource).toContain('data-testid="ai-chart-mobile-summary"');
   expect(pageSource).toContain('data-testid="ai-chart-mobile-chart"');
