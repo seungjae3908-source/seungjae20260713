@@ -278,7 +278,17 @@ function statusLabel(data: Payload | null): string {
   return 'Unavailable';
 }
 
-function LevelList({ side, levels, currency }: { side: 'ask' | 'bid'; levels: Level[]; currency: Currency }) {
+function LevelList({
+  side,
+  levels,
+  currency,
+  onSelectLevel,
+}: {
+  side: 'ask' | 'bid';
+  levels: Level[];
+  currency: Currency;
+  onSelectLevel?: (input: { side: 'ask' | 'bid'; price: number }) => void;
+}) {
   return (
     <div role="list" aria-label={side === 'ask' ? '매도 호가' : '매수 호가'} data-testid={`${side}-levels`}>
       {levels.map((level) => (
@@ -289,7 +299,19 @@ function LevelList({ side, levels, currency }: { side: 'ask' | 'bid'; levels: Le
           className="grid min-h-10 grid-cols-[54px_1fr_1fr_1fr] items-center gap-1 border-b border-border/50 px-3 text-xs last:border-b-0"
         >
           <span className="text-muted-foreground">{side === 'ask' ? 'Ask' : 'Bid'} {level.rank}</span>
-          <span className="text-right font-semibold tabular-nums">{formatPrice(level.price, currency)}</span>
+          {onSelectLevel ? (
+            <button
+              type="button"
+              data-testid={`${side}-price-select-${level.rank}`}
+              aria-label={`${formatPrice(level.price, currency)} 가격 선택`}
+              onClick={() => onSelectLevel({ side, price: level.price })}
+              className="min-h-9 rounded-lg px-1 text-right font-semibold tabular-nums underline decoration-dotted underline-offset-2"
+            >
+              {formatPrice(level.price, currency)}
+            </button>
+          ) : (
+            <span className="text-right font-semibold tabular-nums">{formatPrice(level.price, currency)}</span>
+          )}
           <span className="text-right tabular-nums">{formatQuantity(level.quantity)}</span>
           <span className="text-right tabular-nums">{formatQuantity(level.cumulativeQuantity)}</span>
         </div>
@@ -303,11 +325,13 @@ export function InstrumentOrderbookDock({
   market,
   assetClass,
   defaultOpen = false,
+  onSelectLevel,
 }: {
   ticker: string;
   market: OrderbookMarket;
   assetClass: OrderbookAssetClass;
   defaultOpen?: boolean;
+  onSelectLevel?: (input: { side: 'ask' | 'bid'; price: number }) => void;
 }) {
   const symbol = ticker.trim().toUpperCase();
   const targetKey = `${assetClass}:${market}:${symbol}`;
@@ -475,6 +499,9 @@ export function InstrumentOrderbookDock({
   const currency = data?.currency ?? (market === 'US' ? 'USD' : market === 'BITGET' ? 'USDT' : 'KRW');
   const imbalance = useMemo(() => data?.imbalance == null ? '-' : `${(data.imbalance * 100).toFixed(1)}%`, [data?.imbalance]);
   const diagnostic = error ?? (data?.status === 'invalid' ? data.reason : null);
+  const levelSelector = data && data.freshness === 'fresh' && (data.status === 'ready' || data.status === 'partial')
+    ? onSelectLevel
+    : undefined;
 
   return (
     <>
@@ -546,8 +573,8 @@ export function InstrumentOrderbookDock({
               <div className="grid grid-cols-[54px_1fr_1fr_1fr] gap-1 border-b border-border bg-muted/40 px-3 py-2 text-[11px] font-semibold">
                 <span>Side</span><span className="text-right">Price</span><span className="text-right">Quantity</span><span className="text-right">Cumulative</span>
               </div>
-              <LevelList side="ask" levels={data?.asks ?? []} currency={currency} />
-              <LevelList side="bid" levels={data?.bids ?? []} currency={currency} />
+              <LevelList side="ask" levels={data?.asks ?? []} currency={currency} onSelectLevel={levelSelector} />
+              <LevelList side="bid" levels={data?.bids ?? []} currency={currency} onSelectLevel={levelSelector} />
 
               {!loading && data && data.asks.length === 0 && data.bids.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">표시 가능한 실제 호가가 없습니다.</p>
@@ -556,7 +583,7 @@ export function InstrumentOrderbookDock({
             </div>
 
             <footer className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
-              Depth imbalance는 참고용 호가 통계이며 거래 신호가 아닙니다. ORDERBOOK_IMBALANCE != TRADE_SIGNAL
+              Depth imbalance는 참고용 호가 통계이며 거래 신호가 아닙니다. Fresh 호가의 가격 선택은 지정가 입력만 채우며 주문을 제출하지 않습니다. ORDERBOOK_IMBALANCE != TRADE_SIGNAL
             </footer>
           </section>
         </div>
