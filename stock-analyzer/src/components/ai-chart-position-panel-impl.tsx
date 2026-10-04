@@ -2048,6 +2048,211 @@ export function AiChartPositionPanel({
     }
   }, [entryContextReady, liveEntryDraft.kind, selection]);
 
+  const invalidateManualEntry = useCallback(() => {
+    manualEntrySequenceRef.current += 1;
+    manualEntryAbortRef.current?.abort();
+    manualEntryAbortRef.current = null;
+    setManualPreviewState({ kind: 'idle' });
+    setManualPlanState({ kind: 'idle' });
+  }, []);
+
+  const resetManualEntry = useCallback(() => {
+    invalidateManualEntry();
+    setManualIntentId(newManualIntentId());
+    setManualQuantityText('');
+    setManualEstimatedKrwText('');
+    setManualStopPriceText('');
+    setManualTargetPriceText('');
+    setManualOrderType(initialOrderPrefill?.orderType ?? 'market');
+    setManualLimitPriceText(initialOrderPrefill ? String(initialOrderPrefill.limitPrice) : '');
+    setManualFuturesSide(selection.action === 'SHORT' ? 'SHORT' : 'LONG');
+    setManualLeverage(2);
+    setManualStockExchange('');
+  }, [initialOrderPrefill, invalidateManualEntry, selection.action]);
+
+  const manualInstruction = useCallback(() => {
+    const estimatedKrw = positiveText(manualEstimatedKrwText);
+    const stopPrice = positiveText(manualStopPriceText);
+    const targetPrice = positiveText(manualTargetPriceText);
+    const limitPrice = manualOrderType === 'limit' ? positiveText(manualLimitPriceText) : null;
+    const quantity = positiveText(manualQuantityText);
+    if (estimatedKrw == null) throw new Error('MANUAL_ENTRY_ESTIMATED_KRW_REQUIRED');
+    if (stopPrice == null) throw new Error('MANUAL_ENTRY_STOP_PRICE_REQUIRED');
+    if (targetPrice == null) throw new Error('MANUAL_ENTRY_TARGET_PRICE_REQUIRED');
+    if (manualOrderType === 'limit' && limitPrice == null) throw new Error('MANUAL_ENTRY_LIMIT_PRICE_REQUIRED');
+    if (!(market === 'UPBIT' && manualOrderType === 'market') && quantity == null) {
+      throw new Error('MANUAL_ENTRY_QUANTITY_REQUIRED');
+    }
+    if (market === 'US' && !manualStockExchange) {
+      // Toss ignores this field, while Kiwoom requires an explicit venue. The server remains authoritative.
+      // Keeping it null here lets the server fail closed when the configured broker is Kiwoom.
+    }
+    return {
+      clientIntentId: manualIntentId,
+      market,
+      symbol,
+      side: market === 'BITGET' ? manualFuturesSide : 'BUY',
+      orderType: manualOrderType,
+      quantity: market === 'UPBIT' && manualOrderType === 'market' ? null : quantity,
+      quoteAmount: market === 'UPBIT' && manualOrderType === 'market' ? estimatedKrw : null,
+      estimatedKrw,
+      limitPrice,
+      stopPrice,
+      targetPrice,
+      leverage: market === 'BITGET' ? manualLeverage : null,
+      stockExchange: market === 'US' && manualStockExchange ? manualStockExchange : null,
+    };
+  }, [
+    manualEstimatedKrwText,
+    manualFuturesSide,
+    manualIntentId,
+    manualLeverage,
+    manualLimitPriceText,
+    manualOrderType,
+    manualQuantityText,
+    manualStockExchange,
+    manualStopPriceText,
+    manualTargetPriceText,
+    market,
+    symbol,
+  ]);
+
+  const requestManualEntryPreview = useCallback(async () => {
+    if (manualPreviewState.kind === 'loading' || manualPlanState.kind === 'loading') return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setManualPreviewState({ kind: 'unavailable', code: 'OFFLINE' });
+      return;
+    }
+    let instruction: ReturnType<typeof manualInstruction>;
+    try {
+      instruction = manualInstruction();
+    } catch (error) {
+      setManualPreviewState({ kind: 'unavailable', code: error instanceof Error ? error.message : 'MANUAL_ENTRY_INPUT_INVALID' });
+      return;
+    }
+    const controller = new AbortController();
+    manualEntryAbortRef.current?.abort();
+    manualEntryAbortRef.current = controller;
+    const sequence = ++manualEntrySequenceRef.current;
+    setManualPreviewState({ kind: 'loading' });
+    setManualPlanState({ kind: 'idle' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/manual-entry/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, instruction }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        preview?: ManualEntryPreview;
+        decision?: ManualEntryDecision;
+        privateAccountReadPerformed?: boolean;
+        planCreated?: boolean;
+        orderSubmitted?: boolean;
+        financialMutationPerformed?: boolean;
+        cancelRequests?: number;
+        amendRequests?: number;
+        transferRequests?: number;
+        withdrawalRequests?: number;
+        executionAuthority?: string;
+      } | null;
+      if (controller.signal.aborted || sequence !== manualEntrySequenceRef.current) return;
+      if (response.status === 401 || payload?.error === 'LOGIN_REQUIRED') {
+        setManualPreviewState({ kind: 'unavailable', code: 'LOGIN_REQUIRED' });
+        return;
+      }
+      if (!response.ok || payload?.ok !== true || !payload.preview || !payload.decision) {
+        setManualPreviewState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.privateAccountReadPerformed !== true
+        || payload.planCreated !== false
+        || payload.orderSubmitted !== false
+        || payload.financialMutationPerformed !== false
+        || payload.cancelRequests !== 0
+        || payload.amendRequests !== 0
+        || payload.transferRequests !== 0
+        || payload.withdrawalRequests !== 0
+        || payload.executionAuthority !== 'NONE') {
+        setManualPreviewState({ kind: 'unavailable', code: 'MANUAL_ENTRY_PREVIEW_SAFETY_MISMATCH' });
+        return;
+      }
+      setManualPreviewState({ kind: 'ready', preview: payload.preview, decision: payload.decision });
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== manualEntrySequenceRef.current) return;
+      setManualPreviewState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'MANUAL_ENTRY_PREVIEW_FAILED' });
+    } finally {
+      if (manualEntryAbortRef.current === controller) manualEntryAbortRef.current = null;
+    }
+  }, [manualInstruction, manualPlanState.kind, manualPreviewState.kind]);
+
+  const createManualEntryPlan = useCallback(async () => {
+    if (manualPreviewState.kind !== 'ready' || !manualPreviewState.decision.allowed || manualPlanState.kind === 'loading') return;
+    let instruction: ReturnType<typeof manualInstruction>;
+    try {
+      instruction = manualInstruction();
+    } catch (error) {
+      setManualPlanState({ kind: 'unavailable', code: error instanceof Error ? error.message : 'MANUAL_ENTRY_INPUT_INVALID' });
+      return;
+    }
+    const controller = new AbortController();
+    manualEntryAbortRef.current?.abort();
+    manualEntryAbortRef.current = controller;
+    const sequence = ++manualEntrySequenceRef.current;
+    setManualPlanState({ kind: 'loading' });
+    try {
+      const response = await authorizedFetch('/api/trade-automation/manual-entry/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, instruction }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null) as {
+        ok?: boolean;
+        error?: string;
+        plan?: { id?: string; state?: string };
+        duplicate?: boolean;
+        planCreated?: boolean;
+        orderSubmitted?: boolean;
+        financialMutationPerformed?: boolean;
+        cancelRequests?: number;
+        amendRequests?: number;
+        transferRequests?: number;
+        withdrawalRequests?: number;
+        executionAuthority?: string;
+      } | null;
+      if (controller.signal.aborted || sequence !== manualEntrySequenceRef.current) return;
+      if (response.status === 401 || payload?.error === 'LOGIN_REQUIRED') {
+        setManualPlanState({ kind: 'unavailable', code: 'LOGIN_REQUIRED' });
+        return;
+      }
+      if (!response.ok || payload?.ok !== true || !payload.plan?.id || payload.plan.state !== 'APPROVAL_PENDING') {
+        setManualPlanState({ kind: 'unavailable', code: payload?.error ?? `HTTP_${response.status}` });
+        return;
+      }
+      if (payload.planCreated !== true
+        || payload.orderSubmitted !== false
+        || payload.financialMutationPerformed !== false
+        || payload.cancelRequests !== 0
+        || payload.amendRequests !== 0
+        || payload.transferRequests !== 0
+        || payload.withdrawalRequests !== 0
+        || payload.executionAuthority !== 'USER_APPROVAL_REQUIRED') {
+        setManualPlanState({ kind: 'unavailable', code: 'MANUAL_ENTRY_PLAN_SAFETY_MISMATCH' });
+        return;
+      }
+      setManualPlanState({ kind: 'ready', planId: payload.plan.id, duplicate: payload.duplicate === true });
+      window.dispatchEvent(new Event('trade-approval-queue-refresh'));
+    } catch (error) {
+      if (controller.signal.aborted || sequence !== manualEntrySequenceRef.current) return;
+      setManualPlanState({ kind: 'unavailable', code: error instanceof Error ? error.name : 'MANUAL_ENTRY_PLAN_FAILED' });
+    } finally {
+      if (manualEntryAbortRef.current === controller) manualEntryAbortRef.current = null;
+    }
+  }, [manualInstruction, manualPlanState.kind, manualPreviewState]);
+
   const tradingCockpit = (
     <details
             open={cockpitOpen}
