@@ -126,6 +126,14 @@ function scannerApiRequestTimeoutMs(): number {
   return parsed;
 }
 
+function scannerApiUsesDedicatedTimeout(): boolean {
+  const source = readFileSync(
+    path.resolve(process.cwd(), 'stock-analyzer/src/lib/api.ts'),
+    'utf8',
+  );
+  return /apiGet<ScanResult>\(\`\/market\/scan\?\$\{params\.toString\(\)\}\`,\s*SCANNER_API_REQUEST_TIMEOUT_MS\)/u.test(source);
+}
+
 async function withServer(
   scanner: StockScannerRunner,
   run: (baseUrl: string) => Promise<void>,
@@ -156,6 +164,10 @@ test('stock scanner server response budget leaves auth/network headroom below th
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS > 0);
   assert.ok(STOCK_SCANNER_ROUTE_DEADLINE_MS < browserDeadlineMs);
   assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 4_000);
+});
+
+test('stock scanner frontend transport uses the dedicated scanner deadline', () => {
+  assert.equal(scannerApiUsesDedicatedTimeout(), true);
 });
 
 test('normal zero-match scan returns HTTP 200 empty with provider health', async () => {
