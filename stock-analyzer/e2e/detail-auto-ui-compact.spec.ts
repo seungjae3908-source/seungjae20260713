@@ -83,7 +83,7 @@ test('desktop settings open as a closable popup and follow only the selected mar
 
   await page.getByTestId('trading-section-settings').click();
   await expect(page.getByTestId('auto-trading-settings-column')).toBeVisible();
-  await page.getByTestId('auto-trading-advanced-settings').click();
+  await page.getByTestId('open-trading-automation-settings').click();
   const dialog = page.getByTestId('trading-automation-settings-dialog');
   await expect(dialog).toBeVisible();
   await expect(page.getByTestId('auto-market-domestic_stock')).toBeVisible();
@@ -93,7 +93,7 @@ test('desktop settings open as a closable popup and follow only the selected mar
   await expect(dialog).toHaveCount(0);
 
   await page.getByTestId('trading-market-crypto_futures').click();
-  await page.getByTestId('auto-trading-advanced-settings').click();
+  await page.getByTestId('open-trading-automation-settings').click();
   await expect(page.getByTestId('trading-automation-settings-dialog')).toBeVisible();
   await expect(page.getByTestId('auto-market-crypto_futures')).toBeVisible();
   await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
