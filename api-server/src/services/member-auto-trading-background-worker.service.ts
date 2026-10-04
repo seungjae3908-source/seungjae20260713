@@ -1276,8 +1276,8 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
-  if (process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true') {
-    console.log('[member-auto-trading-background] disabled; explicit enable flag is required');
+  if (process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'false') {
+    console.log('[member-auto-trading-background] disabled by explicit false flag');
     return null;
   }
   if (!hasSupabaseServerKey()) {

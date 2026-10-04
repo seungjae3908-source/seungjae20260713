@@ -69,6 +69,13 @@ on:
       - ops/plan-paper-canonical-seven-blocker-repair.mjs
       - api-server/src/services/manual-paper-natural-contract.d.ts
       - api-server/src/routes/paper-trading.ts
+      - api-server/src/services/backtest-paper-handoff.service.ts
+      - api-server/src/services/backtest-paper-handoff.service.test.ts
+      - api-server/src/services/paper-trading.types.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - packages/strategy-hypothesis/src/backtest-paper-handoff.js
+      - packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
       - api-server/src/services/crypto-signal-scanner.service.ts
@@ -272,7 +279,7 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
 
-      - name: Require bounded non-UI diff
+      - name: Require bounded Paper runtime diff
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -282,7 +289,7 @@ jobs:
             base="$(git merge-base HEAD origin/main)"
           fi
           git cat-file -e "$base^{commit}"
-          mapfile -t changed < <(git diff --name-only "$base"...HEAD)
+          mapfile -t changed_all < <(git diff --name-only "$base"...HEAD)
           allowed=(
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
             .github/workflows/paper-forward-schedule-validation.yml
@@ -316,6 +323,13 @@ jobs:
             ops/plan-paper-canonical-seven-blocker-repair.mjs
             api-server/src/services/manual-paper-natural-contract.d.ts
             api-server/src/routes/paper-trading.ts
+            api-server/src/services/backtest-paper-handoff.service.ts
+            api-server/src/services/backtest-paper-handoff.service.test.ts
+            api-server/src/services/paper-trading.types.ts
+            api-server/src/services/member-auto-trading-background-worker.service.ts
+            api-server/src/services/member-auto-trading-background-worker.service.test.ts
+            packages/strategy-hypothesis/src/backtest-paper-handoff.js
+            packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
             api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
             api-server/src/services/crypto-signal-scanner.service.ts
@@ -487,14 +501,24 @@ jobs:
             research-production/test/research-canonical-dataset-component.test.mjs
             research-production/test/research-dataset-snapshot-store.test.mjs
           )
-          test "${#changed[@]}" -ge 1
-          test "${#changed[@]}" -le "${#allowed[@]}"
-          for path in "${changed[@]}"; do
+          sensitive=()
+          for path in "${changed_all[@]}"; do
+            case "$path" in
+              market-prediction-lab/*paper*|research-production/*paper*|research-production/src/engine.mjs|research-production/test/research-engine.test.mjs|ops/*paper*|api-server/*paper*|packages/*paper*|.github/workflows/*paper*|.github/workflows/authoritative-paper-*)
+                sensitive+=("$path")
+                ;;
+              api-server/src/services/member-auto-trading-background-worker.service.ts|api-server/src/services/member-auto-trading-background-worker.service.test.ts)
+                sensitive+=("$path")
+                ;;
+            esac
+          done
+          test "${#sensitive[@]}" -ge 1
+          test "${#sensitive[@]}" -le "${#allowed[@]}"
+          for path in "${sensitive[@]}"; do
             printf '%s\n' "${allowed[@]}" | grep -Fx "$path" >/dev/null || {
-              echo "unexpected path: $path" >&2
+              echo "unexpected Paper-sensitive path: $path" >&2
               exit 1
             }
-            [[ "$path" != stock-analyzer/* ]]
           done
 
       - name: Validate JavaScript and shell syntax

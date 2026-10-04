@@ -832,9 +832,243 @@ def summarize_runtime_liveness(last_success_at, now_ms=None):
     }
 
 
+def _activity_entry(identifier, at, source, label, status, detail=None, profile=None):
+    if not isinstance(at, (int, float)) or isinstance(at, bool) or not math.isfinite(at) or at <= 0:
+        return None
+    return {
+        'id': str(identifier)[:180],
+        'at': int(at),
+        'source': str(source)[:80],
+        'label': str(label)[:160],
+        'status': str(status)[:80],
+        'detail': str(detail)[:300] if detail is not None else None,
+        'profile': str(profile)[:80] if profile is not None else None,
+    }
+
+
+def build_research_activity(root, now_ms=None, maximum_entries=200):
+    now_ms = int(__import__('time').time() * 1000) if now_ms is None else int(now_ms)
+    cutoff = now_ms - 24 * 60 * 60 * 1000
+    entries = []
+
+    runs_root = root / 'runs'
+    try:
+        run_dirs = sorted(
+            [path for path in runs_root.iterdir() if path.is_dir() and not path.is_symlink()],
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )[:500]
+    except FileNotFoundError:
+        run_dirs = []
+    for run_dir in run_dirs:
+        try:
+            value = read_json_optional(run_dir / 'cycle.json')
+        except RuntimeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        at = finite_number(value.get('generatedAt'))
+        if at is None or at < cutoff or at > now_ms + RUNTIME_CLOCK_SKEW_MS:
+            continue
+        profile = value.get('profile') if isinstance(value.get('profile'), str) else 'unknown'
+        failed = optional_integer_count(value.get('failedCount'))
+        blocked = optional_integer_count(value.get('blockedDataCount'))
+        success = optional_integer_count(value.get('successCount'))
+        detail = f"성공={success if success is not None else '—'} / 자료부족={blocked if blocked is not None else '—'} / 실패={failed if failed is not None else '—'}"
+        entry = _activity_entry(
+            value.get('cycleId') or run_dir.name,
+            at,
+            'research-cycle',
+            profile,
+            value.get('status', 'unknown'),
+            detail,
+            profile,
+        )
+        if entry:
+            entries.append(entry)
+
+    latest_sources = [
+        ('temporal', root / 'latest' / 'temporal-crypto-futures.json', 'generatedAt', '시점 자료'),
+        ('factory', root / 'latest' / 'research-factory.json', 'generatedAt', '연구 팩토리'),
+        ('ai-review', root / 'ai-review' / 'latest.json', 'observedAt', '인공지능 검토'),
+        ('video-discovery', root / 'video-research' / 'latest.json', 'observedAt', '영상 자료 탐색'),
+    ]
+    for source, path, time_key, label in latest_sources:
+        try:
+            value = read_json_optional(path)
+        except RuntimeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        raw_at = value.get(time_key)
+        if isinstance(raw_at, str):
+            try:
+                raw_at = __import__('datetime').datetime.fromisoformat(raw_at.replace('Z', '+00:00')).timestamp() * 1000
+            except Exception:
+                raw_at = None
+        at = finite_number(raw_at)
+        if at is None or at < cutoff or at > now_ms + RUNTIME_CLOCK_SKEW_MS:
+            continue
+        status = value.get('status', 'unknown')
+        detail = None
+        if source == 'temporal':
+            detail = f"표본={value.get('observationCount', '—')} / 실패={value.get('failedCount', '—')}"
+        elif source == 'factory':
+            detail = '연구 상태 갱신'
+        elif source == 'ai-review':
+            detail = f"검토={len(value.get('reviews') or [])} / 보류={len(value.get('blockedProfiles') or [])}"
+        elif source == 'video-discovery':
+            detail = f"자료={value.get('sourceCount', '—')}"
+        entry = _activity_entry(f"{source}:{int(at)}", at, source, label, status, detail)
+        if entry:
+            entries.append(entry)
+
+    entries.sort(key=lambda item: (-item['at'], item['source'], item['id']))
+    deduped = []
+    seen = set()
+    for entry in entries:
+        key = (entry['source'], entry['id'])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+        if len(deduped) >= maximum_entries:
+            break
+    return {
+        'windowHours': 24,
+        'generatedAt': now_ms,
+        'entries': deduped,
+    }
+
+
+def summarize_auto_backtest(value):
+    if not isinstance(value, dict) or value.get('profile') != 'fast-historical':
+        return {
+            'present': False,
+            'status': 'MISSING',
+            'cycleId': None,
+            'generatedAt': None,
+            'researchSha': None,
+            'pipelines': [],
+            'executionAuthority': 'NONE',
+        }
+    pipelines = []
+    for raw in value.get('results') if isinstance(value.get('results'), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        steps = []
+        for step in raw.get('steps') if isinstance(raw.get('steps'), list) else []:
+            if not isinstance(step, dict):
+                continue
+            step_id = step.get('id')
+            status = step.get('status')
+            if not isinstance(step_id, str) or not isinstance(status, str):
+                continue
+            steps.append({
+                'id': step_id[:120],
+                'status': status[:40],
+                'reportStatus': step.get('reportStatus')[:80] if isinstance(step.get('reportStatus'), str) else None,
+                'startedAt': finite_number(step.get('startedAt')),
+                'endedAt': finite_number(step.get('endedAt')),
+            })
+        pipeline_id = raw.get('id')
+        status = raw.get('status')
+        if not isinstance(pipeline_id, str) or not isinstance(status, str):
+            continue
+        candidate_passed = len(steps) > 0 and steps[0].get('status') == 'success'
+        if status == 'success':
+            feedback = '후보 생성부터 후속 백테스트·검증 단계까지 자동 진행 완료'
+        elif status == 'blocked_data':
+            feedback = '필수 시점 데이터 부족으로 다음 단계 자동 중단 · 데이터 누적 후 재평가'
+        elif status == 'failed':
+            feedback = '기술 실패로 자동 중단 · 실패 원인 확인 필요'
+        else:
+            feedback = '자동 연구 상태 확인 필요'
+        pipelines.append({
+            'id': pipeline_id[:120],
+            'status': status[:40],
+            'startedAt': finite_number(raw.get('startedAt')),
+            'endedAt': finite_number(raw.get('endedAt')),
+            'stepCount': optional_integer_count(raw.get('stepCount')),
+            'plannedStepCount': optional_integer_count(raw.get('plannedStepCount')),
+            'candidatePassed': candidate_passed,
+            'automaticHandoffObserved': candidate_passed and len(steps) > 1,
+            'feedback': feedback,
+            'steps': steps,
+        })
+    return {
+        'present': True,
+        'status': str(value.get('status', 'unknown'))[:40],
+        'cycleId': value.get('cycleId') if isinstance(value.get('cycleId'), str) else None,
+        'generatedAt': finite_number(value.get('generatedAt')),
+        'researchSha': value.get('researchSha') if isinstance(value.get('researchSha'), str) else None,
+        'pipelines': pipelines,
+        'executionAuthority': 'NONE',
+    }
+
+
+def summarize_formula_backtest_queue(value):
+    empty = {
+        'present': False,
+        'generatedAt': None,
+        'scanned': 0,
+        'counts': {'PASS': 0, 'HOLD': 0, 'RESERVE': 0, 'EXCLUDE': 0},
+        'rows': [],
+        'deletionAllowed': False,
+        'executionAuthority': 'NONE',
+    }
+    if not isinstance(value, dict) or value.get('contract') != 'research-formula-auto-backtest-summary/v1':
+        return empty
+    if value.get('deletionAllowed') is not False or value.get('executionAuthority') != 'NONE':
+        return empty
+    raw_at = value.get('generatedAt')
+    generated_at = None
+    if isinstance(raw_at, str):
+        try:
+            generated_at = int(__import__('datetime').datetime.fromisoformat(raw_at.replace('Z', '+00:00')).timestamp() * 1000)
+        except Exception:
+            generated_at = None
+    rows = []
+    allowed_states = {'PASS', 'HOLD', 'RESERVE', 'EXCLUDE'}
+    for raw in value.get('rows') if isinstance(value.get('rows'), list) else []:
+        if not isinstance(raw, dict) or raw.get('state') not in allowed_states:
+            continue
+        formula_id = raw.get('formulaId')
+        item_digest = raw.get('itemDigest')
+        reason = raw.get('reason')
+        if not all(isinstance(item, str) for item in (formula_id, item_digest, reason)):
+            continue
+        blockers = [str(item)[:120] for item in raw.get('blockers', []) if isinstance(item, str)][:20]
+        rows.append({
+            'formulaId': formula_id[:220],
+            'itemDigest': item_digest[:64],
+            'state': raw.get('state'),
+            'reason': reason[:240],
+            'evaluatedAt': raw.get('evaluatedAt')[:40] if isinstance(raw.get('evaluatedAt'), str) else None,
+            'tournamentId': raw.get('tournamentId')[:220] if isinstance(raw.get('tournamentId'), str) else None,
+            'candidateCount': optional_integer_count(raw.get('candidateCount')),
+            'researchSurvivorCount': optional_integer_count(raw.get('researchSurvivorCount')),
+            'blockers': blockers,
+            'retainedForAudit': raw.get('retainedForAudit') is True,
+        })
+    counts = {state: sum(1 for row in rows if row['state'] == state) for state in allowed_states}
+    return {
+        'present': True,
+        'generatedAt': generated_at,
+        'scanned': optional_integer_count(value.get('scanned')) or 0,
+        'counts': counts,
+        'rows': rows[:50],
+        'deletionAllowed': False,
+        'executionAuthority': 'NONE',
+    }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
-    cycles = [summarize_cycle(profile, read_json_optional(root / 'latest' / f'{profile}.json')) for profile in PROFILES]
+    raw_cycles = {profile: read_json_optional(root / 'latest' / f'{profile}.json') for profile in PROFILES}
+    cycles = [summarize_cycle(profile, raw_cycles[profile]) for profile in PROFILES]
+    auto_backtest = summarize_auto_backtest(raw_cycles.get('fast-historical'))
+    formula_backtest_queue = summarize_formula_backtest_queue(read_json_optional(root / 'latest' / 'formula-backtest-queue.json'))
     paper_runtime = summarize_paper_runtime(read_json_optional(root / 'forward' / 'paper' / 'status' / 'runtime-status.json'))
     paper_ledger = summarize_paper_ledger(read_json_optional(root / 'forward' / 'paper' / 'state' / 'recurring-paper-loop.json'))
     shadow_groups = summarize_shadow_groups(read_json_optional(root / 'forward' / 'shadow-summary.json'))
@@ -845,6 +1079,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     candidate_performance = read_candidate_performance(root)
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
+    activity = build_research_activity(root)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -904,6 +1139,9 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         },
         'dataFactory': {'temporalCryptoFutures': temporal_crypto},
         'factory': factory_runtime,
+        'activity': activity,
+        'autoBacktest': auto_backtest,
+        'formulaBacktestQueue': formula_backtest_queue,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {

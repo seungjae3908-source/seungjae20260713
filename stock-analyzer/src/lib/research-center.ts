@@ -214,6 +214,65 @@ export interface ResearchCenterOverview {
       reportDigest?: string | null;
     };
   };
+  activity?: {
+    windowHours: 24;
+    generatedAt: number | null;
+    entries: Array<{
+      id: string;
+      at: number;
+      source: string;
+      label: string;
+      status: string;
+      detail: string | null;
+      profile: string | null;
+    }>;
+  };
+  autoBacktest?: {
+    present: boolean;
+    status: string;
+    cycleId: string | null;
+    generatedAt: number | null;
+    researchSha: string | null;
+    executionAuthority: 'NONE';
+    pipelines: Array<{
+      id: string;
+      status: string;
+      startedAt: number | null;
+      endedAt: number | null;
+      stepCount: number | null;
+      plannedStepCount: number | null;
+      candidatePassed: boolean;
+      automaticHandoffObserved: boolean;
+      feedback: string;
+      steps: Array<{
+        id: string;
+        status: string;
+        reportStatus: string | null;
+        startedAt: number | null;
+        endedAt: number | null;
+      }>;
+    }>;
+  };
+  formulaBacktestQueue?: {
+    present: boolean;
+    generatedAt: number | null;
+    scanned: number;
+    counts: { PASS: number; HOLD: number; RESERVE: number; EXCLUDE: number };
+    deletionAllowed: false;
+    executionAuthority: 'NONE';
+    rows: Array<{
+      formulaId: string;
+      itemDigest: string;
+      state: 'PASS' | 'HOLD' | 'RESERVE' | 'EXCLUDE';
+      reason: string;
+      evaluatedAt: string | null;
+      tournamentId: string | null;
+      candidateCount: number;
+      researchSurvivorCount: number;
+      blockers: string[];
+      retainedForAudit: boolean;
+    }>;
+  };
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
   };

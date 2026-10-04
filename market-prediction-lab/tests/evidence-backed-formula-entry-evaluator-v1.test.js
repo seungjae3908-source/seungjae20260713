@@ -17,6 +17,7 @@ import {
   createEvidenceBackedFormulaSignalEvaluatorV1,
 } from "../src/evidence-backed-formula-entry-evaluator-v1.js";
 import { runOnePassCandidateBacktestV1 } from "../src/research-tournament-engine-v1.js";
+import { compiledFuturesMomentumFormula } from "./research-bundle-formula-fixture.js";
 
 const START = Date.UTC(2020, 0, 2);
 const STEP = 15 * 60 * 1000;
@@ -362,6 +363,55 @@ test("real FormulaCandidateV1 binds canonical parameter identity, #723 exit sema
   assert.equal(result.executionEngine, "runIndependentSignalBacktest");
   assert.ok(result.trades.length >= 1);
   assert.equal(result.safety.executionAuthority, "NONE");
+});
+
+
+test("safe futures FormulaCandidate evaluates LONG and SHORT with next-open execution and no order authority", () => {
+  for (const direction of ["LONG", "SHORT"]) {
+    const { formula, generated, datasetIdentity } = compiledFuturesMomentumFormula({ direction });
+    const executionParameters = buildEvidenceBackedFormulaExecutionParametersV1({ formulaCandidate: formula, generatedCandidate: generated });
+    const { signalEvaluator, evaluatorContract } = createEvidenceBackedFormulaSignalEvaluatorV1({ formulaCandidate: formula, generatedCandidate: generated });
+    assert.equal(evaluatorContract.derivativesEnabled, true);
+    assert.ok(evaluatorContract.supportedMarkets.includes("CRYPTO_FUTURES"));
+    const series = direction === "LONG"
+      ? candles([100, 100, 100, 103, 104, 105], [100, 100, 100, 300, 150, 150])
+      : candles([103, 103, 103, 100, 99, 98], [100, 100, 100, 300, 150, 150]);
+    const side = direction === "SHORT" ? "short" : "long";
+    const directSignal = signalEvaluator({ market: "CRYPTO_FUTURES", side, timeframe: "15m", candles: series, index: 3 });
+    assert.equal(directSignal.safeDslSignal, true);
+    const result = runOnePassCandidateBacktestV1({
+      formulaCandidate: formula,
+      generatedCandidate: generated,
+      datasetIdentity,
+      backtestInput: {
+        market: "CRYPTO_FUTURES",
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        side,
+        candles: series,
+        fundingRates: [{ timestamp: series[4].timestamp, rate: 0.0001 }],
+        initialCapital: 10_000,
+        riskModel: { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 2 },
+        costModel: {
+          entryFeeRate: 0.0006,
+          exitFeeRate: 0.0006,
+          taxRate: 0,
+          slippageRate: 0.0005,
+          spreadRate: 0.0002,
+          latencyBars: 0,
+          latencyDriftRate: 0,
+        },
+      },
+      executionParameters,
+      signalEvaluator,
+      evaluatorContract,
+      period: { startTime: series[0].timestamp, endTime: series.at(-1).timestamp, includeFinalHoldout: false },
+      liquidityImpactEvidence: { value: 0, evidenceId: "fixture:futures-liquidity-zero" },
+    });
+    assert.equal(result.canonicalBacktestOwner, "#690");
+    assert.equal(result.safety.executionAuthority, "NONE");
+    assert.equal(result.safeguards.fundingIncludedForFutures, true);
+  }
 });
 
 test("valid-grid parameter mutation with stale parameterIdentity is rejected before evaluation", () => {

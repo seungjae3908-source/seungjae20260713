@@ -12,25 +12,21 @@ const WORKSPACE_TABS = [
   {
     value: 'general',
     label: '요약',
-    description: '지금 상태와 다음에 볼 것만 간단히 보여줍니다.',
     icon: LayoutDashboard,
   },
   {
     value: 'expert',
     label: '상세',
-    description: '단계별 근거·표본·원본 식별자를 자세히 확인합니다.',
     icon: ListTree,
   },
   {
     value: 'copilot',
-    label: 'AI 도우미',
-    description: '현재 근거 안에서 가설과 검증 절차를 설명합니다.',
+    label: '인공지능 도우미',
     icon: Bot,
   },
   {
     value: 'video',
     label: '영상',
-    description: '승인된 영상·전사본을 연구 아이디어 소스로만 확인합니다.',
     icon: Clapperboard,
   },
 ] as const;
@@ -74,12 +70,11 @@ export default function ResearchCenterWorkspace() {
           })}
         </div>
         <div
-          className="mx-auto mt-2 flex min-h-9 w-full max-w-3xl items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs"
+          className="mx-auto mt-2 flex min-h-9 w-full max-w-3xl items-center rounded-xl bg-muted/50 px-3 py-2 text-xs"
           data-testid="research-workspace-selection"
           aria-live="polite"
         >
           <strong className="shrink-0 text-foreground">현재 · {selected.label}</strong>
-          <span className="min-w-0 break-keep text-muted-foreground">{selected.description}</span>
         </div>
       </div>
 

@@ -55,15 +55,15 @@ type Status = {
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
-  bitget: 'Bitget 코인선물',
-  upbit: 'Upbit 코인현물',
-  kiwoom: 'Kiwoom 주식 실행 연결',
-  toss: 'Toss 주식 실행 연결',
+  bitget: '비트겟 코인선물',
+  upbit: '업비트 코인현물',
+  kiwoom: '키움 주식',
+  toss: '토스 주식',
 };
 
 const STOCK_BROKER_LABELS: Record<StockBroker, string> = {
-  kiwoom: 'Kiwoom',
-  toss: 'Toss',
+  kiwoom: '키움',
+  toss: '토스',
 };
 
 const MARKET_LABELS: Record<Market, string> = {
@@ -74,10 +74,10 @@ const MARKET_LABELS: Record<Market, string> = {
 };
 
 const MARKET_DESCRIPTIONS: Record<Market, string> = {
-  domestic_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
-  us_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
-  crypto_spot: 'Upbit 고정 · 모의매매 지원',
-  crypto_futures: 'Bitget 고정 · LONG/SHORT, 2~3배 제한',
+  domestic_stock: '매수',
+  us_stock: '매수',
+  crypto_spot: '매수',
+  crypto_futures: '롱·숏 · 2~3배',
 };
 
 const DEFAULT_MARKETS: MarketSwitches = {
@@ -152,6 +152,23 @@ function exchangesForMarkets(
     toss: (markets.domestic_stock && brokers.domestic_stock === 'toss')
       || (markets.us_stock && brokers.us_stock === 'toss'),
   };
+}
+
+function orderStateLabel(value: string): string {
+  const labels: Record<string, string> = {
+    queued: '대기',
+    ready: '준비',
+    submitted: '전송됨',
+    filled: '체결',
+    partial: '부분체결',
+    partially_filled: '부분체결',
+    blocked: '차단',
+    rejected: '거절',
+    failed: '실패',
+    cancelled: '취소됨',
+    canceled: '취소됨',
+  };
+  return labels[value] ?? '확인 필요';
 }
 
 export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?: Status; selectedMarket?: Market }) {
@@ -308,7 +325,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <div>
         <h2 className="text-sm font-extrabold">자동매매 설정</h2>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          주문별 승인은 사용하지 않습니다. 저장된 자동매매 정책과 시장 ON/OFF, 매 주문 위험검사를 모두 통과한 신호만 실행합니다.
+          시장별 자동 실행과 위험 한도를 설정합니다.
         </p>
       </div>
       <button type="button" onClick={() => void load()} aria-label="거래 설정 새로고침" className="rounded-xl border border-card-border p-2">
@@ -354,7 +371,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     {!selectedMarket || selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock' ? <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="stock-broker-routing">
       <p className="text-xs font-extrabold">주식 증권사 선택</p>
       <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-        국내·미국주식은 사용자마다 Toss 또는 Kiwoom을 선택합니다. 코인현물은 Upbit, 코인선물은 Bitget으로 고정됩니다.
+        국내·미국주식 거래사를 선택합니다.
       </p>
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {((selectedMarket === 'domestic_stock' || selectedMarket === 'us_stock') ? [selectedMarket] : ['domestic_stock', 'us_stock'] as StockMarket[]).map((market) => (
@@ -367,18 +384,18 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
               onChange={(event) => selectStockBroker(market, event.target.value === 'toss' ? 'toss' : 'kiwoom')}
               className="mt-2 h-10 w-full rounded-xl border border-card-border bg-background px-3 text-xs"
             >
-              <option value="kiwoom">Kiwoom</option>
-              <option value="toss">Toss</option>
+              <option value="kiwoom">키움</option>
+              <option value="toss">토스</option>
             </select>
           </label>
         ))}
       </div>
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 text-[11px] font-semibold text-muted-foreground">
-        <p className="rounded-xl bg-secondary/60 p-2">코인현물 · Upbit 고정</p>
-        <p className="rounded-xl bg-secondary/60 p-2">코인선물 · Bitget 고정</p>
+        <p className="rounded-xl bg-secondary/60 p-2">코인현물 · 업비트</p>
+        <p className="rounded-xl bg-secondary/60 p-2">코인선물 · 비트겟</p>
       </div>
       <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
-        실전 주문은 거래용 키 저장, 사용자 정책, 서버 provider 게이트, 주문 직전 Risk 재검증을 모두 통과해야 합니다. 키 저장만으로 실주문은 켜지지 않습니다.
+        실전 주문은 거래키, 서버 허용, 주문 직전 위험검사를 모두 통과해야 합니다.
       </p>
     </div> : null}
 
@@ -394,10 +411,10 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {connection?.configured
-              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : connection.accountMode === 'mock' ? '모의' : 'Paper'} · ${status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON' : '서버게이트 OFF'}`
+              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : '모의'} · ${status?.liveExecutionServerEnabled?.[exchange] ? '서버 허용 켜짐' : '서버 허용 꺼짐'}`
               : '거래키 미연결 · 모의매매는 가능'}
           </p>
-          <p className="mt-1 text-[10px] text-muted-foreground">API 키 값은 화면에 표시하지 않습니다.</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">거래키 값은 화면에 표시하지 않습니다.</p>
         </div>;
       })}
     </div>
@@ -442,15 +459,15 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
           ...value,
           enabledStrategies: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
         }))}
-        placeholder="비우면 위험검사를 통과한 전략 전체 · 예: trend-breakout-v1"
+        placeholder="비우면 위험검사를 통과한 전략 전체"
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3 text-sm"
       />
     </label>
 
     {!selectedMarket || selectedMarket === 'crypto_futures' ? <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
-      Bitget 레버리지
+      비트겟 레버리지
       <select
-        aria-label="Bitget 레버리지"
+        aria-label="비트겟 레버리지"
         value={draft.bitgetLeverage}
         onChange={(event) => setDraft((value) => ({
           ...value,
@@ -467,7 +484,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <p className="font-extrabold">마지막 주문 · 체결 · 오류</p>
       <p className="mt-1 text-muted-foreground" data-testid="last-trade-state">
         {status?.lastOrder
-          ? `${EXCHANGE_LABELS[status.lastOrder.exchange]} · ${status.lastOrder.state}${status.lastOrder.lastErrorCode ? ` · ${status.lastOrder.lastErrorCode}` : ''}`
+          ? `${EXCHANGE_LABELS[status.lastOrder.exchange]} · ${orderStateLabel(status.lastOrder.state)}${status.lastOrder.lastErrorCode ? ' · 오류 확인 필요' : ''}`
           : '주문 기록 없음'}
       </p>
     </div>
@@ -497,14 +514,14 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
           <dt className="font-bold">활성 시장</dt><dd>{activeMarkets.map((market) => MARKET_LABELS[market]).join(', ') || '없음'}</dd>
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
-          <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
+          <dt className="font-bold">레버리지</dt><dd>비트겟 최대 {draft.bitgetLeverage}배</dd>
           <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '위험검사 통과 전략 전체'}</dd>
           <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
-          <dt className="font-bold">코인현물</dt><dd>Upbit 고정</dd>
-          <dt className="font-bold">코인선물</dt><dd>Bitget 고정</dd>
-          <dt className="font-bold">실전주문</dt><dd>거래키 + provider 서버게이트 + 주문 직전 Risk Gate 모두 필요</dd>
-          <dt className="font-bold">긴급정지</dt><dd>누르면 4시장 신규 주문 즉시 OFF</dd>
+          <dt className="font-bold">코인현물</dt><dd>업비트</dd>
+          <dt className="font-bold">코인선물</dt><dd>비트겟</dd>
+          <dt className="font-bold">실전주문</dt><dd>거래키 + 서버 허용 + 주문 직전 위험검사</dd>
+          <dt className="font-bold">긴급정지</dt><dd>누르면 4시장 신규 주문 즉시 차단</dd>
         </dl>
         <div className="mt-5 grid grid-cols-2 gap-2">
           <button type="button" onClick={() => setConfirming(false)} className="rounded-2xl border border-card-border px-4 py-3 font-extrabold">취소</button>
