@@ -2324,13 +2324,257 @@ export function AiChartPositionPanel({
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-entry-planning">
                   <p className="text-[10px] font-black">새 진입 계획</p>
                   <p className="mt-0.5 text-[8px] font-bold leading-4 text-muted-foreground">
-                    Scanner 근거가 있는 경우에만 기존 canonical Paper owner를 재사용합니다. 이 화면에서 새로 만드는 진입은 현재 Paper 전용입니다.
-                    실전 신규진입은 브라우저에서 임의 생성하지 않으며, 서버가 이미 만든 live 승인계획이 있을 때만 아래 승인 큐에서 서버 live gate를 거쳐 처리합니다.
+                    직접 수동주문은 서버가 실계좌·현재가·호가·미체결·손실·노출·비용을 다시 검증한 뒤 승인대기 계획만 만듭니다.
+                    계획 생성만으로 주문은 제출되지 않으며, 아래 승인 큐의 명시적 승인 단계에서 다시 Risk 검증 후 Provider 전송이 가능합니다.
                   </p>
                   <div className="mt-2 grid grid-cols-2 gap-1.5 text-[8px] font-black">
-                    <span className="rounded-lg bg-positive/10 px-2 py-1.5 text-positive">Paper 신규진입 · 연결됨</span>
-                    <span className="rounded-lg bg-primary/10 px-2 py-1.5 text-primary">Live 진입초안 · 서버검증 연결</span>
+                    <span className="rounded-lg bg-positive/10 px-2 py-1.5 text-positive">수동 Live · 서버 Risk Preview</span>
+                    <span className="rounded-lg bg-primary/10 px-2 py-1.5 text-primary">Scanner Paper/Live · 기존 경로 유지</span>
                   </div>
+                  <div className="mt-2 rounded-xl border border-primary/20 bg-primary/5 p-2.5" data-testid="ai-chart-manual-entry">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[9px] font-black">직접 수동주문</p>
+                        <p className="mt-0.5 text-[8px] font-bold text-muted-foreground">
+                          입력 → 서버 Preview → 승인대기 계획 → 명시적 승인 · 이 화면에서 즉시 주문하지 않음
+                        </p>
+                      </div>
+                      {initialOrderPrefill?.source === 'orderbook' && manualOrderType === 'limit' ? (
+                        <span className="rounded-full border border-primary/30 bg-background px-2 py-1 text-[8px] font-black text-primary">
+                          호가 지정가 자동입력
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      {(['market', 'limit'] as const).map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={manualOrderType === value}
+                          onClick={() => {
+                            invalidateManualEntryForEdit();
+                            setManualOrderType(value);
+                          }}
+                          className={`min-h-10 rounded-lg border text-[9px] font-black ${manualOrderType === value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
+                        >
+                          {value === 'market' ? '시장가' : '지정가'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {market === 'BITGET' ? (
+                      <div className="mt-2 grid grid-cols-2 gap-1.5">
+                        {(['LONG', 'SHORT'] as const).map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={manualFuturesSide === value}
+                            onClick={() => {
+                              invalidateManualEntryForEdit();
+                              setManualFuturesSide(value);
+                            }}
+                            className={`min-h-10 rounded-lg border text-[9px] font-black ${manualFuturesSide === value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {manualOrderType === 'limit' ? (
+                        <label className="text-[8px] font-bold text-muted-foreground">
+                          지정가
+                          <input
+                            data-testid="manual-entry-limit-price"
+                            inputMode="decimal"
+                            value={manualLimitPriceText}
+                            onChange={(event) => {
+                              invalidateManualEntryForEdit();
+                              setManualLimitPriceText(event.target.value);
+                            }}
+                            placeholder="가격 입력"
+                            className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                          />
+                        </label>
+                      ) : null}
+                      {!(market === 'UPBIT' && manualOrderType === 'market') ? (
+                        <label className="text-[8px] font-bold text-muted-foreground">
+                          수량
+                          <input
+                            data-testid="manual-entry-quantity"
+                            inputMode="decimal"
+                            value={manualQuantityText}
+                            onChange={(event) => {
+                              invalidateManualEntryForEdit();
+                              setManualQuantityText(event.target.value);
+                            }}
+                            placeholder="수량 입력"
+                            className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                          />
+                        </label>
+                      ) : null}
+                      <label className="text-[8px] font-bold text-muted-foreground">
+                        주문예상금액 KRW
+                        <input
+                          data-testid="manual-entry-estimated-krw"
+                          inputMode="decimal"
+                          value={manualEstimatedKrwText}
+                          onChange={(event) => {
+                            invalidateManualEntryForEdit();
+                            setManualEstimatedKrwText(event.target.value);
+                          }}
+                          placeholder={market === 'UPBIT' && manualOrderType === 'market' ? '매수할 원화 금액' : '예상 주문금액'}
+                          className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                        />
+                      </label>
+                      <label className="text-[8px] font-bold text-muted-foreground">
+                        손절가
+                        <input
+                          data-testid="manual-entry-stop-price"
+                          inputMode="decimal"
+                          value={manualStopPriceText}
+                          onChange={(event) => {
+                            invalidateManualEntryForEdit();
+                            setManualStopPriceText(event.target.value);
+                          }}
+                          placeholder="손절가"
+                          className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                        />
+                      </label>
+                      <label className="text-[8px] font-bold text-muted-foreground">
+                        목표가
+                        <input
+                          data-testid="manual-entry-target-price"
+                          inputMode="decimal"
+                          value={manualTargetPriceText}
+                          onChange={(event) => {
+                            invalidateManualEntryForEdit();
+                            setManualTargetPriceText(event.target.value);
+                          }}
+                          placeholder="목표가"
+                          className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[11px] font-black text-foreground"
+                        />
+                      </label>
+                    </div>
+
+                    {market === 'BITGET' ? (
+                      <div className="mt-2 grid grid-cols-2 gap-1.5">
+                        {([2, 3] as const).map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={manualLeverage === value}
+                            onClick={() => {
+                              invalidateManualEntryForEdit();
+                              setManualLeverage(value);
+                            }}
+                            className={`min-h-10 rounded-lg border text-[9px] font-black ${manualLeverage === value ? 'border-primary bg-primary/10 text-primary' : 'border-card-border'}`}
+                          >
+                            레버리지 {value}x
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {market === 'US' ? (
+                      <label className="mt-2 block text-[8px] font-bold text-muted-foreground">
+                        키움 사용 시 미국 거래소
+                        <select
+                          data-testid="manual-entry-stock-exchange"
+                          value={manualStockExchange}
+                          onChange={(event) => {
+                            invalidateManualEntryForEdit();
+                            setManualStockExchange(event.target.value as typeof manualStockExchange);
+                          }}
+                          className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-3 text-[10px] font-black text-foreground"
+                        >
+                          <option value="">Toss는 선택 불필요 / Kiwoom은 선택 필요</option>
+                          <option value="NASDAQ">NASDAQ</option>
+                          <option value="NYSE">NYSE</option>
+                          <option value="AMEX">AMEX</option>
+                        </select>
+                      </label>
+                    ) : null}
+
+                    <button
+                      type="button"
+                      data-testid="manual-entry-preview"
+                      disabled={manualPreviewState.kind === 'loading' || manualPlanState.kind === 'loading' || manualPlanState.kind === 'ready'}
+                      onClick={() => void requestManualEntryPreview()}
+                      className="mt-2 min-h-11 w-full rounded-xl border border-primary/30 bg-background px-3 text-[10px] font-black text-primary disabled:opacity-50"
+                    >
+                      {manualPreviewState.kind === 'loading' ? '실계좌·호가·Risk 검증 중...' : '서버 주문 Preview'}
+                    </button>
+
+                    {manualPreviewState.kind === 'unavailable' ? (
+                      <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-bold text-warning">
+                        {manualEntryErrorLabel(manualPreviewState.code)}
+                      </p>
+                    ) : null}
+
+                    {manualPreviewState.kind === 'ready' ? (
+                      <div className="mt-2 rounded-xl border border-card-border bg-background p-2.5" data-testid="manual-entry-preview-ready">
+                        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                          <Metric label="Provider" value={providerLabel(manualPreviewState.preview.exchange)} />
+                          <Metric label="현재가" value={formatPrice(manualPreviewState.preview.currentPrice, market)} />
+                          <Metric label="서버 주문금액" value={`${manualPreviewState.preview.estimatedKrw.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원`} />
+                          <Metric label="주문가능" value={`${manualPreviewState.preview.availableBalance.toLocaleString('ko-KR', { maximumFractionDigits: 0 })}원`} />
+                          <Metric label="Spread" value={`${manualPreviewState.preview.spreadPercent.toFixed(3)}%`} />
+                          <Metric label="Slippage" value={manualPreviewState.preview.estimatedSlippagePercent == null ? '미제공' : `${manualPreviewState.preview.estimatedSlippagePercent.toFixed(3)}%`} />
+                          <Metric label="오늘 주문" value={String(manualPreviewState.preview.dailyOrderCount)} />
+                          <Metric label="시장" value={manualPreviewState.preview.marketStatus} />
+                        </div>
+                        {manualPreviewState.decision.blockCodes.length ? (
+                          <p className="mt-2 break-words text-[8px] font-black text-warning">
+                            차단 · {manualPreviewState.decision.blockCodes.join(' · ')}
+                          </p>
+                        ) : (
+                          <p className="mt-2 text-[8px] font-black text-positive">
+                            Preview PASS · 실제 주문 전 승인단계에서 다시 검증합니다.
+                          </p>
+                        )}
+                        {manualPreviewState.decision.warnings.length ? (
+                          <p className="mt-1 break-words text-[8px] font-bold text-muted-foreground">
+                            안내 · {manualPreviewState.decision.warnings.join(' · ')}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    <button
+                      type="button"
+                      data-testid="manual-entry-create-plan"
+                      disabled={manualPreviewState.kind !== 'ready' || !manualPreviewState.decision.allowed || manualPlanState.kind === 'loading' || manualPlanState.kind === 'ready'}
+                      onClick={() => void createManualEntryPlan()}
+                      className="mt-2 min-h-11 w-full rounded-xl bg-primary px-3 text-[10px] font-black text-primary-foreground disabled:opacity-50"
+                    >
+                      {manualPlanState.kind === 'loading' ? '승인대기 계획 생성 중...' : '승인대기 계획 만들기'}
+                    </button>
+
+                    {manualPlanState.kind === 'unavailable' ? (
+                      <p role="alert" className="mt-2 rounded-lg bg-warning/10 p-2 text-[8px] font-bold text-warning">
+                        {manualEntryErrorLabel(manualPlanState.code)}
+                      </p>
+                    ) : null}
+                    {manualPlanState.kind === 'ready' ? (
+                      <div className="mt-2 rounded-lg border border-positive/30 bg-positive/5 p-2 text-[8px] font-bold" data-testid="manual-entry-plan-ready">
+                        <p className="font-black text-positive">승인대기 계획 생성 완료 · 주문 제출 0건</p>
+                        <p className="mt-1 text-muted-foreground">
+                          아래 승인 큐에서 최종 내용을 확인하고 명시적으로 승인해야 주문 단계로 넘어갑니다.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={resetManualEntry}
+                          className="mt-2 min-h-9 rounded-lg border border-card-border bg-background px-3 text-[9px] font-black"
+                        >
+                          새 주문 입력
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
                   {entryContextReady ? (
                     <div className="mt-2 [&_[data-testid=scanner-approval-composer]]:rounded-2xl [&_[data-testid=scanner-approval-composer]]:shadow-none">
                       <ScannerApprovalComposer selection={selection} />
