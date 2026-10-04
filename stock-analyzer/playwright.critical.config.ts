@@ -16,6 +16,8 @@ export const CRITICAL_BROWSER_SPECS = [
   /portfolio-professional-ui\.spec\.ts$/u,
   /account-professional-ui\.spec\.ts$/u,
   /phase12-trade-automation\.spec\.ts$/u,
+  /phase13-orderbook\.spec\.ts$/u,
+  /stock-info-trade-actions\.spec\.ts$/u,
   /research-copilot\.spec\.ts$/u,
   /research-center-professional-hierarchy\.spec\.ts$/u,
   /research-paper-closed-loop-observer\.spec\.ts$/u,
