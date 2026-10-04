@@ -231,6 +231,7 @@ export function buildTaskPlan({
     if (task.kind === 'paper') {
       env.PAPER_FORWARD_SCHEDULE_ACTIVE = 'true';
       env.PAPER_FORWARD_ROOT = join(stateRoot, 'forward', 'paper');
+      env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH = join(resolve(stateRoot), 'latest', 'formula-paper-strategy-registry.json');
       env.PAPER_FORWARD_RESEARCH_SHA = pinnedSha;
       env.PAPER_FORWARD_ACTIVATION_AT_MS = String(Number.isFinite(activationAtMs) ? activationAtMs : Date.now());
       env.PAPER_FORWARD_TRIGGER_SOURCE = 'cron';
