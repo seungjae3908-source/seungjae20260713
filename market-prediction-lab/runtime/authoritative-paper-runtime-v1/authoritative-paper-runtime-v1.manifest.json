@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "ff65706ea56d81d74c4d5225baf2946e699ebdc524a925505a1f5da07a72df85",
+  "sourceGraphSha256": "3160f46e44eec298d583a6f692b2724e4240b67caccde75be3256feadcb0a266",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -91,11 +91,11 @@
     "api-server/src/services/signal-performance-learning.service.ts": "f4180691041a9f7f57cbfd7513ff6666260275efa6c49652c313ae6bc9195392",
     "api-server/src/services/strategy-promotion.service.ts": "d9a8590862f69b5b2da72e27a874b92665161f9eb4c8f9674a94c651bfb5ccd1",
     "api-server/src/services/trade-paper-market-contract.service.ts": "376ed9ba0bb91253fadb9da62f031a45ef3af1bc055622b4a1d8b46c9706f570",
-    "api-server/src/services/trading-risk-engine.service.ts": "1276d15d55141ede4b647c87e6105aa246a9bbc728beed5aec9bb2f50f33d7e8",
+    "api-server/src/services/trading-risk-engine.service.ts": "6005a12a69e8375913d7699ef864d0efa01ff3d80357c85cd355bb16cbdd96f2",
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "0d1cd5efc05d994799cfba29c02c5cb80dbd9bb10fdb9475f901e3a0b61637f2",
+  "bundleSha256": "a1ae7fcbb978b0a47de6f3a59abda9d890b5e4c6b291434724350ea4cd7509f3",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
