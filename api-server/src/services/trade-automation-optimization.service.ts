@@ -64,13 +64,16 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
-  const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
+  const explicitManual = plan.executionMode === 'manual' && policy.mode === 'approval';
+  const profitabilityAttestation = explicitManual ? null : attestLiveTradingProfitability(plan, undefined, {
     now,
     maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
   });
-  const economics = plan.accountMode === 'live'
-    ? profitabilityAttestation.serverEconomics
-    : plan.economics;
+  const economics = explicitManual
+    ? plan.economics
+    : plan.accountMode === 'live'
+      ? profitabilityAttestation?.serverEconomics ?? null
+      : plan.economics;
   const economicsPlan = economics === plan.economics ? plan : { ...plan, economics };
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
@@ -81,13 +84,13 @@ export function evaluateTradingOptimization(
     add(blockCodes, 'ENTRY_PRICE_OUTSIDE_ZONE');
   }
 
-  if (plan.accountMode === 'live' && !profitabilityAttestation.allowed) {
+  if (plan.accountMode === 'live' && !explicitManual && profitabilityAttestation && !profitabilityAttestation.allowed) {
     add(blockCodes, 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED');
     for (const code of profitabilityAttestation.blockCodes) add(blockCodes, code);
   }
 
   const computedExpectedValueR = expectedValueR(economicsPlan);
-  if (liveOrAutomatic) {
+  if (liveOrAutomatic && !explicitManual) {
     if (!economics) {
       add(blockCodes, 'ECONOMICS_REQUIRED');
     } else {
@@ -108,12 +111,16 @@ export function evaluateTradingOptimization(
       if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
       else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
     }
+  } else if (!liveOrAutomatic && !economics) {
+    warnings.push('모의 주문에는 기대값 데이터가 없어도 실행할 수 있지만 실계좌 전환은 차단됩니다.');
+  } else if (explicitManual) {
+    warnings.push('사용자 직접 수동주문은 전략 수익성 증거를 요구하지 않으며 계좌·시장·손실·노출·비용 Risk를 그대로 재검증합니다.');
+  }
+  if (liveOrAutomatic) {
     if (!finite(plan.estimatedSlippagePercent)) add(blockCodes, 'SLIPPAGE_ESTIMATE_REQUIRED');
     else if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'SLIPPAGE_TOO_HIGH');
     if (!finite(plan.averageSpreadPercent)) add(blockCodes, 'AVERAGE_SPREAD_REQUIRED');
     else if (plan.averageSpreadPercent > policy.maxAverageSpreadPercent) add(blockCodes, 'AVERAGE_SPREAD_TOO_WIDE');
-  } else if (!economics) {
-    warnings.push('모의 주문에는 기대값 데이터가 없어도 실행할 수 있지만 실계좌 전환은 차단됩니다.');
   }
 
   const correlatedExposure = plan.marketSnapshot.correlatedExposurePercent;
