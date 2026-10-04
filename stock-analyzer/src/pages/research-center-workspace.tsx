@@ -21,7 +21,7 @@ const WORKSPACE_TABS = [
   },
   {
     value: 'copilot',
-    label: 'AI 도우미',
+    label: '인공지능 도우미',
     icon: Bot,
   },
   {
