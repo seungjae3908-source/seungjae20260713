@@ -184,7 +184,7 @@ jobs:
               repo: context.repo.repo,
               issue_number: 1555,
               body: [
-                'Production Account Read-only Live QA dispatched behind the protected production environment.',
+                'Production Account Read-only Live QA dispatched in the isolated production-readonly-qa environment.',
                 '',
                 '- Exact deployed Production SHA: ' + process.env.TARGET_SHA,
                 '- Activation target providers: ' + process.env.TARGET_PROVIDERS,
@@ -195,6 +195,7 @@ jobs:
                 '- Provider Secret values passed by bridge: 0',
                 '- Orders/cancels/amends/transfers/withdrawals authorized by bridge: 0',
                 '- Live/auto trading authority granted by bridge: false',
+                '- Required reviewer for this read-only QA: false',
                 '- Source command comment ID: ' + process.env.SOURCE_COMMENT_ID,
               ].join('\n'),
             });
