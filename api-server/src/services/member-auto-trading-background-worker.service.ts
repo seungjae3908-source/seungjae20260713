@@ -501,17 +501,19 @@ function buildPlanInput(
   const marketStatus = snapshotMarketStatus(entry);
   const leverageEvidence = Number(evidence?.leverage);
   const marginModeEvidence = String(evidence?.marginMode ?? '').toLowerCase();
-  let leverage: 2 | 3 | null = null;
+  let leverage: 2 | 3 | 4 | 5 | 6 | 7 | null = null;
   let marginMode: 'crossed' | 'isolated' | null = null;
   if (mapping.exchange === 'bitget') {
-    if ((leverageEvidence !== 2 && leverageEvidence !== 3)
+    if (!Number.isInteger(leverageEvidence)
+      || leverageEvidence < 2
+      || leverageEvidence > 7
       || leverageEvidence !== member.policy.bitgetLeverage) {
       throw new Error('BACKGROUND_LEVERAGE_EVIDENCE_MISMATCH');
     }
     if (marginModeEvidence !== 'isolated') {
       throw new Error('BACKGROUND_ISOLATED_MARGIN_EVIDENCE_REQUIRED');
     }
-    leverage = leverageEvidence;
+    leverage = leverageEvidence as 2 | 3 | 4 | 5 | 6 | 7;
     marginMode = 'isolated';
   }
 

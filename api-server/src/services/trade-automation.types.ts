@@ -107,7 +107,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   maxOpenPositions: 5,
   maxDailyOrders: 10,
   maxConsecutiveLosses: 3,
-  bitgetLeverage: 2 as 2 | 3,
+  bitgetLeverage: 2 as 2 | 3 | 4 | 5 | 6 | 7,
   riskOptimizationEnabled: true,
   pilotStage: 'approval-20' as TradingPilotStage,
   riskPerTradePercent: { bitget: 0.1, upbit: 0.2, kiwoom: 0.25, toss: 0.25 },
@@ -142,7 +142,7 @@ export type TradingPolicy = {
   maxOpenPositions: number;
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
-  bitgetLeverage: 2 | 3;
+  bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
   riskOptimizationEnabled: boolean;
   pilotStage: TradingPilotStage;
   riskPerTradePercent: Record<TradingExchange, number>;
