@@ -52,7 +52,7 @@ test('Research Center V2 source preserves the complete fail-closed maturity ladd
   for (const key of ['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact']) {
     expect(product).toContain(`'${key}'`);
   }
-  for (const tab of ['연구 현황', 'AI 분석실', '검증 리포트', '모의매매']) expect(page).toContain(`label: '${tab}'`);
+  for (const tab of ['연구 현황', '인공지능 분석실', '검증 리포트', '모의매매']) expect(page).toContain(`label: '${tab}'`);
 
   expect(product).toContain("return value === 0 ? 'ZERO_MEASURED' : 'PRESENT'");
   expect(product).toContain("'현재 검증된 Champion 없음'");
