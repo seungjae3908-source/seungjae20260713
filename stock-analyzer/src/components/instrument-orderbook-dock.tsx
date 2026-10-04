@@ -15,7 +15,7 @@ export type OrderbookAssetClass = 'stock' | 'crypto_spot' | 'crypto_futures';
 export type OrderbookMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
 type OrderbookStatus = 'ready' | 'partial' | 'stale' | 'unavailable' | 'invalid';
 type Currency = 'KRW' | 'USD' | 'USDT';
-type Provider = 'kiwoom' | 'upbit' | 'bitget' | null;
+type Provider = 'kiwoom' | 'toss' | 'upbit' | 'bitget' | null;
 
 type Level = {
   rank: number;
@@ -64,7 +64,10 @@ function finite(value: unknown): number | null {
 
 function sameNumber(left: number, right: number): boolean {
   const scale = Math.max(1, Math.abs(left), Math.abs(right));
-  return Math.abs(left - right) <= Number.EPSILON * 16 * scale;
+  // Decimal market prices (for example 225.12 - 225.11) can accumulate a
+  // few ULPs of IEEE-754 subtraction noise. Accept only that microscopic
+  // representation error while still failing closed on real value drift.
+  return Math.abs(left - right) <= Number.EPSILON * 64 * scale;
 }
 
 function cleanText(value: unknown): string | null {
@@ -175,7 +178,7 @@ function parsePayload(value: unknown): Payload {
   }
   const spread = derivedSpread ?? declaredSpread;
 
-  const provider: Provider = row.provider === 'kiwoom' || row.provider === 'upbit' || row.provider === 'bitget'
+  const provider: Provider = row.provider === 'kiwoom' || row.provider === 'toss' || row.provider === 'upbit' || row.provider === 'bitget'
     ? row.provider
     : null;
   const providerTimestamp = cleanText(row.providerTimestamp);
@@ -260,6 +263,7 @@ function formatTime(value: string | null | undefined): string {
 
 function providerLabel(provider: Provider): string {
   if (provider === 'kiwoom') return 'Kiwoom read-only';
+  if (provider === 'toss') return 'Toss read-only';
   if (provider === 'upbit') return 'Upbit public REST';
   if (provider === 'bitget') return 'Bitget public REST';
   return 'Provider unavailable';
