@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const nodeTest = require('node:test');
 const {
+  assertProductionDeployExecutionProvenance,
   assertProductionDeployProvenance,
   assertProductionRuntimeIdentity,
   canonicalizeProductionAccountProviders,
@@ -86,4 +87,35 @@ nodeTest.test('I: preserves the canonical four-provider ordering', () => {
     ['bitget', 'kiwoom', 'toss', 'upbit'],
   );
   assert.equal(canonicalizeProductionAccountProviders('toss,toss'), null);
+});
+
+nodeTest.test('J: accepts only the current in-progress official deploy for inline post-deploy QA', () => {
+  const inline = deploy({ status: 'in_progress', conclusion: null });
+  assert.doesNotThrow(() => assertProductionDeployExecutionProvenance(inline, {
+    targetSha,
+    productionDeployRunId: '36696880082',
+    currentRunId: '36696880082',
+    mode: 'inline',
+  }));
+  assert.throws(() => assertProductionDeployExecutionProvenance(inline, {
+    targetSha,
+    productionDeployRunId: '36696880082',
+    currentRunId: '36696880083',
+    mode: 'inline',
+  }), /INLINE_RUN_ID_MISMATCH/);
+});
+
+nodeTest.test('K: inline post-deploy QA rejects completed, waiting, or failed runs', () => {
+  for (const overrides of [
+    { status: 'completed', conclusion: 'success' },
+    { status: 'waiting', conclusion: null },
+    { status: 'completed', conclusion: 'failure' },
+  ]) {
+    assert.throws(() => assertProductionDeployExecutionProvenance(deploy(overrides), {
+      targetSha,
+      productionDeployRunId: '36696880082',
+      currentRunId: '36696880082',
+      mode: 'inline',
+    }), /INLINE_STATUS_MISMATCH/);
+  }
 });

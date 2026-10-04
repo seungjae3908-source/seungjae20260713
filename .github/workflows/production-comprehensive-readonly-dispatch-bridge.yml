@@ -178,7 +178,7 @@ jobs:
               repo: context.repo.repo,
               issue_number: 1555,
               body: [
-                'Production Comprehensive Read-Only QA dispatched in the isolated `production-readonly-qa` environment.',
+                'Production Comprehensive Read-Only QA dispatched with protected Production QA credentials.',
                 '',
                 `- Exact deployed Production SHA: \`${process.env.TARGET_SHA}\``,
                 '- QA repository checkout is pinned to the deployed SHA input: `true`',
