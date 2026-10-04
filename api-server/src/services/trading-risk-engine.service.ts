@@ -117,7 +117,7 @@ export const TRADING_RISK_POLICY = Object.freeze({
   defaultMaintenanceMarginRate: 0.005,
   minimumStopLiquidationBufferPercent: 0.5,
   maximumAdjustmentIterations: 1_000,
-  cryptoFuturesAppMaximumLeverage: 10,
+  cryptoFuturesAppMaximumLeverage: 7,
 });
 
 const DATA_STATUSES = new Set<RiskDataStatus>([
