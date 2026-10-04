@@ -77,6 +77,8 @@ for (const width of [360, 390, 430]) {
     await page.getByTestId('trading-market-us_stock').click();
     await expect(page.getByTestId('auto-market-us_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveValue('kiwoom');
+    await expect(page.getByTestId('stock-broker-us_stock')).toBeDisabled();
+    await expect(page.getByTestId('stock-broker-us_stock').locator('option')).toHaveCount(1);
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveCount(0);
 
     await page.getByTestId('trading-market-crypto_spot').click();
@@ -89,6 +91,9 @@ for (const width of [360, 390, 430]) {
     await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-bitget')).toBeVisible();
     await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
+    await expect(page.getByLabel('Bitget 레버리지').locator('option')).toHaveText([
+      '2배 (기본)', '3배', '4배', '5배', '6배', '7배 (최대)',
+    ]);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     expectNoBrowserFailures(failures);
