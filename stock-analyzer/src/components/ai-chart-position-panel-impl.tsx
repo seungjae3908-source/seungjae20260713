@@ -808,6 +808,7 @@ export function AiChartPositionPanel({
   pricePlan,
   initialCockpitOpen = false,
   initialCockpitTab = 'entry',
+  initialOrderPrefill = null,
   onOverlayChange,
 }: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
@@ -834,6 +835,18 @@ export function AiChartPositionPanel({
   const [exitSubmissionGateState, setExitSubmissionGateState] = useState<ExitSubmissionGateState>({ kind: 'idle' });
   const [entryReadiness, setEntryReadiness] = useState<EntryReadinessState>({ kind: 'idle' });
   const [liveEntryDraft, setLiveEntryDraft] = useState<LiveEntryDraftState>({ kind: 'idle' });
+  const [manualIntentId, setManualIntentId] = useState(newManualIntentId);
+  const [manualOrderType, setManualOrderType] = useState<'market' | 'limit'>(() => initialOrderPrefill?.orderType ?? 'market');
+  const [manualLimitPriceText, setManualLimitPriceText] = useState(() => initialOrderPrefill ? String(initialOrderPrefill.limitPrice) : '');
+  const [manualQuantityText, setManualQuantityText] = useState('');
+  const [manualEstimatedKrwText, setManualEstimatedKrwText] = useState('');
+  const [manualStopPriceText, setManualStopPriceText] = useState('');
+  const [manualTargetPriceText, setManualTargetPriceText] = useState('');
+  const [manualFuturesSide, setManualFuturesSide] = useState<'LONG' | 'SHORT'>(() => selection.action === 'SHORT' ? 'SHORT' : 'LONG');
+  const [manualLeverage, setManualLeverage] = useState<2 | 3>(2);
+  const [manualStockExchange, setManualStockExchange] = useState<'NASDAQ' | 'NYSE' | 'AMEX' | ''>('');
+  const [manualPreviewState, setManualPreviewState] = useState<ManualEntryPreviewState>({ kind: 'idle' });
+  const [manualPlanState, setManualPlanState] = useState<ManualEntryPlanState>({ kind: 'idle' });
   const abortRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   const orderAbortRef = useRef<AbortController | null>(null);
@@ -856,6 +869,8 @@ export function AiChartPositionPanel({
   const entryReadinessSequenceRef = useRef(0);
   const liveDraftAbortRef = useRef<AbortController | null>(null);
   const liveDraftSequenceRef = useRef(0);
+  const manualEntryAbortRef = useRef<AbortController | null>(null);
+  const manualEntrySequenceRef = useRef(0);
 
   useEffect(() => {
     requestSequenceRef.current += 1;
@@ -891,6 +906,9 @@ export function AiChartPositionPanel({
     liveDraftSequenceRef.current += 1;
     liveDraftAbortRef.current?.abort();
     liveDraftAbortRef.current = null;
+    manualEntrySequenceRef.current += 1;
+    manualEntryAbortRef.current?.abort();
+    manualEntryAbortRef.current = null;
     setState({ kind: 'idle' });
     setLinesVisible(true);
     setAdditionalValueText('');
@@ -914,8 +932,20 @@ export function AiChartPositionPanel({
     setExitSubmissionGateState({ kind: 'idle' });
     setEntryReadiness({ kind: 'idle' });
     setLiveEntryDraft({ kind: 'idle' });
+    setManualIntentId(newManualIntentId());
+    setManualOrderType(initialOrderPrefill?.orderType ?? 'market');
+    setManualLimitPriceText(initialOrderPrefill ? String(initialOrderPrefill.limitPrice) : '');
+    setManualQuantityText('');
+    setManualEstimatedKrwText('');
+    setManualStopPriceText('');
+    setManualTargetPriceText('');
+    setManualFuturesSide(selection.action === 'SHORT' ? 'SHORT' : 'LONG');
+    setManualLeverage(2);
+    setManualStockExchange('');
+    setManualPreviewState({ kind: 'idle' });
+    setManualPlanState({ kind: 'idle' });
     onOverlayChange(null);
-  }, [initialCockpitOpen, initialCockpitTab, market, onOverlayChange, symbol]);
+  }, [initialCockpitOpen, initialCockpitTab, initialOrderPrefill, market, onOverlayChange, selection.action, symbol]);
 
   useEffect(() => {
     return () => {
@@ -930,6 +960,7 @@ export function AiChartPositionPanel({
       exitSubmissionGateAbortRef.current?.abort();
       entryReadinessAbortRef.current?.abort();
       liveDraftAbortRef.current?.abort();
+      manualEntryAbortRef.current?.abort();
     };
   }, []);
 
