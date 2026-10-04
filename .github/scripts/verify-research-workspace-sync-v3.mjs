@@ -158,6 +158,7 @@ const researchCenterIntegrationReviewed=[
  'api-server/src/routes/market-summary-availability.smoke.test.ts',
  'api-server/src/routes/video-research-source-evidence.ts',
  'api-server/src/services/research-center-readonly-contract.service.ts',
+ 'api-server/src/services/research-copilot.service.ts',
  'api-server/src/services/strategy-promotion-research-bridge.service.ts',
  'api-server/src/services/strategy-promotion-research-bridge.service.test.ts',
  'api-server/src/services/fast-profitability-activation.service.ts',
