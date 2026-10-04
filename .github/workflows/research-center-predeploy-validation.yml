@@ -233,7 +233,7 @@ jobs:
           node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
           const fs = require('node:fs');
           const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+          if (plan.taskCount !== 11 || plan.stepCount !== 22) {
             throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
           }
           if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {
