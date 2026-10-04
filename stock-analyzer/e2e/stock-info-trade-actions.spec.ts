@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { tradeChartPath, tradeFocusFromSearch } from '../src/lib/trade-navigation';
+import { tradeActionFromSearch, tradeChartPath, tradeFocusFromSearch } from '../src/lib/trade-navigation';
 
 const stockInfoPath = fileURLToPath(new URL('../src/pages/stock-info.tsx', import.meta.url));
 const aiChartPath = fileURLToPath(new URL('../src/pages/ai-chart.tsx', import.meta.url));
@@ -21,6 +21,7 @@ test('stock tab trade navigation preserves market policy and never invents spot 
   expect(stockBuy.searchParams.get('action')).toBe('BUY');
   expect(stockBuy.searchParams.get('source')).toBe('stock-info');
   expect(tradeFocusFromSearch(stockBuy.search)).toBe('entry');
+  expect(tradeActionFromSearch(stockBuy.search)).toBe('BUY');
 
   const stockSell = new URL(tradeChartPath({
     assetType: 'stock',
@@ -33,6 +34,7 @@ test('stock tab trade navigation preserves market policy and never invents spot 
   expect(stockSell.searchParams.get('trade')).toBe('exit');
   expect(stockSell.searchParams.get('action')).toBe('SELL');
   expect(tradeFocusFromSearch(stockSell.search)).toBe('exit');
+  expect(tradeActionFromSearch(stockSell.search)).toBe('SELL');
 
   const spotSell = new URL(tradeChartPath({
     assetType: 'coin_spot',
@@ -56,6 +58,7 @@ test('stock tab trade navigation preserves market policy and never invents spot 
     }), 'https://app.invalid');
     expect(futures.searchParams.get('trade')).toBe('entry');
     expect(futures.searchParams.get('action')).toBe(action);
+    expect(tradeActionFromSearch(futures.search)).toBe(action);
   }
 
   expect(() => tradeChartPath({
@@ -93,6 +96,8 @@ test('stock and coin detail expose trade actions only through the canonical AI c
   expect(stockInfo).not.toMatch(/\/api\/trade-automation\/(?:plans|orders)/);
 
   expect(aiChart).toContain("tradeFocusFromSearch(initialSearchRef.current)");
+  expect(aiChart).toContain("tradeActionFromSearch(initialSearchRef.current)");
+  expect(aiChart).toContain("{ ...base, action: tradeActionRef.current }");
   expect(aiChart).toContain("tradeRouteRequested ? 'position' : 'summary'");
   expect(aiChart).toContain('initialCockpitOpen={tradeRouteRequested}');
   expect(aiChart).toContain("initialCockpitTab={tradeFocusRef.current ?? 'entry'}");
