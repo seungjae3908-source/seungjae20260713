@@ -48,7 +48,7 @@ type ResearchTab = 'overview' | 'ai-lab' | 'evidence' | 'paper';
 
 const TABS: Array<{ key: ResearchTab; label: string; icon: typeof Activity }> = [
   { key: 'overview', label: '연구 현황', icon: Activity },
-  { key: 'ai-lab', label: '인공지능 분석실', icon: BrainCircuit },
+  { key: 'ai-lab', label: 'AI 분석실', icon: BrainCircuit },
   { key: 'evidence', label: '검증 리포트', icon: FileSearch },
   { key: 'paper', label: '모의매매', icon: WalletCards },
 ];
