@@ -15,6 +15,7 @@ import {
 export const FORMULA_AUTO_BACKTEST_QUEUE_ITEM_CONTRACT_V1 = 'research-formula-auto-backtest-queue-item/v1';
 export const FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1 = 'research-formula-auto-backtest-result/v1';
 export const FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1 = 'research-formula-auto-backtest-summary/v1';
+export const FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1 = 'research-formula-paper-strategy-registry/v1';
 export const FORMULA_AUTO_BACKTEST_STATES_V1 = Object.freeze(['PASS', 'HOLD', 'RESERVE', 'EXCLUDE']);
 
 const SAFE_FILE = /^[A-Za-z0-9._-]{1,180}\.json$/u;
@@ -274,6 +275,85 @@ export function classifyFormulaAutoBacktestResultV1(tournament) {
   return 'EXCLUDE';
 }
 
+export function buildFormulaPaperStrategyRegistryV1(rows = []) {
+  if (!Array.isArray(rows)) throw new TypeError('FORMULA_PAPER_REGISTRY_ROWS_ARRAY_REQUIRED');
+  const entries = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (row?.state !== 'PASS' || !Array.isArray(row?.tournament?.candidates)) continue;
+    for (const candidate of row.tournament.candidates) {
+      if (candidate?.researchSurvivor !== true
+        || candidate?.failure !== null
+        || candidate?.tradingAuthority !== false
+        || candidate?.safety?.executionAuthority !== 'NONE'
+        || !candidate?.formulaCandidate
+        || !candidate?.generatedCandidate) continue;
+      const market = candidate.market;
+      const direction = String(candidate.direction ?? '').toUpperCase();
+      const allowedDirection = market === 'CRYPTO_FUTURES'
+        ? (direction === 'LONG' || direction === 'SHORT')
+        : (['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT'].includes(market) && direction === 'LONG');
+      if (!allowedDirection) continue;
+      const registryId = digest({
+        itemDigest: row.itemDigest,
+        formulaCandidateId: candidate.formulaCandidateId,
+        generatedCandidateId: candidate.generatedCandidateId,
+        parameterIdentity: candidate.parameterIdentity,
+      });
+      if (seen.has(registryId)) continue;
+      seen.add(registryId);
+      entries.push(Object.freeze({
+        registryId,
+        source: 'FORMULA_AUTO_BACKTEST_PASS',
+        registeredAt: row.evaluatedAt ?? null,
+        itemDigest: row.itemDigest ?? null,
+        tournamentId: row.tournamentId ?? row.tournament?.tournamentId ?? null,
+        formulaCandidateId: candidate.formulaCandidateId ?? null,
+        generatedCandidateId: candidate.generatedCandidateId ?? null,
+        strategyHash: candidate.strategyHash ?? null,
+        parameterIdentity: candidate.parameterIdentity ?? null,
+        strategyFamily: candidate.strategyFamily ?? null,
+        market,
+        timeframe: candidate.timeframe ?? null,
+        direction,
+        formulaCandidate: structuredClone(candidate.formulaCandidate),
+        generatedCandidate: structuredClone(candidate.generatedCandidate),
+        paperState: 'REGISTERED_WAITING_FUTURE_SIGNAL',
+        futureSignalRequired: true,
+        freshPublicEvidenceRequired: true,
+        canonicalPaperAdmissionRequired: true,
+        simulationAuthorityRequired: true,
+        directTradeOnBacktestPass: false,
+        enabledForPaperEvaluation: true,
+        retainedForAudit: true,
+        liveTrading: false,
+        autoTrading: false,
+        realOrder: false,
+        privateTradingApi: false,
+        executionAuthority: 'NONE',
+      }));
+    }
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    contract: FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
+    generatedAt: new Date().toISOString(),
+    entryCount: entries.length,
+    entries: Object.freeze(entries),
+    acceptedSourceState: 'PASS',
+    rejectedSourceStates: Object.freeze(['HOLD', 'RESERVE', 'EXCLUDE']),
+    directTradeOnBacktestPass: false,
+    futureSignalRequired: true,
+    canonicalPaperAdmissionRequired: true,
+    deletionAllowed: false,
+    liveTrading: false,
+    autoTrading: false,
+    realOrder: false,
+    privateTradingApi: false,
+    executionAuthority: 'NONE',
+  });
+}
+
 export async function evaluateFormulaAutoBacktestQueueItemV1(item) {
   let validated;
   try {
@@ -348,6 +428,7 @@ export async function processFormulaAutoBacktestQueueV1({
   const inbox = join(root, 'formula-backtest', 'inbox');
   const resultsRoot = join(root, 'formula-backtest', 'results');
   const latestPath = join(root, 'latest', 'formula-backtest-queue.json');
+  const paperRegistryPath = join(root, 'latest', 'formula-paper-strategy-registry.json');
   await mkdir(inbox, { recursive: true, mode: 0o700 });
   await mkdir(resultsRoot, { recursive: true, mode: 0o700 });
   let files = (await readdir(inbox)).filter((name) => SAFE_FILE.test(name)).sort().slice(0, maximumItems);
@@ -399,12 +480,14 @@ export async function processFormulaAutoBacktestQueueV1({
   const counts = Object.fromEntries(FORMULA_AUTO_BACKTEST_STATES_V1.map((state) => [
     state, rows.filter((row) => row.state === state).length,
   ]));
+  const paperRegistry = buildFormulaPaperStrategyRegistryV1(rows);
   const summary = {
     schemaVersion: 1,
     contract: FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1,
     generatedAt: new Date().toISOString(),
     scanned: files.length,
     counts,
+    paperRegisteredCount: paperRegistry.entryCount,
     rows: rows.map((row) => ({
       formulaId: row.formulaId,
       itemDigest: row.itemDigest,
@@ -424,5 +507,6 @@ export async function processFormulaAutoBacktestQueueV1({
     executionAuthority: 'NONE',
   };
   await atomicJson(latestPath, summary);
+  await atomicJson(paperRegistryPath, paperRegistry);
   return Object.freeze(summary);
 }
