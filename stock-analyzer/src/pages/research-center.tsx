@@ -173,6 +173,7 @@ function exportResearchWorkbook(
   const performance = overview.paper.candidatePerformance;
   const activity = overview.activity?.entries ?? [];
   const autoBacktest = overview.autoBacktest?.pipelines ?? [];
+  const formulaQueue = overview.formulaBacktestQueue?.rows ?? [];
   const timestamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
   downloadExcelWorkbook(`research-center-${timestamp}.xls`, [
     {
@@ -223,6 +224,22 @@ function exportResearchWorkbook(
             item.identity.timeframe,
           ]),
         )),
+      ],
+    },
+    {
+      name: '신규 수식',
+      rows: [
+        ['수식', '상태', '사유', '후보 수', '생존 수', '막힌 이유', '평가시각', '감사보관'],
+        ...formulaQueue.map((row) => [
+          row.formulaId,
+          row.state === 'PASS' ? '통과' : row.state === 'HOLD' ? '보류' : row.state === 'RESERVE' ? '예비' : '제외',
+          row.reason,
+          row.candidateCount,
+          row.researchSurvivorCount,
+          row.blockers.join(', '),
+          row.evaluatedAt ?? '',
+          row.retainedForAudit,
+        ]),
       ],
     },
     {
@@ -329,6 +346,50 @@ function AutoResearchBacktestPanel({ overview }: { overview: ResearchCenterOverv
         )) : <p className="col-span-full rounded-xl border border-dashed border-card-border p-5 text-center text-xs text-muted-foreground">자동 백테스트 실행 이력 미수집</p>}
       </div>
       
+    </section>
+  );
+}
+
+function FormulaBacktestQueuePanel({ overview }: { overview: ResearchCenterOverview }) {
+  const queue = overview.formulaBacktestQueue;
+  const rows = queue?.rows ?? [];
+  const counts = queue?.counts ?? { PASS: 0, HOLD: 0, RESERVE: 0, EXCLUDE: 0 };
+  return (
+    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5" data-testid="research-formula-backtest-queue">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-base font-black">신규 수식 자동 검증</h2>
+        <span className="text-[10px] font-bold text-muted-foreground">{formatDate(queue?.generatedAt)}</span>
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {[
+          ['통과', counts.PASS],
+          ['보류', counts.HOLD],
+          ['예비', counts.RESERVE],
+          ['제외', counts.EXCLUDE],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-xl border border-card-border bg-background p-2 text-center">
+            <p className="text-[9px] font-bold text-muted-foreground">{label}</p>
+            <p className="mt-1 text-sm font-black tabular-nums">{value}</p>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 max-h-72 overflow-auto rounded-xl border border-card-border">
+        {rows.length ? (
+          <table className="w-full min-w-[680px] text-left text-xs">
+            <thead className="sticky top-0 bg-muted"><tr><th className="p-2">수식</th><th className="p-2">상태</th><th className="p-2">사유</th><th className="p-2">감사기록</th></tr></thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.itemDigest} className="border-t border-card-border">
+                  <td className="max-w-72 truncate p-2" title={row.formulaId}>{row.formulaId}</td>
+                  <td className="p-2 font-black">{row.state === 'PASS' ? '통과' : row.state === 'HOLD' ? '보류' : row.state === 'RESERVE' ? '예비' : '제외'}</td>
+                  <td className="p-2 text-muted-foreground">{row.reason}</td>
+                  <td className="p-2">{row.retainedForAudit ? '보관' : '확인 필요'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <p className="p-5 text-center text-xs text-muted-foreground">아직 신규 수식 검증 이력이 없습니다.</p>}
+      </div>
     </section>
   );
 }
@@ -627,6 +688,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
 
       <ResearchActivityPanel overview={overview} />
       <AutoResearchBacktestPanel overview={overview} />
+      <FormulaBacktestQueuePanel overview={overview} />
 
       <div>
         <section className="min-w-0" aria-labelledby="research-pipeline-title">
