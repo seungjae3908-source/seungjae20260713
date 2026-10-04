@@ -370,6 +370,20 @@ test('Bitget futures worker preserves a validated 7x policy and evidence into th
     leverage: 7,
     marginMode: 'isolated',
     marketStatus: 'TRADABLE',
+    tickSize: 0.1,
+    minOrderNotional: 5,
+  };
+  entry.signal.learningSnapshot.referencePrice = 100;
+  entry.signal.learningSnapshot.entryPrice = 100;
+  entry.signal.learningSnapshot.stopLoss = 95;
+  entry.signal.learningSnapshot.target1 = 110;
+  entry.signal.learningSnapshot.target2 = 120;
+  entry.publicQuote = {
+    bid: 100,
+    ask: 100.1,
+    last: 100.05,
+    asOfMs: nowMs - 1_000,
+    maxAgeMs: 30_000,
   };
 
   const base = source(repository, nowMs);
