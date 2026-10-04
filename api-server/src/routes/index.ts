@@ -138,7 +138,7 @@ const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).jso
 });
 
 // Explicitly block every existing private/actual-trading path before the
-// legacy crypto router can reach it. Its internal gates remain defense in depth.
+// legacy crypto router can reach it. crypto-auto.ts itself remains untouched.
 router.use('/crypto/futures/auto', privateExchangeDisabled);
 router.get('/crypto/spot/accounts', privateExchangeDisabled);
 router.get('/crypto/futures/account', privateExchangeDisabled);
