@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rename, stat } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, rename } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { assertFormulaCandidateV1 } from './autonomous-strategy-formula-generator-v1.js';
@@ -361,8 +361,8 @@ export async function processFormulaAutoBacktestQueueV1({
   const rows = [];
   for (const name of files) {
     const path = join(inbox, name);
-    const info = await stat(path);
-    if (!info.isFile() || info.isSymbolicLink?.()) continue;
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) continue;
     const item = JSON.parse(await readFile(path, 'utf8'));
     const itemDigest = digest(item);
     const resultPath = join(resultsRoot, itemDigest + '.json');
