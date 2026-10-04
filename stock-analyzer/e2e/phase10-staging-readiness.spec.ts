@@ -2104,9 +2104,10 @@ test.describe('real staging release readiness', () => {
     try {
       await expectHealthyRoute(page, '/account');
       await expectBootstrapTerminalError(page);
-      await page.getByRole('button', { name: '다시 시도', exact: true }).click();
+      const retryAlert = page.getByTestId('account-bootstrap-error');
+      await retryAlert.getByRole('button', { name: '다시 확인', exact: true }).click();
       await expect(page.locator('nav')).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByTestId('error-state')).toHaveCount(0);
+      await expect(page.getByTestId('account-bootstrap-error')).toHaveCount(0);
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
       expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
