@@ -36,6 +36,7 @@ test('builds zero-authority exact-SHA comprehensive receipt', () => {
   assert.equal(receipt.productionDeployRunId, 123);
   assert.equal(receipt.recommendationsDesktop1440.fallbackTimedOut, false);
   assert.equal(receipt.orderRequests, 0);
+  assert.equal(receipt.realOrderSubmitted, false);
   assert.equal(receipt.liveTradingAuthorityGranted, false);
 });
 

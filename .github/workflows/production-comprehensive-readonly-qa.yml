@@ -16,6 +16,8 @@ on:
       - api-server/scripts/build-production-comprehensive-readonly-receipt.test.mjs
       - .github/workflows/production-postdeploy-qa.yml
       - .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - .github/scripts/run-production-readonly-qa.sh
+      - .github/scripts/verify-production-qa-receipt.cjs
   workflow_dispatch:
     inputs:
       sha:
@@ -77,8 +79,8 @@ jobs:
           if (!liveJob.includes("github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'")) {
             throw new Error('Live comprehensive QA must remain explicit dispatch or orchestrator-call only');
           }
-          if (!liveJob.includes('environment: production-readonly-qa')) {
-            throw new Error('Live comprehensive QA must use the isolated read-only QA environment');
+          if (!liveJob.includes('environment: production')) {
+            throw new Error('Standalone comprehensive QA must retain protected Production credential access');
           }
           if (liveJob.includes('PROD_SSH_') || liveJob.includes('PROD_DATABASE_URL')) {
             throw new Error('Live comprehensive QA must not receive deploy or Production database authority');
@@ -136,8 +138,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 80
-    environment: production-readonly-qa
+    environment: production
     env:
+      GH_TOKEN: ${{ github.token }}
       PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
@@ -145,6 +148,7 @@ jobs:
       PRODUCTION_QA_INCLUDE_TELEGRAM: ${{ inputs.include_telegram && 'true' || 'false' }}
       EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
       PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+      PRODUCTION_DEPLOY_MODE: completed
     steps:
       - uses: actions/checkout@v4
         with:
@@ -263,15 +267,7 @@ jobs:
         run: pnpm exec playwright install chromium
 
       - name: Run real Production comprehensive read-only QA
-        working-directory: stock-analyzer
-        run: pnpm exec playwright test --config=playwright.production-comprehensive.config.ts
-
-      - name: Build exact-SHA zero-authority comprehensive QA receipt
-        run: >-
-          node api-server/scripts/build-production-comprehensive-readonly-receipt.mjs
-          stock-analyzer/production-comprehensive-artifacts
-          "$EXPECTED_DEPLOY_SHA"
-          "$PRODUCTION_DEPLOY_RUN_ID"
+        run: bash .github/scripts/run-production-readonly-qa.sh comprehensive
 
       - name: Safety summary
         if: always()
