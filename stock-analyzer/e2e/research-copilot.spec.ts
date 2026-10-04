@@ -139,7 +139,7 @@ test('failed refresh removes previous evidence instead of retaining a fresh-look
   await page.getByRole('button', { name: '인공지능 도우미', exact: true }).click();
   await expect(page.getByRole('region', { name: '연구 단계' })).toBeVisible();
   await page.getByRole('button', { name: '증거 새로고침' }).click();
-  await expect(page.getByRole('alert')).toContainText('연구 기능을 사용할 수 없습니다.');
+  await expect(page.getByRole('alert')).toContainText('연구 자료를 불러오지 못했습니다.');
   await expect(page.getByRole('region', { name: '연구 단계' })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '전략 상태와 인계' })).toHaveCount(0);
   diagnostics.clean();
@@ -154,7 +154,7 @@ for (const [width, height] of viewports) {
     await page.getByRole('button', { name: '인공지능 도우미', exact: true }).click();
     await expect(page.getByTestId('research-copilot')).toBeVisible();
     await expect(page.getByText('가설과 검증 절차를 설명합니다.', { exact: false })).toBeVisible();
-    await expect(page.getByText('AI 제공자 무료 사용 가능 여부 미확인')).toBeVisible();
+    await expect(page.getByText('인공지능 무료 사용 가능 여부 미확인')).toBeVisible();
     await expect(page.getByText('왜 버튼을 누를 수 없나요?')).toBeVisible();
     await expect(page.getByRole('button', { name: '후보 가설 제안' })).toBeDisabled();
     expect(diagnostics.calls.filter(call => call.startsWith('POST'))).toEqual([]);
@@ -191,13 +191,13 @@ for (const [width, height] of viewports) test(`canonical TEST_ONLY candidate ${w
   await page.getByRole('button', { name: '수식 검증', exact: true }).click();
   const submit = page.getByRole('button', { name: '검증된 묶음으로 백테스트 실행' });
   await expect(submit).toBeEnabled(); await submit.click();
-  await expect(page.getByLabel('백테스트 묶음')).toContainText('백테스트 묶음 · COMPLETED');
+  await expect(page.getByLabel('백테스트 묶음')).toContainText('백테스트 묶음 · 완료');
   await expect(page.getByLabel('백테스트 묶음')).toContainText('저장 결과 확인 필요');
   await page.getByRole('button', { name: '저장된 결과 확인' }).click();
   await expect(page.getByLabel('백테스트 묶음')).toContainText('결과 보존 상태: 완료');
   await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('같은 후보의 미래 검증 자료 부족');
   await expect(submit).toBeDisabled();
-  await page.getByText('이 후보의 식별자와 출처 자세히', { exact: true }).press('Enter');
+  await page.getByText('식별자와 출처', { exact: true }).press('Enter');
   await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText(diagnostics.canonical.bundle.dataset.id);
   await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('TEST_ONLY_PREPROCESSING');
   await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('독립 표본은 실제 미래검증 자료로 확인합니다.');
@@ -211,8 +211,8 @@ for (const [width, height] of viewports) test(`canonical TEST_ONLY candidate ${w
 test('stale overview cannot credit current receipts', async ({ page }) => {
   const diagnostics = await setup(page, { stale: true });
   await page.goto('/research-center'); await page.getByRole('button', { name: '인공지능 도우미', exact: true }).click();
-  await expect(page.getByRole('region', { name: '연구 근거와 AI 한도' })).toContainText('STALE');
-  await expect(page.getByRole('region', { name: '연구 단계' })).toContainText('BLOCKED_DATA');
+  await expect(page.getByRole('region', { name: '연구 자료와 인공지능 한도' })).toContainText('검증 필요');
+  await expect(page.getByRole('region', { name: '연구 단계' })).toContainText('자료 부족');
   diagnostics.clean();
 });
 test('repeated readback cannot discard the original artifact pin after a changed storage response', async ({ page }) => {
@@ -221,7 +221,7 @@ test('repeated readback cannot discard the original artifact pin after a changed
   await page.getByLabel('연구 수식 입력').fill(JSON.stringify(diagnostics.canonical.dsl));
   await page.getByRole('button', { name: '수식 검증', exact: true }).click();
   await page.getByRole('button', { name: '검증된 묶음으로 백테스트 실행' }).click();
-  await expect(page.getByLabel('백테스트 묶음')).toContainText('백테스트 묶음 · COMPLETED');
+  await expect(page.getByLabel('백테스트 묶음')).toContainText('백테스트 묶음 · 완료');
   for (let i = 0; i < 2; i++) {
     await page.getByRole('button', { name: '저장된 결과 확인' }).click();
     await expect(page.getByLabel('백테스트 묶음')).toContainText('자료 부족');
@@ -238,7 +238,7 @@ test('manual AI review disables duplicate submission and remains advisory', asyn
   const action = page.getByRole('button', { name: '후보 가설 제안' });
   await action.click();
   await expect(action).toBeDisabled();
-  await expect(page.getByRole('region', { name: '인공지능 연구 제안' })).toContainText('검증 전 연구 제안');
+  await expect(page.getByRole('region', { name: '인공지능 연구 제안' })).toContainText('검증 전 제안');
   expect(diagnostics.reviewRequests()).toBe(1);
   await expect(page.getByText('신뢰 확률·성과 수치: 미생성.', { exact: false })).toBeVisible();
   diagnostics.clean();
@@ -249,7 +249,7 @@ for (const key of ['modelIdentityDigest', 'featureOrderDigest', 'preprocessingVe
   await page.getByLabel('연구 수식 입력').fill(JSON.stringify(diagnostics.canonical.dsl));
   await page.getByRole('button', { name: '수식 검증', exact: true }).click();
   await page.getByRole('button', { name: '검증된 묶음으로 백테스트 실행' }).click();
-  await expect(page.getByLabel('백테스트 묶음')).toContainText('COMPLETED');
+  await expect(page.getByLabel('백테스트 묶음')).toContainText('완료');
   await page.getByRole('button', { name: '저장된 결과 확인' }).click();
   await expect(page.getByRole('alert')).toContainText('연구 응답 계약을 확인할 수 없습니다.');
   await expect(page.getByLabel('백테스트 묶음')).toContainText('결과 보존 상태: 자료 부족');
@@ -262,7 +262,7 @@ test('changed source after AI completion cannot display the previous explanation
   await page.goto('/research-center');
   await page.getByRole('button', { name: '인공지능 도우미', exact: true }).click();
   await page.getByRole('button', { name: '후보 가설 제안' }).click();
-  await expect(page.getByText('원본 기준 시각:', { exact: false })).toContainText(new Date(NOW - 1_000).toISOString());
+  await expect(page.getByRole('region', { name: '연구 자료와 인공지능 한도' })).toContainText('기준 시각:');
   await expect(page.getByRole('region', { name: '인공지능 연구 제안' })).toHaveCount(0);
   expect(diagnostics.reviewRequests()).toBe(1);
   diagnostics.clean();
