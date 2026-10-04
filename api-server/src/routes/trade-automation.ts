@@ -6,6 +6,7 @@ import { createSupabaseTradingRepository, safeConnections, type TradingRepositor
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import { prepareManualEntry, type ManualEntryInstruction } from '../services/trade-manual-entry.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
 import {
@@ -1095,6 +1096,179 @@ router.delete('/connections/:exchange', async (req: AuthenticatedRequest, res) =
       existingProviderOrdersCanceled: false,
     });
   } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/manual-entry/preview', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_MANUAL_ENTRY_PREVIEW_CONFIRMATION_REQUIRED',
+      privateAccountReadPerformed: false,
+      planCreated: false,
+      orderSubmitted: false,
+      financialMutationPerformed: false,
+    });
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('MANUAL_ENTRY_PREVIEW_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+  try {
+    const { repository, execution } = context(req);
+    const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
+    const prepared = await prepareManualEntry({
+      repository,
+      execution,
+      userId,
+      instruction: (req.body?.instruction ?? req.body) as ManualEntryInstruction,
+      accountSnapshotFor: async (exchange) => {
+        const reader = readers[exchange];
+        if (!reader) throw new Error('MANUAL_ENTRY_ACCOUNT_READER_UNAVAILABLE');
+        return reader({ userId, accessToken }, controller.signal);
+      },
+    });
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    const snapshot = prepared.input.marketSnapshot;
+    return res.json({
+      ok: true,
+      preview: {
+        exchange: prepared.input.exchange,
+        stockBroker: prepared.input.stockBroker ?? null,
+        market: prepared.input.market,
+        symbol: prepared.input.symbol,
+        side: prepared.input.side,
+        orderType: prepared.input.orderType,
+        quantity: prepared.input.quantity ?? null,
+        quoteAmount: prepared.input.quoteAmount ?? null,
+        limitPrice: prepared.input.limitPrice ?? null,
+        estimatedKrw: prepared.input.estimatedKrw,
+        stopPrice: prepared.input.stopPrice,
+        targetPrices: prepared.input.targetPrices,
+        leverage: prepared.input.leverage ?? null,
+        currentPrice: snapshot.currentPrice ?? null,
+        spreadPercent: snapshot.spreadPercent,
+        estimatedSlippagePercent: snapshot.estimatedSlippagePercent ?? null,
+        estimatedFeePercent: snapshot.estimatedFeePercent ?? null,
+        availableBalance: snapshot.availableBalance,
+        accountValueKrw: snapshot.accountValueKrw,
+        dailyPnlPercent: snapshot.dailyPnlPercent,
+        weeklyPnlPercent: snapshot.weeklyPnlPercent ?? null,
+        accountExposureKrw: snapshot.accountExposureKrw ?? null,
+        instrumentExposureKrw: snapshot.instrumentExposureKrw ?? null,
+        openPositionCount: snapshot.openPositionCount,
+        dailyOrderCount: snapshot.dailyOrderCount,
+        marketStatus: snapshot.marketStatus ?? 'UNKNOWN',
+        source: snapshot.source ?? null,
+        fxSource: prepared.fxSource,
+        fxAsOf: prepared.fxAsOf,
+      },
+      decision: prepared.decision,
+      providerRequests: prepared.providerRequests,
+      privateAccountReadPerformed: true,
+      planCreated: false,
+      orderSubmitted: false,
+      cancelRequests: 0,
+      amendRequests: 0,
+      transferRequests: 0,
+      withdrawalRequests: 0,
+      financialMutationPerformed: false,
+      executionAuthority: 'NONE',
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
+});
+
+router.post('/manual-entry/plan', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'EXPLICIT_MANUAL_ENTRY_PLAN_CONFIRMATION_REQUIRED',
+      planCreated: false,
+      orderSubmitted: false,
+      financialMutationPerformed: false,
+    });
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('MANUAL_ENTRY_PLAN_ABORTED'));
+  req.once('aborted', abort);
+  res.once('close', abort);
+  try {
+    const { repository, execution, automation } = context(req);
+    const readers = exitPreviewReadersFactoryForTests?.() ?? createVaultBackedAccountReaders();
+    const prepared = await prepareManualEntry({
+      repository,
+      execution,
+      userId,
+      instruction: (req.body?.instruction ?? req.body) as ManualEntryInstruction,
+      accountSnapshotFor: async (exchange) => {
+        const reader = readers[exchange];
+        if (!reader) throw new Error('MANUAL_ENTRY_ACCOUNT_READER_UNAVAILABLE');
+        return reader({ userId, accessToken }, controller.signal);
+      },
+    });
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    if (!prepared.decision.allowed) {
+      return res.status(409).json({
+        ok: false,
+        error: 'MANUAL_ENTRY_RISK_BLOCKED',
+        decision: prepared.decision,
+        planCreated: false,
+        orderSubmitted: false,
+        financialMutationPerformed: false,
+      });
+    }
+    const result = await automation.createPlan(
+      userId,
+      prepared.input,
+      prepared.policy,
+      prepared.emergencyStopped || prepared.policy.emergencyStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
+    );
+    if (!result.plan) {
+      return res.status(409).json({
+        ok: false,
+        error: 'MANUAL_ENTRY_PLAN_BLOCKED',
+        decision: result.decision,
+        planCreated: false,
+        orderSubmitted: false,
+        financialMutationPerformed: false,
+      });
+    }
+    return res.json({
+      ok: true,
+      plan: result.plan,
+      duplicate: result.duplicate,
+      decision: result.decision,
+      providerRequests: prepared.providerRequests,
+      privateAccountReadPerformed: true,
+      planCreated: true,
+      orderSubmitted: false,
+      cancelRequests: 0,
+      amendRequests: 0,
+      transferRequests: 0,
+      withdrawalRequests: 0,
+      financialMutationPerformed: false,
+      executionAuthority: 'USER_APPROVAL_REQUIRED',
+    });
+  } catch (error) {
+    if (controller.signal.aborted || res.writableEnded) return undefined;
+    return errorResponse(res, error);
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', abort);
+  }
 });
 
 router.post('/plans', async (req: AuthenticatedRequest, res) => {
