@@ -1,4 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { SCANNER_API_REQUEST_TIMEOUT_MS } from '@/lib/auth-bootstrap';
 import type { StockGrade } from '@workspace/stock-grade';
 
 export type { StockGrade };
@@ -614,7 +615,7 @@ const BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '/api';
 
 const enc = encodeURIComponent;
 
-export async function apiGet<T>(path: string): Promise<T> {
+export async function apiGet<T>(path: string, timeoutMs?: number): Promise<T> {
   const separator = path.includes('?') ? '&' : '?';
   const url = `${BASE}${path}${separator}_ts=${Date.now()}`;
   const res = await authorizedFetch(url, {
@@ -623,7 +624,7 @@ export async function apiGet<T>(path: string): Promise<T> {
       'Cache-Control': 'no-cache, no-store, max-age=0',
       Pragma: 'no-cache',
     },
-  });
+  }, timeoutMs == null ? {} : { timeoutMs });
 
   if (!res.ok) {
     let code = `HTTP_${res.status}`;
@@ -803,7 +804,7 @@ export const api = {
     if (opts?.tradingValueLookbackDays != null)
       params.set('tradingValueLookbackDays', String(opts.tradingValueLookbackDays));
     if (opts?.timeframe) params.set('timeframe', opts.timeframe);
-    return apiGet<ScanResult>(`/market/scan?${params.toString()}`);
+    return apiGet<ScanResult>(`/market/scan?${params.toString()}`, SCANNER_API_REQUEST_TIMEOUT_MS);
   },
 
   themes: (market: 'KR' | 'US') =>
