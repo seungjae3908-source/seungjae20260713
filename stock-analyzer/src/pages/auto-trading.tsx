@@ -69,6 +69,18 @@ function StatusItem({ label, value }: { label: string; value: string }) {
   );
 }
 
+function kstActivityTime(value: string | null | undefined) {
+  if (!value) return '없음';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '확인 필요';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(time));
+}
+
 function SegmentedButton({
   active,
   disabled = false,
@@ -214,13 +226,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
   const policy = runtimeStatus?.policy;
   const marketEnabled = Boolean(policy?.marketEnabled?.[market]);
-  const selected거래사 = market === 'crypto_spot'
+  const selectedProvider = market === 'crypto_spot'
     ? 'upbit'
     : market === 'crypto_futures'
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
-  const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selected거래사);
+  const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
+  const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
 
   const changeMode = (next: TradingMode) => {
@@ -273,6 +286,12 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
           <StatusItem label="실거래" value="별도 승인 필요" />
         </div>
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
+          <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
+          <StatusItem label="복구 필요" value={`${marketActivity?.recoveryRequiredOrders ?? 0}건`} />
+          <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
+          <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건 · ${kstActivityTime(marketActivity?.lastActivityAt)}`} />
+        </div>
       </section>
     </div>
   ) : (
@@ -298,9 +317,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatusItem label="최근 상태" value={lastOrder?.state ?? '주문 없음'} />
-        <StatusItem label="거래사" value={marketMeta.provider} />
-        <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
-        <StatusItem label="자동 실행" value={policy?.automaticEnabled && marketEnabled ? '켜짐' : '꺼짐'} />
+        <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
+        <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
+        <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건`} />
       </div>
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
         <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/scanner')}>신호 확인</button>
