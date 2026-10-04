@@ -339,6 +339,71 @@ test('stock automatic routing uses the selected Toss or Kiwoom provider as the c
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
+test('Bitget futures worker preserves a validated 7x policy and evidence into the plan', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const futuresPolicy = normalizeTradingPolicy({
+    ...policy(),
+    marketEnabled: {
+      domestic_stock: false,
+      us_stock: false,
+      crypto_spot: false,
+      crypto_futures: true,
+    },
+    exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
+    bitgetLeverage: 7,
+  });
+  await repository.savePolicy(USER, futuresPolicy);
+
+  const futuresHandoff = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+  const entry = futuresHandoff.entries[0];
+  entry.identity.market = 'CRYPTO_FUTURES';
+  entry.identity.symbol = 'BTCUSDT';
+  entry.identity.direction = 'LONG';
+  entry.signal.market = 'CRYPTO_FUTURES';
+  entry.signal.symbol = 'BTCUSDT';
+  entry.signal.direction = 'LONG';
+  entry.execution.marketAdapterIdentity = { id: 'bitget-paper-v1', version: '1' };
+  entry.execution.dataEvidence = {
+    ...entry.execution.dataEvidence,
+    provider: 'bitget',
+    leverage: 7,
+    marginMode: 'isolated',
+    marketStatus: 'TRADABLE',
+  };
+
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return futuresHandoff as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: futuresPolicy,
+        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+      }];
+    },
+    async resolveFx() {
+      return {
+        market: 'CRYPTO_FUTURES',
+        krwPerQuoteCurrency: 1_400,
+        source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(nowMs).toISOString(),
+        stale: false,
+      };
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.failures, 0);
+  assert.equal(result.createdPlans, 1);
+  const plans = await repository.listPlans(USER);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]?.exchange, 'bitget');
+  assert.equal(plans[0]?.leverage, 7);
+  assert.equal(plans[0]?.marginMode, 'isolated');
+});
+
 test('background worker is default OFF without explicit activation flag', () => {
   const previous = process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
   delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
