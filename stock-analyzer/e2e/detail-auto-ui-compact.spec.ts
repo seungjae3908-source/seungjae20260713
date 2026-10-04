@@ -77,17 +77,24 @@ for (const width of [360, 390, 412, 430]) {
   });
 }
 
-test('desktop settings follow the selected market instead of showing all provider controls at once', async ({ page }) => {
+test('desktop settings open as a closable popup and follow only the selected market', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto('/__phase12-trade-automation-e2e');
 
   await page.getByTestId('trading-section-settings').click();
   await expect(page.getByTestId('auto-trading-settings-column')).toBeVisible();
+  await page.getByTestId('auto-trading-advanced-settings').click();
+  const dialog = page.getByTestId('trading-automation-settings-dialog');
+  await expect(dialog).toBeVisible();
   await expect(page.getByTestId('auto-market-domestic_stock')).toBeVisible();
   await expect(page.getByTestId('stock-broker-domestic_stock')).toBeVisible();
   await expect(page.getByTestId('stock-broker-us_stock')).toHaveCount(0);
+  await dialog.getByLabel('닫기').click();
+  await expect(dialog).toHaveCount(0);
 
   await page.getByTestId('trading-market-crypto_futures').click();
+  await page.getByTestId('auto-trading-advanced-settings').click();
+  await expect(page.getByTestId('trading-automation-settings-dialog')).toBeVisible();
   await expect(page.getByTestId('auto-market-crypto_futures')).toBeVisible();
   await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
   await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
