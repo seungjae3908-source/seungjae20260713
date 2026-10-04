@@ -1007,11 +1007,68 @@ def summarize_auto_backtest(value):
     }
 
 
+def summarize_formula_backtest_queue(value):
+    empty = {
+        'present': False,
+        'generatedAt': None,
+        'scanned': 0,
+        'counts': {'PASS': 0, 'HOLD': 0, 'RESERVE': 0, 'EXCLUDE': 0},
+        'rows': [],
+        'deletionAllowed': False,
+        'executionAuthority': 'NONE',
+    }
+    if not isinstance(value, dict) or value.get('contract') != 'research-formula-auto-backtest-summary/v1':
+        return empty
+    if value.get('deletionAllowed') is not False or value.get('executionAuthority') != 'NONE':
+        return empty
+    raw_at = value.get('generatedAt')
+    generated_at = None
+    if isinstance(raw_at, str):
+        try:
+            generated_at = int(__import__('datetime').datetime.fromisoformat(raw_at.replace('Z', '+00:00')).timestamp() * 1000)
+        except Exception:
+            generated_at = None
+    rows = []
+    allowed_states = {'PASS', 'HOLD', 'RESERVE', 'EXCLUDE'}
+    for raw in value.get('rows') if isinstance(value.get('rows'), list) else []:
+        if not isinstance(raw, dict) or raw.get('state') not in allowed_states:
+            continue
+        formula_id = raw.get('formulaId')
+        item_digest = raw.get('itemDigest')
+        reason = raw.get('reason')
+        if not all(isinstance(item, str) for item in (formula_id, item_digest, reason)):
+            continue
+        blockers = [str(item)[:120] for item in raw.get('blockers', []) if isinstance(item, str)][:20]
+        rows.append({
+            'formulaId': formula_id[:220],
+            'itemDigest': item_digest[:64],
+            'state': raw.get('state'),
+            'reason': reason[:240],
+            'evaluatedAt': raw.get('evaluatedAt')[:40] if isinstance(raw.get('evaluatedAt'), str) else None,
+            'tournamentId': raw.get('tournamentId')[:220] if isinstance(raw.get('tournamentId'), str) else None,
+            'candidateCount': optional_integer_count(raw.get('candidateCount')),
+            'researchSurvivorCount': optional_integer_count(raw.get('researchSurvivorCount')),
+            'blockers': blockers,
+            'retainedForAudit': raw.get('retainedForAudit') is True,
+        })
+    counts = {state: sum(1 for row in rows if row['state'] == state) for state in allowed_states}
+    return {
+        'present': True,
+        'generatedAt': generated_at,
+        'scanned': optional_integer_count(value.get('scanned')) or 0,
+        'counts': counts,
+        'rows': rows[:50],
+        'deletionAllowed': False,
+        'executionAuthority': 'NONE',
+    }
+
+
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     root = Path(state_root).resolve()
     raw_cycles = {profile: read_json_optional(root / 'latest' / f'{profile}.json') for profile in PROFILES}
     cycles = [summarize_cycle(profile, raw_cycles[profile]) for profile in PROFILES]
     auto_backtest = summarize_auto_backtest(raw_cycles.get('fast-historical'))
+    formula_backtest_queue = summarize_formula_backtest_queue(read_json_optional(root / 'latest' / 'formula-backtest-queue.json'))
     paper_runtime = summarize_paper_runtime(read_json_optional(root / 'forward' / 'paper' / 'status' / 'runtime-status.json'))
     paper_ledger = summarize_paper_ledger(read_json_optional(root / 'forward' / 'paper' / 'state' / 'recurring-paper-loop.json'))
     shadow_groups = summarize_shadow_groups(read_json_optional(root / 'forward' / 'shadow-summary.json'))
@@ -1084,6 +1141,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'factory': factory_runtime,
         'activity': activity,
         'autoBacktest': auto_backtest,
+        'formulaBacktestQueue': formula_backtest_queue,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {
