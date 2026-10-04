@@ -59,6 +59,9 @@ jobs:
           grep -Fq "FUTURES_LIVE_CAPABILITY_ALLOWLIST" "$workflow"
           grep -Fq "FUTURES_LIVE_MARKET_ALLOWLIST: 'CRYPTO_FUTURES'" "$workflow"
           grep -Fq "FUTURES_LIVE_MARGIN_MODE: 'isolated'" "$workflow"
+          grep -Fq "FUTURES_LIVE_EXACT_CREDENTIAL_REUSE_QA_REQUIRED" "$workflow"
+          grep -Fq "FUTURES_LIVE_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED" "$workflow"
+          grep -Fq "PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE" "$workflow"
           grep -Fq "AUTO_TRADING=false" "$workflow"
           grep -Fq "LIVE_AUTOMATIC_TRADING_ENABLED=false" "$workflow"
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
@@ -234,6 +237,74 @@ jobs:
             core.setOutput('comprehensive_run_id', String(comprehensive.id));
             core.setOutput('account_run_id', String(account.id));
 
+      - name: Require successful post-deploy four-provider Credential Reuse QA
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_RUN_ID: ${{ steps.prerequisites.outputs.production_run_id }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const productionRunId = Number(process.env.PRODUCTION_RUN_ID);
+            const production = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: productionRunId,
+            })).data;
+            const productionCompletedAt = Date.parse(production.updated_at ?? '');
+            if (!Number.isFinite(productionCompletedAt)) {
+              core.setFailed('FUTURES_LIVE_CREDENTIAL_REUSE_PRODUCTION_TIME_INVALID');
+              return;
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-live-credential-reuse-qa.yml',
+              branch: 'main',
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const run = runs
+              .filter((candidate) => candidate.head_sha === target
+                && candidate.head_branch === 'main'
+                && candidate.conclusion === 'success'
+                && Date.parse(candidate.run_started_at ?? candidate.created_at) >= productionCompletedAt)
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!run) {
+              core.setFailed('FUTURES_LIVE_EXACT_CREDENTIAL_REUSE_QA_REQUIRED:' + target);
+              return;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
+            });
+            const artifact = artifacts.find((candidate) =>
+              candidate.name === 'production-live-credential-reuse-' + target
+              && candidate.expired !== true
+              && Number(candidate.size_in_bytes) > 0);
+            if (!artifact) {
+              core.setFailed('FUTURES_LIVE_CREDENTIAL_REUSE_QA_ARTIFACT_MISSING:' + run.id);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
+            });
+            const spotReceipt = [...comments].reverse().find((comment) => {
+              const body = String(comment.body ?? '');
+              return Date.parse(comment.created_at ?? '') >= productionCompletedAt
+                && body.includes('[PRODUCTION_LIVE_TRADING_GATE]')
+                && body.includes('status: ACTIVATED_SPOT_LIVE_LIMITED_MANUAL')
+                && body.includes('target_sha: ' + target)
+                && body.includes('providers: kiwoom,toss,upbit')
+                && body.includes('AUTO_TRADING=false')
+                && body.includes('LIVE_AUTOMATIC_TRADING_ENABLED=false')
+                && body.includes('executionAuthority=SPOT_LIVE_LIMITED')
+                && body.includes('REAL_ORDER_SUBMITTED=false');
+            });
+            if (!spotReceipt) {
+              core.setFailed('FUTURES_LIVE_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED:' + target);
+              return;
+            }
+
       - name: Download exact Bitget account QA evidence
         uses: actions/download-artifact@v4
         with:
@@ -285,6 +356,32 @@ jobs:
             throw new Error('FUTURES_LIVE_BITGET_ACCOUNT_QA_NOT_READY');
           }
           NODE
+
+      - name: Require no conflicting active Production trading gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowIds = [
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-automatic-trading-gate.yml',
+            ];
+            const activeStates = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
+            for (const workflowId of workflowIds) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                event: 'issue_comment',
+                per_page: 30,
+              });
+              const conflict = runs.find((run) =>
+                run.id !== context.runId && activeStates.has(String(run.status ?? '')));
+              if (conflict) {
+                core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + workflowId + ':' + conflict.id);
+                return;
+              }
+            }
 
       - name: Configure protected Production SSH
         shell: bash
@@ -350,6 +447,8 @@ jobs:
               spotApproved: bool('SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
               automaticLive: bool('LIVE_AUTOMATIC_TRADING_ENABLED'),
               upbitSpot: bool('UPBIT_LIVE_ORDER_ENABLED'),
+              kiwoomSpot: bool('KIWOOM_LIVE_ORDER_ENABLED'),
+              tossSpot: bool('TOSS_LIVE_ORDER_ENABLED'),
               spotAuthority: String(env.executionAuthority ?? 'NONE').toUpperCase(),
               futuresApproved: bool('FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED'),
               bitgetFutures: bool('BITGET_FUTURES_LIVE_ORDER_ENABLED'),
@@ -366,7 +465,8 @@ jobs:
             || pre.live !== true || pre.auto !== false || pre.real !== true || pre.privateApi !== true
             || pre.orderExecution !== true || pre.activationApproved !== true
             || pre.spotApproved !== true || pre.automaticLive !== false
-            || pre.upbitSpot !== true || pre.spotAuthority !== 'SPOT_LIVE_LIMITED') {
+            || pre.upbitSpot !== true || pre.kiwoomSpot !== true || pre.tossSpot !== true
+            || pre.spotAuthority !== 'SPOT_LIVE_LIMITED') {
             throw new Error('FUTURES_LIVE_REQUIRES_ACTIVE_UPBIT_SPOT_LIMITED_SAME_SHA');
           }
 
@@ -430,7 +530,8 @@ jobs:
               || post.live !== true || post.auto !== false || post.real !== true || post.privateApi !== true
               || post.orderExecution !== true || post.activationApproved !== true
               || post.spotApproved !== true || post.automaticLive !== false
-              || post.upbitSpot !== true || post.spotAuthority !== 'SPOT_LIVE_LIMITED'
+              || post.upbitSpot !== true || post.kiwoomSpot !== true || post.tossSpot !== true
+              || post.spotAuthority !== 'SPOT_LIVE_LIMITED'
               || post.futuresApproved !== true || post.bitgetFutures !== true
               || post.futuresAuthority !== 'FUTURES_LIVE_LIMITED'
               || post.futuresCapabilities !== capabilityAllowlist
