@@ -1246,6 +1246,16 @@ router.post('/manual-entry/plan', async (req: AuthenticatedRequest, res) => {
         financialMutationPerformed: false,
       });
     }
+    if (result.plan.state !== 'APPROVAL_PENDING') {
+      return res.status(409).json({
+        ok: false,
+        error: 'MANUAL_ENTRY_INTENT_ALREADY_USED',
+        duplicate: result.duplicate,
+        planCreated: false,
+        orderSubmitted: false,
+        financialMutationPerformed: false,
+      });
+    }
     return res.json({
       ok: true,
       plan: result.plan,
