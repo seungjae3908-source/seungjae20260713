@@ -31,7 +31,7 @@ function fixture() {
       ...ZERO,
     },
     account: {
-      schemaVersion: 'production-account-readonly-live-qa-v2',
+      schemaVersion: 'production-account-readonly-live-qa-v3',
       targetSha: SHA,
       productionDeployRunId: 42,
       generatedAt: '2026-10-04T00:03:00.000Z',
@@ -47,8 +47,22 @@ function fixture() {
       providers: providers.map((provider) => ({
         provider, connected: true, status: 'CONNECTED', stale: false, fresh: true,
         errorCode: null, checkedAtPresent: true, lastGoodAtPresent: true,
-        reconciliation: 'PASS', reconciliationPassed: true,
+        reconciliation: 'PASS', reconciliationPassed: true, openOrderCount: 0,
       })),
+      safetyCounters: {
+        openOrderCount: 0,
+        orphanOrderCount: 0,
+        activeLocalOrderCount: 0,
+        staleLocalOrderCount: 0,
+        duplicateClientOrderIdCount: 0,
+        stalePlanCount: 0,
+        bitgetActivePositionCount: 0,
+        oppositePositionDuplicateCount: 0,
+        nonIsolatedPositionCount: 0,
+        outOfPolicyLeveragePositionCount: 0,
+        liquidationRiskPositionCount: 0,
+      },
+      bitgetPositionMode: 'one_way_mode',
       ...ZERO,
     },
     credential: {
@@ -117,7 +131,7 @@ test('builds ACTIVATION_READY inside the same approved in-progress Production De
   });
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
-  assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v2');
+  assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v3');
 });
 
 test('rejects any nonzero financial mutation counter', () => {
@@ -130,6 +144,31 @@ test('rejects active trading gate conflicts', () => {
   const input = fixture();
   input.context.activeConflictingTradingGates = [{ name: 'Production Live Trading Gate', id: 7 }];
   assert.throws(() => buildProductionPostdeployQaEvidence(input), /ACTIVE_GATE_CONFLICT/);
+});
+
+test('rejects unsafe open, orphan, stale, duplicate, margin, leverage, or liquidation state', () => {
+  for (const key of [
+    'openOrderCount',
+    'orphanOrderCount',
+    'activeLocalOrderCount',
+    'staleLocalOrderCount',
+    'duplicateClientOrderIdCount',
+    'stalePlanCount',
+    'oppositePositionDuplicateCount',
+    'nonIsolatedPositionCount',
+    'outOfPolicyLeveragePositionCount',
+    'liquidationRiskPositionCount',
+  ]) {
+    const input = fixture();
+    input.account.safetyCounters[key] = 1;
+    assert.throws(() => buildProductionPostdeployQaEvidence(input), /NOT_ZERO/);
+  }
+});
+
+test('rejects Bitget hedge mode even when all counters are zero', () => {
+  const input = fixture();
+  input.account.bitgetPositionMode = 'hedge_mode';
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /BITGET_RUNTIME_POLICY_INVALID/);
 });
 
 test('rejects a receipt created before the current post-deploy orchestrator', () => {
