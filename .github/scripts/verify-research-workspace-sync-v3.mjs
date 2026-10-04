@@ -194,6 +194,11 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts',
 ];
 const researchBacktestPaperReviewed=[
+ 'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
+ 'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
+ 'market-prediction-lab/tests/research-bundle-formula-fixture.js',
+ 'market-prediction-lab/src/formula-auto-backtest-queue-v1.js',
+ 'market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js',
  '.github/tests/trading-ops-consolidated-preflight.test.mjs',
  '.github/workflows/production-automatic-trading-gate.yml',
  '.github/workflows/paper-forward-schedule-validation.yml',
