@@ -9,6 +9,7 @@ export type CanonicalAccount = { market: 'KR' | 'US' | 'UPBIT' | 'BITGET'; accou
 export type CanonicalAccountSnapshot = {
   provider: AccountProvider; readOnly: true; connected: boolean; status: AccountReadStatus;
   accounts: CanonicalAccount[] | null; balances: CanonicalBalance[] | null; positions: CanonicalPosition[] | null; openOrders: CanonicalReadonlyOrder[] | null;
+  positionMode?: 'one_way_mode' | 'hedge_mode' | null;
   checkedAt: string; lastGoodAt: string | null; stale: boolean; errorCode: string | null;
   orderRequests: 0; cancelRequests: 0; amendRequests: 0; transferRequests: 0; withdrawalRequests: 0;
   credentialsReturned: false; liveTradingEnabled: false; autoTradingEnabled: false;

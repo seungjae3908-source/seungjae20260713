@@ -322,6 +322,14 @@ test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite
     marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null, liquidationDistancePercent: 4 } },
   policy, { emergencyStopped: false, serverLiveEnabled: true });
   assert.ok(liquidationRisk.blockCodes.includes('BITGET_LIQUIDATION_RISK'));
+  const crossedMargin = evaluateTradingPlan({ ...input, leverage: 3, marginMode: 'crossed',
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(crossedMargin.blockCodes.includes('BITGET_ISOLATED_MARGIN_REQUIRED'));
+  const isolatedMargin = evaluateTradingPlan({ ...input, leverage: 3, marginMode: 'isolated',
+    marketSnapshot: { ...input.marketSnapshot, existingPositionSide: null } },
+  policy, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(isolatedMargin.blockCodes.includes('BITGET_ISOLATED_MARGIN_REQUIRED'), false);
   const request = prepareBitgetOrder({ apiKey: 'key', secretKey: 'secret', passphrase: 'pass' }, { ...input, leverage: 3 }, 'client-1', '1000');
   assert.match(request.body ?? '', /"reduceOnly":"NO"/);
   assert.doesNotThrow(() => validateBitgetContractRules({ ...input, quantity: 0.02, leverage: 3 }, {

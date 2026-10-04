@@ -9,6 +9,18 @@ const ZERO_COUNTERS = Object.freeze([
   'transferRequests',
   'withdrawalRequests',
 ]);
+const ZERO_SAFETY_COUNTERS = Object.freeze([
+  'openOrderCount',
+  'orphanOrderCount',
+  'activeLocalOrderCount',
+  'staleLocalOrderCount',
+  'duplicateClientOrderIdCount',
+  'stalePlanCount',
+  'oppositePositionDuplicateCount',
+  'nonIsolatedPositionCount',
+  'outOfPolicyLeveragePositionCount',
+  'liquidationRiskPositionCount',
+]);
 
 function requireExactSha(value, expected, code) {
   if (String(value ?? '').toLowerCase() !== expected) throw new Error(code);
@@ -81,7 +93,7 @@ function assertComprehensiveReceipt(comprehensive, { targetSha, productionDeploy
 
 function assertAccountReceipt(account, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
-  if (account?.schemaVersion !== 'production-account-readonly-live-qa-v2'
+  if (account?.schemaVersion !== 'production-account-readonly-live-qa-v3'
     || account?.productionDeployRunId !== deployRunId
     || account?.officialProductionOrigin !== true
     || account?.authenticatedProductionSession !== true
@@ -96,12 +108,22 @@ function assertAccountReceipt(account, { targetSha, productionDeployRunId }) {
   }
   requireExactSha(account.targetSha, sha, 'POSTDEPLOY_QA_ACCOUNT_SHA_MISMATCH');
   requireZeroAuthority(account, 'POSTDEPLOY_QA_ACCOUNT');
+  for (const key of ZERO_SAFETY_COUNTERS) {
+    if (account?.safetyCounters?.[key] !== 0) {
+      throw new Error(`POSTDEPLOY_QA_ACCOUNT_${key.toUpperCase()}_NOT_ZERO`);
+    }
+  }
+  if (!Number.isInteger(account?.safetyCounters?.bitgetActivePositionCount)
+    || account.safetyCounters.bitgetActivePositionCount < 0
+    || account?.bitgetPositionMode !== 'one_way_mode') {
+    throw new Error('POSTDEPLOY_QA_ACCOUNT_BITGET_RUNTIME_POLICY_INVALID');
+  }
   const accountRows = providerRows(account, 'POSTDEPLOY_QA_ACCOUNT');
   for (const row of accountRows) {
     if (row.connected !== true || row.status !== 'CONNECTED' || row.stale !== false
       || row.fresh !== true || row.errorCode !== null || row.checkedAtPresent !== true
       || row.lastGoodAtPresent !== true || row.reconciliation !== 'PASS'
-      || row.reconciliationPassed !== true) {
+      || row.reconciliationPassed !== true || row.openOrderCount !== 0) {
       throw new Error(`POSTDEPLOY_QA_ACCOUNT_PROVIDER_FAILED:${row.provider}`);
     }
   }
@@ -212,7 +234,7 @@ function buildProductionPostdeployQaEvidence({
   assertNoForbiddenEvidenceKeys({ comprehensive, account, credential });
 
   return {
-    schemaVersion: 'production-postdeploy-activation-ready-v2',
+    schemaVersion: 'production-postdeploy-activation-ready-v3',
     targetSha: sha,
     mainSha: sha,
     productionSha: sha,
@@ -231,6 +253,22 @@ function buildProductionPostdeployQaEvidence({
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,
     activeConflictingTradingGates: 0,
+    openOrderCount: account.safetyCounters.openOrderCount,
+    orphanOrderCount: account.safetyCounters.orphanOrderCount,
+    activeLocalOrderCount: account.safetyCounters.activeLocalOrderCount,
+    staleLocalOrderCount: account.safetyCounters.staleLocalOrderCount,
+    duplicateClientOrderIdCount: account.safetyCounters.duplicateClientOrderIdCount,
+    stalePlanCount: account.safetyCounters.stalePlanCount,
+    oppositePositionDuplicateCount: account.safetyCounters.oppositePositionDuplicateCount,
+    nonIsolatedPositionCount: account.safetyCounters.nonIsolatedPositionCount,
+    outOfPolicyLeveragePositionCount: account.safetyCounters.outOfPolicyLeveragePositionCount,
+    liquidationRiskPositionCount: account.safetyCounters.liquidationRiskPositionCount,
+    bitgetPositionMode: account.bitgetPositionMode,
+    bitgetMarginModePolicy: 'isolated',
+    bitgetLeveragePolicy: '2-7',
+    duplicateWorkerExecutionCount: 0,
+    pm2FlagDriftCount: 0,
+    legacyCryptoAutoAuthorityGranted: false,
     activationReady: true,
   };
 }
@@ -239,6 +277,7 @@ module.exports = {
   REQUIRED_PROVIDERS,
   REQUIRED_CREDENTIAL_REUSE_PATHS,
   ZERO_COUNTERS,
+  ZERO_SAFETY_COUNTERS,
   assertAccountReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
