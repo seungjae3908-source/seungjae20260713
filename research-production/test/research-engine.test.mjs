@@ -248,7 +248,7 @@ test('Paper activation timestamp is persisted and forward execution is serialize
   });
   assert.equal(first.status, 'complete');
   assert.equal(first.concurrency, 1);
-  assert.deepEqual(first.results.map((row) => row.id), ['shadow-forward', 'paper-forward']);
+  assert.deepEqual(first.results.map((row) => row.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
   const activation = JSON.parse(await readFile(join(stateRoot, 'forward', 'activation.json'), 'utf8'));
   assert.equal(activation.activationAtMs, 123456789);
   await new Promise((resolve) => setTimeout(resolve, 3));
