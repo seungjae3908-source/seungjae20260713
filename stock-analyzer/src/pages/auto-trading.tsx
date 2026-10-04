@@ -306,7 +306,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <StatusItem label="주문별 승인" value="불필요" />
-          <StatusItem label="시장 제어" value="4시장 개별 ON/OFF" />
+          <StatusItem label="시장 제어" value="4시장 개별 켜기·끄기" />
           <StatusItem label="위험검사" value="매 주문 재검증" />
         </div>
         <p className="mt-2 text-xs text-muted-foreground">주문마다 승인을 요청하지 않습니다.</p>
@@ -330,7 +330,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
           <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
           <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
+          <StatusItem label="실거래 권한" value="서버 승인 필요" />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
           <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
@@ -385,7 +385,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <h2 className="text-sm font-bold">{marketMeta.label} 모의 포지션 준비</h2>
           </div>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            AI 검색기에서 {marketMeta.label} 종목을 선택하면 신호와 위험·비용을 다시 검증해 모의 포지션을 준비합니다.
+            인공지능 검색기에서 {marketMeta.label} 종목을 선택하면 신호와 위험·비용을 다시 검증해 모의 포지션을 준비합니다.
           </p>
           <button type="button" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground" onClick={() => navigate('/scanner')}>
             {marketMeta.label} 신호 선택하기
