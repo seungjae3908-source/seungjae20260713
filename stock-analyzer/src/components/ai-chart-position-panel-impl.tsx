@@ -1050,12 +1050,19 @@ export function AiChartPositionPanel({
   const canonicalOrderStatus = orderDashboard.kind === 'ready'
     ? `${orderDashboard.items.length}건`
     : orderDashboard.kind === 'loading' ? '조회 중' : orderDashboard.kind === 'unavailable' ? '조회 실패' : '미조회';
-  const exitStatus = !position
-    ? '해당 없음'
-    : exitPreviewState.kind === 'ready' ? '재검증됨'
-      : exitPreviewState.kind === 'loading' ? '재검증 중'
-        : exitPreviewState.kind === 'unavailable' ? '재검증 실패'
-          : '재검증 필요';
+  const positionStatus = state.kind === 'ready'
+    ? position ? '있음' : '없음'
+    : state.kind === 'loading' ? '확인 중'
+      : state.kind === 'unavailable' ? '확인 불가'
+        : '미확인';
+  const exitStatus = state.kind !== 'ready'
+    ? '보유 미확인'
+    : !position
+      ? '해당 없음'
+      : exitPreviewState.kind === 'ready' ? '재검증됨'
+        : exitPreviewState.kind === 'loading' ? '재검증 중'
+          : exitPreviewState.kind === 'unavailable' ? '재검증 실패'
+            : '재검증 필요';
 
   const loadOrderDashboard = useCallback(async (preserveMessage = false) => {
     const controller = new AbortController();
@@ -1913,8 +1920,8 @@ export function AiChartPositionPanel({
                 <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${entryContextReady ? 'border-positive/30 bg-positive/10 text-positive' : 'border-card-border bg-background text-muted-foreground'}`}>
                   진입 {entryContextReady ? '근거' : '대기'}
                 </span>
-                <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${position ? 'border-positive/30 bg-positive/10 text-positive' : 'border-card-border bg-background text-muted-foreground'}`}>
-                  보유 {position ? '있음' : '없음'}
+                <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${position ? 'border-positive/30 bg-positive/10 text-positive' : state.kind === 'unavailable' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground'}`}>
+                  보유 {positionStatus}
                 </span>
                 <span className={`min-w-0 truncate rounded-lg border px-1.5 py-1 text-center text-[8px] font-black ${orderDashboard.kind === 'ready' ? 'border-primary/30 bg-primary/10 text-primary' : orderDashboard.kind === 'unavailable' ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground'}`}>
                   주문 {canonicalOrderStatus}
@@ -1928,7 +1935,7 @@ export function AiChartPositionPanel({
               <div className="mt-3 space-y-3">
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="ai-chart-cockpit-lifecycle">
                   <Metric label="진입" value={entryContextReady ? 'Scanner 근거 있음' : '신호 필요'} />
-                  <Metric label="보유" value={position ? '포지션 있음' : '없음'} />
+                  <Metric label="보유" value={positionStatus === '있음' ? '포지션 있음' : positionStatus} />
                   <Metric label="앱 주문" value={canonicalOrderStatus} />
                   <Metric label="종료" value={exitStatus} />
                 </div>
@@ -2234,7 +2241,18 @@ export function AiChartPositionPanel({
                 ) : null}
 
                 {cockpitTab === 'exit' ? (
-                  position ? (
+                  state.kind !== 'ready' ? (
+                    <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard-unchecked">
+                      <p className="text-[10px] font-black">부분청산 · 전량종료</p>
+                      <p className="mt-1 text-[9px] font-bold leading-4 text-muted-foreground">
+                        {state.kind === 'loading'
+                          ? '실계좌 보유수량을 확인하고 있습니다. 확인 전에는 판매 가능 여부를 판단하지 않습니다.'
+                          : state.kind === 'unavailable'
+                            ? '실계좌 보유상태를 확인하지 못했습니다. 다시 조회하기 전에는 보유 없음으로 단정하지 않습니다.'
+                            : '아직 실계좌 보유상태를 조회하지 않았습니다. 내 포지션 확인 후 보유분 판매·종료 계획을 만들 수 있습니다.'}
+                      </p>
+                    </section>
+                  ) : position ? (
                 <section className="rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-exit-dashboard">
                   <div className="flex items-start justify-between gap-2">
                     <div>
