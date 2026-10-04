@@ -9,6 +9,7 @@ const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '')
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
 const qaPassword = String(process.env.PRODUCTION_QA_PASSWORD ?? '');
 const expectedDeploySha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
+const productionDeployRunId = Number(process.env.PRODUCTION_DEPLOY_RUN_ID ?? 0);
 const rawTargetProviders = String(process.env.PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS ?? '').trim();
 const artifactDir = path.resolve(
   process.cwd(),
@@ -22,6 +23,9 @@ if (productionLiveQaEnabled) {
   if (!baseUrl) throw new Error('PRODUCTION_BASE_URL is required');
   if (!qaLogin || !qaPassword) throw new Error('Production QA login credential is required');
   if (!/^[0-9a-f]{40}$/.test(expectedDeploySha)) throw new Error('EXPECTED_DEPLOY_SHA must be exact');
+  if (!Number.isSafeInteger(productionDeployRunId) || productionDeployRunId <= 0) {
+    throw new Error('PRODUCTION_DEPLOY_RUN_ID must be exact');
+  }
   if (new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('Official Production origin is required');
 }
 
@@ -284,6 +288,8 @@ test('Production real-account read-only providers return fresh connected snapsho
   writeEvidence({
     schemaVersion: 'production-account-readonly-live-qa-v2',
     targetSha: expectedDeploySha,
+    productionDeployRunId,
+    generatedAt: new Date().toISOString(),
     officialProductionOrigin: true,
     authenticatedProductionSession: true,
     credentialVaultEncryptionConfigured: credentialStatus?.encryptionConfigured === true,

@@ -1,0 +1,197 @@
+const REQUIRED_PROVIDERS = Object.freeze(['bitget', 'kiwoom', 'toss', 'upbit']);
+const REQUIRED_CREDENTIAL_REUSE_PATHS = Object.freeze(REQUIRED_PROVIDERS.map(
+  (provider) => `/api/trade-automation/connections/${provider}/reuse-readonly`,
+));
+const ZERO_COUNTERS = Object.freeze([
+  'orderRequests',
+  'cancelRequests',
+  'amendRequests',
+  'transferRequests',
+  'withdrawalRequests',
+]);
+
+function requireExactSha(value, expected, code) {
+  if (String(value ?? '').toLowerCase() !== expected) throw new Error(code);
+}
+
+function requireZeroCounters(value, prefix) {
+  for (const key of ZERO_COUNTERS) {
+    if (value?.[key] !== 0) throw new Error(`${prefix}_${key.toUpperCase()}_NOT_ZERO`);
+  }
+}
+
+function requireZeroAuthority(value, prefix) {
+  requireZeroCounters(value, prefix);
+  if (value?.liveTradingAuthorityGranted !== false) throw new Error(`${prefix}_LIVE_AUTHORITY_NOT_FALSE`);
+  if (value?.autoTradingAuthorityGranted !== false) throw new Error(`${prefix}_AUTO_AUTHORITY_NOT_FALSE`);
+}
+
+function assertNoForbiddenEvidenceKeys(value) {
+  const forbidden = new Set([
+    'clientSecret', 'secretKey', 'accessKey', 'apiKey', 'signature', 'prehash',
+    'authorization', 'accountUid', 'accountRef', 'user_id', 'vaultRowId',
+    'balances', 'positions', 'openOrders',
+  ]);
+  const visit = (node) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!node || typeof node !== 'object') return;
+    for (const [key, child] of Object.entries(node)) {
+      if (forbidden.has(key)) throw new Error(`POSTDEPLOY_QA_FORBIDDEN_EVIDENCE_KEY:${key}`);
+      visit(child);
+    }
+  };
+  visit(value);
+}
+
+function providerRows(value, prefix) {
+  const rows = Array.isArray(value?.providers) ? value.providers : [];
+  const names = rows.map((row) => row?.provider).sort();
+  if (JSON.stringify(names) !== JSON.stringify(REQUIRED_PROVIDERS)) {
+    throw new Error(`${prefix}_PROVIDER_SET_INVALID`);
+  }
+  return rows;
+}
+
+function buildProductionPostdeployQaEvidence({
+  targetSha,
+  productionDeployRunId,
+  comprehensive,
+  account,
+  credential,
+  context,
+  generatedAt = new Date().toISOString(),
+}) {
+  const sha = String(targetSha ?? '').trim().toLowerCase();
+  const deployRunId = Number(productionDeployRunId);
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('POSTDEPLOY_QA_TARGET_SHA_INVALID');
+  if (!Number.isSafeInteger(deployRunId) || deployRunId <= 0) throw new Error('POSTDEPLOY_QA_DEPLOY_RUN_ID_INVALID');
+
+  if (comprehensive?.schemaVersion !== 'production-comprehensive-readonly-qa-v1'
+    || comprehensive?.complete !== true
+    || comprehensive?.identityMatch !== true
+    || comprehensive?.productionDeployRunId !== deployRunId
+    || comprehensive?.recommendationsDesktop1440?.fallbackTimedOut !== false
+    || comprehensive?.recommendationsDesktop1440?.busyAfter5s !== 0
+    || !Number.isFinite(comprehensive?.recommendationsDesktop1440?.loadMs)
+    || comprehensive.recommendationsDesktop1440.loadMs >= 5_000) {
+    throw new Error('POSTDEPLOY_QA_COMPREHENSIVE_INVALID');
+  }
+  requireExactSha(comprehensive.targetSha, sha, 'POSTDEPLOY_QA_COMPREHENSIVE_SHA_MISMATCH');
+  requireZeroAuthority(comprehensive, 'POSTDEPLOY_QA_COMPREHENSIVE');
+
+  if (account?.schemaVersion !== 'production-account-readonly-live-qa-v2'
+    || account?.productionDeployRunId !== deployRunId
+    || account?.officialProductionOrigin !== true
+    || account?.authenticatedProductionSession !== true
+    || account?.credentialVaultEncryptionConfigured !== true
+    || account?.secretValuesRecorded !== false
+    || account?.accountValuesRecorded !== false
+    || account?.blockedMutationRequests !== 0
+    || account?.observedAppMutationRequests !== 0
+    || JSON.stringify(account?.testedProviders) !== JSON.stringify(REQUIRED_PROVIDERS)) {
+    throw new Error('POSTDEPLOY_QA_ACCOUNT_INVALID');
+  }
+  requireExactSha(account.targetSha, sha, 'POSTDEPLOY_QA_ACCOUNT_SHA_MISMATCH');
+  requireZeroAuthority(account, 'POSTDEPLOY_QA_ACCOUNT');
+  const accountRows = providerRows(account, 'POSTDEPLOY_QA_ACCOUNT');
+  for (const row of accountRows) {
+    if (row.connected !== true || row.status !== 'CONNECTED' || row.stale !== false
+      || row.fresh !== true || row.errorCode !== null || row.checkedAtPresent !== true
+      || row.lastGoodAtPresent !== true || row.reconciliation !== 'PASS'
+      || row.reconciliationPassed !== true) {
+      throw new Error(`POSTDEPLOY_QA_ACCOUNT_PROVIDER_FAILED:${row.provider}`);
+    }
+  }
+
+  if (credential?.schemaVersion !== 'production-live-credential-reuse-qa-v1'
+    || credential?.productionDeployRunId !== deployRunId
+    || credential?.officialProductionOrigin !== true
+    || credential?.authenticatedProductionSession !== true
+    || credential?.credentialsReturned !== false
+    || credential?.secretValuesRecorded !== false
+    || credential?.accountValuesRecorded !== false
+    || credential?.realOrderSubmitted !== false
+    || credential?.observedCredentialConnectionMutations !== REQUIRED_PROVIDERS.length) {
+    throw new Error('POSTDEPLOY_QA_CREDENTIAL_INVALID');
+  }
+  const credentialMutationPaths = Array.isArray(credential?.observedMutationPaths)
+    ? credential.observedMutationPaths
+    : [];
+  const normalizedCredentialMutationPaths = credentialMutationPaths.map((row) => {
+    if (row?.method !== 'POST' || typeof row?.path !== 'string') {
+      throw new Error('POSTDEPLOY_QA_CREDENTIAL_MUTATION_NOT_READONLY_REUSE');
+    }
+    return row.path;
+  }).sort();
+  if (JSON.stringify(normalizedCredentialMutationPaths)
+    !== JSON.stringify([...REQUIRED_CREDENTIAL_REUSE_PATHS].sort())) {
+    throw new Error('POSTDEPLOY_QA_CREDENTIAL_REUSE_PATH_SET_INVALID');
+  }
+  requireExactSha(credential.targetSha, sha, 'POSTDEPLOY_QA_CREDENTIAL_SHA_MISMATCH');
+  requireZeroAuthority(credential, 'POSTDEPLOY_QA_CREDENTIAL');
+  const credentialRows = providerRows(credential, 'POSTDEPLOY_QA_CREDENTIAL');
+  for (const row of credentialRows) {
+    if (row.configured !== true || row.verified !== true || row.reusedReadonlyCredential !== true
+      || row.credentialsReturned !== false || row.liveExecutionActivated !== false
+      || row.automaticLiveExecutionActivated !== false || row.realOrderSubmitted !== false) {
+      throw new Error(`POSTDEPLOY_QA_CREDENTIAL_PROVIDER_FAILED:${row.provider}`);
+    }
+    requireZeroCounters(row, `POSTDEPLOY_QA_CREDENTIAL_PROVIDER_${String(row.provider).toUpperCase()}`);
+  }
+
+  requireExactSha(context?.mainSha, sha, 'POSTDEPLOY_QA_MAIN_SHA_MISMATCH');
+  requireExactSha(context?.productionDeploySha, sha, 'POSTDEPLOY_QA_PRODUCTION_SHA_MISMATCH');
+  requireExactSha(context?.processDeploySha, sha, 'POSTDEPLOY_QA_PROCESS_SHA_MISMATCH');
+  requireExactSha(context?.deployMarkerSha, sha, 'POSTDEPLOY_QA_MARKER_SHA_MISMATCH');
+  requireExactSha(context?.latestSuccessfulDeploySha, sha, 'POSTDEPLOY_QA_LATEST_DEPLOY_SHA_MISMATCH');
+  if (context?.identityMatch !== true || context?.latestSuccessfulDeployRunId !== deployRunId) {
+    throw new Error('POSTDEPLOY_QA_PRODUCTION_IDENTITY_INVALID');
+  }
+  if (!Array.isArray(context?.activeConflictingTradingGates)
+    || context.activeConflictingTradingGates.length !== 0) {
+    throw new Error('POSTDEPLOY_QA_ACTIVE_GATE_CONFLICT');
+  }
+  const deployCompletedAt = Date.parse(String(context?.productionDeployCompletedAt ?? ''));
+  const orchestratorStartedAt = Date.parse(String(context?.orchestratorStartedAt ?? ''));
+  if (!Number.isFinite(deployCompletedAt) || !Number.isFinite(orchestratorStartedAt)
+    || orchestratorStartedAt < deployCompletedAt) {
+    throw new Error('POSTDEPLOY_QA_EVIDENCE_PREDATES_DEPLOY');
+  }
+  for (const [name, receipt] of Object.entries({ comprehensive, account, credential })) {
+    const receiptGeneratedAt = Date.parse(String(receipt?.generatedAt ?? ''));
+    if (!Number.isFinite(receiptGeneratedAt) || receiptGeneratedAt < orchestratorStartedAt) {
+      throw new Error(`POSTDEPLOY_QA_${name.toUpperCase()}_RECEIPT_NOT_FRESH`);
+    }
+  }
+
+  assertNoForbiddenEvidenceKeys({ comprehensive, account, credential });
+
+  return {
+    schemaVersion: 'production-postdeploy-activation-ready-v1',
+    targetSha: sha,
+    mainSha: sha,
+    productionSha: sha,
+    productionDeployRunId: deployRunId,
+    generatedAt,
+    identityMatch: true,
+    comprehensiveQa: 'PASS',
+    providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
+    credentialReuse: '4/4 PASS',
+    orderRequests: 0,
+    cancelRequests: 0,
+    amendRequests: 0,
+    transferRequests: 0,
+    withdrawalRequests: 0,
+    liveTradingAuthorityGranted: false,
+    autoTradingAuthorityGranted: false,
+    activeConflictingTradingGates: 0,
+    activationReady: true,
+  };
+}
+
+module.exports = {
+  REQUIRED_PROVIDERS,
+  REQUIRED_CREDENTIAL_REUSE_PATHS,
+  ZERO_COUNTERS,
+  buildProductionPostdeployQaEvidence,
+};

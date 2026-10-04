@@ -14,6 +14,8 @@ on:
       - 'stock-analyzer/e2e/support/production-readonly-login.ts'
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
+      - '.github/workflows/production-postdeploy-qa.yml'
+      - '.github/scripts/verify-production-postdeploy-qa-contract.mjs'
   workflow_dispatch:
     inputs:
       sha:
@@ -26,6 +28,20 @@ on:
         type: string
       production_deploy_run_id:
         description: Exact latest successful official Production Deploy Run ID verified by the dispatch bridge
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA to verify with real read-only account calls
+        required: true
+        type: string
+      providers:
+        description: Comma-separated read-only target providers
+        required: true
+        type: string
+      production_deploy_run_id:
+        description: Exact latest successful official Production Deploy Run ID
         required: true
         type: string
 
@@ -68,8 +84,9 @@ jobs:
             if (!source.includes(value)) throw new Error(code);
           };
           requireText(workflow, 'run-name: Production Account Read-only Live QA', 'LIVE_QA_TARGETED_RUN_NAME_REQUIRED');
-          requireText(live, "if: github.event_name == 'workflow_dispatch'", 'LIVE_QA_MUST_BE_DISPATCH_ONLY');
-          requireText(live, 'environment: production', 'LIVE_QA_MUST_USE_PRODUCTION_ENVIRONMENT');
+          requireText(live, "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'", 'LIVE_QA_MUST_BE_DISPATCH_OR_ORCHESTRATOR_CALL_ONLY');
+          requireText(live, 'environment: production-readonly-qa', 'LIVE_QA_MUST_USE_READONLY_ENVIRONMENT');
+          if (live.includes('PROD_SSH_') || live.includes('PROD_DATABASE_URL')) throw new Error('LIVE_QA_DEPLOY_AUTHORITY_FORBIDDEN');
           requireText(live, 'PRODUCTION_BASE_URL: https://lsj119.com', 'LIVE_QA_OFFICIAL_HOST_REQUIRED');
           requireText(live, 'ref: ' + '$' + '{{ inputs.sha }}', 'LIVE_QA_EXACT_SHA_CHECKOUT_REQUIRED');
           requireText(live, 'PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ' + '$' + '{{ inputs.providers }}', 'LIVE_QA_TARGET_PROVIDERS_REQUIRED');
@@ -121,10 +138,10 @@ jobs:
 
   production-account-readonly-live-qa:
     name: Real Production account read-only provider QA
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: production
+    environment: production-readonly-qa
     env:
       PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
@@ -263,9 +280,9 @@ jobs:
           set -Eeuo pipefail
           evidence="stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json"
           test -s "$evidence"
-          node - "$evidence" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS" <<'NODE'
+          node - "$evidence" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS" "$PRODUCTION_DEPLOY_RUN_ID" <<'NODE'
           const fs = require('node:fs');
-          const [file, expectedSha, rawTargetProviders] = process.argv.slice(2);
+          const [file, expectedSha, rawTargetProviders, productionDeployRunId] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
           const allowedTargets = new Set(['toss', 'kiwoom', 'upbit', 'bitget']);
           const requestedProviders = String(rawTargetProviders ?? '').split(',').filter(Boolean);
@@ -278,6 +295,8 @@ jobs:
           const providers = Array.isArray(value?.providers) ? value.providers : [];
           if (value?.schemaVersion !== 'production-account-readonly-live-qa-v2'
             || value?.targetSha !== expectedSha
+            || value?.productionDeployRunId !== Number(productionDeployRunId)
+            || !Number.isFinite(Date.parse(String(value?.generatedAt ?? '')))
             || !Array.isArray(value?.testedProviders)
             || JSON.stringify(value.testedProviders) !== JSON.stringify(expectedTestedProviders)
             || value?.officialProductionOrigin !== true
