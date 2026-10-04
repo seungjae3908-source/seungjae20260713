@@ -21,6 +21,8 @@ on:
     paths:
       - .github/workflows/production-deploy.yml
       - .github/workflows/production-one-time-approval.yml
+      - .github/workflows/production-postdeploy-qa.yml
+      - .github/scripts/verify-production-postdeploy-qa-contract.mjs
       - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/post-merge-release-provenance.yml
       - .github/workflows/staging-readiness.yml
@@ -79,6 +81,8 @@ jobs:
         run: node api-server/scripts/verify-production-verification-contract.mjs
       - name: Verify Production trade schema read-only gate contract
         run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
+      - name: Verify approval-free post-deploy QA isolation contract
+        run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
 
   approval-gate:
     name: Validate immutable main revision, release provenance, and exact staging verdict
@@ -257,6 +261,33 @@ jobs:
           [[ -n "$SSH_HOST" ]] || { echo 'Missing PROD_SSH_HOST' >&2; exit 1; }
           [[ -n "$SSH_USER" ]] || { echo 'Missing PROD_SSH_USER' >&2; exit 1; }
           [[ -n "$SSH_PRIVATE_KEY" ]] || { echo 'Missing PROD_SSH_PRIVATE_KEY' >&2; exit 1; }
+      - name: Provision isolated approval-free read-only QA credential scope
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_HUB_GITHUB_TOKEN }}
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$GH_TOKEN" ]] || { echo 'Missing QA environment administrator token' >&2; exit 1; }
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'Missing Production read-only QA credential' >&2
+            exit 1
+          }
+          echo "::add-mask::$GH_TOKEN"
+          echo "::add-mask::$PRODUCTION_QA_LOGIN"
+          echo "::add-mask::$PRODUCTION_QA_PASSWORD"
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/environments/production-readonly-qa" >/dev/null
+          printf '%s' "$PRODUCTION_QA_LOGIN" \
+            | gh secret set PRODUCTION_QA_LOGIN --env production-readonly-qa --repo "$GITHUB_REPOSITORY"
+          printf '%s' "$PRODUCTION_QA_PASSWORD" \
+            | gh secret set PRODUCTION_QA_PASSWORD --env production-readonly-qa --repo "$GITHUB_REPOSITORY"
+          protection_count="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-readonly-qa" --jq '.protection_rules | length')"
+          secret_names="$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-readonly-qa/secrets" --jq '[.secrets[].name] | sort | join(",")')"
+          [[ "$protection_count" == "0" ]] || { echo 'Read-only QA environment must not require reviewers' >&2; exit 1; }
+          [[ "$secret_names" == "PRODUCTION_QA_LOGIN,PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'Read-only QA environment contains a forbidden secret scope' >&2
+            exit 1
+          }
       - name: Configure SSH
         run: |
           set -Eeuo pipefail

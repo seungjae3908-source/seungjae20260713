@@ -97,6 +97,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
         with:
           script: |
             const target = process.env.TARGET_SHA;
@@ -132,7 +133,11 @@ jobs:
               repo: context.repo.repo,
               workflow_id: workflowId,
               ref: 'main',
-              inputs: { sha: target, include_telegram: 'false' },
+              inputs: {
+                sha: target,
+                include_telegram: 'false',
+                production_deploy_run_id: process.env.PRODUCTION_DEPLOY_RUN_ID,
+              },
               return_run_details: true,
               headers: {
                 accept: 'application/vnd.github+json',
@@ -173,7 +178,7 @@ jobs:
               repo: context.repo.repo,
               issue_number: 1555,
               body: [
-                'Production Comprehensive Read-Only QA dispatched behind the protected `production` environment.',
+                'Production Comprehensive Read-Only QA dispatched in the isolated `production-readonly-qa` environment.',
                 '',
                 `- Exact deployed Production SHA: \`${process.env.TARGET_SHA}\``,
                 '- QA repository checkout is pinned to the deployed SHA input: `true`',
@@ -181,7 +186,8 @@ jobs:
                 `- Production Comprehensive QA Run ID: \`${process.env.QA_RUN_ID}\``,
                 `- Run: [Open GitHub Actions run](${process.env.QA_RUN_URL})`,
                 '- Exact Production deploy SHA + identityMatch are enforced by the QA workflow before browser tests.',
-                '- Production environment protection bypassed: `false`',
+                '- Production deploy/live activation protection changed: `false`',
+                '- Read-only QA required reviewer: `false`',
                 '- Production DB/app mutations by this bridge: `0`',
                 '- Telegram runtime readiness in comprehensive QA: `excluded`',
                 '- Trading/private/order authority granted: `false`',

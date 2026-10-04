@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requireRecommendationResponse } from './recommendation-response';
+import {
+  recommendationQueryKey,
+  requireRecommendationResponse,
+} from './recommendation-response.ts';
+
+test('recommendation query key is shared by every recommendation surface', () => {
+  assert.deepEqual(recommendationQueryKey('KR'), ['recommendations', 'KR']);
+  assert.deepEqual(recommendationQueryKey('US'), ['recommendations', 'US']);
+});
 
 const NOW = Date.parse('2026-09-10T08:30:00.000Z');
 

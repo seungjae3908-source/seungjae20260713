@@ -1,0 +1,331 @@
+name: Production Post-Deploy Read-Only QA
+run-name: Production Post-Deploy Read-Only QA ${{ github.event.comment.body || github.event.pull_request.head.sha }}
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    paths:
+      - '.github/workflows/production-postdeploy-qa.yml'
+      - '.github/workflows/production-comprehensive-readonly-qa.yml'
+      - '.github/workflows/production-account-readonly-live-qa.yml'
+      - '.github/workflows/production-live-credential-reuse-qa.yml'
+      - '.github/workflows/production-deploy.yml'
+      - '.github/scripts/production-postdeploy-qa-evidence.cjs'
+      - '.github/scripts/production-postdeploy-qa-evidence.test.cjs'
+      - '.github/scripts/verify-production-postdeploy-qa-contract.mjs'
+      - 'api-server/scripts/build-production-comprehensive-readonly-receipt.mjs'
+      - 'api-server/scripts/build-production-comprehensive-readonly-receipt.test.mjs'
+      - 'api-server/src/services/recommendation-deadline.ts'
+      - 'api-server/src/services/recommendation-deadline.service.test.ts'
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-postdeploy-qa-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  static-contract:
+    name: Validate approval-free post-deploy QA orchestration contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node api-server/scripts/build-production-comprehensive-readonly-receipt.test.mjs
+      - run: node --test .github/scripts/production-postdeploy-qa-evidence.test.cjs
+      - run: >-
+          node --experimental-strip-types --test
+          api-server/src/services/recommendation-deadline.service.test.ts
+          stock-analyzer/src/lib/recommendation-response.test.ts
+      - run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
+
+  validate-command:
+    name: Require owner command, exact current Production identity, and latest deploy
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-production-postdeploy-qa ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.validate.outputs.target_sha }}
+      production_deploy_run_id: ${{ steps.validate.outputs.production_deploy_run_id }}
+      production_deploy_completed_at: ${{ steps.validate.outputs.production_deploy_completed_at }}
+      orchestrator_started_at: ${{ steps.validate.outputs.orchestrator_started_at }}
+    steps:
+      - name: Validate exact owner command and immutable Production identity
+        id: validate
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/run-production-postdeploy-qa ([0-9a-fA-F]{40})$/.exec(body);
+            if (!match) {
+              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha>');
+              return;
+            }
+            const target = match[1].toLowerCase();
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (String(main.data.commit.sha).toLowerCase() !== target) {
+              core.setFailed(`POSTDEPLOY_QA_REQUIRES_EXACT_CURRENT_MAIN: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+
+            const deployRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = deployRuns
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== target) {
+              core.setFailed('POSTDEPLOY_QA_LATEST_SUCCESSFUL_DEPLOY_SHA_MISMATCH');
+              return;
+            }
+
+            const healthResponse = await fetch('https://lsj119.com/api/health', {
+              headers: { Accept: 'application/json' },
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (!healthResponse.ok) {
+              core.setFailed(`POSTDEPLOY_QA_PRODUCTION_HEALTH_HTTP_${healthResponse.status}`);
+              return;
+            }
+            const health = await healthResponse.json();
+            for (const key of ['deploySha', 'processDeploySha', 'deployMarkerSha']) {
+              if (String(health?.[key] ?? '').toLowerCase() !== target) {
+                core.setFailed(`POSTDEPLOY_QA_PRODUCTION_${key.toUpperCase()}_MISMATCH`);
+                return;
+              }
+            }
+            if (health?.ok !== true || health?.identityMatch !== true) {
+              core.setFailed('POSTDEPLOY_QA_PRODUCTION_IDENTITY_NOT_MATCHED');
+              return;
+            }
+
+            const currentRun = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(process.env.ORCHESTRATOR_RUN_ID),
+            })).data;
+            if (Date.parse(currentRun.created_at) < Date.parse(latest.completed_at ?? latest.updated_at)) {
+              core.setFailed('POSTDEPLOY_QA_RUN_PREDATES_LATEST_DEPLOY');
+              return;
+            }
+            core.setOutput('target_sha', target);
+            core.setOutput('production_deploy_run_id', String(latest.id));
+            core.setOutput('production_deploy_completed_at', latest.completed_at ?? latest.updated_at);
+            core.setOutput('orchestrator_started_at', currentRun.created_at);
+
+  comprehensive:
+    name: 1 · Comprehensive Read-only QA
+    needs: validate-command
+    uses: ./.github/workflows/production-comprehensive-readonly-qa.yml
+    with:
+      sha: ${{ needs.validate-command.outputs.target_sha }}
+      include_telegram: false
+      production_deploy_run_id: ${{ needs.validate-command.outputs.production_deploy_run_id }}
+
+  account:
+    name: 2 · Four-provider Account Read-only QA
+    needs: [validate-command, comprehensive]
+    uses: ./.github/workflows/production-account-readonly-live-qa.yml
+    with:
+      sha: ${{ needs.validate-command.outputs.target_sha }}
+      providers: bitget,kiwoom,toss,upbit
+      production_deploy_run_id: ${{ needs.validate-command.outputs.production_deploy_run_id }}
+
+  credential-reuse:
+    name: 3 · Credential Reuse QA
+    needs: [validate-command, account]
+    uses: ./.github/workflows/production-live-credential-reuse-qa.yml
+    with:
+      sha: ${{ needs.validate-command.outputs.target_sha }}
+      production_deploy_run_id: ${{ needs.validate-command.outputs.production_deploy_run_id }}
+
+  activation-ready:
+    name: 4 · Verify artifacts, gate conflicts, and ACTIVATION_READY
+    needs: [validate-command, comprehensive, account, credential-reuse]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-command.outputs.target_sha }}
+          persist-credentials: false
+      - name: Download all exact-run QA evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: production-*
+          path: postdeploy-evidence
+          merge-multiple: true
+      - name: Recheck current main, Production identity, latest deploy, and trading gate conflicts
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ needs.validate-command.outputs.target_sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ needs.validate-command.outputs.production_deploy_run_id }}
+          PRODUCTION_DEPLOY_COMPLETED_AT: ${{ needs.validate-command.outputs.production_deploy_completed_at }}
+          ORCHESTRATOR_STARTED_AT: ${{ needs.validate-command.outputs.orchestrator_started_at }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const target = process.env.TARGET_SHA;
+            const deployRunId = Number(process.env.PRODUCTION_DEPLOY_RUN_ID);
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const deployRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latestSuccessfulDeploy = deployRuns
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latestSuccessfulDeploy || latestSuccessfulDeploy.id !== deployRunId) {
+              throw new Error('POSTDEPLOY_QA_NEWER_SUCCESSFUL_DEPLOY_DETECTED');
+            }
+            const healthResponse = await fetch('https://lsj119.com/api/health', {
+              headers: { Accept: 'application/json' },
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (!healthResponse.ok) throw new Error(`POSTDEPLOY_QA_PRODUCTION_HEALTH_HTTP_${healthResponse.status}`);
+            const health = await healthResponse.json();
+
+            const gateWorkflows = [
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-automatic-trading-gate.yml',
+            ];
+            const conflicts = [];
+            for (const workflowId of gateWorkflows) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                per_page: 100,
+              });
+              for (const run of runs) {
+                if (run.status !== 'completed') {
+                  conflicts.push({ id: run.id, name: run.name, status: run.status, headSha: run.head_sha });
+                }
+              }
+            }
+            const value = {
+              mainSha: String(main.data.commit.sha).toLowerCase(),
+              productionDeploySha: String(health.deploySha ?? '').toLowerCase(),
+              processDeploySha: String(health.processDeploySha ?? '').toLowerCase(),
+              deployMarkerSha: String(health.deployMarkerSha ?? '').toLowerCase(),
+              identityMatch: health.identityMatch === true,
+              latestSuccessfulDeploySha: String(latestSuccessfulDeploy.head_sha ?? '').toLowerCase(),
+              latestSuccessfulDeployRunId: latestSuccessfulDeploy.id,
+              productionDeployCompletedAt: process.env.PRODUCTION_DEPLOY_COMPLETED_AT,
+              orchestratorStartedAt: process.env.ORCHESTRATOR_STARTED_AT,
+              activeConflictingTradingGates: conflicts,
+            };
+            fs.mkdirSync('postdeploy-evidence', { recursive: true });
+            fs.writeFileSync('postdeploy-evidence/production-postdeploy-context.json', JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+            if (value.mainSha !== target || value.productionDeploySha !== target
+              || value.processDeploySha !== target || value.deployMarkerSha !== target
+              || value.latestSuccessfulDeploySha !== target || value.identityMatch !== true
+              || value.latestSuccessfulDeployRunId !== deployRunId || conflicts.length !== 0) {
+              throw new Error('POSTDEPLOY_QA_FINAL_IDENTITY_OR_GATE_CONFLICT_CHECK_FAILED');
+            }
+      - name: Build immutable zero-authority ACTIVATION_READY evidence
+        env:
+          TARGET_SHA: ${{ needs.validate-command.outputs.target_sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ needs.validate-command.outputs.production_deploy_run_id }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { buildProductionPostdeployQaEvidence } = require('./.github/scripts/production-postdeploy-qa-evidence.cjs');
+          const find = (name) => {
+            const matches = [];
+            const walk = (dir) => {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) walk(full);
+                else if (entry.name === name) matches.push(full);
+              }
+            };
+            walk('postdeploy-evidence');
+            if (matches.length !== 1) throw new Error(`POSTDEPLOY_QA_ARTIFACT_CARDINALITY:${name}:${matches.length}`);
+            return JSON.parse(fs.readFileSync(matches[0], 'utf8'));
+          };
+          const evidence = buildProductionPostdeployQaEvidence({
+            targetSha: process.env.TARGET_SHA,
+            productionDeployRunId: process.env.PRODUCTION_DEPLOY_RUN_ID,
+            comprehensive: find('production-comprehensive-readonly-qa.json'),
+            account: find('production-account-readonly-live-qa.json'),
+            credential: find('production-live-credential-reuse-qa.json'),
+            context: find('production-postdeploy-context.json'),
+          });
+          const output = `postdeploy-evidence/production-postdeploy-activation-ready-${process.env.TARGET_SHA}.json`;
+          fs.writeFileSync(output, JSON.stringify(evidence, null, 2) + '\n', { mode: 0o600 });
+          console.log(JSON.stringify({ ok: true, activationReady: evidence.activationReady, targetSha: evidence.targetSha }));
+          NODE
+      - name: Upload immutable post-deploy ACTIVATION_READY evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-postdeploy-activation-ready-${{ needs.validate-command.outputs.target_sha }}
+          path: postdeploy-evidence/production-postdeploy-activation-ready-${{ needs.validate-command.outputs.target_sha }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record completed owner-command receipt
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ needs.validate-command.outputs.target_sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ needs.validate-command.outputs.production_deploy_run_id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1555,
+              body: [
+                'POST-DEPLOY QA COMPLETE / ACTIVATION_READY',
+                '',
+                `- Exact main/Production SHA: \`${process.env.TARGET_SHA}\``,
+                `- Production Deploy Run ID: \`${process.env.PRODUCTION_DEPLOY_RUN_ID}\``,
+                `- Post-deploy QA Run ID: \`${context.runId}\``,
+                '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`',
+                '- orders/cancels/amends/transfers/withdrawals: `0/0/0/0/0`',
+                '- liveTradingAuthorityGranted: `false`',
+                '- autoTradingAuthorityGranted: `false`',
+                '- active conflicting trading gates: `0`',
+                '- ACTIVATION_READY: `true`',
+              ].join('\n'),
+            });

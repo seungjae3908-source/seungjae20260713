@@ -14,8 +14,11 @@ import { cached } from '../lib/cache';
 import { CATALOG, type CatalogEntry } from '../data/catalog';
 import { classifyAssetType } from '../data/asset-type';
 import { MarketDataService } from './market-data.service';
-import { FinancialService } from './financial.service';
 import { buildContext } from './signal.service';
+import {
+  RECOMMENDATION_ANALYSIS_BUDGET_MS,
+  withRecommendationDeadline,
+} from './recommendation-deadline';
 import { computeIndicators } from '../sample/indicators';
 import { computeScanConditions, type SignalContext } from '../sample/accumulation';
 import type { Candle } from '../sample/types';
@@ -207,17 +210,17 @@ type ExcludeReason =
   | 'low_liquidity'
   | 'overheated'
   | 'delisting_risk'
+  | 'provider_timeout'
   | 'not_qualified';
 
 async function analyze(entry: CatalogEntry): Promise<{ a: Analyzed | null; exclude?: ExcludeReason }> {
   const assetType = classifyAssetType(entry.name, entry.market);
   if (assetType !== 'STOCK') return { a: null, exclude: 'not_qualified' };
 
-  const [meta, quote, ctx, finRaw] = await Promise.all([
+  const [meta, quote, ctx] = await Promise.all([
     MarketDataService.getCandlesMeta(entry.ticker, '1D' as any).catch(() => null),
     MarketDataService.getQuote(entry.ticker).catch(() => null),
     buildContext(entry).catch(() => ({ currency: entry.currency } as SignalContext)),
-    FinancialService.getFinancials(entry.ticker).catch(() => null),
   ]);
 
   const candles = meta?.candles ?? [];
@@ -269,7 +272,7 @@ async function analyze(entry: CatalogEntry): Promise<{ a: Analyzed | null; exclu
 
   const fin = ctx.financials ?? null;
   const finSource: Analyzed['finSource'] =
-    finRaw == null ? 'none' : finRaw.source === 'sample' ? 'sample' : 'live';
+    fin == null ? 'none' : ctx.financialSource === 'sample' ? 'sample' : 'live';
 
   return {
     a: {
@@ -608,7 +611,18 @@ async function getRecommendations(marketInput: string): Promise<RecommendationRe
     const excludedBreakdown: Record<string, number> = {};
     const analyzed: Analyzed[] = [];
 
-    const settled = await Promise.all(pool.map((entry) => analyze(entry).catch(() => ({ a: null, exclude: 'insufficient_data' as ExcludeReason }))));
+    const settled = await Promise.all(pool.map(async (entry) => {
+      try {
+        return await withRecommendationDeadline(analyze(entry));
+      } catch (error) {
+        return {
+          a: null,
+          exclude: error instanceof Error && error.message === 'RECOMMENDATION_PROVIDER_TIMEOUT'
+            ? 'provider_timeout' as const
+            : 'insufficient_data' as const,
+        };
+      }
+    }));
     for (const { a, exclude } of settled) {
       if (a) analyzed.push(a);
       else if (exclude && exclude !== 'not_qualified') {
