@@ -28,7 +28,7 @@ const cryptoAuto = await text('api-server/src/routes/crypto-auto.ts');
 const normalizedCryptoAuto = cryptoAuto.replace(/\r\n/g, '\n');
 const cryptoAutoBlob = createHash('sha1')
   .update(`blob ${Buffer.byteLength(normalizedCryptoAuto)}\0${normalizedCryptoAuto}`).digest('hex');
-assert(cryptoAutoBlob === '4b964ddf329c58da3a43cd6024c1130fd3527b61', 'crypto-auto.ts changed from the verified baseline');
+assert(cryptoAutoBlob === '0f5ade3143235ff7112c455ee5ab517ccdf425d4', 'crypto-auto.ts changed from the safety-hardened verified baseline');
 
 const routes = await text('api-server/src/routes/index.ts');
 const disabledIndex = routes.indexOf("router.use('/crypto/futures/auto', privateExchangeDisabled)");
