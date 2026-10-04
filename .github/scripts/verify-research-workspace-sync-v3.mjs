@@ -177,6 +177,9 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/src/components/research-center-general.tsx',
  'stock-analyzer/src/pages/research-center-workspace.tsx',
  'stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts',
+ 'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
+ 'stock-analyzer/e2e/research-evidence-maturity.spec.ts',
+ 'stock-analyzer/e2e/research-paper-closed-loop-observer.spec.ts',
  'stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts',
 ];
 const researchBacktestPaperReviewed=[
