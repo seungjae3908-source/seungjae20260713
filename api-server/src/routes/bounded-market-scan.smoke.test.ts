@@ -131,7 +131,7 @@ function scannerApiUsesDedicatedTimeout(): boolean {
     path.resolve(process.cwd(), 'stock-analyzer/src/lib/api.ts'),
     'utf8',
   );
-  return /apiGet<ScanResult>\(\`\/market\/scan\?\$\{params\.toString\(\)\}\`,\s*SCANNER_API_REQUEST_TIMEOUT_MS\)/u.test(source);
+  return source.includes("apiGet<ScanResult>(`/market/scan?${params.toString()}`, SCANNER_API_REQUEST_TIMEOUT_MS)");
 }
 
 async function withServer(
