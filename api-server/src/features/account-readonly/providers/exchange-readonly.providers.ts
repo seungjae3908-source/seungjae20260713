@@ -249,6 +249,10 @@ async function readBitgetClassicSnapshot(
       return parsed;
     },
   );
+  const positionModes = [...new Set(data(accountRaw).map((row) => String(row.posMode ?? '').trim().toLowerCase()))];
+  const positionMode = positionModes.length === 1 && ['one_way_mode', 'hedge_mode'].includes(positionModes[0] ?? '')
+    ? positionModes[0] as 'one_way_mode' | 'hedge_mode'
+    : null;
   const positions = parseBitgetResponse(
     credentials,
     '/api/v2/mix/position/all-position',
@@ -333,17 +337,21 @@ async function readBitgetClassicSnapshot(
     balances,
     positions,
     openOrders,
+    positionMode,
     lastGoodAt: checkedAt,
   };
 }
 
-function bitgetAccountMode(value: unknown): 'classic' | 'uta' {
+function bitgetAccountMode(value: unknown): {
+  mode: 'classic' | 'uta';
+  positionMode: 'one_way_mode' | 'hedge_mode' | null;
+} {
   if (!record(value)) throw new Error('BITGET_ACCOUNT_SETTINGS_RESPONSE_INVALID');
   const code = typeof value.code === 'string' || typeof value.code === 'number'
     ? String(value.code)
     : '';
   if (!code) throw new Error('BITGET_ACCOUNT_SETTINGS_RESPONSE_INVALID');
-  if (code === '25245') return 'classic';
+  if (code === '25245') return { mode: 'classic', positionMode: null };
   if (code !== '00000') throw bitgetApplicationFailure(code);
 
   const payload = value.data;
@@ -351,7 +359,9 @@ function bitgetAccountMode(value: unknown): 'classic' | 'uta' {
   const accountMode = typeof payload.accountMode === 'string'
     ? payload.accountMode.trim().toLowerCase()
     : '';
-  if (accountMode === 'unified' || accountMode === 'hybrid') return 'uta';
+  const holdMode = typeof payload.holdMode === 'string' ? payload.holdMode.trim().toLowerCase() : '';
+  const positionMode = holdMode === 'one_way_mode' || holdMode === 'hedge_mode' ? holdMode : null;
+  if (accountMode === 'unified' || accountMode === 'hybrid') return { mode: 'uta', positionMode };
   if (accountMode === 'upgrading' || accountMode === 'switching') {
     throw new AccountReadonlyError('BITGET_ACCOUNT_MODE_TRANSITION', true);
   }
@@ -397,6 +407,7 @@ async function readBitgetUtaSnapshot(
   signal?: AbortSignal,
   now = new Date(),
   fallbackAttempted = false,
+  positionMode: 'one_way_mode' | 'hedge_mode' | null = null,
 ): Promise<CanonicalAccountSnapshot> {
   const pendingPromise = transport(prepareBitgetUtaPendingOrders(credentials), signal)
     .then((value) => ({ value, error: null as AccountReadonlyError | null }))
@@ -511,6 +522,7 @@ async function readBitgetUtaSnapshot(
     balances,
     positions,
     openOrders,
+    positionMode,
     lastGoodAt: checkedAt,
   };
 }
@@ -572,12 +584,15 @@ export async function readBitgetSnapshot(
   now = new Date(),
 ): Promise<CanonicalAccountSnapshot> {
   let mode: 'classic' | 'uta';
+  let positionMode: 'one_way_mode' | 'hedge_mode' | null = null;
   let selectedTransport = transport;
   let fallbackAttempted = false;
   try {
-    mode = bitgetAccountMode(
+    const settings = bitgetAccountMode(
       await transport(prepareBitgetUtaAccountSettings(credentials), signal),
     );
+    mode = settings.mode;
+    positionMode = settings.positionMode;
   } catch (error) {
     if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
       mode = 'classic';
@@ -608,7 +623,7 @@ export async function readBitgetSnapshot(
   }
 
   try {
-    return await readBitgetUtaSnapshot(credentials, selectedTransport, signal, now, fallbackAttempted);
+    return await readBitgetUtaSnapshot(credentials, selectedTransport, signal, now, fallbackAttempted, positionMode);
   } catch (error) {
     if (error instanceof AccountReadonlyError && error.code === 'BITGET_NOT_UTA') {
       return readBitgetClassicSnapshot(
