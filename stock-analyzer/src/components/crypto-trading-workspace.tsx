@@ -692,7 +692,7 @@ function analyze(
   };
 }
 
-function loadSettings() {
+function loadSettings(): AutoSettings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
   try {
     const parsed = JSON.parse(window.localStorage.getItem(SETTINGS_KEY) ?? "{}") as Partial<AutoSettings>;
