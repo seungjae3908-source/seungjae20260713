@@ -386,7 +386,10 @@ export function calculateTradingRisk(
   }
 
   const appMaximumLeverage = input.market === 'crypto-futures'
-    ? input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage
+    ? Math.min(
+      input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage,
+      TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage,
+    )
     : input.appMaximumLeverage ?? null;
   result.appMaximumLeverage = appMaximumLeverage;
   result.exchangeMaximumLeverage = input.maximumLeverage ?? null;
