@@ -45,9 +45,9 @@ function copilotStatusLabel(status: string) {
 
 function aiReasonLabel(reason: string | null | undefined) {
   if (!reason) return '사용 가능';
-  if (reason === 'FREE_TIER_NOT_CONFIRMED') return 'AI 제공자 무료 사용 가능 여부 미확인';
-  if (reason === 'PROVIDER_NOT_CONFIGURED') return 'AI 제공자 연결 필요';
-  return 'AI 사용 조건 확인 필요';
+  if (reason === 'FREE_TIER_NOT_CONFIRMED') return '인공지능 무료 사용 가능 여부 미확인';
+  if (reason === 'PROVIDER_NOT_CONFIGURED') return '인공지능 연결 필요';
+  return '인공지능 사용 조건 확인 필요';
 }
 
 export function ResearchCopilotPanel() {
@@ -140,13 +140,13 @@ export function ResearchCopilotPanel() {
         <p className="mt-3 text-sm leading-6 text-foreground/80">가설과 검증 절차를 설명합니다. 수익성·승격·실거래는 결정하지 않습니다.</p>
       </header>
       {snapshot.isPending ? <p role="status">연구 자료를 불러오는 중…</p> : null}
-      {snapshot.isError ? <div role="alert" className="rounded-xl border border-destructive p-4"><p>{snapshot.error.message}</p><button className={button} onClick={() => void snapshot.refetch()}>다시 조회</button></div> : null}
+      {snapshot.isError ? <div role="alert" className="rounded-xl border border-destructive p-4"><p>연구 자료를 불러오지 못했습니다.</p><button className={button} onClick={() => void snapshot.refetch()}>다시 조회</button></div> : null}
       {data ? <>
         <section aria-label="연구 자료와 인공지능 한도" className="rounded-2xl border border-border bg-card p-4">
           <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold text-muted-foreground">현재 증거</p><h2 className="mt-1 font-bold">{copilotStatusLabel(data.status)}</h2></div><button className={button} disabled={busy || snapshot.isFetching} onClick={() => void snapshot.refetch()}>증거 새로고침</button></div>
-          <p className="mt-2 text-sm">원본 기준 시각: {data.timestamp === null ? '미수집' : new Date(data.timestamp).toISOString()} · {data.freshness}</p>
-          <p className="mt-2 break-all text-xs text-muted-foreground">출처: {data.data_sources.join(' / ')} · SHA-256: {data.evidenceDigest}</p>
-          <p className="mt-2 text-sm">인공지능 요청 {data.ai.calls}회 · 캐시 적중 {data.ai.cacheHits}회 · 토큰 사용량/무료 잔여 한도: 미확인</p>
+          <p className="mt-2 text-sm">기준 시각: {data.timestamp === null ? '미수집' : new Date(data.timestamp).toLocaleString('ko-KR')} · {evidenceStatusLabel(data.freshness)}</p>
+          <p className="mt-2 text-xs text-muted-foreground">확인된 출처 {data.data_sources.length}개 · 자료 지문 확인됨</p>
+          <p className="mt-2 text-sm">인공지능 요청 {data.ai.calls}회 · 캐시 적중 {data.ai.cacheHits}회</p>
           <p className="mt-2 text-sm">{data.ai.available ? '명시 요청에만 인공지능을 호출합니다.' : aiReasonLabel(data.ai.reason)}</p>{!data.ai.available ? <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-sm"><p className="font-black">왜 버튼을 누를 수 없나요?</p><p className="mt-1 break-keep text-muted-foreground">현재 인공지능 사용 조건이 확인되지 않아 요청 기능을 꺼두었습니다.</p><details className="mt-2 text-xs"><summary className="cursor-pointer font-bold">기술 상태 코드 보기</summary><p className="mt-2 break-all font-mono text-muted-foreground">{data.ai.reason}</p></details></div> : null}
           <div className="mt-4 flex flex-wrap gap-2">{ACTIONS.map(([task, label]) => <button key={task} className={button} disabled={busy || snapshot.isError || snapshot.isFetching || !data.ai.available} onClick={() => ask(task)}>{label}</button>)}</div>
         </section>
