@@ -260,7 +260,7 @@ jobs:
                 && body.includes('status: ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL')
                 && body.includes('target_sha: ' + target)
                 && body.includes('provider: bitget')
-                && /max_leverage:\s*(2|3)/u.test(body)
+                && /max_leverage:\s*([2-7])/u.test(body)
                 && body.includes('margin_mode: isolated')
                 && body.includes('FUTURES_LIVE_EXECUTION_AUTHORITY=FUTURES_LIVE_LIMITED')
                 && body.includes('AUTO_TRADING=false')
@@ -271,7 +271,7 @@ jobs:
               core.setFailed('AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED:' + target);
               return;
             }
-            const leverage = /max_leverage:\s*(2|3)/u.exec(String(futuresReceipt.body || ''))?.[1];
+            const leverage = /max_leverage:\s*([2-7])/u.exec(String(futuresReceipt.body || ''))?.[1];
             if (!leverage) {
               core.setFailed('AUTOMATIC_TRADING_FUTURES_LEVERAGE_RECEIPT_INVALID');
               return;
@@ -399,7 +399,7 @@ jobs:
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
-          if (!['2', '3'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
+          if (!['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
           if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
 
