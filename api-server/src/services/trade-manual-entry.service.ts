@@ -404,6 +404,18 @@ export async function prepareManualEntry(input: {
   });
   const referencePrice = finitePositive(seed.limitPrice ?? preview.snapshot.currentPrice);
   if (referencePrice == null) throw new Error('MANUAL_ENTRY_REFERENCE_PRICE_UNAVAILABLE');
+  const requestedQuantity = finitePositive(seed.quantity);
+  const requestedQuote = finitePositive(seed.quoteAmount);
+  const providerNotionalKrw = requestedQuantity != null
+    ? requestedQuantity * referencePrice * fx.rate
+    : requestedQuote != null
+      ? requestedQuote * (input.instruction.market === 'UPBIT' ? 1 : fx.rate)
+      : null;
+  if (providerNotionalKrw == null || !Number.isFinite(providerNotionalKrw) || providerNotionalKrw <= 0) {
+    throw new Error('MANUAL_ENTRY_SERVER_NOTIONAL_UNAVAILABLE');
+  }
+  const clientEstimatedKrw = Number(input.instruction.estimatedKrw);
+  const estimatedKrw = Math.max(clientEstimatedKrw, providerNotionalKrw);
   if ((side === 'buy' || side === 'long')
     && (!(seed.stopPrice < referencePrice) || !(seed.targetPrices[0]! > referencePrice))) {
     throw new Error('MANUAL_ENTRY_LONG_STOP_TARGET_INVALID');
@@ -435,6 +447,7 @@ export async function prepareManualEntry(input: {
   };
   const finalInput: TradingPlanInput = {
     ...seed,
+    estimatedKrw,
     marketSnapshot: finalSnapshot,
     estimatedSlippagePercent: preview.snapshot.estimatedSlippagePercent,
     averageSpreadPercent: preview.snapshot.spreadPercent,
