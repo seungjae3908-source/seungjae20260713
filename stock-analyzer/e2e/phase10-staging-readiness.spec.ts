@@ -502,6 +502,21 @@ function isSameOriginBrowserRead(request: Request) {
   }
 }
 
+function isScannerReadIdentity(input: {
+  method: string;
+  rawUrl: string;
+  origin: string;
+}) {
+  try {
+    const parsed = new URL(input.rawUrl);
+    return input.method === 'GET'
+      && parsed.origin === input.origin
+      && parsed.pathname === '/api/market/scan';
+  } catch {
+    return false;
+  }
+}
+
 function completeBrowserRequest(page: Page, request: Request) {
   pendingMutatingRequests.get(page)?.delete(request);
   pendingApiGetRequests.get(page)?.delete(request);
@@ -764,6 +779,34 @@ async function waitForBrowserNetworkQuiescence(page: Page) {
     },
     {
       message: 'same-origin browser reads and mutations must settle before context teardown',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe('quiescent');
+}
+
+async function waitForScannerNetworkQuiescence(page: Page) {
+  const origin = new URL(page.url()).origin;
+  let quietSince: number | null = null;
+  await expect.poll(
+    () => {
+      const pending = pendingSameOriginReadRequests.get(page);
+      const outstanding = pending
+        ? [...pending].filter((request) => isScannerReadIdentity({
+          method: request.method(),
+          rawUrl: request.url(),
+          origin,
+        })).length
+        : 0;
+      if (outstanding > 0) {
+        quietSince = null;
+        return 'pending';
+      }
+      if (quietSince === null) quietSince = Date.now();
+      return Date.now() - quietSince >= 500 ? 'quiescent' : 'quiet';
+    },
+    {
+      message: 'same-origin scanner GETs must remain settled before verifier leaves /scanner',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
@@ -1683,6 +1726,7 @@ async function auditAuthenticatedViewport(
       'scanner viewport API must remain inside the existing 12s scanner contract',
     ).toBeLessThanOrEqual(12_000);
     await settle(page);
+    await waitForScannerNetworkQuiescence(page);
   }
   const layout = await page.evaluate(() => {
     const visible = (element: Element) => {
@@ -1835,6 +1879,35 @@ test('capability denial diagnostics admit only same-origin API GET 401/403 and m
   expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 403 ()')).toBe(true);
   expect(isExpectedCapabilityDenialConsole('Failed to load resource: the server responded with a status of 401 ()')).toBe(true);
   expect(isExpectedCapabilityDenialConsole('TypeError: failed to fetch')).toBe(false);
+});
+
+test('scanner read identity accepts only same-origin market scan GETs', () => {
+  const origin = 'https://staging.example.test';
+  expect(isScannerReadIdentity({
+    method: 'GET',
+    rawUrl: `${origin}/api/market/scan`,
+    origin,
+  })).toBe(true);
+  expect(isScannerReadIdentity({
+    method: 'GET',
+    rawUrl: `${origin}/api/market/scan?market=US`,
+    origin,
+  })).toBe(true);
+  expect(isScannerReadIdentity({
+    method: 'POST',
+    rawUrl: `${origin}/api/market/scan`,
+    origin,
+  })).toBe(false);
+  expect(isScannerReadIdentity({
+    method: 'GET',
+    rawUrl: `${origin}/api/market/scan/extra`,
+    origin,
+  })).toBe(false);
+  expect(isScannerReadIdentity({
+    method: 'GET',
+    rawUrl: 'https://other.example.test/api/market/scan',
+    origin,
+  })).toBe(false);
 });
 
 test('stock chart hedge abort proof requires a matching successful primary candle identity', () => {
