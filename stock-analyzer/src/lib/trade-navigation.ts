@@ -10,6 +10,8 @@ export type TradeChartNavigationInput = {
   action: AnalysisTradeAction;
   focus: TradeFocus;
   timeframe?: string;
+  limitPrice?: number | null;
+  source?: 'stock-info' | 'orderbook';
 };
 
 function clean(value: string, maximum: number) {
@@ -57,8 +59,15 @@ export function tradeChartPath(input: TradeChartNavigationInput): string {
     timeframe,
     action: input.action,
     trade: input.focus,
-    source: 'stock-info',
+    source: input.source ?? 'stock-info',
   });
+  if (input.limitPrice != null) {
+    if (!Number.isFinite(input.limitPrice) || input.limitPrice <= 0) {
+      throw new Error('TRADE_NAVIGATION_LIMIT_PRICE_INVALID');
+    }
+    params.set('orderType', 'limit');
+    params.set('limitPrice', String(input.limitPrice));
+  }
   return `/ai-chart?${params.toString()}`;
 }
 
@@ -81,4 +90,21 @@ export function tradeActionFromSearch(search: string): AnalysisTradeAction | nul
   if (!['KR', 'US', 'UPBIT'].includes(market)) return null;
   if (focus === 'entry') return action === 'BUY' ? action : null;
   return action === 'SELL' ? action : null;
+}
+
+
+export type TradeOrderPrefill = {
+  orderType: 'limit';
+  limitPrice: number;
+  source: 'stock-info' | 'orderbook';
+};
+
+export function tradeOrderPrefillFromSearch(search: string): TradeOrderPrefill | null {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  if (!tradeFocusFromSearch(search) || !tradeActionFromSearch(search)) return null;
+  if (params.get('orderType') !== 'limit') return null;
+  const limitPrice = Number(params.get('limitPrice'));
+  if (!Number.isFinite(limitPrice) || limitPrice <= 0) return null;
+  const source = params.get('source') === 'orderbook' ? 'orderbook' : 'stock-info';
+  return { orderType: 'limit', limitPrice, source };
 }
