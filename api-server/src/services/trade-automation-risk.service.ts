@@ -264,6 +264,7 @@ export function evaluateTradingPlan(
   if (plan.exchange === 'bitget') {
     if (!['long', 'short', 'buy', 'sell'].includes(plan.side)) add(blockCodes, 'BITGET_SIDE_INVALID');
     if (!Number.isInteger(plan.leverage) || (plan.leverage ?? 0) < 2 || (plan.leverage ?? 0) > 7) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
+    if (Number.isInteger(plan.leverage) && (plan.leverage ?? 0) > policy.bitgetLeverage) add(blockCodes, 'BITGET_LEVERAGE_POLICY_LIMIT');
     if (plan.marginMode !== 'crossed' && plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_MARGIN_MODE_REQUIRED');
     if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !plan.reduceOnly) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
     const requiredMargin = plan.estimatedKrw / Math.max(1, plan.leverage ?? 1);
