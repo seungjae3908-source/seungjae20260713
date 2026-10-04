@@ -282,7 +282,7 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
 
   await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
   await expect(page.getByRole('tab')).toHaveCount(4);
-  await expect(page.getByRole('tab').allTextContents()).resolves.toEqual(['연구 현황', 'AI 분석실', '검증 리포트', '모의매매']);
+  await expect(page.getByRole('tab').allTextContents()).resolves.toEqual(['연구 현황', '인공지능 분석실', '검증 리포트', '모의매매']);
   const tabs = page.getByRole('tab');
   await tabs.nth(0).focus();
   await tabs.nth(0).press('ArrowRight');
@@ -319,8 +319,8 @@ test('Research Center V2 exposes exactly four tabs and every required click-thro
   await expect(page.getByTestId('research-paper-tab')).toContainText('실거래 권한 없음');
   await captureScreenshot(page, 'after-desktop-paper.png');
 
-  await page.getByRole('tab', { name: 'AI 분석실' }).click();
-  await expect(page.getByTestId('research-ai-lab-tab')).toContainText('AI 분석 근거 미수집');
+  await page.getByRole('tab', { name: '인공지능 분석실' }).click();
+  await expect(page.getByTestId('research-ai-lab-tab')).toContainText('인공지능 분석 근거 미수집');
   await page.getByRole('textbox', { name: '연구 근거 질문' }).fill('수익성과 PF는?');
   await page.getByRole('button', { name: '근거에서 찾기' }).click();
   await expect(page.locator('output')).toContainText('승률·PF·MDD를 임의 생성하지 않습니다');
@@ -456,11 +456,11 @@ test('actual canonical AI evidence is rendered without granting AI trading autho
   };
   const { assertClean } = await installAdmin(page, overview(aiDebate));
   await openExpertResearch(page);
-  await page.getByRole('tab', { name: 'AI 분석실' }).click();
+  await page.getByRole('tab', { name: '인공지능 분석실' }).click();
   const lab = page.getByTestId('research-ai-lab-tab');
   await expect(lab).toContainText('AI 의견이 충돌했습니다');
   await expect(lab).toContainText('google-gemini');
   await expect(lab).toContainText('groq');
-  await expect(lab).toContainText('AI는 수익성 수치나 자동매매 승인을 만들지 않습니다');
+  await expect(lab).toContainText('인공지능은 수익성 수치나 자동매매 승인을 만들지 않습니다');
   await assertClean();
 });
