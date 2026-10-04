@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server import build_research_activity, build_research_overview, summarize_runtime_liveness  # noqa: E402
+from server import build_research_activity, build_research_overview, summarize_formula_backtest_queue, summarize_runtime_liveness  # noqa: E402
 
 
 def write_json(path, value):
@@ -220,6 +220,52 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertEqual([row['source'] for row in activity['entries']], ['temporal', 'research-cycle'])
         self.assertEqual(activity['entries'][1]['id'], 'cycle-a')
         self.assertNotIn('old', [row['id'] for row in activity['entries']])
+
+    def test_formula_backtest_queue_preserves_lifecycle_counts_and_audit_rows(self):
+        summary = summarize_formula_backtest_queue({
+            'schemaVersion': 1,
+            'contract': 'research-formula-auto-backtest-summary/v1',
+            'generatedAt': '2026-10-04T00:00:00.000Z',
+            'scanned': 4,
+            'counts': {'PASS': 1, 'HOLD': 1, 'RESERVE': 1, 'EXCLUDE': 1},
+            'rows': [
+                {
+                    'formulaId': 'formula-a',
+                    'itemDigest': 'a' * 64,
+                    'state': 'PASS',
+                    'reason': 'FULL_RESEARCH_TOURNAMENT_SURVIVOR',
+                    'evaluatedAt': '2026-10-04T00:00:00.000Z',
+                    'tournamentId': 'tournament-a',
+                    'candidateCount': 4,
+                    'researchSurvivorCount': 1,
+                    'blockers': [],
+                    'retainedForAudit': True,
+                },
+                {
+                    'formulaId': 'formula-b',
+                    'itemDigest': 'b' * 64,
+                    'state': 'HOLD',
+                    'reason': 'MORE_CANONICAL_EVIDENCE_REQUIRED',
+                    'evaluatedAt': '2026-10-04T00:01:00.000Z',
+                    'tournamentId': 'tournament-b',
+                    'candidateCount': 4,
+                    'researchSurvivorCount': 0,
+                    'blockers': ['MISSING_CANONICAL_CALLBACK'],
+                    'retainedForAudit': True,
+                },
+            ],
+            'deletionAllowed': False,
+            'executionAuthority': 'NONE',
+        })
+        self.assertTrue(summary['present'])
+        self.assertEqual(summary['counts']['PASS'], 1)
+        self.assertEqual(summary['counts']['HOLD'], 1)
+        self.assertEqual(summary['counts']['RESERVE'], 0)
+        self.assertEqual(summary['counts']['EXCLUDE'], 0)
+        self.assertEqual(len(summary['rows']), 2)
+        self.assertTrue(all(row['retainedForAudit'] for row in summary['rows']))
+        self.assertEqual(summary['executionAuthority'], 'NONE')
+        self.assertFalse(summary['deletionAllowed'])
 
     def test_runtime_liveness_detects_missed_cycles_and_clock_skew(self):
         now_ms = 1_800_000_000_000
