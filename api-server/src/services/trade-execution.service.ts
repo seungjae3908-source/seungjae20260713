@@ -985,8 +985,10 @@ export class TradeExecutionService {
         prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated'), PREFLIGHT_TIMEOUT_MS));
     }
     if (!plan.reduceOnly) {
+      const leverage = Number(plan.leverage);
+      if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) throw new Error('BITGET_LEVERAGE_LIMIT');
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetLeverage(credentials, plan.symbol, plan.leverage === 3 ? 3 : 2), PREFLIGHT_TIMEOUT_MS));
+        prepareBitgetLeverage(credentials, plan.symbol, leverage as 2 | 3 | 4 | 5 | 6 | 7), PREFLIGHT_TIMEOUT_MS));
     }
     if (!await this.beginSubmissionIntent(order, risk)) {
       return { skippedOrder: await this.repository.getOrder(userId, order.id) ?? order };
