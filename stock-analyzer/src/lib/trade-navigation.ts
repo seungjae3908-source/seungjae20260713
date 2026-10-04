@@ -67,3 +67,18 @@ export function tradeFocusFromSearch(search: string): TradeFocus | null {
   const value = params.get('trade');
   return value === 'entry' || value === 'exit' ? value : null;
 }
+
+export function tradeActionFromSearch(search: string): AnalysisTradeAction | null {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  const focus = tradeFocusFromSearch(search);
+  const market = params.get('market');
+  const action = params.get('action') as AnalysisTradeAction | null;
+  if (!focus || !market || !action) return null;
+
+  if (market === 'BITGET') {
+    return focus === 'entry' && (action === 'LONG' || action === 'SHORT') ? action : null;
+  }
+  if (!['KR', 'US', 'UPBIT'].includes(market)) return null;
+  if (focus === 'entry') return action === 'BUY' ? action : null;
+  return action === 'SELL' ? action : null;
+}
