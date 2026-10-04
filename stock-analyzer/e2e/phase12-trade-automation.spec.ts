@@ -49,8 +49,8 @@ function expectNoBrowserFailures(failures: ReturnType<typeof captureBrowserFailu
   expect(failures.requestFailures).toEqual([]);
 }
 
-for (const width of [360, 390, 430]) {
-  test(`four-market unified trading workspace fits ${width}px mobile`, async ({ page }) => {
+for (const width of [360, 390, 430, 768, 1024]) {
+  test(`four-market unified trading workspace fits ${width}px responsive viewport`, async ({ page }) => {
     const failures = captureBrowserFailures(page);
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
@@ -187,3 +187,28 @@ test('paper mode exposes the same four-market navigation without enabling live a
   await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실주문 없음');
   expectNoBrowserFailures(failures);
 });
+
+
+for (const viewport of [
+  { name: 'PC', width: 1440, height: 900 },
+  { name: '태블릿', width: 1024, height: 900 },
+  { name: '태블릿 세로', width: 768, height: 1024 },
+  { name: '모바일', width: 390, height: 844 },
+]) {
+  test(`${viewport.name} paper manual simulator opens in a closable popup without page overflow`, async ({ page }) => {
+    const failures = captureBrowserFailures(page);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/__phase12-trade-automation-e2e');
+    await page.getByTestId('trading-mode-paper').click();
+    await page.getByTestId('trading-market-crypto_futures').click();
+    await page.getByTestId('trading-section-orders').click();
+
+    await page.getByRole('button', { name: '수동 모의매매' }).click();
+    const dialog = page.getByRole('dialog', { name: '수동 모의매매' });
+    await expect(dialog).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await dialog.getByRole('button', { name: '닫기' }).click();
+    await expect(dialog).toHaveCount(0);
+    expectNoBrowserFailures(failures);
+  });
+}
