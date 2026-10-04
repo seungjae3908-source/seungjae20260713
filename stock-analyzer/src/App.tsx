@@ -473,7 +473,7 @@ function AuthenticatedApp() {
     }
   }, [auth.isApproved, auth.membershipLevel]);
   if (auth.loading) return <PageFallback />;
-  if (auth.bootstrapError) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
+  if (auth.bootstrapError) return <ErrorState message={auth.bootstrapError} onRetry={auth.retryBootstrap} />;
   if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
   return <><AutoBackupSync /><ApprovedRouter /></>;
 }
