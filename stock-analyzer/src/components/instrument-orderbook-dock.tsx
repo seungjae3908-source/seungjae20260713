@@ -64,7 +64,10 @@ function finite(value: unknown): number | null {
 
 function sameNumber(left: number, right: number): boolean {
   const scale = Math.max(1, Math.abs(left), Math.abs(right));
-  return Math.abs(left - right) <= Number.EPSILON * 16 * scale;
+  // Decimal market prices (for example 225.12 - 225.11) can accumulate a
+  // few ULPs of IEEE-754 subtraction noise. Accept only that microscopic
+  // representation error while still failing closed on real value drift.
+  return Math.abs(left - right) <= Number.EPSILON * 64 * scale;
 }
 
 function cleanText(value: unknown): string | null {
