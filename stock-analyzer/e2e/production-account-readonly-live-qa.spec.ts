@@ -302,6 +302,7 @@ test('Production real-account read-only providers return fresh connected snapsho
     amendRequests: Number(credentialStatus?.amendRequests ?? -1),
     transferRequests: Number(credentialStatus?.transferRequests ?? -1),
     withdrawalRequests: Number(credentialStatus?.withdrawalRequests ?? -1),
+    realOrderSubmitted: false,
     blockedMutationRequests: blocked.length,
     observedAppMutationRequests: observedAppMutations.length,
     liveTradingAuthorityGranted: credentialStatus?.liveTradingEnabled === true,

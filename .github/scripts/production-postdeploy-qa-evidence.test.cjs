@@ -25,6 +25,8 @@ function fixture() {
       generatedAt: '2026-10-04T00:02:00.000Z',
       complete: true,
       identityMatch: true,
+      secretValuesRecorded: false,
+      realOrderSubmitted: false,
       recommendationsDesktop1440: { loadMs: 250, fallbackTimedOut: false, busyAfter5s: 0 },
       ...ZERO,
     },
@@ -40,6 +42,7 @@ function fixture() {
       accountValuesRecorded: false,
       blockedMutationRequests: 0,
       observedAppMutationRequests: 0,
+      realOrderSubmitted: false,
       testedProviders: providers,
       providers: providers.map((provider) => ({
         provider, connected: true, status: 'CONNECTED', stale: false, fresh: true,
@@ -73,12 +76,20 @@ function fixture() {
       ...ZERO,
     },
     context: {
+      schemaVersion: 'production-postdeploy-context-v2',
+      deploymentVerificationMode: 'completed-successful-run',
       mainSha: SHA,
       productionDeploySha: SHA,
       processDeploySha: SHA,
       deployMarkerSha: SHA,
       latestSuccessfulDeploySha: SHA,
       latestSuccessfulDeployRunId: 42,
+      productionDeployRunId: 42,
+      productionDeployHeadSha: SHA,
+      productionDeployStatus: 'completed',
+      productionDeployConclusion: 'success',
+      deploymentStepSucceeded: true,
+      deploymentSafetyVerified: true,
       identityMatch: true,
       productionDeployCompletedAt: '2026-10-04T00:00:00.000Z',
       orchestratorStartedAt: '2026-10-04T00:01:00.000Z',
@@ -92,6 +103,21 @@ test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () =
   assert.equal(evidence.activationReady, true);
   assert.equal(evidence.credentialReuse, '4/4 PASS');
   assert.equal(evidence.activeConflictingTradingGates, 0);
+  assert.equal(evidence.realOrderSubmitted, false);
+});
+
+test('builds ACTIVATION_READY inside the same approved in-progress Production Deploy job', () => {
+  const input = fixture();
+  Object.assign(input.context, {
+    deploymentVerificationMode: 'inline-approved-job',
+    productionDeployStatus: 'in_progress',
+    productionDeployConclusion: null,
+    latestSuccessfulDeploySha: null,
+    latestSuccessfulDeployRunId: null,
+  });
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v2');
 });
 
 test('rejects any nonzero financial mutation counter', () => {
