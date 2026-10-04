@@ -114,9 +114,9 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/activate-production-futures-live-trading ([0-9a-f]{40}) bitget (2|3) isolated$/u.exec(body);
+          const match = /^\/activate-production-futures-live-trading ([0-9a-f]{40}) bitget ([2-7]) isolated$/u.exec(body);
           if (!match) {
-            throw new Error('Expected /activate-production-futures-live-trading <40-char-current-main-sha> bitget <2|3> isolated');
+            throw new Error('Expected /activate-production-futures-live-trading <40-char-current-main-sha> bitget <2-7> isolated');
           }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\nmax_leverage=${match[2]}\n`);
           NODE
@@ -416,7 +416,7 @@ jobs:
           const maxLeverage = String(process.env.MAX_LEVERAGE ?? '');
           const capabilityAllowlist = 'BALANCE_READ,POSITION_READ,OPEN_ORDER_READ,ORDER_CREATE,ORDER_CANCEL,ORDER_AMEND';
           const marketAllowlist = 'CRYPTO_FUTURES';
-          if (!/^[0-9a-f]{40}$/.test(target) || !['2', '3'].includes(maxLeverage)) {
+          if (!/^[0-9a-f]{40}$/.test(target) || !['2', '3', '4', '5', '6', '7'].includes(maxLeverage)) {
             throw new Error('FUTURES_LIVE_ACTIVATION_INPUT_INVALID');
           }
           const markerPath = '/opt/stock-app/.deploy/current-sha';
