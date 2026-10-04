@@ -224,6 +224,14 @@ jobs:
             );
             if (!account) return;
 
+            const credentialReuse = await requireQa(
+              'production-live-credential-reuse-qa.yml',
+              'Production Live Credential Reuse QA',
+              () => 'production-live-credential-reuse-' + target,
+              'AUTOMATIC_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED',
+            );
+            if (!credentialReuse) return;
+
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
@@ -332,6 +340,32 @@ jobs:
             }
           }
           NODE
+
+      - name: Require no conflicting active Production trading gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowIds = [
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-automatic-trading-gate.yml',
+            ];
+            const activeStates = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
+            for (const workflowId of workflowIds) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowId,
+                event: 'issue_comment',
+                per_page: 30,
+              });
+              const conflict = runs.find((run) =>
+                run.id !== context.runId && activeStates.has(String(run.status ?? '')));
+              if (conflict) {
+                core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + workflowId + ':' + conflict.id);
+                return;
+              }
+            }
 
       - name: Configure protected Production SSH
         shell: bash
