@@ -41,3 +41,14 @@ test('provider credentials load after policy files so empty policy values cannot
   assert.doesNotMatch(aiPolicy,/^GEMINI_API_KEY=/m);
   assert.doesNotMatch(videoPolicy,/^YOUTUBE_DATA_API_KEY=/m);
 });
+
+test('Research Production activation owns AI and video timer lifecycle on the same exact-SHA release', async () => {
+  const activation=await readFile(new URL('../deploy/activate-server.sh', import.meta.url),'utf8');
+  assert.match(activation,/install-ai-research-units[.]sh/);
+  assert.match(activation,/research-production-ai-review[.]timer/);
+  assert.match(activation,/research-production-video-discovery[.]timer/);
+  assert.match(activation,/systemctl enable --now/);
+  assert.match(activation,/systemctl is-enabled --quiet "\\$timer"/);
+  assert.match(activation,/systemctl is-active --quiet "\\$timer"/);
+  assert.doesNotMatch(activation,/LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true/);
+});
