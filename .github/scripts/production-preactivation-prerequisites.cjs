@@ -16,6 +16,7 @@ const REQUIRED_CI_CONTEXTS = Object.freeze([
 
 const REQUIRED_ARTIFACT_NAMES = Object.freeze({
   comprehensive: (sha, runId) => `production-comprehensive-readonly-${runId}`,
+  tradingCore: (sha) => `production-trading-core-${sha}`,
   account: (sha) => `production-account-readonly-live-${sha}`,
   credential: (sha) => `production-live-credential-reuse-${sha}`,
   activationReady: (sha) => `production-postdeploy-activation-ready-${sha}`,
@@ -127,7 +128,17 @@ async function inspectProductionPreactivationPrerequisites({ github, context, ta
     key,
     makeName(target, latestSuccessfulDeploy.id),
   ]));
-  for (const [key, name] of Object.entries(artifactNames)) {
+  const tradingCoreMatches = artifacts.filter((artifact) =>
+    artifact.name === artifactNames.tradingCore && !artifact.expired && artifact.size_in_bytes > 0);
+  if (tradingCoreMatches.length > 1) {
+    throw new Error(`PREACTIVATION_TRADINGCORE_ARTIFACT_AMBIGUOUS:${artifactNames.tradingCore}`);
+  }
+  const qaScope = tradingCoreMatches.length === 1 ? 'trading_core' : 'full';
+  const requiredArtifactKeys = qaScope === 'trading_core'
+    ? ['tradingCore', 'account', 'credential', 'activationReady']
+    : ['comprehensive', 'account', 'credential', 'activationReady'];
+  for (const key of requiredArtifactKeys) {
+    const name = artifactNames[key];
     const matches = artifacts.filter((artifact) =>
       artifact.name === name && !artifact.expired && artifact.size_in_bytes > 0);
     if (matches.length !== 1) throw new Error(`PREACTIVATION_${key.toUpperCase()}_ARTIFACT_REQUIRED:${name}`);
@@ -139,6 +150,7 @@ async function inspectProductionPreactivationPrerequisites({ github, context, ta
 
   return {
     targetSha: target,
+    qaScope,
     requiredCiRunId,
     postMergeProvenanceRunId: provenance.runId,
     productionDeployRunId: latestSuccessfulDeploy.id,
