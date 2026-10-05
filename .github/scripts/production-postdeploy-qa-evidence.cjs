@@ -170,10 +170,43 @@ function assertCredentialReceipt(credential, { targetSha, productionDeployRunId 
   assertNoForbiddenEvidenceKeys(credential);
 }
 
+
+function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v1'
+    || tradingCore?.productionDeployRunId !== deployRunId
+    || tradingCore?.officialProductionOrigin !== true
+    || tradingCore?.authenticatedProductionSession !== true
+    || tradingCore?.paperAutomaticTriggered !== true
+    || tradingCore?.paperFilled !== true
+    || tradingCore?.journalVisible !== true
+    || !(Number(tradingCore?.executionSyncInserted) >= 1)
+    || !(Number(tradingCore?.telegramDeliveryQueued) >= 1)
+    || tradingCore?.telegramTestDelivered !== true
+    || tradingCore?.policyRestored !== true
+    || tradingCore?.realOrderSubmitted !== false
+    || tradingCore?.liveTradingAuthorityGranted !== false
+    || tradingCore?.autoTradingAuthorityGranted !== false
+    || tradingCore?.secretValuesRecorded !== false
+    || tradingCore?.accountValuesRecorded !== false) {
+    throw new Error('POSTDEPLOY_QA_TRADING_CORE_INVALID');
+  }
+  requireExactSha(tradingCore.targetSha, sha, 'POSTDEPLOY_QA_TRADING_CORE_SHA_MISMATCH');
+  requireZeroAuthority(tradingCore, 'POSTDEPLOY_QA_TRADING_CORE');
+  for (const provider of REQUIRED_PROVIDERS) {
+    if (tradingCore?.providers?.[provider] !== 'PASS') {
+      throw new Error(`POSTDEPLOY_QA_TRADING_CORE_PROVIDER_FAILED:${provider}`);
+    }
+  }
+  assertNoForbiddenEvidenceKeys(tradingCore);
+}
+
 function buildProductionPostdeployQaEvidence({
   targetSha,
   productionDeployRunId,
-  comprehensive,
+  comprehensive = null,
+  tradingCore = null,
+  qaScope = 'full',
   account,
   credential,
   context,
@@ -184,7 +217,13 @@ function buildProductionPostdeployQaEvidence({
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('POSTDEPLOY_QA_TARGET_SHA_INVALID');
   if (!Number.isSafeInteger(deployRunId) || deployRunId <= 0) throw new Error('POSTDEPLOY_QA_DEPLOY_RUN_ID_INVALID');
 
-  assertComprehensiveReceipt(comprehensive, { targetSha: sha, productionDeployRunId: deployRunId });
+  if (qaScope === 'full') {
+    assertComprehensiveReceipt(comprehensive, { targetSha: sha, productionDeployRunId: deployRunId });
+  } else if (qaScope === 'trading_core') {
+    assertTradingCoreReceipt(tradingCore, { targetSha: sha, productionDeployRunId: deployRunId });
+  } else {
+    throw new Error('POSTDEPLOY_QA_SCOPE_INVALID');
+  }
   assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });
   assertCredentialReceipt(credential, { targetSha: sha, productionDeployRunId: deployRunId });
 
@@ -224,24 +263,29 @@ function buildProductionPostdeployQaEvidence({
     || orchestratorStartedAt < deployCompletedAt) {
     throw new Error('POSTDEPLOY_QA_EVIDENCE_PREDATES_DEPLOY');
   }
-  for (const [name, receipt] of Object.entries({ comprehensive, account, credential })) {
+  const scopedReceipts = qaScope === 'trading_core'
+    ? { tradingCore, account, credential }
+    : { comprehensive, account, credential };
+  for (const [name, receipt] of Object.entries(scopedReceipts)) {
     const receiptGeneratedAt = Date.parse(String(receipt?.generatedAt ?? ''));
     if (!Number.isFinite(receiptGeneratedAt) || receiptGeneratedAt < orchestratorStartedAt) {
       throw new Error(`POSTDEPLOY_QA_${name.toUpperCase()}_RECEIPT_NOT_FRESH`);
     }
   }
 
-  assertNoForbiddenEvidenceKeys({ comprehensive, account, credential });
+  assertNoForbiddenEvidenceKeys(scopedReceipts);
 
   return {
-    schemaVersion: 'production-postdeploy-activation-ready-v3',
+    schemaVersion: 'production-postdeploy-activation-ready-v4',
+    qaScope,
     targetSha: sha,
     mainSha: sha,
     productionSha: sha,
     productionDeployRunId: deployRunId,
     generatedAt,
     identityMatch: true,
-    comprehensiveQa: 'PASS',
+    comprehensiveQa: qaScope === 'full' ? 'PASS' : 'NOT_RUN',
+    tradingCoreQa: qaScope === 'trading_core' ? 'PASS' : 'NOT_RUN',
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
     orderRequests: 0,
@@ -281,5 +325,6 @@ module.exports = {
   assertAccountReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
+  assertTradingCoreReceipt,
   buildProductionPostdeployQaEvidence,
 };
