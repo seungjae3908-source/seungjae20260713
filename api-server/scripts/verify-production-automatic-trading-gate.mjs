@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(path, 'utf8');
 const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
+const preactivation = read('.github/scripts/production-preactivation-prerequisites.cjs');
 const manualSpotGate = read('.github/workflows/production-live-trading-gate.yml');
 const manualFuturesGate = read('.github/workflows/production-futures-live-trading-gate.yml');
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
@@ -34,13 +35,16 @@ requireText(workflow, '[PRODUCTION_FUTURES_LIVE_TRADING_GATE]', 'AUTO_GATE_FUTUR
 requireText(workflow, 'ACTIVATED_FUTURES_LIVE_LIMITED_MANUAL', 'AUTO_GATE_FUTURES_MANUAL_RECEIPT_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_SPOT_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_SPOT_MANUAL_GATE_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_FUTURES_MANUAL_RECEIPT_REQUIRED', 'AUTO_GATE_FUTURES_MANUAL_GATE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PRODUCTION_DEPLOY_REQUIRED', 'AUTO_GATE_DEPLOY_PROVENANCE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED', 'AUTO_GATE_COMPREHENSIVE_QA_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED', 'AUTO_GATE_ACCOUNT_QA_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED', 'AUTO_GATE_CREDENTIAL_REUSE_QA_MISSING');
-requireText(workflow, 'production-live-credential-reuse-', 'AUTO_GATE_CREDENTIAL_REUSE_ARTIFACT_MISSING');
-requireText(workflow, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
-requireText(workflow, "name.startsWith(workflowName + ' ' + target + ' ')", 'AUTO_GATE_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(workflow, 'const ciRunId = release.requiredCiRunId;', 'AUTO_GATE_REQUIRED_CI_HELPER_WIRING_MISSING');
+requireText(workflow, 'Date.parse(release.productionDeployCompletedAt)', 'AUTO_GATE_DEPLOYMENT_BOUNDARY_HELPER_WIRING_MISSING');
+requireText(preactivation, 'PREACTIVATION_REQUIRED_CI_NOT_6_OF_6', 'AUTO_GATE_REQUIRED_CI_6_OF_6_HELPER_MISSING');
+requireText(preactivation, 'PREACTIVATION_REQUIRED_CI_NOT_COHERENT', 'AUTO_GATE_REQUIRED_CI_COHERENCE_HELPER_MISSING');
+requireText(preactivation, "requiredCiRun.path !== '.github/workflows/futures-public-network-smoke.yml'", 'AUTO_GATE_REQUIRED_CI_WORKFLOW_IDENTITY_MISSING');
+requireText(preactivation, "workflow_id: 'production-deploy.yml'", 'AUTO_GATE_DEPLOY_PROVENANCE_MISSING');
+requireText(preactivation, "event: 'workflow_dispatch'", 'AUTO_GATE_DEPLOY_EVENT_FILTER_MISSING');
+requireText(preactivation, "run.event === 'workflow_dispatch'", 'AUTO_GATE_DEPLOY_EVENT_RECHECK_MISSING');
+requireText(preactivation, 'production-live-credential-reuse-', 'AUTO_GATE_CREDENTIAL_REUSE_ARTIFACT_MISSING');
+requireText(preactivation, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
 requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
 requireText(workflow, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
 
@@ -63,6 +67,7 @@ requireText(workflow, "manual.futuresMarginMode !== 'isolated'", 'AUTO_GATE_ISOL
 requireText(workflow, "['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)", 'AUTO_GATE_LEVERAGE_BOUND_MISSING');
 
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
+forbid(workflow, /if\s*\(false\)/u, 'AUTO_GATE_DEAD_VALIDATION_BLOCK_FORBIDDEN');
 forbid(workflow, /WITHDRAW[^\n]*true/i, 'AUTO_GATE_WITHDRAW_ENABLE_FORBIDDEN');
 forbid(workflow, /TRANSFER[^\n]*true/i, 'AUTO_GATE_TRANSFER_ENABLE_FORBIDDEN');
 
