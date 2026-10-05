@@ -124,10 +124,16 @@ requireText(promotionClient, 'liveTradingAllowed !== false', 'promotion live-tra
 
 requireText(routeIndex, "router.use('/paper-journal', requireCapability('canAccessJournalSync'));", 'paper journal capability mount');
 requireText(routeIndex, "router.use('/', paperJournalRouter);", 'paper journal router mount');
-requireText(journalClient, "authorizedFetch('/api/paper-journal/unified-ledger?source=APP_PAPER&range=ALL'", 'journal client endpoint');
+requireText(journalClient, "authorizedFetch('/api/paper-journal/unified-ledger?range=ALL'", 'journal client endpoint');
+requireText(journalClient, "summary.source !== 'APP_AUTO_JOURNAL'", 'live feedback source validation');
+requireText(journalClient, 'summary.researchMutationAllowed !== false', 'live feedback Research mutation lock');
+requireText(journalClient, 'summary.promotionAuthority !== false', 'live feedback promotion lock');
+requireText(journalClient, "summary.executionAuthority !== 'NONE'", 'live feedback execution authority lock');
+requireText(journalClient, 'summary.profitabilityCredit !== 0', 'live feedback zero profitability credit');
 requireText(paperRoute, "router.get('/paper-journal/unified-ledger'", 'unified journal API');
 requireText(paperRoute, 'readCanonicalResearchOwnerStateForJournalBinding', 'journal research owner readback');
 requireText(paperRoute, 'bindCanonicalResearchToUnifiedJournal', 'journal canonical binding');
+requireText(paperRoute, 'buildLiveAutoResearchFeedback', 'live auto Research feedback readback');
 
 const expectedCostKeys = [
   'commission', 'tax', 'spread', 'slippage',
