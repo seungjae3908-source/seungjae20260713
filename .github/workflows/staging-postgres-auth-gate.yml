@@ -11,15 +11,15 @@ permissions:
   statuses: read
 
 concurrency:
-  group: staging-postgres-auth-gate-${{ github.event.issue.number == 1555 && (startsWith(github.event.comment.body, '/run-staging-auth ') || startsWith(github.event.comment.body, '/run-staging-auth-only ')) && 'command' || github.event.comment.id }}
+  group: staging-postgres-auth-gate-${{ contains(github.event.issue.labels.*.name, 'release-control') && (startsWith(github.event.comment.body, '/run-staging-auth ') || startsWith(github.event.comment.body, '/run-staging-auth-only ')) && 'command' || github.event.comment.id }}
   cancel-in-progress: false
 
 jobs:
   authenticate-before-deploy:
     name: Read-only PostgreSQL authentication before staging deployment
     if: >-
-      github.event.issue.number == 1555 &&
-      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      contains(github.event.issue.labels.*.name, 'release-control') &&
+      startsWith(github.event.issue.title, 'Staging Readiness Control') &&
       (startsWith(github.event.comment.body, '/run-staging-auth ') ||
       startsWith(github.event.comment.body, '/run-staging-auth-only '))
     runs-on: ubuntu-latest
@@ -34,6 +34,21 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Require canonical current Release Control
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { assertCurrentReleaseControl } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/current-release-control.cjs'
+            );
+            const current = await assertCurrentReleaseControl({
+              github,
+              context,
+              issueNumber: Number(context.issue.number),
+              issueTitle: String(context.payload.issue?.title ?? ''),
+            });
+            core.info('Canonical Release Control #' + current.issueNumber + ' verified.');
 
       - uses: actions/setup-node@v4
         with:
@@ -163,7 +178,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: 1555,
+                issue_number: context.issue.number,
                 body: [
                   authOnly
                     ? 'Paper-only PostgreSQL authentication gate failed safely without Staging dispatch.'
@@ -195,7 +210,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: 1555,
+                issue_number: context.issue.number,
                 body: [
                   'Paper-only PostgreSQL authentication succeeded without Staging dispatch.',
                   '',
@@ -246,7 +261,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 1555,
+              issue_number: context.issue.number,
               body: [
                 'Staging PostgreSQL authentication succeeded before deployment.',
                 '',
