@@ -47,7 +47,9 @@ def main():
         ("KRX", ("KRX",)),
         ("KOSPI", ("KOSPI",)),
         ("KOSDAQ", ("KOSDAQ",)),
-        ("KRX_DELISTING_3Y", ("KRX-DELISTING", START, END)),
+        ("KRX_DELISTING_ALL", ("KRX-DELISTING",)),
+        ("KRX_DELISTING_FROM_2023", ("KRX-DELISTING", "2023")),
+        ("KRX_DELISTING_3Y", ("KRX-DELISTING", "2023", "2026")),
     ]:
         try:
             df=fdr.StockListing(*args)
