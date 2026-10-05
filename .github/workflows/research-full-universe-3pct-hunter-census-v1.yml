@@ -37,6 +37,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Syntax check research runner
+        run: python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-census-v2.py
       - name: Install research dependencies
         run: |
           python -m pip install --upgrade pip
