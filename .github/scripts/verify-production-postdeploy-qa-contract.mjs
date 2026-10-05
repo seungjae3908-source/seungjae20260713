@@ -24,6 +24,7 @@ const credential = read('.github/workflows/production-live-credential-reuse-qa.y
 const runner = read('.github/scripts/run-production-readonly-qa.sh');
 const contextBuilder = read('.github/scripts/build-production-postdeploy-context.mjs');
 const evidenceBuilder = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
+const releaseOrchestrator = read('.github/scripts/production-release-orchestrator.cjs');
 const app = read('stock-analyzer/src/App.tsx');
 const recommendations = read('stock-analyzer/src/pages/recommendations.tsx');
 const stocks = read('stock-analyzer/src/pages/stocks.tsx');
@@ -92,6 +93,17 @@ requireText(command, '/run-production-trading-core-release <40-char-sha>', 'TRAD
 requireText(command, '/run-staging-trading-core <40-char-sha>', 'TRADING_CORE_STAGING_COMMAND_MISSING');
 requireText(command, "workflow_id: 'staging-readiness.yml'", 'TRADING_CORE_STAGING_DISPATCH_MISSING');
 requireText(command, "run_full_validation: 'true'", 'TRADING_CORE_STAGING_FULL_VALIDATION_MISSING');
+requireText(command, 'cancel-in-progress: false', 'ONE_COMMAND_RELEASE_MUST_NOT_BE_CANCELLED');
+requireText(command, 'selectReusableExactStagingRun', 'ONE_COMMAND_RELEASE_STAGING_REUSE_MISSING');
+requireText(command, 'await waitForRun(stagingRun.id', 'ONE_COMMAND_RELEASE_STAGING_WAIT_MISSING');
+requireText(command, 'STAGING_RELEASE_FAILED:', 'ONE_COMMAND_RELEASE_STAGING_FAILURE_MISSING');
+requireOrder(command, [
+  "workflow_id: 'staging-readiness.yml'",
+  'await requireStagingArtifact(stagingRun)',
+  "workflow_id: 'production-deploy.yml'",
+], 'ONE_COMMAND_RELEASE_SEQUENCE_INVALID');
+requireText(releaseOrchestrator, 'artifact.name === expectedName', 'ONE_COMMAND_RELEASE_EXACT_ARTIFACT_MISSING');
+requireText(releaseOrchestrator, "run.head_branch === 'main'", 'ONE_COMMAND_RELEASE_MAIN_BRANCH_MISSING');
 requireText(command, "qa_scope: qaScope", 'TRADING_CORE_OWNER_COMMAND_SCOPE_MISSING');
 requireText(deploy, 'qa_scope:', 'PRODUCTION_QA_SCOPE_INPUT_MISSING');
 requireText(deploy, "inputs.qa_scope == 'trading_core'", 'TRADING_CORE_INLINE_QA_CONDITION_MISSING');
