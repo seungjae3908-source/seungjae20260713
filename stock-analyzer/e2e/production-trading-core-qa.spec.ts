@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { loginProductionReadOnly } from './support/production-readonly-login';
+import {
+  loginProductionReadOnly,
+  productionReadOnlyAccessToken,
+} from './support/production-readonly-login';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -33,21 +36,23 @@ async function appApi<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' = 'GET',
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  return page.evaluate(async ({ pathname, method, body }) => {
+  const accessToken = await productionReadOnlyAccessToken(page);
+  if (!accessToken) throw new Error('PRODUCTION_TRADING_CORE_AUTH_TOKEN_MISSING');
+  return page.evaluate(async ({ pathname, method, body, token }) => {
     const response = await fetch(pathname, {
       method,
       credentials: 'same-origin',
       cache: 'no-store',
       headers: body === undefined
-        ? { Accept: 'application/json' }
-        : { Accept: 'application/json', 'Content-Type': 'application/json' },
+        ? { Accept: 'application/json', Authorization: `Bearer ${token}` }
+        : { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();
     let payload: unknown = null;
     try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text.slice(0, 200) }; }
     return { ok: response.ok, status: response.status, body: payload };
-  }, { pathname, method, body }) as Promise<ApiResult<T>>;
+  }, { pathname, method, body, token: accessToken }) as Promise<ApiResult<T>>;
 }
 
 function writeEvidence(value: unknown) {
