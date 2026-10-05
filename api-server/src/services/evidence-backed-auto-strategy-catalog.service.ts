@@ -67,7 +67,7 @@ export type StrategyPilotProfile = Readonly<{
   maxConsecutiveLosses: number;
   lossCooldownMinutes: number;
   sameSymbolReentryRequiresFreshSignal: true;
-  futuresMaxLeverage: 3;
+  futuresMaxLeverage: 7;
   paperMirrorRequired: true;
   pairedFillComparisonRequired: true;
   liveOrderRequiresExplicitConfirmation: false;
@@ -90,7 +90,7 @@ export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   maxConsecutiveLosses: 3,
   lossCooldownMinutes: 30,
   sameSymbolReentryRequiresFreshSignal: true,
-  futuresMaxLeverage: 3,
+  futuresMaxLeverage: 7,
   paperMirrorRequired: true,
   pairedFillComparisonRequired: true,
   liveOrderRequiresExplicitConfirmation: false,
@@ -253,7 +253,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
       'VWAP/EMA20 눌림 또는 반등 실패 후 구조 재확인',
       '전고/전저 재돌파에서만 진입 후보',
       'Funding 극단/비정상 spread/depth/liquidation chase는 VETO',
-      'isolated margin, 2~3x 상한은 별도 Risk Engine이 강제',
+      'isolated margin, 2~7x 정책 상한은 별도 Risk Engine이 강제',
     ]),
     requiredEvidence: req('orderFlowReady', 'oiReady', 'cvdReady', 'takerFlowReady', 'fundingRiskReady'),
     paperResearchAllowedWhenReady: true,
