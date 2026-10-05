@@ -816,6 +816,28 @@ function analyze(
         : 'complete' as const;
   const observedTimestamp = Math.max(latest.time, ticker.timestamp ?? 0);
   const observedAt = new Date(observedTimestamp).toISOString();
+  const selectedStrategy = isOwnerSelectedStrategyId(request.ownerSelectedStrategyId)
+    ? evaluateOwnerSelectedCryptoStrategy({
+      market: request.market === 'spot' ? 'CRYPTO_SPOT' : 'CRYPTO_FUTURES',
+      card: {
+        observedAt,
+        dataState,
+        riskScore,
+        price: ticker.price,
+        tradingValue: ticker.tradingValue,
+        liquidity: ticker.tradingValue,
+      } as ScannerSignalCard,
+      candles,
+      context15m,
+      context60m,
+      flow,
+      fundingRate: ticker.fundingRate,
+      nowMs: now,
+    })
+    : null;
+  if (selectedStrategy?.status === 'READY' && selectedStrategy.strategyId === request.ownerSelectedStrategyId) {
+    direction = selectedStrategy.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  }
   const conditionLabel = request.condition === 'volume'
     ? '거래량 증가'
     : request.condition === 'breakout'
@@ -879,10 +901,12 @@ function analyze(
     });
   }
   const technicalPlan = pricePlan(ticker, candles, direction, request.market);
+  const selectedStrategyReady = selectedStrategy?.status === 'READY'
+    && selectedStrategy.strategyId === request.ownerSelectedStrategyId;
   const strongSignalEligible = direction !== 'NEUTRAL'
-    && conditionMatched
-    && score >= 75
-    && confidence >= 70
+    && (selectedStrategyReady || conditionMatched)
+    && (selectedStrategyReady || score >= 75)
+    && (selectedStrategyReady || confidence >= 70)
     && dataCompleteness >= 80
     && riskScore <= 45
     && dataState === 'complete'
@@ -934,7 +958,10 @@ function analyze(
     observedAt,
     expiresAt: expiry(request.timeframe, observedTimestamp),
     strongSignalEligible,
-    warnings,
+    ownerSelectedStrategy: selectedStrategy ?? undefined,
+    warnings: selectedStrategy && selectedStrategy.status !== 'READY'
+      ? [...new Set([...warnings, ...selectedStrategy.reasons.map((reason) => `전략 대기: ${reason}`)])]
+      : warnings,
   };
 }
 
