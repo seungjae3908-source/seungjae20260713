@@ -127,7 +127,9 @@ activate() {
       "${SUDO[@]}" systemctl disable --now \
         research-production-fast-historical.timer \
         research-production-long-history.timer \
-        research-production-forward.timer >/dev/null 2>&1 || true
+        research-production-forward.timer \
+        research-production-ai-review.timer \
+        research-production-video-discovery.timer >/dev/null 2>&1 || true
     fi
     cleanup_transient
     return "$status"
@@ -279,6 +281,12 @@ ENV
   done
   "${SUDO[@]}" systemctl daemon-reload
 
+  # Keep AI/video research on the same exact-SHA release as the core Research runtime.
+  "${SUDO[@]}" systemctl disable --now \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer >/dev/null 2>&1 || true
+  RESEARCH_RELEASE_ROOT="$CURRENT" "$CURRENT/research-production/deploy/install-ai-research-units.sh"
+
   local -a RUN_AS_RESEARCH
   if command -v runuser >/dev/null 2>&1; then
     RUN_AS_RESEARCH=(runuser -u investment-research --)
@@ -310,15 +318,41 @@ ENV
   "${SUDO[@]}" systemctl enable --now \
     research-production-fast-historical.timer \
     research-production-long-history.timer \
-    research-production-forward.timer
+    research-production-forward.timer \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer
 
   for timer in \
     research-production-fast-historical.timer \
     research-production-long-history.timer \
-    research-production-forward.timer; do
+    research-production-forward.timer \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer; do
     "${SUDO[@]}" systemctl is-enabled --quiet "$timer"
     "${SUDO[@]}" systemctl is-active --quiet "$timer"
   done
+
+  # Bootstrap one read-only AI scan so activation cannot report success while
+  # the free AI provider configuration is missing. Provider outages remain
+  # observable in the AI artifact and never grant execution authority.
+  "${SUDO[@]}" systemctl start research-production-ai-review.service
+  local ai_latest="$STATE/ai-review/latest.json"
+  "${SUDO[@]}" test -s "$ai_latest"
+  "${SUDO[@]}" /usr/bin/node - "$ai_latest" "$TARGET_SHA" <<'NODE'
+const fs = require('node:fs');
+const [path, targetSha] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+if (value?.researchSha !== targetSha
+  || value?.provider == null
+  || value?.status === 'WAITING_FOR_FREE_AI'
+  || value?.safety?.executionAuthority !== 'NONE'
+  || value?.safety?.liveTrading !== false
+  || value?.safety?.orderAllowed !== false) {
+  console.error('RESEARCH_AI_PROVIDER_NOT_READY');
+  process.exit(68);
+}
+process.stdout.write(`RESEARCH_AI_BOOTSTRAP_STATUS=${String(value.status)}\n`);
+NODE
 
   local app_sha_after
   app_sha_after="$(read_app_sha)"
@@ -341,7 +375,9 @@ ENV
   "${SUDO[@]}" systemctl list-timers --all \
     research-production-fast-historical.timer \
     research-production-long-history.timer \
-    research-production-forward.timer --no-pager
+    research-production-forward.timer \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer --no-pager
 }
 
 case "$MODE" in

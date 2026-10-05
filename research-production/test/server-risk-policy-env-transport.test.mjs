@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { buildTaskPlan } from '../src/engine.mjs';
 
 const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+const aiInstallerSource = readFileSync(new URL('../deploy/install-ai-research-units.sh', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 const SHA = 'a'.repeat(40);
 const KEY = 'PAPER_FORWARD_RISK_POLICY_RECORD_PATH';
 const DECISION_KEY = 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH';
@@ -54,7 +55,20 @@ switch (name) {
   case 'runuser':
     if (!args.includes('preflight') || args.includes('run')) throw Error('unexpected cycle execution');
     break;
-  case 'df': case 'systemctl': case 'systemd-analyze': break;
+  case 'systemctl':
+    if (args[0] === 'start' && args[1] === 'research-production-ai-review.service') {
+      const latest = safe(process.env.HARNESS_ROOT + '/state/ai-review/latest.json');
+      mkdirSync(dirname(latest), { recursive: true });
+      appendFileSync(latest, JSON.stringify({
+        schemaVersion: 'research-production-ai-scan-v1',
+        status: 'NO_NEW_EVIDENCE',
+        researchSha: process.env.TARGET_SHA,
+        provider: 'GROQ_FREE',
+        safety: { executionAuthority: 'NONE', liveTrading: false, orderAllowed: false },
+      }));
+    }
+    break;
+  case 'df': case 'systemd-analyze': break;
   default: throw Error('unexpected host operation: ' + name);
 }
 `;
@@ -70,11 +84,23 @@ function activate(value, { mode = 'activate', legacy, supplemental, decision } =
       writeFileSync(join(bin, command), '#!/usr/bin/env bash\nexec "$REAL_NODE" "$HARNESS_ROOT/shim.mjs" ' + command + ' "$@"\n', { mode: 0o755 });
     }
     for (const prefix of [`research/releases/${SHA}`, 'research/current']) {
-      for (const file of ['bin/research-cycle.mjs', 'src/engine.mjs', 'deploy/research-production@.service',
-        ...['fast-historical', 'long-history', 'forward'].map(t => `deploy/research-production-${t}.timer`)]) {
+      const releaseFiles = [
+        'bin/research-cycle.mjs',
+        'src/engine.mjs',
+        'deploy/research-production@.service',
+        ...['fast-historical', 'long-history', 'forward'].map(t => `deploy/research-production-${t}.timer`),
+        'deploy/research-production-ai-review.service',
+        'deploy/research-production-ai-review.timer',
+        'deploy/research-production-video-discovery.service',
+        'deploy/research-production-video-discovery.timer',
+        'deploy/install-ai-research-units.sh',
+      ];
+      for (const file of releaseFiles) {
         const path = join(root, prefix, 'research-production', file);
         mkdirSync(resolve(path, '..'), { recursive: true });
-        writeFileSync(path, 'sandbox release fixture\n');
+        writeFileSync(path, file === 'deploy/install-ai-research-units.sh'
+          ? aiInstallerSource
+          : 'sandbox release fixture\n', { mode: file.endsWith('.sh') ? 0o755 : 0o644 });
       }
     }
     const decisionFixture = join(root, 'research', 'releases', SHA, 'market-prediction-lab',

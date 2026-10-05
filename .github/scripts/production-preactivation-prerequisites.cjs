@@ -4,6 +4,10 @@ const {
   evaluatePostMergeStatusProvenance,
   inspectPostMergeStatusEvidence,
 } = require('../../api-server/scripts/release-candidate-provenance.cjs');
+const {
+  evaluateProductionCiProvenance,
+  inspectRequiredStatusEvidence,
+} = require('../../api-server/scripts/production-ci-provenance.cjs');
 
 const REQUIRED_ARTIFACT_NAMES = Object.freeze({
   comprehensive: (sha, runId) => `production-comprehensive-readonly-${runId}`,
@@ -39,6 +43,23 @@ async function inspectProductionPreactivationPrerequisites({ github, context, ta
     throw new Error(`PREACTIVATION_POSTMERGE_PROVENANCE_REJECTED:${provenance.reason}`);
   }
 
+  const requiredEvidence = inspectRequiredStatusEvidence(statuses);
+  if (!requiredEvidence.ok) {
+    throw new Error(`PREACTIVATION_REQUIRED_CI_UNAVAILABLE:${requiredEvidence.reason}`);
+  }
+  const requiredRun = (await github.rest.actions.getWorkflowRun({
+    ...repo, run_id: requiredEvidence.runId,
+  })).data;
+  const requiredCi = evaluateProductionCiProvenance({
+    targetSha: target,
+    currentMainSha: main,
+    statuses,
+    run: requiredRun,
+  });
+  if (!requiredCi.ok) {
+    throw new Error(`PREACTIVATION_REQUIRED_CI_REJECTED:${requiredCi.reason}`);
+  }
+
   const deployRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
     ...repo,
     workflow_id: 'production-deploy.yml',
@@ -46,7 +67,15 @@ async function inspectProductionPreactivationPrerequisites({ github, context, ta
     status: 'completed',
     per_page: 100,
   });
-  const latestSuccessfulDeploy = deployRuns.find((run) => run.conclusion === 'success');
+  const latestSuccessfulDeploy = deployRuns
+    .filter((run) => run.name === 'Production Deploy'
+      && run.path === '.github/workflows/production-deploy.yml'
+      && run.event === 'workflow_dispatch'
+      && run.head_branch === 'main'
+      && run.status === 'completed'
+      && run.conclusion === 'success')
+    .sort((left, right) =>
+      Date.parse(right.updated_at ?? right.created_at ?? '') - Date.parse(left.updated_at ?? left.created_at ?? ''))[0];
   if (!latestSuccessfulDeploy || latestSuccessfulDeploy.head_sha !== target) {
     throw new Error(`PREACTIVATION_LATEST_PRODUCTION_DEPLOY_NOT_EXACT:${target}`);
   }
@@ -79,6 +108,7 @@ async function inspectProductionPreactivationPrerequisites({ github, context, ta
   return {
     targetSha: target,
     postMergeProvenanceRunId: provenance.runId,
+    requiredCiRunId: requiredCi.runId,
     productionDeployRunId: latestSuccessfulDeploy.id,
     productionDeployCompletedAt: new Date(deploymentCompletedAt).toISOString(),
     artifactNames,

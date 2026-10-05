@@ -76,6 +76,7 @@ jobs:
           grep -F 'naturalCycleCredit: 0' "$install" >/dev/null
           grep -F 'exec /usr/bin/env -i' "$install" >/dev/null
           grep -F 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' "$install" >/dev/null
+          grep -F 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH' "$active_contract" >/dev/null
           grep -F 'materialize-paper-risk-policy-record.mjs' "$install" >/dev/null
           grep -F 'financialValuesFromApprovedDecision:true' market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs >/dev/null
           grep -F '"maximumLeverage": 5' market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json >/dev/null
@@ -321,8 +322,8 @@ jobs:
   gate:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -573,6 +574,40 @@ jobs:
           set -Eeuo pipefail
           [[ "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 14
           STATE_ROOT=/opt/stock-app-data/paper-forward-v1
+          RESEARCH_ENV=/etc/investment-research/research-production.env
+          if [[ "$(id -u)" -eq 0 ]]; then
+            READ_PRIV=()
+          else
+            READ_PRIV=(sudo -n)
+          fi
+          [[ -r "$RESEARCH_ENV" || "${#READ_PRIV[@]}" -gt 0 ]] || {
+            echo 'RESEARCH_SUPPLEMENTAL_COST_EVIDENCE_ENV_UNREADABLE' >&2
+            exit 15
+          }
+          COST_SOURCE="$("${READ_PRIV[@]}" cat "$RESEARCH_ENV" | node -e '
+          const fs = require("node:fs");
+          const source = fs.readFileSync(0, "utf8");
+          const line = source.split(/\r?\n/u).find((row) => row.startsWith("PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="));
+          if (!line) process.exit(15);
+          let value = line.slice(line.indexOf("=") + 1).trim();
+          if (value.startsWith("\"") && value.endsWith("\"")) value = value.slice(1, -1).replace(/\\(["\\`$])/gu, "$1");
+          if (!value.startsWith("/") || /[\u0000-\u001f\u007f]/u.test(value)) process.exit(15);
+          process.stdout.write(value);
+          ')" || {
+            echo 'RESEARCH_SUPPLEMENTAL_COST_EVIDENCE_PATH_MISSING' >&2
+            exit 15
+          }
+          COST_TARGET="$STATE_ROOT/policy/supplemental-cost-evidence.json"
+          mkdir -p "$STATE_ROOT/policy"
+          "${READ_PRIV[@]}" cat -- "$COST_SOURCE" > "$COST_TARGET" || {
+            echo 'RESEARCH_SUPPLEMENTAL_COST_EVIDENCE_MISSING' >&2
+            exit 15
+          }
+          chmod 600 "$COST_TARGET"
+          node -e "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))" "$COST_TARGET" || {
+            echo 'RESEARCH_SUPPLEMENTAL_COST_EVIDENCE_INVALID_JSON' >&2
+            exit 15
+          }
           SOURCE_DIR="$(mktemp -d /tmp/paper-forward-source.XXXXXX)"
           cleanup() { rm -rf -- "$SOURCE_DIR"; }
           trap cleanup EXIT
@@ -586,6 +621,7 @@ jobs:
           LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
             PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
             PAPER_FORWARD_RISK_POLICY_DECISION_PATH="$SOURCE_DIR/market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json" \
+            PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="$COST_TARGET" \
             "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
           PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
           const fs = require('node:fs');
@@ -799,7 +835,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]',
                 `TARGET_SHA=${process.env.TARGET_SHA}`,
