@@ -98,7 +98,7 @@ function reviewed(
   };
 }
 
-test('registers six rule packs with automatic live promotion disabled', () => {
+test('registers six rule packs with four user-selected live strategies enabled', () => {
   const catalog = evidenceBackedAutoStrategyCatalog();
   assert.equal(catalog.length, 6);
   assert.equal(catalog.every((row) => row.pilotProfile.initialOperatingCapitalKrw === 500_000), true);
@@ -106,8 +106,8 @@ test('registers six rule packs with automatic live promotion disabled', () => {
   assert.equal(catalog.every((row) => row.pilotProfile.profitReserveShare === 0.5), true);
   assert.equal(catalog.every((row) => row.pilotProfile.riskPerTradePercentCeiling === 0.5), true);
   assert.equal(catalog.every((row) => row.pilotProfile.futuresMaxLeverage === 3), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.automaticLiveExecutionAllowed === false), true);
-  assert.equal(catalog.every((row) => row.automaticLivePromotionAllowed === false), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.automaticLiveExecutionAllowed === true), true);
+  assert.equal(catalog.filter((row) => row.automaticLivePromotionAllowed).length, 4);
 });
 
 test('missing deterministic evidence fails closed before AI review', () => {
@@ -146,7 +146,7 @@ test('complete deterministic evidence still fails closed without runtime AI revi
   assert.ok(result.blockers.includes('STRATEGY_RULE_PACK_AI_REVIEW_REQUIRED'));
 });
 
-test('bound fresh PASS review admits Paper candidate while live stays disabled', () => {
+test('bound fresh PASS review admits selected strategy to Paper and live pilot', () => {
   const input = baseInput('CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1', 'CRYPTO_SPOT', 'BUY', {
     orderFlowReady: true,
     cvdReady: true,
@@ -159,7 +159,7 @@ test('bound fresh PASS review admits Paper candidate while live stays disabled',
   assert.equal(result.state, 'PAPER_CANDIDATE');
   assert.equal(result.paperAllowed, true);
   assert.equal(result.liveAiEligible, true);
-  assert.equal(result.liveAllowed, false);
+  assert.equal(result.liveAllowed, true);
 });
 
 test('ABSTAIN remains non-directional support and can continue only when deterministic evidence is complete', () => {
@@ -239,7 +239,7 @@ test('cash rule packs reject SHORT while futures rule pack accepts LONG and SHOR
     const result = evaluateStrategyRulePackGate(reviewed(futures, 'PASS'));
     assert.equal(result.paperAllowed, true);
     assert.equal(result.liveAiEligible, true);
-    assert.equal(result.liveAllowed, false);
+    assert.equal(result.liveAllowed, true);
   }
 });
 
