@@ -83,7 +83,7 @@ function requiredCi(overrides = {}) {
 
 function activationReceipt(overrides = {}) {
   return {
-    issueNumber: 23,
+    issueNumber: 1555,
     action: 'AUTHORIZE',
     commentId: RECEIPT_COMMENT_ID,
     targetMainSha: MAIN,
