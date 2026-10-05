@@ -137,6 +137,28 @@ interface UpbitCandleRow {
 interface UpbitOrderbookUnit {
   bid_price?: unknown;
   ask_price?: unknown;
+  bid_size?: unknown;
+  ask_size?: unknown;
+}
+
+interface UpbitTradeTickRow {
+  timestamp?: unknown;
+  trade_price?: unknown;
+  trade_volume?: unknown;
+  ask_bid?: unknown;
+}
+
+interface BitgetPublicFillRow {
+  price?: unknown;
+  size?: unknown;
+  side?: unknown;
+  ts?: unknown;
+}
+
+interface BitgetDepthRow {
+  asks?: unknown;
+  bids?: unknown;
+  ts?: unknown;
 }
 
 interface UpbitOrderbookRow {
@@ -182,6 +204,54 @@ function text(value: unknown): string {
 
 function average(values: number[]): number | null {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+const previousOpenInterest = new Map<string, { value: number; observedAtMs: number }>();
+
+function depthQuantity(rows: unknown): number {
+  if (!Array.isArray(rows)) return 0;
+  return rows.reduce((sum, row) => {
+    if (!Array.isArray(row) || row.length < 2) return sum;
+    const quantity = finite(row[1]);
+    return sum + (quantity != null && quantity > 0 ? quantity : 0);
+  }, 0);
+}
+
+function signedFlow(
+  rows: readonly { side: string; size: number; ts: number }[],
+) {
+  const ordered = [...rows].filter((row) => row.size > 0 && Number.isFinite(row.ts))
+    .sort((left, right) => left.ts - right.ts);
+  let buyVolume = 0;
+  let sellVolume = 0;
+  const signed: number[] = [];
+  for (const row of ordered) {
+    const buy = row.side === 'buy';
+    if (buy) buyVolume += row.size;
+    else sellVolume += row.size;
+    signed.push(buy ? row.size : -row.size);
+  }
+  const half = Math.max(1, Math.floor(signed.length / 2));
+  const older = signed.slice(0, half).reduce((sum, value) => sum + value, 0);
+  const newer = signed.slice(half).reduce((sum, value) => sum + value, 0);
+  const total = buyVolume + sellVolume;
+  return {
+    buyVolume,
+    sellVolume,
+    cvd: buyVolume - sellVolume,
+    cvdSlope: newer - older,
+    takerBuyRatio: total > 0 ? buyVolume / total : 0.5,
+  };
+}
+
+function openInterestChange(symbol: string, value: number | null, nowMs: number) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  const previous = previousOpenInterest.get(symbol);
+  previousOpenInterest.set(symbol, { value, observedAtMs: nowMs });
+  if (!previous || previous.value <= 0 || nowMs <= previous.observedAtMs || nowMs - previous.observedAtMs > 15 * 60_000) {
+    return null;
+  }
+  return (value - previous.value) / previous.value * 100;
 }
 
 function linkedSignal(parent: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; clear(): void } {
