@@ -196,6 +196,7 @@ jobs:
                 github, context, targetSha: process.env.TARGET_SHA,
               });
               core.setOutput('postmerge_run_id', String(result.postMergeProvenanceRunId));
+              core.setOutput('required_ci_run_id', String(result.requiredCiRunId));
               core.setOutput('production_run_id', String(result.productionDeployRunId));
               core.setOutput('deployment_completed_at', result.productionDeployCompletedAt);
             } catch (error) {
@@ -794,7 +795,7 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           PROVIDERS: ${{ steps.command.outputs.providers }}
-          CI_RUN_ID: ${{ steps.prerequisites.outputs.postmerge_run_id }}
+          CI_RUN_ID: ${{ steps.prerequisites.outputs.required_ci_run_id }}
           PRODUCTION_RUN_ID: ${{ steps.prerequisites.outputs.production_run_id }}
           COMPREHENSIVE_QA_RUN_ID: ${{ steps.prerequisites.outputs.production_run_id }}
           ACCOUNT_QA_RUN_ID: ${{ steps.prerequisites.outputs.production_run_id }}
