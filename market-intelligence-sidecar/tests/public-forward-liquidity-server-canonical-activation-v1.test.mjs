@@ -107,7 +107,7 @@ function validInputs() {
     currentMainSha: MAIN,
     activationBindingDigest: bindingDigest,
     latestActivationReceipt: {
-      issueNumber: 23,
+      issueNumber: 1555,
       action: 'AUTHORIZE',
       targetMainSha: MAIN,
       activationBindingDigest: bindingDigest,
