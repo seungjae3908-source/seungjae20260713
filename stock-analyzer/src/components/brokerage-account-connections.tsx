@@ -208,8 +208,10 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
       setLastSyncedAt(new Date().toISOString());
     } finally {
-      if (sequence === requestSequence.current) setLoading(false);
-      refreshInFlight.current = false;
+      if (sequence === requestSequence.current) {
+        setLoading(false);
+        refreshInFlight.current = false;
+      }
     }
   }, [enabledProviders]);
 
@@ -240,6 +242,10 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       requestSequence.current += 1;
       controllerRef.current?.abort();
       controllerRef.current = null;
+      // A capability change (notably delayed Kiwoom discovery) recreates this
+      // effect. Release the old generation before its aborted promise settles so
+      // the new four-provider refresh cannot be dropped by the in-flight guard.
+      refreshInFlight.current = false;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', onOnline);
