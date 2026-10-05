@@ -113,8 +113,13 @@ jobs:
             const release = await inspectProductionPreactivationPrerequisites({
               github, context, targetSha: target,
             });
-            const ciRunId = release.postMergeProvenanceRunId;
+            const ciRunId = release.requiredCiRunId;
             const production = { id: release.productionDeployRunId };
+            const productionCompletedAt = Date.parse(release.productionDeployCompletedAt);
+            if (!Number.isFinite(productionCompletedAt)) {
+              core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
+              return;
+            }
             const comprehensive = production;
             const account = production;
             if (false) {
