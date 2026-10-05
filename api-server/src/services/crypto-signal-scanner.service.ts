@@ -952,9 +952,12 @@ function analyze(
       : item),
     pricePlan: technicalPlan.pricePlan,
     dataState,
-    dataSources: request.market === 'spot'
-      ? ['upbit-public-market', 'upbit-public-ticker', 'upbit-public-candles', 'upbit-public-orderbook']
-      : ['bitget-public-ticker', 'bitget-public-candles'],
+    dataSources: [
+      ...(request.market === 'spot'
+        ? ['upbit-public-market', 'upbit-public-ticker', 'upbit-public-candles', 'upbit-public-orderbook']
+        : ['bitget-public-ticker', 'bitget-public-candles']),
+      ...(flow ? [flow.provenance] : []),
+    ],
     observedAt,
     expiresAt: expiry(request.timeframe, observedTimestamp),
     strongSignalEligible,
