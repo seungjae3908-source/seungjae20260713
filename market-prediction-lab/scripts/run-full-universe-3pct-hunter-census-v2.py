@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import re
 import time
 import tempfile
+from io import StringIO
 from pathlib import Path
 
 import requests
@@ -20,7 +22,11 @@ END_EXCLUSIVE = pd.Timestamp("2026-04-01", tz="UTC")
 THRESHOLDS = [0.03, 0.05, 0.10, 0.20, 0.50, 1.00]
 
 US_DATASET = "mito0o852/OHLCV-1m"
-KR_FALLBACK_DATASET = "podongchip/kospi-daily-stock-features-2021-2026"
+KR_SNAPSHOT_DATE = "2026-03-31"
+KR_CACHE_BASE = "https://raw.githubusercontent.com/FinanceData/fdr_krx_data_cache/master/data/listing"
+KR_LISTING_SNAPSHOT_URL = f"{KR_CACHE_BASE}/krx/{KR_SNAPSHOT_DATE}.csv"
+KR_DELISTING_SNAPSHOT_URL = f"{KR_CACHE_BASE}/delisting/{KR_SNAPSHOT_DATE}.csv"
+KR_NAVER_DAILY_URL = "https://fchart.stock.naver.com/sise.nhn?timeframe=day&count=6000&requestType=0&symbol="
 CRYPTO_DATASET = "rogerdehe/klines-binance"
 
 
@@ -134,91 +140,305 @@ def load_us() -> tuple[pl.DataFrame, dict]:
         "monthCount": len(frames),
     }
 
-def _kr_pykrx() -> tuple[pl.DataFrame, dict]:
-    from pykrx import stock
-    rows = []
-    failures = []
-    dates = pd.date_range(START.date(), (END_EXCLUSIVE - pd.Timedelta(days=1)).date(), freq="B")
-    for idx, dt in enumerate(dates, 1):
-        key = dt.strftime("%Y%m%d")
-        frame = None
-        last = None
-        for attempt in range(3):
-            try:
-                frame = stock.get_market_ohlcv_by_ticker(key, market="ALL")
-                break
-            except Exception as exc:
-                last = exc
-                time.sleep(0.4 * (attempt + 1))
-        if frame is None:
-            failures.append({"date": key, "error": str(last)[:160]})
-            continue
-        if frame.empty:
-            continue
-        frame = frame.reset_index()
-        # pykrx returns columns: 티커 시가 고가 저가 종가 거래량 ...
-        ticker_col = frame.columns[0]
-        required = ["시가", "고가", "저가", "종가", "거래량"]
-        if not all(c in frame.columns for c in required):
-            failures.append({"date": key, "error": f"schema:{list(frame.columns)[:12]}"})
-            continue
-        for r in frame[[ticker_col, *required]].itertuples(index=False, name=None):
-            sym, o, h, l, c, v = r
-            try:
-                o, h, l, c, v = float(o), float(h), float(l), float(c), float(v)
-            except Exception:
-                continue
-            if min(o, h, l, c) <= 0 or v < 0:
-                continue
-            rows.append((str(sym).zfill(6), dt.date(), o, h, l, c, v))
-        if idx % 50 == 0:
-            print(json.dumps({"krBusinessDatesChecked": idx, "rows": len(rows), "failures": len(failures)}), flush=True)
-        time.sleep(0.04)
-    if len(rows) < 300_000:
-        raise RuntimeError(f"PYKRX_COVERAGE_TOO_LOW:{len(rows)} failures={len(failures)}")
-    return pl.DataFrame(rows, schema=["symbol","date","open","high","low","close","volume"], orient="row"), {
-        "provider": "pykrx/KRX",
-        "coverageMode": "DAILY_ALL_MARKET_KOSPI_KOSDAQ_KONEX",
-        "failedBusinessDates": len(failures),
-        "failurePreview": failures[:10],
-    }
+def _kr_market_bucket(value: str) -> str:
+    market = str(value or "").upper()
+    if market.startswith("KOSPI"):
+        return "KOSPI"
+    if market.startswith("KOSDAQ"):
+        return "KOSDAQ"
+    if market.startswith("KONEX"):
+        return "KONEX"
+    return "OTHER"
 
-def _kr_fallback() -> tuple[pl.DataFrame, dict]:
-    file = hf_hub_download(
-        repo_id=KR_FALLBACK_DATASET,
-        repo_type="dataset",
-        filename="kospi_data_v1.parquet",
-    )
-    df = (
-        pl.scan_parquet(file)
-        .with_columns(pl.col("Date").str.to_date(strict=False).alias("date"))
-        .filter((pl.col("date") >= pl.lit(START.date())) & (pl.col("date") < pl.lit(END_EXCLUSIVE.date())))
-        .select([
-            pl.col("Code").cast(pl.Utf8).str.zfill(6).alias("symbol"),
-            "date",
-            pl.col("Open").cast(pl.Float64).alias("open"),
-            pl.col("High").cast(pl.Float64).alias("high"),
-            pl.col("Low").cast(pl.Float64).alias("low"),
-            pl.col("Close").cast(pl.Float64).alias("close"),
-            pl.col("Volume").cast(pl.Float64).alias("volume"),
-        ])
-        .filter((pl.col("open") > 0) & (pl.col("high") > 0) & (pl.col("low") > 0) & (pl.col("close") > 0))
-        .collect()
-    )
-    return df, {
-        "provider": KR_FALLBACK_DATASET,
-        "coverageMode": "KOSPI_948_FALLBACK_ONLY",
-        "warning": "KOSDAQ is not included in fallback mode",
+
+def _download_kr_snapshot(url: str) -> pd.DataFrame:
+    last = None
+    for attempt in range(5):
+        try:
+            response = requests.get(
+                url,
+                timeout=45,
+                headers={"User-Agent": "market-prediction-lab/full-universe-3pct-hunter-kr-v3"},
+            )
+            if response.status_code in (429, 500, 502, 503, 504):
+                raise RuntimeError(f"HTTP_{response.status_code}")
+            response.raise_for_status()
+            text = response.content.decode("utf-8-sig")
+            if len(text) < 1000:
+                raise RuntimeError(f"KR_SNAPSHOT_TOO_SMALL:{len(text)}")
+            return pd.read_csv(StringIO(text), dtype=str)
+        except Exception as exc:
+            last = exc
+            time.sleep(min(2 + attempt * 3, 12))
+    raise RuntimeError(f"KR_SNAPSHOT_DOWNLOAD_FAILED:{url}:{last}")
+
+
+def _build_kr_frozen_universe() -> tuple[list[str], set[str], dict[str, str], dict]:
+    current = _download_kr_snapshot(KR_LISTING_SNAPSHOT_URL)
+    delisted = _download_kr_snapshot(KR_DELISTING_SNAPSHOT_URL)
+
+    if "Code" not in current.columns or "Market" not in current.columns:
+        raise RuntimeError(f"KR_CURRENT_SNAPSHOT_SCHEMA:{list(current.columns)}")
+    if not {"Symbol", "Market", "ListingDate", "DelistingDate"}.issubset(delisted.columns):
+        raise RuntimeError(f"KR_DELISTING_SNAPSHOT_SCHEMA:{list(delisted.columns)}")
+
+    current = current.copy()
+    current["Code"] = current["Code"].fillna("").astype(str).str.upper().str.zfill(6)
+    current["bucket"] = current["Market"].map(_kr_market_bucket)
+    current = current[
+        current["Code"].str.match(r"^[0-9A-Z]{6}$", na=False)
+        & current["bucket"].isin(["KOSPI", "KOSDAQ", "KONEX"])
+    ].drop_duplicates("Code", keep="last")
+
+    delisted = delisted.copy()
+    delisted["Symbol"] = delisted["Symbol"].fillna("").astype(str).str.upper().str.zfill(6)
+    delisted["bucket"] = delisted["Market"].map(_kr_market_bucket)
+    delisted["ListingDate"] = delisted["ListingDate"].fillna("")
+    delisted["DelistingDate"] = delisted["DelistingDate"].fillna("")
+    delisted = delisted[
+        delisted["Symbol"].str.match(r"^[0-9A-Z]{6}$", na=False)
+        & delisted["bucket"].isin(["KOSPI", "KOSDAQ", "KONEX"])
+        & (delisted["DelistingDate"] >= str(START.date()))
+        & (delisted["DelistingDate"] < str(END_EXCLUSIVE.date()))
+        & ((delisted["ListingDate"] == "") | (delisted["ListingDate"] < str(END_EXCLUSIVE.date())))
+    ].drop_duplicates("Symbol", keep="last")
+
+    current_symbols = set(current["Code"].tolist())
+    delisted_symbols = set(delisted["Symbol"].tolist())
+    overlap = current_symbols & delisted_symbols
+    if overlap:
+        raise RuntimeError(f"KR_FROZEN_UNIVERSE_OVERLAP:{sorted(overlap)[:20]}")
+
+    market_by_symbol = {
+        str(row.Code): str(row.bucket)
+        for row in current[["Code", "bucket"]].itertuples(index=False)
     }
+    market_by_symbol.update({
+        str(row.Symbol): str(row.bucket)
+        for row in delisted[["Symbol", "bucket"]].itertuples(index=False)
+    })
+
+    current_counts = current["bucket"].value_counts().to_dict()
+    delisted_counts = delisted["bucket"].value_counts().to_dict()
+    universe = sorted(current_symbols | delisted_symbols)
+
+    if len(current_symbols) < 2800:
+        raise RuntimeError(f"KR_CURRENT_UNIVERSE_TOO_SMALL:{len(current_symbols)}")
+    if int(current_counts.get("KOSPI", 0)) < 900:
+        raise RuntimeError(f"KR_KOSPI_CURRENT_TOO_SMALL:{current_counts}")
+    if int(current_counts.get("KOSDAQ", 0)) < 1700:
+        raise RuntimeError(f"KR_KOSDAQ_CURRENT_TOO_SMALL:{current_counts}")
+    if int(current_counts.get("KONEX", 0)) < 80:
+        raise RuntimeError(f"KR_KONEX_CURRENT_TOO_SMALL:{current_counts}")
+    if len(delisted_symbols) < 180:
+        raise RuntimeError(f"KR_DELISTED_PERIOD_TOO_SMALL:{len(delisted_symbols)}")
+    if len(universe) < 3000:
+        raise RuntimeError(f"KR_FROZEN_UNIVERSE_TOO_SMALL:{len(universe)}")
+
+    meta = {
+        "snapshotDate": KR_SNAPSHOT_DATE,
+        "listingSnapshotUrl": KR_LISTING_SNAPSHOT_URL,
+        "delistingSnapshotUrl": KR_DELISTING_SNAPSHOT_URL,
+        "currentSnapshotSymbols": len(current_symbols),
+        "delistedDuringPeriodSymbols": len(delisted_symbols),
+        "universeSymbols": len(universe),
+        "currentMarketCounts": {str(k): int(v) for k, v in current_counts.items()},
+        "delistedMarketCounts": {str(k): int(v) for k, v in delisted_counts.items()},
+        "overlapSymbols": 0,
+    }
+    return universe, delisted_symbols, market_by_symbol, meta
+
+
+def _kr_rows_from_pandas(symbol: str, frame: pd.DataFrame) -> list[tuple]:
+    if frame is None or frame.empty:
+        return []
+    x = frame.copy()
+    if "Date" in x.columns:
+        x["date"] = pd.to_datetime(x["Date"], errors="coerce").dt.date
+    else:
+        x["date"] = pd.to_datetime(x.index, errors="coerce").date
+
+    rename = {}
+    for col in x.columns:
+        low = str(col).lower()
+        if low in {"open", "high", "low", "close", "volume"}:
+            rename[col] = low
+    x = x.rename(columns=rename)
+    required = ["open", "high", "low", "close", "volume"]
+    if not all(col in x.columns for col in required):
+        return []
+
+    for col in required:
+        x[col] = pd.to_numeric(x[col], errors="coerce")
+    x = x.dropna(subset=["date", *required])
+    x = x[
+        (x["date"] >= START.date())
+        & (x["date"] < END_EXCLUSIVE.date())
+        & (x["open"] > 0)
+        & (x["high"] > 0)
+        & (x["low"] > 0)
+        & (x["close"] > 0)
+        & (x["volume"] >= 0)
+    ]
+    return [
+        (
+            symbol,
+            row.date,
+            float(row.open),
+            float(row.high),
+            float(row.low),
+            float(row.close),
+            float(row.volume),
+        )
+        for row in x[["date", "open", "high", "low", "close", "volume"]].itertuples(index=False)
+    ]
+
+
+def _fetch_kr_naver_rows(symbol: str) -> list[tuple]:
+    last = None
+    for attempt in range(4):
+        try:
+            response = requests.get(
+                KR_NAVER_DAILY_URL + symbol,
+                timeout=30,
+                headers={"User-Agent": "market-prediction-lab/full-universe-3pct-hunter-kr-v3"},
+            )
+            if response.status_code in (429, 500, 502, 503, 504):
+                raise RuntimeError(f"HTTP_{response.status_code}")
+            response.raise_for_status()
+            data_list = re.findall(r'<item data="(.*?)" />', response.text, re.DOTALL)
+            if not data_list:
+                return []
+            frame = pd.read_csv(
+                StringIO("\n".join(data_list)),
+                delimiter="|",
+                header=None,
+                names=["Date", "Open", "High", "Low", "Close", "Volume"],
+                dtype={"Date": str},
+            )
+            return _kr_rows_from_pandas(symbol, frame)
+        except Exception as exc:
+            last = exc
+            time.sleep(min(1.5 * (attempt + 1), 6))
+    raise RuntimeError(f"NAVER_FETCH_FAILED:{symbol}:{last}")
+
+
+def _fetch_kr_delisted_rows(symbol: str) -> list[tuple]:
+    try:
+        import FinanceDataReader as fdr
+
+        frame = fdr.DataReader(
+            f"KRX-DELISTING:{symbol}",
+            str(START.date()),
+            str((END_EXCLUSIVE - pd.Timedelta(days=1)).date()),
+        )
+        return _kr_rows_from_pandas(symbol, frame)
+    except Exception as exc:
+        raise RuntimeError(f"KRX_DELISTING_FETCH_FAILED:{symbol}:{exc}") from exc
+
+
+def _fetch_kr_symbol(symbol: str, known_delisted: bool) -> tuple[str, list[tuple], str, str | None]:
+    try:
+        rows = _fetch_kr_naver_rows(symbol)
+        if rows:
+            return symbol, rows, "NAVER", None
+    except Exception as exc:
+        naver_error = str(exc)[:220]
+    else:
+        naver_error = "NAVER_EMPTY"
+
+    try:
+        rows = _fetch_kr_delisted_rows(symbol)
+        if rows:
+            return symbol, rows, "KRX_DELISTING", None
+    except Exception as exc:
+        delisted_error = str(exc)[:220]
+    else:
+        delisted_error = "KRX_DELISTING_EMPTY"
+
+    return symbol, [], "NONE", f"{naver_error};{delisted_error};knownDelisted={known_delisted}"
+
 
 def load_kr() -> tuple[pl.DataFrame, dict]:
-    try:
-        return _kr_pykrx()
-    except Exception as exc:
-        print(json.dumps({"krPrimaryFailed": str(exc), "fallback": KR_FALLBACK_DATASET}), flush=True)
-        df, meta = _kr_fallback()
-        meta["primaryFailure"] = str(exc)[:500]
-        return df, meta
+    universe, delisted_symbols, market_by_symbol, universe_meta = _build_kr_frozen_universe()
+    all_rows: list[tuple] = []
+    failures = []
+    source_counts = {"NAVER": 0, "KRX_DELISTING": 0}
+    usable_symbols = set()
+    usable_market_counts = {"KOSPI": 0, "KOSDAQ": 0, "KONEX": 0, "OTHER": 0}
+    usable_delisted = 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        future_map = {
+            pool.submit(_fetch_kr_symbol, symbol, symbol in delisted_symbols): symbol
+            for symbol in universe
+        }
+        for idx, future in enumerate(concurrent.futures.as_completed(future_map), 1):
+            symbol = future_map[future]
+            try:
+                symbol, rows, source, error = future.result()
+            except Exception as exc:
+                rows, source, error = [], "NONE", str(exc)[:300]
+
+            if rows:
+                all_rows.extend(rows)
+                usable_symbols.add(symbol)
+                source_counts[source] = source_counts.get(source, 0) + 1
+                bucket = market_by_symbol.get(symbol, "OTHER")
+                usable_market_counts[bucket] = usable_market_counts.get(bucket, 0) + 1
+                if symbol in delisted_symbols:
+                    usable_delisted += 1
+            else:
+                failures.append({"symbol": symbol, "error": error})
+
+            if idx % 100 == 0 or idx == len(universe):
+                print(json.dumps({
+                    "krFrozenSymbolsComplete": idx,
+                    "universeSymbols": len(universe),
+                    "usableSymbols": len(usable_symbols),
+                    "rows": len(all_rows),
+                    "failures": len(failures),
+                    "sourceCounts": source_counts,
+                }), flush=True)
+
+    min_usable = int(len(universe) * 0.95)
+    if len(usable_symbols) < min_usable:
+        raise RuntimeError(
+            f"KR_FROZEN_PRICE_COVERAGE_TOO_LOW:usable={len(usable_symbols)} "
+            f"required={min_usable} universe={len(universe)} failures={len(failures)}"
+        )
+    if usable_market_counts.get("KOSPI", 0) < 880:
+        raise RuntimeError(f"KR_KOSPI_PRICE_COVERAGE_TOO_LOW:{usable_market_counts}")
+    if usable_market_counts.get("KOSDAQ", 0) < 1650:
+        raise RuntimeError(f"KR_KOSDAQ_PRICE_COVERAGE_TOO_LOW:{usable_market_counts}")
+    if usable_delisted < 170:
+        raise RuntimeError(
+            f"KR_DELISTED_PRICE_COVERAGE_TOO_LOW:{usable_delisted}/{len(delisted_symbols)}"
+        )
+    if len(all_rows) < 1_000_000:
+        raise RuntimeError(f"KR_RAW_ROWS_TOO_LOW:{len(all_rows)}")
+
+    frame = pl.DataFrame(
+        all_rows,
+        schema=["symbol", "date", "open", "high", "low", "close", "volume"],
+        orient="row",
+    ).unique(subset=["symbol", "date"], keep="last").sort(["symbol", "date"])
+
+    meta = {
+        "provider": "FinanceData/fdr_krx_data_cache + NAVER + FinanceDataReader KRX-DELISTING",
+        "coverageMode": "FROZEN_KRX_ALL_MARKET_2026_03_31_PLUS_DELISTED_SINCE_2023_04_01",
+        **universe_meta,
+        "usableSymbols": len(usable_symbols),
+        "usableDelistedSymbols": usable_delisted,
+        "usableMarketCounts": usable_market_counts,
+        "failedSymbols": len(failures),
+        "failurePreview": failures[:30],
+        "priceSourceCounts": source_counts,
+        "rawRows": frame.height,
+        "survivorshipControl": "period-end frozen listing plus all symbols delisted within observed period",
+    }
+    return frame, meta
+
 
 def load_crypto(market: str) -> tuple[pl.DataFrame, dict]:
     sub = "spot" if market == "CRYPTO_SPOT" else "futures"
