@@ -151,6 +151,7 @@ jobs:
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_ACCOUNT_READONLY_LIVE_QA: "true"
       PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-account-readonly-artifacts
+      PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/account
       EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
       PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
       PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: ${{ inputs.providers }}
@@ -453,7 +454,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: production-account-readonly-live-${{ inputs.sha }}
-          path: stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json
+          path: |
+            stock-analyzer/production-account-readonly-artifacts
+            stock-analyzer/production-login-diagnostics/account
           if-no-files-found: warn
           retention-days: 30
 
