@@ -1,0 +1,84 @@
+name: Research Full-Universe 3pct Hunter Tradability V1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/postprocess-full-universe-3pct-hunter-tradability-v1.py
+      - .github/workflows/research-full-universe-3pct-hunter-tradability-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-full-universe-3pct-hunter-tradability-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tradability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SOURCE_RUN_ID: "37381483241"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for exact source census run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 90); do
+            status=$(gh api repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID} --jq .status)
+            conclusion=$(gh api repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID} --jq '.conclusion // ""')
+            echo "source run status=${status} conclusion=${conclusion}"
+            if [ "${status}" = "completed" ]; then
+              if [ "${conclusion}" != "success" ]; then
+                echo "source census did not finish successfully"
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "source census wait timed out"
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check postprocessor
+        run: python -m py_compile market-prediction-lab/scripts/postprocess-full-universe-3pct-hunter-tradability-v1.py
+
+      - name: Install dependencies
+        run: python -m pip install "polars>=1.30,<2" "pyarrow>=18,<22"
+
+      - name: Download exact source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: full-universe-3pct-hunter-census-v2-*
+          path: source-artifacts
+
+      - name: Compute tradable opportunity census
+        run: |
+          python market-prediction-lab/scripts/postprocess-full-universe-3pct-hunter-tradability-v1.py \
+            --input-root source-artifacts \
+            --output-dir market-prediction-lab/docs/full-universe-3pct-hunter-tradability-v1
+
+      - name: Upload tradability evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-universe-3pct-hunter-tradability-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/full-universe-3pct-hunter-tradability-v1
+          if-no-files-found: error
+          retention-days: 14
