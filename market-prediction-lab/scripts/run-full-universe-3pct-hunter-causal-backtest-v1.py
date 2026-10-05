@@ -286,6 +286,40 @@ def metrics(trades: pl.DataFrame, market: str, all_dates: list | None = None) ->
         "windows": windows,
     }
 
+def write_portfolio_series(trades: pl.DataFrame, market_dates: list, out: Path) -> None:
+    if trades.is_empty():
+        pd.DataFrame(columns=["date","portfolioReturn","trades","wealth"]).to_csv(out / "daily-portfolio.csv", index=False)
+        pd.DataFrame(columns=["month","return","trades"]).to_csv(out / "monthly-portfolio.csv", index=False)
+        return
+    daily = (
+        trades.group_by("date")
+        .agg([
+            pl.col("netReturn").mean().alias("portfolioReturn"),
+            pl.len().alias("trades"),
+        ])
+        .sort("date")
+        .to_pandas()
+    )
+    daily["date"] = pd.to_datetime(daily["date"])
+    calendar = pd.DatetimeIndex(pd.to_datetime(sorted(market_dates)))
+    daily = daily.set_index("date").reindex(calendar).rename_axis("date").reset_index()
+    daily["portfolioReturn"] = daily["portfolioReturn"].fillna(0.0)
+    daily["trades"] = daily["trades"].fillna(0).astype(int)
+    daily["wealth"] = (1.0 + daily["portfolioReturn"]).cumprod()
+    daily.to_csv(out / "daily-portfolio.csv", index=False)
+
+    monthly = (
+        daily.assign(month=daily["date"].dt.to_period("M").astype(str))
+        .groupby("month", as_index=False)
+        .agg(
+            return_=("portfolioReturn", lambda s: float(np.prod(1.0 + s.to_numpy()) - 1.0)),
+            trades=("trades","sum"),
+        )
+        .rename(columns={"return_":"return"})
+    )
+    monthly.to_csv(out / "monthly-portfolio.csv", index=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--market", required=True, choices=MARKETS)
@@ -349,6 +383,7 @@ def main():
     ]
     selected_trades.select(ledger_columns).write_csv(out / "selected-ledger.csv")
     selected_trades.select(ledger_columns).write_parquet(out / "selected-ledger.parquet", compression="zstd")
+    write_portfolio_series(selected_trades, market_dates, out)
 
     report = {
         "schemaVersion": 1,
