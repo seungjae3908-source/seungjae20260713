@@ -1050,7 +1050,7 @@ jobs:
             }
             if (active.length > 0) core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + active.join(','));
 
-      - name: Disable in safe order: automatic, futures, spot, background worker
+      - name: "Disable in safe order: automatic, futures, spot, background worker"
         shell: bash
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
