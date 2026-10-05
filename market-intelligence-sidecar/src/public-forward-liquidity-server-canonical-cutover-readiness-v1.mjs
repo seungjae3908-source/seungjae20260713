@@ -127,7 +127,7 @@ export function buildServerCanonicalCutoverReadiness({
     currentMainSha,
     activationBindingDigest,
   ].join(' ');
-  if (latestActivationReceipt?.issueNumber !== 23
+  if (latestActivationReceipt?.issueNumber !== 1555
     || latestActivationReceipt?.action !== 'AUTHORIZE'
     || latestActivationReceipt?.targetMainSha !== currentMainSha
     || latestActivationReceipt?.activationBindingDigest !== activationBindingDigest
