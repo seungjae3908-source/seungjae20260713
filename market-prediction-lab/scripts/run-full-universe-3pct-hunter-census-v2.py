@@ -5,18 +5,21 @@ import argparse
 import json
 import re
 import time
+import tempfile
 from pathlib import Path
+
+import requests
 
 import duckdb
 import pandas as pd
 import polars as pl
 from huggingface_hub import hf_hub_download, snapshot_download
 
-START = pd.Timestamp("2023-06-01", tz="UTC")
-END_EXCLUSIVE = pd.Timestamp("2026-06-01", tz="UTC")
+START = pd.Timestamp("2023-04-01", tz="UTC")
+END_EXCLUSIVE = pd.Timestamp("2026-04-01", tz="UTC")
 THRESHOLDS = [0.03, 0.05, 0.10, 0.20, 0.50, 1.00]
 
-US_DATASET = "AmirTrader/YahooFinance"
+US_DATASET = "mito0o852/OHLCV-1m"
 KR_FALLBACK_DATASET = "podongchip/kospi-daily-stock-features-2021-2026"
 CRYPTO_DATASET = "rogerdehe/klines-binance"
 
@@ -44,34 +47,91 @@ def safe_symbol_from_file(path: str, market: str) -> str:
         return stem.replace("_USDT_USDT", "USDT")
     return stem
 
+def _month_iter(start: pd.Timestamp, end_exclusive: pd.Timestamp):
+    cursor = pd.Timestamp(start.year, start.month, 1, tz="UTC")
+    last = pd.Timestamp((end_exclusive - pd.Timedelta(days=1)).year, (end_exclusive - pd.Timedelta(days=1)).month, 1, tz="UTC")
+    while cursor <= last:
+        yield cursor
+        cursor = cursor + pd.offsets.MonthBegin(1)
+
+
+def _download_us_month(month: pd.Timestamp, destination: Path) -> None:
+    url = f"https://huggingface.co/datasets/{US_DATASET}/resolve/main/data/ohlcv_{month.strftime('%Y-%m')}.parquet"
+    headers = {"user-agent": "market-prediction-lab/full-universe-3pct-hunter-v3"}
+    last = None
+    for attempt in range(10):
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=180, allow_redirects=True) as response:
+                if response.status_code in (429, 500, 502, 503, 504):
+                    raise RuntimeError(f"HTTP_{response.status_code}")
+                response.raise_for_status()
+                with destination.open("wb") as out:
+                    for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
+                        if chunk:
+                            out.write(chunk)
+                if destination.stat().st_size < 100_000:
+                    raise RuntimeError(f"US_MONTH_TOO_SMALL:{destination.stat().st_size}")
+                return
+        except Exception as exc:
+            last = exc
+            wait = min(5 + attempt * 10, 60)
+            print(json.dumps({"usMonthRetry": month.strftime("%Y-%m"), "attempt": attempt + 1, "waitSeconds": wait, "error": str(exc)[:180]}), flush=True)
+            time.sleep(wait)
+    raise RuntimeError(f"US_MONTH_DOWNLOAD_FAILED:{month.strftime('%Y-%m')}:{last}")
+
+
 def load_us() -> tuple[pl.DataFrame, dict]:
-    root = Path(snapshot_download_retry(
-        repo_id=US_DATASET,
-        repo_type="dataset",
-        allow_patterns=["data/daily/*.parquet"],
-    ))
-    pattern = (root / "data" / "daily" / "*.parquet").as_posix()
-    con = duckdb.connect()
-    query = f"""
-      SELECT
-        regexp_extract(filename, '([^/]+)\\.parquet$', 1) AS symbol,
-        CAST(date AS DATE) AS date,
-        CAST(open AS DOUBLE) AS open,
-        CAST(high AS DOUBLE) AS high,
-        CAST(low AS DOUBLE) AS low,
-        CAST(close AS DOUBLE) AS close,
-        CAST(volume AS DOUBLE) AS volume
-      FROM read_parquet('{pattern}', filename=true, union_by_name=true)
-      WHERE CAST(date AS DATE) >= DATE '{START.date()}'
-        AND CAST(date AS DATE) < DATE '{END_EXCLUSIVE.date()}'
-        AND open > 0 AND high > 0 AND low > 0 AND close > 0
-    """
-    df = pl.from_arrow(con.execute(query).fetch_arrow_table())
-    con.close()
-    return df, {
+    frames = []
+    audits = []
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        for idx, month in enumerate(_month_iter(START, END_EXCLUSIVE), 1):
+            path = td_path / f"ohlcv_{month.strftime('%Y-%m')}.parquet"
+            _download_us_month(month, path)
+            con = duckdb.connect()
+            query = f"""
+              WITH bars AS (
+                SELECT
+                  upper(ticker) AS symbol,
+                  timezone('America/New_York', timestamp) AS local_ts,
+                  CAST(open AS DOUBLE) AS open,
+                  CAST(high AS DOUBLE) AS high,
+                  CAST(low AS DOUBLE) AS low,
+                  CAST(close AS DOUBLE) AS close,
+                  CAST(volume AS DOUBLE) AS volume
+                FROM read_parquet('{path.as_posix()}')
+              ),
+              regular AS (
+                SELECT *, CAST(local_ts AS DATE) AS date, CAST(local_ts AS TIME) AS local_time
+                FROM bars
+                WHERE CAST(local_ts AS TIME) >= TIME '09:30:00'
+                  AND CAST(local_ts AS TIME) < TIME '16:00:00'
+                  AND regexp_matches(symbol, '^[A-Z][A-Z0-9.\\-]{0,9}$')
+              )
+              SELECT
+                symbol,
+                date,
+                arg_min(open, local_ts) AS open,
+                max(high) AS high,
+                min(low) AS low,
+                arg_max(close, local_ts) AS close,
+                sum(volume) AS volume
+              FROM regular
+              GROUP BY symbol, date
+            """
+            frame = pl.from_arrow(con.execute(query).fetch_arrow_table())
+            con.close()
+            if frame.height:
+                frames.append(frame)
+            audits.append({"month": month.strftime("%Y-%m"), "rows": frame.height, "symbols": frame.select("symbol").unique().height if frame.height else 0})
+            print(json.dumps({"usMonthDone": month.strftime("%Y-%m"), "rows": frame.height, "symbols": audits[-1]["symbols"], "monthIndex": idx}), flush=True)
+    if len(frames) < 34:
+        raise RuntimeError(f"US_MONTH_COVERAGE_TOO_LOW:{len(frames)}")
+    return pl.concat(frames, how="vertical"), {
         "provider": US_DATASET,
-        "coverageMode": "PUBLIC_CURRENT_AND_HISTORICAL_SYMBOL_FILES",
-        "sourceFiles": len(list((root / "data" / "daily").glob("*.parquet"))),
+        "coverageMode": "PUBLIC_1MIN_MONTHLY_PARQUET_AGGREGATED_TO_REGULAR_SESSION_DAILY",
+        "months": audits,
+        "monthCount": len(frames),
     }
 
 def _kr_pykrx() -> tuple[pl.DataFrame, dict]:
