@@ -1,0 +1,278 @@
+name: Research AI Production Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/research-ai-production-activation.yml
+      - research-production/deploy/activate-ai-research.sh
+      - research-production/deploy/install-ai-research-units.sh
+      - research-production/deploy/research-production-ai-review.service
+      - research-production/deploy/research-production-ai-review.timer
+      - research-production/deploy/research-production-video-discovery.service
+      - research-production/deploy/research-production-video-discovery.timer
+      - research-production/bin/research-provider-bootstrap.mjs
+      - research-production/bin/research-ai-review.mjs
+      - research-production/bin/research-video-discovery.mjs
+      - research-production/src/research-ai-review-worker.mjs
+      - research-production/src/research-video-discovery-worker.mjs
+      - research-production/test/research-ai-activation-contract.test.mjs
+      - research-production/test/research-ai-units-install-contract.test.mjs
+      - research-production/test/research-provider-bootstrap.test.mjs
+      - scripts/agent_hub_rollover_v2.py
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: research-ai-production-activation
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate AI activation safety contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n research-production/deploy/activate-ai-research.sh
+          bash -n research-production/deploy/install-ai-research-units.sh
+          systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer
+          node --test             research-production/test/research-ai-activation-contract.test.mjs             research-production/test/research-ai-units-install-contract.test.mjs             research-production/test/research-provider-bootstrap.test.mjs
+          grep -Fq "startsWith(github.event.comment.body, '/activate-research-ai ')" .github/workflows/research-ai-production-activation.yml
+          grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-ai-production-activation.yml
+          ! grep -Eq "LIVE_TRADING:[[:space:]]+['\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\"]?true" .github/workflows/research-ai-production-activation.yml
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-research-ai ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      required_ci_run_id: ${{ steps.gate.outputs.required_ci_run_id }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+
+      - name: Require exact main, Required CI 6/6, and Research Production receipt
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = /^\/activate-research-ai ([0-9a-f]{40})$/u.exec(body);
+            if (!match) {
+              core.setFailed('Expected /activate-research-ai <40-char-current-main-sha>');
+              return;
+            }
+            const target = match[1].toLowerCase();
+            const hubIssue = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isSafeInteger(hubIssue) || hubIssue <= 0 || Number(context.issue.number) !== hubIssue) {
+              core.setFailed('AI Research activation must be posted on the current canonical Hub.');
+              return;
+            }
+
+            const main = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha.toLowerCase();
+            if (main !== target) {
+              core.setFailed('AI_RESEARCH_MAIN_SHA_MISMATCH:target=' + target + ':main=' + main);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            statuses.sort((a, b) => Number(b.id) - Number(a.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed('AI_RESEARCH_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
+              return;
+            }
+            const runIds = new Set(required.map((name) =>
+              /\/actions\/runs\/(\d+)/u.exec(String(latest.get(name)?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('AI_RESEARCH_REQUIRED_CI_NOT_COHERENT');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: runId,
+            })).data;
+            if (run.name !== 'Application CI'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml'
+              || run.head_sha.toLowerCase() !== target
+              || run.head_branch !== 'main'
+              || !['push', 'workflow_dispatch'].includes(run.event)
+              || run.status !== 'completed'
+              || run.conclusion !== 'success') {
+              core.setFailed('AI_RESEARCH_REQUIRED_CI_PROVENANCE_REJECTED:' + runId);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: hubIssue, per_page: 100,
+            });
+            const researchReceipt = [...comments].reverse().find((comment) => {
+              const text = String(comment.body ?? '');
+              return text.includes('[RESEARCH_PRODUCTION_ACTIVATION]')
+                && text.includes('status: success')
+                && text.includes('target_sha: ' + target)
+                && text.includes('live_trading: false')
+                && text.includes('private_api: false')
+                && text.includes('order_authority: false');
+            });
+            if (!researchReceipt) {
+              core.setFailed('AI_RESEARCH_EXACT_RESEARCH_PRODUCTION_RECEIPT_REQUIRED:' + target);
+              return;
+            }
+            const duplicate = [...comments].reverse().find((comment) => {
+              const text = String(comment.body ?? '');
+              return text.includes('[RESEARCH_AI_PRODUCTION_ACTIVATION]')
+                && text.includes('status: success')
+                && text.includes('target_sha: ' + target);
+            });
+            if (duplicate) {
+              core.setFailed('AI_RESEARCH_DUPLICATE_TARGET_ACTIVATION_BLOCKED:' + target);
+              return;
+            }
+            core.setOutput('target_sha', target);
+            core.setOutput('required_ci_run_id', String(runId));
+
+  activate:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      REQUIRED_CI_RUN_ID: ${{ needs.authorize.outputs.required_ci_run_id }}
+      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Read-only AI Research preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight"             < research-production/deploy/activate-ai-research.sh             | tee "$RUNNER_TEMP/ai-research-preflight.txt"
+          grep -Fxq 'AI_RESEARCH_PREFLIGHT=PASS' "$RUNNER_TEMP/ai-research-preflight.txt"
+          grep -Fxq "TARGET_SHA=$TARGET_SHA" "$RUNNER_TEMP/ai-research-preflight.txt"
+          grep -Fxq 'executionAuthority=NONE' "$RUNNER_TEMP/ai-research-preflight.txt"
+
+      - name: Activate AI Review and Video Discovery timers with one-shot proof
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate"             < research-production/deploy/activate-ai-research.sh             | tee "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'AI_RESEARCH_ACTIVATED=true' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'AI_REVIEW_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'VIDEO_DISCOVERY_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'AI_REVIEW_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'VIDEO_DISCOVERY_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'REAL_ORDER_SUBMITTED=false' "$RUNNER_TEMP/ai-research-activation.txt"
+
+      - name: Record sanitized AI Research activation receipt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.HUB_ISSUE_NUMBER),
+              body: [
+                '[RESEARCH_AI_PRODUCTION_ACTIVATION]',
+                'status: success',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'required_ci_run: ' + process.env.REQUIRED_CI_RUN_ID,
+                'research_production_sha_match: true',
+                'provider_youtube: PRESENT',
+                'provider_gemini: PRESENT',
+                'provider_groq: PRESENT',
+                'provider_secret_values_exposed: false',
+                'ai_review_one_shot: success',
+                'video_discovery_one_shot: success',
+                'ai_review_timer_enabled: true',
+                'video_discovery_timer_enabled: true',
+                'live_trading: false',
+                'private_trading_api_allowed: false',
+                'real_order_enabled: false',
+                'executionAuthority: NONE',
+                'real_order_count: 0',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
