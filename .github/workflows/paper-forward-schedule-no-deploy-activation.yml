@@ -835,7 +835,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 '[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]',
                 `TARGET_SHA=${process.env.TARGET_SHA}`,
