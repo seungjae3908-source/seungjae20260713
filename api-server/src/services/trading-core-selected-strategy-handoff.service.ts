@@ -123,7 +123,7 @@ function stockTargets(card: ScannerSignalCard) {
 }
 
 function evaluateUsOrb(card: ScannerSignalCard, raw: readonly Candle[]): StrategyObservation | null {
-  if (!marketOpen(card) || card.direction !== 'LONG' || card.strongSignalEligible === false || card.price <= 5) return null;
+  if (!marketOpen(card) || card.direction !== 'LONG' || card.price <= 5) return null;
   const exchange = String(card.exchange ?? '').toUpperCase();
   if (!['NASDAQ', 'NYSE', 'AMEX'].includes(exchange) || card.listingStatus !== 'LISTED') return null;
   const plan = stockTargets(card);
@@ -209,7 +209,7 @@ function evaluateUsOrb(card: ScannerSignalCard, raw: readonly Candle[]): Strateg
 }
 
 function evaluateKrPressure(card: ScannerSignalCard, raw: readonly Candle[]): StrategyObservation | null {
-  if (!marketOpen(card) || card.direction !== 'LONG' || card.strongSignalEligible === false) return null;
+  if (!marketOpen(card) || card.direction !== 'LONG') return null;
   const plan = stockTargets(card);
   if (!plan) return null;
   const rows = latestSession(normalizedCandles(raw), 'Asia/Seoul', 9 * 60, 15 * 60 + 30);
@@ -329,7 +329,7 @@ function parseBitgetCandles(rows: any[]): PublicCandle[] {
 }
 
 async function evaluateSpot(card: ScannerSignalCard): Promise<StrategyObservation | null> {
-  if (card.direction !== 'LONG' || card.strongSignalEligible === false || card.dataState !== 'complete') return null;
+  if (card.direction !== 'LONG' || card.dataState !== 'complete') return null;
   const symbol = card.symbol.toUpperCase().replace(/^KRW-/u, '');
   const market = 'KRW-' + symbol;
   const base = 'https://api.upbit.com';
@@ -409,7 +409,7 @@ async function evaluateSpot(card: ScannerSignalCard): Promise<StrategyObservatio
 }
 
 async function evaluateFutures(card: ScannerSignalCard, policy: TradingPolicy): Promise<StrategyObservation | null> {
-  if (!['LONG','SHORT'].includes(card.direction) || card.strongSignalEligible === false || card.dataState !== 'complete') return null;
+  if (!['LONG','SHORT'].includes(card.direction) || card.dataState !== 'complete') return null;
   const symbol = card.symbol.toUpperCase().replace(/[-_/]/gu, '').replace(/USDT$/u, '') + 'USDT';
   const base = 'https://api.bitget.com';
   const common = `symbol=${encodeURIComponent(symbol)}&productType=usdt-futures`;
@@ -741,7 +741,7 @@ async function cryptoObservations(userId: string, market: 'spot'|'futures', poli
   });
   cursorByKey.set(key, response.universe.nextCursor ?? 0);
   const cards = response.cards
-    .filter((card) => card.strongSignalEligible !== false)
+    .filter((card) => card.direction !== 'NEUTRAL' && card.dataState === 'complete')
     .sort((a,b) => b.score-a.score)
     .slice(0,4);
   const observations: StrategyObservation[] = [];
