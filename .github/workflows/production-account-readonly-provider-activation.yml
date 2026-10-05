@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/production-account-readonly-provider-activation.yml'
+      - '.github/scripts/current-release-control.cjs'
+      - '.github/scripts/current-release-control.test.cjs'
       - 'api-server/src/features/account-readonly/**'
       - 'api-server/src/services/trade-exchange-adapters.service.ts'
       - 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts'
@@ -23,10 +25,10 @@ concurrency:
   group: >-
     ${{ github.event_name == 'issue_comment'
         && github.event.action == 'created'
-        && github.event.issue.number == 1555
+        && contains(github.event.issue.labels.*.name, 'release-control')
         && github.event.issue.pull_request == null
         && github.event.issue.state == 'open'
-        && github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'
+        && startsWith(github.event.issue.title, 'Staging Readiness Control')
         && github.event.comment.user.login == github.repository_owner
         && github.event.comment.author_association == 'OWNER'
         && startsWith(github.event.comment.body, '/activate-production-account-readonly-providers ')
@@ -52,7 +54,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           file='.github/workflows/production-account-readonly-provider-activation.yml'
           grep -Fq "stock-app-production-live" "$file"
-          grep -Fq "github.event.issue.number == 1555" "$file"
+          grep -Fq "contains(github.event.issue.labels.*.name, 'release-control')" "$file"
           grep -Fq "github.event.comment.user.login == github.repository_owner" "$file"
           grep -Fq "github.event.comment.author_association == 'OWNER'" "$file"
           grep -Fq "startsWith(github.event.comment.body, '/activate-production-account-readonly-providers ')" "$file"
@@ -108,10 +110,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 1555 &&
+      contains(github.event.issue.labels.*.name, 'release-control') &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      startsWith(github.event.issue.title, 'Staging Readiness Control') &&
       github.event.comment.user.login == github.repository_owner &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/activate-production-account-readonly-providers ')
@@ -135,6 +137,21 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Require canonical current Release Control
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { assertCurrentReleaseControl } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/current-release-control.cjs'
+            );
+            const current = await assertCurrentReleaseControl({
+              github,
+              context,
+              issueNumber: Number(context.issue.number),
+              issueTitle: String(context.payload.issue?.title ?? ''),
+            });
+            core.info('Canonical Release Control #' + current.issueNumber + ' verified.');
 
       - name: Parse exact owner command
         id: command
@@ -815,7 +832,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 1555,
+              issue_number: context.issue.number,
               body: [
                 'Production account read-only provider activation and zero-mutation QA completed.',
                 '',
