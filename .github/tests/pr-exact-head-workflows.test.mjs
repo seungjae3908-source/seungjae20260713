@@ -128,11 +128,12 @@ test("exact-current-main CI recovery is manual-only", () => {
   const on = indentedBlock(document, "on", 0);
   assert.doesNotMatch(on, /^\s+push:/mu, "main push must not auto-repeat full CI");
   assert.match(on, /^\s+issue_comment:/mu);
-  assert.match(document, /github\.event\.issue\.number == 1555/u);
+  assert.match(document, /contains\(github\.event\.issue\.labels\.\*\.name, 'release-control'\)/u);
   assert.match(document, /github\.event\.issue\.pull_request == null/u);
   assert.match(document, /github\.event\.issue\.state == 'open'/u);
-  assert.match(document, /Staging Readiness Control — Rollover 2026-10-02/u);
-  assert.doesNotMatch(document, /github\.event\.issue\.number == 23\b/u);
+  assert.match(document, /startsWith\(github\.event\.issue\.title, 'Staging Readiness Control'\)/u);
+  assert.match(document, /current-release-control\.cjs/u);
+  assert.doesNotMatch(document, /github\.event\.issue\.number == \d+\b/u);
   assert.match(document, /github\.event\.comment\.user\.login == github\.repository_owner/u);
   assert.match(document, /github\.event\.comment\.author_association == 'OWNER'/u);
   assert.match(document, /startsWith\(github\.event\.comment\.body, '\/run-application-ci-main '\)/u);
