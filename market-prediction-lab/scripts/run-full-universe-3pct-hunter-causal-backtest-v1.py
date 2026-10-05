@@ -198,7 +198,7 @@ def compound(values: list[float]) -> float:
         wealth *= 1.0 + float(value)
     return wealth - 1.0
 
-def metrics(trades: pl.DataFrame, market: str) -> dict:
+def metrics(trades: pl.DataFrame, market: str, all_dates: list | None = None) -> dict:
     if trades.is_empty():
         return {
             "tradeCount":0,"activeDays":0,"totalReturn":0.0,"mdd":0.0,
@@ -235,25 +235,42 @@ def metrics(trades: pl.DataFrame, market: str) -> dict:
 
     pdaily = daily.to_pandas()
     pdaily["date"] = pd.to_datetime(pdaily["date"])
+    if all_dates is not None:
+        calendar = pd.DatetimeIndex(pd.to_datetime(sorted(all_dates)))
+        pdaily = (
+            pdaily.set_index("date")
+            .reindex(calendar)
+            .rename_axis("date")
+            .reset_index()
+        )
+        for col in ["portfolioReturn","trades","mfe3Hits","mfe5Hits","mfe10Hits","mfe20Hits"]:
+            pdaily[col] = pdaily[col].fillna(0)
     pdaily["month"] = pdaily["date"].dt.to_period("M")
     monthly = pdaily.groupby("month")["portfolioReturn"].apply(lambda s: np.prod(1.0 + s.to_numpy()) - 1.0)
 
-    dates = daily.get_column("date").to_list()
+    dates = [d.date() for d in pdaily["date"].tolist()]
     windows = {}
     for label, n in WINDOWS[market]:
         selected = dates if n is None else dates[-n:]
-        x = daily.filter(pl.col("date").is_in(selected))
+        start = pd.Timestamp(selected[0]) if selected else None
+        end = pd.Timestamp(selected[-1]) if selected else None
+        if selected:
+            mask = (pdaily["date"] >= start) & (pdaily["date"] <= end)
+            sub = pdaily.loc[mask]
+        else:
+            sub = pdaily.iloc[0:0]
         windows[label] = {
             "startDate": str(selected[0]) if selected else None,
             "endDate": str(selected[-1]) if selected else None,
-            "activeDays": len(selected),
-            "return": compound(x.get_column("portfolioReturn").to_list()) if x.height else 0.0,
-            "tradeCount": int(x.get_column("trades").sum()) if x.height else 0,
+            "marketDays": len(selected),
+            "return": compound(sub["portfolioReturn"].tolist()) if len(sub) else 0.0,
+            "tradeCount": int(sub["trades"].sum()) if len(sub) else 0,
         }
 
     return {
         "tradeCount": trades.height,
-        "activeDays": daily.height,
+        "activeDays": int((pdaily["trades"] > 0).sum()),
+        "marketDays": int(len(pdaily)),
         "totalReturn": wealth[-1] - 1.0,
         "mdd": mdd,
         "winRate": float((tnet > 0).mean()),
@@ -292,31 +309,37 @@ def main():
     raw = add_preopen_features(raw).filter(tradable_mask(market))
     raw = add_scores(raw, market)
 
+    market_dates = raw.select("date").unique().sort("date").get_column("date").to_list()
     variants = {}
     ledgers = {}
     for variant in ("PRESSURE4","PRESSURE5","PRESSURE4_EVENT"):
         trades = simulate(variant_rows(raw, market, variant), market)
-        variants[variant] = metrics(trades, market)
+        variants[variant] = metrics(trades, market, market_dates)
         ledgers[variant] = trades
 
-    # Select only on the first two years by PF -> return -> lower MDD.
+    # Freeze the variant using only the first two years, prioritizing monthly consistency.
     boundary = pd.Timestamp("2025-04-01").date()
+    pre_dates = [d for d in market_dates if d < boundary]
+    test_dates = [d for d in market_dates if d >= boundary]
     selection_rows = []
     for variant, trades in ledgers.items():
         pre = trades.filter(pl.col("date") < pl.lit(boundary))
-        m = metrics(pre, market)
+        m = metrics(pre, market, pre_dates)
+        months_total = max(int(m.get("monthsTotal") or 0), 1)
         selection_rows.append((
             variant,
-            float(m.get("profitFactor") or 0.0),
+            float(m.get("monthsPositive") or 0) / months_total,
+            float(m.get("months3pctPlus") or 0) / months_total,
             float(m.get("totalReturn") or 0.0),
             -float(m.get("mdd") or 0.0),
+            int(m.get("tradeCount") or 0),
         ))
-    selected = sorted(selection_rows, key=lambda x: (x[1],x[2],x[3],x[0]), reverse=True)[0][0]
+    selected = sorted(selection_rows, key=lambda x: (x[1],x[2],x[3],x[4],x[5],x[0]), reverse=True)[0][0]
     selected_trades = ledgers[selected].sort(["date","symbol","direction"])
 
     # Held-out last year.
     test_trades = selected_trades.filter(pl.col("date") >= pl.lit(boundary))
-    heldout = metrics(test_trades, market)
+    heldout = metrics(test_trades, market, test_dates)
 
     ledger_columns = [
         "date","symbol","direction","score","eventLane","open","high","low","close",
