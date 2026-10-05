@@ -33,6 +33,7 @@ def load_us() -> tuple[pl.DataFrame, dict]:
         repo_id=US_DATASET,
         repo_type="dataset",
         allow_patterns=["data/daily/*.parquet"],
+        max_workers=2,
     ))
     pattern = (root / "data" / "daily" / "*.parquet").as_posix()
     con = duckdb.connect()
@@ -150,6 +151,7 @@ def load_crypto(market: str) -> tuple[pl.DataFrame, dict]:
         repo_id=CRYPTO_DATASET,
         repo_type="dataset",
         allow_patterns=[f"{sub}/1d/*.parquet"],
+        max_workers=2,
     ))
     folder = root / sub / "1d"
     files = [
