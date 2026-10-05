@@ -1044,17 +1044,27 @@ export function createCryptoSignalScannerService(
       const work = await runBoundedWorkPool(
         batch,
         async (ticker, _index, signal) => {
-          const [candles, contextCandles, spread] = await Promise.all([
+          const selectedRequested = isOwnerSelectedStrategyId(request.ownerSelectedStrategyId);
+          const [candles, contextCandles, context60m, spread, flow] = await Promise.all([
             providers.getCandles(request.market, ticker.symbol, request.timeframe, signal),
             request.timeframe === contextTimeframe
               ? Promise.resolve<CryptoCandle[] | null>(null)
               : providers.getCandles(request.market, ticker.symbol, contextTimeframe, signal).catch(() => []),
+            selectedRequested && request.timeframe !== '60m'
+              ? providers.getCandles(request.market, ticker.symbol, '60m', signal).catch(() => [])
+              : Promise.resolve<CryptoCandle[] | null>(null),
             providers.getSpread(request.market, ticker, signal),
+            selectedRequested && providers.getOrderFlow
+              ? providers.getOrderFlow(request.market, ticker, signal).catch(() => null)
+              : Promise.resolve<OwnerSelectedFlowEvidence | null>(null),
           ]);
           const candidate = analyze(
             { ...request, strategyMode },
             { ...ticker, ...spread },
             candles,
+            contextCandles ?? candles,
+            context60m ?? (request.timeframe === '60m' ? candles : []),
+            flow,
             spread,
             providers.now(),
           );
