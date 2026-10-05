@@ -57,6 +57,7 @@ import {
   type MemberAutoTradingMarketMark,
 } from './member-auto-trading-market-mark.service';
 import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import { buildUserSelectedTradingCoreHandoff } from './trading-core-selected-strategy-handoff.service';
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
@@ -91,6 +92,7 @@ type MemberRuntimeState = Readonly<{
 
 export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
+  readSelectedStrategyHandoff?(member: EligibleMember, nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
@@ -1102,13 +1104,30 @@ export class MemberAutoTradingBackgroundWorker {
           result.skipped += entries.length;
           continue;
         }
+
+        let memberEntries = entries;
+        if (this.source.readSelectedStrategyHandoff) {
+          try {
+            const selected = await this.source.readSelectedStrategyHandoff(member, nowMs);
+            if (selected?.status === 'READY' && selected.entries.length > 0) {
+              const bySignal = new Map(memberEntries.map((entry) => [entry.identity.signalId, entry]));
+              for (const entry of selected.entries) bySignal.set(entry.identity.signalId, entry);
+              memberEntries = [...bySignal.values()].slice(0, MAX_ENTRIES_PER_TICK);
+              result.entries += selected.entries.length;
+              result.handoffStatus = 'READY';
+            }
+          } catch {
+            result.failures += 1;
+          }
+        }
+
         const repository = this.source.tradingRepositoryFor(member.userId);
         const paper = this.source.paperJournalRepositoryFor(member.userId);
         let runtime: MemberRuntimeState;
         try {
           runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
         } catch {
-          result.blocked += entries.length;
+          result.blocked += memberEntries.length;
           continue;
         }
 
@@ -1179,7 +1198,7 @@ export class MemberAutoTradingBackgroundWorker {
           }
         }
 
-        for (const entry of entries) {
+        for (const entry of memberEntries) {
           if (!policyAllowsEntry(member, entry)) {
             result.skipped += 1;
             continue;
@@ -1404,6 +1423,15 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       throw error;
     }
     return validateMemberAutoTradingPaperHandoff(parsed, nowMs);
+  }
+
+  async readSelectedStrategyHandoff(member: EligibleMember, nowMs: number) {
+    return buildUserSelectedTradingCoreHandoff({
+      userId: member.userId,
+      policy: member.policy,
+      nowMs,
+      researchCodeSha: String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase(),
+    });
   }
 
   async listEligibleMembers() {
