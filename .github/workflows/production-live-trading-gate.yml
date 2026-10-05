@@ -1358,6 +1358,8 @@ jobs:
                 if (typeof value.status === 'string'
                   && value.status.startsWith('BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE')) {
                   status = value.status;
+                } else if (value.status === 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS') {
+                  status = value.status;
                 } else if (value.status === 'BLOCKED_LIVE_STATE_NOT_TERMINAL') {
                   status = value.status;
                 }

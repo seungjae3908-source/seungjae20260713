@@ -155,6 +155,57 @@ test('Toss token refresh is single-flight, cached, and never uses account header
   assert.equal(calls, 1); assert.equal(seen[0].headers['X-Tossinvest-Account'], undefined);
 });
 
+test('Toss account 401 invalidates a stale cached token and retries exactly once with a fresh token', async () => {
+  const credentials = { clientId: 'TOSS_CLIENT_TEST_ONLY', clientSecret: 'TOSS_SECRET_TEST_ONLY' };
+  const authorization: string[] = [];
+  let tokenIssues = 0;
+  let accountReads = 0;
+  const transport: ReadonlyTransport = async (request) => {
+    if (request.path === '/oauth2/token') {
+      tokenIssues += 1;
+      return { status: 200, body: { access_token: `FAKE_TOKEN_${tokenIssues}`, expires_in: 3600 } };
+    }
+    accountReads += 1;
+    authorization.push(request.headers.Authorization ?? '');
+    if (accountReads === 2) return { status: 401, body: { message: 'UNTRUSTED_PROVIDER_TEXT' } };
+    return { status: 200, body: { result: [] } };
+  };
+  const provider = new TossReadonlyProvider(transport, new TossTokenManager(transport));
+
+  await provider.request('/api/v1/accounts', credentials);
+  await provider.request('/api/v1/accounts', credentials);
+
+  assert.equal(tokenIssues, 2);
+  assert.equal(accountReads, 3);
+  assert.deepEqual(authorization, ['Bearer FAKE_TOKEN_1', 'Bearer FAKE_TOKEN_1', 'Bearer FAKE_TOKEN_2']);
+});
+
+test('Toss account 401 after one fresh-token retry is classified without credential leakage', async () => {
+  const credentials = { clientId: 'TOSS_CLIENT_TEST_ONLY', clientSecret: 'TOSS_SECRET_TEST_ONLY' };
+  let tokenIssues = 0;
+  let accountReads = 0;
+  const transport: ReadonlyTransport = async (request) => {
+    if (request.path === '/oauth2/token') {
+      tokenIssues += 1;
+      return { status: 200, body: { access_token: `FAKE_TOKEN_${tokenIssues}`, expires_in: 3600 } };
+    }
+    accountReads += 1;
+    return { status: 401, body: { message: 'UNTRUSTED_PROVIDER_TEXT' } };
+  };
+  const provider = new TossReadonlyProvider(transport, new TossTokenManager(transport));
+
+  await assert.rejects(
+    () => provider.request('/api/v1/accounts', credentials),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'TOSS_ACCOUNT_API_AUTH_FAILED'
+      && !error.message.includes(credentials.clientId)
+      && !error.message.includes(credentials.clientSecret)
+      && !error.message.includes('UNTRUSTED_PROVIDER_TEXT'),
+  );
+  assert.equal(tokenIssues, 2);
+  assert.equal(accountReads, 2);
+});
+
 test('Toss provider rejects every mutation path and masks accountSeq', async () => {
   const transport: ReadonlyTransport = async (request) => request.path === '/oauth2/token' ? { status: 200, body: { access_token: 'FAKE', expires_in: 60 } } : { status: 200, body: { result: [] } };
   const provider = new TossReadonlyProvider(transport, new TossTokenManager(transport));
