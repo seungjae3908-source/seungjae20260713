@@ -77,6 +77,24 @@ export type CanonicalTradeLineage = Readonly<{
   fillIds: readonly string[];
 }>;
 
+export type UnifiedResearchLineage = Readonly<{
+  schemaVersion: 'trading-research-lineage-v1';
+  candidateId: string | null;
+  market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+  symbol: string;
+  timeframe: string;
+  direction: 'BUY' | 'LONG' | 'SHORT';
+  strategyId: string;
+  strategyVersion: string;
+  parameterHash: string;
+  researchCodeSha: string;
+  costPolicyVersion: string;
+  handoffId: string;
+  source: 'MEMBER_AUTO_TRADING_PAPER_HANDOFF';
+  executionAuthority: 'NONE';
+  profitabilityCredit: 0;
+}>;
+
 export type UnifiedTradeOrder = {
   schemaVersion: 1;
   recordType: 'unified_trade_order';
@@ -113,6 +131,7 @@ export type UnifiedTradeOrder = {
   warnings: string[];
   technicalSnapshot: TechnicalSnapshot;
   canonicalLineage?: CanonicalTradeLineage;
+  researchLineage?: UnifiedResearchLineage | null;
 };
 
 export type TossOrderContract = {
@@ -199,6 +218,7 @@ export type UnifiedTradeCycle = {
   warnings: string[];
   technicalSnapshot: TechnicalSnapshot;
   canonicalLineage?: CanonicalTradeLineage;
+  researchLineage?: UnifiedResearchLineage | null;
   review: TradeReview;
 };
 
@@ -597,7 +617,62 @@ function normalizeCanonicalOrder(payload: Record<string, unknown>): UnifiedTrade
         fillIds: clean(row.fillIds),
       });
     })(),
+    researchLineage: normalizedResearchLineage(payload.researchLineage),
   };
+}
+
+function normalizedResearchLineage(value: unknown): UnifiedResearchLineage | undefined {
+  if (value == null) return undefined;
+  if (!isObject(value)) throw new PaperJournalError('INVALID_RESEARCH_LINEAGE', 'Research 연결 정보를 확인하세요.');
+  const candidateId = value.candidateId == null ? null : nullableText(value.candidateId, 200);
+  const market = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].includes(String(value.market))
+    ? value.market as UnifiedResearchLineage['market']
+    : null;
+  const symbol = nullableText(value.symbol, 80);
+  const timeframe = nullableText(value.timeframe, 40);
+  const direction = ['BUY', 'LONG', 'SHORT'].includes(String(value.direction))
+    ? value.direction as UnifiedResearchLineage['direction']
+    : null;
+  const strategyId = nullableText(value.strategyId, 120);
+  const strategyVersion = nullableText(value.strategyVersion, 80);
+  const parameterHash = nullableText(value.parameterHash, 200);
+  const researchCodeSha = nullableText(value.researchCodeSha, 40);
+  const costPolicyVersion = nullableText(value.costPolicyVersion, 120);
+  const handoffId = nullableText(value.handoffId, 200);
+  if (value.schemaVersion !== 'trading-research-lineage-v1'
+    || !market
+    || !symbol
+    || !timeframe
+    || !direction
+    || !strategyId
+    || !strategyVersion
+    || !parameterHash
+    || !researchCodeSha
+    || !/^[0-9a-f]{40}$/u.test(researchCodeSha)
+    || !costPolicyVersion
+    || !handoffId
+    || value.source !== 'MEMBER_AUTO_TRADING_PAPER_HANDOFF'
+    || value.executionAuthority !== 'NONE'
+    || value.profitabilityCredit !== 0) {
+    throw new PaperJournalError('INVALID_RESEARCH_LINEAGE', 'Research 연결 정보를 확인하세요.');
+  }
+  return Object.freeze({
+    schemaVersion: 'trading-research-lineage-v1' as const,
+    candidateId,
+    market,
+    symbol,
+    timeframe,
+    direction,
+    strategyId,
+    strategyVersion,
+    parameterHash,
+    researchCodeSha,
+    costPolicyVersion,
+    handoffId,
+    source: 'MEMBER_AUTO_TRADING_PAPER_HANDOFF' as const,
+    executionAuthority: 'NONE' as const,
+    profitabilityCredit: 0 as const,
+  });
 }
 
 function reconcileOrders(orders: UnifiedTradeOrder[], issues: JournalIntegrityIssue[]) {
@@ -704,6 +779,25 @@ function mergeCanonicalLineage(
   });
 }
 
+function mergeResearchLineage(
+  current: UnifiedResearchLineage | null | undefined,
+  next: UnifiedResearchLineage | null | undefined,
+  issues: JournalIntegrityIssue[],
+  orderId: string,
+): UnifiedResearchLineage | null | undefined {
+  if (current === null) return null;
+  if (current === undefined) return next;
+  if (next === undefined) return current;
+  if (next === null) return null;
+  if (JSON.stringify(current) === JSON.stringify(next)) return current;
+  issues.push({
+    code: 'RESEARCH_LINEAGE_MISMATCH',
+    orderId,
+    message: '같은 포지션에 서로 다른 Research 식별자가 감지되어 성과 피드백 연결을 차단했습니다.',
+  });
+  return null;
+}
+
 function finishCycle(cycle: OpenCycle): UnifiedTradeCycle {
   const { entryValue: _entryValue, exitValue: _exitValue, ...result } = cycle;
   return { ...result, review: reviewCycle(result) };
@@ -768,6 +862,7 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
           warnings: [...order.warnings],
           technicalSnapshot: order.technicalSnapshot,
           canonicalLineage: order.canonicalLineage,
+          researchLineage: order.researchLineage,
         };
         open.set(key, { ...unsigned, entryValue: leg.price * leg.quantity, exitValue: 0 });
       } else {
@@ -782,6 +877,12 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
         existing.netPnl = netFromCosts(existing.grossPnl, existing.fees, existing.tax);
         existing.ruleViolation ||= order.ruleViolation;
         existing.canonicalLineage = mergeCanonicalLineage(existing.canonicalLineage, order.canonicalLineage);
+        existing.researchLineage = mergeResearchLineage(
+          existing.researchLineage,
+          order.researchLineage,
+          issues,
+          order.brokerOrderId,
+        );
         existing.warnings.push(...order.warnings, ...costWarnings(existing.costEvidence));
       }
       continue;
@@ -815,6 +916,12 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
     current.netReturnPercent = current.entryValue > 0 && current.netPnl != null ? current.netPnl / current.entryValue * 100 : null;
     current.ruleViolation ||= order.ruleViolation;
     current.canonicalLineage = mergeCanonicalLineage(current.canonicalLineage, order.canonicalLineage);
+    current.researchLineage = mergeResearchLineage(
+      current.researchLineage,
+      order.researchLineage,
+      issues,
+      order.brokerOrderId,
+    );
     current.warnings.push(...order.warnings, ...costWarnings(current.costEvidence));
     if (current.remainingQuantity > EPSILON) {
       current.partialExits.push(allocated);
