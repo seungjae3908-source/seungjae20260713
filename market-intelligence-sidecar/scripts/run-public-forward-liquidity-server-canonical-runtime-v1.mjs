@@ -161,7 +161,7 @@ async function verifyProtectedAuthorityComments({
   let latest = null;
   while (page <= 20) {
     const response = await githubJson(
-      `/issues/23/comments?since=${since}&per_page=100&page=${page}`,
+      `/issues/1555/comments?since=${since}&per_page=100&page=${page}`,
     );
     if (!Array.isArray(response)) {
       throw new Error('SERVER_CANONICAL_RELEASE_COMMENTS_INVALID');
@@ -498,7 +498,7 @@ async function prepareActivation() {
     maximumCanonicalEconomicCredit: 1,
   });
   const latestActivationReceipt = Object.freeze({
-    issueNumber: 23,
+    issueNumber: 1555,
     action: 'AUTHORIZE',
     targetMainSha: targetSha,
     activationBindingDigest: bindingDigest,
