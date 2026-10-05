@@ -351,13 +351,15 @@ jobs:
             }
 
             const workflowId = 'futures-public-network-smoke.yml';
-            const existing = await github.paginate(github.rest.actions.listWorkflowRuns, {
+            const { data: existingPage } = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: workflowId,
               event: 'workflow_dispatch',
+              branch: headRef,
               per_page: 100,
             });
+            const existing = existingPage.workflow_runs ?? [];
             const exactRuns = existing
               .filter((run) => String(run.head_sha || '').toLowerCase() === targetSha)
               .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
