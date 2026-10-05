@@ -9,11 +9,13 @@ import polars as pl
 
 THRESHOLDS = [0.03, 0.05, 0.10, 0.20, 0.50, 1.00]
 
+US_NOT_TEST = ~pl.col("symbol").str.contains(r"^(ZVZZ|ZWZZ)")
+
 PROFILES = {
     "US_STOCK": {
-        "LOOSE": (pl.col("open") >= 1.0) & (pl.col("prior_dollar_volume20") >= 1_000_000)
+        "LOOSE": US_NOT_TEST & (pl.col("open") >= 1.0) & (pl.col("prior_dollar_volume20") >= 1_000_000)
                  & pl.col("ret20_prev").is_not_null() & pl.col("prior_rvol").is_not_null(),
-        "STRICT": (pl.col("open") >= 2.0) & (pl.col("prior_dollar_volume20") >= 5_000_000)
+        "STRICT": US_NOT_TEST & (pl.col("open") >= 2.0) & (pl.col("prior_dollar_volume20") >= 5_000_000)
                   & pl.col("ret20_prev").is_not_null() & pl.col("prior_rvol").is_not_null(),
     },
     "KR_STOCK": {
