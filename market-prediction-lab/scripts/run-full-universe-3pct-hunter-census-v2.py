@@ -326,6 +326,29 @@ def opportunity_rows(df: pl.DataFrame, market: str) -> pl.DataFrame:
     )
     return pl.concat([long_rows, short_rows], how="vertical")
 
+def assert_direction_policy(opp: pl.DataFrame, market: str) -> None:
+    allowed = {
+        "US_STOCK": {"LONG"},
+        "KR_STOCK": {"LONG"},
+        "CRYPTO_SPOT": {"LONG"},
+        "CRYPTO_FUTURES": {"LONG", "SHORT"},
+    }
+    observed = set(opp.get_column("direction").unique().to_list()) if opp.height else set()
+    forbidden = observed - allowed[market]
+    if forbidden:
+        raise RuntimeError(
+            f"DIRECTION_POLICY_VIOLATION:{market}:forbidden={sorted(forbidden)}"
+        )
+    if market != "CRYPTO_FUTURES" and "SHORT" in observed:
+        raise RuntimeError(f"SHORT_FORBIDDEN:{market}")
+    print(json.dumps({
+        "directionPolicyVerified": True,
+        "market": market,
+        "allowed": sorted(allowed[market]),
+        "observed": sorted(observed),
+    }), flush=True)
+
+
 def market_summary(raw: pl.DataFrame, opp: pl.DataFrame, market: str, source_meta: dict) -> dict:
     dates = raw.select("date").unique().height
     symbols = raw.select("symbol").unique().height
@@ -422,6 +445,7 @@ def main():
         loaded, source_meta = loader()
         raw = add_features(loaded, market)
         opp = opportunity_rows(raw, market)
+        assert_direction_policy(opp, market)
         summary = market_summary(raw, opp, market, source_meta)
         summary["causalBaselineTop20"] = causal_baseline(raw, market, 20)
         summary["causalBaselineTop50"] = causal_baseline(raw, market, 50)
