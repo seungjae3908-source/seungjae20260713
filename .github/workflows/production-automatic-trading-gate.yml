@@ -309,6 +309,7 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
@@ -427,10 +428,14 @@ jobs:
             alreadyDesired = true;
           } catch {}
           if (alreadyDesired) {
+            execFileSync('sleep', ['2']);
+            const persisted = snapshot();
+            assertAllFourManual(persisted, true);
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
               idempotent: true,
+              persistenceReadback: 'PASS',
               REAL_ORDER_SUBMITTED: false,
             }));
             process.exit(0);
@@ -446,6 +451,12 @@ jobs:
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
+            execFileSync('sleep', ['2']);
+            const persisted = snapshot();
+            assertAllFourManual(persisted, true);
+            if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
+              throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
+            }
             console.log(JSON.stringify({
               status: 'ACTIVATED_ALL4',
               targetSha: target,
@@ -457,6 +468,7 @@ jobs:
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: true,
               PAPER_AUTOMATIC_EXECUTION: true,
               LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
+              persistenceReadback: 'PASS',
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
@@ -502,7 +514,10 @@ jobs:
                 'providers: toss,kiwoom,upbit,bitget',
                 'required_ci_run: ' + process.env.CI_RUN_ID,
                 'production_deploy_run: ' + process.env.PRODUCTION_RUN_ID,
-                'production_comprehensive_qa_run: ' + process.env.COMPREHENSIVE_RUN_ID,
+                'qa_scope: ' + process.env.QA_SCOPE,
+                'production_qa_run: ' + process.env.PRODUCTION_RUN_ID,
+                'production_comprehensive_qa_run: ' + (process.env.QA_SCOPE === 'full' ? process.env.COMPREHENSIVE_RUN_ID : 'NOT_RUN'),
+                'production_trading_core_qa_run: ' + (process.env.QA_SCOPE === 'trading_core' ? process.env.PRODUCTION_RUN_ID : 'NOT_RUN'),
                 'production_account_qa_run: ' + process.env.ACCOUNT_RUN_ID,
                 'spot_manual_receipt_comment: ' + process.env.SPOT_RECEIPT_ID,
                 'futures_manual_receipt_comment: ' + process.env.FUTURES_RECEIPT_ID,
@@ -514,6 +529,7 @@ jobs:
                 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=true',
                 'paper_automatic_execution=true',
                 'live_automatic_background_execution=true',
+                'persistence_readback=PASS',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',
