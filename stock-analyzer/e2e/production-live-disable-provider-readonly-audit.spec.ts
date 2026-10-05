@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -229,6 +230,15 @@ test('safe-disable provider audit is deterministic, sequential, sanitized, and z
   const accessToken = await productionReadOnlyAccessToken(page);
   expect(accessToken, 'Authenticated Production access token must remain in memory only').not.toBeNull();
 
+  const profile = await readOnlyGet(page, '/api/auth/profile', accessToken!);
+  const profileId = profile.httpStatus === 200 && typeof profile.payload?.id === 'string'
+    ? profile.payload.id.trim()
+    : '';
+  expect(profileId, 'Authenticated Production profile id is required for scoped fallback audit').toMatch(
+    /^[0-9a-f-]{16,64}$/iu,
+  );
+  const qaUserScopeHash = createHash('md5').update(profileId, 'utf8').digest('hex');
+
   const credential = await probeCredentialStatus(page, accessToken!);
   const providerResults: Array<{
     provider: SafeDisableProvider;
@@ -307,6 +317,7 @@ test('safe-disable provider audit is deterministic, sequential, sanitized, and z
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
     officialProductionOrigin: true,
+    qaUserScopeHash,
     authenticatedProductionSession: true,
     readOnlyEnforced: true,
     providerSequence: SAFE_DISABLE_PROVIDER_ORDER,
