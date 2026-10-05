@@ -1284,10 +1284,10 @@ export class MemberAutoTradingBackgroundWorker {
               }
             }
 
-            if (liveBackgroundEnabled() && !deterministicGate.recognized) {
+            if (liveBackgroundEnabled() && (!deterministicGate.recognized || strategyRulePackGate(entry, aiReview, nowMs).liveAllowed)) {
               const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
-              const liveSeed = await buildLivePlanInput({
+              const liveSeedBase = await buildLivePlanInput({
                 source: this.source,
                 repository,
                 member,
@@ -1299,6 +1299,12 @@ export class MemberAutoTradingBackgroundWorker {
                 fxCache,
                 nowMs,
               });
+              const liveSeed: TradingPlanInput = deterministicGate.recognized
+                ? {
+                  ...liveSeedBase,
+                  signalReasons: [...liveSeedBase.signalReasons, 'USER_SELECTED_UNVALIDATED_LIVE_PILOT'],
+                }
+                : liveSeedBase;
               const livePreview = await new TradeExecutionService(repository).previewLiveRiskSnapshot(
                 member.userId,
                 liveSeed,
