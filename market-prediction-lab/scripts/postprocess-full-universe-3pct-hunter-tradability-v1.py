@@ -15,13 +15,13 @@ PROFILES = {
     "US_STOCK": {
         "LOOSE": US_NOT_TEST & (pl.col("open") >= 1.0) & (pl.col("prior_dollar_volume20") >= 1_000_000)
                  & pl.col("ret20_prev").is_not_null() & pl.col("prior_rvol").is_not_null(),
-        "STRICT": US_NOT_TEST & (pl.col("open") >= 2.0) & (pl.col("prior_dollar_volume20") >= 5_000_000)
+        "STRICT": US_NOT_TEST & (pl.col("open") >= 2.0) & (pl.col("prior_dollar_volume20") >= 10_000_000)
                   & pl.col("ret20_prev").is_not_null() & pl.col("prior_rvol").is_not_null(),
     },
     "KR_STOCK": {
         "LOOSE": (pl.col("open") >= 1_000.0) & (pl.col("prior_dollar_volume20") >= 500_000_000)
                  & pl.col("ret20_prev").is_not_null() & pl.col("prior_rvol").is_not_null(),
-        "STRICT": (pl.col("open") >= 1_000.0) & (pl.col("prior_dollar_volume20") >= 2_000_000_000)
+        "STRICT": (pl.col("open") >= 1_000.0) & (pl.col("prior_dollar_volume20") >= 1_000_000_000)
                   & pl.col("ret20_prev").is_not_null() & pl.col("prior_rvol").is_not_null(),
     },
     "CRYPTO_SPOT": {
