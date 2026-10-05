@@ -127,7 +127,9 @@ activate() {
       "${SUDO[@]}" systemctl disable --now \
         research-production-fast-historical.timer \
         research-production-long-history.timer \
-        research-production-forward.timer >/dev/null 2>&1 || true
+        research-production-forward.timer \
+        research-production-ai-review.timer \
+        research-production-video-discovery.timer >/dev/null 2>&1 || true
     fi
     cleanup_transient
     return "$status"
@@ -279,6 +281,12 @@ ENV
   done
   "${SUDO[@]}" systemctl daemon-reload
 
+  # Keep AI/video research on the same exact-SHA release as the core Research runtime.
+  "${SUDO[@]}" systemctl disable --now \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer >/dev/null 2>&1 || true
+  RESEARCH_RELEASE_ROOT="$CURRENT" "$CURRENT/research-production/deploy/install-ai-research-units.sh"
+
   local -a RUN_AS_RESEARCH
   if command -v runuser >/dev/null 2>&1; then
     RUN_AS_RESEARCH=(runuser -u investment-research --)
@@ -310,12 +318,16 @@ ENV
   "${SUDO[@]}" systemctl enable --now \
     research-production-fast-historical.timer \
     research-production-long-history.timer \
-    research-production-forward.timer
+    research-production-forward.timer \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer
 
   for timer in \
     research-production-fast-historical.timer \
     research-production-long-history.timer \
-    research-production-forward.timer; do
+    research-production-forward.timer \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer; do
     "${SUDO[@]}" systemctl is-enabled --quiet "$timer"
     "${SUDO[@]}" systemctl is-active --quiet "$timer"
   done
@@ -341,7 +353,9 @@ ENV
   "${SUDO[@]}" systemctl list-timers --all \
     research-production-fast-historical.timer \
     research-production-long-history.timer \
-    research-production-forward.timer --no-pager
+    research-production-forward.timer \
+    research-production-ai-review.timer \
+    research-production-video-discovery.timer --no-pager
 }
 
 case "$MODE" in
