@@ -174,6 +174,7 @@ jobs:
             core.setOutput('comprehensive_run_id', String(comprehensive.id));
             core.setOutput('account_run_id', String(account.id));
             core.setOutput('deployment_completed_at', release.productionDeployCompletedAt);
+            core.setOutput('qa_scope', release.qaScope);
             core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
             core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
             core.setOutput('futures_max_leverage', leverage);
@@ -195,14 +196,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           root="${{ runner.temp }}/production-preactivation-evidence"
-          comprehensive="$(find "$root" -name production-comprehensive-readonly-qa.json -print -quit)"
-          account="$(find "$root" -name production-account-readonly-live-qa.json -print -quit)"
-          credential="$(find "$root" -name production-live-credential-reuse-qa.json -print -quit)"
-          activation="$(find "$root" -name "production-postdeploy-activation-ready-${TARGET_SHA}.json" -print -quit)"
-          [[ -n "$comprehensive" && -n "$account" && -n "$credential" && -n "$activation" ]]
+          test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" \
-            "$comprehensive" "$account" "$credential" "$activation"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
 
       - name: Download exact-SHA four-provider Account QA evidence
         if: ${{ false }}
