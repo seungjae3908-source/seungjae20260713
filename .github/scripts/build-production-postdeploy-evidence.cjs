@@ -4,15 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { buildProductionPostdeployQaEvidence } = require('./production-postdeploy-qa-evidence.cjs');
 
-const [directory, targetSha, productionDeployRunId] = process.argv.slice(2);
+const [directory, targetSha, productionDeployRunId, qaScope = 'full'] = process.argv.slice(2);
 if (!directory || !targetSha || !productionDeployRunId) {
-  throw new Error('Usage: build-production-postdeploy-evidence.cjs <directory> <sha> <deploy-run-id>');
+  throw new Error('Usage: build-production-postdeploy-evidence.cjs <directory> <sha> <deploy-run-id> [full|trading_core]');
 }
+if (qaScope !== 'full' && qaScope !== 'trading_core') throw new Error('POSTDEPLOY_QA_SCOPE_INVALID');
 const read = (relative) => JSON.parse(fs.readFileSync(path.join(directory, relative), 'utf8'));
 const evidence = buildProductionPostdeployQaEvidence({
   targetSha,
   productionDeployRunId,
-  comprehensive: read('production-comprehensive-readonly-qa.json'),
+  qaScope,
+  comprehensive: qaScope === 'full' ? read('production-comprehensive-readonly-qa.json') : null,
+  tradingCore: qaScope === 'trading_core' ? read('production-trading-core-qa.json') : null,
   account: read('production-account-readonly-live-qa.json'),
   credential: read('production-live-credential-reuse-qa.json'),
   context: read('production-postdeploy-context.json'),
