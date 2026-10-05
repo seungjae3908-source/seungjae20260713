@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-full-universe-3pct-hunter-census-v1-${{ github.sha }}
+  group: research-full-universe-3pct-hunter-census-v1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
