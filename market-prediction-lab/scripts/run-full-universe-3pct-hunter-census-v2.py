@@ -20,6 +20,22 @@ US_DATASET = "AmirTrader/YahooFinance"
 KR_FALLBACK_DATASET = "podongchip/kospi-daily-stock-features-2021-2026"
 CRYPTO_DATASET = "rogerdehe/klines-binance"
 
+
+def snapshot_download_retry(**kwargs):
+    last = None
+    for attempt in range(12):
+        try:
+            return snapshot_download(max_workers=2, **kwargs)
+        except Exception as exc:
+            last = exc
+            text = str(exc)
+            if "429" not in text and "Too Many Requests" not in text:
+                raise
+            wait = min(45 + attempt * 20, 180)
+            print(json.dumps({"hfRateLimited": True, "attempt": attempt + 1, "waitSeconds": wait, "error": text[:240]}), flush=True)
+            time.sleep(wait)
+    raise RuntimeError(f"HF_SNAPSHOT_RETRY_EXHAUSTED:{last}")
+
 def safe_symbol_from_file(path: str, market: str) -> str:
     stem = Path(path).stem.upper()
     if market == "CRYPTO_SPOT":
@@ -29,11 +45,10 @@ def safe_symbol_from_file(path: str, market: str) -> str:
     return stem
 
 def load_us() -> tuple[pl.DataFrame, dict]:
-    root = Path(snapshot_download(
+    root = Path(snapshot_download_retry(
         repo_id=US_DATASET,
         repo_type="dataset",
         allow_patterns=["data/daily/*.parquet"],
-        max_workers=2,
     ))
     pattern = (root / "data" / "daily" / "*.parquet").as_posix()
     con = duckdb.connect()
@@ -147,11 +162,10 @@ def load_kr() -> tuple[pl.DataFrame, dict]:
 
 def load_crypto(market: str) -> tuple[pl.DataFrame, dict]:
     sub = "spot" if market == "CRYPTO_SPOT" else "futures"
-    root = Path(snapshot_download(
+    root = Path(snapshot_download_retry(
         repo_id=CRYPTO_DATASET,
         repo_type="dataset",
         allow_patterns=[f"{sub}/1d/*.parquet"],
-        max_workers=2,
     ))
     folder = root / sub / "1d"
     files = [
