@@ -23,13 +23,16 @@ test('pre-live gates use exact Required CI and a real workflow_dispatch Producti
 test('Paper activation commands route through the current rollover release-control issue', async () => {
   const paper = await read('.github/workflows/paper-forward-schedule-no-deploy-activation.yml');
   const natural = await read('.github/workflows/natural-paper-outcome-schedule-activation.yml');
-  for (const source of [paper, natural]) {
+  const diagnostics = await read('.github/workflows/paper-forward-no-deploy-readonly-diagnostics.yml');
+  for (const source of [paper, natural, diagnostics]) {
     assert.match(source, /github[.]event[.]issue[.]number == 1555/);
     assert.match(source, /Staging Readiness Control — Rollover 2026-10-02/);
     assert.doesNotMatch(source, /github[.]event[.]issue[.]number == 23/);
   }
   assert.match(paper, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH/);
   assert.match(paper, /RESEARCH_SUPPLEMENTAL_COST_EVIDENCE_MISSING/);
+  assert.doesNotMatch(paper, /issue_number:\s*23/u);
+  assert.doesNotMatch(diagnostics, /issue_number:\s*23/u);
 });
 
 test('Research Production activation includes core, AI review, and video discovery timers without live authority', async () => {
@@ -42,6 +45,8 @@ test('Research Production activation includes core, AI review, and video discove
     'research-production-video-discovery.timer',
   ]) assert.match(activation, new RegExp(timer.replaceAll('.', '[.]')));
   assert.match(activation, /install-ai-research-units[.]sh/);
+  assert.match(activation, /systemctl start research-production-ai-review[.]service/);
+  assert.match(activation, /RESEARCH_AI_PROVIDER_NOT_READY/);
   assert.doesNotMatch(activation, /LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true/);
 });
 
