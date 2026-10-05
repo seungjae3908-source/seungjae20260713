@@ -678,6 +678,9 @@ function analyze(
   request: CryptoSignalScanRequest,
   ticker: CryptoTicker,
   candles: CryptoCandle[],
+  context15m: CryptoCandle[],
+  context60m: CryptoCandle[],
+  flow: OwnerSelectedFlowEvidence | null,
   spread: { bid: number | null; ask: number | null },
   now: number,
 ): ScannerSignalCard | null {
