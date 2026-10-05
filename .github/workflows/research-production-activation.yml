@@ -64,6 +64,9 @@ jobs:
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
           grep -q 'research-production-forward.timer' research-production/deploy/activate-server.sh
+          grep -q 'research-production-ai-review.timer' research-production/deploy/activate-server.sh
+          grep -q 'research-production-video-discovery.timer' research-production/deploy/activate-server.sh
+          grep -q 'install-ai-research-units.sh' research-production/deploy/activate-server.sh
           grep -q 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' research-production/deploy/activate-server.sh
           grep -q 'natural-paper-btcusdt-v1.json' .github/workflows/research-production-activation.yml
 
@@ -143,6 +146,7 @@ jobs:
                 && lines.includes('status: success')
                 && lines.includes(`target_sha: ${targetSha}`)
                 && lines.includes('exact_main_research_self_check: success')
+                && lines.includes('timers: fast-historical=enabled; long-history=enabled; forward=enabled; ai-review=enabled; video-discovery=enabled')
                 && lines.includes('existing_app_deploy_mutation: 0')
                 && lines.includes('production_db_mutation: 0')
                 && lines.includes('live_trading: false')
@@ -345,7 +349,11 @@ jobs:
             research-production/deploy/research-production@.service \
             research-production/deploy/research-production-fast-historical.timer \
             research-production/deploy/research-production-long-history.timer \
-            research-production/deploy/research-production-forward.timer
+            research-production/deploy/research-production-forward.timer \
+            research-production/deploy/research-production-ai-review.service \
+            research-production/deploy/research-production-ai-review.timer \
+            research-production/deploy/research-production-video-discovery.service \
+            research-production/deploy/research-production-video-discovery.timer
           npm --prefix research-production test
           node research-production/bin/research-cycle.mjs preflight \
             --repo-root "$GITHUB_WORKSPACE" \
@@ -453,7 +461,7 @@ jobs:
                 `application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
                 `target_application_ci_run: ${process.env.TARGET_APPLICATION_RUN_ID}`,
                 'exact_main_research_self_check: success',
-                'timers: fast-historical=enabled; long-history=enabled; forward=enabled',
+                'timers: fast-historical=enabled; long-history=enabled; forward=enabled; ai-review=enabled; video-discovery=enabled',
                 'existing_app_deploy_mutation: 0',
                 'production_db_mutation: 0',
                 'live_trading: false',
