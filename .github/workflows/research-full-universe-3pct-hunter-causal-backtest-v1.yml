@@ -91,3 +91,40 @@ jobs:
           path: market-prediction-lab/docs/full-universe-3pct-hunter-causal-v1/${{ matrix.market }}
           if-no-files-found: error
           retention-days: 14
+
+
+  combine:
+    needs: backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check combiner
+        run: python -m py_compile market-prediction-lab/scripts/combine-full-universe-3pct-hunter-causal-v1.py
+
+      - name: Download current-run causal artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: full-universe-3pct-hunter-causal-v1-*
+          path: causal-artifacts
+
+      - name: Combine four-market results
+        run: |
+          python market-prediction-lab/scripts/combine-full-universe-3pct-hunter-causal-v1.py \
+            --input-root causal-artifacts \
+            --output-dir market-prediction-lab/docs/full-universe-3pct-hunter-causal-combined-v1
+
+      - name: Upload combined evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-universe-3pct-hunter-causal-combined-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/full-universe-3pct-hunter-causal-combined-v1
+          if-no-files-found: error
+          retention-days: 14
