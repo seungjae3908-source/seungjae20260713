@@ -172,11 +172,11 @@ test('ignores newer pull-request validation runs when resolving the real Product
       id: index + 2, context, state: 'success',
       target_url: `https://github.com/example/repo/actions/runs/${REQUIRED_CI_RUN_ID}`,
     }))];
-    if (fn === input.github.rest.actions.listWorkflowRuns) return [prValidation, fixture().github ? {
+    if (fn === input.github.rest.actions.listWorkflowRuns) return [prValidation, {
       id: PRODUCTION_RUN_ID, name: 'Production Deploy', path: '.github/workflows/production-deploy.yml',
       event: 'workflow_dispatch', head_branch: 'main', head_sha: SHA, conclusion: 'success', status: 'completed',
       created_at: '2026-10-05T00:00:00.000Z', updated_at: '2026-10-05T00:01:00.000Z',
-    } : null].filter(Boolean);
+    }];
     if (fn === input.github.rest.actions.listJobsForWorkflowRun) return [{ steps: [{
       name: 'Record successful deployment boundary', conclusion: 'success', completed_at: BOUNDARY,
     }] }];
@@ -188,4 +188,20 @@ test('ignores newer pull-request validation runs when resolving the real Product
   };
   const result = await inspectProductionPreactivationPrerequisites({ ...input, targetSha: SHA });
   assert.equal(result.productionDeployRunId, PRODUCTION_RUN_ID);
+});
+
+test('rejects when exact-main Required CI 6/6 provenance is missing or incoherent', async () => {
+  const input = fixture();
+  const originalPaginate = input.github.paginate;
+  input.github.paginate = async (fn, args) => {
+    const rows = await originalPaginate(fn, args);
+    if (fn === input.github.rest.repos.listCommitStatusesForRef) {
+      return rows.filter((row) => row.context !== REQUIRED_PRODUCTION_STATUSES[0]);
+    }
+    return rows;
+  };
+  await assert.rejects(
+    inspectProductionPreactivationPrerequisites({ ...input, targetSha: SHA }),
+    /PREACTIVATION_REQUIRED_CI_UNAVAILABLE/,
+  );
 });
