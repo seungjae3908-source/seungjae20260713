@@ -18,6 +18,7 @@ function fixture() {
   return {
     targetSha: SHA,
     productionDeployRunId: 42,
+    qaScope: 'full',
     comprehensive: {
       schemaVersion: 'production-comprehensive-readonly-qa-v1',
       targetSha: SHA,
@@ -118,6 +119,10 @@ test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () =
   assert.equal(evidence.credentialReuse, '4/4 PASS');
   assert.equal(evidence.activeConflictingTradingGates, 0);
   assert.equal(evidence.realOrderSubmitted, false);
+  assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v4');
+  assert.equal(evidence.qaScope, 'full');
+  assert.equal(evidence.comprehensiveQa, 'PASS');
+  assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
 });
 
 test('builds ACTIVATION_READY inside the same approved in-progress Production Deploy job', () => {
@@ -131,7 +136,38 @@ test('builds ACTIVATION_READY inside the same approved in-progress Production De
   });
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
-  assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v3');
+  assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v4');
+});
+
+test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive receipt', () => {
+  const input = fixture();
+  input.qaScope = 'trading_core';
+  input.comprehensive = null;
+  input.tradingCore = {
+    schemaVersion: 'production-trading-core-qa-v1',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    paperAutomaticTriggered: true,
+    paperFilled: true,
+    journalVisible: true,
+    executionSyncInserted: 1,
+    telegramDeliveryQueued: 1,
+    telegramTestDelivered: true,
+    policyRestored: true,
+    realOrderSubmitted: false,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    ...ZERO,
+  };
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.qaScope, 'trading_core');
+  assert.equal(evidence.tradingCoreQa, 'PASS');
+  assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
 });
 
 test('rejects any nonzero financial mutation counter', () => {

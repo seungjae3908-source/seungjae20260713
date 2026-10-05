@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/production-live-trading-gate.yml
+      - .github/scripts/production-trading-gate-conflicts.cjs
+      - .github/scripts/production-trading-gate-conflicts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -198,6 +200,7 @@ jobs:
               core.setOutput('postmerge_run_id', String(result.postMergeProvenanceRunId));
               core.setOutput('production_run_id', String(result.productionDeployRunId));
               core.setOutput('deployment_completed_at', result.productionDeployCompletedAt);
+              core.setOutput('qa_scope', result.qaScope);
             } catch (error) {
               core.setFailed(error instanceof Error ? error.message : 'LIVE_TRADING_PREACTIVATION_PREREQUISITES_FAILED');
             }
@@ -219,14 +222,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           root="${{ runner.temp }}/production-preactivation-evidence"
-          comprehensive="$(find "$root" -name production-comprehensive-readonly-qa.json -print -quit)"
-          account="$(find "$root" -name production-account-readonly-live-qa.json -print -quit)"
-          credential="$(find "$root" -name production-live-credential-reuse-qa.json -print -quit)"
-          activation="$(find "$root" -name "production-postdeploy-activation-ready-${TARGET_SHA}.json" -print -quit)"
-          [[ -n "$comprehensive" && -n "$account" && -n "$credential" && -n "$activation" ]]
+          test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" \
-            "$comprehensive" "$account" "$credential" "$activation"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
 
       - name: Require exact current main and coherent Required CI 6/6
         if: ${{ false }}
@@ -514,26 +512,30 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const { inspectProductionTradingGateConflicts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-trading-gate-conflicts.cjs`
+            );
             const workflowIds = [
               'production-live-trading-gate.yml',
               'production-futures-live-trading-gate.yml',
               'production-automatic-trading-gate.yml',
             ];
-            const activeStates = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
-            for (const workflowId of workflowIds) {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: workflowId,
-                event: 'issue_comment',
-                per_page: 30,
-              });
-              const conflict = runs.find((run) =>
-                run.id !== context.runId && activeStates.has(String(run.status ?? '')));
-              if (conflict) {
-                core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + workflowId + ':' + conflict.id);
-                return;
-              }
+            const gateState = await inspectProductionTradingGateConflicts({
+              github,
+              context,
+              currentWorkflowId: 'production-live-trading-gate.yml',
+              workflowIds,
+            });
+            if (!gateState.ok) {
+              const detail = gateState.conflicts
+                .map((item) => item.workflowId + ':' + item.runId + ':' + item.status)
+                .join(',');
+              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + detail);
+              return;
+            }
+            if (gateState.ignoredNewerSameWorkflow.length > 0) {
+              core.info('Ignored newer serialized duplicate run(s): '
+                + gateState.ignoredNewerSameWorkflow.map((item) => item.runId).join(','));
             }
 
       - name: Configure protected Production SSH
@@ -906,6 +908,9 @@ jobs:
               core.setFailed('LIVE_DISABLE_EXACT_SUCCESSFUL_PRODUCTION_DEPLOY_REQUIRED:' + target);
               return;
             }
+            const { inspectProductionTradingGateConflicts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-trading-gate-conflicts.cjs`
+            );
             const workflowIds = [
               'production-live-trading-gate.yml',
               'production-futures-live-trading-gate.yml',
@@ -913,18 +918,20 @@ jobs:
               'production-account-readonly-provider-activation.yml',
               'production-deploy.yml',
             ];
-            const activeStatuses = new Set(['requested', 'queued', 'pending', 'waiting', 'in_progress']);
-            const active = [];
-            for (const workflow_id of workflowIds) {
-              const candidates = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                owner: context.repo.owner, repo: context.repo.repo, workflow_id, per_page: 30,
-              });
-              for (const run of candidates) {
-                if (run.id !== context.runId && activeStatuses.has(run.status)) active.push(run.id);
-              }
-            }
-            if (active.length > 0) {
-              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + active.join(','));
+            const gateState = await inspectProductionTradingGateConflicts({
+              github,
+              context,
+              currentWorkflowId: 'production-live-trading-gate.yml',
+              workflowIds,
+              eventByWorkflow: {
+                'production-deploy.yml': 'workflow_dispatch',
+              },
+            });
+            if (!gateState.ok) {
+              const detail = gateState.conflicts
+                .map((item) => item.workflowId + ':' + item.runId + ':' + item.status)
+                .join(',');
+              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + detail);
               return;
             }
             core.setOutput('deploy_run_id', String(production.id));
@@ -1185,6 +1192,9 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const { inspectProductionTradingGateConflicts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-trading-gate-conflicts.cjs`
+            );
             const workflowIds = [
               'production-live-trading-gate.yml',
               'production-futures-live-trading-gate.yml',
@@ -1192,17 +1202,21 @@ jobs:
               'production-account-readonly-provider-activation.yml',
               'production-deploy.yml',
             ];
-            const activeStatuses = new Set(['requested', 'queued', 'pending', 'waiting', 'in_progress']);
-            const active = [];
-            for (const workflow_id of workflowIds) {
-              const candidates = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                owner: context.repo.owner, repo: context.repo.repo, workflow_id, per_page: 30,
-              });
-              for (const run of candidates) {
-                if (run.id !== context.runId && activeStatuses.has(run.status)) active.push(run.id);
-              }
+            const gateState = await inspectProductionTradingGateConflicts({
+              github,
+              context,
+              currentWorkflowId: 'production-live-trading-gate.yml',
+              workflowIds,
+              eventByWorkflow: {
+                'production-deploy.yml': 'workflow_dispatch',
+              },
+            });
+            if (!gateState.ok) {
+              const detail = gateState.conflicts
+                .map((item) => item.workflowId + ':' + item.runId + ':' + item.status)
+                .join(',');
+              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + detail);
             }
-            if (active.length > 0) core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + active.join(','));
 
       - name: "Disable in safe order: automatic, futures, spot, background worker"
         shell: bash

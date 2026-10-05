@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/production-automatic-trading-gate.yml
+      - .github/scripts/production-trading-gate-conflicts.cjs
+      - .github/scripts/production-trading-gate-conflicts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -113,141 +115,15 @@ jobs:
             const release = await inspectProductionPreactivationPrerequisites({
               github, context, targetSha: target,
             });
-            const ciRunId = release.postMergeProvenanceRunId;
+            const ciRunId = release.requiredCiRunId;
             const production = { id: release.productionDeployRunId };
             const comprehensive = production;
             const account = production;
-            if (false) {
-            const main = (await github.rest.repos.getBranch({
-              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
-            })).data.commit.sha;
-            if (main !== target) {
-              core.setFailed('AUTOMATIC_TRADING_MAIN_SHA_MISMATCH:target=' + target + ':main=' + main);
-              return;
-            }
-
-            const required = [
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
-              'futures-public-network-smoke/verified',
-            ];
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
-            });
-            statuses.sort((a, b) => Number(b.id) - Number(a.id));
-            const latest = new Map();
-            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
-            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
-            if (missing.length) {
-              core.setFailed('AUTOMATIC_TRADING_REQUIRED_CI_NOT_6_OF_6:' + missing.join(','));
-              return;
-            }
-            const runIds = new Set(required.map((name) => {
-              const match = String(latest.get(name)?.target_url || '').match(/\/actions\/runs\/(\d+)/);
-              return match ? Number(match[1]) : null;
-            }));
-            if (runIds.size !== 1 || runIds.has(null)) {
-              core.setFailed('AUTOMATIC_TRADING_REQUIRED_CI_NOT_COHERENT');
-              return;
-            }
-            const ciRunId = [...runIds][0];
-            const ciRun = (await github.rest.actions.getWorkflowRun({
-              owner: context.repo.owner, repo: context.repo.repo, run_id: ciRunId,
-            })).data;
-            if (ciRun.name !== 'Application CI'
-              || ciRun.path !== '.github/workflows/futures-public-network-smoke.yml'
-              || ciRun.head_sha !== target
-              || ciRun.head_branch !== 'main'
-              || !['push', 'workflow_dispatch'].includes(ciRun.event)
-              || ciRun.status !== 'completed'
-              || ciRun.conclusion !== 'success') {
-              core.setFailed('AUTOMATIC_TRADING_REQUIRED_CI_PROVENANCE_REJECTED:' + ciRunId);
-              return;
-            }
-
-            const productionRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner: context.repo.owner, repo: context.repo.repo,
-              head_sha: target, branch: 'main', event: 'workflow_dispatch',
-              status: 'completed', per_page: 100,
-            });
-            const production = productionRuns
-              .filter((run) => run.name === 'Production Deploy'
-                && run.path === '.github/workflows/production-deploy.yml'
-                && run.head_sha === target
-                && run.conclusion === 'success')
-              .sort((a, b) => Date.parse(b.updated_at || b.created_at) - Date.parse(a.updated_at || a.created_at))[0];
-            if (!production) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_PRODUCTION_DEPLOY_REQUIRED:' + target);
-              return;
-            }
-            const productionCompletedAt = Date.parse(production.updated_at || '');
+            const productionCompletedAt = Date.parse(release.productionDeployCompletedAt);
             if (!Number.isFinite(productionCompletedAt)) {
               core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
               return;
             }
-
-            const requireQa = async (workflowId, workflowName, artifactName, errorCode) => {
-              const qaRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                owner: context.repo.owner, repo: context.repo.repo,
-                workflow_id: workflowId, branch: 'main',
-                event: 'workflow_dispatch', status: 'completed', per_page: 100,
-              });
-              const runNameMatches = (name) => name === workflowName
-                || name.startsWith(workflowName + ' ' + target + ' ');
-              const run = qaRuns
-                .filter((candidate) => runNameMatches(candidate.name)
-                  && candidate.path === '.github/workflows/' + workflowId
-                  && candidate.head_sha === target
-                  && candidate.head_branch === 'main'
-                  && candidate.conclusion === 'success'
-                  && Date.parse(candidate.run_started_at || candidate.created_at) >= productionCompletedAt)
-                .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-              if (!run) {
-                core.setFailed(errorCode + ':' + target);
-                return null;
-              }
-              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
-              });
-              const artifact = artifacts.find((candidate) =>
-                candidate.name === artifactName(run)
-                && candidate.expired !== true
-                && Number(candidate.size_in_bytes) > 0);
-              if (!artifact) {
-                core.setFailed(errorCode + '_ARTIFACT_MISSING:' + run.id);
-                return null;
-              }
-              return run;
-            };
-
-            const comprehensive = await requireQa(
-              'production-comprehensive-readonly-qa.yml',
-              'Production Comprehensive Read-Only QA',
-              (run) => 'production-comprehensive-readonly-' + run.id,
-              'AUTOMATIC_TRADING_EXACT_COMPREHENSIVE_QA_REQUIRED',
-            );
-            if (!comprehensive) return;
-
-            const account = await requireQa(
-              'production-account-readonly-live-qa.yml',
-              'Production Account Read-only Live QA',
-              () => 'production-account-readonly-live-' + target,
-              'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED',
-            );
-            if (!account) return;
-
-            const credentialReuse = await requireQa(
-              'production-live-credential-reuse-qa.yml',
-              'Production Live Credential Reuse QA',
-              () => 'production-live-credential-reuse-' + target,
-              'AUTOMATIC_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED',
-            );
-            if (!credentialReuse) return;
-            }
-
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
@@ -298,6 +174,7 @@ jobs:
             core.setOutput('comprehensive_run_id', String(comprehensive.id));
             core.setOutput('account_run_id', String(account.id));
             core.setOutput('deployment_completed_at', release.productionDeployCompletedAt);
+            core.setOutput('qa_scope', release.qaScope);
             core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
             core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
             core.setOutput('futures_max_leverage', leverage);
@@ -319,14 +196,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           root="${{ runner.temp }}/production-preactivation-evidence"
-          comprehensive="$(find "$root" -name production-comprehensive-readonly-qa.json -print -quit)"
-          account="$(find "$root" -name production-account-readonly-live-qa.json -print -quit)"
-          credential="$(find "$root" -name production-live-credential-reuse-qa.json -print -quit)"
-          activation="$(find "$root" -name "production-postdeploy-activation-ready-${TARGET_SHA}.json" -print -quit)"
-          [[ -n "$comprehensive" && -n "$account" && -n "$credential" && -n "$activation" ]]
+          test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" \
-            "$comprehensive" "$account" "$credential" "$activation"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
 
       - name: Download exact-SHA four-provider Account QA evidence
         if: ${{ false }}
@@ -390,26 +262,30 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const { inspectProductionTradingGateConflicts } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/production-trading-gate-conflicts.cjs`
+            );
             const workflowIds = [
               'production-live-trading-gate.yml',
               'production-futures-live-trading-gate.yml',
               'production-automatic-trading-gate.yml',
             ];
-            const activeStates = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
-            for (const workflowId of workflowIds) {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: workflowId,
-                event: 'issue_comment',
-                per_page: 30,
-              });
-              const conflict = runs.find((run) =>
-                run.id !== context.runId && activeStates.has(String(run.status ?? '')));
-              if (conflict) {
-                core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + workflowId + ':' + conflict.id);
-                return;
-              }
+            const gateState = await inspectProductionTradingGateConflicts({
+              github,
+              context,
+              currentWorkflowId: 'production-automatic-trading-gate.yml',
+              workflowIds,
+            });
+            if (!gateState.ok) {
+              const detail = gateState.conflicts
+                .map((item) => item.workflowId + ':' + item.runId + ':' + item.status)
+                .join(',');
+              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + detail);
+              return;
+            }
+            if (gateState.ignoredNewerSameWorkflow.length > 0) {
+              core.info('Ignored newer serialized duplicate run(s): '
+                + gateState.ignoredNewerSameWorkflow.map((item) => item.runId).join(','));
             }
 
       - name: Configure protected Production SSH
@@ -433,6 +309,7 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
@@ -545,6 +422,24 @@ jobs:
           };
 
           const before = snapshot();
+          let alreadyDesired = false;
+          try {
+            assertAllFourManual(before, true);
+            alreadyDesired = true;
+          } catch {}
+          if (alreadyDesired) {
+            execFileSync('sleep', ['2']);
+            const persisted = snapshot();
+            assertAllFourManual(persisted, true);
+            console.log(JSON.stringify({
+              status: 'ALREADY_ACTIVATED_ALL4',
+              targetSha: target,
+              idempotent: true,
+              persistenceReadback: 'PASS',
+              REAL_ORDER_SUBMITTED: false,
+            }));
+            process.exit(0);
+          }
           assertAllFourManual(before, false);
           const preserved = manualState(before);
           let mutated = false;
@@ -555,6 +450,12 @@ jobs:
             assertAllFourManual(after, true);
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
+            }
+            execFileSync('sleep', ['2']);
+            const persisted = snapshot();
+            assertAllFourManual(persisted, true);
+            if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
+              throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
             console.log(JSON.stringify({
               status: 'ACTIVATED_ALL4',
@@ -567,6 +468,7 @@ jobs:
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: true,
               PAPER_AUTOMATIC_EXECUTION: true,
               LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
+              persistenceReadback: 'PASS',
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
@@ -612,7 +514,10 @@ jobs:
                 'providers: toss,kiwoom,upbit,bitget',
                 'required_ci_run: ' + process.env.CI_RUN_ID,
                 'production_deploy_run: ' + process.env.PRODUCTION_RUN_ID,
-                'production_comprehensive_qa_run: ' + process.env.COMPREHENSIVE_RUN_ID,
+                'qa_scope: ' + process.env.QA_SCOPE,
+                'production_qa_run: ' + process.env.PRODUCTION_RUN_ID,
+                'production_comprehensive_qa_run: ' + (process.env.QA_SCOPE === 'full' ? process.env.COMPREHENSIVE_RUN_ID : 'NOT_RUN'),
+                'production_trading_core_qa_run: ' + (process.env.QA_SCOPE === 'trading_core' ? process.env.PRODUCTION_RUN_ID : 'NOT_RUN'),
                 'production_account_qa_run: ' + process.env.ACCOUNT_RUN_ID,
                 'spot_manual_receipt_comment: ' + process.env.SPOT_RECEIPT_ID,
                 'futures_manual_receipt_comment: ' + process.env.FUTURES_RECEIPT_ID,
@@ -624,6 +529,7 @@ jobs:
                 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=true',
                 'paper_automatic_execution=true',
                 'live_automatic_background_execution=true',
+                'persistence_readback=PASS',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',

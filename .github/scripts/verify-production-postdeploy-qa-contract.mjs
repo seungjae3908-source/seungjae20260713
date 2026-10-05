@@ -88,6 +88,20 @@ for (const [name, workflow] of Object.entries({ comprehensive, account, credenti
 }
 
 requireText(command, '/run-production-postdeploy-qa <40-char-sha>', 'POSTDEPLOY_OWNER_COMMAND_MISSING');
+requireText(command, '/run-production-trading-core-release <40-char-sha>', 'TRADING_CORE_OWNER_COMMAND_MISSING');
+requireText(command, '/run-staging-trading-core <40-char-sha>', 'TRADING_CORE_STAGING_COMMAND_MISSING');
+requireText(command, "workflow_id: 'staging-readiness.yml'", 'TRADING_CORE_STAGING_DISPATCH_MISSING');
+requireText(command, "run_full_validation: 'true'", 'TRADING_CORE_STAGING_FULL_VALIDATION_MISSING');
+requireText(command, "qa_scope: qaScope", 'TRADING_CORE_OWNER_COMMAND_SCOPE_MISSING');
+requireText(deploy, 'qa_scope:', 'PRODUCTION_QA_SCOPE_INPUT_MISSING');
+requireText(deploy, "inputs.qa_scope == 'trading_core'", 'TRADING_CORE_INLINE_QA_CONDITION_MISSING');
+requireText(deploy, '1T · Focused Trading Core Production QA', 'TRADING_CORE_INLINE_QA_STEP_MISSING');
+requireOrder(deploy, [
+  '- name: 2 · Four-provider Account Production read-only QA',
+  '- name: 3 · Production Credential Reuse QA',
+  '- name: 1T · Focused Trading Core Production QA',
+  '- name: Final exact-SHA identity, safety, and gate-conflict check',
+], 'TRADING_CORE_PROVIDER_FIRST_QA_ORDER_INVALID');
 requireText(command, "workflow_id: 'production-deploy.yml'", 'POSTDEPLOY_COMMAND_MUST_DISPATCH_PRODUCTION_CHAIN');
 requireText(command, 'createWorkflowDispatch', 'POSTDEPLOY_COMMAND_DISPATCH_MISSING');
 forbidText(command, 'uses: ./.github/workflows/production-comprehensive-readonly-qa.yml', 'POSTDEPLOY_COMMAND_SEPARATE_QA_JOB_FORBIDDEN');
@@ -134,5 +148,7 @@ console.log(JSON.stringify({
   inlinePostdeployQaInApprovedJob: true,
   runtimeEnvironmentAndSecretMutationRemoved: true,
   ownerCommand: '/run-production-postdeploy-qa <40-char-sha>',
+  tradingCoreOwnerCommand: '/run-production-trading-core-release <40-char-sha>',
+  tradingCoreStagingCommand: '/run-staging-trading-core <40-char-sha>',
   recommendationsFallbackBudgetMs: 5000,
 }));
