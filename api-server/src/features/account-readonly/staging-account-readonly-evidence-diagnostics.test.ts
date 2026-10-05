@@ -52,6 +52,19 @@ test('sanitized evidence preserves only fixed actionable account failure codes',
   ]);
 });
 
+test('sanitized evidence preserves Toss token and account API auth stages without provider text', async () => {
+  for (const code of ['TOSS_TOKEN_AUTH_FAILED', 'TOSS_ACCOUNT_API_AUTH_FAILED'] as const) {
+    const results = await collectProviderEvidence(async (provider) => {
+      if (provider === 'toss') throw new AccountReadonlyError(code);
+      return { connected: true };
+    });
+    const toss = results[0];
+    assert.equal(toss?.verdict, 'FAIL');
+    assert.equal(toss?.verdict === 'FAIL' ? toss.errorCode : null, code);
+    assert.equal(JSON.stringify(results).includes('secret'), false);
+  }
+});
+
 test('untrusted provider error text and arbitrary provider codes collapse to a fixed generic evidence code', async () => {
   const results = await collectProviderEvidence(async () => {
     throw new AccountReadonlyError('SECRET_ACCOUNT_PROVIDER_CODE_12345');

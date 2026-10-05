@@ -67,6 +67,25 @@ test('stale snapshot remains fail-closed but retryable', () => {
   expect(providerDiagnosticRetryable(diagnostic)).toBe(true);
 });
 
+test('Toss auth stage remains exact, sanitized, and non-retryable', () => {
+  for (const errorCode of ['TOSS_TOKEN_AUTH_FAILED', 'TOSS_ACCOUNT_API_AUTH_FAILED']) {
+    const observation = healthyObservation();
+    observation.payload = {
+      ...observation.payload,
+      connected: false,
+      status: 'AUTH_FAILED',
+      errorCode,
+      openOrders: null,
+      lastGoodAt: null,
+    };
+    const diagnostic = providerDiagnostic('toss', observation);
+    expect(diagnostic.diagnosticClassification).toBe(`ERROR_${errorCode}`);
+    expect(providerDiagnosticHealthy(diagnostic)).toBe(false);
+    expect(providerDiagnosticRetryable(diagnostic)).toBe(false);
+    expect(JSON.stringify(diagnostic)).not.toContain('token=');
+  }
+});
+
 test('auth, permission, unknown orders, and unsafe error text stay fail-closed and sanitized', () => {
   const permission = providerDiagnostic('bitget', {
     responseReceived: true,

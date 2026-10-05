@@ -126,6 +126,12 @@ export class TossTokenManager {
     return issued;
   }
 
+  invalidate(credentials: TossCredentials, rejectedToken?: string) {
+    const key = credentialKey(credentials);
+    const cached = this.cached.get(key);
+    if (!rejectedToken || cached?.token === rejectedToken) this.cached.delete(key);
+  }
+
   private async issue(key: string, credentials: TossCredentials, signal?: AbortSignal) {
     const body = new URLSearchParams({
       grant_type: 'client_credentials',
@@ -139,7 +145,7 @@ export class TossTokenManager {
       body,
       signal,
     });
-    if (response.status === 401) throw new AccountReadonlyError('TOSS_AUTH_FAILED');
+    if (response.status === 401) throw new AccountReadonlyError('TOSS_TOKEN_AUTH_FAILED');
     if (response.status === 403) throw new AccountReadonlyError('TOSS_IP_NOT_ALLOWED');
     if (response.status === 429) throw new AccountReadonlyError('RATE_LIMITED', true);
     if (response.status >= 400) throw new AccountReadonlyError(`TOSS_HTTP_${response.status}`, response.status >= 500);
@@ -266,15 +272,24 @@ export class TossReadonlyProvider {
 
   async request(path: string, credentials: TossCredentials, signal?: AbortSignal, accountSeq?: string, query = '') {
     if (!PRIVATE_GETS.has(path)) throw new AccountReadonlyError('READONLY_PATH_REJECTED');
-    const token = await this.tokens.token(credentials, signal);
-    const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
-    if (path !== '/api/v1/accounts') {
-      const selected = String(accountSeq ?? credentials.accountSeq ?? '').trim();
-      if (!selected) throw new AccountReadonlyError('TOSS_ACCOUNT_NOT_CONFIGURED');
-      headers['X-Tossinvest-Account'] = selected;
+    const read = async (token: string) => {
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: 'application/json' };
+      if (path !== '/api/v1/accounts') {
+        const selected = String(accountSeq ?? credentials.accountSeq ?? '').trim();
+        if (!selected) throw new AccountReadonlyError('TOSS_ACCOUNT_NOT_CONFIGURED');
+        headers['X-Tossinvest-Account'] = selected;
+      }
+      return this.transport({ method: 'GET', path, headers, body: null, query, signal });
+    };
+
+    let token = await this.tokens.token(credentials, signal);
+    let response = await read(token);
+    if (response.status === 401) {
+      this.tokens.invalidate(credentials, token);
+      token = await this.tokens.token(credentials, signal);
+      response = await read(token);
     }
-    const response = await this.transport({ method: 'GET', path, headers, body: null, query, signal });
-    if (response.status === 401) throw new AccountReadonlyError('TOSS_AUTH_FAILED');
+    if (response.status === 401) throw new AccountReadonlyError('TOSS_ACCOUNT_API_AUTH_FAILED');
     if (response.status === 403) throw new AccountReadonlyError('TOSS_IP_NOT_ALLOWED');
     if (response.status === 429) {
       const retryAfter = nullableNumber(response.headers?.['retry-after']);
