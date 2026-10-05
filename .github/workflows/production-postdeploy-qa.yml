@@ -11,6 +11,10 @@ on:
       - '.github/workflows/production-account-readonly-live-qa.yml'
       - '.github/workflows/production-live-credential-reuse-qa.yml'
       - '.github/workflows/production-deploy.yml'
+      - '.github/workflows/production-trading-core-qa.yml'
+      - '.github/tests/production-trading-core-qa-contract.test.mjs'
+      - 'stock-analyzer/e2e/production-trading-core-qa.spec.ts'
+      - 'stock-analyzer/playwright.production-trading-core.config.ts'
       - '.github/scripts/run-production-readonly-qa.sh'
       - '.github/scripts/build-production-postdeploy-context.mjs'
       - '.github/scripts/build-production-postdeploy-evidence.cjs'
@@ -63,7 +67,8 @@ jobs:
       github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == github.repository_owner &&
       github.event.comment.author_association == 'OWNER' &&
-      startsWith(github.event.comment.body, '/run-production-postdeploy-qa ')
+      (startsWith(github.event.comment.body, '/run-production-postdeploy-qa ')
+       || startsWith(github.event.comment.body, '/run-production-trading-core-release '))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -74,12 +79,15 @@ jobs:
         with:
           script: |
             const body = String(process.env.COMMENT_BODY ?? '').trim();
-            const match = /^\/run-production-postdeploy-qa ([0-9a-fA-F]{40})$/.exec(body);
+            const full = /^\/run-production-postdeploy-qa ([0-9a-fA-F]{40})$/.exec(body);
+            const tradingCore = /^\/run-production-trading-core-release ([0-9a-fA-F]{40})$/.exec(body);
+            const match = full || tradingCore;
             if (!match) {
-              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha>');
+              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha> OR /run-production-trading-core-release <40-char-sha>');
               return;
             }
             const target = match[1].toLowerCase();
+            const qaScope = tradingCore ? 'trading_core' : 'full';
             const main = await github.rest.repos.getBranch({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -110,6 +118,7 @@ jobs:
                 sha: target,
                 data_probe_path: '/api/healthz/data-plane',
                 force_rebuild: 'false',
+                qa_scope: qaScope,
               },
             });
             await github.rest.issues.createComment({
@@ -120,8 +129,11 @@ jobs:
                 'Production deploy + inline post-deploy QA chain dispatched.',
                 '',
                 `- Exact main SHA: \`${target}\``,
+                '- QA scope: `' + qaScope + '`',
                 '- One approval only: `Review deployments → production → Approve and deploy`',
-                '- Comprehensive → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.',
+                qaScope === 'trading_core'
+                  ? '- Trading Core → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.'
+                  : '- Comprehensive → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.',
                 `- Runs: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/production-deploy.yml`,
               ].join('\n'),
             });
