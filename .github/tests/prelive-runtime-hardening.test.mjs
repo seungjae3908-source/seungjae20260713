@@ -28,6 +28,8 @@ test('Paper activation commands route through the current rollover release-contr
     assert.match(source, /Staging Readiness Control — Rollover 2026-10-02/);
     assert.doesNotMatch(source, /github[.]event[.]issue[.]number == 23/);
   }
+  assert.match(paper, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH/);
+  assert.match(paper, /RESEARCH_SUPPLEMENTAL_COST_EVIDENCE_MISSING/);
 });
 
 test('Research Production activation includes core, AI review, and video discovery timers without live authority', async () => {
