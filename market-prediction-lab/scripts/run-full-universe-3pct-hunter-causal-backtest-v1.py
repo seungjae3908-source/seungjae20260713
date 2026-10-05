@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import importlib.util
 import json
 import math
+import time
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +34,80 @@ WINDOWS = {
     "CRYPTO_SPOT": [("1D",1),("1W",7),("1M",30),("3M",90),("6M",183),("1Y",365),("3Y",None)],
     "CRYPTO_FUTURES": [("1D",1),("1W",7),("1M",30),("3M",90),("6M",183),("1Y",365),("3Y",None)],
 }
+
+def load_kr_fast() -> tuple[pl.DataFrame, dict]:
+    from pykrx import stock
+
+    dates = pd.date_range(census.START.date(), (census.END_EXCLUSIVE - pd.Timedelta(days=1)).date(), freq="B")
+
+    def fetch_day(dt):
+        key = dt.strftime("%Y%m%d")
+        last = None
+        for attempt in range(4):
+            try:
+                frame = stock.get_market_ohlcv_by_ticker(key, market="ALL")
+                if frame is None or frame.empty:
+                    return key, [], None
+                frame = frame.reset_index()
+                ticker_col = frame.columns[0]
+                required = ["시가", "고가", "저가", "종가", "거래량"]
+                if not all(col in frame.columns for col in required):
+                    return key, [], f"schema:{list(frame.columns)[:12]}"
+                rows = []
+                for r in frame[[ticker_col, *required]].itertuples(index=False, name=None):
+                    sym, o, h, l, close, v = r
+                    try:
+                        o, h, l, close, v = float(o), float(h), float(l), float(close), float(v)
+                    except Exception:
+                        continue
+                    if min(o, h, l, close) <= 0 or v < 0:
+                        continue
+                    rows.append((str(sym).zfill(6), dt.date(), o, h, l, close, v))
+                return key, rows, None
+            except Exception as exc:
+                last = exc
+                time.sleep(0.8 * (attempt + 1))
+        return key, [], str(last)[:180]
+
+    all_rows = []
+    failures = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(fetch_day, dt): dt for dt in dates}
+        for idx, future in enumerate(concurrent.futures.as_completed(futures), 1):
+            key, rows, error = future.result()
+            if rows:
+                all_rows.extend(rows)
+            if error:
+                failures.append({"date": key, "error": error})
+            if idx % 50 == 0:
+                print(json.dumps({
+                    "krFastDatesComplete": idx,
+                    "rows": len(all_rows),
+                    "failures": len(failures),
+                }), flush=True)
+
+    if len(all_rows) < 300_000:
+        print(json.dumps({
+            "krFastFallback": True,
+            "rows": len(all_rows),
+            "failures": len(failures),
+        }), flush=True)
+        return census.load_kr()
+
+    return (
+        pl.DataFrame(
+            all_rows,
+            schema=["symbol","date","open","high","low","close","volume"],
+            orient="row",
+        ),
+        {
+            "provider": "pykrx/KRX",
+            "coverageMode": "DAILY_ALL_MARKET_KOSPI_KOSDAQ_KONEX_PARALLEL4",
+            "failedBusinessDates": len(failures),
+            "failurePreview": failures[:10],
+        },
+    )
+
 
 def add_preopen_features(df: pl.DataFrame) -> pl.DataFrame:
     x = df.sort(["symbol","date"])
@@ -333,7 +409,7 @@ def main():
     if market == "US_STOCK":
         loaded, source_meta = census.load_us()
     elif market == "KR_STOCK":
-        loaded, source_meta = census.load_kr()
+        loaded, source_meta = load_kr_fast()
     elif market == "CRYPTO_SPOT":
         loaded, source_meta = census.load_crypto("CRYPTO_SPOT")
     else:
