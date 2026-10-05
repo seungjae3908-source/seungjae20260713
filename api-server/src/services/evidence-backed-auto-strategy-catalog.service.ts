@@ -52,7 +52,7 @@ export type StrategyRuleEvidenceKey =
   | 'fundingRiskReady';
 
 export type StrategyPilotProfile = Readonly<{
-  mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM';
+  mode: 'PAPER_MIRROR_AUTOMATIC_LIVE';
   initialOperatingCapitalKrw: number;
   profitCompoundShare: 0.5;
   profitReserveShare: 0.5;
@@ -70,12 +70,12 @@ export type StrategyPilotProfile = Readonly<{
   futuresMaxLeverage: 3;
   paperMirrorRequired: true;
   pairedFillComparisonRequired: true;
-  liveOrderRequiresExplicitConfirmation: true;
-  automaticLiveExecutionAllowed: false;
+  liveOrderRequiresExplicitConfirmation: false;
+  automaticLiveExecutionAllowed: true;
 }>;
 
 export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
-  mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM',
+  mode: 'PAPER_MIRROR_AUTOMATIC_LIVE',
   initialOperatingCapitalKrw: 500_000,
   profitCompoundShare: 0.5,
   profitReserveShare: 0.5,
@@ -93,8 +93,8 @@ export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   futuresMaxLeverage: 3,
   paperMirrorRequired: true,
   pairedFillComparisonRequired: true,
-  liveOrderRequiresExplicitConfirmation: true,
-  automaticLiveExecutionAllowed: false,
+  liveOrderRequiresExplicitConfirmation: false,
+  automaticLiveExecutionAllowed: true,
 });
 
 export type StrategyRulePackDefinition = Readonly<{
@@ -107,7 +107,7 @@ export type StrategyRulePackDefinition = Readonly<{
   requiredEvidence: readonly StrategyRuleEvidenceKey[];
   paperResearchAllowedWhenReady: true;
   pilotProfile: StrategyPilotProfile;
-  automaticLivePromotionAllowed: false;
+  automaticLivePromotionAllowed: boolean;
   promotionRequirements: readonly string[];
 }>;
 
@@ -195,7 +195,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     requiredEvidence: req('pitUniverseReady', 'first5mRvolReady', 'openingRangeReady', 'retestReady', 'microBreakoutReady'),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
-    automaticLivePromotionAllowed: false,
+    automaticLivePromotionAllowed: true,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -216,7 +216,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     requiredEvidence: req('pressureReady', 'compressionReady', 'volumeExpansionReady', 'breakoutReady'),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
-    automaticLivePromotionAllowed: false,
+    automaticLivePromotionAllowed: true,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'PIT_UNIVERSE', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -237,7 +237,7 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     requiredEvidence: req('orderFlowReady', 'cvdReady', 'takerBuyReady', 'orderbookImbalanceReady', 'mlRankReady', 'modelFrozen'),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
-    automaticLivePromotionAllowed: false,
+    automaticLivePromotionAllowed: true,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'FROZEN_MODEL', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
   Object.freeze({
@@ -258,12 +258,24 @@ export const STRATEGY_RULE_PACKS: readonly StrategyRulePackDefinition[] = Object
     requiredEvidence: req('orderFlowReady', 'oiReady', 'cvdReady', 'takerFlowReady', 'fundingRiskReady'),
     paperResearchAllowedWhenReady: true,
     pilotProfile: RULE_PACK_PILOT_PROFILE,
-    automaticLivePromotionAllowed: false,
+    automaticLivePromotionAllowed: true,
     promotionRequirements: Object.freeze(['OOS', 'WALK_FORWARD', 'FULL_COST', 'STRATEGY_HEALTH', 'PROFITABILITY_ATTESTATION']),
   }),
 ]);
 
+export const USER_SELECTED_LIVE_STRATEGY_IDS = Object.freeze([
+  'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+  'KR_PRESSURE_BREAKOUT_V1',
+  'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+  'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+] as const);
+
+const USER_SELECTED_LIVE = new Set<string>(USER_SELECTED_LIVE_STRATEGY_IDS);
 const BY_ID = new Map(STRATEGY_RULE_PACKS.map((row) => [row.strategyId, row]));
+
+export function isUserSelectedLiveStrategyId(value: string): value is typeof USER_SELECTED_LIVE_STRATEGY_IDS[number] {
+  return USER_SELECTED_LIVE.has(value);
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -361,7 +373,7 @@ export type StrategyRulePackGate = Readonly<{
   state: 'PASS_THROUGH' | 'NO_TRADE' | 'PAPER_CANDIDATE';
   paperAllowed: boolean;
   liveAiEligible: boolean;
-  liveAllowed: false;
+  liveAllowed: boolean;
   blockers: readonly string[];
   definition: StrategyRulePackDefinition | null;
 }>;
@@ -507,13 +519,16 @@ export function evaluateStrategyRulePackGate(input: StrategyRulePackGateInput): 
   const liveAiEligible = unique.length === 0
     && review?.status === 'READY'
     && String(review?.decision ?? '').toUpperCase() === 'PASS';
+  const liveAllowed = liveAiEligible
+    && deterministic.definition?.automaticLivePromotionAllowed === true
+    && isUserSelectedLiveStrategyId(deterministic.strategyId);
   return Object.freeze({
     recognized: true,
     strategyId: deterministic.strategyId,
     state: unique.length === 0 ? 'PAPER_CANDIDATE' : 'NO_TRADE',
     paperAllowed: unique.length === 0,
     liveAiEligible,
-    liveAllowed: false,
+    liveAllowed,
     blockers: Object.freeze(unique),
     definition: deterministic.definition,
   });
