@@ -1655,11 +1655,10 @@ async function runAuthenticatedAiChartCertification(
       if (verifierOwnedTeardownSafe) {
         verifierOwnedContextTeardowns.set(page, new URL(page.url()).origin);
       }
-      try {
-        await context.close();
-      } finally {
-        verifierOwnedContextTeardowns.delete(page);
-      }
+      await context.close();
+      // Chromium may deliver requestfailed after context.close() resolves. Keep
+      // the page-scoped teardown proof available for that late event; WeakMap
+      // ownership releases it automatically with the closed Page object.
     }
   }
 
