@@ -56,6 +56,81 @@ jobs:
           stock-analyzer/src/lib/recommendation-response.test.ts
       - run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
 
+  dispatch-trading-core-staging:
+    name: Dispatch exact-main Staging readiness for Trading Core release
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-staging-trading-core ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate owner staging command and dispatch exact-main full staging gate
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/run-staging-trading-core ([0-9a-fA-F]{40})$/.exec(body);
+            if (!match) {
+              core.setFailed('Exact command required: /run-staging-trading-core <40-char-sha>');
+              return;
+            }
+            const target = match[1].toLowerCase();
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (String(main.data.commit.sha).toLowerCase() !== target) {
+              core.setFailed(`STAGING_COMMAND_REQUIRES_EXACT_CURRENT_MAIN: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const active = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'staging-readiness.yml',
+              per_page: 100,
+            });
+            const conflicts = active.filter((run) => run.status !== 'completed');
+            if (conflicts.length > 0) {
+              core.setFailed(`STAGING_COMMAND_ACTIVE_RUN_CONFLICT:${conflicts.map((run) => run.id).join(',')}`);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'staging-readiness.yml',
+              ref: 'main',
+              inputs: {
+                sha: target,
+                action: 'deploy',
+                run_full_validation: 'true',
+                run_destructive_recovery_drill: 'false',
+              },
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1555,
+              body: [
+                'Trading Core release staging gate dispatched.',
+                '',
+                `- Exact main SHA: \`${target}\``,
+                '- Staging action: `deploy`',
+                '- Full validation: `true`',
+                '- Destructive recovery drill: `false`',
+                `- Runs: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/staging-readiness.yml`,
+              ].join('\n'),
+            });
+
   dispatch-approved-production-chain:
     name: Dispatch the single protected Production deploy + inline QA chain
     if: >-
