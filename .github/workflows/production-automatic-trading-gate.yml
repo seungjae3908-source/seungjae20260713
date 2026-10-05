@@ -7,6 +7,8 @@ on:
       - .github/workflows/production-automatic-trading-gate.yml
       - .github/scripts/production-trading-gate-conflicts.cjs
       - .github/scripts/production-trading-gate-conflicts.test.cjs
+      - .github/scripts/production-trading-gate-idempotency.cjs
+      - .github/scripts/production-trading-gate-idempotency.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -51,11 +53,66 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - run: |
+          node api-server/scripts/verify-production-automatic-trading-gate.mjs
+          node --test .github/scripts/production-trading-gate-idempotency.test.cjs
+
+  route-activate:
+    name: Deduplicate Production automatic activation command
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-production-auto-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      execute: ${{ steps.idempotency.outputs.execute }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Suppress already-applied exact state
+        id: idempotency
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/activate-production-auto-trading ([0-9a-f]{40}) all4$/u.exec(body);
+            if (!match) throw new Error('Expected /activate-production-auto-trading <40-char-current-main-sha> all4');
+            const { inspectProductionTradingGateCommandIdempotency } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/production-trading-gate-idempotency.cjs'
+            );
+            const result = await inspectProductionTradingGateCommandIdempotency({
+              github,
+              context,
+              targetSha: match[1],
+              marker: '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
+              desiredStatus: 'ACTIVATED_ALL4_AUTO',
+            });
+            core.setOutput('execute', result.duplicate ? 'false' : 'true');
+            core.notice(result.duplicate
+              ? 'PRODUCTION_AUTOMATIC_TRADING_IDEMPOTENT_NOOP'
+              : 'PRODUCTION_AUTOMATIC_TRADING_COMMAND_ACCEPTED');
 
   activate:
     name: Owner-approved four-market Production automatic-trading activation
+    needs: route-activate
     if: >-
+      needs.route-activate.result == 'success' &&
+      needs.route-activate.outputs.execute == 'true' &&
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.number == 1555 &&
@@ -538,9 +595,62 @@ jobs:
               ].join('\n'),
             });
 
+  route-disable:
+    name: Deduplicate Production automatic disable command
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/disable-production-auto-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      execute: ${{ steps.idempotency.outputs.execute }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Suppress already-applied exact state
+        id: idempotency
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/disable-production-auto-trading ([0-9a-f]{40})$/u.exec(body);
+            if (!match) throw new Error('Expected /disable-production-auto-trading <40-char-deployed-sha>');
+            const { inspectProductionTradingGateCommandIdempotency } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/production-trading-gate-idempotency.cjs'
+            );
+            const result = await inspectProductionTradingGateCommandIdempotency({
+              github,
+              context,
+              targetSha: match[1],
+              marker: '[PRODUCTION_AUTOMATIC_TRADING_GATE]',
+              desiredStatus: 'DISABLED_ALL4_MANUAL_LIVE_PRESERVED',
+            });
+            core.setOutput('execute', result.duplicate ? 'false' : 'true');
+            core.notice(result.duplicate
+              ? 'PRODUCTION_AUTOMATIC_TRADING_DISABLE_IDEMPOTENT_NOOP'
+              : 'PRODUCTION_AUTOMATIC_TRADING_DISABLE_COMMAND_ACCEPTED');
+
   disable:
     name: Owner-approved four-market automatic disable preserving manual live authority
+    needs: route-disable
     if: >-
+      needs.route-disable.result == 'success' &&
+      needs.route-disable.outputs.execute == 'true' &&
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.number == 1555 &&
