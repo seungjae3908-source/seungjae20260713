@@ -89,6 +89,9 @@ for (const [name, workflow] of Object.entries({ comprehensive, account, credenti
 
 requireText(command, '/run-production-postdeploy-qa <40-char-sha>', 'POSTDEPLOY_OWNER_COMMAND_MISSING');
 requireText(command, '/run-production-trading-core-release <40-char-sha>', 'TRADING_CORE_OWNER_COMMAND_MISSING');
+requireText(command, '/run-staging-trading-core <40-char-sha>', 'TRADING_CORE_STAGING_COMMAND_MISSING');
+requireText(command, "workflow_id: 'staging-readiness.yml'", 'TRADING_CORE_STAGING_DISPATCH_MISSING');
+requireText(command, "run_full_validation: 'true'", 'TRADING_CORE_STAGING_FULL_VALIDATION_MISSING');
 requireText(command, "qa_scope: qaScope", 'TRADING_CORE_OWNER_COMMAND_SCOPE_MISSING');
 requireText(deploy, 'qa_scope:', 'PRODUCTION_QA_SCOPE_INPUT_MISSING');
 requireText(deploy, "inputs.qa_scope == 'trading_core'", 'TRADING_CORE_INLINE_QA_CONDITION_MISSING');
@@ -146,5 +149,6 @@ console.log(JSON.stringify({
   runtimeEnvironmentAndSecretMutationRemoved: true,
   ownerCommand: '/run-production-postdeploy-qa <40-char-sha>',
   tradingCoreOwnerCommand: '/run-production-trading-core-release <40-char-sha>',
+  tradingCoreStagingCommand: '/run-staging-trading-core <40-char-sha>',
   recommendationsFallbackBudgetMs: 5000,
 }));
