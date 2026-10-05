@@ -43,8 +43,16 @@ export type CanonicalExecutionLedgerEntry = Readonly<{
   cancellationIntent: boolean;
   submissionAttemptId: string | null;
   submissionStartedAt: string | null;
+  orderedAt: string;
+  updatedAt: string;
+  latestEventAt: string | null;
   latestEventReason: string | null;
   latestEventState: TradingOrderState | null;
+  lastErrorCode: string | null;
+  retryCount: number;
+  nextRetryAt: string | null;
+  protectionStatus: TradingOrder['protectionStatus'];
+  protectionErrorCode: string | null;
   eventCount: number;
   integrityBlockers: readonly string[];
   canonicalSource: 'trade_orders+trade_order_events+trade_order_plans';
@@ -188,8 +196,16 @@ export class TradeExecutionLedgerProjectionService {
         cancellationIntent,
         submissionAttemptId: order.submissionAttemptId ?? null,
         submissionStartedAt: order.submissionStartedAt ?? null,
+        orderedAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        latestEventAt: latest?.createdAt ?? null,
         latestEventReason: latest?.reason ?? null,
         latestEventState: latest?.toState ?? null,
+        lastErrorCode: order.lastErrorCode ?? null,
+        retryCount: order.retryCount,
+        nextRetryAt: order.nextRetryAt ?? null,
+        protectionStatus: order.protectionStatus,
+        protectionErrorCode: order.protectionErrorCode ?? null,
         eventCount: chain.length,
         integrityBlockers: Object.freeze(integrityBlockers(
           order,
