@@ -9,6 +9,9 @@ on:
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+      - stock-analyzer/playwright.production-account-readonly.config.ts
+      - ops/production-live-disable-readonly-audit.sh
+      - ops/verify-production-live-disable-readonly-audit.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/trade-execution.service.ts
@@ -50,7 +53,7 @@ jobs:
           workflow=.github/workflows/production-live-trading-gate.yml
           grep -Fq "/activate-production-live-trading " "$workflow"
           grep -Fq "/disable-production-live-trading " "$workflow"
-          grep -Fq "CONFIRM_NO_OPEN_LIVE_ORDERS" "$workflow"
+          grep -Fq "SAFE_READONLY_AUDIT_REQUIRED" "$workflow"
           grep -Fq "environment: production" "$workflow"
           grep -Fq "ORDER_EXECUTION_ENABLED: 'true'" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_APPROVED: 'true'" "$workflow"
@@ -80,6 +83,8 @@ jobs:
           grep -Fq "const disableTradingGates = () =>" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED" "$workflow"
+          bash -n ops/production-live-disable-readonly-audit.sh
+          node ops/verify-production-live-disable-readonly-audit.mjs --static
           ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
@@ -812,7 +817,7 @@ jobs:
             });
 
   disable:
-    name: Owner-approved Production live-trading gate disable
+    name: Owner-approved safe Production live-trading recovery disable
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
@@ -824,18 +829,29 @@ jobs:
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/disable-production-live-trading ')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     environment: production
     permissions:
+      actions: read
       contents: read
       issues: write
-    env:
-      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-      SSH_USER: ${{ secrets.PROD_SSH_USER }}
-      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      statuses: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
       - name: Parse exact owner disable command
         id: command
         shell: bash
@@ -846,12 +862,114 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/disable-production-live-trading ([0-9a-f]{40}) CONFIRM_NO_OPEN_LIVE_ORDERS$/u.exec(body);
-          if (!match) throw new Error('Expected /disable-production-live-trading <40-char-deployed-sha> CONFIRM_NO_OPEN_LIVE_ORDERS');
+          const match = /^\/disable-production-live-trading ([0-9a-f]{40}) SAFE_READONLY_AUDIT_REQUIRED$/u.exec(body);
+          if (!match) throw new Error('Expected /disable-production-live-trading <40-char-deployed-sha> SAFE_READONLY_AUDIT_REQUIRED');
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
           NODE
 
+      - name: Resolve exact successful Production deploy and gate-conflict state
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = String(process.env.TARGET_SHA || '');
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              branch: 'main',
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const production = runs
+              .filter((run) => run.name === 'Production Deploy'
+                && run.path === '.github/workflows/production-deploy.yml'
+                && run.head_sha === target
+                && run.head_branch === 'main'
+                && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.updated_at || b.created_at) - Date.parse(a.updated_at || a.created_at))[0];
+            if (!production) {
+              core.setFailed('LIVE_DISABLE_EXACT_SUCCESSFUL_PRODUCTION_DEPLOY_REQUIRED:' + target);
+              return;
+            }
+            const workflowIds = [
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-automatic-trading-gate.yml',
+              'production-account-readonly-provider-activation.yml',
+              'production-deploy.yml',
+            ];
+            const activeStatuses = new Set(['requested', 'queued', 'pending', 'waiting', 'in_progress']);
+            const active = [];
+            for (const workflow_id of workflowIds) {
+              const candidates = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id, per_page: 30,
+              });
+              for (const run of candidates) {
+                if (run.id !== context.runId && activeStatuses.has(run.status)) active.push(run.id);
+              }
+            }
+            if (active.length > 0) {
+              core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + active.join(','));
+              return;
+            }
+            core.setOutput('deploy_run_id', String(production.id));
+
+      - name: Require exact public Production identity before audit
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          health="$RUNNER_TEMP/live-disable-health.json"
+          curl --fail --silent --show-error --max-time 15 https://lsj119.com/api/health -o "$health"
+          node - "$health" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, target] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (value?.ok !== true || value?.deploySha !== target || value?.processDeploySha !== target
+            || value?.deployMarkerSha !== target || value?.identityMatch !== true) {
+            throw new Error('LIVE_DISABLE_PRODUCTION_IDENTITY_MISMATCH');
+          }
+          NODE
+
+      - name: Install isolated read-only QA runtime
+        run: |
+          set -Eeuo pipefail
+          pnpm install --frozen-lockfile
+          cd stock-analyzer
+          pnpm exec playwright install chromium
+
+      - name: Fresh four-provider pre-disable read-only audit
+        env:
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_ACCOUNT_READONLY_LIVE_QA: 'true'
+          PRODUCTION_LIVE_DISABLE_READONLY_AUDIT: 'true'
+          PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-live-disable-pre-artifacts
+          PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: bitget,kiwoom,toss,upbit
+          EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::$PRODUCTION_QA_LOGIN"
+          echo "::add-mask::$PRODUCTION_QA_PASSWORD"
+          cd stock-analyzer
+          pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+          node ../ops/verify-production-live-disable-readonly-audit.mjs \
+            --provider-artifact production-live-disable-pre-artifacts/production-account-readonly-live-qa.json
+
       - name: Configure protected Production SSH
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -867,15 +985,84 @@ jobs:
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
 
-      - name: Disable every Production live-trading authority gate
+      - name: Require global internal-order and worker idle evidence before any disable
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p recovery-disable-evidence
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'LIVE_DISABLE_PROTECTED_DATABASE_CREDENTIAL_MISSING' >&2
+            exit 1
+          }
+          audit_script_b64="$(base64 -w0 ops/production-live-disable-readonly-audit.sh)"
+          quoted_script="$(printf '%q' "$audit_script_b64")"
+          quoted_sha="$(printf '%q' "$TARGET_SHA")"
+          remote_command="PM2_NAME=stock-app TARGET_SHA=$quoted_sha AUDIT_SCRIPT_B64=$quoted_script bash -c 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; printf \"%s\" \"\$AUDIT_SCRIPT_B64\" | base64 -d | bash'"
+          set +e
+          printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+            -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            > recovery-disable-evidence/runtime-pre-disable.json \
+            2> "$RUNNER_TEMP/live-disable-audit.stderr"
+          audit_status=$?
+          set -e
+          test -s recovery-disable-evidence/runtime-pre-disable.json
+          node ops/verify-production-live-disable-readonly-audit.mjs \
+            --artifact recovery-disable-evidence/runtime-pre-disable.json
+          if (( audit_status != 0 )); then
+            node - recovery-disable-evidence/runtime-pre-disable.json <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          console.error('BLOCKED_LIVE_STATE_NOT_TERMINAL');
+          console.error('code=' + String(value.code ?? 'UNKNOWN'));
+          console.error('sanitizedBlockers=' + JSON.stringify(value.sanitizedBlockers ?? []));
+          NODE
+            exit "$audit_status"
+          fi
+
+      - name: Recheck no competing gate immediately before disable
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowIds = [
+              'production-live-trading-gate.yml',
+              'production-futures-live-trading-gate.yml',
+              'production-automatic-trading-gate.yml',
+              'production-account-readonly-provider-activation.yml',
+              'production-deploy.yml',
+            ];
+            const activeStatuses = new Set(['requested', 'queued', 'pending', 'waiting', 'in_progress']);
+            const active = [];
+            for (const workflow_id of workflowIds) {
+              const candidates = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner, repo: context.repo.repo, workflow_id, per_page: 30,
+              });
+              for (const run of candidates) {
+                if (run.id !== context.runId && activeStatuses.has(run.status)) active.push(run.id);
+              }
+            }
+            if (active.length > 0) core.setFailed('PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE:' + active.join(','));
+
+      - name: Disable in safe order: automatic, futures, spot, background worker
         shell: bash
         env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
           TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" \
+            > recovery-disable-evidence/runtime-final.json <<'NODE'
           import { execFileSync } from 'node:child_process';
           import { readFileSync, existsSync } from 'node:fs';
           const target = String(process.env.TARGET_SHA ?? '');
@@ -885,77 +1072,139 @@ jobs:
             || readFileSync(markerPath, 'utf8').trim() !== target) {
             throw new Error('LIVE_TRADING_DISABLE_DEPLOYED_SHA_MISMATCH');
           }
-          const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
-          const matches = rows.filter((row) => row?.name === 'stock-app');
-          if (matches.length !== 1 || matches[0]?.pm2_env?.DEPLOY_SHA !== target) {
-            throw new Error('LIVE_TRADING_DISABLE_RUNTIME_IDENTITY_INVALID');
-          }
-          execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
-            env: {
-              ...process.env,
-              LIVE_TRADING: 'false',
-              AUTO_TRADING: 'false',
-              REAL_ORDER_ENABLED: 'false',
-              PRIVATE_TRADING_API_ALLOWED: 'false',
-              ORDER_EXECUTION_ENABLED: 'false',
-              LIVE_TRADING_ACTIVATION_APPROVED: 'false',
-              SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
-              FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
-              LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
-              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
-              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
-              CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
-              CRYPTO_AUTO_TRADE_ENABLED: 'false',
-              BITGET_AUTO_TRADE_ENABLED: 'false',
-              SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
-              SPOT_LIVE_MARKET_ALLOWLIST: '',
-              FUTURES_LIVE_CAPABILITY_ALLOWLIST: '',
-              FUTURES_LIVE_MARKET_ALLOWLIST: '',
-              FUTURES_LIVE_MAX_LEVERAGE: '',
-              FUTURES_LIVE_MARGIN_MODE: '',
-              BITGET_LIVE_ORDER_ENABLED: 'false',
-              BITGET_FUTURES_LIVE_ORDER_ENABLED: 'false',
-              UPBIT_LIVE_ORDER_ENABLED: 'false',
-              KIWOOM_LIVE_ORDER_ENABLED: 'false',
-              TOSS_LIVE_ORDER_ENABLED: 'false',
-              executionAuthority: 'NONE',
-              FUTURES_LIVE_EXECUTION_AUTHORITY: 'NONE',
-              DEPLOY_SHA: target,
-            },
-            stdio: ['ignore', 'ignore', 'pipe'],
-          });
-          execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
-
-          const postRows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
-          const postMatches = postRows.filter((row) => row?.name === 'stock-app');
-          const postEnv = postMatches.length === 1 ? postMatches[0]?.pm2_env : null;
-          if (!postEnv || postEnv.status !== 'online' || postEnv.DEPLOY_SHA !== target) {
-            throw new Error('LIVE_TRADING_DISABLE_POST_RUNTIME_INVALID');
-          }
-          const flag = (key) => {
-            const value = postEnv[key];
+          const readRuntime = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === 'stock-app');
+            if (matches.length !== 1 || matches[0]?.pm2_env?.status !== 'online'
+              || matches[0]?.pm2_env?.DEPLOY_SHA !== target) {
+              throw new Error('LIVE_TRADING_DISABLE_RUNTIME_IDENTITY_INVALID');
+            }
+            return matches[0].pm2_env;
+          };
+          const flag = (env, key) => {
+            const value = env[key];
             if (value === undefined || value === false || value === 'false') return false;
             if (value === true || value === 'true') return true;
             throw new Error(`LIVE_TRADING_DISABLE_FLAG_MALFORMED:${key}`);
           };
+          const spotState = (env) => ({
+            live: flag(env, 'LIVE_TRADING'),
+            real: flag(env, 'REAL_ORDER_ENABLED'),
+            privateApi: flag(env, 'PRIVATE_TRADING_API_ALLOWED'),
+            orderExecution: flag(env, 'ORDER_EXECUTION_ENABLED'),
+            activationApproved: flag(env, 'LIVE_TRADING_ACTIVATION_APPROVED'),
+            spotApproved: flag(env, 'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED'),
+            bitget: flag(env, 'BITGET_LIVE_ORDER_ENABLED'),
+            upbit: flag(env, 'UPBIT_LIVE_ORDER_ENABLED'),
+            kiwoom: flag(env, 'KIWOOM_LIVE_ORDER_ENABLED'),
+            toss: flag(env, 'TOSS_LIVE_ORDER_ENABLED'),
+            capabilityAllowlist: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            marketAllowlist: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
+            authority: String(env.executionAuthority ?? 'NONE').toUpperCase(),
+          });
+          const restartPhase = (updates) => {
+            execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+              env: { ...process.env, ...updates, DEPLOY_SHA: target },
+              stdio: ['ignore', 'ignore', 'pipe'],
+            });
+            execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+            return readRuntime();
+          };
+
+          const pre = readRuntime();
+          if (flag(pre, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || flag(pre, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')) {
+            throw new Error('BLOCKED_LIVE_STATE_NOT_TERMINAL:worker/background-enabled');
+          }
+
+          // 1. ALL4 automatic execution OFF. Manual spot/futures authority is preserved.
+          const preservedSpot = spotState(pre);
+          let state = restartPhase({
+            AUTO_TRADING: 'false',
+            LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+            MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+            MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+            CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
+            CRYPTO_AUTO_TRADE_ENABLED: 'false',
+            BITGET_AUTO_TRADE_ENABLED: 'false',
+          });
+          for (const key of [
+            'AUTO_TRADING', 'LIVE_AUTOMATIC_TRADING_ENABLED',
+            'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED', 'CRYPTO_AUTO_TRADE_ENABLED', 'BITGET_AUTO_TRADE_ENABLED',
+          ]) if (flag(state, key)) throw new Error(`LIVE_DISABLE_AUTOMATIC_PHASE_FAILED:${key}`);
+          if (JSON.stringify(spotState(state)) !== JSON.stringify(preservedSpot)) {
+            throw new Error('LIVE_DISABLE_AUTOMATIC_PHASE_CHANGED_SPOT_AUTHORITY');
+          }
+
+          // 2. Futures automatic/live execution OFF.
+          state = restartPhase({
+            FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
+            BITGET_FUTURES_LIVE_ORDER_ENABLED: 'false',
+            FUTURES_LIVE_EXECUTION_AUTHORITY: 'NONE',
+            FUTURES_LIVE_CAPABILITY_ALLOWLIST: '',
+            FUTURES_LIVE_MARKET_ALLOWLIST: '',
+            FUTURES_LIVE_MAX_LEVERAGE: '',
+            FUTURES_LIVE_MARGIN_MODE: '',
+          });
+          if (flag(state, 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED')
+            || flag(state, 'BITGET_FUTURES_LIVE_ORDER_ENABLED')
+            || String(state.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE').toUpperCase() !== 'NONE'
+            || String(state.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? '')
+            || String(state.FUTURES_LIVE_MARKET_ALLOWLIST ?? '')
+            || String(state.FUTURES_LIVE_MAX_LEVERAGE ?? '')
+            || String(state.FUTURES_LIVE_MARGIN_MODE ?? '')) {
+            throw new Error('LIVE_DISABLE_FUTURES_PHASE_FAILED');
+          }
+
+          // 3. Spot live execution OFF.
+          state = restartPhase({
+            LIVE_TRADING: 'false',
+            REAL_ORDER_ENABLED: 'false',
+            PRIVATE_TRADING_API_ALLOWED: 'false',
+            ORDER_EXECUTION_ENABLED: 'false',
+            LIVE_TRADING_ACTIVATION_APPROVED: 'false',
+            SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: 'false',
+            SPOT_LIVE_CAPABILITY_ALLOWLIST: '',
+            SPOT_LIVE_MARKET_ALLOWLIST: '',
+            BITGET_LIVE_ORDER_ENABLED: 'false',
+            UPBIT_LIVE_ORDER_ENABLED: 'false',
+            KIWOOM_LIVE_ORDER_ENABLED: 'false',
+            TOSS_LIVE_ORDER_ENABLED: 'false',
+            executionAuthority: 'NONE',
+          });
+
+          // 4. Background live worker OFF (idempotent final fence).
+          state = restartPhase({
+            AUTO_TRADING: 'false',
+            LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+            MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+            MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+            CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
+            CRYPTO_AUTO_TRADE_ENABLED: 'false',
+            BITGET_AUTO_TRADE_ENABLED: 'false',
+          });
+
           for (const key of [
             'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
             'ORDER_EXECUTION_ENABLED', 'LIVE_TRADING_ACTIVATION_APPROVED', 'LIVE_AUTOMATIC_TRADING_ENABLED',
             'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED', 'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED',
+            'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED', 'CRYPTO_AUTO_TRADE_ENABLED', 'BITGET_AUTO_TRADE_ENABLED',
             'BITGET_LIVE_ORDER_ENABLED', 'BITGET_FUTURES_LIVE_ORDER_ENABLED', 'UPBIT_LIVE_ORDER_ENABLED', 'KIWOOM_LIVE_ORDER_ENABLED', 'TOSS_LIVE_ORDER_ENABLED',
           ]) {
-            if (flag(key)) throw new Error(`LIVE_TRADING_DISABLE_FLAG_STILL_ENABLED:${key}`);
+            if (flag(state, key)) throw new Error(`LIVE_TRADING_DISABLE_FLAG_STILL_ENABLED:${key}`);
           }
-          if (String(postEnv.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE'
-            || String(postEnv.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE').toUpperCase() !== 'NONE') {
+          if (String(state.executionAuthority ?? 'NONE').toUpperCase() !== 'NONE'
+            || String(state.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE').toUpperCase() !== 'NONE') {
             throw new Error('LIVE_TRADING_DISABLE_AUTHORITY_STILL_ENABLED');
           }
-          if (String(postEnv.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? '')
-            || String(postEnv.SPOT_LIVE_MARKET_ALLOWLIST ?? '')
-            || String(postEnv.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? '')
-            || String(postEnv.FUTURES_LIVE_MARKET_ALLOWLIST ?? '')
-            || String(postEnv.FUTURES_LIVE_MAX_LEVERAGE ?? '')
-            || String(postEnv.FUTURES_LIVE_MARGIN_MODE ?? '')) {
+          if (String(state.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? '')
+            || String(state.SPOT_LIVE_MARKET_ALLOWLIST ?? '')
+            || String(state.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? '')
+            || String(state.FUTURES_LIVE_MARKET_ALLOWLIST ?? '')
+            || String(state.FUTURES_LIVE_MAX_LEVERAGE ?? '')
+            || String(state.FUTURES_LIVE_MARGIN_MODE ?? '')) {
             throw new Error('LIVE_TRADING_DISABLE_ALLOWLIST_STILL_ENABLED');
           }
 
@@ -978,12 +1227,59 @@ jobs:
           if (!healthOk) throw new Error('LIVE_TRADING_DISABLE_HEALTH_INVALID');
 
           process.stdout.write(JSON.stringify({
+            schemaVersion: 'production-live-disable-runtime-final-v1',
             status: 'DISABLED',
             targetSha: target,
             executionAuthority: 'NONE',
+            futuresExecutionAuthority: 'NONE',
+            orders: 0,
+            cancels: 0,
+            amends: 0,
+            transfers: 0,
+            withdrawals: 0,
             realOrderSubmitted: false,
+            liveTradingAuthorityGranted: false,
+            autoTradingAuthorityGranted: false,
           }));
           NODE
+
+      - name: Destroy protected SSH key before post-disable QA
+        if: always()
+        shell: bash
+        run: rm -f -- ~/.ssh/id_ed25519
+
+      - name: Post-disable four-provider read-only audit
+        env:
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_ACCOUNT_READONLY_LIVE_QA: 'true'
+          PRODUCTION_LIVE_DISABLE_READONLY_AUDIT: 'true'
+          PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-live-disable-post-artifacts
+          PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: bitget,kiwoom,toss,upbit
+          EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::$PRODUCTION_QA_LOGIN"
+          echo "::add-mask::$PRODUCTION_QA_PASSWORD"
+          cd stock-analyzer
+          pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+          node ../ops/verify-production-live-disable-readonly-audit.mjs \
+            --provider-artifact production-live-disable-post-artifacts/production-account-readonly-live-qa.json
+
+      - name: Upload sanitized safe-disable evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-safe-disable-${{ steps.command.outputs.sha }}-${{ github.run_id }}
+          path: |
+            recovery-disable-evidence/runtime-pre-disable.json
+            recovery-disable-evidence/runtime-final.json
+            stock-analyzer/production-live-disable-pre-artifacts/production-account-readonly-live-qa.json
+            stock-analyzer/production-live-disable-post-artifacts/production-account-readonly-live-qa.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Record sanitized live-trading disable receipt
         uses: actions/github-script@v7
@@ -998,8 +1294,10 @@ jobs:
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
                 'status: DISABLED',
-                'owner_attestation: CONFIRM_NO_OPEN_LIVE_ORDERS',
+                'safety_contract: SAFE_READONLY_AUDIT_REQUIRED',
                 `target_sha: ${process.env.TARGET_SHA}`,
+                `production_deploy_run: ${{ steps.production.outputs.deploy_run_id }}`,
+                `safe_disable_artifact: production-live-safe-disable-${process.env.TARGET_SHA}-${context.runId}`,
                 'LIVE_TRADING=false',
                 'AUTO_TRADING=false',
                 'REAL_ORDER_ENABLED=false',
@@ -1011,10 +1309,59 @@ jobs:
                 'LIVE_AUTOMATIC_TRADING_ENABLED=false',
                 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false',
                 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false',
+                'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false',
+                'CRYPTO_AUTO_TRADE_ENABLED=false',
+                'BITGET_AUTO_TRADE_ENABLED=false',
                 'SPOT_LIVE_CAPABILITY_ALLOWLIST=',
                 'SPOT_LIVE_MARKET_ALLOWLIST=',
                 'executionAuthority=NONE',
+                'orders=0',
+                'cancels=0',
+                'amends=0',
+                'transfers=0',
+                'withdrawals=0',
                 'REAL_ORDER_SUBMITTED=false',
+                `workflow_run: ${context.runId}`,
+              ].join('\n'),
+            });
+
+      - name: Record sanitized blocked recovery evidence
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const candidates = [
+              'recovery-disable-evidence/runtime-pre-disable.json',
+              'stock-analyzer/production-live-disable-pre-artifacts/production-account-readonly-live-qa.json',
+              'stock-analyzer/production-live-disable-post-artifacts/production-account-readonly-live-qa.json',
+            ];
+            const blockers = [];
+            for (const file of candidates) {
+              if (!fs.existsSync(file)) continue;
+              try {
+                const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+                for (const item of value.sanitizedBlockers || []) {
+                  if (item && typeof item === 'object') blockers.push({
+                    provider: String(item.provider || 'unknown').slice(0, 16),
+                    symbol: String(item.symbol || 'REDACTED').slice(0, 32),
+                    state: String(item.state || 'UNKNOWN').slice(0, 64),
+                  });
+                }
+              } catch {}
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1555,
+              body: [
+                '[PRODUCTION_LIVE_TRADING_GATE]',
+                'status: BLOCKED_LIVE_STATE_NOT_TERMINAL',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `sanitized_blockers: ${JSON.stringify(blockers.slice(0, 50))}`,
+                'orders/cancels/amends/transfers/withdrawals performed by recovery: 0/0/0/0/0',
                 `workflow_run: ${context.runId}`,
               ].join('\n'),
             });
