@@ -466,6 +466,83 @@ const defaultProviders: CryptoScannerProviders = {
     const unit = rows[0]?.orderbook_units?.[0];
     return { bid: finite(unit?.bid_price), ask: finite(unit?.ask_price) };
   },
+  async getOrderFlow(market, ticker, signal) {
+    const nowMs = Date.now();
+    if (market === 'spot') {
+      const marketCode = `KRW-${ticker.symbol}`;
+      const [trades, books] = await Promise.all([
+        fetchJson<UpbitTradeTickRow[]>(
+          `${UPBIT_BASE}/v1/trades/ticks?market=${encodeURIComponent(marketCode)}&count=200`,
+          signal,
+        ),
+        fetchJson<UpbitOrderbookRow[]>(
+          `${UPBIT_BASE}/v1/orderbook?markets=${encodeURIComponent(marketCode)}&count=15`,
+          signal,
+        ),
+      ]);
+      const normalized = trades.flatMap((row) => {
+        const size = finite(row.trade_volume);
+        const ts = finite(row.timestamp);
+        const side = text(row.ask_bid).toUpperCase() === 'BID' ? 'buy'
+          : text(row.ask_bid).toUpperCase() === 'ASK' ? 'sell' : '';
+        return size != null && size > 0 && ts != null && ts > 0 && side
+          ? [{ side, size, ts }]
+          : [];
+      });
+      const flow = signedFlow(normalized);
+      const units = books[0]?.orderbook_units ?? [];
+      const bidDepth = units.reduce((sum, unit) => sum + Math.max(0, finite(unit.bid_size) ?? 0), 0);
+      const askDepth = units.reduce((sum, unit) => sum + Math.max(0, finite(unit.ask_size) ?? 0), 0);
+      const totalDepth = bidDepth + askDepth;
+      const bookTs = finite((books[0] as Record<string, unknown> | undefined)?.timestamp) ?? nowMs;
+      return Object.freeze({
+        observedAtMs: Math.min(nowMs, bookTs),
+        ...flow,
+        bidDepth,
+        askDepth,
+        orderbookImbalance: totalDepth > 0 ? (bidDepth - askDepth) / totalDepth : 0,
+        openInterestChangePercent: null,
+        provenance: 'upbit-public-trades+orderbook',
+      });
+    }
+    const [fills, depth] = await Promise.all([
+      fetchJson<BitgetEnvelope<BitgetPublicFillRow[]>>(
+        `${BITGET_BASE}/api/v2/mix/market/fills?symbol=${encodeURIComponent(ticker.symbol)}&productType=${BITGET_PRODUCT_TYPE}&limit=100`,
+        signal,
+      ),
+      fetchJson<BitgetEnvelope<BitgetDepthRow>>(
+        `${BITGET_BASE}/api/v2/mix/market/merge-depth?symbol=${encodeURIComponent(ticker.symbol)}&productType=${BITGET_PRODUCT_TYPE}&precision=scale0&limit=15`,
+        signal,
+      ),
+    ]);
+    if (text(fills.code) !== '00000' || !Array.isArray(fills.data)
+      || text(depth.code) !== '00000' || !depth.data) {
+      throw new Error('BITGET_PUBLIC_FLOW_UNAVAILABLE');
+    }
+    const normalized = fills.data.flatMap((row) => {
+      const size = finite(row.size);
+      const ts = finite(row.ts);
+      const rawSide = text(row.side).toLowerCase();
+      const side = rawSide === 'buy' ? 'buy' : rawSide === 'sell' ? 'sell' : '';
+      return size != null && size > 0 && ts != null && ts > 0 && side
+        ? [{ side, size, ts }]
+        : [];
+    });
+    const flow = signedFlow(normalized);
+    const bidDepth = depthQuantity(depth.data.bids);
+    const askDepth = depthQuantity(depth.data.asks);
+    const totalDepth = bidDepth + askDepth;
+    const depthTs = finite(depth.data.ts) ?? nowMs;
+    return Object.freeze({
+      observedAtMs: Math.min(nowMs, depthTs),
+      ...flow,
+      bidDepth,
+      askDepth,
+      orderbookImbalance: totalDepth > 0 ? (bidDepth - askDepth) / totalDepth : 0,
+      openInterestChangePercent: openInterestChange(ticker.symbol, ticker.openInterest, nowMs),
+      provenance: 'bitget-public-fills+merge-depth+ticker-open-interest',
+    });
+  },
   now: Date.now,
 };
 
