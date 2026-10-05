@@ -110,10 +110,10 @@ export function providerDiagnostic(
   else if (snapshot?.liveTradingEnabled !== false || snapshot?.autoTradingEnabled !== false) {
     diagnosticClassification = 'QA_AUTHORITY_NOT_FALSE';
   } else if (!configured) diagnosticClassification = 'NOT_CONFIGURED';
+  else if (errorCode !== null) diagnosticClassification = `ERROR_${errorCode}`;
   else if (!connected) diagnosticClassification = 'NOT_CONNECTED';
   else if (status !== 'CONNECTED') diagnosticClassification = `STATUS_${status}`;
   else if (stale !== false) diagnosticClassification = 'STALE_SNAPSHOT';
-  else if (errorCode !== null) diagnosticClassification = `ERROR_${errorCode}`;
   else if (!openOrdersIsArray) diagnosticClassification = 'OPEN_ORDERS_UNKNOWN';
   else if (!lastVerifiedAtPresent) diagnosticClassification = 'LAST_VERIFIED_AT_MISSING';
 
