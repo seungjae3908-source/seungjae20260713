@@ -17,6 +17,7 @@ on:
       - stock-analyzer/playwright.production-account-readonly.config.ts
       - stock-analyzer/playwright.production-live-disable-readonly.config.ts
       - ops/production-live-disable-readonly-audit.sh
+      - ops/production-toss-fresh-readonly-probe.mjs
       - ops/verify-production-live-disable-readonly-audit.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
@@ -90,7 +91,11 @@ jobs:
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_ROLLED_BACK" "$workflow"
           grep -Fq "LIVE_TRADING_ACTIVATION_FAILED_AND_ROLLBACK_FAILED" "$workflow"
           bash -n ops/production-live-disable-readonly-audit.sh
+          node --check ops/production-toss-fresh-readonly-probe.mjs
           node ops/verify-production-live-disable-readonly-audit.mjs --static
+          grep -Fq 'production-toss-fresh-readonly-probe.mjs' "$workflow"
+          grep -Fq 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS_TOKEN_AUTH_FAILED' ops/production-toss-fresh-readonly-probe.mjs
+          grep -Fq 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS_ACCOUNT_API_AUTH_FAILED' ops/production-toss-fresh-readonly-probe.mjs
           ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
           ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
@@ -950,6 +955,8 @@ jobs:
           pnpm exec playwright install chromium
 
       - name: Fresh four-provider pre-disable read-only audit
+        id: provider_audit
+        continue-on-error: true
         env:
           PRODUCTION_BASE_URL: https://lsj119.com
           PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
@@ -991,6 +998,146 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
+
+      - name: Resolve Toss-only pre-disable failure with fresh-process probe
+        id: toss_fresh_probe
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PROVIDER_AUDIT_OUTCOME: ${{ steps.provider_audit.outcome }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p recovery-disable-evidence
+          provider_artifact="stock-analyzer/production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json"
+          test -s "$provider_artifact"
+
+          if [[ "$PROVIDER_AUDIT_OUTCOME" == "success" ]]; then
+            node ops/verify-production-live-disable-readonly-audit.mjs --provider-artifact "$provider_artifact"
+            exit 0
+          fi
+
+          qa_user_scope_hash="$(node - "$provider_artifact" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, target] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const providers = Array.isArray(value?.providers) ? value.providers : [];
+          const toss = providers.find((row) => row?.provider === 'toss');
+          const others = providers.filter((row) => row?.provider !== 'toss');
+          const allowedTossErrors = new Set([
+            'TOSS_AUTH_FAILED',
+            'TOSS_TOKEN_AUTH_FAILED',
+            'TOSS_ACCOUNT_API_AUTH_FAILED',
+          ]);
+          const zeroMutation = value?.ordersMutationRequests === 0
+            && value?.cancelRequests === 0
+            && value?.amendRequests === 0
+            && value?.transferRequests === 0
+            && value?.withdrawalRequests === 0
+            && value?.realOrderSubmitted === false;
+          const tossOnlyStatus = value?.status === 'BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE:toss'
+            || value?.status === 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS';
+          const othersHealthy = others.length === 3 && others.every((row) =>
+            row?.responseReceived === true
+            && row?.httpStatus === 200
+            && row?.configured === true
+            && row?.verified === true
+            && row?.connected === true
+            && row?.status === 'CONNECTED'
+            && row?.stale === false
+            && row?.errorCode === null
+            && row?.openOrdersKnown === true
+            && row?.lastVerifiedAtPresent === true
+            && row?.diagnosticClassification === 'PASS');
+          if (value?.schemaVersion !== 'production-live-disable-provider-readonly-audit-v2'
+            || value?.targetSha !== target
+            || !tossOnlyStatus
+            || !toss
+            || !allowedTossErrors.has(String(toss.errorCode ?? ''))
+            || !othersHealthy
+            || !zeroMutation
+            || value?.liveTradingAuthorityGranted !== false
+            || value?.autoTradingAuthorityGranted !== false
+            || !/^[0-9a-f]{32}$/u.test(String(value?.qaUserScopeHash ?? ''))) {
+            throw new Error('LIVE_DISABLE_TOSS_FALLBACK_PRECONDITION_REJECTED');
+          }
+          process.stdout.write(String(value.qaUserScopeHash));
+          NODE
+          )"
+
+          [[ "$qa_user_scope_hash" =~ ^[0-9a-f]{32}$ ]] || {
+            echo 'LIVE_DISABLE_TOSS_FALLBACK_USER_SCOPE_INVALID' >&2
+            exit 1
+          }
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
+            echo 'LIVE_DISABLE_PROTECTED_DATABASE_CREDENTIAL_MISSING' >&2
+            exit 1
+          }
+
+          probe_b64="$(base64 -w0 ops/production-toss-fresh-readonly-probe.mjs)"
+          quoted_probe="$(printf '%q' "$probe_b64")"
+          quoted_sha="$(printf '%q' "$TARGET_SHA")"
+          quoted_hash="$(printf '%q' "$qa_user_scope_hash")"
+          remote_command="PM2_NAME=stock-app TARGET_SHA=$quoted_sha QA_USER_SCOPE_HASH=$quoted_hash PROBE_B64=$quoted_probe bash -c 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; printf \"%s\" \"\$PROBE_B64\" | base64 -d | node --input-type=module'"
+
+          set +e
+          printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+            -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            > recovery-disable-evidence/toss-fresh-readonly-probe.json \
+            2> "$RUNNER_TEMP/toss-fresh-readonly-probe.stderr"
+          probe_status=$?
+          set -e
+
+          test -s recovery-disable-evidence/toss-fresh-readonly-probe.json || {
+            echo 'LIVE_DISABLE_TOSS_FRESH_PROBE_NO_EVIDENCE' >&2
+            exit 1
+          }
+          node - recovery-disable-evidence/toss-fresh-readonly-probe.json "$probe_status" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, rawExit, target] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const exitCode = Number(rawExit);
+          const zeroMutation = value?.mutationRequests?.orders === 0
+            && value?.mutationRequests?.cancels === 0
+            && value?.mutationRequests?.amends === 0
+            && value?.mutationRequests?.transfers === 0
+            && value?.mutationRequests?.withdrawals === 0
+            && value?.realOrderSubmitted === false;
+          if (value?.schemaVersion !== 'production-toss-fresh-readonly-probe-v1'
+            || value?.targetSha !== target
+            || value?.readOnlyEnforced !== true
+            || value?.rawSecretValuesExposed !== false
+            || value?.rawAccountValuesExposed !== false
+            || !zeroMutation
+            || value?.liveTradingAuthorityGranted !== false
+            || value?.autoTradingAuthorityGranted !== false) {
+            throw new Error('LIVE_DISABLE_TOSS_FRESH_PROBE_EVIDENCE_INVALID');
+          }
+          if (exitCode === 0) {
+            if (value.status !== 'PASS'
+              || value.openOrdersKnown !== true
+              || value.openOrderCount !== 0
+              || value.freshOAuthTokenIssued !== true) {
+              throw new Error('LIVE_DISABLE_TOSS_FRESH_PROBE_PASS_INVALID');
+            }
+            process.stdout.write('TOSS_FRESH_READONLY_PROBE_PASS\n');
+            process.exit(0);
+          }
+          const allowedBlocked = typeof value.status === 'string' && (
+            value.status.startsWith('BLOCKED_EXTERNAL_CREDENTIAL:TOSS')
+            || value.status === 'BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE:toss'
+            || value.status === 'BLOCKED_LIVE_STATE_NOT_TERMINAL'
+          );
+          if (!allowedBlocked) throw new Error('LIVE_DISABLE_TOSS_FRESH_PROBE_BLOCKED_STATUS_INVALID');
+          console.error('TOSS_FRESH_READONLY_PROBE_BLOCKED=' + value.status);
+          console.error('diagnosticClassification=' + String(value.diagnosticClassification ?? 'UNKNOWN'));
+          process.exit(1);
+          NODE
 
       - name: Require global internal-order and worker idle evidence before any disable
         env:
@@ -1284,6 +1431,7 @@ jobs:
           path: |
             recovery-disable-evidence/runtime-pre-disable.json
             recovery-disable-evidence/runtime-final.json
+            recovery-disable-evidence/toss-fresh-readonly-probe.json
             stock-analyzer/production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json
             stock-analyzer/production-live-disable-post-artifacts/production-live-disable-provider-readonly-audit.json
           if-no-files-found: warn
@@ -1345,6 +1493,7 @@ jobs:
               'recovery-disable-evidence/runtime-pre-disable.json',
               'stock-analyzer/production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json',
               'stock-analyzer/production-live-disable-post-artifacts/production-live-disable-provider-readonly-audit.json',
+              'recovery-disable-evidence/toss-fresh-readonly-probe.json',
             ];
             const blockers = [];
             let status = 'BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE:unknown';
@@ -1358,7 +1507,8 @@ jobs:
                 if (typeof value.status === 'string'
                   && value.status.startsWith('BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE')) {
                   status = value.status;
-                } else if (value.status === 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS') {
+                } else if (typeof value.status === 'string'
+                  && value.status.startsWith('BLOCKED_EXTERNAL_CREDENTIAL:TOSS')) {
                   status = value.status;
                 } else if (value.status === 'BLOCKED_LIVE_STATE_NOT_TERMINAL') {
                   status = value.status;
