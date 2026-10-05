@@ -12,10 +12,10 @@ jobs:
     name: Dispatch owner-approved exact-SHA Production comprehensive read-only QA
     if: >-
       github.event.action == 'created' &&
-      github.event.issue.number == 1555 &&
+      contains(github.event.issue.labels.*.name, 'release-control') &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      startsWith(github.event.issue.title, 'Staging Readiness Control') &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-production-comprehensive-readonly-qa ')
@@ -33,6 +33,21 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
+      - name: Require canonical current Release Control
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { assertCurrentReleaseControl } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/current-release-control.cjs'
+            );
+            const current = await assertCurrentReleaseControl({
+              github,
+              context,
+              issueNumber: Number(context.issue.number),
+              issueTitle: String(context.payload.issue?.title ?? ''),
+            });
+            core.info('Canonical Release Control #' + current.issueNumber + ' verified.');
 
       - name: Parse exact owner command
         id: command
@@ -176,7 +191,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 1555,
+              issue_number: context.issue.number,
               body: [
                 'Production Comprehensive Read-Only QA dispatched with protected Production QA credentials.',
                 '',
