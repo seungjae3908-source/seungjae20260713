@@ -105,7 +105,7 @@ test('registers six rule packs with four user-selected live strategies enabled',
   assert.equal(catalog.every((row) => row.pilotProfile.profitCompoundShare === 0.5), true);
   assert.equal(catalog.every((row) => row.pilotProfile.profitReserveShare === 0.5), true);
   assert.equal(catalog.every((row) => row.pilotProfile.riskPerTradePercentCeiling === 0.5), true);
-  assert.equal(catalog.every((row) => row.pilotProfile.futuresMaxLeverage === 3), true);
+  assert.equal(catalog.every((row) => row.pilotProfile.futuresMaxLeverage === 7), true);
   assert.equal(catalog.every((row) => row.pilotProfile.automaticLiveExecutionAllowed === true), true);
   assert.equal(catalog.filter((row) => row.automaticLivePromotionAllowed).length, 4);
 });
