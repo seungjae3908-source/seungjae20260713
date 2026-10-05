@@ -7,6 +7,11 @@ import {
   scannerStrategyForTimeframe,
   type ScannerStrategyMode,
 } from './scanner-quant-strategy.service';
+import {
+  evaluateOwnerSelectedCryptoStrategy,
+  isOwnerSelectedStrategyId,
+  type OwnerSelectedFlowEvidence,
+} from './owner-selected-live-strategy.service';
 import type {
   ScannerEvidence,
   ScannerFailure,
@@ -69,6 +74,8 @@ export interface CryptoSignalScanRequest {
   minimumScore?: number;
   maximumRiskScore?: number;
   strategyMode?: ScannerStrategyMode;
+  /** Internal production worker hint for exact owner-selected formulas. */
+  ownerSelectedStrategyId?: string;
   signal?: AbortSignal;
 }
 
@@ -85,6 +92,11 @@ export interface CryptoScannerProviders {
     ticker: CryptoTicker,
     signal: AbortSignal,
   ): Promise<{ bid: number | null; ask: number | null }>;
+  getOrderFlow?(
+    market: CryptoMarket,
+    ticker: CryptoTicker,
+    signal: AbortSignal,
+  ): Promise<OwnerSelectedFlowEvidence | null>;
   now(): number;
 }
 
