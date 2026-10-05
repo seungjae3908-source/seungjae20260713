@@ -3,6 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loginProductionReadOnly } from './support/production-readonly-login';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
+import {
+  providerDiagnostic,
+  providerDiagnosticHealthy,
+  type ReadonlyProbeObservation,
+} from './support/production-live-disable-provider-audit';
 import { parseBitgetReadonlyDiagnosticHeader, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
@@ -165,6 +170,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   const blocked: Array<{ method: string; path: string; reason: string }> = [];
   const observedAppMutations: Array<{ method: string; path: string }> = [];
   const snapshots = new Map<Provider, SafetySnapshot>();
+  const providerObservations = new Map<Provider, ReadonlyProbeObservation>();
   const bitgetDiagnostics = new Map<Provider, SanitizedBitgetReadonlyDiagnostic>();
   let credentialStatus: CredentialStatus | null = null;
 
@@ -197,18 +203,54 @@ test('Production real-account read-only providers return fresh connected snapsho
     }
 
     const match = /^\/api\/accounts\/read-only\/(toss|kiwoom|upbit|bitget)$/.exec(url.pathname);
-    if (!match || !response.ok()) return;
+    if (!match) return;
+    const provider = match[1] as Provider;
+    providerObservations.set(provider, {
+      responseReceived: true,
+      httpStatus: response.status(),
+      payload: null,
+      transportClassification: 'NONE',
+    });
     if (match[1] === 'bitget') {
       const diagnostic = parseBitgetReadonlyDiagnosticHeader(
         response.headers()['x-account-readonly-bitget-diagnostic'],
       );
       if (diagnostic) bitgetDiagnostics.set('bitget', diagnostic);
     }
+    if (!response.ok()) return;
     try {
-      snapshots.set(match[1] as Provider, await response.json() as SafetySnapshot);
+      const snapshot = await response.json() as SafetySnapshot;
+      snapshots.set(provider, snapshot);
+      providerObservations.set(provider, {
+        responseReceived: true,
+        httpStatus: response.status(),
+        payload: snapshot,
+        transportClassification: 'NONE',
+      });
     } catch {
-      // The explicit provider assertions below fail closed on missing valid JSON.
+      providerObservations.set(provider, {
+        responseReceived: true,
+        httpStatus: response.status(),
+        payload: null,
+        transportClassification: 'INVALID_JSON',
+      });
     }
+  });
+
+  page.on('requestfailed', (request) => {
+    if (request.method() !== 'GET') return;
+    const url = new URL(request.url());
+    if (url.origin !== productionOrigin) return;
+    const match = /^\/api\/accounts\/read-only\/(toss|kiwoom|upbit|bitget)$/.exec(url.pathname);
+    if (!match) return;
+    providerObservations.set(match[1] as Provider, {
+      responseReceived: false,
+      httpStatus: null,
+      payload: null,
+      transportClassification: request.failure()?.errorText?.includes('TIMED_OUT')
+        ? 'NETWORK_TIMEOUT'
+        : 'NETWORK_FAILURE',
+    });
   });
 
   await login(page);
@@ -279,10 +321,46 @@ test('Production real-account read-only providers return fresh connected snapsho
     await expect(refresh).toBeVisible({ timeout: 10_000 });
     await expect(refresh).toBeEnabled({ timeout: 15_000 });
     await refresh.click();
-    await expect.poll(
-      requiredSnapshotsHealthy,
-      { timeout: 45_000, intervals: [500, 1_000, 2_000, 5_000] },
-    ).toBe(true);
+    try {
+      await expect.poll(
+        requiredSnapshotsHealthy,
+        { timeout: 45_000, intervals: [500, 1_000, 2_000, 5_000] },
+      ).toBe(true);
+    } catch {
+      const diagnostics = requiredSnapshots.map((provider) => providerDiagnostic(
+        provider,
+        providerObservations.get(provider) ?? {
+          responseReceived: false,
+          httpStatus: null,
+          payload: null,
+          transportClassification: 'NETWORK_FAILURE',
+        },
+      ));
+      const incomplete = diagnostics
+        .filter((diagnostic) => !providerDiagnosticHealthy(diagnostic))
+        .map((diagnostic) => diagnostic.provider);
+      writeEvidence({
+        schemaVersion: 'production-account-readonly-snapshot-diagnostic-v1',
+        auditPurpose: recoveryDisableAudit ? 'PRE_DISABLE_UI_DIAGNOSTIC' : 'ACCOUNT_UI_QA',
+        targetSha: expectedDeploySha,
+        productionDeployRunId,
+        generatedAt: new Date().toISOString(),
+        providers: diagnostics,
+        credentialsReturned: false,
+        rawSecretsReturned: false,
+        rawAccountValuesReturned: false,
+        ordersMutationRequests: 0,
+        cancelRequests: 0,
+        amendRequests: 0,
+        transferRequests: 0,
+        withdrawalRequests: 0,
+        realOrderSubmitted: false,
+      });
+      console.error(`ACCOUNT_READONLY_PROVIDER_DIAGNOSTICS=${JSON.stringify(diagnostics)}`);
+      throw new Error(`${recoveryDisableAudit
+        ? 'BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE'
+        : 'PRODUCTION_ACCOUNT_READONLY_SNAPSHOT_INCOMPLETE'}:${incomplete.join(',') || 'unknown'}`);
+    }
   }
 
   expect(credentialStatus?.ok).toBe(true);

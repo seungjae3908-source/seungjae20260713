@@ -5,19 +5,17 @@ import path from 'node:path';
 const root = process.cwd();
 const workflowPath = path.join(root, '.github/workflows/production-live-trading-gate.yml');
 const auditPath = path.join(root, 'ops/production-live-disable-readonly-audit.sh');
-const specPath = path.join(root, 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts');
+const specPath = path.join(root, 'stock-analyzer/e2e/production-live-disable-provider-readonly-audit.spec.ts');
+const uiSpecPath = path.join(root, 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts');
+const providerSupportPath = path.join(root, 'stock-analyzer/e2e/support/production-live-disable-provider-audit.ts');
+const providerConfigPath = path.join(root, 'stock-analyzer/playwright.production-live-disable-readonly.config.ts');
 
 const COUNT_KEYS = [
   'productionProcessCount', 'duplicateWorkers', 'workerExecutingCount',
   'activeLocalOrderCount', 'staleSubmittedOrderCount', 'staleApprovalPlanCount',
   'duplicateClientOrderIdCount', 'activeExecutionClaimCount', 'activeRecoveryLeaseCount',
 ];
-const SAFE_PROVIDER_COUNTERS = [
-  'openOrderCount', 'orphanOrderCount', 'activeLocalOrderCount', 'staleLocalOrderCount',
-  'duplicateClientOrderIdCount', 'stalePlanCount', 'bitgetActivePositionCount',
-  'oppositePositionDuplicateCount', 'nonIsolatedPositionCount',
-  'outOfPolicyLeveragePositionCount', 'liquidationRiskPositionCount',
-];
+const SAFE_PROVIDER_COUNTERS = ['openOrderCount', 'orphanOrderCount'];
 const FORBIDDEN_PATTERNS = [
   /postgres(?:ql)?:\/\//iu,
   /\b(?:password|passwd|secret|authorization|accountUid|clientOrderId|exchangeOrderId)\b\s*[=:]/iu,
@@ -74,29 +72,45 @@ function assertDatabaseArtifact(value) {
 }
 
 function assertProviderArtifact(value) {
-  assert(value?.schemaVersion === 'production-live-disable-readonly-audit-v1', 'provider schema mismatch');
-  assert(value?.auditPurpose === 'PRE_DISABLE_SAFETY', 'provider audit purpose mismatch');
+  assert(value?.schemaVersion === 'production-live-disable-provider-readonly-audit-v2', 'provider schema mismatch');
+  assert(['PRE_DISABLE_SAFETY', 'POST_DISABLE_SAFETY'].includes(value?.auditPurpose), 'provider audit purpose mismatch');
+  assert(value?.status === 'PASS', 'provider audit did not pass');
   assert(/^[0-9a-f]{40}$/u.test(value?.targetSha), 'provider target SHA invalid');
+  assert(Number.isSafeInteger(value?.productionDeployRunId) && value.productionDeployRunId > 0, 'provider deploy run invalid');
   assert(value?.officialProductionOrigin === true, 'provider origin not proven');
   assert(value?.authenticatedProductionSession === true, 'provider session not proven');
-  assert(value?.secretValuesRecorded === false, 'provider secret values recorded');
-  assert(value?.accountValuesRecorded === false, 'provider account values recorded');
-  for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests', 'blockedMutationRequests', 'observedAppMutationRequests']) {
+  assert(value?.readOnlyEnforced === true, 'provider read-only policy not proven');
+  assert(value?.rawSecretsReturned === false, 'provider secret values returned');
+  assert(value?.rawAccountValuesReturned === false, 'provider account values returned');
+  assert(value?.credentialsReturned === false, 'credential redaction not proven');
+  for (const key of ['ordersMutationRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests', 'blockedMutationRequests', 'observedAppMutationRequests']) {
     assert(value?.[key] === 0, `${key} must be zero`);
   }
   assert(value?.realOrderSubmitted === false, 'realOrderSubmitted must be false');
   assert(value?.liveTradingAuthorityGranted === false, 'QA must not grant live authority');
   assert(value?.autoTradingAuthorityGranted === false, 'QA must not grant auto authority');
-  assert(JSON.stringify(value?.testedProviders) === JSON.stringify(['bitget', 'kiwoom', 'toss', 'upbit']), 'all four providers required');
+  assert(JSON.stringify(value?.providerSequence) === JSON.stringify(['toss', 'kiwoom', 'upbit', 'bitget']), 'bounded provider sequence invalid');
+  assert(value?.credentialStatus?.responseReceived === true, 'credential status response missing');
+  assert(value?.credentialStatus?.httpStatus === 200, 'credential status HTTP invalid');
+  assert(value?.credentialStatus?.ok === true, 'credential status not ok');
+  assert(value?.credentialStatus?.encryptionConfigured === true, 'credential encryption not configured');
+  assert(value?.credentialStatus?.allProvidersSupported === true, 'credential provider support incomplete');
+  assert(value?.credentialStatus?.credentialsReturned === false, 'credential status redaction not proven');
+  assert(value?.credentialStatus?.diagnosticClassification === 'PASS', 'credential status diagnostic failed');
   for (const key of SAFE_PROVIDER_COUNTERS) assert(value?.safetyCounters?.[key] === 0, `${key} must be zero`);
   assertSanitizedBlockers(value?.sanitizedBlockers);
   assert(value.sanitizedBlockers.length === 0, 'safe provider audit cannot contain blockers');
-  for (const provider of value.providers ?? []) {
+  assert(Array.isArray(value.providers) && value.providers.length === 4, 'four provider diagnostics required');
+  assert(JSON.stringify(value.providers.map((provider) => provider.provider)) === JSON.stringify(value.providerSequence), 'provider result order mismatch');
+  for (const provider of value.providers) {
     assert(['bitget', 'kiwoom', 'toss', 'upbit'].includes(provider?.provider), 'provider invalid');
+    assert(provider.responseReceived === true && provider.httpStatus === 200, `${provider.provider} response missing`);
+    assert(provider.configured === true && provider.verified === true, `${provider.provider} credential not verified`);
     assert(provider.connected === true && provider.status === 'CONNECTED', `${provider.provider} not connected`);
-    assert(provider.stale === false && provider.fresh === true, `${provider.provider} not fresh`);
-    assert(provider.errorCode === null && provider.reconciliationPassed === true, `${provider.provider} reconciliation failed`);
-    assert(provider.openOrderCount === 0, `${provider.provider} open orders exist`);
+    assert(provider.stale === false && provider.lastVerifiedAtPresent === true, `${provider.provider} not fresh`);
+    assert(provider.errorCode === null && provider.openOrdersIsArray === true && provider.openOrdersKnown === true, `${provider.provider} reconciliation failed`);
+    assert(provider.diagnosticClassification === 'PASS', `${provider.provider} diagnostic failed`);
+    assert(Number.isInteger(provider.attemptCount) && provider.attemptCount >= 1 && provider.attemptCount <= 3, `${provider.provider} attempts invalid`);
   }
   const serialized = JSON.stringify(value);
   for (const pattern of FORBIDDEN_PATTERNS) assert(!pattern.test(serialized), `sensitive provider artifact pattern: ${pattern}`);
@@ -106,15 +120,20 @@ function verifyStaticContract() {
   const workflow = read(workflowPath);
   const audit = read(auditPath);
   const spec = read(specPath);
+  const uiSpec = read(uiSpecPath);
+  const providerSupport = read(providerSupportPath);
+  const providerConfig = read(providerConfigPath);
   for (const token of [
     'Fresh four-provider pre-disable read-only audit',
     'Require global internal-order and worker idle evidence before any disable',
     'Disable in safe order: automatic, futures, spot, background worker',
     'Post-disable four-provider read-only audit',
     'BLOCKED_LIVE_STATE_NOT_TERMINAL',
+    'BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE',
     'ops/production-live-disable-readonly-audit.sh',
     'ops/verify-production-live-disable-readonly-audit.mjs',
-    '--provider-artifact production-live-disable-pre-artifacts/production-account-readonly-live-qa.json',
+    '--provider-artifact production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json',
+    'playwright.production-live-disable-readonly.config.ts',
     "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'",
   ]) assert(workflow.includes(token), `workflow token missing: ${token}`);
   assert(workflow.indexOf('Fresh four-provider pre-disable read-only audit') < workflow.indexOf('Disable in safe order: automatic, futures, spot, background worker'), 'provider audit must precede disable');
@@ -135,8 +154,71 @@ function verifyStaticContract() {
     assert(!sql.includes(word), `mutating SQL forbidden: ${word.trim()}`);
   }
   assert(spec.includes('PRODUCTION_LIVE_DISABLE_READONLY_AUDIT'), 'provider recovery mode missing');
-  assert(spec.includes("name === 'bitgetActivePositionCount'"), 'active futures position recovery gate missing');
+  assert(spec.includes('for (const provider of SAFE_DISABLE_PROVIDER_ORDER)'), 'provider reads must be sequential');
+  assert(spec.includes('const MAX_ATTEMPTS = 3'), 'provider retry bound missing');
+  assert(spec.includes('const BACKOFF_MS = [750, 1_500]'), 'provider retry backoff missing');
+  assert(!spec.includes('Promise.all(SAFE_DISABLE_PROVIDER_ORDER'), 'unbounded provider fan-out forbidden');
   assert(spec.includes('sanitizedBlockers'), 'sanitized provider blockers missing');
+  assert(providerSupport.includes("['toss', 'kiwoom', 'upbit', 'bitget']"), 'provider order contract missing');
+  assert(providerSupport.includes('PERMISSION_OR_IP_ALLOWLIST_REJECTED'), 'provider classification missing');
+  assert(uiSpec.includes('ACCOUNT_READONLY_PROVIDER_DIAGNOSTICS='), 'UI provider diagnostics missing');
+  assert(uiSpec.includes('BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE'), 'UI failure classification missing');
+  assert(providerConfig.includes('retries: 0'), 'retry-to-pass forbidden');
+  assert(providerConfig.includes("trace: 'off'"), 'Production trace capture forbidden');
+
+  const providerSafe = {
+    schemaVersion: 'production-live-disable-provider-readonly-audit-v2',
+    auditPurpose: 'PRE_DISABLE_SAFETY',
+    status: 'PASS',
+    targetSha: 'a'.repeat(40),
+    productionDeployRunId: 1,
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    readOnlyEnforced: true,
+    providerSequence: ['toss', 'kiwoom', 'upbit', 'bitget'],
+    credentialStatus: {
+      responseReceived: true,
+      httpStatus: 200,
+      ok: true,
+      encryptionConfigured: true,
+      allProvidersSupported: true,
+      credentialsReturned: false,
+      diagnosticClassification: 'PASS',
+      attemptCount: 1,
+    },
+    providers: ['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => ({
+      provider,
+      responseReceived: true,
+      httpStatus: 200,
+      configured: true,
+      verified: true,
+      connected: true,
+      status: 'CONNECTED',
+      stale: false,
+      errorCode: null,
+      openOrdersIsArray: true,
+      openOrdersKnown: true,
+      lastVerifiedAtPresent: true,
+      diagnosticClassification: 'PASS',
+      attemptCount: 1,
+    })),
+    safetyCounters: { openOrderCount: 0, orphanOrderCount: 0 },
+    sanitizedBlockers: [],
+    ordersMutationRequests: 0,
+    cancelRequests: 0,
+    amendRequests: 0,
+    transferRequests: 0,
+    withdrawalRequests: 0,
+    blockedMutationRequests: 0,
+    observedAppMutationRequests: 0,
+    realOrderSubmitted: false,
+    credentialsReturned: false,
+    rawSecretsReturned: false,
+    rawAccountValuesReturned: false,
+    liveTradingAuthorityGranted: false,
+    autoTradingAuthorityGranted: false,
+  };
+  assertProviderArtifact(providerSafe);
 
   const safe = {
     schemaVersion: 'production-live-disable-readonly-audit-v1', targetSha: 'a'.repeat(40), status: 'SAFE', code: null,
