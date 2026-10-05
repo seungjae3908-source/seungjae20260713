@@ -11,6 +11,7 @@ const qaPassword = String(process.env.PRODUCTION_QA_PASSWORD ?? '');
 const expectedDeploySha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
 const productionDeployRunId = Number(process.env.PRODUCTION_DEPLOY_RUN_ID ?? 0);
 const rawTargetProviders = String(process.env.PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS ?? '').trim();
+const recoveryDisableAudit = process.env.PRODUCTION_LIVE_DISABLE_READONLY_AUDIT === 'true';
 const artifactDir = path.resolve(
   process.cwd(),
   process.env.PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR ?? 'production-account-readonly-artifacts',
@@ -425,8 +426,37 @@ test('Production real-account read-only providers return fresh connected snapsho
   // Persist bounded, sanitized provider state before any connectivity assertion so a
   // Production failure identifies the exact provider status/error without retaining
   // account values, credentials, traces, screenshots, or mutation payloads.
+  const sanitizedBlockers = (recoveryDisableAudit ? [
+    ...providers.flatMap((provider) => {
+      const openOrders = snapshots.get(provider)?.openOrders;
+      if (!Array.isArray(openOrders)) return [];
+      return openOrders.map((order) => ({
+        provider,
+        symbol: String((order as { symbol?: unknown })?.symbol ?? 'UNKNOWN').trim().toUpperCase(),
+        state: String((order as { status?: unknown })?.status ?? 'OPEN_ORDER').trim().toUpperCase(),
+      }));
+    }),
+    ...bitgetPositions.map((position) => ({
+      provider: 'bitget',
+      symbol: String(position.symbol ?? 'UNKNOWN').trim().toUpperCase(),
+      state: 'ACTIVE_FUTURES_POSITION',
+    })),
+    ...activeLocalOrders.map((order) => ({
+      provider: 'internal',
+      symbol: 'REDACTED',
+      state: String(order.state ?? 'NON_TERMINAL_ORDER').trim().toUpperCase(),
+    })),
+  ] : []).slice(0, 50).map((item) => ({
+    provider: /^[a-z0-9_-]{1,16}$/u.test(item.provider) ? item.provider : 'unknown',
+    symbol: /^[A-Z0-9._/-]{1,32}$/u.test(item.symbol) ? item.symbol : 'REDACTED',
+    state: /^[A-Z0-9_/-]{1,48}$/u.test(item.state) ? item.state : 'UNKNOWN',
+  }));
+
   writeEvidence({
-    schemaVersion: 'production-account-readonly-live-qa-v3',
+    schemaVersion: recoveryDisableAudit
+      ? 'production-live-disable-readonly-audit-v1'
+      : 'production-account-readonly-live-qa-v3',
+    auditPurpose: recoveryDisableAudit ? 'PRE_DISABLE_SAFETY' : 'ACTIVATION_READINESS',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -437,6 +467,7 @@ test('Production real-account read-only providers return fresh connected snapsho
     providers: sanitizedProviders,
     safetyCounters,
     bitgetPositionMode: bitgetSnapshot?.positionMode ?? null,
+    sanitizedBlockers,
     secretValuesRecorded: false,
     accountValuesRecorded: false,
     orderRequests: Number(credentialStatus?.orderRequests ?? -1),
@@ -506,10 +537,10 @@ test('Production real-account read-only providers return fresh connected snapsho
   if (blocked.length > 0) providerFailures.push(`blocked mutation requests=${blocked.length}`);
   if (observedAppMutations.length > 0) providerFailures.push(`observed app mutations=${observedAppMutations.length}`);
   for (const [name, value] of Object.entries(safetyCounters)) {
-    if (name === 'bitgetActivePositionCount') continue;
+    if (!recoveryDisableAudit && name === 'bitgetActivePositionCount') continue;
     if (value !== 0) providerFailures.push(`${name}=${value}`);
   }
-  if (bitgetSnapshot?.positionMode !== 'one_way_mode') {
+  if (!recoveryDisableAudit && bitgetSnapshot?.positionMode !== 'one_way_mode') {
     providerFailures.push(`bitget positionMode=${bitgetSnapshot?.positionMode ?? 'unknown'}`);
   }
 
