@@ -55,7 +55,20 @@ switch (name) {
   case 'runuser':
     if (!args.includes('preflight') || args.includes('run')) throw Error('unexpected cycle execution');
     break;
-  case 'df': case 'systemctl': case 'systemd-analyze': break;
+  case 'systemctl':
+    if (args[0] === 'start' && args[1] === 'research-production-ai-review.service') {
+      const latest = safe(process.env.HARNESS_ROOT + '/state/ai-review/latest.json');
+      mkdirSync(dirname(latest), { recursive: true });
+      appendFileSync(latest, JSON.stringify({
+        schemaVersion: 'research-production-ai-scan-v1',
+        status: 'NO_NEW_EVIDENCE',
+        researchSha: process.env.TARGET_SHA,
+        provider: 'GROQ_FREE',
+        safety: { executionAuthority: 'NONE', liveTrading: false, orderAllowed: false },
+      }));
+    }
+    break;
+  case 'df': case 'systemd-analyze': break;
   default: throw Error('unexpected host operation: ' + name);
 }
 `;
