@@ -263,3 +263,108 @@ test('unified ledger merges read-only Upbit history in memory without persisting
     await close(server);
   }
 });
+
+
+test('APP_AUTO journal exposes verified zero-credit Research feedback without mutation authority', async () => {
+  const lineage = {
+    schemaVersion: 'trading-research-lineage-v1',
+    candidateId: 'paper-candidate-v1:' + 'a'.repeat(64),
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    timeframe: '15m',
+    direction: 'LONG',
+    strategyId: 'strategy-live-v1',
+    strategyVersion: 'v1',
+    parameterHash: 'params-live-v1',
+    researchCodeSha: 'b'.repeat(40),
+    costPolicyVersion: 'cost-live-v1',
+    handoffId: 'paper-auto-handoff:sha256:' + 'c'.repeat(64),
+    source: 'MEMBER_AUTO_TRADING_PAPER_HANDOFF',
+    executionAuthority: 'NONE',
+    profitabilityCredit: 0,
+  };
+  const order = (effect, id, price, at) => ({
+    schemaVersion: 1,
+    recordType: 'unified_trade_order',
+    source: 'APP_AUTO',
+    broker: 'APP',
+    accountIdMasked: 'APP-****-fixture',
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    side: effect === 'OPEN' ? 'BUY' : 'SELL',
+    positionSide: 'LONG',
+    positionEffect: effect,
+    clientOrderId: 'client-' + id,
+    brokerOrderId: 'broker-' + id,
+    fillId: 'fill-' + id,
+    orderedAt: at,
+    filledAt: at,
+    observedAt: at,
+    quantity: 1,
+    filledQuantity: 1,
+    remainingQuantity: 0,
+    averageFillPrice: price,
+    fees: 0.1,
+    tax: 0,
+    currency: 'USDT',
+    status: 'FILLED',
+    strategy: 'strategy-live-v1',
+    timeframe: '15m',
+    stopLossPrice: 95,
+    targetPrice: 105,
+    ruleViolation: false,
+    warnings: [],
+    canonicalLineage: {
+      signalIds: ['signal-live'],
+      planIds: ['plan-' + id],
+      orderIds: ['order-' + id],
+      fillIds: ['fill-' + id],
+    },
+    researchLineage: lineage,
+    technicalSnapshot: {
+      snapshotId: 'snap-' + id,
+      contextSource: 'PRE_TRADE_SNAPSHOT',
+      capturedAt: at,
+      timeframe: '15m',
+      price,
+      signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    },
+  });
+  const automationPayloads = [
+    order('OPEN', 'entry', 100, '2026-08-10T01:00:00.000Z'),
+    order('CLOSE', 'exit', 105, '2026-08-10T02:00:00.000Z'),
+  ];
+  const emptyHistory = async () => ({
+    payloads: [], realizedEvidence: [], requestedRange: '30D', effectiveDays: 30, rangeCapped: false,
+    persisted: false, privateProviderRequests: 0, providers: [], truncated: false,
+    safety: {
+      orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+      credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false,
+    },
+  });
+  const { server, baseUrl } = await start({
+    repository: repository([]),
+    automationJournalReader: async () => automationPayloads,
+    accountHistoryReader: emptyHistory,
+  });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/unified-ledger?range=ALL&source=APP_AUTO`);
+    const body = await json(response);
+    assert.equal(response.status, 200);
+    assert.equal(body.result.trades.length, 1);
+    assert.equal(body.result.trades[0].source, 'APP_AUTO');
+    assert.equal(body.result.trades[0].researchLineage.candidateId, lineage.candidateId);
+    assert.equal(body.result.liveResearchFeedback.status, 'VERIFIED');
+    assert.equal(body.result.liveResearchFeedback.autoTradeCount, 1);
+    assert.equal(body.result.liveResearchFeedback.lineageVerifiedCount, 1);
+    assert.equal(body.result.liveResearchFeedback.records[0].candidateId, lineage.candidateId);
+    assert.equal(body.result.liveResearchFeedback.records[0].journalStatus, 'CLOSED');
+    assert.equal(body.result.liveResearchFeedback.records[0].observationOnly, true);
+    assert.equal(body.result.liveResearchFeedback.records[0].researchMutationAllowed, false);
+    assert.equal(body.result.liveResearchFeedback.records[0].promotionAuthority, false);
+    assert.equal(body.result.liveResearchFeedback.records[0].executionAuthority, 'NONE');
+    assert.equal(body.result.liveResearchFeedback.records[0].profitabilityCredit, 0);
+  } finally {
+    await close(server);
+  }
+});
