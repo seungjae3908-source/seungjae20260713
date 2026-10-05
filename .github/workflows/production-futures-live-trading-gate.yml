@@ -144,6 +144,7 @@ jobs:
               core.setOutput('postmerge_run_id', String(result.postMergeProvenanceRunId));
               core.setOutput('production_run_id', String(result.productionDeployRunId));
               core.setOutput('deployment_completed_at', result.productionDeployCompletedAt);
+              core.setOutput('qa_scope', result.qaScope);
             } catch (error) {
               core.setFailed(error instanceof Error ? error.message : 'FUTURES_LIVE_PREACTIVATION_PREREQUISITES_FAILED');
             }
@@ -165,14 +166,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           root="${{ runner.temp }}/production-preactivation-evidence"
-          comprehensive="$(find "$root" -name production-comprehensive-readonly-qa.json -print -quit)"
-          account="$(find "$root" -name production-account-readonly-live-qa.json -print -quit)"
-          credential="$(find "$root" -name production-live-credential-reuse-qa.json -print -quit)"
-          activation="$(find "$root" -name "production-postdeploy-activation-ready-${TARGET_SHA}.json" -print -quit)"
-          [[ -n "$comprehensive" && -n "$account" && -n "$credential" && -n "$activation" ]]
+          test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
-            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" \
-            "$comprehensive" "$account" "$credential" "$activation"
+            "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
 
       - name: Require exact current main and coherent Required CI 6/6
         if: ${{ false }}
