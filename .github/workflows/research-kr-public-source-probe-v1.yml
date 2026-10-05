@@ -1,0 +1,39 @@
+name: Research KR Public Source Probe V1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/probe-kr-public-source-v1.py
+      - .github/workflows/research-kr-public-source-probe-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-kr-public-source-probe-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/probe-kr-public-source-v1.py
+      - name: Install probe dependencies
+        run: python -m pip install --upgrade "finance-datareader>=0.9.90" "pandas>=2.2,<3" "requests>=2.32,<3"
+      - name: Probe KR public sources
+        run: python market-prediction-lab/scripts/probe-kr-public-source-v1.py
