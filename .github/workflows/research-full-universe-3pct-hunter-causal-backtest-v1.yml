@@ -19,7 +19,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check research scripts
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-census-v2.py
+          python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-causal-backtest-v1.py
+          python -m py_compile market-prediction-lab/scripts/combine-full-universe-3pct-hunter-causal-v1.py
+
   wait-source:
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
