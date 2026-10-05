@@ -9,6 +9,13 @@ import polars as pl
 
 THRESHOLDS = [0.03, 0.05, 0.10, 0.20, 0.50, 1.00]
 
+WINDOW_SESSIONS = {
+    "US_STOCK": [("1D", 1), ("1W", 5), ("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 252), ("3Y", None)],
+    "KR_STOCK": [("1D", 1), ("1W", 5), ("1M", 21), ("3M", 63), ("6M", 126), ("1Y", 252), ("3Y", None)],
+    "CRYPTO_SPOT": [("1D", 1), ("1W", 7), ("1M", 30), ("3M", 90), ("6M", 183), ("1Y", 365), ("3Y", None)],
+    "CRYPTO_FUTURES": [("1D", 1), ("1W", 7), ("1M", 30), ("3M", 90), ("6M", 183), ("1Y", 365), ("3Y", None)],
+}
+
 US_NOT_TEST = ~pl.col("symbol").str.contains(r"^(ZVZZ|ZWZZ)")
 
 PROFILES = {
@@ -38,6 +45,63 @@ PROFILES = {
     },
 }
 
+def threshold_counts(frame: pl.DataFrame) -> dict:
+    out = {}
+    for threshold in THRESHOLDS:
+        y = frame.filter(pl.col("max_move") >= threshold)
+        out[f"{int(threshold*100)}pct"] = {
+            "count": y.height,
+            "distinctSymbols": y.select("symbol").unique().height,
+            "activeDates": y.select("date").unique().height,
+            "maxMove": float(y.select(pl.col("max_move").max()).item()) if y.height else None,
+        }
+    return out
+
+
+def window_breakdown(frame: pl.DataFrame, market: str) -> dict:
+    if frame.is_empty():
+        return {}
+    dates = frame.select("date").unique().sort("date").get_column("date").to_list()
+    out = {}
+    for label, n in WINDOW_SESSIONS[market]:
+        selected_dates = dates if n is None else dates[-n:]
+        x = frame.filter(pl.col("date").is_in(selected_dates))
+        out[label] = {
+            "startDate": str(selected_dates[0]) if selected_dates else None,
+            "endDate": str(selected_dates[-1]) if selected_dates else None,
+            "sessions": len(selected_dates),
+            "thresholds": threshold_counts(x),
+        }
+        if market == "CRYPTO_FUTURES":
+            out[label]["directions"] = {
+                direction: threshold_counts(x.filter(pl.col("direction") == direction))
+                for direction in ["LONG", "SHORT"]
+            }
+    return out
+
+
+def top_symbols(frame: pl.DataFrame, market: str, limit: int = 50) -> list[dict]:
+    if frame.is_empty():
+        return []
+    agg = (
+        frame.group_by(["symbol", "direction"] if market == "CRYPTO_FUTURES" else ["symbol"])
+        .agg([
+            pl.len().alias("count3pct"),
+            (pl.col("max_move") >= 0.05).sum().alias("count5pct"),
+            (pl.col("max_move") >= 0.10).sum().alias("count10pct"),
+            (pl.col("max_move") >= 0.20).sum().alias("count20pct"),
+            (pl.col("max_move") >= 0.50).sum().alias("count50pct"),
+            (pl.col("max_move") >= 1.00).sum().alias("count100pct"),
+            pl.col("max_move").max().alias("maxMove"),
+            pl.col("max_move").mean().alias("meanMove"),
+            pl.col("date").n_unique().alias("activeDates"),
+        ])
+        .sort(["count10pct", "count3pct", "maxMove"], descending=[True, True, True])
+        .head(limit)
+    )
+    return agg.to_dicts()
+
+
 def summarize(frame: pl.DataFrame, market: str) -> dict:
     out = {}
     for profile, predicate in PROFILES[market].items():
@@ -66,6 +130,8 @@ def summarize(frame: pl.DataFrame, market: str) -> dict:
                     "20pct": d.filter(pl.col("max_move") >= 0.20).height,
                     "50pct": d.filter(pl.col("max_move") >= 0.50).height,
                 }
+        stats["windows"] = window_breakdown(x, market)
+        stats["topSymbols"] = top_symbols(x, market, 50)
         out[profile] = stats
     return out
 
