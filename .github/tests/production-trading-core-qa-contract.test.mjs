@@ -22,6 +22,9 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'telegramTestDelivered',
     'policyRestored',
     'realOrderSubmitted: false',
+    'productionReadOnlyAccessToken',
+    'Authorization: `Bearer ${token}`',
+    'PRODUCTION_TRADING_CORE_AUTH_TOKEN_MISSING',
   ]) assert.ok(spec.includes(required), required);
 
   for (const forbidden of [
