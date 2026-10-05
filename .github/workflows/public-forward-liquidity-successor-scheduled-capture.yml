@@ -3,7 +3,7 @@ name: Public Forward Liquidity Successor Scheduled Capture
 # IMPORTANT GOVERNANCE BOUNDARY:
 # - V2 history and already-failed V2 slots remain immutable and receive zero V3 credit.
 # - A merged V3 activation binding is inert by itself and never authorizes capture.
-# - Scheduled capture requires a separate exact OWNER authority receipt on Release Control #23
+# - Scheduled capture requires a separate exact OWNER authority receipt on Release Control #1555
 #   matching the exact current main SHA and the immutable activation-binding digest.
 # - Missing, revoked, stale, pre-cohort, or non-6/6 authority always skips capture fail-closed.
 # - No replay/backfill/manual/synthetic/hindsight sample credit is granted by validation.
@@ -89,6 +89,9 @@ jobs:
           test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
           ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
           ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
+          grep -Fq 'issue_number: 1555' "$workflow"
+          grep -Fq "release.title !== 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          ! grep -Eq 'issue_number:[[:space:]]*23\b' "$workflow"
 
       - name: Syntax check existing seam, runner, V3 reliability, and Phase 2 policy contracts
         run: |
@@ -277,9 +280,9 @@ jobs:
             const release = (await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
             })).data;
-            if (release.state !== 'open' || release.title !== 'Staging Readiness Control') {
+            if (release.state !== 'open' || release.title !== 'Staging Readiness Control — Rollover 2026-10-02') {
               setBlocked('SUCCESSOR_V3_RELEASE_CONTROL_NOT_OPEN');
               return;
             }
@@ -289,7 +292,7 @@ jobs:
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               per_page: 100,
             });
             comments.sort((left, right) => Number(left.id) - Number(right.id));
