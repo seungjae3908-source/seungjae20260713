@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, BarChart3, BookOpenCheck, FileSpreadsheet, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { JournalPaperLinkageSummary } from '@/components/journal-paper-linkage-summary';
+import { JournalExecutionLedgerTimeline } from '@/components/journal-execution-ledger-timeline';
 import {
   getUnifiedTradeJournal,
   importAccountHistory,
@@ -542,6 +543,7 @@ export function UnifiedTradeJournalPanel({
 
     {data ? <>
       <JournalPaperLinkageSummary data={data} />
+      <JournalExecutionLedgerTimeline />
 
       {bindingIssues.length ? (
         <section className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4" data-testid="unified-journal-binding-issues">
