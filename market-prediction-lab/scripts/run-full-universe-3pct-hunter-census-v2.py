@@ -106,7 +106,7 @@ def load_us() -> tuple[pl.DataFrame, dict]:
                 FROM bars
                 WHERE CAST(local_ts AS TIME) >= TIME '09:30:00'
                   AND CAST(local_ts AS TIME) < TIME '16:00:00'
-                  AND regexp_matches(symbol, '^[A-Z][A-Z0-9.\\-]{{0,9}}
+                  AND regexp_matches(symbol, '^[A-Z][A-Z0-9.\\-]{{0,9}}$')
               )
               SELECT
                 symbol,
