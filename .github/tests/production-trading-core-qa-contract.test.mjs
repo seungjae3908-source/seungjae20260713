@@ -1,0 +1,46 @@
+import fs from 'node:fs';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+const read = (file) => fs.readFileSync(file, 'utf8');
+
+test('Trading Core Production QA is isolated from unrelated product QA', () => {
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  const config = read('stock-analyzer/playwright.production-trading-core.config.ts');
+
+  for (const required of [
+    '/api/trade-automation/status',
+    '/api/trade-automation/policy',
+    '/api/trade-automation/plans',
+    '/api/user-integrations/execution/sync',
+    '/api/paper-journal/unified-ledger',
+    '/api/user-integrations/telegram/test',
+    "accountMode: 'paper'",
+    'TRADING_CORE_QA_CANARY',
+    'paperAutomaticTriggered',
+    'journalVisible',
+    'telegramTestDelivered',
+    'policyRestored',
+    'realOrderSubmitted: false',
+  ]) assert.ok(spec.includes(required), required);
+
+  for (const forbidden of [
+    "accountMode: 'live'",
+    '/api/admin/research',
+    '/api/research',
+    'research-center',
+    'youtube',
+    'backtester',
+    '/api/trade-automation/plans/',
+    '/approve',
+    '/cancel',
+    '/amend',
+    '/transfer',
+    '/withdraw',
+  ]) assert.equal(spec.includes(forbidden), false, forbidden);
+
+  for (const privacy of ["trace: 'off'", "video: 'off'", "screenshot: 'off'"]) {
+    assert.ok(config.includes(privacy), privacy);
+  }
+  assert.ok(config.includes('production-trading-core-qa\\.spec\\.ts'));
+});
