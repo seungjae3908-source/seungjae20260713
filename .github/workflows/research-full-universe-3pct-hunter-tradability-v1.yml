@@ -31,6 +31,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check postprocessor
+        run: python -m py_compile market-prediction-lab/scripts/postprocess-full-universe-3pct-hunter-tradability-v1.py
+
       - name: Wait for exact source census run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,13 +57,6 @@ jobs:
           done
           echo "source census wait timed out"
           exit 1
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Syntax check postprocessor
-        run: python -m py_compile market-prediction-lab/scripts/postprocess-full-universe-3pct-hunter-tradability-v1.py
 
       - name: Install dependencies
         run: python -m pip install "polars>=1.30,<2" "pyarrow>=18,<22"
