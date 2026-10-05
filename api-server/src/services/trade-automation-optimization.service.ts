@@ -1,5 +1,5 @@
 import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
-import { isEvidenceBackedAutoStrategyId } from './evidence-backed-auto-strategy-catalog.service';
+import { isEvidenceBackedAutoStrategyId, isUserSelectedLiveStrategyId } from './evidence-backed-auto-strategy-catalog.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -66,11 +66,12 @@ export function evaluateTradingOptimization(
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
   const rulePackPilot = isEvidenceBackedAutoStrategyId(plan.strategyId);
+  const userSelectedLivePilot = plan.accountMode === 'live' && isUserSelectedLiveStrategyId(plan.strategyId);
   const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
     now,
     maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
   });
-  const economics = plan.accountMode === 'live'
+  const economics = plan.accountMode === 'live' && !userSelectedLivePilot
     ? profitabilityAttestation.serverEconomics
     : plan.economics;
   const economicsPlan = economics === plan.economics ? plan : { ...plan, economics };
@@ -83,16 +84,18 @@ export function evaluateTradingOptimization(
     add(blockCodes, 'ENTRY_PRICE_OUTSIDE_ZONE');
   }
 
-  if (plan.accountMode === 'live' && !profitabilityAttestation.allowed) {
+  if (plan.accountMode === 'live' && !userSelectedLivePilot && !profitabilityAttestation.allowed) {
     add(blockCodes, 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED');
     for (const code of profitabilityAttestation.blockCodes) add(blockCodes, code);
+  } else if (userSelectedLivePilot) {
+    warnings.push('USER_SELECTED_UNVALIDATED_LIVE_PILOT');
   }
 
   const computedExpectedValueR = expectedValueR(economicsPlan);
   if (liveOrAutomatic) {
-    if (!economics) {
+    if (!economics && !userSelectedLivePilot) {
       add(blockCodes, 'ECONOMICS_REQUIRED');
-    } else {
+    } else if (economics) {
       const calibratedAt = Date.parse(economics.calibratedAt);
       if (!Number.isFinite(calibratedAt) || now - calibratedAt > policy.maxEconomicsAgeHours * 60 * 60_000) {
         add(blockCodes, 'ECONOMICS_STALE');
@@ -136,7 +139,7 @@ export function evaluateTradingOptimization(
   const stageMaximum = policy.pilotStage === 'approval-20'
     ? 0 : policy.pilotStage === 'limited-50' ? 50_000 : policy.maxOrderKrw;
   if (plan.accountMode === 'live') {
-    if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
+    if (policy.pilotStage === 'approval-20' && !userSelectedLivePilot) add(blockCodes, 'PILOT_LIVE_DISABLED');
     else if (!rulePackPilot && plan.estimatedKrw > stageMaximum) add(blockCodes, 'PILOT_ORDER_LIMIT');
     else if (rulePackPilot) warnings.push('RULE_PACK_DYNAMIC_HWM_LIMIT_RECHECKED_PRE_SUBMISSION');
   }
