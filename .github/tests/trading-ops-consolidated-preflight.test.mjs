@@ -8,6 +8,8 @@ test('account read UI refresh is bounded, visible-only, and non-overlapping', ()
   const source = read('stock-analyzer/src/components/brokerage-account-connections.tsx');
   assert.match(source, /ACCOUNT_AUTO_REFRESH_MS = 10_000/);
   assert.match(source, /refreshInFlight/);
+  assert.match(source, /if \(sequence === requestSequence\.current\) \{\s*setLoading\(false\);\s*refreshInFlight\.current = false;/);
+  assert.match(source, /controllerRef\.current = null;\s*\/\/ A capability change[\s\S]*?refreshInFlight\.current = false;/);
   assert.match(source, /document\.visibilityState === 'visible'/);
   assert.match(source, /trade-execution-completed/);
   assert.match(source, /account-last-synced/);
