@@ -20,7 +20,7 @@ concurrency:
 jobs:
   tradability:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       SOURCE_RUN_ID: "37384183815"
       LIVE_TRADING: "false"
@@ -35,7 +35,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for i in $(seq 1 90); do
+          for i in $(seq 1 300); do
             status=$(gh api repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID} --jq .status)
             conclusion=$(gh api repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID} --jq '.conclusion // ""')
             echo "source run status=${status} conclusion=${conclusion}"
