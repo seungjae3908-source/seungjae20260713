@@ -44,3 +44,11 @@ test('Research Production activation includes core, AI review, and video discove
   assert.match(activation, /install-ai-research-units[.]sh/);
   assert.doesNotMatch(activation, /LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true/);
 });
+
+test('Backtester UI and API share the same 7x futures leverage cap', async () => {
+  const panel = await read('stock-analyzer/src/components/backtest-research-panel.tsx');
+  const engine = await read('api-server/src/services/backtest-engine.service.ts');
+  assert.match(panel, /label="레버리지"[\s\S]{0,300}max="7"/u);
+  assert.doesNotMatch(panel, /label="레버리지"[\s\S]{0,300}max="10"/u);
+  assert.match(engine, /maximumLeverage: 7/);
+});
