@@ -44,17 +44,7 @@ async function proveAuthenticatedProfileReadOnly(page: Page) {
   }
   if (!/^https:\/\//.test(origin)) return false;
 
-  const state = await page.context().storageState();
-  const originState = state.origins.find((entry) => entry.origin === origin);
-  let accessToken: string | null = null;
-  for (const entry of originState?.localStorage ?? []) {
-    try {
-      accessToken = accessTokenFromUnknown(JSON.parse(entry.value));
-    } catch {
-      // Non-JSON localStorage values are unrelated to the authenticated session.
-    }
-    if (accessToken) break;
-  }
+  const accessToken = await productionReadOnlyAccessToken(page);
   if (!accessToken) return false;
 
   for (let attempt = 0; attempt <= LOGIN_AUTH_PROFILE_TIMEOUT_RETRIES; attempt += 1) {
@@ -79,6 +69,26 @@ async function proveAuthenticatedProfileReadOnly(page: Page) {
     }
   }
   return false;
+}
+
+export async function productionReadOnlyAccessToken(page: Page) {
+  let origin: string;
+  try {
+    origin = new URL(page.url()).origin;
+  } catch {
+    return null;
+  }
+  const state = await page.context().storageState();
+  const originState = state.origins.find((entry) => entry.origin === origin);
+  for (const entry of originState?.localStorage ?? []) {
+    try {
+      const token = accessTokenFromUnknown(JSON.parse(entry.value));
+      if (token) return token;
+    } catch {
+      // Non-JSON localStorage values are unrelated to the authenticated session.
+    }
+  }
+  return null;
 }
 
 async function gotoLoginWithTimeoutRetry(page: Page) {

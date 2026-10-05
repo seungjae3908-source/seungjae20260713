@@ -9,7 +9,13 @@ on:
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+      - stock-analyzer/e2e/production-live-disable-provider-readonly-audit.spec.ts
+      - stock-analyzer/e2e/production-live-disable-provider-audit-contract.spec.ts
+      - stock-analyzer/e2e/support/production-live-disable-provider-audit.ts
+      - stock-analyzer/e2e/support/production-readonly-login.ts
+      - stock-analyzer/src/components/brokerage-account-connections.tsx
       - stock-analyzer/playwright.production-account-readonly.config.ts
+      - stock-analyzer/playwright.production-live-disable-readonly.config.ts
       - ops/production-live-disable-readonly-audit.sh
       - ops/verify-production-live-disable-readonly-audit.mjs
       - api-server/src/services/trade-automation.service.ts
@@ -950,6 +956,7 @@ jobs:
           PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
           PRODUCTION_ACCOUNT_READONLY_LIVE_QA: 'true'
           PRODUCTION_LIVE_DISABLE_READONLY_AUDIT: 'true'
+          PRODUCTION_LIVE_DISABLE_AUDIT_PHASE: pre
           PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-live-disable-pre-artifacts
           PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: bitget,kiwoom,toss,upbit
           EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
@@ -959,9 +966,9 @@ jobs:
           echo "::add-mask::$PRODUCTION_QA_LOGIN"
           echo "::add-mask::$PRODUCTION_QA_PASSWORD"
           cd stock-analyzer
-          pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+          pnpm exec playwright test --config=playwright.production-live-disable-readonly.config.ts
           node ../ops/verify-production-live-disable-readonly-audit.mjs \
-            --provider-artifact production-live-disable-pre-artifacts/production-account-readonly-live-qa.json
+            --provider-artifact production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json
 
       - name: Configure protected Production SSH
         env:
@@ -1255,6 +1262,7 @@ jobs:
           PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
           PRODUCTION_ACCOUNT_READONLY_LIVE_QA: 'true'
           PRODUCTION_LIVE_DISABLE_READONLY_AUDIT: 'true'
+          PRODUCTION_LIVE_DISABLE_AUDIT_PHASE: post
           PRODUCTION_ACCOUNT_READONLY_ARTIFACT_DIR: production-live-disable-post-artifacts
           PRODUCTION_ACCOUNT_READONLY_TARGET_PROVIDERS: bitget,kiwoom,toss,upbit
           EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
@@ -1264,9 +1272,9 @@ jobs:
           echo "::add-mask::$PRODUCTION_QA_LOGIN"
           echo "::add-mask::$PRODUCTION_QA_PASSWORD"
           cd stock-analyzer
-          pnpm exec playwright test --config=playwright.production-account-readonly.config.ts
+          pnpm exec playwright test --config=playwright.production-live-disable-readonly.config.ts
           node ../ops/verify-production-live-disable-readonly-audit.mjs \
-            --provider-artifact production-live-disable-post-artifacts/production-account-readonly-live-qa.json
+            --provider-artifact production-live-disable-post-artifacts/production-live-disable-provider-readonly-audit.json
 
       - name: Upload sanitized safe-disable evidence
         if: always()
@@ -1276,8 +1284,8 @@ jobs:
           path: |
             recovery-disable-evidence/runtime-pre-disable.json
             recovery-disable-evidence/runtime-final.json
-            stock-analyzer/production-live-disable-pre-artifacts/production-account-readonly-live-qa.json
-            stock-analyzer/production-live-disable-post-artifacts/production-account-readonly-live-qa.json
+            stock-analyzer/production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json
+            stock-analyzer/production-live-disable-post-artifacts/production-live-disable-provider-readonly-audit.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -1335,14 +1343,24 @@ jobs:
             const fs = require('node:fs');
             const candidates = [
               'recovery-disable-evidence/runtime-pre-disable.json',
-              'stock-analyzer/production-live-disable-pre-artifacts/production-account-readonly-live-qa.json',
-              'stock-analyzer/production-live-disable-post-artifacts/production-account-readonly-live-qa.json',
+              'stock-analyzer/production-live-disable-pre-artifacts/production-live-disable-provider-readonly-audit.json',
+              'stock-analyzer/production-live-disable-post-artifacts/production-live-disable-provider-readonly-audit.json',
             ];
             const blockers = [];
+            let status = 'BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE:unknown';
             for (const file of candidates) {
               if (!fs.existsSync(file)) continue;
               try {
                 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+                if (file.endsWith('runtime-pre-disable.json') && value.status === 'BLOCKED') {
+                  status = 'BLOCKED_LIVE_STATE_NOT_TERMINAL';
+                }
+                if (typeof value.status === 'string'
+                  && value.status.startsWith('BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE')) {
+                  status = value.status;
+                } else if (value.status === 'BLOCKED_LIVE_STATE_NOT_TERMINAL') {
+                  status = value.status;
+                }
                 for (const item of value.sanitizedBlockers || []) {
                   if (item && typeof item === 'object') blockers.push({
                     provider: String(item.provider || 'unknown').slice(0, 16),
@@ -1358,7 +1376,7 @@ jobs:
               issue_number: 1555,
               body: [
                 '[PRODUCTION_LIVE_TRADING_GATE]',
-                'status: BLOCKED_LIVE_STATE_NOT_TERMINAL',
+                `status: ${status}`,
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `sanitized_blockers: ${JSON.stringify(blockers.slice(0, 50))}`,
                 'orders/cancels/amends/transfers/withdrawals performed by recovery: 0/0/0/0/0',
