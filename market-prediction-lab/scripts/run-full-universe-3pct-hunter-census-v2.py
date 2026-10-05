@@ -399,6 +399,7 @@ def causal_baseline(raw: pl.DataFrame, market: str, top_n: int) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", default="market-prediction-lab/docs/full-universe-3pct-hunter-v2")
+    ap.add_argument("--market", choices=["US_STOCK","KR_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"])
     args = ap.parse_args()
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -409,6 +410,8 @@ def main():
         "CRYPTO_SPOT": lambda: load_crypto("CRYPTO_SPOT"),
         "CRYPTO_FUTURES": lambda: load_crypto("CRYPTO_FUTURES"),
     }
+    if args.market:
+        loaders = {args.market: loaders[args.market]}
 
     summaries = {}
     opp_frames = []
