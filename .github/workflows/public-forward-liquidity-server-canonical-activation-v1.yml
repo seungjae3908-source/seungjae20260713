@@ -96,6 +96,10 @@ jobs:
           grep -Fq 'matchingCanonicalReceipts' "$runner"
           grep -Fq 'SERVER_CANONICAL_HISTORICAL_SHADOW_ZERO_CREDIT_UNPROVEN' "$runner"
           grep -Fq 'canonicalEconomicCredit: 0' "$runner"
+          grep -Fq 'github.event.issue.number == 1555' "$workflow"
+          grep -Fq "context.payload.issue?.title !== 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          grep -Fq 'issue_number: 1555' "$workflow"
+          ! grep -Eq 'github\.event\.issue\.number == 23\b|issue_number:[[:space:]]*23\b' "$workflow"
           ! grep -Eq 'LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow" "$installer" "$service" "$runner"
           ! grep -Eq 'contents:[[:space:]]+write|actions:[[:space:]]+write|issues:[[:space:]]+write|pull-requests:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
 
@@ -103,7 +107,7 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       !github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/activate-public-forward-liquidity-server-canonical-v1 ')
     runs-on: ubuntu-latest
@@ -133,7 +137,7 @@ jobs:
               return;
             }
             if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control') {
+                || context.payload.issue?.title !== 'Staging Readiness Control — Rollover 2026-10-02') {
               core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID');
               return;
             }
@@ -229,7 +233,7 @@ jobs:
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
             const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             let latest = null;
@@ -302,7 +306,7 @@ jobs:
               return;
             }
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
