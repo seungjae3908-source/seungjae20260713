@@ -523,7 +523,7 @@ test('account refresh displays only allowlisted Toss and Bitget authentication d
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss', {
-      status: 'AUTH_FAILED', errorCode: 'TOSS_AUTH_FAILED',
+      status: 'AUTH_FAILED', errorCode: 'TOSS_TOKEN_AUTH_FAILED',
     }));
     if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit'));
     if (path === '/api/accounts/read-only/bitget') {
@@ -564,10 +564,10 @@ test('account refresh displays only allowlisted Toss and Bitget authentication d
   await page.goto('/account');
 
   const toss = page.getByTestId('connection-toss');
-  await expect(toss).toContainText('Toss Client ID / Client Secret 인증을 확인해 주세요.');
-  await expect(toss).toContainText('TOSS_AUTH_FAILED');
+  await expect(toss).toContainText('Toss Client ID / Client Secret을 다시 입력하거나 재발급해 주세요.');
+  await expect(toss).toContainText('TOSS_TOKEN_AUTH_FAILED');
   await expect(toss.getByTestId('account-readonly-metadata-toss')).toContainText('조회 키 저장됨');
-  await expect(toss.getByTestId('account-readonly-metadata-toss')).toContainText('최근 오류 TOSS_AUTH_FAILED');
+  await expect(toss.getByTestId('account-readonly-metadata-toss')).toContainText('최근 오류 TOSS_TOKEN_AUTH_FAILED');
 
   const bitget = page.getByTestId('connection-bitget');
   const diagnostic = bitget.getByTestId('bitget-readonly-diagnostic');
