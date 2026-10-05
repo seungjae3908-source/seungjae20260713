@@ -208,7 +208,9 @@ test('Production read-only suites share the bounded cold login contract', () => 
     const qa = source(consumer);
     const wrapperStart = qa.indexOf('async function login(');
     const wrapper = qa.slice(wrapperStart, qa.indexOf('\n}', wrapperStart) + 2);
-    expect(qa).toContain("import { loginProductionReadOnly } from './support/production-readonly-login';");
+    expect(qa).toMatch(
+      /import\s*\{[^}]*\bloginProductionReadOnly\b[^}]*\}\s*from\s*['"]\.\/support\/production-readonly-login['"];/s,
+    );
     expect(wrapperStart).toBeGreaterThanOrEqual(0);
     expect(wrapper).toContain('await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });');
     expect(wrapper).not.toContain('page.goto');
