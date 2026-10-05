@@ -286,11 +286,19 @@ test('safe-disable provider audit is deterministic, sequential, sanitized, and z
     incompleteProviders.push('safety-contract');
   }
 
-  const status = incompleteProviders.length > 0
-    ? `BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE:${incompleteProviders.join(',')}`
-    : openOrderCount > 0
-      ? 'BLOCKED_LIVE_STATE_NOT_TERMINAL'
-      : 'PASS';
+  const tossExternalCredentialBlocked = incompleteProviders.length === 1
+    && incompleteProviders[0] === 'toss'
+    && providerResults.some(({ provider, diagnostic }) => provider === 'toss' && [
+      'ERROR_TOSS_TOKEN_AUTH_FAILED',
+      'ERROR_TOSS_ACCOUNT_API_AUTH_FAILED',
+    ].includes(diagnostic.diagnosticClassification));
+  const status = tossExternalCredentialBlocked
+    ? 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS'
+    : incompleteProviders.length > 0
+      ? `BLOCKED_PROVIDER_READONLY_AUDIT_INCOMPLETE:${incompleteProviders.join(',')}`
+      : openOrderCount > 0
+        ? 'BLOCKED_LIVE_STATE_NOT_TERMINAL'
+        : 'PASS';
   const evidence = {
     schemaVersion: 'production-live-disable-provider-readonly-audit-v2',
     auditPurpose: auditPhase,
