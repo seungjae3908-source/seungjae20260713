@@ -6,6 +6,7 @@ on:
       - research/full-universe-3pct-hunter-3y-v1-20261006
     paths:
       - market-prediction-lab/scripts/run-full-universe-3pct-hunter-causal-backtest-v1.py
+      - market-prediction-lab/scripts/combine-full-universe-3pct-hunter-causal-v1.py
       - .github/workflows/research-full-universe-3pct-hunter-causal-backtest-v1.yml
   workflow_dispatch:
 
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   wait-source:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       SOURCE_RUN_ID: "37384183815"
     steps:
@@ -28,7 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for i in $(seq 1 180); do
+          for i in $(seq 1 300); do
             status=$(gh api repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID} --jq .status)
             conclusion=$(gh api repos/${{ github.repository }}/actions/runs/${SOURCE_RUN_ID} --jq '.conclusion // ""')
             echo "source run status=${status} conclusion=${conclusion}"
