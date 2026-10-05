@@ -81,7 +81,6 @@ async function scanCrypto(
     cursor: cursors[market],
     batchSize: 8,
     strategyMode: 'scalping',
-    minimumScore: null,
     maximumRiskScore: 45,
     ownerSelectedStrategyId: strategyId,
     signal,
