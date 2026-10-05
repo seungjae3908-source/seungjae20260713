@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { loginProductionReadOnly } from './support/production-readonly-login';
+import {
+  loginProductionReadOnly,
+  productionReadOnlyAccessToken,
+} from './support/production-readonly-login';
 import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
 import {
   providerDiagnostic,
@@ -254,6 +257,8 @@ test('Production real-account read-only providers return fresh connected snapsho
   });
 
   await login(page);
+  const accessToken = await productionReadOnlyAccessToken(page);
+  expect(accessToken, 'Authenticated Production access token must remain in memory only').not.toBeNull();
   await page.goto('/account', { waitUntil: 'commit', timeout: 15_000 });
   await expect(page.getByTestId('brokerage-account-connections')).toBeVisible({ timeout: 15_000 });
 
@@ -375,9 +380,13 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(credentialStatus?.liveTradingEnabled).toBe(false);
   expect(credentialStatus?.autoTradingEnabled).toBe(false);
 
-  const runtimeState = await page.evaluate(async () => {
+  const runtimeState = await page.evaluate(async ({ token }) => {
     const read = async (url: string) => {
-      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
       if (!response.ok) throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}`);
       return response.json() as Promise<unknown>;
     };
@@ -386,7 +395,7 @@ test('Production real-account read-only providers return fresh connected snapsho
       read('/api/trade-automation/approval-queue'),
     ]);
     return { orders, approvalQueue };
-  }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot };
+  }, { token: accessToken! }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot };
 
   expect(runtimeState.orders.ok).toBe(true);
   expect(runtimeState.orders.orderSubmitted).toBe(false);

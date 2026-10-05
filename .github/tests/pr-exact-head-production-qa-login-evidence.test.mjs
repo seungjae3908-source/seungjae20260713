@@ -8,6 +8,8 @@ const deployWorkflow = fs.readFileSync('.github/workflows/production-deploy.yml'
 const accountWorkflow = fs.readFileSync('.github/workflows/production-account-readonly-live-qa.yml', 'utf8');
 const credentialWorkflow = fs.readFileSync('.github/workflows/production-live-credential-reuse-qa.yml', 'utf8');
 const tradingCoreWorkflow = fs.readFileSync('.github/workflows/production-trading-core-qa.yml', 'utf8');
+const accountQa = fs.readFileSync('stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts', 'utf8');
+const tradingCoreQa = fs.readFileSync('stock-analyzer/e2e/production-trading-core-qa.spec.ts', 'utf8');
 
 test('Production comprehensive QA preserves fail-closed login attribution evidence', () => {
   assert.match(source, /function sanitizeLoginDiagnostics\(items: Diagnostic\[\]\)/);
@@ -77,4 +79,16 @@ test('all shared-login Production QA workflows retain sanitized login diagnostic
   assert.match(deployWorkflow, /if: \$\{\{ always\(\) && steps\.account_qa\.outcome != 'skipped' \}\}/);
   assert.match(deployWorkflow, /if: \$\{\{ always\(\) && steps\.credential_qa\.outcome != 'skipped' \}\}/);
   assert.match(deployWorkflow, /if: \$\{\{ always\(\) && steps\.trading_core_qa\.outcome != 'skipped' \}\}/);
+});
+
+test('authenticated Production QA probes send the in-memory Bearer token to protected app APIs', () => {
+  for (const qa of [accountQa, tradingCoreQa]) {
+    assert.match(qa, /productionReadOnlyAccessToken/);
+    assert.match(qa, /Authorization: `Bearer \$\{token\}`/);
+    assert.doesNotMatch(qa, /console\.(?:log|error)\([^\n]*accessToken/);
+    assert.doesNotMatch(qa, /writeEvidence\([^)]*accessToken/);
+  }
+
+  assert.match(accountQa, /Authenticated Production access token must remain in memory only/);
+  assert.match(tradingCoreQa, /PRODUCTION_TRADING_CORE_AUTH_TOKEN_MISSING/);
 });
