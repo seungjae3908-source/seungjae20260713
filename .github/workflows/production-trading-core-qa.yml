@@ -1,0 +1,217 @@
+name: Production Trading Core QA
+run-name: Production Trading Core QA ${{ inputs.sha || github.event.pull_request.head.sha }}
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-trading-core-qa.yml'
+      - '.github/tests/production-trading-core-qa-contract.test.mjs'
+      - 'stock-analyzer/e2e/production-trading-core-qa.spec.ts'
+      - 'stock-analyzer/playwright.production-trading-core.config.ts'
+      - 'api-server/src/routes/trade-automation.ts'
+      - 'api-server/src/routes/paper-journal.ts'
+      - 'api-server/src/routes/user-broker-telegram.ts'
+      - 'api-server/src/services/member-auto-trading-background-worker.service.ts'
+      - 'api-server/src/services/trade-automation-unified-journal-adapter.ts'
+      - 'api-server/src/features/account-readonly/**'
+      - 'api-server/src/features/user-broker-telegram/**'
+      - '.github/workflows/production-automatic-trading-gate.yml'
+      - '.github/workflows/production-live-trading-gate.yml'
+      - '.github/workflows/production-futures-live-trading-gate.yml'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA
+        required: true
+        type: string
+      production_deploy_run_id:
+        description: Exact successful Production Deploy run ID
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA
+        required: true
+        type: string
+      production_deploy_run_id:
+        description: Exact successful Production Deploy run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-trading-core-qa-${{ github.event.pull_request.number || inputs.sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Validate focused Trading Core QA contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test .github/tests/production-trading-core-qa-contract.test.mjs
+
+  production-trading-core:
+    name: Real Production Trading Core closed-loop QA
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCTION_BASE_URL: https://lsj119.com
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_TRADING_CORE_QA: 'true'
+      PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
+      EXPECTED_DEPLOY_SHA: ${{ inputs.sha }}
+      PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact deployed source checkout
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_DEPLOY_SHA"
+
+      - name: Require exact official Production Deploy provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ inputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+        with:
+          script: |
+            const { assertProductionDeployProvenance } = require('./.github/scripts/production-deploy-provenance.cjs');
+            const id = String(process.env.PRODUCTION_DEPLOY_RUN_ID || '');
+            if (!/^[1-9][0-9]*$/.test(id)) {
+              core.setFailed('TRADING_CORE_DEPLOY_RUN_ID_INVALID');
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(id),
+            })).data;
+            try {
+              assertProductionDeployProvenance(run, {
+                targetSha: process.env.TARGET_SHA,
+                productionDeployRunId: id,
+              });
+            } catch (error) {
+              core.setFailed(String(error?.message ?? 'TRADING_CORE_DEPLOY_PROVENANCE_INVALID'));
+            }
+
+      - name: Require exact Production runtime identity
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/trading-core-health.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { assertProductionRuntimeIdentity } = require('./.github/scripts/production-deploy-provenance.cjs');
+          assertProductionRuntimeIdentity(
+            JSON.parse(fs.readFileSync('/tmp/trading-core-health.json', 'utf8')),
+            process.env.EXPECTED_DEPLOY_SHA,
+          );
+          NODE
+
+      - name: Require protected QA login
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
+            exit 1
+          }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install isolated Chromium
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Run focused Production Trading Core QA
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
+
+      - name: Verify sanitized Trading Core receipt
+        run: |
+          set -Eeuo pipefail
+          file="stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json"
+          test -s "$file"
+          node - "$file" "$EXPECTED_DEPLOY_SHA" "$PRODUCTION_DEPLOY_RUN_ID" <<'NODE'
+          const fs = require('node:fs');
+          const [file, sha, runId] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const providers = value?.providers ?? {};
+          if (value?.schemaVersion !== 'production-trading-core-qa-v1'
+            || value?.targetSha !== sha
+            || value?.productionDeployRunId !== Number(runId)
+            || value?.officialProductionOrigin !== true
+            || value?.authenticatedProductionSession !== true
+            || !Number.isFinite(Date.parse(String(value?.generatedAt ?? '')))
+            || ['toss','kiwoom','upbit','bitget'].some((p) => providers[p] !== 'PASS')
+            || value?.paperAutomaticTriggered !== true
+            || value?.paperFilled !== true
+            || value?.journalVisible !== true
+            || !(Number(value?.executionSyncInserted) >= 1)
+            || !(Number(value?.telegramDeliveryQueued) >= 1)
+            || value?.telegramTestDelivered !== true
+            || value?.policyRestored !== true
+            || value?.realOrderSubmitted !== false
+            || value?.liveTradingAuthorityGranted !== false
+            || value?.autoTradingAuthorityGranted !== false
+            || value?.orderRequests !== 0
+            || value?.cancelRequests !== 0
+            || value?.amendRequests !== 0
+            || value?.transferRequests !== 0
+            || value?.withdrawalRequests !== 0
+            || value?.secretValuesRecorded !== false
+            || value?.accountValuesRecorded !== false) {
+            throw new Error('PRODUCTION_TRADING_CORE_QA_RECEIPT_INVALID');
+          }
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-trading-core-${{ inputs.sha }}
+          path: stock-analyzer/production-trading-core-artifacts
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Safety summary
+        if: always()
+        run: |
+          {
+            echo '## Production Trading Core QA'
+            echo
+            echo "- SHA: `$EXPECTED_DEPLOY_SHA`"
+            echo '- scope: 4 Provider + Paper Auto + Unified Journal + Telegram only'
+            echo '- Research/AI Chart/Backtester/other UI: not evaluated'
+            echo '- real orders/cancels/amends/transfers/withdrawals: 0/0/0/0/0'
+            echo '- Paper canary: one bounded QA trade'
+            echo '- Telegram: one [TEST] delivery plus execution outbox proof'
+          } >> "$GITHUB_STEP_SUMMARY"
