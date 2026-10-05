@@ -46,6 +46,12 @@ jobs:
 
           grep -Fq "startsWith(github.event.comment.body, '/diagnose-paper-canonical-runtime-readiness ')" "$workflow"
           grep -Fq "environment: production" "$workflow"
+          grep -Fq 'github.event.issue.number == 1555' "$workflow"
+          grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          ! grep -Eq 'github\.event\.issue\.number == 23\b|issue_number:[[:space:]]*23\b' "$workflow"
+          grep -Fq 'github.event.issue.number == 1555' "$workflow"
+          grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          ! grep -Eq 'github\.event\.issue\.number == 23\b|issue_number:[[:space:]]*23\b' "$workflow"
           grep -Fq "execFileSync('pm2', ['jlist']" "$remote"
           grep -Fq "activationApplied: false" "$remote"
           grep -Fq "readFile" "$service"
@@ -72,8 +78,8 @@ jobs:
   diagnose:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       startsWith(github.event.comment.body, '/diagnose-paper-canonical-runtime-readiness ')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -384,6 +390,6 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: context.issue.number,
               body: lines.join('\n'),
             });
