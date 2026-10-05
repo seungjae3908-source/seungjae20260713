@@ -7,6 +7,8 @@ on:
       - .github/workflows/production-live-trading-gate.yml
       - .github/scripts/production-trading-gate-conflicts.cjs
       - .github/scripts/production-trading-gate-conflicts.test.cjs
+      - .github/scripts/production-trading-gate-idempotency.cjs
+      - .github/scripts/production-trading-gate-idempotency.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -81,6 +83,10 @@ jobs:
           grep -Fq "LIVE_TRADING_EXACT_CREDENTIAL_REUSE_QA_REQUIRED" "$workflow"
           grep -Fq "LIVE_TRADING_ALL_THREE_PROVIDERS_REQUIRED" "$workflow"
           grep -Fq "PRODUCTION_TRADING_GATE_CONFLICT_ACTIVE" "$workflow"
+          grep -Fq 'needs: route-activate' "$workflow"
+          grep -Fq 'needs: route-disable' "$workflow"
+          grep -Fq 'production-trading-gate-idempotency.cjs' "$workflow"
+          node --test .github/scripts/production-trading-gate-idempotency.test.cjs
           grep -Fq 'runNameMatches = (name)' "$workflow"
           grep -Fq 'name.startsWith(`${workflowName} ${target} `)' "$workflow"
           grep -Fq 'production-comprehensive-readonly-${run.id}' "$workflow"
@@ -126,9 +132,69 @@ jobs:
           }
           NODE
 
+  route-activate:
+    name: Deduplicate Production live activation command
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-production-live-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      execute: ${{ steps.idempotency.outputs.execute }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Suppress already-applied exact state
+        id: idempotency
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/activate-production-live-trading ([0-9a-f]{40}) ([a-z]+(?:,[a-z]+)*)$/u.exec(body);
+            if (!match) throw new Error('Expected /activate-production-live-trading <40-char-current-main-sha> <provider[,provider...]>');
+            const allowed = new Set(['toss', 'kiwoom', 'upbit']);
+            const providers = match[2].split(',');
+            if (providers.length !== allowed.size
+              || new Set(providers).size !== providers.length
+              || providers.some((provider) => !allowed.has(provider))) {
+              throw new Error('LIVE_TRADING_ALL_THREE_PROVIDERS_REQUIRED');
+            }
+            const { inspectProductionTradingGateCommandIdempotency } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/production-trading-gate-idempotency.cjs'
+            );
+            const result = await inspectProductionTradingGateCommandIdempotency({
+              github,
+              context,
+              targetSha: match[1],
+              marker: '[PRODUCTION_LIVE_TRADING_GATE]',
+              desiredStatus: 'ACTIVATED_SPOT_LIVE_LIMITED_MANUAL',
+            });
+            core.setOutput('execute', result.duplicate ? 'false' : 'true');
+            core.notice(result.duplicate
+              ? 'PRODUCTION_LIVE_TRADING_IDEMPOTENT_NOOP'
+              : 'PRODUCTION_LIVE_TRADING_COMMAND_ACCEPTED');
+
   activate:
     name: Owner-approved manual Production live-trading gate activation
+    needs: route-activate
     if: >-
+      needs.route-activate.result == 'success' &&
+      needs.route-activate.outputs.execute == 'true' &&
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.number == 1555 &&
@@ -829,9 +895,62 @@ jobs:
               ].join('\n'),
             });
 
+  route-disable:
+    name: Deduplicate Production live disable command
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/disable-production-live-trading ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      execute: ${{ steps.idempotency.outputs.execute }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Suppress already-applied exact state
+        id: idempotency
+        uses: actions/github-script@v7
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/disable-production-live-trading ([0-9a-f]{40}) SAFE_READONLY_AUDIT_REQUIRED$/u.exec(body);
+            if (!match) throw new Error('Expected /disable-production-live-trading <40-char-deployed-sha> SAFE_READONLY_AUDIT_REQUIRED');
+            const { inspectProductionTradingGateCommandIdempotency } = require(
+              process.env.GITHUB_WORKSPACE + '/.github/scripts/production-trading-gate-idempotency.cjs'
+            );
+            const result = await inspectProductionTradingGateCommandIdempotency({
+              github,
+              context,
+              targetSha: match[1],
+              marker: '[PRODUCTION_LIVE_TRADING_GATE]',
+              desiredStatus: 'DISABLED',
+            });
+            core.setOutput('execute', result.duplicate ? 'false' : 'true');
+            core.notice(result.duplicate
+              ? 'PRODUCTION_LIVE_TRADING_DISABLE_IDEMPOTENT_NOOP'
+              : 'PRODUCTION_LIVE_TRADING_DISABLE_COMMAND_ACCEPTED');
+
   disable:
     name: Owner-approved safe Production live-trading recovery disable
+    needs: route-disable
     if: >-
+      needs.route-disable.result == 'success' &&
+      needs.route-disable.outputs.execute == 'true' &&
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.number == 1555 &&
