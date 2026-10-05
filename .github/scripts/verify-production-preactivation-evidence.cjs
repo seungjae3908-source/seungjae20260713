@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 const {
   REQUIRED_PROVIDERS,
   ZERO_COUNTERS,
@@ -8,26 +9,62 @@ const {
   assertAccountReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
+  assertTradingCoreReceipt,
 } = require('./production-postdeploy-qa-evidence.cjs');
 
-const [targetSha, runIdText, boundaryText, comprehensivePath, accountPath, credentialPath, activationPath] = process.argv.slice(2);
-if (!activationPath) {
-  throw new Error('Usage: verify-production-preactivation-evidence.cjs <sha> <run-id> <deployment-boundary> <comprehensive> <account> <credential> <activation-ready>');
+const args = process.argv.slice(2);
+if (args.length < 4) {
+  throw new Error('Usage: verify-production-preactivation-evidence.cjs <sha> <run-id> <deployment-boundary> <evidence-dir|comprehensive> [account credential activation-ready]');
 }
+
+const [targetSha, runIdText, boundaryText] = args;
 const productionDeployRunId = Number(runIdText);
 const context = { targetSha, productionDeployRunId };
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
-const comprehensive = read(comprehensivePath);
-const account = read(accountPath);
-const credential = read(credentialPath);
-const activation = read(activationPath);
-assertComprehensiveReceipt(comprehensive, context);
+
+let comprehensive = null;
+let tradingCore = null;
+let account;
+let credential;
+let activation;
+
+if (args.length === 4 && fs.existsSync(args[3]) && fs.statSync(args[3]).isDirectory()) {
+  const root = args[3];
+  const activationPath = path.join(root, `production-postdeploy-activation-ready-${String(targetSha).toLowerCase()}.json`);
+  account = read(path.join(root, 'production-account-readonly-live-qa.json'));
+  credential = read(path.join(root, 'production-live-credential-reuse-qa.json'));
+  activation = read(activationPath);
+  if (activation?.qaScope === 'trading_core') {
+    tradingCore = read(path.join(root, 'production-trading-core-qa.json'));
+  } else {
+    comprehensive = read(path.join(root, 'production-comprehensive-readonly-qa.json'));
+  }
+} else {
+  const [, , , comprehensivePath, accountPath, credentialPath, activationPath] = args;
+  if (!activationPath) {
+    throw new Error('Legacy usage requires <comprehensive> <account> <credential> <activation-ready>');
+  }
+  comprehensive = read(comprehensivePath);
+  account = read(accountPath);
+  credential = read(credentialPath);
+  activation = read(activationPath);
+}
+
+const qaScope = activation?.qaScope === 'trading_core' ? 'trading_core' : 'full';
+if (qaScope === 'trading_core') {
+  assertTradingCoreReceipt(tradingCore, context);
+} else {
+  assertComprehensiveReceipt(comprehensive, context);
+}
 assertAccountReceipt(account, context);
 assertCredentialReceipt(credential, context);
 
 const boundary = Date.parse(String(boundaryText ?? ''));
 if (!Number.isFinite(boundary)) throw new Error('PREACTIVATION_EVIDENCE_BOUNDARY_INVALID');
-for (const [name, receipt] of Object.entries({ comprehensive, account, credential, activation })) {
+const scopedReceipts = qaScope === 'trading_core'
+  ? { tradingCore, account, credential, activation }
+  : { comprehensive, account, credential, activation };
+for (const [name, receipt] of Object.entries(scopedReceipts)) {
   const generatedAt = Date.parse(String(receipt?.generatedAt ?? ''));
   if (!Number.isFinite(generatedAt) || generatedAt < boundary) {
     throw new Error(`PREACTIVATION_${name.toUpperCase()}_EVIDENCE_NOT_FRESH`);
@@ -35,13 +72,20 @@ for (const [name, receipt] of Object.entries({ comprehensive, account, credentia
 }
 
 const sha = String(targetSha).toLowerCase();
-if (activation?.schemaVersion !== 'production-postdeploy-activation-ready-v3'
+const v3Full = activation?.schemaVersion === 'production-postdeploy-activation-ready-v3'
+  && qaScope === 'full'
+  && activation?.comprehensiveQa === 'PASS';
+const v4Scoped = activation?.schemaVersion === 'production-postdeploy-activation-ready-v4'
+  && activation?.qaScope === qaScope
+  && (qaScope === 'trading_core'
+    ? activation?.tradingCoreQa === 'PASS' && activation?.comprehensiveQa === 'NOT_RUN'
+    : activation?.comprehensiveQa === 'PASS');
+if ((!v3Full && !v4Scoped)
   || activation?.targetSha !== sha
   || activation?.mainSha !== sha
   || activation?.productionSha !== sha
   || activation?.productionDeployRunId !== productionDeployRunId
   || activation?.identityMatch !== true
-  || activation?.comprehensiveQa !== 'PASS'
   || activation?.credentialReuse !== '4/4 PASS'
   || activation?.realOrderSubmitted !== false
   || activation?.liveTradingAuthorityGranted !== false
@@ -69,5 +113,6 @@ process.stdout.write(JSON.stringify({
   ok: true,
   targetSha: sha,
   productionDeployRunId,
+  qaScope,
   activationReady: true,
 }) + '\n');
