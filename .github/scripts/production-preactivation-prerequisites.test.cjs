@@ -16,6 +16,7 @@ const REQUIRED_CI_RUN_ID = 303;
 const BOUNDARY = '2026-10-05T00:01:00.000Z';
 
 function fixture(overrides = {}) {
+  const qaScope = overrides.qaScope ?? 'full';
   const listCommitStatusesForRef = () => undefined;
   const listWorkflowRuns = () => undefined;
   const listJobsForWorkflowRun = () => undefined;
@@ -32,9 +33,12 @@ function fixture(overrides = {}) {
     created_at: '2026-10-05T00:00:00.000Z',
     updated_at: '2026-10-05T00:01:00.000Z',
   };
-  const artifacts = Object.entries(REQUIRED_ARTIFACT_NAMES).map(([key, name], index) => ({
+  const artifactKeys = qaScope === 'trading_core'
+    ? ['tradingCore', 'account', 'credential', 'activationReady']
+    : ['comprehensive', 'account', 'credential', 'activationReady'];
+  const artifacts = artifactKeys.map((key, index) => ({
     id: index + 1,
-    name: name(SHA, PRODUCTION_RUN_ID),
+    name: REQUIRED_ARTIFACT_NAMES[key](SHA, PRODUCTION_RUN_ID),
     expired: false,
     size_in_bytes: 100,
     created_at: '2026-10-05T00:02:00.000Z',
@@ -60,6 +64,7 @@ function fixture(overrides = {}) {
     statuses,
     ...overrides,
   };
+  delete state.qaScope;
   if (overrides.deploy) state.deploys = [overrides.deploy];
 
   const github = {
@@ -120,6 +125,15 @@ test('accepts exact-main Required CI 6/6, post-merge provenance, and fresh Produ
   assert.equal(result.postMergeProvenanceRunId, PROVENANCE_RUN_ID);
   assert.equal(result.productionDeployRunId, PRODUCTION_RUN_ID);
   assert.equal(result.productionDeployCompletedAt, BOUNDARY);
+  assert.equal(result.qaScope, 'full');
+});
+
+test('accepts focused Trading Core artifact set without Comprehensive artifact', async () => {
+  const input = fixture({ qaScope: 'trading_core' });
+  const result = await inspectProductionPreactivationPrerequisites({ ...input, targetSha: SHA });
+  assert.equal(result.qaScope, 'trading_core');
+  assert.equal(result.productionDeployRunId, PRODUCTION_RUN_ID);
+  assert.equal(result.artifactNames.tradingCore, `production-trading-core-${SHA}`);
 });
 
 test('ignores a newer pull-request validation run and selects the real workflow_dispatch Production deploy', async () => {
