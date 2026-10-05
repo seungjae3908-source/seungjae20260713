@@ -332,6 +332,28 @@ ENV
     "${SUDO[@]}" systemctl is-active --quiet "$timer"
   done
 
+  # Bootstrap one read-only AI scan so activation cannot report success while
+  # the free AI provider configuration is missing. Provider outages remain
+  # observable in the AI artifact and never grant execution authority.
+  "${SUDO[@]}" systemctl start research-production-ai-review.service
+  local ai_latest="$STATE/ai-review/latest.json"
+  "${SUDO[@]}" test -s "$ai_latest"
+  "${SUDO[@]}" /usr/bin/node - "$ai_latest" "$TARGET_SHA" <<'NODE'
+const fs = require('node:fs');
+const [path, targetSha] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+if (value?.researchSha !== targetSha
+  || value?.provider == null
+  || value?.status === 'WAITING_FOR_FREE_AI'
+  || value?.safety?.executionAuthority !== 'NONE'
+  || value?.safety?.liveTrading !== false
+  || value?.safety?.orderAllowed !== false) {
+  console.error('RESEARCH_AI_PROVIDER_NOT_READY');
+  process.exit(68);
+}
+process.stdout.write(`RESEARCH_AI_BOOTSTRAP_STATUS=${String(value.status)}\n`);
+NODE
+
   local app_sha_after
   app_sha_after="$(read_app_sha)"
   [[ "$app_sha_after" == "$APP_SHA_BEFORE" ]] || {
