@@ -213,8 +213,10 @@ export class TradePreSubmissionRiskService {
       }
 
       if (currentPlan.exchange === 'bitget') {
-        if (currentPlan.leverage !== RULE_PACK_PILOT_PROFILE.futuresMaxLeverage) {
-          blockCodes.push('PILOT_FUTURES_LEVERAGE_REQUIRED');
+        if (!Number.isInteger(currentPlan.leverage)
+          || Number(currentPlan.leverage) < 2
+          || Number(currentPlan.leverage) > Math.min(7, Number(policy.bitgetLeverage))) {
+          blockCodes.push('PILOT_FUTURES_LEVERAGE_POLICY_LIMIT');
         }
         if (currentPlan.marginMode !== 'isolated') blockCodes.push('PILOT_FUTURES_ISOLATED_REQUIRED');
       }
