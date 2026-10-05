@@ -40,88 +40,28 @@ ALLOWED_DIRECTIONS = {
     "CRYPTO_SPOT": {"LONG"},
     "CRYPTO_FUTURES": {"LONG", "SHORT"},
 }
-SOURCE_CENSUS_RUN_ID = 37384183815
+SOURCE_CENSUS_RUN_ID = 37390376696
 
 
 def load_kr_fast() -> tuple[pl.DataFrame, dict]:
-    from pykrx import stock
-
-    dates = pd.date_range(census.START.date(), (census.END_EXCLUSIVE - pd.Timedelta(days=1)).date(), freq="B")
-
-    def fetch_day(dt):
-        key = dt.strftime("%Y%m%d")
-        last = None
-        for attempt in range(4):
-            try:
-                frame = stock.get_market_ohlcv_by_ticker(key, market="ALL")
-                if frame is None or frame.empty:
-                    return key, [], None
-                frame = frame.reset_index()
-                ticker_col = frame.columns[0]
-                required = ["시가", "고가", "저가", "종가", "거래량"]
-                if not all(col in frame.columns for col in required):
-                    return key, [], f"schema:{list(frame.columns)[:12]}"
-                rows = []
-                for r in frame[[ticker_col, *required]].itertuples(index=False, name=None):
-                    sym, o, h, l, close, v = r
-                    try:
-                        o, h, l, close, v = float(o), float(h), float(l), float(close), float(v)
-                    except Exception:
-                        continue
-                    if min(o, h, l, close) <= 0 or v < 0:
-                        continue
-                    rows.append((str(sym).zfill(6), dt.date(), o, h, l, close, v))
-                return key, rows, None
-            except Exception as exc:
-                last = exc
-                time.sleep(0.8 * (attempt + 1))
-        return key, [], str(last)[:180]
-
-    all_rows = []
-    failures = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {pool.submit(fetch_day, dt): dt for dt in dates}
-        for idx, future in enumerate(concurrent.futures.as_completed(futures), 1):
-            key, rows, error = future.result()
-            if rows:
-                all_rows.extend(rows)
-            if error:
-                failures.append({"date": key, "error": error})
-            if idx % 50 == 0:
-                print(json.dumps({
-                    "krFastDatesComplete": idx,
-                    "rows": len(all_rows),
-                    "failures": len(failures),
-                }), flush=True)
-
-    if len(all_rows) < 300_000:
-        print(json.dumps({
-            "krFastFallbackAttempted": True,
-            "rows": len(all_rows),
-            "failures": len(failures),
-        }), flush=True)
-        return census.load_kr()
-
-    return (
-        pl.DataFrame(
-            all_rows,
-            schema=["symbol","date","open","high","low","close","volume"],
-            orient="row",
-        ),
-        {
-            "provider": "pykrx/KRX",
-            "coverageMode": "DAILY_ALL_MARKET_KOSPI_KOSDAQ_KONEX_PARALLEL4",
-            "failedBusinessDates": len(failures),
-            "failurePreview": failures[:10],
-        },
-    )
+    # Use the same frozen period-end KRX universe as the census.
+    # Do not retry pykrx or silently fall back to KOSPI-only data.
+    return census.load_kr()
 
 
 def assert_source_coverage(market: str, source_meta: dict) -> None:
     mode = str(source_meta.get("coverageMode") or "")
     if market == "KR_STOCK":
-        if "ALL_MARKET" not in mode or "FALLBACK" in mode:
+        usable = int(source_meta.get("usableSymbols") or 0)
+        market_counts = source_meta.get("usableMarketCounts") or {}
+        if "FROZEN_KRX_ALL_MARKET" not in mode or "FALLBACK" in mode:
             raise RuntimeError(f"KR_FULL_UNIVERSE_COVERAGE_REQUIRED:{mode}")
+        if usable < 2950:
+            raise RuntimeError(f"KR_USABLE_SYMBOLS_TOO_LOW:{usable}")
+        if int(market_counts.get("KOSPI") or 0) < 880:
+            raise RuntimeError(f"KR_KOSPI_USABLE_TOO_LOW:{market_counts}")
+        if int(market_counts.get("KOSDAQ") or 0) < 1650:
+            raise RuntimeError(f"KR_KOSDAQ_USABLE_TOO_LOW:{market_counts}")
     elif market == "US_STOCK":
         if int(source_meta.get("monthCount") or 0) < 34:
             raise RuntimeError(f"US_MONTH_COVERAGE_TOO_LOW:{source_meta.get('monthCount')}")
