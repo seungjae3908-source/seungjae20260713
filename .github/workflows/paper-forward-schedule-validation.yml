@@ -272,6 +272,19 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
 
+      - name: Verify current Release Control routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for workflow in \
+            .github/workflows/paper-forward-schedule-activation.yml \
+            .github/workflows/paper-forward-schedule-no-deploy-activation.yml \
+            .github/workflows/paper-forward-schedule-disable.yml; do
+            grep -Fq 'github.event.issue.number == 1555' "$workflow"
+            grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+            ! grep -Eq 'github\.event\.issue\.number == 23\b|issue_number:[[:space:]]*23\b' "$workflow"
+          done
+
       - name: Require bounded non-UI diff
         shell: bash
         run: |
