@@ -365,6 +365,8 @@ function providerLabel(provider: CredentialProvider) { return provider === 'toss
 function latestCheckedAt(values: Array<CanonicalAccountSnapshot | undefined>) { const timestamps = values.map((value) => value?.checkedAt).filter((value): value is string => Boolean(value)); if (!timestamps.length) return resolveEvidenceDisplay({ value: null }).display; return new Date(timestamps.sort().at(-1)!).toLocaleString('ko-KR'); }
 function errorGuide(value: string) {
   if (value === 'TOSS_AUTH_FAILED') return 'Toss Client ID / Client Secret 인증을 확인해 주세요.';
+  if (value === 'TOSS_TOKEN_AUTH_FAILED') return 'Toss Client ID / Client Secret을 다시 입력하거나 재발급해 주세요.';
+  if (value === 'TOSS_ACCOUNT_API_AUTH_FAILED') return 'Toss 조회 토큰의 계좌 조회 권한을 확인하고 필요하면 키를 재발급해 주세요.';
   if (value === 'TOSS_IP_NOT_ALLOWED') return 'Toss Open API 허용 IP를 확인해 주세요.';
   if (value === 'UPBIT_IP_NOT_ALLOWED') return 'Upbit API 허용 IP에 서버 출구 IP를 등록해 주세요.';
   if (value === 'UPBIT_PERMISSION_DENIED') return 'Upbit API Key의 자산·주문조회 권한을 확인해 주세요.';

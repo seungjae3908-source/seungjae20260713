@@ -1359,7 +1359,7 @@ test('vault-backed Bitget treats production 40084 for Classic Account mode as a 
 
 test('Toss authenticated account GET preserves 401 versus 403 without credential leakage', async () => {
   for (const fixture of [
-    { status: 401, code: 'TOSS_AUTH_FAILED' },
+    { status: 401, code: 'TOSS_ACCOUNT_API_AUTH_FAILED' },
     { status: 403, code: 'TOSS_IP_NOT_ALLOWED' },
   ] as const) {
     const readers = createVaultBackedAccountReaders({
@@ -1393,7 +1393,7 @@ test('Toss authenticated account GET preserves 401 versus 403 without credential
 
 test('Toss OAuth token uses the official form contract and preserves 401 versus 403 without credential leakage', async () => {
   for (const fixture of [
-    { status: 401, code: 'TOSS_AUTH_FAILED' },
+    { status: 401, code: 'TOSS_TOKEN_AUTH_FAILED' },
     { status: 403, code: 'TOSS_IP_NOT_ALLOWED' },
   ] as const) {
     const clientId = 'TOSS_CLIENT_RUNTIME_TEST_ONLY';
