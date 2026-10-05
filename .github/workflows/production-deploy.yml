@@ -483,28 +483,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: 1T · Focused Trading Core Production QA
-        if: ${{ inputs.qa_scope == 'trading_core' }}
-        env:
-          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
-          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
-          PRODUCTION_BASE_URL: https://lsj119.com
-          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
-          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
-          PRODUCTION_TRADING_CORE_QA: 'true'
-          PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
-        working-directory: stock-analyzer
-        run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
-
-      - name: Upload Trading Core QA evidence
-        if: ${{ inputs.qa_scope == 'trading_core' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-trading-core-${{ env.TARGET_SHA }}
-          path: stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json
-          if-no-files-found: error
-          retention-days: 30
-
       - name: 2 · Four-provider Account Production read-only QA
         env:
           GH_TOKEN: ${{ github.token }}
@@ -573,6 +551,28 @@ jobs:
         with:
           name: production-live-credential-reuse-${{ env.TARGET_SHA }}
           path: stock-analyzer/production-live-credential-reuse-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 1T · Focused Trading Core Production QA
+        if: ${{ inputs.qa_scope == 'trading_core' }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_TRADING_CORE_QA: 'true'
+          PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
+
+      - name: Upload Trading Core QA evidence
+        if: ${{ inputs.qa_scope == 'trading_core' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-trading-core-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json
           if-no-files-found: error
           retention-days: 30
 
