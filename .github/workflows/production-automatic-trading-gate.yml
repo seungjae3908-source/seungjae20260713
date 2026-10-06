@@ -9,6 +9,8 @@ on:
       - .github/scripts/production-trading-gate-conflicts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/scripts/production-preactivation-evidence-paths.cjs
+      - .github/scripts/production-preactivation-evidence-paths.test.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - api-server/src/services/trade-automation.service.ts
@@ -52,6 +54,7 @@ jobs:
         with:
           node-version: "22"
       - run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
 
   activate:
     name: Owner-approved four-market Production automatic-trading activation
