@@ -15,8 +15,8 @@ const requiredFragments = [
   'name: Telegram Production Release',
   'issue_comment:',
   'pull_request:',
-  'github.event.issue.number == 23',
-  "github.event.issue.title == 'Staging Readiness Control'",
+  'github.event.issue.number == 1555',
+  "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'",
   "github.event.comment.user.login == 'seungjae3908-source'",
   "github.event.comment.author_association == 'OWNER'",
   '/run-telegram-production ',
@@ -106,6 +106,16 @@ const missing = requiredFragments.filter((fragment) => !source.includes(fragment
 if (missing.length > 0) {
   console.error(`[telegram-production-release-contract] missing safeguards: ${missing.join(', ')}`);
   process.exit(1);
+}
+
+if (source.includes('github.event.issue.number == 23')
+  || source.includes('issue_number: 23')
+  || source.includes("github.event.issue.title == 'Staging Readiness Control'")) {
+  throw new Error('Telegram Production release must not route commands or receipts to saturated control issue #23');
+}
+const rolloverReceiptTargets = source.match(/issue_number:\s*1555/g) ?? [];
+if (rolloverReceiptTargets.length !== 3) {
+  throw new Error(`Telegram Production release must route all three evidence comments to #1555; found ${rolloverReceiptTargets.length}`);
 }
 
 const requiredConfigBlocks = [
