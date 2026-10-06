@@ -355,7 +355,7 @@ def main():
         repo_id=DATASET,repo_type="dataset",allow_patterns=[f"{sub}/15m/*.parquet"]
     ))/sub/"15m"
     files,selected,tasks,prescreen_failures=activity.full_universe_prescreen(folder,sub)
-    selected=selected.copy()
+    selected=selected.clone()
     selected_pd=selected.to_pandas()
     selected_pd["timestamp"]=pd.to_datetime(selected_pd["date"],utc=True)
     selected_pd["month"]=selected_pd["month"].astype(str)
