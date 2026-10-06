@@ -118,6 +118,13 @@ async function githubIssueComment(commentId) {
   return githubJson(`/issues/comments/${id}`);
 }
 
+function issueNumberFromComment(comment, code) {
+  const issueUrl = String(comment?.issue_url ?? '').trim();
+  const match = issueUrl.match(/\/issues\/([1-9][0-9]*)(?:\/)?$/u);
+  if (!match) throw new Error(code);
+  return positiveInteger(match[1], code);
+}
+
 async function verifyProtectedAuthorityComments({
   targetSha,
   activationReceiptCommentId,
@@ -156,12 +163,33 @@ async function verifyProtectedAuthorityComments({
     throw new Error('SERVER_CANONICAL_OWNER_CUTOVER_AUTHORITY_INVALID');
   }
 
+  const receiptIssueNumber = issueNumberFromComment(
+    receipt,
+    'SERVER_CANONICAL_V3_OWNER_RECEIPT_ISSUE_INVALID',
+  );
+  const authorityIssueNumber = issueNumberFromComment(
+    authority,
+    'SERVER_CANONICAL_OWNER_CUTOVER_AUTHORITY_ISSUE_INVALID',
+  );
+  if (receiptIssueNumber !== authorityIssueNumber) {
+    throw new Error('SERVER_CANONICAL_AUTHORITY_ISSUE_MISMATCH');
+  }
+  const releaseControl = await githubJson(`/issues/${receiptIssueNumber}`);
+  const releaseControlTitle = String(releaseControl?.title ?? '');
+  const validReleaseControlTitle = releaseControlTitle === 'Staging Readiness Control'
+    || releaseControlTitle.startsWith('Staging Readiness Control — Rollover ');
+  if (releaseControl?.state !== 'open'
+    || releaseControl?.pull_request
+    || !validReleaseControlTitle) {
+    throw new Error('SERVER_CANONICAL_RELEASE_CONTROL_INVALID');
+  }
+
   const since = encodeURIComponent(receipt?.created_at ?? '');
   let page = 1;
   let latest = null;
   while (page <= 20) {
     const response = await githubJson(
-      `/issues/23/comments?since=${since}&per_page=100&page=${page}`,
+      `/issues/${receiptIssueNumber}/comments?since=${since}&per_page=100&page=${page}`,
     );
     if (!Array.isArray(response)) {
       throw new Error('SERVER_CANONICAL_RELEASE_COMMENTS_INVALID');
@@ -189,7 +217,13 @@ async function verifyProtectedAuthorityComments({
     || latest.action !== 'AUTHORIZE') {
     throw new Error('SERVER_CANONICAL_V3_OWNER_RECEIPT_NOT_LATEST');
   }
-  return Object.freeze({ receipt, authority });
+  return Object.freeze({
+    receipt,
+    authority,
+    issueNumber: receiptIssueNumber,
+    issueTitle: releaseControlTitle,
+    releaseControlOpen: true,
+  });
 }
 
 async function requiredCi(targetSha) {
@@ -498,7 +532,9 @@ async function prepareActivation() {
     maximumCanonicalEconomicCredit: 1,
   });
   const latestActivationReceipt = Object.freeze({
-    issueNumber: 23,
+    issueNumber: authorityEvidence.issueNumber,
+    issueTitle: authorityEvidence.issueTitle,
+    releaseControlOpen: authorityEvidence.releaseControlOpen,
     action: 'AUTHORIZE',
     targetMainSha: targetSha,
     activationBindingDigest: bindingDigest,
