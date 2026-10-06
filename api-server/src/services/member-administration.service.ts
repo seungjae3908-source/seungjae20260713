@@ -143,24 +143,20 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
   if ('isActive' in value && typeof value.isActive !== 'boolean') {
     throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 활성 상태 값을 확인하세요.');
   }
-  if (
-    'membershipExpiresAt' in value
-    && value.membershipExpiresAt !== null
-    && typeof value.membershipExpiresAt !== 'string'
-  ) {
-    throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 만료일 값을 확인하세요.');
-  }
-
   const membershipLevel = typeof value.membershipLevel === 'string'
     ? value.membershipLevel as MemberTier
     : undefined;
   const isActive = typeof value.isActive === 'boolean' ? value.isActive : undefined;
   let membershipExpiresAt: string | null | undefined;
   if ('membershipExpiresAt' in value) {
-    if (value.membershipExpiresAt == null || value.membershipExpiresAt === '') {
+    const expiryInput = value.membershipExpiresAt;
+    if (expiryInput == null || expiryInput === '') {
       membershipExpiresAt = null;
     } else {
-      const timestamp = Date.parse(value.membershipExpiresAt);
+      if (typeof expiryInput !== 'string') {
+        throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 만료일 값을 확인하세요.');
+      }
+      const timestamp = Date.parse(expiryInput);
       if (!Number.isFinite(timestamp)) {
         throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 만료일 값을 확인하세요.');
       }
