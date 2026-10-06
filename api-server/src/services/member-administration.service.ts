@@ -182,7 +182,8 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
 export function isActiveAdmin(profile: MemberAdministrationProfile) {
   return profile.status === 'approved'
     && profile.is_active === true
-    && storedMemberTier(profile) === 'admin';
+    && storedMemberTier(profile) === 'admin'
+    && deriveMemberTier(profile) === 'admin';
 }
 
 function legacyRoleForTier(tier: MemberTier): 'pending' | 'associate' | 'full' | 'admin' {
