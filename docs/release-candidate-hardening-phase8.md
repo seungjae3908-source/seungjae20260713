@@ -31,7 +31,11 @@ GitHub Actions `database-rls` job에서 `postgres:16-alpine` service container�
 9. 잔여 테이블·컬럼·함수 부재를 확인한다.
 10. 세 migration을 다시 적용하고 RLS를 재검증한다.
 
-운영 DB에는 migration을 적용하지 않는다.
+운영 DB에는 수동으로 migration을 적용하지 않는다. protected Production
+exact-SHA 배포 게이트만 6개 paper 테이블이 모두 없는 경우에 한해 Phase 7
+storage → Phase 8 membership RLS → authenticated privilege 순서를 하나의 원자적
+transaction으로 적용할 수 있다. 일부 테이블만 존재하거나 구조·정책 검증이
+어긋나면 자동 보정하지 않고 fail-closed한다.
 
 ## Migration apply·rollback
 

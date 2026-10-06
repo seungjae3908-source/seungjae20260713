@@ -7,8 +7,8 @@ const migrationPath = path.join(process.cwd(), 'api-server/supabase/migrations/2
 const sql = readFileSync(migrationPath, 'utf8');
 const tables = ['paper_accounts', 'paper_orders', 'paper_positions', 'paper_fills', 'paper_journal_entries', 'paper_sync_state'];
 
-test('migration is explicitly review only', () => {
-  assert.match(sql, /Do not apply it to the production database/i);
+test('migration is restricted to the protected exact-SHA production bootstrap', () => {
+  assert.match(sql, /protected exact-SHA atomic paper[\s\S]*Never apply this migration manually/i);
 });
 
 for (const table of tables) {
