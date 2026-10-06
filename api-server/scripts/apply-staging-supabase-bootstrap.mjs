@@ -103,6 +103,7 @@ async function buildAtomicSql(projectRef) {
     'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
     'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql',
     'api-server/supabase/migrations/2026082704_member_watchlist_items.sql',
+    'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
   ];
   const assertionPaths = [
     'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
