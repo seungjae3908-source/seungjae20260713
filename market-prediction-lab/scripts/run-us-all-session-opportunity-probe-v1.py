@@ -109,7 +109,9 @@ def query_sql(path: Path) -> str:
           ELSE 'POST'
         END AS sessionPart
       FROM w
-      WHERE entryPrice IS NOT NULL
+      WHERE entryTime IS NOT NULL
+        AND entryPrice IS NOT NULL
+        AND entryTime <= ts + INTERVAL '2 minutes'
         AND futureHigh IS NOT NULL
         AND futureLow IS NOT NULL
         AND priorDollar60 IS NOT NULL
@@ -179,7 +181,7 @@ def main() -> None:
 
         sample_sql = base + f"""
         SELECT
-          symbol,ts,date,sessionPart,close,entryPrice,futureHigh,futureLow,
+          symbol,ts,entryTime,date,sessionPart,close,entryPrice,futureHigh,futureLow,
           ret1,ret5,ret15,rvol60,dollarAccel5,rangePct,closeLoc,
           distHigh30,distLow30,vwapDist,
           futureHigh/entryPrice-1 AS forwardMFE,
@@ -214,6 +216,8 @@ def main() -> None:
             "notOpeningOnly": True,
             "preRegularPostAllIncluded": True,
             "signalStateUsesCurrentAndPastBarsOnly": True,
+            "forwardHighLowUsesClockTimeRangeNotRowCount": True,
+            "nextEntryBarMustArriveWithinTwoClockMinutes": True,
             "forwardHighLowUsedOnlyAsLabel": True,
             "strictNoStopLabelIsConservativeNotExactPathOrder": True,
             "notYetATradingStrategy": True,
