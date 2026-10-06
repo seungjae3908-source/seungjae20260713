@@ -601,7 +601,11 @@ def portfolio_audit(df: pd.DataFrame, rank_score: np.ndarray, threshold: float):
                 "entries": int(r["positions"]["entries"]),
                 "maxConcurrent": int(r["positions"]["maxConcurrent"]),
                 "capacityBlocked": int(r["allMissReasons"].get("portfolio_capacity", 0)),
-                "executionRecall": float(r["recall"]["executionRecall"]),
+                "executionRecall": (
+                    float(r["opportunities"]["executionRecall"])
+                    if r["opportunities"]["executionRecall"] is not None
+                    else None
+                ),
                 "bookedNetReturnSum": float(r["positions"]["bookedNetReturnSum"]),
                 "positiveEntryRate": r["positions"]["positiveEntryRate"],
             }
