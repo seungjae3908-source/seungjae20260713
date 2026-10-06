@@ -127,7 +127,12 @@ export function buildServerCanonicalCutoverReadiness({
     currentMainSha,
     activationBindingDigest,
   ].join(' ');
-  if (latestActivationReceipt?.issueNumber !== 23
+  const releaseControlTitle = String(latestActivationReceipt?.issueTitle ?? '');
+  const validReleaseControlTitle = releaseControlTitle === 'Staging Readiness Control'
+    || releaseControlTitle.startsWith('Staging Readiness Control — Rollover ');
+  if (!positiveInteger(latestActivationReceipt?.issueNumber)
+    || latestActivationReceipt?.releaseControlOpen !== true
+    || !validReleaseControlTitle
     || latestActivationReceipt?.action !== 'AUTHORIZE'
     || latestActivationReceipt?.targetMainSha !== currentMainSha
     || latestActivationReceipt?.activationBindingDigest !== activationBindingDigest
