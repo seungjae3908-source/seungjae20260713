@@ -38,6 +38,7 @@ on:
       - .github/scripts/verify-production-qa-receipt.cjs
       - .github/scripts/verify-production-deploy-execution.cjs
       - ops/apply-production-paper-journal-privileges.mjs
+      - ops/classify-production-paper-journal-privilege-failure.mjs
       - ops/verify-production-paper-journal-privileges.mjs
       - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
       - .github/scripts/build-production-postdeploy-context.mjs
@@ -381,6 +382,7 @@ jobs:
             trap cleanup_paper_gate EXIT
             tar -czf "$paper_archive" \
               ops/apply-production-paper-journal-privileges.mjs \
+              ops/classify-production-paper-journal-privilege-failure.mjs \
               api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
             scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
               "$paper_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
