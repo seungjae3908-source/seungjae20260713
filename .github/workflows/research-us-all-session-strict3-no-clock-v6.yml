@@ -1,0 +1,59 @@
+name: Research US All-Session Strict3 No-Clock V6
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/audit-us-all-session-strict3-no-clock-v6.py
+      - .github/workflows/research-us-all-session-strict3-no-clock-v6.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-us-all-session-strict3-no-clock-v6-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_RUN_ID: "37432285496"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/audit-us-all-session-strict3-no-clock-v6.py
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "lightgbm==4.5.0" "scikit-learn==1.5.2"
+      - name: Download frozen event data
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: us-all-session-opportunity-events-v3-combined-10ec3c31b27dcbaf3563932ab8843e66f8ea050a
+          path: source
+      - name: Audit strict3 without clock features
+        run: |
+          python market-prediction-lab/scripts/audit-us-all-session-strict3-no-clock-v6.py \
+            --events source/events.parquet \
+            --out-dir market-prediction-lab/docs/us-all-session-strict3-no-clock-v6
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-all-session-strict3-no-clock-v6-${{ github.sha }}
+          path: market-prediction-lab/docs/us-all-session-strict3-no-clock-v6
+          if-no-files-found: error
+          retention-days: 14
