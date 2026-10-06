@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "scikit-learn>=1.5,<2"
+          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "scikit-learn>=1.5,<2" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1"
       - name: Download Funding V3.2 winner artifact
         uses: actions/download-artifact@v4
         with:
