@@ -60,6 +60,8 @@ def build_current_features(combined:pl.DataFrame,month_start,month_end):
         &pl.col("gap").is_not_null()
         &pl.col("first5Rvol").is_not_null()
         &pl.col("first5Return").is_not_null()
+        &pl.col("first5CloseLoc").is_not_null()
+        &(pl.col("first5RangePct")>0)
         &(pl.col("open")>=2.0)
         &(pl.col("priorDollar20")>=5_000_000)
     )
