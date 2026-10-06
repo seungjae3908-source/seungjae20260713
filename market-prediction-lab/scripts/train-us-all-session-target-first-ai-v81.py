@@ -95,10 +95,11 @@ def prepare(data:pd.DataFrame)->pd.DataFrame:
     for c in v8.FEATURES:
         x[c]=pd.to_numeric(x[c],errors="coerce")
     x=x.replace([np.inf,-np.inf],np.nan)
+    # Keep the exact same feature-missing population contract as V8.
+    # LightGBM natively handles feature NaNs; dropping them here would silently
+    # change train/calibration/validation populations and invalidate the frozen-model comparison.
     return x.dropna(
-        subset=v8.FEATURES+[
-            "labelMfe3","labelTargetFirst3","exactNetReturn"
-        ]
+        subset=["labelMfe3","labelTargetFirst3","exactNetReturn"]
     ).copy()
 
 def main():
