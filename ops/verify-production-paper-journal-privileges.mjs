@@ -96,6 +96,7 @@ function verifyArtifact(filePath) {
   assert(value?.atomic_transaction === true, 'atomic transaction missing');
   assert([0, 6].includes(value?.tables_before), 'preflight table count mismatch');
   assert(value?.tables_created === 6 - value?.tables_before, 'created table count mismatch');
+  assert(value?.database_changed === (value?.tables_before === 0), 'database change classification mismatch');
   assert(value?.tables_verified === 6, 'table count mismatch');
   assert(value?.table_contract_verified === true, 'table contract was not verified');
   assert(value?.policy_contract_verified === true, 'policy contract was not verified');

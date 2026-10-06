@@ -194,6 +194,7 @@ run_sql "assert rollback cleanup" "api-server/supabase/test/phase8_rollback_asse
 run_sql "reapply Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
 assert_production_paper_partial_schema_fails
 run_production_paper_gate "missing-schema-bootstrap" 0
+run_production_paper_gate "post-bootstrap-noop" 6
 run_sql "reapply trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
 run_sql "reapply trade automation safety hardening" "api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql"
 run_sql "reapply recovery worker lease fencing" "api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql"
