@@ -99,6 +99,15 @@ def replay_always_on(
     signal_times = list(x["timestamp"].drop_duplicates().sort_values())
     active: dict[tuple[str, str], dict] = {}
     last_closed: dict[tuple[str, str], pd.Timestamp] = {}
+    # Capacity-blocked candidates are not forgotten. They remain on a watchlist
+    # until their original opportunity horizon expires. A stale watchlist item is
+    # never executed by itself; execution still requires a fresh scanner signal.
+    watchlist: dict[tuple[str, str], dict] = {}
+    watchlist_adds = 0
+    watchlist_recheck_ticks = 0
+    watchlist_refresh_signals = 0
+    watchlist_refresh_entries = 0
+    watchlist_expired = 0
     entered_rows: list[dict] = []
     miss_reasons = Counter()
     scan_ticks_while_position_open = 0
@@ -125,6 +134,15 @@ def replay_always_on(
             last_closed[k] = active[k]["exitTime"]
             del active[k]
 
+        expired_watch = [
+            k for k, w in watchlist.items() if w["validUntil"] <= t
+        ]
+        for k in expired_watch:
+            del watchlist[k]
+            watchlist_expired += 1
+        if watchlist:
+            watchlist_recheck_ticks += 1
+
         had_open_before_scan = bool(active)
         if had_open_before_scan:
             scan_ticks_while_position_open += 1
@@ -149,6 +167,9 @@ def replay_always_on(
                 continue
 
             key = _position_key(row)
+            if key in watchlist:
+                watchlist_refresh_signals += 1
+
             if key in active:
                 miss_reasons["already_open"] += 1
                 if is_opportunity:
@@ -158,6 +179,16 @@ def replay_always_on(
 
             if max_positions is not None and len(active) >= max_positions:
                 miss_reasons["portfolio_capacity"] += 1
+                watchlist[key] = {
+                    "market": market,
+                    "symbol": str(row["symbol"]),
+                    "direction": str(row["direction"]),
+                    "lastSignalTime": row["timestamp"],
+                    "validUntil": row["exitTime"],
+                    "score": float(row["score"]),
+                    "isOpportunity": bool(is_opportunity),
+                }
+                watchlist_adds += 1
                 if is_opportunity:
                     opportunity_missed += 1
                     opportunity_missed_reasons["portfolio_capacity"] += 1
@@ -185,6 +216,11 @@ def replay_always_on(
                 "reentry": bool(was_reentry),
             }
             active[key] = pos
+            if key in watchlist:
+                # This entry is based on the current fresh event, not the stale
+                # watchlist entry. The watchlist only preserves attention.
+                del watchlist[key]
+                watchlist_refresh_entries += 1
             entered_rows.append(pos)
             market_entry_count[market] += 1
 
@@ -248,10 +284,22 @@ def replay_always_on(
         "opportunities": {
             "target": float(opportunity_target),
             "total": int(opportunity_total),
+            "detected": int(opportunity_total),
+            "detectedRecall": 1.0 if opportunity_total else None,
             "captured": int(opportunity_entered),
+            "executed": int(opportunity_entered),
             "missed": int(opportunity_missed),
             "recall": recall,
+            "executionRecall": recall,
             "missReasons": dict(opportunity_missed_reasons),
+        },
+        "watchlist": {
+            "capacityBlockedAdds": int(watchlist_adds),
+            "recheckTicks": int(watchlist_recheck_ticks),
+            "freshSignalRefreshes": int(watchlist_refresh_signals),
+            "entriesOnLaterFreshSignal": int(watchlist_refresh_entries),
+            "expiredWithoutFreshExecution": int(watchlist_expired),
+            "remainingAtEnd": int(len(watchlist)),
         },
         "allMissReasons": dict(miss_reasons),
         "markets": market_rows,
@@ -263,6 +311,9 @@ def replay_always_on(
             "stocksAndSpotLongOnly": True,
             "futuresLongShort": True,
             "portfolioCapacityCanBeAudited": True,
+            "capacityBlockedSignalsKeptOnWatchlist": True,
+            "staleWatchlistNeverExecutedWithoutFreshSignal": True,
+            "detectionSeparatedFromExecution": True,
             "opportunityRecallUsesMFEAtLeast3pct": float(opportunity_target) == 0.03,
             "profitabilityProven": False,
             "executionAuthority": "NONE",
