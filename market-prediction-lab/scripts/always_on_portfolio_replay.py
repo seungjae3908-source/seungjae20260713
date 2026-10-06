@@ -408,8 +408,52 @@ def contract_fixture() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def watchlist_fixture() -> pd.DataFrame:
+    t0 = pd.Timestamp("2026-01-06T00:00:00Z")
+    return pd.DataFrame([
+        {
+            "market": "CRYPTO_FUTURES",
+            "timestamp": t0,
+            "symbol": "AUSDT",
+            "direction": "LONG",
+            "score": 0.95,
+            "entryTime": t0 + pd.Timedelta(minutes=1),
+            "exitTime": t0 + pd.Timedelta(minutes=20),
+            "netReturn": 0.02,
+            "MFE": 0.04,
+            "MAE": 0.01,
+        },
+        {
+            "market": "CRYPTO_FUTURES",
+            "timestamp": t0 + pd.Timedelta(minutes=5),
+            "symbol": "BUSDT",
+            "direction": "LONG",
+            "score": 0.90,
+            "entryTime": t0 + pd.Timedelta(minutes=6),
+            "exitTime": t0 + pd.Timedelta(minutes=30),
+            "netReturn": 0.03,
+            "MFE": 0.05,
+            "MAE": 0.01,
+        },
+        {
+            # Fresh B signal after A exits. Entry must use this row, not stale t+5 data.
+            "market": "CRYPTO_FUTURES",
+            "timestamp": t0 + pd.Timedelta(minutes=21),
+            "symbol": "BUSDT",
+            "direction": "LONG",
+            "score": 0.93,
+            "entryTime": t0 + pd.Timedelta(minutes=22),
+            "exitTime": t0 + pd.Timedelta(minutes=35),
+            "netReturn": 0.04,
+            "MFE": 0.06,
+            "MAE": 0.008,
+        },
+    ])
+
+
 def contract_smoke() -> dict:
     result = replay_always_on(contract_fixture(), max_positions=3)
+    watch = replay_always_on(watchlist_fixture(), max_positions=1)
     checks = {
         "scannerContinuesDuringOpenPosition": result["scanner"][
             "scanTicksWhilePositionOpen"
@@ -422,12 +466,23 @@ def contract_smoke() -> dict:
             "recall"
         ] == 1.0,
         "concurrencyObserved": result["positions"]["maxConcurrent"] >= 2,
+        "capacityBlockedCandidateAddedToWatchlist": watch["watchlist"][
+            "capacityBlockedAdds"
+        ] >= 1,
+        "watchlistCandidateRechecked": watch["watchlist"]["recheckTicks"] >= 1,
+        "freshSignalRefreshRecognized": watch["watchlist"][
+            "freshSignalRefreshes"
+        ] >= 1,
+        "entryOccursOnLaterFreshSignal": watch["watchlist"][
+            "entriesOnLaterFreshSignal"
+        ] >= 1,
     }
     return {
         "contract": "always-on-contract-smoke-v1",
         "pass": all(checks.values()),
         "checks": checks,
         "replay": result,
+        "watchlistReplay": watch,
     }
 
 
