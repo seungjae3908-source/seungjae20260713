@@ -9,7 +9,12 @@ import {
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
-import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
+import {
+  isTransientTradingProviderError,
+  tradingProviderHttpErrorCode,
+  tradingProviderNetworkErrorCode,
+  tradingProviderTimeoutCode,
+} from './trade-provider-http-error.service';
 import {
   prepareBitgetAccount,
   prepareBitgetContractConfig,
@@ -95,6 +100,9 @@ const BASE_URLS = {
 
 const PREFLIGHT_TIMEOUT_MS = 4_000;
 const ORDER_TIMEOUT_MS = 12_000;
+const VERIFICATION_TRANSIENT_RETRIES = 2;
+const VERIFICATION_RETRY_BASE_DELAY_MS = 1_000;
+const VERIFICATION_RETRY_MAX_DELAY_MS = 3_000;
 const BITGET_RECOGNIZED_STATES = new Set([
   'live', 'new', 'init', 'pending', 'accepted',
   'partially_filled', 'partial_fill', 'partial-filled',
@@ -429,7 +437,12 @@ export class TradeExecutionService {
   private cancelService: TradeCancelReconciliationService;
   private riskService: TradePreSubmissionRiskService;
 
-  constructor(private repository: TradingRepository) {
+  constructor(
+    private repository: TradingRepository,
+    private verificationSleep: (delayMs: number) => Promise<void> = (delayMs) => new Promise(
+      (resolve) => setTimeout(resolve, delayMs),
+    ),
+  ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
     this.cancelService = new TradeCancelReconciliationService(repository);
@@ -619,8 +632,24 @@ export class TradeExecutionService {
     let verifiedCredentials: Record<string, string> = credentials;
     let providerRequests = 0;
     const request = async <T>(operation: () => Promise<T>) => {
-      providerRequests += 1;
-      return operation();
+      for (let attempt = 0; ; attempt += 1) {
+        providerRequests += 1;
+        try {
+          return await operation();
+        } catch (error) {
+          const code = error instanceof Error
+            ? error.message.split(':')[0]
+            : 'LIVE_EXECUTION_VERIFICATION_FAILED';
+          if (attempt >= VERIFICATION_TRANSIENT_RETRIES || !isTransientTradingProviderError(code)) {
+            throw error;
+          }
+          const delayMs = Math.min(
+            VERIFICATION_RETRY_MAX_DELAY_MS,
+            VERIFICATION_RETRY_BASE_DELAY_MS * (2 ** attempt),
+          );
+          await this.verificationSleep(delayMs);
+        }
+      }
     };
 
     try {
