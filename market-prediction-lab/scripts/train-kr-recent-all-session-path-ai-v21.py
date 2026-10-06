@@ -83,6 +83,7 @@ def metrics(df:pd.DataFrame,score:np.ndarray,threshold:float)->dict:
     return {
         "threshold":float(threshold),
         "rows":int(len(df)),
+        "sampleSelected":int(pred.sum()),
         "positiveBuckets":int((y==1).sum()),
         "detectedPositiveBuckets":int((pred&(y==1)).sum()),
         "recall":recall,
@@ -105,7 +106,8 @@ def choose_threshold(cal:pd.DataFrame,score:np.ndarray)->dict:
     rows=[metrics(cal,score,float(t)) for t in thresholds]
     eligible=[
         r for r in rows
-        if r["recall"]>=0.20
+        if r["sampleSelected"]>=50
+        and r["recall"]>=0.20
         and r["populationWeightedPrecision"]>=0.40
         and r["populationWeightedSelectedShare"]<=0.20
         and (
@@ -125,8 +127,9 @@ def choose_threshold(cal:pd.DataFrame,score:np.ndarray)->dict:
         )
         mode="PATH_PRECISION_RECALL_GATE"
     else:
+        diagnostic=[r for r in rows if r["sampleSelected"]>=50] or rows
         winner=max(
-            rows,
+            diagnostic,
             key=lambda r:(
                 r["populationWeightedPrecision"],
                 r["recall"],
