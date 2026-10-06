@@ -15,6 +15,8 @@ import requests
 from huggingface_hub import HfApi
 from lightgbm import LGBMClassifier
 
+ROOT=Path(__file__).resolve().parents[2]
+
 DATASET="rogerdehe/klines-binance"
 START=pd.Timestamp("2023-04-01",tz="UTC")
 TRAIN_END=pd.Timestamp("2024-10-01",tz="UTC")
