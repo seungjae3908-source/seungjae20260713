@@ -144,22 +144,31 @@ def load_bars(market: str) -> tuple[pd.DataFrame, dict]:
 
 def add_features(pdf: pd.DataFrame) -> pd.DataFrame:
     out=[]
-    for symbol,g in pdf.groupby("symbol",sort=False):
-        g=g.sort_values("timestamp").copy()
-        q=g["quote_volume"].astype(float)
-        tq=g["taker_buy_quote"].astype(float)
-        base=g["volume"].astype(float)
-        g["takerRatio"]=np.where(q>0,tq/q,np.nan)
-        g["deltaQuote"]=2.0*tq-q
-        g["prevQuoteMean96"]=q.shift(1).rolling(96,min_periods=48).mean()
-        g["rvol"]=q/g["prevQuoteMean96"]
-        g["vwap96"]=q.rolling(96,min_periods=48).sum()/base.rolling(96,min_periods=48).sum().replace(0,np.nan)
-        g["prevClose"]=g["close"].shift(1)
-        g["prevVwap"]=g["vwap96"].shift(1)
-        g["flow4"]=g["deltaQuote"].rolling(4,min_periods=4).sum()/q.rolling(4,min_periods=4).sum().replace(0,np.nan)
-        g["ret4"]=g["close"]/g["close"].shift(4)-1.0
-        g["date"]=g["timestamp"].dt.date
-        out.append(g)
+    for symbol,g0 in pdf.groupby("symbol",sort=False):
+        g0=g0.sort_values("timestamp").copy()
+        gap=g0["timestamp"].diff()
+        g0["_segment"]=(gap > pd.Timedelta(minutes=30)).cumsum()
+        for seg,g in g0.groupby("_segment",sort=False):
+            g=g.copy()
+            if len(g) < 50:
+                continue
+            q=g["quote_volume"].astype(float)
+            tq=g["taker_buy_quote"].astype(float)
+            base=g["volume"].astype(float)
+            g["segmentId"]=f"{symbol}:{int(seg)}"
+            g["takerRatio"]=np.where(q>0,tq/q,np.nan)
+            g["deltaQuote"]=2.0*tq-q
+            g["prevQuoteMean96"]=q.shift(1).rolling(96,min_periods=48).mean()
+            g["rvol"]=q/g["prevQuoteMean96"]
+            g["vwap96"]=q.rolling(96,min_periods=48).sum()/base.rolling(96,min_periods=48).sum().replace(0,np.nan)
+            g["prevClose"]=g["close"].shift(1)
+            g["prevVwap"]=g["vwap96"].shift(1)
+            g["flow4"]=g["deltaQuote"].rolling(4,min_periods=4).sum()/q.rolling(4,min_periods=4).sum().replace(0,np.nan)
+            g["ret4"]=g["close"]/g["close"].shift(4)-1.0
+            g["date"]=g["timestamp"].dt.date
+            out.append(g)
+    if not out:
+        raise RuntimeError("CRYPTO_V3_NO_CONTIGUOUS_FEATURE_SEGMENTS")
     return pd.concat(out,ignore_index=True).dropna(subset=["rvol","vwap96","flow4","ret4","takerRatio","prevClose","prevVwap"])
 
 
@@ -226,7 +235,7 @@ def simulate_union(pdf: pd.DataFrame, union: pl.DataFrame, market: str) -> pl.Da
     sig={(str(r.symbol),pd.Timestamp(r.timestamp)):True for r in union.select(["symbol","timestamp"]).iter_rows(named=True)}
     rows=[]
     cost=COSTS[market]
-    for symbol,g in pdf.groupby("symbol",sort=False):
+    for (symbol,segment_id),g in pdf.groupby(["symbol","segmentId"],sort=False):
         g=g.sort_values("timestamp").reset_index(drop=True)
         ts=list(g["timestamp"])
         opens=g["open"].to_numpy(float); highs=g["high"].to_numpy(float); lows=g["low"].to_numpy(float); closes=g["close"].to_numpy(float)
@@ -234,6 +243,8 @@ def simulate_union(pdf: pd.DataFrame, union: pl.DataFrame, market: str) -> pl.Da
             if (str(symbol),pd.Timestamp(t)) not in sig:
                 continue
             entry_i=i+1
+            if pd.Timestamp(ts[entry_i]) - pd.Timestamp(t) > pd.Timedelta(minutes=30):
+                continue
             entry=float(opens[entry_i])
             if entry<=0: continue
             for hold in HOLDS:
