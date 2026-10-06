@@ -1,0 +1,55 @@
+name: Research KR DART Event V4 Source Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-kr-dart-event-v4-source-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install probe dependencies
+        run: python -m pip install "huggingface_hub>=0.30,<1" "pandas>=2.2,<3" "pyarrow>=18,<22"
+      - name: Probe DartLab public files
+        run: |
+          python - <<'PY'
+          import json, re, pandas as pd
+          from huggingface_hub import HfApi, hf_hub_download
+
+          repo='eddmpython/dartlab-data'
+          api=HfApi()
+          files=api.list_repo_files(repo_id=repo, repo_type='dataset')
+          roots={}
+          for f in files:
+              roots[f.split('/')[0]]=roots.get(f.split('/')[0],0)+1
+          price_files=[f for f in files if re.search(r'(gov|krx)/prices/raw-202[3-6]\.parquet$',f)]
+          aggregate=[f for f in files if any(k in f.lower() for k in ['disclosure','filing','search','index','rcept','receipt']) and f.lower().endswith(('.parquet','.csv','.json'))]
+          root_parquets=[f for f in files if '/' not in f and f.lower().endswith('.parquet')]
+          dart_shallow=[f for f in files if f.startswith('dart/') and f.count('/')<=2 and f.lower().endswith(('.parquet','.csv','.json'))][:200]
+
+          out={'fileCount':len(files),'rootCounts':roots,'priceFiles':price_files,'aggregateCandidates':aggregate[:200],'rootParquets':root_parquets,'dartShallow':dart_shallow}
+
+          for target in ['gov/prices/raw-2023.parquet','krx/prices/raw-2023.parquet']:
+              if target not in files: continue
+              p=hf_hub_download(repo_id=repo,repo_type='dataset',filename=target)
+              df=pd.read_parquet(p)
+              out['priceProbe']={'path':target,'rows':len(df),'columns':[str(c) for c in df.columns],'head':df.head(3).astype(str).to_dict('records')}
+              break
+
+          print(json.dumps({'KR_DART_V4_SOURCE_PROBE':out},ensure_ascii=False))
+          PY
