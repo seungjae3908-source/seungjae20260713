@@ -122,6 +122,91 @@ def broad_candidates(daily: pl.DataFrame) -> pl.DataFrame:
     return x.with_columns(pl.col("date").dt.strftime("%Y-%m").alias("month"))
 
 
+def stream_build_daily_and_outcomes() -> tuple[pl.DataFrame, int, pl.DataFrame]:
+    daily_frames = []
+    outcome_rows = []
+    history = None
+    broad_count = 0
+    base_cols = [
+        "symbol","date","open","close","volume","dollar_volume",
+        "first5_high","first5_low","first5_close","first5_volume",
+    ]
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        for idx, month in enumerate(census._month_iter(census.START, census.END_EXCLUSIVE), 1):
+            path = root / f"ohlcv_{month.strftime('%Y-%m')}.parquet"
+            census._download_us_month(month, path)
+            month_base = aggregate_month(path).select(base_cols).sort(["symbol","date"])
+
+            if history is None or history.is_empty():
+                combined = month_base
+            else:
+                combined = pl.concat([history, month_base], how="vertical").sort(["symbol","date"])
+
+            feat = combined.with_columns([
+                pl.col("close").shift(1).over("symbol").alias("prev_close"),
+                pl.col("dollar_volume").shift(1).rolling_mean(20, min_samples=10).over("symbol").alias("priorDollar20"),
+                pl.col("first5_volume").shift(1).rolling_mean(20, min_samples=10).over("symbol").alias("priorFirst5Vol20"),
+            ]).with_columns([
+                (pl.col("open") / pl.col("prev_close") - 1.0).alias("gap"),
+                (pl.col("first5_volume") / pl.col("priorFirst5Vol20")).alias("first5Rvol"),
+                (pl.col("first5_close") / pl.col("open") - 1.0).alias("first5Return"),
+                ((pl.col("first5_high") - pl.col("first5_low")) / pl.col("open")).alias("first5RangePct"),
+            ])
+
+            month_start = month.date()
+            month_end = (month + pd.offsets.MonthBegin(1)).date()
+            current = feat.filter(
+                (pl.col("date") >= pl.lit(month_start))
+                & (pl.col("date") < pl.lit(month_end))
+                & pl.col("gap").is_not_null()
+                & pl.col("first5Rvol").is_not_null()
+                & pl.col("first5Return").is_not_null()
+                & (pl.col("open") >= 2.0)
+                & (pl.col("priorDollar20") >= 10_000_000)
+            )
+
+            if current.height:
+                daily_frames.append(current)
+                broad = broad_candidates(current)
+                broad_count += broad.height
+                if broad.height:
+                    month_rows = replay_month(path, broad)
+                    outcome_rows.extend(month_rows)
+                else:
+                    month_rows = []
+            else:
+                broad = current
+                month_rows = []
+
+            history = (
+                combined.sort(["symbol","date"])
+                .group_by("symbol", maintain_order=True)
+                .tail(25)
+                .select(base_cols)
+            )
+
+            print(json.dumps({
+                "usOrbStreamMonth": month.strftime("%Y-%m"),
+                "dailyRows": current.height,
+                "broadCandidates": broad.height,
+                "monthOutcomes": len(month_rows),
+                "totalOutcomes": len(outcome_rows),
+                "monthIndex": idx,
+            }), flush=True)
+            path.unlink(missing_ok=True)
+
+    if len(daily_frames) < 34:
+        raise RuntimeError(f"US_ORB_STREAM_MONTH_COVERAGE_TOO_LOW:{len(daily_frames)}")
+    if not outcome_rows:
+        raise RuntimeError("US_ORB_NO_REPLAY_OUTCOMES")
+
+    daily = pl.concat(daily_frames, how="vertical").sort(["date","symbol"])
+    outcomes = pl.DataFrame(outcome_rows).with_columns(pl.col("date").cast(pl.Date))
+    return daily, broad_count, outcomes
+
+
 def replay_month(path: Path, cand: pl.DataFrame) -> list[dict]:
     if cand.is_empty():
         return []
@@ -283,9 +368,7 @@ def main():
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    daily = build_daily_features()
-    broad = broad_candidates(daily)
-    outcomes = build_outcomes(broad)
+    daily, broad_count, outcomes = stream_build_daily_and_outcomes()
     all_dates = daily.select("date").unique().sort("date").get_column("date").to_list()
     train_dates = [d for d in all_dates if d < TRAIN_END]
     valid_dates = [d for d in all_dates if TRAIN_END <= d < VALID_END]
@@ -347,7 +430,7 @@ def main():
         "contract":"full-universe-3pct-hunter-us-orb-v3",
         "periods":{"train":["2023-04-01",str(TRAIN_END)],"validation":[str(TRAIN_END),str(VALID_END)],"benchmarkReusedObservedDataset":[str(VALID_END),str(END)]},
         "candidateCount":len(grid),
-        "broadCandidateDays":broad.height,
+        "broadCandidateDays":broad_count,
         "replayedOutcomeRows":outcomes.height,
         "trainPassCount":len(train_pass),
         "validationPassCount":len(valid_pass),
@@ -357,6 +440,8 @@ def main():
             "breakoutConfirmedOnOneMinuteClose":True,
             "entryNextMinuteOpen":True,
             "minuteOrderUsedAfterEntry":True,
+            "monthlyRawFilesDownloadedOnce":True,
+            "rollingHistoryCarriesPrior25SessionsOnly":True,
             "freshPost2026MarchIntradayOosAvailable":False,
             "benchmarkLastYearPreviouslyObservedInEarlierResearch":True,
             "profitabilityProven":False,
