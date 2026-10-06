@@ -1,6 +1,6 @@
 -- Phase 7 paper journal sync and analytics storage.
--- IMPORTANT: this migration is committed for review/CI only.
--- Do not apply it to the production database as part of this change.
+-- Production use is allowed only inside the protected exact-SHA atomic paper
+-- journal bootstrap. Never apply this migration manually or by an unprotected job.
 
 begin;
 
