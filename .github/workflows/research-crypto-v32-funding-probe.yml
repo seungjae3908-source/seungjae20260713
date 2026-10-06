@@ -1,0 +1,40 @@
+name: Research Crypto V3.2 Funding Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-crypto-v32-funding-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install probe dependency
+        run: python -m pip install "requests>=2.32,<3"
+      - name: Probe funding history
+        run: |
+          python - <<'PY'
+          import json, requests, datetime as dt
+          url='https://fapi.binance.com/fapi/v1/fundingRate'
+          def ms(s):
+              return int(dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc).timestamp()*1000)
+          params={'symbol':'BTCUSDT','startTime':ms('2026-04-01T00:00:00'),'endTime':ms('2026-04-10T00:00:00'),'limit':1000}
+          r=requests.get(url,params=params,timeout=30,headers={'User-Agent':'market-prediction-lab/funding-v32-probe'})
+          out={'status':r.status_code,'text':r.text[:1000]}
+          if r.ok:
+              data=r.json()
+              out={'status':r.status_code,'rows':len(data),'head':data[:3],'tail':data[-3:]}
+          print(json.dumps({'FUNDING_PROBE':out},ensure_ascii=False))
+          r.raise_for_status()
+          PY
