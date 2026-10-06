@@ -115,9 +115,14 @@ def main():
     # Attach point-in-time surprise features to every 1m replay outcome.
     outcomes=outcomes.merge(events,on=["date","ticker"] if "ticker" in outcomes.columns else ["date"],how="left") if False else outcomes
     # base outcomes use symbol; event table uses ticker.
-    ev=events.rename(columns={"ticker":"symbol"})
+    ev=events.rename(columns={"ticker":"symbol"}).copy()
+    ev["date"]=pd.to_datetime(ev["date"],errors="coerce").dt.date
+    outcomes=outcomes.copy()
+    outcomes["date"]=pd.to_datetime(outcomes["date"],errors="coerce").dt.date
+    dpdf=daily.to_pandas()
+    dpdf["date"]=pd.to_datetime(dpdf["date"],errors="coerce").dt.date
     outcomes=outcomes.merge(ev,on=["date","symbol"],how="inner",validate="many_to_one")
-    dpdf=daily.to_pandas().merge(ev,on=["date","symbol"],how="inner",validate="many_to_one")
+    dpdf=dpdf.merge(ev,on=["date","symbol"],how="inner",validate="many_to_one")
 
     reports={}; grid=[]
     for surprise_name,fn in SURPRISES.items():
