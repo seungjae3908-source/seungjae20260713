@@ -180,6 +180,7 @@ def stream_events():
     history=None
     daily_frames=[]
     event_rows=[]
+    outcome_rows=[]
     with tempfile.TemporaryDirectory() as td:
         root=Path(td)
         for idx,month in enumerate(census._month_iter(census.START,census.END_EXCLUSIVE),1):
@@ -216,15 +217,24 @@ def stream_events():
                             "first5Return":float(meta["first5Return"]),"first5RangePct":float(meta["first5RangePct"]),
                             "first5CloseLoc":float(meta["first5CloseLoc"]),"priorDollar20":float(meta["priorDollar20"]),
                             **extra,
-                            "_bars":g.sort_values("local_ts").reset_index(drop=True),"_entry_i":entry_i,
                         })
+                        sorted_g=g.sort_values("local_ts").reset_index(drop=True)
+                        for target in TARGETS:
+                            for stop in STOPS:
+                                for hold in HOLDS:
+                                    res=simulate(sorted_g,entry_i,target,stop,hold)
+                                    if res is None:
+                                        continue
+                                    outcome_rows.append({
+                                        "eventId":eid,"target":target,"stop":stop,"holdMinutes":hold,**res,
+                                    })
             history=(combined.sort(["symbol","date"]).group_by("symbol",maintain_order=True).tail(25).select(base_cols))
             print(json.dumps({"usSpecialistMonth":month.strftime("%Y-%m"),"dailyRows":current.height,"broadDays":broad.height,"eventsTotal":len(event_rows),"monthIndex":idx}),flush=True)
             path.unlink(missing_ok=True)
-    if not daily_frames or not event_rows:
+    if not daily_frames or not event_rows or not outcome_rows:
         raise RuntimeError("US_SPECIALIST_NO_EVENTS")
     daily=pl.concat(daily_frames,how="vertical").sort(["date","symbol"])
-    return daily,event_rows
+    return daily,event_rows,outcome_rows
 
 
 def rank_events(df:pd.DataFrame,top_n:int):
@@ -261,11 +271,11 @@ def rank_key(m,name):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("--out-dir",required=True);args=ap.parse_args()
     out=Path(args.out_dir);out.mkdir(parents=True,exist_ok=True)
-    daily,events=stream_events()
+    daily,events,outcomes=stream_events()
     all_dates=daily.select("date").unique().sort("date").get_column("date").to_list()
 
-    meta=pd.DataFrame([{k:v for k,v in e.items() if not k.startswith("_")} for e in events])
-    event_map={e["eventId"]:e for e in events}
+    meta=pd.DataFrame(events)
+    outcome_df=pd.DataFrame(outcomes)
     reports={};grid=[];ledgers={}
     configs=[]
     for typ in sorted(meta["eventType"].unique()):
@@ -288,19 +298,20 @@ def main():
             for stop in STOPS:
                 for hold in HOLDS:
                     name=f"US_{typ}_G{gap:+.2f}_RV{rv:g}_F5{f5:.3f}_TOP{top_n}_TP{int(target*100)}_SL{stop:g}_H{hold}"
-                    rows=[]
-                    for r in selected.itertuples(index=False):
-                        ev=event_map.get(r.eventId)
-                        if ev is None:continue
-                        res=simulate(ev["_bars"],ev["_entry_i"],target,stop,hold)
-                        if res is None:continue
-                        rows.append({
-                            "market":"US_STOCK","direction":"LONG","candidate":name,"date":r.date,"symbol":r.symbol,
-                            "eventType":typ,"gap":r.gap,"first5Rvol":r.first5Rvol,"first5Return":r.first5Return,
-                            "first5CloseLoc":r.first5CloseLoc,"priorDollar20":r.priorDollar20,
-                            "triggerTime":r.triggerTime,"pullbackDepth":r.pullbackDepth,**res,
-                        })
-                    pdf=pd.DataFrame(rows)
+                    selected_ids=selected[[
+                        "eventId","date","symbol","eventType","gap","first5Rvol","first5Return",
+                        "first5CloseLoc","priorDollar20","triggerTime","pullbackDepth"
+                    ]].copy()
+                    oc=outcome_df[
+                        (outcome_df["target"]==target)
+                        &(outcome_df["stop"]==stop)
+                        &(outcome_df["holdMinutes"]==hold)
+                    ].copy()
+                    pdf=selected_ids.merge(oc,on="eventId",how="inner",validate="one_to_one")
+                    if len(pdf):
+                        pdf["market"]="US_STOCK"
+                        pdf["direction"]="LONG"
+                        pdf["candidate"]=name
                     mt=calc(pdf,all_dates[0],TRAIN_END,all_dates);mc=calc(pdf,TRAIN_END,CAL_END,all_dates);mv=calc(pdf,CAL_END,VAL_END,all_dates)
                     gt,gc,gv=gate(mt,50),gate(mc,15),gate(mv,25)
                     eligible=gt["pass"] and gc["pass"]
@@ -321,7 +332,7 @@ def main():
     summary={
         "schemaVersion":1,"contract":"us-opening-specialist-v4",
         "fullUniverseDailyRows":daily.height,"fullUniverseSymbols":daily.select("symbol").unique().height,
-        "broadIntradayEvents":len(events),"candidateCount":len(reports),"eligibleAfterCalibrationCount":len(eligible),
+        "broadIntradayEvents":len(events),"precomputedOutcomeRows":len(outcomes),"candidateCount":len(reports),"eligibleAfterCalibrationCount":len(eligible),
         "validationPassCount":len(passes),"validationPassCandidates":passes,
         "selectedByCalibration":selected,"selectedResults":reports.get(selected) if selected else None,
         "truthBoundary":{
@@ -333,7 +344,7 @@ def main():
             "candidateSelectionUsesTrainAndCalibrationOnly":True,
             "validationExcludedFromSelection":True,
             "freshPost2026MarchIntradayOosAvailable":False,
-            "profitabilityProven":False,
+            "intradayPathsCompressedToOutcomeGridAtDetection":True,\n            "profitabilityProven":False,
             "executionAuthority":"NONE",
         },
     }
