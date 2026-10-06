@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily bounded cleanup of Research task workspaces
+
+[Timer]
+OnCalendar=*-*-* 04:23:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=research-production-maintenance.service
+
+[Install]
+WantedBy=timers.target
