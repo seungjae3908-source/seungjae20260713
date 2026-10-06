@@ -177,6 +177,10 @@ const tradingQaReviewed=[
  'api-server/src/services/trade-execution-toss-verification.test.ts',
  'stock-analyzer/e2e/production-live-credential-reuse-qa.spec.ts',
 ];
+const telegramReleaseReviewed=[
+ '.github/workflows/telegram-production-release.yml',
+ 'api-server/scripts/verify-telegram-production-release-contract.mjs',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -184,6 +188,7 @@ const allowed=new Set([
  ...portfolioReviewed,
  ...researchCenterIntegrationReviewed,
  ...tradingQaReviewed,
+ ...telegramReleaseReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
