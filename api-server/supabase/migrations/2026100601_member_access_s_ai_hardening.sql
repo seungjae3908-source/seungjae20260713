@@ -76,6 +76,16 @@ revoke all on function public.is_approved_member() from public;
 grant execute on function public.current_membership_level() to anon, authenticated;
 grant execute on function public.is_approved_member() to anon, authenticated;
 
+-- Associate members may view only their own journal evidence for trading analytics
+-- and AI review. Mutation policies stay unchanged (regular/admin only).
+drop policy if exists "paper_journal_entries select own" on public.paper_journal_entries;
+create policy "paper_journal_entries select own"
+  on public.paper_journal_entries for select
+  using (
+    auth.uid() = user_id
+    and public.current_membership_level() in ('associate', 'regular', 'admin')
+  );
+
 alter table public.member_permission_audit
   drop constraint if exists member_permission_audit_action_check;
 alter table public.member_permission_audit
