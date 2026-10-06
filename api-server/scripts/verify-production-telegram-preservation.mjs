@@ -10,6 +10,10 @@ import vm from 'node:vm';
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root, 'ops/deploy-production.sh'), 'utf8').replaceAll('\r\n', '\n');
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+const shellPath = (value) => process.platform === 'win32' ? value.replaceAll('\\', '/') : value;
+const windowsReadlinkDouble = process.platform === 'win32'
+  ? 'readlink() { [[ "$1" == "-m" || "$1" == "-f" ]] || return 2; printf "%s\\n" "$2"; }\n'
+  : '';
 const between = (start, end, offset = 0) => {
   const first = source.indexOf(start, offset);
   const last = source.indexOf(end, first + start.length);
@@ -124,8 +128,8 @@ function run(fragment, { rows = state('false', 'false'), same = false, stale = f
     const runtimeRows = structuredClone(rows);
     if (Array.isArray(runtimeRows) && runtimeRows[0]?.pm2_env && typeof runtimeRows[0].pm2_env === 'object') {
       runtimeRows[0].pid = Number(runtimeRows[0].pid || 4242);
-      runtimeRows[0].pm2_env.pm_cwd ??= path.join(temp, 'live');
-      runtimeRows[0].pm2_env.pm_exec_path ??= path.join(temp, 'live/api-server/dist/index.mjs');
+      runtimeRows[0].pm2_env.pm_cwd ??= shellPath(path.join(temp, 'live'));
+      runtimeRows[0].pm2_env.pm_exec_path ??= shellPath(path.join(temp, 'live/api-server/dist/index.mjs'));
       runtimeRows[0].pm2_env.watch ??= false;
       runtimeRows[0].pm2_env.LIVE_TRADING ??= 'false';
       runtimeRows[0].pm2_env.AUTO_TRADING ??= 'false';
@@ -151,16 +155,16 @@ function run(fragment, { rows = state('false', 'false'), same = false, stale = f
       env: {
         PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
         TEMP: temp, TMP: temp, TMPDIR: temp,
-        PM2_FIXTURE: path.join(temp, 'pm2.json'), PM2_EVENTS: path.join(temp, 'events.jsonl'),
+        PM2_FIXTURE: shellPath(path.join(temp, 'pm2.json')), PM2_EVENTS: shellPath(path.join(temp, 'events.jsonl')),
         PM2_NAME: 'stock-app', TARGET_SHA: target, CURRENT_SHA: same ? target : previous,
-        LIVE_DIR: path.join(temp, 'live'), RELEASE_DIR: path.join(temp, 'release'),
-        BACKUP_DIR: path.join(temp, 'backup'), DEPLOY_STATE_DIR: path.join(temp, 'live/.deploy'),
-        LIVE_PORT: '8080', CANARY_PORT: '18081', CANARY_ENV: path.join(temp, 'canary.env'),
+        LIVE_DIR: shellPath(path.join(temp, 'live')), RELEASE_DIR: shellPath(path.join(temp, 'release')),
+        BACKUP_DIR: shellPath(path.join(temp, 'backup')), DEPLOY_STATE_DIR: shellPath(path.join(temp, 'live/.deploy')),
+        LIVE_PORT: '8080', CANARY_PORT: '18081', CANARY_ENV: shellPath(path.join(temp, 'canary.env')),
         PUBLIC_BASE_URL: '', STALE_FIRST_HEALTH: String(stale), FAIL_TARGET_HEALTH: String(failTarget),
         // A caller's true values must never override the recorded PM2 false state.
         LIVE_TELEGRAM_ACTIVATION_APPROVED: ambient, TELEGRAM_INTELLIGENCE_WORKER_ENABLED: ambient,
       },
-      input: `set -Eeuo pipefail\n${doubles}\n${helpers}\n${rollback}\n${canary ? '' : capture}${before}\n${fragment}\n`,
+      input: `set -Eeuo pipefail\n${windowsReadlinkDouble}${doubles}\n${helpers}\n${rollback}\n${canary ? '' : capture}${before}\n${fragment}\n`,
     });
     assert.ifError(result.error);
     return { ...result, marker: fs.readFileSync(marker, 'utf8').trim(),
