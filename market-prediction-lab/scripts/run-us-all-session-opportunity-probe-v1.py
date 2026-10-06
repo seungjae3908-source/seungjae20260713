@@ -151,6 +151,20 @@ def main() -> None:
             WHERE futureHigh >= entryPrice*1.05
               AND futureLow > entryPrice*(1.0-{STOP})
           ) AS strict5NoStopStates,
+          count(*) FILTER (
+            WHERE tm >= TIME '09:30:00'
+              AND tm < TIME '09:35:00'
+              AND futureHigh >= entryPrice*1.03
+          ) AS opening5mMfe3States,
+          count(*) FILTER (
+            WHERE NOT (tm >= TIME '09:30:00' AND tm < TIME '09:35:00')
+              AND futureHigh >= entryPrice*1.03
+          ) AS outsideOpening5mMfe3States,
+          count(*) FILTER (
+            WHERE tm >= TIME '09:30:00'
+              AND tm < TIME '09:45:00'
+              AND futureHigh >= entryPrice*1.03
+          ) AS opening15mMfe3States,
           count(DISTINCT symbol || ':' || CAST(date AS VARCHAR) || ':' || CAST(floor(epoch(ts)/900) AS VARCHAR))
             FILTER (WHERE futureHigh >= entryPrice*1.03)
             AS mfe3Symbol15mBuckets
@@ -215,6 +229,7 @@ def main() -> None:
             "allMinuteStatesScannedWithinSessionWindow": True,
             "notOpeningOnly": True,
             "preRegularPostAllIncluded": True,
+            "opening5mReportedSeparatelyFromRestOfSession": True,
             "signalStateUsesCurrentAndPastBarsOnly": True,
             "forwardHighLowUsesClockTimeRangeNotRowCount": True,
             "nextEntryBarMustArriveWithinTwoClockMinutes": True,
