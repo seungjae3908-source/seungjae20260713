@@ -1,0 +1,54 @@
+name: Research Crypto 15m ML Schema Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-crypto-15m-ml-schema-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "huggingface_hub>=0.30,<1" "pyarrow>=18,<22" "requests>=2.32,<3"
+      - name: Probe 15m schemas and file sizes
+        run: |
+          python - <<'PY'
+          import json, os
+          import pyarrow.parquet as pq
+          from huggingface_hub import HfApi, hf_hub_download
+          repo='rogerdehe/klines-binance'
+          api=HfApi()
+          files=api.list_repo_files(repo,repo_type='dataset')
+          out={}
+          for sub,target in [('spot','ETH_USDT.parquet'),('futures','ETH_USDT_USDT.parquet')]:
+              paths=[p for p in files if p.startswith(f'{sub}/15m/') and p.endswith(target)]
+              if not paths:
+                  out[sub]={'error':'sample missing'}; continue
+              p=paths[0]
+              local=hf_hub_download(repo_id=repo,repo_type='dataset',filename=p)
+              pf=pq.ParquetFile(local)
+              out[sub]={
+                'path':p,'sizeBytes':os.path.getsize(local),'rows':pf.metadata.num_rows,
+                'rowGroups':pf.metadata.num_row_groups,
+                'columns':[str(x) for x in pf.schema_arrow.names],
+                'schema':str(pf.schema_arrow),
+              }
+          counts={
+            sub:{
+              tf:len([p for p in files if p.startswith(f'{sub}/{tf}/') and p.endswith('.parquet') and '-mark' not in p and '-funding_rate' not in p and '-index' not in p])
+              for tf in ['1m','3m','15m']
+            } for sub in ['spot','futures']
+          }
+          print(json.dumps({'SCHEMA_PROBE':out,'COUNTS':counts},ensure_ascii=False))
+          PY
