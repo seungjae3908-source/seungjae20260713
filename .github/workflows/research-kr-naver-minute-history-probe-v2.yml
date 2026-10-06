@@ -80,6 +80,33 @@ jobs:
               except Exception as exc:
                   results.append({"type":"siseJson","case":name,"error":repr(exc)})
 
+          # Mobile public chart endpoint documented by current Naver traffic.
+          mobile_url="https://m.stock.naver.com/front-api/chart/domestic/stock/end?code=005930&chartInfoType=item&scriptChartType=candleMinuteFive"
+          try:
+              r=requests.get(mobile_url,headers=headers,timeout=30)
+              payload=None
+              try: payload=r.json()
+              except Exception: pass
+              def walk_dates(obj,found):
+                  if isinstance(obj,dict):
+                      for k,v in obj.items():
+                          if isinstance(v,str) and re.search(r"20\\d{2}[./-]?\\d{2}[./-]?\\d{2}",v):
+                              found.append(v)
+                          walk_dates(v,found)
+                  elif isinstance(obj,list):
+                      for v in obj: walk_dates(v,found)
+              found=[]
+              walk_dates(payload,found)
+              results.append({
+                "type":"mobile_candleMinuteFive","status":r.status_code,
+                "jsonType":type(payload).__name__ if payload is not None else None,
+                "dateLikePreview":found[:20],
+                "textPreview":r.text[:500],
+                "bytes":len(r.content)
+              })
+          except Exception as exc:
+              results.append({"type":"mobile_candleMinuteFive","error":repr(exc)})
+
           # Old HTML endpoint is also recorded for completeness.
           for stamp in ("20261006153000","20260331153000","20240701153000","20230703153000"):
               url=f"https://finance.naver.com/item/sise_time.naver?code=005930&thistime={stamp}&page=1"
