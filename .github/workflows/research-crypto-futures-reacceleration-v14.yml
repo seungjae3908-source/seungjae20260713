@@ -1,0 +1,69 @@
+name: Research Crypto Futures Re-Acceleration V1.4
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-crypto-futures-reacceleration-v14.py
+      - .github/workflows/research-crypto-futures-reacceleration-v14.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-futures-reacceleration-v14-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reacceleration-v14:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SOURCE_RUN_ID: "37400970413"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-reacceleration-v14.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-dynamic-exit-v1.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-dynamic-exit-v12.py
+          python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-causal-backtest-v1.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "scikit-learn>=1.5,<2" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1"
+      - name: Download Funding V3.2 winner artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: full-universe-3pct-hunter-futures-funding-v32-*
+          path: funding-v32
+      - name: Verify source artifact
+        run: |
+          test -n "$(find funding-v32 -name summary.json -print -quit)"
+          test -n "$(find funding-v32 -name winner-ledger.csv -print -quit)"
+      - name: Run re-acceleration V1.4
+        run: |
+          python market-prediction-lab/scripts/run-crypto-futures-reacceleration-v14.py \
+            --input-root funding-v32 \
+            --out-dir market-prediction-lab/docs/crypto-futures-reacceleration-v14
+      - name: Upload V1.4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-reacceleration-v14-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-reacceleration-v14
+          if-no-files-found: error
+          retention-days: 14
