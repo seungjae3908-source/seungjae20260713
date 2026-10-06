@@ -14,7 +14,7 @@ START=pd.Timestamp("2023-04-01")
 END=pd.Timestamp("2026-10-01")
 SEC_BASE="https://www.sec.gov"
 HEADERS={
-    "User-Agent":"market-prediction-lab/1.0 research-only github.com/seungjae3908-source/seungjae20260713",
+    "User-Agent":"market-prediction-lab/1.0 research-only contact=https://github.com/seungjae3908-source/seungjae20260713",
     "Accept-Encoding":"gzip, deflate",
 }
 
@@ -84,14 +84,32 @@ def main():
     args=ap.parse_args()
     out=Path(args.out_dir);out.mkdir(parents=True,exist_ok=True)
 
-    tickers=get_json(f"{SEC_BASE}/files/company_tickers.json")
+    ticker_source="SEC_DIRECT"
+    try:
+        tickers=get_json(f"{SEC_BASE}/files/company_tickers.json")
+        ticker_rows=[
+            (int(rec["cik_str"]),str(rec.get("ticker") or "").upper().strip())
+            for rec in tickers.values()
+            if rec.get("ticker")
+        ]
+    except Exception:
+        ticker_source="GITHUB_MIRROR_ANCALAGAN_SEC_DATA"
+        mirror=get_json("https://raw.githubusercontent.com/Ancalagan/sec-data/main/company_tickers.json")
+        fields=mirror.get("fields") or []
+        data=mirror.get("data") or []
+        idx={str(name):i for i,name in enumerate(fields)}
+        ticker_rows=[]
+        for row in data:
+            try:
+                cik=int(row[idx["cik"]])
+                ticker=str(row[idx["ticker"]] or "").upper().strip()
+            except Exception:
+                continue
+            if ticker:
+                ticker_rows.append((cik,ticker))
     cik_to_tickers={}
-    for rec in tickers.values():
-        try:cik=int(rec["cik_str"])
-        except Exception:continue
-        ticker=str(rec.get("ticker") or "").upper().strip()
-        if ticker:
-            cik_to_tickers.setdefault(cik,[]).append(ticker)
+    for cik,ticker in ticker_rows:
+        cik_to_tickers.setdefault(cik,[]).append(ticker)
 
     all_rows=[]
     audit=[]
@@ -125,6 +143,7 @@ def main():
         "schemaVersion":1,
         "contract":"us-sec-8k-event-universe-probe-v1",
         "period":[str(START.date()),str(END.date())],
+        "tickerMapSource":ticker_source,
         "quartersRequested":len(audit),
         "quartersOk":sum(1 for x in audit if x.get("status")=="OK"),
         "quartersFailed":sum(1 for x in audit if x.get("status")!="OK"),
