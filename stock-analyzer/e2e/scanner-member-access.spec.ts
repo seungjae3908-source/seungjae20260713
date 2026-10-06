@@ -24,6 +24,14 @@ const apiRoutesSource = fs.readFileSync(
   path.resolve(process.cwd(), '../api-server/src/routes/index.ts'),
   'utf8',
 );
+const autoTradingPageSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/auto-trading.tsx'),
+  'utf8',
+);
+const autoTradingWorkerSource = fs.readFileSync(
+  path.resolve(process.cwd(), '../api-server/src/services/member-auto-trading-background-worker.service.ts'),
+  'utf8',
+);
 
 function technicalItem(id: string) {
   const group = APP_NAVIGATION.find((item) => item.id === 'technical');
@@ -78,4 +86,7 @@ test('associate scanner access uses the unified workspace while advanced capabil
 
   expect(apiRoutesSource).toContain("aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures'");
   expect(apiRoutesSource).toContain("req.path === '/tickers' || req.path === '/candles'");
+
+  expect(autoTradingPageSource).toContain("disabled={item.value === 'crypto_futures' && !canFutures}");
+  expect(autoTradingWorkerSource).toContain("mapping.assetClass === 'crypto_futures' && !hasCapability(member.profile, 'canAccessFutures')");
 });
