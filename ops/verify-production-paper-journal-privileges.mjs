@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { classifyProductionPaperJournalPrivilegeFailure } from './classify-production-paper-journal-privilege-failure.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -15,6 +16,7 @@ function read(relativePath) {
 
 function verifyStatic() {
   const script = read('ops/apply-production-paper-journal-privileges.mjs');
+  const classifier = read('ops/classify-production-paper-journal-privilege-failure.mjs');
   const migration = read('api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql');
   const workflow = read('.github/workflows/production-deploy.yml');
   const tables = [
@@ -26,6 +28,20 @@ function verifyStatic() {
     assert(migration.includes(`public.${table}`), `migration omits ${table}`);
   }
   assert(script.includes("const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq'"), 'exact Production project binding missing');
+  assert(script.includes("'begin isolation level repeatable read;'"), 'stable Production snapshot is missing');
+  assert(script.includes('__PAPER_JOURNAL_PHASE__:preflight'), 'safe preflight failure marker missing');
+  assert(script.includes('__PAPER_JOURNAL_PHASE__:migration'), 'safe migration failure marker missing');
+  assert(script.includes('__PAPER_JOURNAL_PHASE__:verification'), 'safe verification failure marker missing');
+  assert(script.includes('classifyProductionPaperJournalPrivilegeFailure(result)'), 'sanitized database failure classifier missing');
+  assert(!classifier.includes('console.'), 'failure classifier must not print database stderr');
+  assert(classifyProductionPaperJournalPrivilegeFailure({ stderr: 'ERROR: PAPER_JOURNAL_ROWS_CHANGED' })
+    === 'paper_journal_rows_changed_in_transaction', 'row drift classification mismatch');
+  assert(classifyProductionPaperJournalPrivilegeFailure({ stderr: 'ERROR: canceling statement due to lock timeout' })
+    === 'database_lock_timeout', 'lock timeout classification mismatch');
+  assert(classifyProductionPaperJournalPrivilegeFailure({ stdout: '__PAPER_JOURNAL_PHASE__:migration\n', stderr: 'ERROR: unknown' })
+    === 'atomic_migration_failed', 'phase fallback classification mismatch');
+  assert(classifyProductionPaperJournalPrivilegeFailure({ error: new Error('spawn failed') })
+    === 'psql_process_failed', 'process failure classification mismatch');
   assert(script.includes('PAPER_JOURNAL_ROWS_CHANGED'), 'row-invariance assertion missing');
   assert(script.includes('PAPER_JOURNAL_POLICIES_CHANGED'), 'policy-invariance assertion missing');
   assert(script.includes("'authenticated_crud_grants',24"), 'authenticated CRUD verification missing');
@@ -39,6 +55,7 @@ function verifyStatic() {
   assert(migration.includes('to authenticated;'), 'authenticated grant missing');
   assert(workflow.includes('Require canonical Production trade schema and journal privileges before application mutation'), 'Production deploy apply step missing');
   assert(workflow.includes('ops/apply-production-paper-journal-privileges.mjs'), 'Production deploy invocation missing');
+  assert(workflow.includes('ops/classify-production-paper-journal-privilege-failure.mjs'), 'sanitized failure classifier is not packaged');
   assert(workflow.includes('ops/verify-production-paper-journal-privileges.mjs --artifact'), 'artifact verification missing');
   assert(workflow.includes('printf \'%s\\n\' "$PROD_DATABASE_URL" | ssh'), 'database credential must use protected stdin transport');
   assert(workflow.includes('/tmp/paper-journal-privileges.*'), 'remote temporary directory allowlist missing');
