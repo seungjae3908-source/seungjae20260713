@@ -172,7 +172,19 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed]);
+const tradingQaReviewed=[
+ 'api-server/src/services/trade-execution.service.ts',
+ 'api-server/src/services/trade-execution-toss-verification.test.ts',
+ 'stock-analyzer/e2e/production-live-credential-reuse-qa.spec.ts',
+];
+const allowed=new Set([
+ ...original,
+ ...added,
+ ...supplemental,
+ ...portfolioReviewed,
+ ...researchCenterIntegrationReviewed,
+ ...tradingQaReviewed,
+]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
 if(researchCenterChanged.length>0){
