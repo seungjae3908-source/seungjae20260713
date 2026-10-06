@@ -144,7 +144,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   input.qaScope = 'trading_core';
   input.comprehensive = null;
   input.tradingCore = {
-    schemaVersion: 'production-trading-core-qa-v1',
+    schemaVersion: 'production-trading-core-qa-v2',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
@@ -155,6 +155,10 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
     paperFilled: true,
     journalVisible: true,
     executionSyncInserted: 1,
+    telegramActivationState: 'ACTIVE_VERIFIED',
+    telegramActivationReady: true,
+    telegramConnectedBefore: true,
+    telegramRuntimeReady: true,
     telegramDeliveryQueued: 1,
     telegramTestDelivered: true,
     policyRestored: true,
@@ -168,6 +172,46 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.qaScope, 'trading_core');
   assert.equal(evidence.tradingCoreQa, 'PASS');
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
+  assert.equal(evidence.telegramActivationState, 'ACTIVE_VERIFIED');
+  assert.equal(evidence.telegramActivationVerified, true);
+});
+
+test('builds preactivation evidence before Telegram workers are enabled', () => {
+  const input = fixture();
+  input.qaScope = 'trading_core';
+  input.comprehensive = null;
+  input.tradingCore = {
+    schemaVersion: 'production-trading-core-qa-v2',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    paperAutomaticTriggered: true,
+    paperFilled: true,
+    journalVisible: true,
+    executionSyncInserted: 1,
+    telegramActivationState: 'READY_FOR_ACTIVATION',
+    telegramActivationReady: true,
+    telegramConnectedBefore: false,
+    telegramRuntimeReady: false,
+    telegramDeliveryQueued: 0,
+    telegramTestDelivered: false,
+    policyRestored: true,
+    realOrderSubmitted: false,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    ...ZERO,
+  };
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.telegramActivationState, 'READY_FOR_ACTIVATION');
+  assert.equal(evidence.telegramActivationReady, true);
+  assert.equal(evidence.telegramActivationVerified, false);
+
+  input.tradingCore.telegramRuntimeReady = true;
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /TRADING_CORE_INVALID/);
 });
 
 test('rejects any nonzero financial mutation counter', () => {
