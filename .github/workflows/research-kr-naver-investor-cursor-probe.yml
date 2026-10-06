@@ -1,0 +1,41 @@
+name: Research KR Naver Investor Cursor Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-kr-naver-investor-cursor-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requests
+        run: python -m pip install "requests>=2.32,<3"
+      - name: Probe direct date cursor
+        run: |
+          python - <<'PY'
+          import base64,json,requests
+          url='https://m.stock.naver.com/front-api/stock/domestic/trend'
+          out=[]
+          for code in ['005930','247540']:
+            for day in ['20250401','20230403']:
+              cursor=base64.b64encode(day.encode()).decode().rstrip('=')
+              r=requests.get(url,params={'code':code,'cursor':cursor},timeout=30,headers={'User-Agent':'Mozilla/5.0','Referer':f'https://m.stock.naver.com/domestic/stock/{code}/total'})
+              item={'code':code,'day':day,'cursor':cursor,'status':r.status_code}
+              if r.ok:
+                j=r.json(); result=j.get('result') or {}; items=result.get('items') or []
+                item.update({'dates':[x.get('localTradedAt') for x in items[:12]],'nextCursor':result.get('cursor'),'hasNext':result.get('hasNext')})
+              else:item['text']=r.text[:500]
+              out.append(item)
+          print(json.dumps({'CURSOR_PROBE':out},ensure_ascii=False))
+          PY
