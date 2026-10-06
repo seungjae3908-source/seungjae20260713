@@ -1,0 +1,59 @@
+name: Research Crypto Futures Causal Prescreen V5.0 Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/probe-crypto-futures-causal-prescreen-v50.py
+      - .github/workflows/research-crypto-futures-causal-prescreen-v50-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-futures-causal-prescreen-v50-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/probe-crypto-futures-causal-prescreen-v50.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-full-universe-flow-v4.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "polars>=1.30,<2" "huggingface_hub>=0.30,<1" "requests>=2.32,<3"
+
+      - name: Run causal prescreen probe
+        run: |
+          python market-prediction-lab/scripts/probe-crypto-futures-causal-prescreen-v50.py             --out-dir market-prediction-lab/docs/crypto-futures-causal-prescreen-v50-probe
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-causal-prescreen-v50-probe-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-causal-prescreen-v50-probe
+          if-no-files-found: error
+          retention-days: 14
