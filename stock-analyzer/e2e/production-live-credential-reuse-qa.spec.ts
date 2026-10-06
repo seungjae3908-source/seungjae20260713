@@ -16,6 +16,17 @@ const artifactDir = path.resolve(process.env.PRODUCTION_LIVE_CREDENTIAL_REUSE_AR
 const providers = ['kiwoom', 'upbit', 'bitget', 'toss'] as const;
 type Provider = typeof providers[number];
 
+// Backend verification can legitimately consume multiple 4s provider probes plus
+// two transient retries (1s/2s backoff). Keep the browser wait budget above the
+// provider-specific worst case so QA does not time out while the server is still
+// performing a valid read-only verification.
+const reuseResponseTimeoutMs: Record<Provider, number> = {
+  kiwoom: 45_000,
+  upbit: 25_000,
+  bitget: 75_000,
+  toss: 60_000,
+};
+
 function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
   if (depth > 6 || value == null) return null;
   if (Array.isArray(value)) {
@@ -106,7 +117,7 @@ async function requireHealthIdentity(page: Page) {
 test.skip(!enabled, 'Production credential reuse QA is disabled');
 
 test('saved read-only credentials connect and verify all providers with zero financial mutation', async ({ page }) => {
-  test.setTimeout(4 * 60_000);
+  test.setTimeout(7 * 60_000);
   if (!baseUrl || !login || !password || !/^[0-9a-f]{40}$/.test(expectedSha)
     || !Number.isSafeInteger(productionDeployRunId) || productionDeployRunId <= 0) {
     throw new Error('PRODUCTION_CREDENTIAL_REUSE_QA_ENV_INCOMPLETE');
@@ -155,15 +166,26 @@ test('saved read-only credentials connect and verify all providers with zero fin
 
     if (buttonVisible) {
       const endpoint = '/api/trade-automation/connections/' + provider + '/reuse-readonly';
-      const responsePromise = page.waitForResponse((response) => {
-        const url = new URL(response.url());
-        return response.request().method() === 'POST' && url.pathname === endpoint;
-      }, { timeout: 30000 });
+      const timeoutMs = reuseResponseTimeoutMs[provider];
 
-      await button.click({ timeout: 5000 });
-      const response = await responsePromise;
+      const response = await test.step('reuse-readonly UI verification: ' + provider, async () => {
+        const responsePromise = page.waitForResponse((candidate) => {
+          const url = new URL(candidate.url());
+          return candidate.request().method() === 'POST' && url.pathname === endpoint;
+        }, { timeout: timeoutMs });
+
+        await button.click({ timeout: 5000 });
+        try {
+          return await responsePromise;
+        } catch (error) {
+          throw new Error(
+            'PRODUCTION_CREDENTIAL_REUSE_RESPONSE_TIMEOUT:' + provider + ':' + timeoutMs,
+            { cause: error },
+          );
+        }
+      });
       const body = await response.json().catch(() => null) as Record<string, unknown> | null;
-      expect(response.status(), JSON.stringify(body)).toBe(200);
+      expect(response.status(), provider + ':' + JSON.stringify(body)).toBe(200);
       assertReuseBody(body);
 
       await expect(card).toContainText(/거래키\s*저장됨/, { timeout: 15000 });
