@@ -14,6 +14,11 @@ const currentReleasePath = [
   '.github/workflows/production-account-readonly-provider-activation.yml',
 ];
 
+const rolloverResilientResearchControls = [
+  '.github/workflows/public-forward-liquidity-schedule-delivery-control.yml',
+  '.github/workflows/public-forward-partial-fill-release-binding-publication.yml',
+];
+
 test('current release path is routed away from append-blocked Release Control #23', () => {
   for (const file of currentReleasePath) {
     const source = fs.readFileSync(file, 'utf8');
@@ -31,4 +36,13 @@ test('rollover does not introduce live trading authority', () => {
   assert.equal(combined.includes("AUTO_TRADING: 'true'"), false);
   assert.equal(combined.includes("REAL_ORDER_ENABLED: 'true'"), false);
   assert.equal(combined.includes("PRIVATE_TRADING_API_ALLOWED: 'true'"), false);
+});
+
+test('research controls accept the active rollover title instead of saturated issue numbers', () => {
+  for (const file of rolloverResilientResearchControls) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.ok(source.includes("startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover '"), file);
+    assert.equal(/github\.event\.issue\.number == 23\b/.test(source), false, file);
+    assert.equal(/issue_number:\s*23\b/.test(source), false, file);
+  }
 });
