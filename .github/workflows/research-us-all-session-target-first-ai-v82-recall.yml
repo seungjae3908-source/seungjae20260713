@@ -1,0 +1,77 @@
+name: Research US All-Session Target-First AI V8.2 Recall
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/train-us-all-session-target-first-ai-v82-recall.py
+      - .github/workflows/research-us-all-session-target-first-ai-v82-recall.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-us-all-session-target-first-ai-v82-recall-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      V8_RUN_ID: "37441335961"
+      V8_ARTIFACT: "us-all-session-target-first-ai-v8-38500a40278149e2d48e89e0a5efbb4947c752f3"
+      V81_RUN_ID: "37442292587"
+      V81_ARTIFACT: "us-all-session-target-first-ai-v81-1d6ae5c1610f495f1e847d57114acb7a7ed456b6"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/train-us-all-session-target-first-ai-v8.py
+          python -m py_compile market-prediction-lab/scripts/train-us-all-session-target-first-ai-v81.py
+          python -m py_compile market-prediction-lab/scripts/train-us-all-session-target-first-ai-v82-recall.py
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "lightgbm==4.5.0" "scikit-learn==1.5.2"
+      - name: Download frozen V8 train calibration dataset
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.V8_RUN_ID }}
+          name: ${{ env.V8_ARTIFACT }}
+          path: frozen-v8
+      - name: Download untouched March holdout already labeled by V8.1
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.V81_RUN_ID }}
+          name: ${{ env.V81_ARTIFACT }}
+          path: frozen-v81
+      - name: Run recall-first threshold selection
+        run: |
+          EVENTS="$(find frozen-v8 -name events-target-first.parquet -print -quit)"
+          MARCH="$(find frozen-v81 -path '*/march-labeled/*' -name events-target-first.parquet -print -quit)"
+          test -n "$EVENTS"
+          test -n "$MARCH"
+          python market-prediction-lab/scripts/train-us-all-session-target-first-ai-v82-recall.py \
+            --events "$EVENTS" \
+            --diagnostic "$MARCH" \
+            --out-dir market-prediction-lab/docs/us-all-session-target-first-ai-v82-recall
+      - name: Upload V8.2 recall evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-all-session-target-first-ai-v82-recall-${{ github.sha }}
+          path: market-prediction-lab/docs/us-all-session-target-first-ai-v82-recall
+          if-no-files-found: error
+          retention-days: 14
