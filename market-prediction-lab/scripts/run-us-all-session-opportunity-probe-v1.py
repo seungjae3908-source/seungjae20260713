@@ -151,7 +151,7 @@ def main() -> None:
           ) AS strict5NoStopStates,
           count(DISTINCT symbol || ':' || CAST(date AS VARCHAR) || ':' || CAST(floor(epoch(ts)/900) AS VARCHAR))
             FILTER (WHERE futureHigh >= entryPrice*1.03)
-          ) AS mfe3Symbol15mBuckets
+            AS mfe3Symbol15mBuckets
         FROM f
         WHERE close >= 1.0
           AND priorDollar60 >= 100000
