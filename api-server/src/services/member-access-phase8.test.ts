@@ -14,7 +14,11 @@ import {
 
 const expected: Record<MemberTier, MemberCapability[]> = {
   pending: [],
-  associate: ['canAccessBasicInfo', 'canAccessSpot', 'canAccessPaperTrading', 'canAccessAutoTrading', 'canConnectPersonalTelegram'],
+  associate: [
+    'canAccessBasicInfo', 'canAccessSpot', 'canAccessRiskPreview',
+    'canAccessPaperTrading', 'canAccessAutoTrading', 'canConnectPersonalTelegram',
+    'canAccessTradingAnalytics', 'canAccessAiTradingReview',
+  ],
   regular: [
     'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures',
     'canAccessRiskPreview', 'canAccessBacktests', 'canAccessPaperTrading', 'canAccessAutoTrading',
@@ -46,6 +50,32 @@ test('legacy pending admin does not gain admin access', () => {
 
 test('explicit associate tier is preserved', () => {
   assert.equal(deriveMemberTier({ membership_level: 'associate', role: 'user', status: 'approved' }), 'associate');
+});
+
+test('expired associate is treated as pending and loses AI capabilities', () => {
+  const profile = {
+    membership_level: 'associate',
+    status: 'approved',
+    is_active: true,
+    membership_expires_at: '2020-01-01T00:00:00.000Z',
+  };
+  assert.equal(deriveMemberTier(profile), 'pending');
+  assert.equal(hasCapability(profile, 'canAccessRiskPreview'), false);
+  assert.equal(hasCapability(profile, 'canAccessTradingAnalytics'), false);
+  assert.equal(hasCapability(profile, 'canAccessAiTradingReview'), false);
+});
+
+test('future-dated associate keeps S/AI member capabilities', () => {
+  const profile = {
+    membership_level: 'associate',
+    status: 'approved',
+    is_active: true,
+    membership_expires_at: '2099-01-01T00:00:00.000Z',
+  };
+  assert.equal(deriveMemberTier(profile), 'associate');
+  assert.equal(hasCapability(profile, 'canAccessRiskPreview'), true);
+  assert.equal(hasCapability(profile, 'canAccessTradingAnalytics'), true);
+  assert.equal(hasCapability(profile, 'canAccessAiTradingReview'), true);
 });
 
 test('inactive regular is treated as pending', () => {
