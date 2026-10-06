@@ -71,7 +71,34 @@ require_research_safety_env() {
   done
 }
 
+provider_env_ready() {
+  [[ -e "$PROVIDER_ENV" ]] || return 1
+  "${SUDO[@]}" node - "$PROVIDER_ENV" <<'NODE'
+const fs = require('node:fs');
+const { parseEnv } = require('node:util');
+const file = process.argv[2];
+const raw = fs.readFileSync(file, 'utf8');
+const env = parseEnv(raw);
+const keyPattern = /^[A-Za-z0-9_.-]{8,512}$/u;
+const present = (key) => typeof env[key] === 'string' && keyPattern.test(env[key].trim());
+const youtube = present('YOUTUBE_DATA_API_KEY');
+const gemini = present('GEMINI_API_KEY') || present('GOOGLE_API_KEY');
+const groq = present('GROQ_API_KEY');
+if (!youtube || !gemini || !groq) process.exit(2);
+process.stdout.write(JSON.stringify({
+  schemaVersion: 'research-provider-env-readiness-v1',
+  source: 'EXISTING_RESEARCH_PROVIDER_ENV',
+  providers: { youtube: 'PRESENT', gemini: 'PRESENT', groq: 'PRESENT' },
+  credentialValuesExposed: false,
+  executionAuthority: 'NONE'
+}) + '\n');
+NODE
+}
+
 provider_preflight() {
+  if provider_env_ready; then
+    return 0
+  fi
   local evidence
   evidence="$(mktemp)"
   trap 'rm -f "$evidence"' RETURN
@@ -94,6 +121,16 @@ if (value?.schemaVersion !== 'research-provider-bootstrap-v1'
   throw new Error('AI_RESEARCH_PROVIDER_PREFLIGHT_NOT_READY');
 }
 NODE
+}
+
+materialize_or_reuse_provider_env() {
+  if provider_env_ready >/dev/null; then
+    printf '%s\n' "AI_RESEARCH_PROVIDER_ENV_SOURCE=EXISTING_RESEARCH_PROVIDER_ENV"
+    return 0
+  fi
+  materialize_or_reuse_provider_env
+  provider_env_ready >/dev/null
+  printf '%s\n' "AI_RESEARCH_PROVIDER_ENV_SOURCE=BOOTSTRAP_MATERIALIZED"
 }
 
 verify_unit_sources() {
