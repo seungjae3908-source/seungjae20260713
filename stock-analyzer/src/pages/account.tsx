@@ -133,7 +133,7 @@ export default function AccountPage() {
       </Card>}
       {!auth.loading && auth.user && auth.can('canAccessBasicInfo') ? <>
         <BrokerageAccountConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} />
-        <TradeExecutionConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} />
+        {auth.can('canPlaceOrders') ? <TradeExecutionConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} /> : null}
       </> : null}
       {!auth.loading && auth.user && auth.can('canConnectPersonalTelegram') ? <div className="mt-4"><UserBrokerTelegramPanel /></div> : null}
       {(notice || error) && <p role={error ? 'alert' : 'status'} className={`mt-3 break-words rounded-2xl p-4 text-center text-sm font-semibold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
