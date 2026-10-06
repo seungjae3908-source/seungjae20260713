@@ -1,5 +1,6 @@
 import {
   prepareBitgetAccount,
+  prepareBitgetClassicAccountSettings,
   prepareBitgetPendingOrders,
   prepareBitgetPositions,
   prepareBitgetUtaAccountInfo,
@@ -217,8 +218,9 @@ async function readBitgetClassicSnapshot(
       if (error instanceof AccountReadonlyError) return { value: null, error };
       throw error;
     });
-  const [accountRaw, positionRaw, pendingResult] = await Promise.all([
+  const [accountRaw, accountSettingsRaw, positionRaw, pendingResult] = await Promise.all([
     transport(prepareBitgetAccount(credentials), signal),
+    transport(prepareBitgetClassicAccountSettings(credentials), signal),
     transport(prepareBitgetPositions(credentials), signal),
     pendingPromise,
   ]);
@@ -249,10 +251,27 @@ async function readBitgetClassicSnapshot(
       return parsed;
     },
   );
-  const positionModes = [...new Set(data(accountRaw).map((row) => String(row.posMode ?? '').trim().toLowerCase()))];
-  const positionMode = positionModes.length === 1 && ['one_way_mode', 'hedge_mode'].includes(positionModes[0] ?? '')
-    ? positionModes[0] as 'one_way_mode' | 'hedge_mode'
-    : null;
+  const positionMode = parseBitgetResponse(
+    credentials,
+    '/api/v2/mix/account/account',
+    'CLASSIC',
+    'ACCOUNT_SETTINGS',
+    fallbackAttempted,
+    () => {
+      if (!record(accountSettingsRaw)) throw new Error('BITGET_CLASSIC_ACCOUNT_SETTINGS_RESPONSE_INVALID');
+      const code = typeof accountSettingsRaw.code === 'string' || typeof accountSettingsRaw.code === 'number'
+        ? String(accountSettingsRaw.code)
+        : '';
+      if (!code) throw new Error('BITGET_CLASSIC_ACCOUNT_SETTINGS_RESPONSE_INVALID');
+      if (code !== '00000') throw bitgetApplicationFailure(code);
+      if (!record(accountSettingsRaw.data)) throw new Error('BITGET_CLASSIC_ACCOUNT_SETTINGS_RESPONSE_INVALID');
+      const normalized = String(accountSettingsRaw.data.posMode ?? '').trim().toLowerCase();
+      if (normalized !== 'one_way_mode' && normalized !== 'hedge_mode') {
+        throw new Error('BITGET_CLASSIC_POSITION_MODE_INVALID');
+      }
+      return normalized;
+    },
+  );
   const positions = parseBitgetResponse(
     credentials,
     '/api/v2/mix/position/all-position',

@@ -414,6 +414,26 @@ export function prepareBitgetAccount(credentials: BitgetCredentials, timestamp?:
   );
 }
 
+export function prepareBitgetClassicAccountSettings(
+  credentials: BitgetCredentials,
+  symbol = 'BTCUSDT',
+  marginCoin = 'USDT',
+  timestamp?: string,
+) {
+  const normalizedSymbol = symbol.trim().toUpperCase();
+  const normalizedMarginCoin = marginCoin.trim().toUpperCase();
+  if (!normalizedSymbol || !normalizedMarginCoin) throw new Error('BITGET_CLASSIC_ACCOUNT_SETTINGS_SCOPE_REQUIRED');
+  const query = [
+    `symbol=${encodeURIComponent(normalizedSymbol)}`,
+    'productType=USDT-FUTURES',
+    `marginCoin=${encodeURIComponent(normalizedMarginCoin)}`,
+  ].join('&');
+  return bitgetRequest(
+    credentials, 'GET', '/api/v2/mix/account/account', null, query, timestamp,
+    bitgetReadonlyDiagnostic(credentials, 'CLASSIC', 'ACCOUNT_SETTINGS'),
+  );
+}
+
 export function prepareBitgetPositions(credentials: BitgetCredentials, timestamp?: string) {
   return bitgetRequest(
     credentials, 'GET', '/api/v2/mix/position/all-position', null, 'productType=USDT-FUTURES&marginCoin=USDT', timestamp,
