@@ -15,89 +15,92 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE_PATH = ROOT / "market-prediction-lab" / "scripts" / "run-crypto-futures-dynamic-exit-v1.py"
-SPEC = importlib.util.spec_from_file_location("dynamic_exit_v1", BASE_PATH)
+BASE_SCRIPT = ROOT / "market-prediction-lab" / "scripts" / "run-crypto-futures-dynamic-exit-v1.py"
+SPEC = importlib.util.spec_from_file_location("dynamic_exit_v1", BASE_SCRIPT)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("DYNAMIC_EXIT_V1_IMPORT_FAILED")
 base = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(base)
 
-EARLY_FEATURES = base.FEATURES + [
-    "adverseFromEntry",
+PREARM_MINUTE = 5
+PREARM_HORIZON = 60
+PREARM_THRESHOLDS = (0.15, 0.25, 0.35, 0.45, 0.55)
+PREARM_CONSECUTIVE = 2
+POSTARM_POLICY = {"name":"AI_TRAIL3_T0.55_G0.8","kind":"hybrid","threshold":0.55,"gap":0.008}
+
+PREARM_FEATURES = base.FEATURES + [
+    "adverseClose",
+    "maeToNow",
     "distanceToArm",
-    "profitSlope5",
 ]
-EARLY_THRESHOLDS = (0.20, 0.30, 0.40, 0.50)
-EARLY_MIN_HOLDS = (5, 10, 15)
-EARLY_CONFIRM_BARS = (2, 3)
-EARLY_HORIZON = 60
-
-POST_AI_THRESHOLD = 0.55
-POST_TRAIL_GAP = 0.008
 
 
-def enrich_early_features(g: pd.DataFrame):
+def add_prearm_features(g: pd.DataFrame) -> pd.DataFrame:
     x = g.copy()
     entry = float(x["open"].iloc[0])
-    x["adverseFromEntry"] = np.maximum.accumulate(x["high"].astype(float) / entry - 1.0)
+    close = x["close"].astype(float)
+    high = x["high"].astype(float)
+    x["adverseClose"] = close / entry - 1.0
+    x["maeToNow"] = np.maximum.accumulate(high / entry - 1.0)
     x["distanceToArm"] = np.maximum(0.0, base.ARM_PROFIT - x["peakProfit"].astype(float))
-    x["profitSlope5"] = x["profitClose"].astype(float) - x["profitClose"].astype(float).shift(5)
-    for c in EARLY_FEATURES:
+    for c in PREARM_FEATURES:
         x[c] = pd.to_numeric(x[c], errors="coerce")
     return x
 
 
-def early_label(g: pd.DataFrame, i: int):
+def prearm_label(g: pd.DataFrame, i: int):
     entry = float(g["open"].iloc[0])
-    stop = entry * (1.0 + base.HARD_STOP)
-    arm = entry * (1.0 - base.ARM_PROFIT)
-    end = min(len(g) - 1, i + EARLY_HORIZON)
+    arm_px = entry * (1.0 - base.ARM_PROFIT)
+    stop_px = entry * (1.0 + base.HARD_STOP)
+    end = min(len(g) - 1, i + PREARM_HORIZON)
     for j in range(i + 1, end + 1):
-        # Conservative minute ordering.
-        if float(g["high"].iloc[j]) >= stop:
+        # Conservative intraminute ordering: adverse hard stop wins ties.
+        if float(g["high"].iloc[j]) >= stop_px:
             return 0
-        if float(g["low"].iloc[j]) <= arm:
+        if float(g["low"].iloc[j]) <= arm_px:
             return 1
     return 0
 
 
-def early_model_rows(signals: pd.DataFrame, paths: dict):
+def make_prearm_rows(signals: pd.DataFrame, paths: dict):
     rows, labels = [], []
     for r in signals.itertuples(index=False):
         key = (str(r.symbol), pd.Timestamp(r.timestamp))
-        g = paths.get(key)
-        if g is None:
+        g0 = paths.get(key)
+        if g0 is None:
             continue
+        g = add_prearm_features(g0)
         entry = float(g["open"].iloc[0])
-        stop = entry * (1.0 + base.HARD_STOP)
-        arm = entry * (1.0 - base.ARM_PROFIT)
-        for i in range(len(g) - 1):
-            if float(g["high"].iloc[i]) >= stop:
+        stop_px = entry * (1.0 + base.HARD_STOP)
+        arm_px = entry * (1.0 - base.ARM_PROFIT)
+        for i in range(len(g)):
+            if float(g["high"].iloc[i]) >= stop_px:
                 break
-            if float(g["low"].iloc[i]) <= arm:
+            if float(g["low"].iloc[i]) <= arm_px:
                 break
-            if i < min(EARLY_MIN_HOLDS):
+            if i + 1 < PREARM_MINUTE:
                 continue
+            y = prearm_label(g, i)
             rows.append([
                 float(g[c].iloc[i]) if pd.notna(g[c].iloc[i]) else np.nan
-                for c in EARLY_FEATURES
+                for c in PREARM_FEATURES
             ])
-            labels.append(early_label(g, i))
+            labels.append(int(y))
     if not rows:
-        raise RuntimeError("NO_EARLY_MODEL_STATES")
+        raise RuntimeError("NO_PREARM_MODEL_STATES")
     return np.asarray(rows, dtype=float), np.asarray(labels, dtype=int)
 
 
-def fit_early_model(x: np.ndarray, y: np.ndarray):
-    if len(x) < 200:
-        raise RuntimeError(f"TOO_FEW_EARLY_STATES:{len(x)}")
+def fit_prearm_model(x: np.ndarray, y: np.ndarray):
+    if len(x) < 100:
+        raise RuntimeError(f"TOO_FEW_PREARM_STATES:{len(x)}")
     if len(np.unique(y)) < 2:
-        raise RuntimeError("EARLY_LABEL_SINGLE_CLASS")
+        raise RuntimeError("PREARM_LABEL_SINGLE_CLASS")
     model = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
         ("model", LogisticRegression(
-            C=0.7,
+            C=1.0,
             class_weight="balanced",
             max_iter=1200,
             random_state=11,
@@ -107,49 +110,24 @@ def fit_early_model(x: np.ndarray, y: np.ndarray):
     return model
 
 
-def predict_early(model, g: pd.DataFrame):
-    return model.predict_proba(g[EARLY_FEATURES].astype(float).to_numpy())[:,1]
+def predict_prearm(model, g: pd.DataFrame):
+    x = add_prearm_features(g)
+    return model.predict_proba(x[PREARM_FEATURES].astype(float).to_numpy())[:, 1]
 
 
-def policy_defs():
-    out = [
-        {"name":"BASE_FIXED_TP3","early":False,"post":"fixed3"},
-        {"name":"BASE_AI_TRAIL","early":False,"post":"ai_trail"},
-    ]
-    for t in EARLY_THRESHOLDS:
-        for min_hold in EARLY_MIN_HOLDS:
-            for confirm in EARLY_CONFIRM_BARS:
-                out.append({
-                    "name":f"EARLY_T{t:.2f}_H{min_hold}_C{confirm}_TP3",
-                    "early":True,
-                    "threshold":t,
-                    "minHold":min_hold,
-                    "confirm":confirm,
-                    "post":"fixed3",
-                })
-                out.append({
-                    "name":f"EARLY_T{t:.2f}_H{min_hold}_C{confirm}_AI_TRAIL",
-                    "early":True,
-                    "threshold":t,
-                    "minHold":min_hold,
-                    "confirm":confirm,
-                    "post":"ai_trail",
-                })
-    return out
-
-
-def simulate(g: pd.DataFrame, continuation_proba: np.ndarray, early_proba: np.ndarray, policy: dict):
+def simulate_v11(
+    g: pd.DataFrame,
+    continuation_proba: np.ndarray,
+    arm_proba: np.ndarray,
+    prearm_threshold: float | None,
+):
     entry = float(g["open"].iloc[0])
     hard_stop = entry * (1.0 + base.HARD_STOP)
-    arm_price = entry * (1.0 - base.ARM_PROFIT)
-
     armed = False
     peak_profit = 0.0
+    pending_exit_reason = None
     low_prob_streak = 0
-    pending_early_exit = False
-    pending_post_ai_exit = False
-
-    exit_i = len(g)-1
+    exit_i = len(g) - 1
     exit_price = float(g["close"].iloc[-1])
     reason = "MAX_HOLD"
 
@@ -158,46 +136,53 @@ def simulate(g: pd.DataFrame, continuation_proba: np.ndarray, early_proba: np.nd
         hi = float(g["high"].iloc[i])
         lo = float(g["low"].iloc[i])
 
-        if pending_early_exit:
-            exit_i=i; exit_price=op; reason="AI_ENTRY_INVALIDATED"; break
-        if pending_post_ai_exit:
-            exit_i=i; exit_price=op; reason="AI_TREND_DIED"; break
+        if pending_exit_reason is not None:
+            exit_i = i
+            exit_price = op
+            reason = pending_exit_reason
+            break
 
+        # Hard stop is always the maximum-loss backstop before +3% protection arms.
         if not armed and hi >= hard_stop:
-            exit_i=i; exit_price=hard_stop; reason="HARD_STOP"; break
+            exit_i = i
+            exit_price = hard_stop
+            reason = "HARD_STOP"
+            break
 
         if armed:
-            lock = max(base.LOCK_PROFIT, peak_profit - POST_TRAIL_GAP)
-            floor_price = entry * (1.0 - lock)
+            lock = max(base.LOCK_PROFIT, peak_profit - float(POSTARM_POLICY["gap"]))
+            floor_price = entry * (1.0 - max(0.0, lock))
             if hi >= floor_price:
-                exit_i=i; exit_price=floor_price; reason="TRAIL_PROTECT"; break
+                exit_i = i
+                exit_price = floor_price
+                reason = "TRAIL_PROTECT"
+                break
 
         minute_peak = 1.0 - lo / entry
         peak_profit = max(peak_profit, minute_peak)
 
-        if not armed and lo <= arm_price:
-            if policy["post"] == "fixed3":
-                exit_i=i; exit_price=arm_price; reason="TP3"; break
-            armed=True
-            low_prob_streak=0
+        if not armed and minute_peak >= base.ARM_PROFIT:
+            armed = True
+            low_prob_streak = 0
 
-        if not armed and policy.get("early") and i >= int(policy["minHold"]):
-            if float(early_proba[i]) < float(policy["threshold"]):
+        if armed:
+            if float(continuation_proba[i]) < float(POSTARM_POLICY["threshold"]):
+                pending_exit_reason = "AI_TREND_DIED"
+            continue
+
+        if prearm_threshold is not None and i + 1 >= PREARM_MINUTE:
+            if float(arm_proba[i]) < float(prearm_threshold):
                 low_prob_streak += 1
             else:
                 low_prob_streak = 0
-            if low_prob_streak >= int(policy["confirm"]):
-                pending_early_exit=True
+            if low_prob_streak >= PREARM_CONSECUTIVE:
+                pending_exit_reason = "AI_ENTRY_THESIS_FAILED"
 
-        if armed and policy["post"] == "ai_trail":
-            if float(continuation_proba[i]) < POST_AI_THRESHOLD:
-                pending_post_ai_exit=True
-
-    used=g.iloc[:exit_i+1]
-    gross=1.0-exit_price/entry
-    net=gross-base.ROUND_TRIP_COST
-    mfe=1.0-float(used["low"].min())/entry
-    mae=float(used["high"].max())/entry-1.0
+    used = g.iloc[:exit_i+1]
+    gross = 1.0 - exit_price / entry
+    net = gross - base.ROUND_TRIP_COST
+    mfe = 1.0 - float(used["low"].min()) / entry
+    mae = float(used["high"].max()) / entry - 1.0
     return {
         "entryPrice":entry,
         "exitPrice":exit_price,
@@ -208,24 +193,36 @@ def simulate(g: pd.DataFrame, continuation_proba: np.ndarray, early_proba: np.nd
         "MAE":mae,
         "exitReason":reason,
         "exitTime":str(g["timestamp"].iloc[exit_i]),
-        "holdMinutes":int(exit_i+1),
-        "armed3pct":bool(armed or reason=="TP3"),
+        "holdMinutes":int(exit_i + 1),
+        "armed3pct":bool(armed),
         "peakProfit":peak_profit,
     }
 
 
-def replay(signals, paths, cont_probs, early_probs, policy):
+def replay(
+    signals: pd.DataFrame,
+    paths: dict,
+    continuation_probas: dict,
+    arm_probas: dict,
+    threshold: float | None,
+    name: str,
+):
     rows=[]
     for r in signals.itertuples(index=False):
         key=(str(r.symbol),pd.Timestamp(r.timestamp))
         g=paths.get(key)
         if g is None:
             continue
-        res=simulate(g,cont_probs[key],early_probs[key],policy)
+        res=simulate_v11(
+            g,
+            continuation_probas[key],
+            arm_probas[key],
+            threshold,
+        )
         rows.append({
             "market":"CRYPTO_FUTURES",
             "direction":"SHORT",
-            "candidate":policy["name"],
+            "candidate":name,
             "date":pd.Timestamp(r.timestamp).date(),
             "timestamp":pd.Timestamp(r.timestamp),
             "symbol":str(r.symbol),
@@ -234,45 +231,35 @@ def replay(signals, paths, cont_probs, early_probs, policy):
     return pd.DataFrame(rows)
 
 
-def to_pl(pdf):
+def slim_capture(pdf: pd.DataFrame):
     if pdf.empty:
-        return pl.DataFrame(schema={"date":pl.Date,"netReturn":pl.Float64})
-    return pl.from_pandas(pdf).with_columns(pl.col("date").cast(pl.Date))
-
-
-def metrics(pdf,start,end):
-    dates=[d.date() for d in pd.date_range(start,pd.Timestamp(end)-pd.Timedelta(days=1),freq="D")]
-    return base.v1.metrics(to_pl(pdf),"CRYPTO_FUTURES",dates)
-
-
-def gate(m,min_trades):
-    checks={
-        "positiveReturn":float(m.get("totalReturn") or 0)>0,
-        "profitFactorAbove1":float(m.get("profitFactor") or 0)>1,
-        "positiveMonthRateAtLeast50pct":float(m.get("positiveMonthRate") or 0)>=0.5,
-        "mddAtMost35pct":float(m.get("mdd") or 1)<=0.35,
-        "minimumTrades":int(m.get("tradeCount") or 0)>=min_trades,
+        return {"trades":0}
+    return {
+        "trades":int(len(pdf)),
+        "armed3pctTrades":int(pdf["armed3pct"].sum()),
+        "medianHoldMinutes":float(pd.to_numeric(pdf["holdMinutes"],errors="coerce").median()),
+        "exitReasons":{str(k):int(v) for k,v in pdf["exitReason"].value_counts().to_dict().items()},
+        "meanNet":float(pd.to_numeric(pdf["netReturn"],errors="coerce").mean()),
     }
-    return {"pass":all(checks.values()),"checks":checks}
 
 
-def rank_key(m,name):
-    return (
-        float(m.get("positiveMonthRate") or 0),
-        float(m.get("totalReturn") or 0),
-        float(m.get("profitFactor") or 0),
-        -float(m.get("mdd") or 0),
-        name,
-    )
+def period_split(trades: pd.DataFrame):
+    d=pd.to_datetime(trades["date"]).dt.date
+    return {
+        "fit":trades[d < base.FIT_END].copy(),
+        "calibration":trades[(d >= base.FIT_END)&(d < base.CAL_END)].copy(),
+        "validation":trades[(d >= base.CAL_END)&(d < base.VALID_END)].copy(),
+        "postHocBenchmark":trades[(d >= base.VALID_END)&(d < base.BENCH_END)].copy(),
+    }
 
 
-def split(pdf,start,end):
-    d=pd.to_datetime(pdf["date"]).dt.date
-    return pdf[(d>=pd.Timestamp(start).date())&(d<pd.Timestamp(end).date())].copy()
-
-
-def exit_reason_counts(pdf):
-    return {str(k):int(v) for k,v in pdf["exitReason"].value_counts().to_dict().items()} if len(pdf) else {}
+def metrics_for(parts: dict):
+    return {
+        "fit":base.calc_metrics(parts["fit"],"2023-05-01",str(base.FIT_END)),
+        "calibration":base.calc_metrics(parts["calibration"],str(base.FIT_END),str(base.CAL_END)),
+        "validation":base.calc_metrics(parts["validation"],str(base.CAL_END),str(base.VALID_END)),
+        "postHocBenchmark":base.calc_metrics(parts["postHocBenchmark"],str(base.VALID_END),str(base.BENCH_END)),
+    }
 
 
 def main():
@@ -280,15 +267,9 @@ def main():
     ap.add_argument("--input-root",required=True)
     ap.add_argument("--out-dir",required=True)
     args=ap.parse_args()
-
     out=Path(args.out_dir); out.mkdir(parents=True,exist_ok=True)
-    (out/"run-started.json").write_text(json.dumps({
-        "contract":"crypto-futures-dynamic-exit-v11",
-        "status":"STARTED",
-        "executionAuthority":"NONE",
-    },indent=2)+"\n",encoding="utf-8")
 
-    source_summary,signals,ledger_path=base.load_source(Path(args.input_root))
+    source_summary, signals, ledger_path=base.load_source(Path(args.input_root))
     cache,file_audit=base.download_paths(signals)
 
     paths={}
@@ -299,84 +280,69 @@ def main():
         if g is None:
             failures.append({"symbol":str(r.symbol),"timestamp":str(r.timestamp),"error":err})
             continue
-        paths[key]=enrich_early_features(g)
-
+        paths[key]=g
     coverage=len(paths)/max(len(signals),1)
-    if coverage<0.95:
-        raise RuntimeError(f"V11_PATH_COVERAGE_LOW:{len(paths)}/{len(signals)}")
+    if coverage < 0.95:
+        raise RuntimeError(f"V11_PATH_COVERAGE_TOO_LOW:{len(paths)}/{len(signals)}")
 
-    fit_signals=signals[signals["date"]<base.FIT_END].copy()
+    fit_signals=signals[signals["date"] < base.FIT_END].copy()
 
-    cont_x,cont_y,_=base.make_model_rows(fit_signals,paths)
-    cont_model=base.fit_model(cont_x,cont_y)
-    early_x,early_y=early_model_rows(fit_signals,paths)
-    early_model=fit_early_model(early_x,early_y)
+    x_cont,y_cont,_=base.make_model_rows(fit_signals,paths)
+    continuation_model=base.fit_model(x_cont,y_cont)
+    continuation_probas={key:base.predict_proba(continuation_model,g) for key,g in paths.items()}
 
-    cont_probs={k:base.predict_proba(cont_model,g) for k,g in paths.items()}
-    early_probs={k:predict_early(early_model,g) for k,g in paths.items()}
+    x_pre,y_pre=make_prearm_rows(fit_signals,paths)
+    prearm_model=fit_prearm_model(x_pre,y_pre)
+    arm_probas={key:predict_prearm(prearm_model,g) for key,g in paths.items()}
 
-    reports={}; grid=[]
-    for policy in policy_defs():
-        trades=replay(signals,paths,cont_probs,early_probs,policy)
-        fit=split(trades,"2023-05-01",str(base.FIT_END))
-        cal=split(trades,str(base.FIT_END),str(base.CAL_END))
-        val=split(trades,str(base.CAL_END),str(base.VALID_END))
-        bench=split(trades,str(base.VALID_END),str(base.BENCH_END))
-
-        mf=metrics(fit,"2023-05-01",str(base.FIT_END))
-        mc=metrics(cal,str(base.FIT_END),str(base.CAL_END))
-        mv=metrics(val,str(base.CAL_END),str(base.VALID_END))
-        mb=metrics(bench,str(base.VALID_END),str(base.BENCH_END))
-        gc,gv,gb=gate(mc,30),gate(mv,30),gate(mb,15)
-
-        reports[policy["name"]]={
-            "policy":policy,"trades":trades,
-            "fit":mf,"calibration":mc,"validation":mv,"postHocBenchmark":mb,
-            "calibrationGate":gc,"validationGate":gv,"postHocBenchmarkGate":gb,
-            "exitReasons":{
-                "fit":exit_reason_counts(fit),
-                "calibration":exit_reason_counts(cal),
-                "validation":exit_reason_counts(val),
-                "postHocBenchmark":exit_reason_counts(bench),
-            },
+    candidates=[("NO_PREARM_EXIT",None)] + [
+        (f"PREARM_T{t:.2f}",t) for t in PREARM_THRESHOLDS
+    ]
+    reports={}
+    grid=[]
+    for name,t in candidates:
+        trades=replay(signals,paths,continuation_probas,arm_probas,t,name)
+        parts=period_split(trades)
+        mm=metrics_for(parts)
+        gc=base.gate(mm["calibration"],30)
+        gv=base.gate(mm["validation"],30)
+        gb=base.gate(mm["postHocBenchmark"],15)
+        reports[name]={
+            "threshold":t,
+            "trades":trades,
+            "metrics":mm,
+            "calibrationGate":gc,
+            "validationGate":gv,
+            "postHocBenchmarkGate":gb,
+            "capture":{k:slim_capture(v) for k,v in parts.items()},
         }
         grid.append({
-            "policy":policy["name"],
-            "early":policy.get("early",False),
-            "post":policy["post"],
-            "threshold":policy.get("threshold"),
-            "minHold":policy.get("minHold"),
-            "confirm":policy.get("confirm"),
+            "policy":name,
+            "threshold":t,
             "calibrationPass":gc["pass"],
-            "calibrationReturn":mc.get("totalReturn"),
-            "calibrationPF":mc.get("profitFactor"),
-            "calibrationMDD":mc.get("mdd"),
-            "calibrationPosMonthRate":mc.get("positiveMonthRate"),
+            "calibrationReturn":mm["calibration"].get("totalReturn"),
+            "calibrationPF":mm["calibration"].get("profitFactor"),
+            "calibrationMDD":mm["calibration"].get("mdd"),
+            "calibrationPosMonthRate":mm["calibration"].get("positiveMonthRate"),
             "validationPass":gv["pass"],
-            "validationReturn":mv.get("totalReturn"),
-            "validationPF":mv.get("profitFactor"),
-            "validationMDD":mv.get("mdd"),
-            "validationPosMonthRate":mv.get("positiveMonthRate"),
-            "benchmarkReturn":mb.get("totalReturn"),
-            "benchmarkPF":mb.get("profitFactor"),
-            "benchmarkMDD":mb.get("mdd"),
-            "benchmarkPosMonthRate":mb.get("positiveMonthRate"),
+            "validationReturn":mm["validation"].get("totalReturn"),
+            "validationPF":mm["validation"].get("profitFactor"),
+            "validationMDD":mm["validation"].get("mdd"),
+            "validationPosMonthRate":mm["validation"].get("positiveMonthRate"),
+            "benchmarkReturn":mm["postHocBenchmark"].get("totalReturn"),
+            "benchmarkPF":mm["postHocBenchmark"].get("profitFactor"),
+            "benchmarkMDD":mm["postHocBenchmark"].get("mdd"),
+            "benchmarkPosMonthRate":mm["postHocBenchmark"].get("positiveMonthRate"),
         })
 
-    selectable=[
-        n for n,d in reports.items()
-        if d["policy"].get("early") and d["calibrationGate"]["pass"]
-    ]
-    winner=sorted(selectable,key=lambda n:rank_key(reports[n]["calibration"],n),reverse=True)[0] if selectable else None
+    eligible=[n for n,d in reports.items() if n!="NO_PREARM_EXIT" and d["calibrationGate"]["pass"]]
+    winner=sorted(
+        eligible,
+        key=lambda n:base.rank_key(reports[n]["metrics"]["calibration"],n),
+        reverse=True,
+    )[0] if eligible else None
 
     pd.DataFrame(grid).to_csv(out/"policy-grid.csv",index=False)
-
-    lr=early_model.named_steps["model"]
-    early_coef=[
-        {"feature":f,"coefficient":float(c)}
-        for f,c in sorted(zip(EARLY_FEATURES,lr.coef_[0]),key=lambda z:abs(z[1]),reverse=True)
-    ]
-
     summary={
         "schemaVersion":1,
         "contract":"crypto-futures-dynamic-exit-v11",
@@ -386,57 +352,53 @@ def main():
         "signalCount":int(len(signals)),
         "replayedSignals":int(len(paths)),
         "replayCoverage":coverage,
-        "continuationFitStates":int(len(cont_x)),
-        "continuationPositiveRate":float(cont_y.mean()),
-        "earlyFitStates":int(len(early_x)),
-        "earlyPositiveRate":float(early_y.mean()),
-        "candidatePolicies":len(grid),
-        "selectableCalibrationPassCount":len(selectable),
+        "postArmPolicy":POSTARM_POLICY,
+        "prearmModelStates":int(len(x_pre)),
+        "prearmPositiveRate":float(y_pre.mean()),
+        "continuationModelStates":int(len(x_cont)),
+        "candidatePolicies":len(candidates),
         "winner":winner,
         "fileAudit":file_audit,
-        "pathFailures":failures[:40],
-        "earlyModelTopCoefficients":early_coef[:12],
+        "pathFailures":len(failures),
         "truthBoundary":{
             "entrySignalUnchangedFromFundingV32Winner":True,
-            "oneMinuteReplay":True,
-            "hardStopRemainsEmergencyBackstop":True,
-            "earlyInvalidationDecisionUsesOnlyCompleted1mBars":True,
-            "earlyInvalidationExecutesNextMinuteOpen":True,
-            "profitArmAt3pct":True,
-            "postProfitAiTrailUsesV1FrozenRule":True,
-            "modelsFitOnlyBefore2024_07_01":True,
-            "policySelectedOnlyOn2024_07_to_2025_03Calibration":True,
-            "validationNotUsedForSelection":True,
+            "hardStopRemainsMaximumLossBackstop":True,
+            "prearmAiBeginsAfterFiveCompletedOneMinuteBars":True,
+            "prearmExitRequiresTwoConsecutiveWeakProbabilities":True,
+            "prearmAiExitExecutesNextMinuteOpen":True,
+            "profitProtectionArmsAt3pct":True,
+            "postArmAiAndTrailingFrozenFromDynamicExitV1":True,
+            "allAiModelsFitOnlyBefore2024_07_01":True,
+            "prearmThresholdSelectedOnlyOn2024_07_to_2025_03Calibration":True,
+            "validationNotUsedForPrearmThresholdSelection":True,
+            "entryStrategyWasPreviouslySelectedUsing2025_04_to_2026_03Validation":True,
+            "combinedSystemValidationFullyIndependent":False,
             "post2026AprilBenchmarkPreviouslyExposed":True,
             "profitabilityProven":False,
             "executionAuthority":"NONE",
         },
     }
 
-    baseline_names=["BASE_FIXED_TP3","BASE_AI_TRAIL"]
-    summary["baselineResults"]={
-        n:{
-            "fit":reports[n]["fit"],"calibration":reports[n]["calibration"],
-            "validation":reports[n]["validation"],"postHocBenchmark":reports[n]["postHocBenchmark"],
-            "exitReasons":reports[n]["exitReasons"],
-        } for n in baseline_names
+    base_report=reports["NO_PREARM_EXIT"]
+    summary["baselineNoPrearm"]={
+        **base_report["metrics"],
+        "capture":base_report["capture"],
     }
     if winner:
         d=reports[winner]
         summary["winnerResults"]={
-            "policy":d["policy"],
-            "fit":d["fit"],
-            "calibration":d["calibration"],
+            **d["metrics"],
             "calibrationGate":d["calibrationGate"],
-            "validation":d["validation"],
             "validationGate":d["validationGate"],
-            "postHocBenchmark":d["postHocBenchmark"],
             "postHocBenchmarkGate":d["postHocBenchmarkGate"],
-            "exitReasons":d["exitReasons"],
+            "capture":d["capture"],
         }
         d["trades"].to_csv(out/"winner-ledger.csv",index=False)
 
-    (out/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    (out/"summary.json").write_text(
+        json.dumps(summary,ensure_ascii=False,indent=2)+"\n",
+        encoding="utf-8",
+    )
     print(json.dumps({"FINAL":summary},ensure_ascii=False),flush=True)
 
 
