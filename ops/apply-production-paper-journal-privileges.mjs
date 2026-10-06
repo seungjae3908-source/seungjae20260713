@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { classifyProductionPaperJournalPrivilegeFailure } from './classify-production-paper-journal-privilege-failure.mjs';
 
 const SCHEMA_VERSION = 'production-paper-journal-privileges-v1';
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
@@ -208,14 +209,22 @@ select json_build_object(
 
 const sql = [
   '\\set ON_ERROR_STOP on',
-  'begin;',
+  '\\echo __PAPER_JOURNAL_PHASE__:transaction',
+  // A stable snapshot prevents legitimate concurrent paper-journal writes from
+  // looking like mutations performed by this privilege-only transaction. Own
+  // writes would still be visible and therefore still fail the row invariant.
+  'begin isolation level repeatable read;',
   "set local lock_timeout = '5s';",
   "set local statement_timeout = '60s';",
   "select pg_advisory_xact_lock(hashtextextended('production-paper-journal-privileges-v1', 0));",
   `select set_config('app.approved_target_sha', '${approvedTargetSha}', true);`,
+  '\\echo __PAPER_JOURNAL_PHASE__:preflight',
   preflightSql,
+  '\\echo __PAPER_JOURNAL_PHASE__:migration',
   migrationBody,
+  '\\echo __PAPER_JOURNAL_PHASE__:verification',
   verificationSql,
+  '\\echo __PAPER_JOURNAL_PHASE__:commit',
   'commit;',
   '',
 ].join('\n');
@@ -246,7 +255,7 @@ const result = spawnSync('psql', [
   stdio: ['pipe', 'pipe', 'pipe'],
   maxBuffer: 2 * 1024 * 1024,
 });
-if (result.error || result.status !== 0) fail('atomic_privilege_migration_failed');
+if (result.error || result.status !== 0) fail(classifyProductionPaperJournalPrivilegeFailure(result));
 
 const lines = String(result.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 let artifact;
