@@ -97,6 +97,20 @@ requireText(command, 'cancel-in-progress: false', 'ONE_COMMAND_RELEASE_MUST_NOT_
 requireText(command, 'selectReusableExactStagingRun', 'ONE_COMMAND_RELEASE_STAGING_REUSE_MISSING');
 requireText(command, 'await waitForRun(stagingRun.id', 'ONE_COMMAND_RELEASE_STAGING_WAIT_MISSING');
 requireText(command, 'STAGING_RELEASE_FAILED:', 'ONE_COMMAND_RELEASE_STAGING_FAILURE_MISSING');
+requireText(releaseOrchestrator, 'async function retryGithubRead', 'ONE_COMMAND_RELEASE_READ_RETRY_MISSING');
+requireText(releaseOrchestrator, 'GITHUB_READ_RETRY_EXHAUSTED:', 'ONE_COMMAND_RELEASE_READ_RETRY_DIAGNOSTIC_MISSING');
+requireText(command, 'retryGithubRead,', 'ONE_COMMAND_RELEASE_READ_RETRY_NOT_IMPORTED');
+for (const label of [
+  'current-main-initial',
+  'current-main-recheck',
+  'list-staging-runs',
+  'list-staging-artifacts',
+  'get-workflow-run',
+  'list-production-runs',
+]) {
+  requireText(command, `readOptions('${label}')`, `ONE_COMMAND_RELEASE_READ_RETRY_CALL_MISSING:${label}`);
+}
+requireText(command, 'MUTATING_GITHUB_CALLS_ARE_NEVER_RETRIED', 'ONE_COMMAND_RELEASE_MUTATION_RETRY_BOUNDARY_MISSING');
 requireOrder(command, [
   "workflow_id: 'staging-readiness.yml'",
   'await requireStagingArtifact(stagingRun)',

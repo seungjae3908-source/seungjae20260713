@@ -162,6 +162,7 @@ jobs:
           script: |
             const {
               activeRuns,
+              retryGithubRead,
               selectReusableExactStagingRun,
               stagingArtifactAccepted,
             } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/production-release-orchestrator.cjs`);
@@ -175,52 +176,68 @@ jobs:
             }
             const target = match[1].toLowerCase();
             const qaScope = tradingCore ? 'trading_core' : 'full';
-            const main = await github.rest.repos.getBranch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              branch: 'main',
-            });
+            const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+            const readOptions = (label) => ({ label, attempts: 3, baseDelayMs: 1_000, sleep });
+            const main = await retryGithubRead(
+              () => github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: 'main',
+              }),
+              readOptions('current-main-initial'),
+            );
             if (String(main.data.commit.sha).toLowerCase() !== target) {
               core.setFailed(`POSTDEPLOY_COMMAND_REQUIRES_EXACT_CURRENT_MAIN: target=${target} main=${main.data.commit.sha}`);
               return;
             }
 
-            const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
             const requireCurrentMain = async () => {
-              const branch = await github.rest.repos.getBranch({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                branch: 'main',
-              });
+              const branch = await retryGithubRead(
+                () => github.rest.repos.getBranch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  branch: 'main',
+                }),
+                readOptions('current-main-recheck'),
+              );
               const current = String(branch.data.commit.sha).toLowerCase();
               if (current !== target) throw new Error(`RELEASE_MAIN_ADVANCED: target=${target} main=${current}`);
             };
-            const listStagingRuns = () => github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'staging-readiness.yml',
-              event: 'workflow_dispatch',
-              branch: 'main',
-              per_page: 100,
-            });
-            const requireStagingArtifact = async (run) => {
-              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+            const listStagingRuns = () => retryGithubRead(
+              () => github.paginate(github.rest.actions.listWorkflowRuns, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                run_id: run.id,
+                workflow_id: 'staging-readiness.yml',
+                event: 'workflow_dispatch',
+                branch: 'main',
                 per_page: 100,
-              });
+              }),
+              readOptions('list-staging-runs'),
+            );
+            const requireStagingArtifact = async (run) => {
+              const artifacts = await retryGithubRead(
+                () => github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                }),
+                readOptions('list-staging-artifacts'),
+              );
               if (!stagingArtifactAccepted(artifacts, { targetSha: target, runId: run.id })) {
                 throw new Error(`STAGING_RELEASE_ARTIFACT_MISSING:${run.id}:staging-verdict-${target}`);
               }
             };
             const waitForRun = async (runId, label, maximumPolls = 480) => {
               for (let poll = 0; poll < maximumPolls; poll += 1) {
-                const response = await github.rest.actions.getWorkflowRun({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: runId,
-                });
+                const response = await retryGithubRead(
+                  () => github.rest.actions.getWorkflowRun({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: runId,
+                  }),
+                  readOptions('get-workflow-run'),
+                );
                 const run = response.data;
                 if (run.status === 'completed') return run;
                 if (poll % 8 === 0) core.info(`${label} Run ${runId} status=${run.status}`);
@@ -228,13 +245,16 @@ jobs:
               }
               throw new Error(`${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_WAIT_TIMEOUT:${runId}`);
             };
-            const listProductionRuns = () => github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'production-deploy.yml',
-              event: 'workflow_dispatch',
-              per_page: 100,
-            });
+            const listProductionRuns = () => retryGithubRead(
+              () => github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'production-deploy.yml',
+                event: 'workflow_dispatch',
+                per_page: 100,
+              }),
+              readOptions('list-production-runs'),
+            );
             const requireNoProductionConflict = async () => {
               const conflicts = activeRuns(await listProductionRuns());
               if (conflicts.length > 0) {
@@ -296,6 +316,8 @@ jobs:
               await requireCurrentMain();
               await requireNoProductionConflict();
 
+              // MUTATING_GITHUB_CALLS_ARE_NEVER_RETRIED: duplicate Staging or
+              // Production dispatches are more dangerous than a visible failure.
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
