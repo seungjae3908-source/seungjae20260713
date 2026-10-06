@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-# Workflow trigger after registration.
+# Workflow registered; trigger causal failed-rally OI replay.
 
 import argparse, importlib.util, json
 from pathlib import Path
