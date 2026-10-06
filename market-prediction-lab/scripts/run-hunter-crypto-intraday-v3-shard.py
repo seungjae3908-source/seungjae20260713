@@ -42,7 +42,7 @@ def one(file,market):
    score=pl.col("vr").clip(0,5)+(-pl.col("ret4")).clip(0,.2)*20+(-pl.col("ret16")).clip(0,.5)*8+(-pl.col("pv")).clip(0,.2)*20
   for fam,m in masks.items():
    q=x.filter(m).with_columns([pl.lit(market).alias("market"),pl.lit(symbol).alias("symbol"),pl.lit(d).alias("direction"),pl.lit(fam).alias("family"),score.alias("score")]).select(["market","symbol","date","entryTime","direction","family","score","entryPrice","hi16","lo16","cl16","hi32","lo32","cl32","vr","ret4","ret16","pv","comp"])
-   if q.height:out.append(q)
+   if q.height:\n    q=q.with_columns([pl.col("date").dt.cast_time_unit("us").alias("date"),pl.col("entryTime").dt.cast_time_unit("us").alias("entryTime")])\n    out.append(q)
  return pl.concat(out,how="vertical") if out else pl.DataFrame()
 def main():
  ap=argparse.ArgumentParser();ap.add_argument("--market",required=True,choices=["CRYPTO_SPOT","CRYPTO_FUTURES"]);ap.add_argument("--shard-index",type=int,required=True);ap.add_argument("--shard-count",type=int,required=True);ap.add_argument("--out-dir",required=True);a=ap.parse_args()
