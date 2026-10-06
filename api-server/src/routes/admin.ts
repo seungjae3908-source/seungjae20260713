@@ -254,28 +254,35 @@ router.post('/members/:id/password-reset', async (req: AuthenticatedRequest, res
     }
     const temporaryPassword = `R9!${randomBytes(18).toString('base64url')}a`;
     const service = getSupabase();
-    const { error: resetError } = await service.auth.admin.updateUserById(targetId, { password: temporaryPassword });
-    if (resetError) throw new Error('PASSWORD_RESET_FAILED');
 
-    let auditRecorded = true;
+    // Never mutate Auth unless the privileged reset attempt is durably auditable.
+    // The audit stores no password or credential material.
     const { error: auditError } = await service.from('member_permission_audit').insert({
       actor_id: req.member!.id,
       target_user_id: targetId,
       action: 'member.password.reset',
       before_value: { password: 'REDACTED' },
-      after_value: { temporaryPasswordIssued: true },
+      after_value: { resetAuthorized: true, credentialStored: false },
       reason,
     });
-    if (auditError) auditRecorded = false;
+    if (auditError) {
+      throw new MemberAdministrationError(
+        'PASSWORD_RESET_AUDIT_FAILED',
+        '감사기록을 저장하지 못해 비밀번호 재설정을 중단했습니다.',
+        503,
+      );
+    }
+
+    const { error: resetError } = await service.auth.admin.updateUserById(targetId, { password: temporaryPassword });
+    if (resetError) throw new Error('PASSWORD_RESET_FAILED');
 
     res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
     return res.json({
       ok: true,
       temporaryPassword,
-      auditRecorded,
-      message: auditRecorded
-        ? '임시 비밀번호를 발급했습니다. 사용자에게 안전한 경로로 전달하세요.'
-        : '임시 비밀번호는 발급됐지만 감사기록 저장을 확인하지 못했습니다.',
+      auditRecorded: true,
+      message: '임시 비밀번호를 발급했습니다. 사용자에게 안전한 경로로 전달하세요.',
     });
   } catch (cause) {
     return sendAdminError(res, cause, 'PASSWORD_RESET_FAILED');
