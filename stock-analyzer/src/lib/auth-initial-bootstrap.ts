@@ -14,6 +14,7 @@ export type InitialMemberProfile = {
   status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
   membership_level?: 'pending' | 'associate' | 'regular' | 'admin' | null;
   is_active?: boolean | null;
+  membership_expires_at?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
