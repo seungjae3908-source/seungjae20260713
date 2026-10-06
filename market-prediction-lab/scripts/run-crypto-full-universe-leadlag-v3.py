@@ -400,7 +400,8 @@ def main():
             "candidateSelectionUsesTrainAndCalibrationOnly":True,
             "validationExcludedFromSelection":True,
             "freshOosExcludedFromSelection":True,
-            "duplicateParquetReadsAcrossExitConfigsEliminated":True,\n            "profitabilityProven":False,
+            "duplicateParquetReadsAcrossExitConfigsEliminated":True,
+            "profitabilityProven":False,
             "executionAuthority":"NONE",
         },
     }
