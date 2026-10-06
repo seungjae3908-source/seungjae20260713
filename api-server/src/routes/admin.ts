@@ -5,7 +5,11 @@ import {
   requireAuthenticated,
   type AuthenticatedRequest,
 } from '../middleware/auth';
-import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
+import { getUserSupabase } from '../lib/supabase';
+import {
+  memberPasswordResetAvailable,
+  resetMemberPasswordCredential,
+} from '../services/member-auth-admin.service';
 import {
   MemberAdministrationError,
   classifyAtomicMemberChangeFailure,
@@ -246,7 +250,7 @@ router.patch('/members/:id', async (req: AuthenticatedRequest, res) => {
 
 router.post('/members/:id/password-reset', async (req: AuthenticatedRequest, res) => {
   try {
-    if (!hasSupabaseServerKey()) {
+    if (!memberPasswordResetAvailable()) {
       return res.status(503).json({
         error: 'PASSWORD_RESET_UNAVAILABLE',
         message: '안전한 비밀번호 재설정 권한이 구성되지 않았습니다.',
@@ -258,11 +262,10 @@ router.post('/members/:id/password-reset', async (req: AuthenticatedRequest, res
       throw new MemberAdministrationError('CHANGE_REASON_REQUIRED', '변경 사유를 3~500자로 입력하세요.', 400);
     }
     const temporaryPassword = `R9!${randomBytes(18).toString('base64url')}a`;
-    const service = getSupabase();
 
-    // Never mutate Auth unless the privileged reset attempt is durably auditable.
-    // The audit stores no password or credential material.
-    const { error: auditError } = await service.from('member_permission_audit').insert({
+    // The authorization/audit row always goes through the caller-scoped RLS
+    // client. Only the Auth credential mutation is delegated to a narrow helper.
+    const { error: auditError } = await adminDb(req).from('member_permission_audit').insert({
       actor_id: req.member!.id,
       target_user_id: targetId,
       action: 'member.password.reset',
@@ -278,8 +281,7 @@ router.post('/members/:id/password-reset', async (req: AuthenticatedRequest, res
       );
     }
 
-    const { error: resetError } = await service.auth.admin.updateUserById(targetId, { password: temporaryPassword });
-    if (resetError) throw new Error('PASSWORD_RESET_FAILED');
+    await resetMemberPasswordCredential(targetId, temporaryPassword);
 
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.setHeader('Pragma', 'no-cache');
