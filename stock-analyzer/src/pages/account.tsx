@@ -42,11 +42,10 @@ export default function AccountPage() {
     } finally { setBusy(false); }
   }
 
-  const membershipExpired = Boolean(
-    auth.profile?.membership_expires_at
-    && Number.isFinite(Date.parse(auth.profile.membership_expires_at))
-    && Date.parse(auth.profile.membership_expires_at) <= Date.now(),
-  );
+  const membershipExpiry = auth.profile?.membership_expires_at ?? null;
+  const membershipExpiryMs = membershipExpiry ? Date.parse(membershipExpiry) : null;
+  const membershipExpired = membershipExpiryMs != null
+    && (!Number.isFinite(membershipExpiryMs) || membershipExpiryMs <= Date.now());
   const stateMessage = auth.bootstrapError ? ''
     : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
     : auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
