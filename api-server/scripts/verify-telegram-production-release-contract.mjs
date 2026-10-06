@@ -71,7 +71,6 @@ const requiredFragments = [
   'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
   'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
   'TELEGRAM_AUTO_TRADING_CHAT_ID',
-  'TELEGRAM_OWNER_MEMBER_ID',
   'TELEGRAM_BOT_USERNAME',
   'TELEGRAM_WEBHOOK_SECRET',
   'BACKGROUND_WORKERS_ENABLED=false',
@@ -158,6 +157,37 @@ for (const fragment of [
   "if (autoTradingChatId) uniqueRoomTargets.set(autoTradingChatId, 'AUTO_TRADING_CHAT')",
 ]) {
   if (!source.includes(fragment)) throw new Error(`TELEGRAM_RUNTIME_FALLBACK_CONTRACT_MISSING:${fragment}`);
+}
+const activationFunctionStart = source.indexOf('function activateApprovedTelegram(');
+const activationFunctionEnd = source.indexOf('const requiredTelegramConfigKeys = [', activationFunctionStart);
+if (activationFunctionStart < 0 || activationFunctionEnd <= activationFunctionStart) {
+  throw new Error('TELEGRAM_ACTIVATION_FUNCTION_BLOCK_MISSING');
+}
+const activationFunctionBlock = source.slice(activationFunctionStart, activationFunctionEnd);
+if (!activationFunctionBlock.includes('const coreTelegramConfigKeys = [')) {
+  throw new Error('TELEGRAM_ACTIVATION_CORE_CONFIG_BLOCK_MISSING');
+}
+for (const optionalKey of [
+  'TELEGRAM_KR_STOCK_CHAT_ID',
+  'TELEGRAM_US_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+  'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+  'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+  'TELEGRAM_AUTO_TRADING_CHAT_ID',
+  'TELEGRAM_OWNER_MEMBER_ID',
+]) {
+  if (activationFunctionBlock.includes(`'${optionalKey}',`)) {
+    throw new Error(`TELEGRAM_ACTIVATION_OPTIONAL_KEY_MUST_NOT_BLOCK_RELEASE:${optionalKey}`);
+  }
+}
+for (const diagnosticCode of [
+  'TELEGRAM_PM2_RESTART_FAILED',
+  'TELEGRAM_PM2_SAVE_FAILED',
+  'TELEGRAM_RUNTIME_UNEXPECTED_FAILURE',
+]) {
+  if (!source.includes(diagnosticCode)) {
+    throw new Error(`TELEGRAM_SANITIZED_RUNTIME_DIAGNOSTIC_MISSING:${diagnosticCode}`);
+  }
 }
 
 if (!personalWorkerSource.includes("console.log('[user-telegram-worker] started')")) {
