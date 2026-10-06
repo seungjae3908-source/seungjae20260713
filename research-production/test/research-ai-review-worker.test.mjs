@@ -183,6 +183,38 @@ test('scan reviews each unseen profile once, caches by evidence digest and never
   }
 });
 
+test('prior-release profile evidence is treated as missing for the current release, not as a blocked AI failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-stale-release-'));
+  let calls = 0;
+  try {
+    await mkdir(join(root, 'latest'), { recursive: true });
+    await writeFile(join(root, 'latest', 'forward.json'), `${JSON.stringify(cycle('forward'))}\n`);
+    await writeFile(join(root, 'latest', 'fast-historical.json'), `${JSON.stringify({ ...cycle('fast-historical'), researchSha: 'b'.repeat(40), status: 'blocked_data' })}\n`);
+    await writeFile(join(root, 'latest', 'long-history.json'), `${JSON.stringify({ ...cycle('long-history'), researchSha: 'c'.repeat(40) })}\n`);
+
+    const env = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: SECRET };
+    const result = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async ({ policy }) => {
+        calls += 1;
+        return { answer: safeAnswer, model: policy.model, provider: policy.provider };
+      },
+      now: () => Date.parse('2026-09-05T09:00:00Z'),
+    });
+
+    assert.equal(result.status, 'COMPLETE');
+    assert.equal(result.providerNetworkCalls, 1);
+    assert.equal(result.reviews.length, 1);
+    assert.equal(result.reviews[0].profile, 'forward');
+    assert.deepEqual([...result.missingProfiles].sort(), ['fast-historical', 'long-history']);
+    assert.equal(result.blockedProfiles.length, 0);
+    assert.equal(calls, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('unsafe numeric performance claims are rejected and backed off without affecting canonical research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-ai-unsafe-'));
   try {
