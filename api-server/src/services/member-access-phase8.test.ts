@@ -14,9 +14,13 @@ import {
 
 const expected: Record<MemberTier, MemberCapability[]> = {
   pending: [],
-  associate: ['canAccessBasicInfo', 'canAccessSpot', 'canAccessPaperTrading', 'canAccessAutoTrading', 'canConnectPersonalTelegram'],
+  associate: [
+    'canAccessBasicInfo', 'canAccessSpot', 'canAccessAiChart',
+    'canAccessPaperTrading', 'canAccessAutoTrading', 'canConnectPersonalTelegram',
+    'canAccessTradingAnalytics', 'canAccessAiTradingReview',
+  ],
   regular: [
-    'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures',
+    'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures', 'canAccessAiChart',
     'canAccessRiskPreview', 'canAccessBacktests', 'canAccessPaperTrading', 'canAccessAutoTrading',
     'canConnectPersonalTelegram', 'canAccessJournalSync', 'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
@@ -32,12 +36,14 @@ for (const tier of ['pending', 'associate', 'regular', 'admin'] as const) {
   }
 }
 
-test('legacy approved user maps to regular', () => {
-  assert.equal(deriveMemberTier({ role: 'user', status: 'approved' }), 'regular');
+test('legacy approved user requires explicit active state', () => {
+  assert.equal(deriveMemberTier({ role: 'user', status: 'approved' }), 'pending');
+  assert.equal(deriveMemberTier({ role: 'user', status: 'approved', is_active: true }), 'regular');
 });
 
-test('legacy approved admin maps to admin', () => {
-  assert.equal(deriveMemberTier({ role: 'admin', status: 'approved' }), 'admin');
+test('legacy approved admin requires explicit active state', () => {
+  assert.equal(deriveMemberTier({ role: 'admin', status: 'approved' }), 'pending');
+  assert.equal(deriveMemberTier({ role: 'admin', status: 'approved', is_active: true }), 'admin');
 });
 
 test('legacy pending admin does not gain admin access', () => {
@@ -45,7 +51,35 @@ test('legacy pending admin does not gain admin access', () => {
 });
 
 test('explicit associate tier is preserved', () => {
-  assert.equal(deriveMemberTier({ membership_level: 'associate', role: 'user', status: 'approved' }), 'associate');
+  assert.equal(deriveMemberTier({ membership_level: 'associate', role: 'user', status: 'approved', is_active: true }), 'associate');
+});
+
+test('expired associate is treated as pending and loses AI capabilities', () => {
+  const profile = {
+    membership_level: 'associate',
+    status: 'approved',
+    is_active: true,
+    membership_expires_at: '2020-01-01T00:00:00.000Z',
+  };
+  assert.equal(deriveMemberTier(profile), 'pending');
+  assert.equal(hasCapability(profile, 'canAccessAiChart'), false);
+  assert.equal(hasCapability(profile, 'canAccessRiskPreview'), false);
+  assert.equal(hasCapability(profile, 'canAccessTradingAnalytics'), false);
+  assert.equal(hasCapability(profile, 'canAccessAiTradingReview'), false);
+});
+
+test('future-dated associate keeps S/AI member capabilities', () => {
+  const profile = {
+    membership_level: 'associate',
+    status: 'approved',
+    is_active: true,
+    membership_expires_at: '2099-01-01T00:00:00.000Z',
+  };
+  assert.equal(deriveMemberTier(profile), 'associate');
+  assert.equal(hasCapability(profile, 'canAccessAiChart'), true);
+  assert.equal(hasCapability(profile, 'canAccessRiskPreview'), false);
+  assert.equal(hasCapability(profile, 'canAccessTradingAnalytics'), true);
+  assert.equal(hasCapability(profile, 'canAccessAiTradingReview'), true);
 });
 
 test('inactive regular is treated as pending', () => {
@@ -53,12 +87,14 @@ test('inactive regular is treated as pending', () => {
 });
 
 test('suspended admin is treated as pending', () => {
-  assert.equal(deriveMemberTier({ membership_level: 'admin', status: 'suspended' }), 'pending');
+  assert.equal(deriveMemberTier({ membership_level: 'admin', status: 'suspended', is_active: false }), 'pending');
 });
 
-test('unknown client role does not gain capabilities', () => {
-  assert.equal(deriveMemberTier({ role: 'superadmin', status: 'pending' }), 'pending');
-  assert.equal(hasCapability({ role: 'superadmin', status: 'pending' }, 'canManageMembers'), false);
+test('unknown client role does not gain capabilities even when approved and active', () => {
+  assert.equal(deriveMemberTier({ role: 'superadmin', status: 'pending', is_active: true }), 'pending');
+  assert.equal(deriveMemberTier({ role: 'superadmin', status: 'approved', is_active: true }), 'pending');
+  assert.equal(hasCapability({ role: 'superadmin', status: 'approved', is_active: true }, 'canAccessBasicInfo'), false);
+  assert.equal(hasCapability({ role: 'superadmin', status: 'approved', is_active: true }, 'canManageMembers'), false);
 });
 
 test('membership labels use the requested Korean names', () => {
