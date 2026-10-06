@@ -431,6 +431,31 @@ function decisionFrom(result: PreSubmissionRiskResult): TradingRiskDecision {
   return { allowed: result.allowed, blockCodes: result.blockCodes, warnings: result.warnings };
 }
 
+function positiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function paperFill(plan: TradingPlan, snapshot: TradingMarketSnapshot) {
+  const requestedQuantity = positiveNumber(plan.quantity);
+  const quoteAmount = positiveNumber(plan.quoteAmount);
+  const plannedQuotePrice = quoteAmount != null && requestedQuantity != null
+    ? quoteAmount / requestedQuantity
+    : null;
+  const averageFillPrice = [
+    plan.limitPrice,
+    plannedQuotePrice,
+    snapshot.currentPrice,
+    snapshot.plannedPrice,
+    plan.entryPrice,
+  ].map(positiveNumber).find((value): value is number => value != null) ?? null;
+  const filledQuantity = requestedQuantity
+    ?? (quoteAmount != null && averageFillPrice != null ? quoteAmount / averageFillPrice : null);
+  if (averageFillPrice == null || filledQuantity == null || !Number.isFinite(filledQuantity) || filledQuantity <= 0) {
+    throw new Error('PAPER_EXECUTION_FILL_UNAVAILABLE');
+  }
+  return { averageFillPrice, filledQuantity };
+}
+
 export class TradeExecutionService {
   private automation: TradeAutomationService;
   private recovery: TradeOrderRecoveryService;
@@ -842,9 +867,8 @@ export class TradeExecutionService {
           serverLiveEnabled: true,
         });
         const metadata = this.riskMetadata(risk, false);
+        const { filledQuantity, averageFillPrice } = paperFill(plan, risk.snapshot);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
-        const filledQuantity = plan.quantity ?? 0;
-        const averageFillPrice = plan.limitPrice ?? (plan.quoteAmount && plan.quantity ? plan.quoteAmount / plan.quantity : null);
         const feePercent = Number(risk.snapshot.estimatedFeePercent);
         const feeAmount = Number.isFinite(averageFillPrice) && Number.isFinite(filledQuantity)
           && averageFillPrice! > 0 && filledQuantity > 0 && Number.isFinite(feePercent) && feePercent >= 0
