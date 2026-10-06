@@ -1,0 +1,204 @@
+name: Research Workspace Canonical Evaluation Execution V18
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-workspace-canonical-evaluation-execution-v18.yml'
+      - 'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js'
+      - 'packages/external-research/src/research-workspace-canonical-evaluation-executor-v18.js'
+      - 'packages/external-research/src/research-workspace-canonical-evaluation-runtime-v18.js'
+      - 'packages/external-research/scripts/run-canonical-evaluation-v18.mjs'
+      - 'packages/external-research/test/research-workspace-canonical-evaluation-executor-v18.test.js'
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact current main SHA already active in Research Production
+        required: true
+        type: string
+      package_name:
+        description: Reviewed Phase18 package basename under state/phase18/approved
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: research-workspace-canonical-evaluation-execution-v18
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate bounded execution runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check packages/external-research/src/research-workspace-canonical-evaluation-executor-v18.js
+          node --check packages/external-research/src/research-workspace-canonical-evaluation-runtime-v18.js
+          node --check packages/external-research/scripts/run-canonical-evaluation-v18.mjs
+          node --test \
+            packages/external-research/test/research-workspace-canonical-evaluation-executor-v18.test.js \
+            packages/external-research/test/research-workspace-canonical-evaluation-runtime-v18.test.js
+          grep -Fq "environment: production" .github/workflows/research-workspace-canonical-evaluation-execution-v18.yml
+          grep -Fq "executionAuthority:'NONE'" packages/external-research/src/research-workspace-canonical-evaluation-runtime-v18.js
+          node - <<'NODE'
+          const fs=require('node:fs');
+          const yaml=fs.readFileSync('.github/workflows/research-workspace-canonical-evaluation-execution-v18.yml','utf8');
+          if (/^\\s+schedule\\s*:/mu.test(yaml) || /^\\s+cron\\s*:/mu.test(yaml)
+            || /LIVE_TRADING\\s*:\\s*['"]?true/iu.test(yaml)
+            || /REAL_ORDER_ENABLED\\s*:\\s*['"]?true/iu.test(yaml)
+            || /PRIVATE_TRADING_API_ALLOWED\\s*:\\s*['"]?true/iu.test(yaml)) {
+            throw new Error('V18_WORKFLOW_AUTHORITY_OR_SCHEDULE_VIOLATION');
+          }
+          NODE
+
+  authorize:
+    if: github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      package_name: ${{ steps.gate.outputs.package_name }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+      - name: Require current main, Required CI 6/6 and exact AI activation receipt
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          INPUT_TARGET_SHA: ${{ inputs.target_sha }}
+          INPUT_PACKAGE_NAME: ${{ inputs.package_name }}
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const target = String(process.env.INPUT_TARGET_SHA ?? '').trim().toLowerCase();
+            const packageName = String(process.env.INPUT_PACKAGE_NAME ?? '').trim();
+            if (!/^[0-9a-f]{40}$/u.test(target)) return core.setFailed('V18_TARGET_SHA_INVALID');
+            if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}[.]json$/u.test(packageName)) return core.setFailed('V18_PACKAGE_NAME_INVALID');
+            const main = (await github.rest.repos.getBranch({owner:context.repo.owner,repo:context.repo.repo,branch:'main'})).data.commit.sha.toLowerCase();
+            if (main !== target) return core.setFailed('V18_MAIN_SHA_MISMATCH');
+            const required=['application-ci/verified','browser-ui/verified','database-rls/verified','security-integration/verified','ai-privacy/verified','futures-public-network-smoke/verified'];
+            const statuses=await github.paginate(github.rest.repos.listCommitStatusesForRef,{owner:context.repo.owner,repo:context.repo.repo,ref:target,per_page:100});
+            statuses.sort((a,b)=>Number(b.id)-Number(a.id));const latest=new Map();
+            for(const status of statuses)if(!latest.has(status.context))latest.set(status.context,status);
+            const missing=required.filter(name=>latest.get(name)?.state!=='success');
+            if(missing.length)return core.setFailed('V18_REQUIRED_CI_NOT_6_OF_6:'+missing.join(','));
+            const runIds=new Set(required.map(name=>/\/actions\/runs\/(\d+)/u.exec(String(latest.get(name)?.target_url??''))?.[1]??null));
+            if(runIds.size!==1||runIds.has(null))return core.setFailed('V18_REQUIRED_CI_NOT_COHERENT');
+            const hub=Number(process.env.HUB_ISSUE_NUMBER??0);
+            const comments=await github.paginate(github.rest.issues.listComments,{owner:context.repo.owner,repo:context.repo.repo,issue_number:hub,per_page:100});
+            const receipt=[...comments].reverse().find(comment=>{
+              if(comment.user?.login!=='github-actions[bot]'||comment.user?.type!=='Bot')return false;
+              const text=String(comment.body??'');
+              return text.includes('[RESEARCH_AI_PRODUCTION_ACTIVATION]')&&text.includes('status: success')
+                &&text.includes('target_sha: '+target)&&text.includes('executionAuthority: NONE')
+                &&text.includes('workspace_worker_enabled: true')&&text.includes('real_order_count: 0');
+            });
+            if(!receipt)return core.setFailed('V18_EXACT_AI_ACTIVATION_RECEIPT_REQUIRED');
+            core.setOutput('target_sha',target);core.setOutput('package_name',packageName);
+
+  execute:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      PACKAGE_NAME: ${{ needs.authorize.outputs.package_name }}
+      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"; test -n "$SSH_USER"; test -n "$SSH_PRIVATE_KEY"; test -n "$SSH_KNOWN_HOSTS"
+          umask 077; mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Re-check exact main after Production approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$TARGET_SHA"
+      - name: Execute one bounded canonical evaluation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q PACKAGE_NAME=%q' "$TARGET_SHA" "$PACKAGE_NAME")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE' | tee "$RUNNER_TEMP/v18-result.json"
+          set -Eeuo pipefail
+          release="/opt/investment-research/releases/$TARGET_SHA"
+          test "$(readlink -f /opt/investment-research/current)" = "$release"
+          test "$(git -C /opt/investment-research/current rev-parse HEAD)" = "$TARGET_SHA"
+          state=/var/lib/investment-research-production
+          package="$state/phase18/approved/$PACKAGE_NAME"
+          test -f "$package"
+          runuser -u investment-research -- node             /opt/investment-research/current/packages/external-research/scripts/run-canonical-evaluation-v18.mjs             --package "$package" --state-root "$state" --repo-root /opt/investment-research/current --current-sha "$TARGET_SHA"
+          REMOTE
+          grep -Fq '"executionAuthority":"NONE"' "$RUNNER_TEMP/v18-result.json"
+          grep -Eq '"status":"(RESEARCH_EVIDENCE_RECORDED|REVIEW_REQUIRED)"' "$RUNNER_TEMP/v18-result.json"
+      - name: Record sanitized Phase18 receipt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const row=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/v18-result.json','utf8').trim().split('\n').at(-1));
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:Number(process.env.HUB_ISSUE_NUMBER),
+              body:[
+                '[RESEARCH_CANONICAL_EVALUATION_V18]',
+                'status: '+row.status,
+                'target_sha: '+process.env.TARGET_SHA,
+                'evaluation_id: '+row.evaluationId,
+                'request_digest: '+row.requestDigest,
+                'compiler_runs: '+row.compilerRuns,
+                'backtest_runs: '+row.backtestRuns,
+                'automatic_adoption: false',
+                'paper_activation: false',
+                'live_activation: false',
+                'profitability_proven: false',
+                'executionAuthority: NONE',
+                'workflow_run: '+context.runId,
+              ].join('\n'),
+            });

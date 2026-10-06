@@ -9,7 +9,9 @@ test('AI Research activation is fail-closed and exact-SHA bound', async () => {
   assert.match(script, /TARGET_SHA must be an exact lowercase 40-character SHA/);
   assert.match(script, /AI_RESEARCH_CURRENT_SHA_MISMATCH/);
   assert.match(script, /\/opt\/investment-research\/releases\/[^\n]*\$TARGET_SHA/);
-  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true/);
+  assert.match(script, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=\$safe_disabled/);
+  assert.match(script, /AI_RESEARCH_TIMER_STILL_ACTIVE/);
+  assert.match(script, /AI_RESEARCH_DAEMON_STILL_ACTIVE/);
   assert.match(script, /systemctl disable --now/);
 });
 
@@ -90,7 +92,7 @@ test('fresh one-shot provider evidence is required before recurring timers enabl
   assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING/);
-  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_SOURCE_MISSING/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_SOURCE_COUNT_INVALID/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_STALE/);
 });
 test('AI activation preserves no-trading authority contract', async () => {
@@ -103,4 +105,16 @@ test('AI activation preserves no-trading authority contract', async () => {
     'REAL_ORDER_SUBMITTED=false',
   ]) assert.match(script, new RegExp(token));
   assert.doesNotMatch(script, /LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true|executionAuthority=LIVE/);
+});
+
+
+test('existing provider credentials are normalized with fixed Research models without secret logging', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /provider_credentials_present\(\)/);
+  assert.match(script, /normalize_existing_provider_env\(\)/);
+  assert.match(script, /GEMINI_MODEL=gemini-3\.1-flash-lite/);
+  assert.match(script, /GROQ_MODEL=openai\/gpt-oss-20b/);
+  assert.match(script, /EXISTING_RESEARCH_PROVIDER_ENV_MODELS_NORMALIZED/);
+  assert.match(script, /install -o root -g investment-research -m 0640/);
+  assert.doesNotMatch(script, /console\.log\([^\n]*API_KEY|echo [^\n]*API_KEY|printf [^\n]*API_KEY/);
 });
