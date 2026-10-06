@@ -16,6 +16,7 @@ const artifactDir = path.resolve(
   process.env.PRODUCTION_TRADING_CORE_ARTIFACT_DIR ?? 'production-trading-core-artifacts',
 );
 const enabled = process.env.PRODUCTION_TRADING_CORE_QA === 'true';
+const prepareMemberAutoPolicy = process.env.PRODUCTION_TRADING_CORE_PREPARE_POLICY === 'true';
 
 test.skip(!enabled, 'Production Trading Core QA runs only in the dedicated protected workflow.');
 
@@ -113,10 +114,50 @@ function memberAutoPolicyReadiness(policy: any) {
   };
 }
 
+function preparedMemberAutoPolicy(policy: any) {
+  const domesticBroker = policy?.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  const requestedLeverage = Number(policy?.bitgetLeverage);
+  const bitgetLeverage = Number.isInteger(requestedLeverage)
+    && requestedLeverage >= 2
+    && requestedLeverage <= 7
+    ? requestedLeverage
+    : 2;
+  return {
+    ...policy,
+    mode: 'automatic',
+    automaticEnabled: true,
+    emergencyStopped: false,
+    newEntriesStopped: false,
+    marketEnabled: {
+      ...(policy?.marketEnabled ?? {}),
+      domestic_stock: true,
+      us_stock: true,
+      crypto_spot: true,
+      crypto_futures: true,
+    },
+    stockBrokerByMarket: {
+      ...(policy?.stockBrokerByMarket ?? {}),
+      domestic_stock: domesticBroker,
+      us_stock: 'kiwoom',
+    },
+    exchangeEnabled: {
+      ...(policy?.exchangeEnabled ?? {}),
+      bitget: true,
+      upbit: true,
+      kiwoom: true,
+      toss: true,
+    },
+    bitgetLeverage,
+    riskOptimizationEnabled: true,
+    pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50',
+    confirmation: { acknowledged: true },
+  };
+}
+
 test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with zero real order authority', async ({ page }) => {
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
-  const statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+  let statusBefore = await appApi<any>(page, '/api/trade-automation/status');
   expect(statusBefore.ok).toBe(true);
   expect(statusBefore.body?.ok).toBe(true);
 
@@ -128,6 +169,31 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(connection?.configured, `${provider} must be configured`).toBe(true);
     expect(Boolean(connection?.lastVerifiedAt), `${provider} must be verified`).toBe(true);
     expect(connection?.lastErrorCode ?? null, `${provider} must have no verification error`).toBeNull();
+  }
+
+  let memberAutoPolicyPrepared = false;
+  if (prepareMemberAutoPolicy) {
+    const prepared = await appApi<any>(
+      page,
+      '/api/trade-automation/policy',
+      'PUT',
+      preparedMemberAutoPolicy(statusBefore.body.policy),
+    );
+    expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
+    expect(prepared.body?.ok).toBe(true);
+    expect(memberAutoPolicyReadiness(prepared.body?.policy).ready).toBe(true);
+
+    statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+    expect(statusBefore.ok).toBe(true);
+    expect(statusBefore.body?.ok).toBe(true);
+    expect(memberAutoPolicyReadiness(statusBefore.body?.policy).ready).toBe(true);
+    for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+      expect(
+        statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
+        `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
+      ).toBe(false);
+    }
+    memberAutoPolicyPrepared = true;
   }
 
   const integrationBefore = await appApi<any>(page, '/api/user-integrations');
@@ -377,6 +443,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
     policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
+    memberAutoPolicyPrepared,
     memberAutoPolicyReady: originalPolicyReadiness.ready,
     memberAutoPolicyBlockers: originalPolicyReadiness.blockers,
     memberAutoDomesticBroker: originalPolicyReadiness.domesticBroker,

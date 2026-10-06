@@ -107,11 +107,12 @@ requireText(releaseOrchestrator, "run.head_branch === 'main'", 'ONE_COMMAND_RELE
 requireText(command, "qa_scope: qaScope", 'TRADING_CORE_OWNER_COMMAND_SCOPE_MISSING');
 requireText(deploy, 'qa_scope:', 'PRODUCTION_QA_SCOPE_INPUT_MISSING');
 requireText(deploy, "inputs.qa_scope == 'trading_core'", 'TRADING_CORE_INLINE_QA_CONDITION_MISSING');
-requireText(deploy, '1T · Focused Trading Core Production QA', 'TRADING_CORE_INLINE_QA_STEP_MISSING');
+requireText(deploy, '1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA', 'TRADING_CORE_INLINE_QA_STEP_MISSING');
+requireText(deploy, "PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'", 'TRADING_CORE_MEMBER_POLICY_PREPARATION_MISSING');
 requireOrder(deploy, [
   '- name: 2 · Four-provider Account Production read-only QA',
   '- name: 3 · Production Credential Reuse QA',
-  '- name: 1T · Focused Trading Core Production QA',
+  '- name: 1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA',
   '- name: Final exact-SHA identity, safety, and gate-conflict check',
 ], 'TRADING_CORE_PROVIDER_FIRST_QA_ORDER_INVALID');
 requireText(command, "workflow_id: 'production-deploy.yml'", 'POSTDEPLOY_COMMAND_MUST_DISPATCH_PRODUCTION_CHAIN');
