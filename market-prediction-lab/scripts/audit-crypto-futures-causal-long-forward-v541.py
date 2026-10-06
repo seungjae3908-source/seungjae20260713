@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Trigger registered frozen forward audit.
+
 import argparse
 import concurrent.futures
 import importlib.util
