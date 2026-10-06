@@ -392,7 +392,8 @@ if (result.error || result.status !== 0) fail(classifyProductionPaperJournalPriv
 const lines = String(result.stdout ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 let artifact;
 try {
-  artifact = JSON.parse(lines.at(-1) ?? '');
+  const artifactLine = lines.findLast((line) => line.startsWith('{') && line.endsWith('}'));
+  artifact = JSON.parse(artifactLine ?? '');
 } catch {
   fail('verification_artifact_invalid');
 }

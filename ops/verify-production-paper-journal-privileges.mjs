@@ -38,6 +38,8 @@ function verifyStatic() {
   assert(script.includes('__PAPER_JOURNAL_PHASE__:policy_repair'), 'safe policy repair marker missing');
   assert(script.includes('__PAPER_JOURNAL_PHASE__:privileges'), 'safe privilege marker missing');
   assert(script.includes('__PAPER_JOURNAL_PHASE__:verification'), 'safe verification failure marker missing');
+  assert(script.includes("lines.findLast((line) => line.startsWith('{') && line.endsWith('}'))"),
+    'sanitized artifact parser must tolerate trailing phase markers');
   assert(script.includes('classifyProductionPaperJournalPrivilegeFailure(result)'), 'sanitized database failure classifier missing');
   assert(!classifier.includes('console.'), 'failure classifier must not print database stderr');
   assert(classifyProductionPaperJournalPrivilegeFailure({ stderr: 'ERROR: PAPER_JOURNAL_ROWS_CHANGED' })
