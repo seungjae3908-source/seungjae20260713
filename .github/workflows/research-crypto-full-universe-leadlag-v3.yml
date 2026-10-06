@@ -1,0 +1,116 @@
+name: Research Crypto Full-Universe Lead-Lag V3
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-crypto-full-universe-leadlag-v3.py
+      - .github/workflows/research-crypto-full-universe-leadlag-v3.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-full-universe-leadlag-v3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  leadlag:
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [CRYPTO_SPOT, CRYPTO_FUTURES]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-crypto-full-universe-leadlag-v3.py
+          python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-causal-backtest-v1.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1" "requests>=2.32,<3"
+      - name: Run full-universe BTC-alt lead-lag V3
+        run: |
+          python market-prediction-lab/scripts/run-crypto-full-universe-leadlag-v3.py \
+            --market ${{ matrix.market }} \
+            --out-dir market-prediction-lab/docs/crypto-full-universe-leadlag-v3/${{ matrix.market }}
+      - name: Upload market evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-full-universe-leadlag-v3-${{ matrix.market }}-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-full-universe-leadlag-v3/${{ matrix.market }}
+          if-no-files-found: error
+          retention-days: 14
+
+  combine:
+    needs: leadlag
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: crypto-full-universe-leadlag-v3-*
+          path: all-leadlag
+      - name: Combine
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows=[]
+          for p in Path('all-leadlag').glob('**/summary.json'):
+              try:x=json.loads(p.read_text(encoding='utf-8'))
+              except Exception:continue
+              if x.get('contract')!='crypto-full-universe-btc-leadlag-v3':continue
+              rows.append({k:x.get(k) for k in [
+                'market','source15mFiles','eligibleDirectionalFiles','signalRowsBeforeTopN',
+                'candidateCount','eligibleAfterCalibrationCount','validationPassCount',
+                'freshOosPassCount','validationPassCandidates','freshOosPassCandidates',
+                'selectedByCalibration','selectedResults'
+              ]})
+          expected={'CRYPTO_SPOT','CRYPTO_FUTURES'}
+          observed={r['market'] for r in rows}
+          out={
+            'contract':'crypto-full-universe-btc-leadlag-v3-combined',
+            'markets':rows,
+            'missingMarkets':sorted(expected-observed),
+            'totalValidationPassCount':sum(int(r.get('validationPassCount') or 0) for r in rows),
+            'totalFreshOosPassCount':sum(int(r.get('freshOosPassCount') or 0) for r in rows),
+            'truthBoundary':{'profitabilityProven':False,'executionAuthority':'NONE'},
+          }
+          Path('combined').mkdir(exist_ok=True)
+          Path('combined/summary.json').write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps({'FINAL_COMBINED':out},ensure_ascii=False))
+          if expected-observed: raise SystemExit(1)
+          PY
+      - name: Upload combined evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-full-universe-leadlag-v3-combined-${{ github.sha }}
+          path: combined
+          if-no-files-found: error
+          retention-days: 14
