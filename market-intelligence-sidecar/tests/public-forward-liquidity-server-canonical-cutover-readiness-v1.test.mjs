@@ -42,6 +42,7 @@ const ACTIVE_CONTRACT = materializeSuccessorScheduleReliabilityV3Contract(ACTIVA
 
 const MAIN = 'a'.repeat(40);
 const BINDING = sha256(canonicalJson(ACTIVATION_BINDING));
+const COMPONENT = 'd'.repeat(64);
 const RAW = 'c'.repeat(64);
 const RECEIPT_COMMENT_ID = 5881193542;
 const AUTHORITY_COMMENT_ID = 6000000001;
@@ -87,6 +88,9 @@ function activationReceipt(overrides = {}) {
     issueTitle: 'Staging Readiness Control — Rollover 2026-10-02',
     releaseControlOpen: true,
     action: 'AUTHORIZE',
+    currentMainSha: MAIN,
+    componentDigest: COMPONENT,
+    componentEquivalentCurrentMain: true,
     commentId: RECEIPT_COMMENT_ID,
     targetMainSha: MAIN,
     activationBindingDigest: BINDING,
@@ -119,6 +123,10 @@ function githubDelivery(overrides = {}) {
 function serverRuntime(overrides = {}) {
   return {
     deployedSha: MAIN,
+    evidenceSha: MAIN,
+    currentMainSha: MAIN,
+    componentDigest: COMPONENT,
+    componentEquivalentCurrentMain: true,
     timerEnabled: true,
     timerActive: true,
     persistent: false,
@@ -268,6 +276,49 @@ test('future natural server receipt can become cutover-ready but receives zero c
   assert.equal(result.safety.replayCredit, 0);
   assert.equal(result.safety.backfillCredit, 0);
   assert.equal(result.safety.currentEconomicCredit, 0);
+});
+
+test('component-equivalent ancestor Shadow evidence survives an unrelated main move', () => {
+  const evidenceSha = 'b'.repeat(40);
+  const shadow = receiptWithDigest({
+    codeSha: evidenceSha,
+    activationReceiptMainSha: evidenceSha,
+  });
+  const result = readiness({
+    latestActivationReceipt: activationReceipt({
+      targetMainSha: evidenceSha,
+      currentMainSha: MAIN,
+      componentDigest: COMPONENT,
+      componentEquivalentCurrentMain: true,
+      body: `/authorize-public-only-partial-fill-v3-schedule-activation ${evidenceSha} ${BINDING}`,
+    }),
+    serverRuntime: serverRuntime({
+      deployedSha: evidenceSha,
+      evidenceSha,
+      currentMainSha: MAIN,
+      componentDigest: COMPONENT,
+      componentEquivalentCurrentMain: true,
+    }),
+    shadowReceipt: shadow,
+    canonicalCreditLedger: canonicalCreditLedger(shadow),
+  });
+
+  assert.equal(result.status, 'READY_FOR_SEPARATE_FUTURE_CANONICAL_ACTIVATION');
+  assert.equal(result.evidenceSha, evidenceSha);
+  assert.equal(result.currentMainSha, MAIN);
+  assert.equal(result.componentDigest, COMPONENT);
+  assert.equal(result.componentEquivalentCurrentMain, true);
+  assert.deepEqual(result.blockers, []);
+});
+
+test('missing component equivalence still fails closed', () => {
+  const result = readiness({
+    latestActivationReceipt: activationReceipt({
+      componentEquivalentCurrentMain: false,
+    }),
+  });
+  assert.equal(result.readyForFutureCanonicalCutover, false);
+  assert.ok(result.blockers.includes('SERVER_CANONICAL_CURRENT_MAIN_OWNER_RECEIPT_INVALID'));
 });
 
 test('pre-authority shadow evidence can never be promoted retroactively', () => {
