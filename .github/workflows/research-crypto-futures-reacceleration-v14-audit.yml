@@ -1,0 +1,62 @@
+name: Research Crypto Futures Re-Acceleration V1.4 Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-crypto-futures-reacceleration-v14-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN_ID: "37405296346"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pandas
+        run: python -m pip install "pandas>=2.2,<3"
+      - name: Download V1.4 artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: crypto-futures-reacceleration-v14-*
+          path: v14
+      - name: Audit all 24 candidates
+        run: |
+          python - <<'PY'
+          import json, pandas as pd
+          from pathlib import Path
+          files=list(Path('v14').glob('**/candidate-grid.csv'))
+          if not files:
+              raise SystemExit('candidate-grid.csv missing')
+          df=pd.read_csv(files[0])
+          def n(mask): return int(mask.fillna(False).sum())
+          audit={
+            'candidateCount':len(df),
+            'eligibleCalibration':int(df['eligible'].astype(bool).sum()),
+            'validationPositive':n(df['validationReturn']>0),
+            'validationPFgt1':n(df['validationPF']>1),
+            'validationPosMonthRateGe50':n(df['validationPosMonthRate']>=0.5),
+            'postHocPositive':n(df['postHocReturn']>0),
+            'postHocPFgt1':n(df['postHocPF']>1),
+            'postHocPosMonthRateGe50':n(df['postHocPosMonthRate']>=0.5),
+            'positiveValidationAndPostHoc':n((df['validationReturn']>0)&(df['postHocReturn']>0)),
+          }
+          cols=['candidate','eligible','calibrationRetention','calibrationReturn','calibrationPF','validationReturn','validationPF','validationMDD','validationPosMonthRate','validationTrades','reusedReturn','postHocReturn','postHocPF','postHocMDD','postHocPosMonthRate','postHocTrades']
+          top_cal=df.sort_values(['calibrationReturn','calibrationPF'],ascending=False).head(8)[cols].to_dict('records')
+          top_val=df.sort_values(['validationReturn','validationPF'],ascending=False).head(8)[cols].to_dict('records')
+          top_post=df.sort_values(['postHocReturn','postHocPF'],ascending=False).head(8)[cols].to_dict('records')
+          robust=df[(df['validationReturn']>0)&(df['postHocReturn']>0)].sort_values(['postHocReturn','validationReturn'],ascending=False)[cols].to_dict('records')
+          print(json.dumps({'V14_GRID_AUDIT':audit,'TOP_CAL':top_cal,'TOP_VAL_DIAGNOSTIC_ONLY':top_val,'TOP_POST_DIAGNOSTIC_ONLY':top_post,'ROBUST_DIAGNOSTIC_ONLY':robust},ensure_ascii=False))
+          PY
