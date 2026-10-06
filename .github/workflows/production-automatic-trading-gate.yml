@@ -13,10 +13,10 @@ on:
       - .github/scripts/production-preactivation-evidence-paths.test.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/tests/production-paper-forward-readiness.test.mjs
-      - .github/tests/production-telegram-active-readiness.test.mjs
+      - .github/tests/production-telegram-runtime-readiness.test.mjs
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - ops/verify-production-paper-forward-readiness.mjs
-      - ops/verify-production-telegram-active-readiness.mjs
+      - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
@@ -64,7 +64,7 @@ jobs:
           node --test
           .github/scripts/production-preactivation-evidence-paths.test.cjs
           .github/tests/production-paper-forward-readiness.test.mjs
-          .github/tests/production-telegram-active-readiness.test.mjs
+          .github/tests/production-telegram-runtime-readiness.test.mjs
 
   activate:
     name: Owner-approved four-market Production automatic-trading activation
@@ -146,7 +146,7 @@ jobs:
               status: 'completed',
               per_page: 100,
             });
-            const telegramArtifactName = `telegram-production-active-verification-${target}`;
+            const telegramArtifactName = `telegram-production-runtime-verification-${target}`;
             let telegramRun = null;
             for (const candidate of telegramRuns
               .filter((run) => run.name === 'Telegram Production Release'
@@ -295,25 +295,25 @@ jobs:
           node .github/scripts/verify-production-preactivation-evidence.cjs \
             "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
 
-      - name: Download exact-SHA member Telegram active verification
+      - name: Download exact-SHA Telegram runtime ACTIVE_VERIFIED evidence
         uses: actions/download-artifact@v4
         with:
-          name: telegram-production-active-verification-${{ steps.command.outputs.sha }}
-          path: ${{ runner.temp }}/telegram-active-verification
+          name: telegram-production-runtime-verification-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/telegram-runtime-verification
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.gate.outputs.telegram_release_run_id }}
 
-      - name: Require member-linked Telegram ACTIVE_VERIFIED evidence
+      - name: Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence
         shell: bash
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
         run: |
           set -Eeuo pipefail
-          evidence="$(find "${{ runner.temp }}/telegram-active-verification" -type f -name production-trading-core-qa.json -print -quit)"
+          evidence="$(find "${{ runner.temp }}/telegram-runtime-verification" -type f -name production-telegram-runtime-proof.json -print -quit)"
           test -n "$evidence"
-          node ops/verify-production-telegram-active-readiness.mjs \
+          node ops/verify-production-telegram-runtime-readiness.mjs \
             --artifact "$evidence" "$TARGET_SHA" "$PRODUCTION_RUN_ID"
 
       - name: Download exact-SHA Paper Forward runtime evidence
