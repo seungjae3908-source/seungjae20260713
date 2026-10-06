@@ -83,8 +83,8 @@ export function deriveMemberTier(profile) {
   if (explicit && MEMBER_TIERS.includes(explicit)) return explicit;
   if (value.role === 'admin' || value.role === 'master') return 'admin';
   if (value.role === 'associate') return 'associate';
-  if (value.role === 'regular' || value.role === 'full') return 'regular';
-  return 'regular';
+  if (value.role === 'user' || value.role === 'regular' || value.role === 'full') return 'regular';
+  return 'pending';
 }
 
 export function permissionsFor(profileOrTier) {
