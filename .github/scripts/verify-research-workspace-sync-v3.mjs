@@ -254,6 +254,37 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
+const memberAccessContractChanged=changed.some((p)=>memberAccessReviewed.includes(p));
+if(memberAccessContractChanged){
+ const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
+  const aiChartPublicRead = req.method === 'GET'
+    && (req.path === '/tickers' || req.path === '/candles');
+  return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
+});`;
+ const canonicalFuturesGate="router.use('/crypto/futures', requireCapability('canAccessFutures'));";
+ const journalSplitGate=`router.use('/paper-journal', (req, res, next) => {
+  const subpath = req.path;
+  if (
+    subpath === '/analytics'
+    || subpath === '/unified-ledger'
+    || subpath === '/unified-ledger/status'
+  ) {
+    return requireCapability('canAccessTradingAnalytics')(req, res, next);
+  }
+  if (
+    subpath === '/review-dataset'
+    || subpath.startsWith('/ai-review/')
+    || subpath.startsWith('/portfolio-advisor/')
+  ) {
+    return requireCapability('canAccessAiTradingReview')(req, res, next);
+  }
+  return requireCapability('canAccessJournalSync')(req, res, next);
+});`;
+ const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
+ if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
+ if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
+ current=current.replace(aiChartFuturesGate,canonicalFuturesGate).replace(journalSplitGate,canonicalJournalGate);
+}
 // Older owner history may not be an ancestor after squash/integration merges. Only
 // normalize away the legacy video mount when the exact current main itself does
 // not contain that reviewed mount. Never delete content that main now owns.
@@ -287,6 +318,12 @@ const protectedPathExceptions=new Map([
  ['stock-analyzer/src/pages/research-center.tsx',new Set([
   'stock-analyzer/src/pages/research-center.tsx',
  ])],
+ ['api-server/src/middleware/auth.ts',memberAccessContractChanged
+   ? new Set(['api-server/src/middleware/auth.ts'])
+   : new Set()],
+ ['packages/member-access',memberAccessContractChanged
+   ? new Set(['packages/member-access/src/index.js','packages/member-access/src/index.d.ts'])
+   : new Set()],
 ]);
 for(const p of protectedPaths){
  const exceptions=protectedPathExceptions.get(p);
