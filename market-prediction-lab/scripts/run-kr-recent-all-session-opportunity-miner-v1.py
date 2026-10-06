@@ -101,7 +101,8 @@ def grid_day(g:pd.DataFrame)->pd.DataFrame:
     z=z.dropna(subset=["close","cumVolume"]).copy()
     z["minuteVolume"]=z["cumVolume"].diff()
     if len(z):
-        # The first observed cumulative value may represent many earlier trades; do not treat it as one-minute flow.\n        z.iloc[0,z.columns.get_loc("minuteVolume")]=0.0
+        # The first observed cumulative value may represent many earlier trades; do not treat it as one-minute flow.
+        z.iloc[0,z.columns.get_loc("minuteVolume")]=0.0
     z["minuteVolume"]=z["minuteVolume"].clip(lower=0).fillna(0)
     z["timestamp"]=z.index
     z["date"]=z.index.date
