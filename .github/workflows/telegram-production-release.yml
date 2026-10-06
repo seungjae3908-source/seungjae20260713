@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/telegram-production-release.yml
       - api-server/scripts/verify-telegram-production-release-contract.mjs
+      - api-server/scripts/telegram-database-evidence.cjs
       - api-server/scripts/verify-production-telegram-preservation.mjs
       - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
       - api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts
@@ -25,6 +26,7 @@ on:
       - ops/verify-production-telegram-active-readiness.mjs
       - ops/verify-production-telegram-runtime-readiness.mjs
       - .github/tests/production-telegram-runtime-readiness.test.mjs
+      - .github/tests/telegram-database-evidence.test.mjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/tests/production-telegram-active-readiness.test.mjs
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
@@ -201,7 +203,7 @@ jobs:
             core.setOutput('run_id', String(verified.runId));
             core.info(`Exact-main Required CI 6/6 accepted from Application CI Run ID ${verified.runId}.`);
 
-      - name: Require successful exact-SHA PostgreSQL authentication artifact
+      - name: Require successful exact-SHA database safety evidence
         id: postgres
         uses: actions/github-script@v7
         env:
@@ -209,7 +211,7 @@ jobs:
         with:
           script: |
             const targetSha = process.env.TARGET_SHA;
-            const artifactName = `staging-postgres-auth-${targetSha}`;
+            const stagingArtifactName = `staging-postgres-auth-${targetSha}`;
             const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -238,7 +240,7 @@ jobs:
                 per_page: 100,
               });
               const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
-                candidate.name === artifactName
+                candidate.name === stagingArtifactName
                 && candidate.expired !== true
                 && candidate.workflow_run?.head_sha === targetSha);
               if (artifact) {
@@ -247,14 +249,55 @@ jobs:
               }
             }
             if (!accepted) {
-              core.setFailed(`No successful unexpired exact-SHA PostgreSQL authentication evidence exists for ${targetSha}.`);
+              const productionArtifactName = `production-paper-journal-privileges-${targetSha}`;
+              const productionRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: targetSha,
+                branch: 'main',
+                event: 'workflow_dispatch',
+                status: 'completed',
+                per_page: 100,
+              });
+              const productionCandidates = productionRuns
+                .filter((run) =>
+                  run.name === 'Production Deploy'
+                  && run.path === '.github/workflows/production-deploy.yml'
+                  && run.head_sha === targetSha
+                  && run.head_branch === 'main'
+                  && run.event === 'workflow_dispatch'
+                  && run.status === 'completed'
+                  && run.conclusion === 'success')
+                .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+              for (const run of productionCandidates) {
+                const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
+                const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
+                  candidate.name === productionArtifactName
+                  && candidate.expired !== true
+                  && candidate.workflow_run?.head_sha === targetSha);
+                if (artifact) {
+                  accepted = { run, artifact, sourceType: 'production_database' };
+                  break;
+                }
+              }
+            }
+            if (!accepted) {
+              core.setFailed(`No successful unexpired exact-SHA staging authentication or Production database safety evidence exists for ${targetSha}.`);
               return;
             }
+            accepted.sourceType ??= 'staging_auth';
             core.setOutput('run_id', String(accepted.run.id));
             core.setOutput('artifact_id', String(accepted.artifact.id));
-            core.info(`PostgreSQL authentication evidence accepted from Run ID ${accepted.run.id}.`);
+            core.setOutput('source_type', accepted.sourceType);
+            core.info(`Database safety evidence accepted from Run ID ${accepted.run.id} (${accepted.sourceType}).`);
 
-      - name: Download exact PostgreSQL authentication artifact
+      - name: Download exact staging PostgreSQL authentication artifact
+        if: steps.postgres.outputs.source_type == 'staging_auth'
         uses: actions/download-artifact@v4
         with:
           name: staging-postgres-auth-${{ steps.command.outputs.sha }}
@@ -263,22 +306,51 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.postgres.outputs.run_id }}
 
-      - name: Verify PostgreSQL authentication artifact is read-only and passed
+      - name: Download exact Production database safety artifact
+        if: steps.postgres.outputs.source_type == 'production_database'
+        uses: actions/download-artifact@v4
+        with:
+          name: production-paper-journal-privileges-${{ steps.command.outputs.sha }}
+          path: production-database-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.postgres.outputs.run_id }}
+
+      - name: Verify database safety evidence is exact-SHA, mutation-free, and passed
+        env:
+          DATABASE_EVIDENCE_SOURCE: ${{ steps.postgres.outputs.source_type }}
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
-          const value = JSON.parse(fs.readFileSync(
-            'staging-postgres-auth/staging-postgres-auth-verification.json',
-            'utf8',
-          ));
-          const valid = value?.status === 'passed'
-            && value?.classification === 'authenticated'
-            && value?.project_match === true
-            && value?.read_only_probe === true
-            && value?.database_changed === false
-            && value?.credentials_recorded === false;
-          if (!valid) {
-            console.error('Exact-SHA PostgreSQL authentication artifact failed the read-only contract.');
+          const path = require('node:path');
+          const {
+            validateProductionDatabaseEvidence,
+            validateStagingPostgresEvidence,
+          } = require('./api-server/scripts/telegram-database-evidence.cjs');
+          const source = process.env.DATABASE_EVIDENCE_SOURCE;
+          let artifactPath;
+          let result;
+          if (source === 'staging_auth') {
+            artifactPath = 'staging-postgres-auth/staging-postgres-auth-verification.json';
+            result = validateStagingPostgresEvidence(
+              JSON.parse(fs.readFileSync(artifactPath, 'utf8')),
+              process.env.TARGET_SHA,
+            );
+          } else if (source === 'production_database') {
+            const directory = 'production-database-evidence';
+            const filename = fs.readdirSync(directory).find((entry) => entry.endsWith('.json'));
+            if (!filename) throw new Error('Production database safety artifact JSON is missing.');
+            artifactPath = path.join(directory, filename);
+            result = validateProductionDatabaseEvidence(
+              JSON.parse(fs.readFileSync(artifactPath, 'utf8')),
+              process.env.TARGET_SHA,
+            );
+          } else {
+            throw new Error(`Unsupported database evidence source: ${source || 'missing'}`);
+          }
+          if (!result.ok) {
+            console.error(`Exact-SHA database safety artifact failed closed: ${result.reason}.`);
             process.exit(1);
           }
           NODE
