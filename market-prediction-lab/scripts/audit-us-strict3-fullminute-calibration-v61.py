@@ -34,6 +34,7 @@ THRESHOLDS=np.unique(np.concatenate([
     np.linspace(0.55,0.90,8),
     np.array([0.925,0.95,0.975,0.99]),
 ]))
+HIST_EDGES=np.concatenate(([-np.inf],THRESHOLDS,[np.inf]))
 
 def fit_model(events:pd.DataFrame):
     data=events.copy()
@@ -83,23 +84,23 @@ def score_query(path:Path)->str:
       AND priorDollar60>=100000
     """
 
-def scan_month(path:Path,model,counts):
+def scan_month(path:Path,model,pos_hist,neg_hist):
     con=duckdb.connect()
     reader=con.execute(score_query(path)).fetch_record_batch(BATCH_ROWS)
     rows=0;positives=0
     for batch in reader:
         df=batch.to_pandas()
-        if df.empty:continue
+        if df.empty:
+            continue
         y=pd.to_numeric(df["labelStrict3"],errors="coerce").fillna(0).astype(int).to_numpy()
         X=df[FEATURES].replace([np.inf,-np.inf],np.nan).astype(float)
         score=model.predict_proba(X)[:,1]
-        rows+=len(df);positives+=int(y.sum())
-        for i,t in enumerate(THRESHOLDS):
-            pred=score>=float(t)
-            counts[i]["tp"]+=int((pred&(y==1)).sum())
-            counts[i]["fp"]+=int((pred&(y==0)).sum())
-            counts[i]["fn"]+=int(((~pred)&(y==1)).sum())
-            counts[i]["tn"]+=int(((~pred)&(y==0)).sum())
+        rows+=len(df)
+        positives+=int(y.sum())
+        if (y==1).any():
+            pos_hist += np.histogram(score[y==1],bins=HIST_EDGES)[0]
+        if (y==0).any():
+            neg_hist += np.histogram(score[y==0],bins=HIST_EDGES)[0]
     con.close()
     return {"rows":rows,"positives":positives}
 
@@ -112,22 +113,30 @@ def main():
 
     events=pd.read_parquet(args.events)
     model,train_rows,train_pos=fit_model(events)
-    counts=[{"tp":0,"fp":0,"fn":0,"tn":0} for _ in THRESHOLDS]
+    pos_hist=np.zeros(len(THRESHOLDS)+1,dtype=np.int64)
+    neg_hist=np.zeros(len(THRESHOLDS)+1,dtype=np.int64)
     audits=[]
     with tempfile.TemporaryDirectory() as td:
         root=Path(td)
         for month in CAL_MONTHS:
             p=root/f"ohlcv_{month}.parquet"
             census._download_us_month(pd.Timestamp(month+"-01",tz="UTC"),p)
-            a=scan_month(p,model,counts)
+            a=scan_month(p,model,pos_hist,neg_hist)
             a["month"]=month
             audits.append(a)
             p.unlink(missing_ok=True)
             print(json.dumps({"calibrationMonth":a},ensure_ascii=False),flush=True)
 
+    pos_tail=np.cumsum(pos_hist[::-1])[::-1]
+    neg_tail=np.cumsum(neg_hist[::-1])[::-1]
+    total_pos=int(pos_hist.sum())
+    total_neg=int(neg_hist.sum())
     grid=[]
-    for t,c in zip(THRESHOLDS,counts):
-        tp=float(c["tp"]);fp=float(c["fp"]);fn=float(c["fn"]);tn=float(c["tn"])
+    for i,t in enumerate(THRESHOLDS):
+        tp=float(pos_tail[i+1])
+        fp=float(neg_tail[i+1])
+        fn=float(total_pos-tp)
+        tn=float(total_neg-fp)
         precision=tp/max(tp+fp,1.0)
         recall=tp/max(tp+fn,1.0)
         selected=(tp+fp)/max(tp+fp+fn+tn,1.0)
