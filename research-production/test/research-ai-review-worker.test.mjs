@@ -183,6 +183,61 @@ test('scan reviews each unseen profile once, caches by evidence digest and never
   }
 });
 
+test('stale-release profile evidence is deferred instead of blocking fresh exact-release AI review', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-stale-release-'));
+  let calls = 0;
+  try {
+    await writeCycles(root);
+
+    for (const profile of ['fast-historical', 'long-history']) {
+      await writeFile(
+        join(root, 'latest', `${profile}.json`),
+        `${JSON.stringify({ ...cycle(profile), researchSha: 'b'.repeat(40) })}\n`,
+      );
+    }
+
+    const env = {
+      RESEARCH_AI_FREE_TIER_CONFIRMED: 'true',
+      AI_CHAT_PROVIDER: 'groq',
+      GROQ_API_KEY: SECRET,
+    };
+
+    const result = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo',
+      stateRoot: root,
+      researchSha: SHA,
+      env,
+      verifyGitHead: false,
+      preflight: fakePreflight(root),
+      invoke: async ({ policy }) => {
+        calls += 1;
+        return { answer: safeAnswer, model: policy.model, provider: policy.provider };
+      },
+      now: () => Date.parse('2026-09-05T09:00:00Z'),
+    });
+
+    assert.equal(result.status, 'COMPLETE');
+    assert.equal(result.providerNetworkCalls, 1);
+    assert.equal(result.reviews.length, 1);
+    assert.equal(result.reviews[0].profile, 'forward');
+    assert.equal(result.blockedProfiles.length, 0);
+    assert.equal(result.deferredProfiles.length, 2);
+    assert.deepEqual(
+      result.deferredProfiles.map((row) => [row.profile, row.reason]).sort(),
+      [
+        ['fast-historical', 'STALE_RELEASE_EVIDENCE'],
+        ['long-history', 'STALE_RELEASE_EVIDENCE'],
+      ],
+    );
+    assert.equal(calls, 1);
+    assert.equal(result.evidenceCredit, 0);
+    assert.equal(result.profitabilityProven, false);
+    assert.equal(result.safety.executionAuthority, 'NONE');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('unsafe numeric performance claims are rejected and backed off without affecting canonical research', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-ai-unsafe-'));
   try {

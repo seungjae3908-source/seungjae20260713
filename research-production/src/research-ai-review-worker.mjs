@@ -336,6 +336,15 @@ export async function runResearchAiReviewScan({
   for (const profile of PROFILES) {
     const cycle = await readJsonOptional(join(base.stateRoot, 'latest', `${profile}.json`));
     if (!cycle) { missingProfiles.push(profile); continue; }
+    if (String(cycle?.researchSha ?? '').toLowerCase() !== String(base.researchSha).toLowerCase()) {
+      deferredProfiles.push(Object.freeze({
+        profile,
+        evidenceDigest: null,
+        retryAfterAt: null,
+        reason: 'STALE_RELEASE_EVIDENCE',
+      }));
+      continue;
+    }
     let projection;
     try { projection = buildResearchAiEvidence(cycle, base.researchSha); }
     catch (error) { blockedProfiles.push(Object.freeze({ profile, reason: safeError(error) })); continue; }
