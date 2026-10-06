@@ -177,9 +177,7 @@ def enrich_oi(trades: pl.DataFrame) -> tuple[pl.DataFrame, dict]:
 
 
 def build_base_trades() -> tuple[dict[int,pl.DataFrame], dict]:
-    daily = flow.load_daily_extended(MARKET)
-    universe, universe_audit = flow.build_monthly_universe(daily, MARKET)
-    raw, failures, requested = flow.load_intraday(MARKET, universe)
+    raw, source_meta = flow.load_bars(MARKET)
     features_pd = flow.add_features(raw)
     features = pl.from_pandas(features_pd).with_columns([
         pl.col("timestamp").cast(pl.Datetime(time_zone="UTC")),
@@ -224,10 +222,7 @@ def build_base_trades() -> tuple[dict[int,pl.DataFrame], dict]:
         result[top_n] = trades
 
     return result, {
-        "monthlyUniverseAudit":universe_audit,
-        "requestedIntradayFiles":requested,
-        "failedIntradayFiles":len(failures),
-        "intradayFailurePreview":failures[:20],
+        **source_meta,
         "featureRows":len(features_pd),
     }
 
