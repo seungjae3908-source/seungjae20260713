@@ -196,11 +196,20 @@ def stream_events():
             else:
                 broad=current
             raw=raw_month(path,broad) if broad.height else pd.DataFrame()
-            dmap={(str(r["symbol"]),r["date"]):r for r in broad.to_dicts()}
+            # Normalize the Polars/DuckDB date keys to datetime.date before lookup.
+            # DuckDB returns pandas Timestamp/date-like values while Polars to_dicts()
+            # returns datetime.date. Without normalization every intraday group misses.
+            dmap={(str(r["symbol"]),pd.Timestamp(r["date"]).date()):r for r in broad.to_dicts()}
+            raw_groups=0
+            matched_meta=0
             if not raw.empty:
                 for (sym,date),g in raw.groupby(["symbol","date"],sort=False):
-                    meta=dmap.get((str(sym),date))
-                    if meta is None:continue
+                    raw_groups+=1
+                    norm_date=pd.Timestamp(date).date()
+                    meta=dmap.get((str(sym),norm_date))
+                    if meta is None:
+                        continue
+                    matched_meta+=1
                     types=[]
                     if float(meta["gap"])>=0.015:
                         types=["OPEN_DRIVE","GAPUP_PB_75","GAPUP_PB_150"]
@@ -210,9 +219,9 @@ def stream_events():
                         det=detect_event(g,typ)
                         if det is None:continue
                         entry_i,extra=det
-                        eid=f"{sym}|{date}|{typ}"
+                        eid=f"{sym}|{norm_date}|{typ}"
                         event_rows.append({
-                            "eventId":eid,"symbol":str(sym),"date":date,"eventType":typ,
+                            "eventId":eid,"symbol":str(sym),"date":norm_date,"eventType":typ,
                             "gap":float(meta["gap"]),"first5Rvol":float(meta["first5Rvol"]),
                             "first5Return":float(meta["first5Return"]),"first5RangePct":float(meta["first5RangePct"]),
                             "first5CloseLoc":float(meta["first5CloseLoc"]),"priorDollar20":float(meta["priorDollar20"]),
@@ -229,7 +238,7 @@ def stream_events():
                                         "eventId":eid,"target":target,"stop":stop,"holdMinutes":hold,**res,
                                     })
             history=(combined.sort(["symbol","date"]).group_by("symbol",maintain_order=True).tail(25).select(base_cols))
-            print(json.dumps({"usSpecialistMonth":month.strftime("%Y-%m"),"dailyRows":current.height,"broadDays":broad.height,"eventsTotal":len(event_rows),"monthIndex":idx}),flush=True)
+            print(json.dumps({"usSpecialistMonth":month.strftime("%Y-%m"),"dailyRows":current.height,"broadDays":broad.height,"rawIntradayGroups":raw_groups,"matchedMetaGroups":matched_meta,"eventsTotal":len(event_rows),"monthIndex":idx}),flush=True)
             path.unlink(missing_ok=True)
     if not daily_frames or not event_rows or not outcome_rows:
         raise RuntimeError("US_SPECIALIST_NO_EVENTS")
