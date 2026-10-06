@@ -16,6 +16,22 @@ const memberAccessSource = fs.readFileSync(
   path.resolve(process.cwd(), '../packages/member-access/src/index.js'),
   'utf8',
 );
+const portfolioSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/portfolio.tsx'),
+  'utf8',
+);
+const apiRoutesSource = fs.readFileSync(
+  path.resolve(process.cwd(), '../api-server/src/routes/index.ts'),
+  'utf8',
+);
+const autoTradingPageSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/auto-trading.tsx'),
+  'utf8',
+);
+const autoTradingWorkerSource = fs.readFileSync(
+  path.resolve(process.cwd(), '../api-server/src/services/member-auto-trading-background-worker.service.ts'),
+  'utf8',
+);
 
 function technicalItem(id: string) {
   const group = APP_NAVIGATION.find((item) => item.id === 'technical');
@@ -29,23 +45,26 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(associateBlock).toContain('canAccessBasicInfo: true');
   expect(associateBlock).toContain('canAccessSpot: true');
   expect(associateBlock).not.toContain('canAccessFutures: true');
+  expect(associateBlock).toContain('canAccessAiChart: true');
   expect(associateBlock).not.toContain('canAccessRiskPreview: true');
   expect(associateBlock).toContain('canAccessPaperTrading: true');
   expect(associateBlock).toContain('canAccessAutoTrading: true');
+  expect(associateBlock).toContain('canAccessTradingAnalytics: true');
+  expect(associateBlock).toContain('canAccessAiTradingReview: true');
   expect(associateBlock).not.toContain('canPlaceOrders: true');
 
   expect(technicalItem('scanner').capability).toBe('canAccessBasicInfo');
-  expect(technicalItem('ai-chart').capability).toBe('canAccessRiskPreview');
+  expect(technicalItem('ai-chart').capability).toBe('canAccessAiChart');
   expect(technicalItem('auto-trading').capability).toBe('canAccessAutoTrading');
 
   expect(appSource).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(appSource).not.toContain('function BasicScannerWorkspace()');
   expect(appSource).not.toContain('scanner-workspace-basic');
 
-  expect(technicalWorkspaceSource).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
+  expect(technicalWorkspaceSource).toContain("const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessAiChart')");
   expect(technicalWorkspaceSource).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
   expect(technicalWorkspaceSource).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
-  expect(technicalWorkspaceSource).toContain('if (!canAccessRiskPreview)');
+  expect(technicalWorkspaceSource).toContain('if (!canAccessAiChart)');
   expect(technicalWorkspaceSource).toContain("import.meta.env.VITE_PHASE11_E2E === 'true'");
   expect(technicalWorkspaceSource).toContain("location.startsWith('/__phase11-technical-workspace-e2e')");
 
@@ -54,10 +73,20 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(responsiveTabsSource).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");
 
   const aiChartAccess = appSource.match(/function AiChartAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
-  expect(aiChartAccess).toContain("gated('canAccessRiskPreview'");
+  expect(aiChartAccess).toContain("gated('canAccessAiChart'");
   expect(aiChartAccess).toContain("builder('AI_CHART', <AiChartPage />)");
 
   const autoTradingAccess = appSource.match(/function AutoTradingAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
   expect(autoTradingAccess).toContain("gated('canAccessAutoTrading'");
   expect(autoTradingAccess).toContain("builder('AUTO_TRADING', <AutoTradingPage />)");
+
+  expect(portfolioSource).toContain("auth.can('canAccessAiTradingReview')");
+  expect(portfolioSource).toContain('<TradingAiReviewPanel');
+  expect(portfolioSource).toContain('<UnifiedTradeJournalPanel');
+
+  expect(apiRoutesSource).toContain("aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures'");
+  expect(apiRoutesSource).toContain("req.path === '/tickers' || req.path === '/candles'");
+
+  expect(autoTradingPageSource).toContain("disabled={item.value === 'crypto_futures' && !canFutures}");
+  expect(autoTradingWorkerSource).toContain("mapping.assetClass === 'crypto_futures' && !hasCapability(member.profile, 'canAccessFutures')");
 });
