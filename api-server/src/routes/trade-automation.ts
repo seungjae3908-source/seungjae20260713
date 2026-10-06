@@ -28,6 +28,7 @@ import {
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
+import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -120,6 +121,19 @@ function emptyMarketActivity(): Record<TradingAssetClass, MarketActivitySummary>
     crypto_spot: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
     crypto_futures: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
   };
+}
+
+function requireLiveOrderCapability(req: AuthenticatedRequest, res: Response): boolean {
+  if (req.member && hasCapability(req.member, 'canPlaceOrders')) return true;
+  res.status(403).json({
+    ok: false,
+    error: 'CAPABILITY_REQUIRED',
+    capability: 'canPlaceOrders',
+    orderSubmitted: false,
+    orderCanceled: false,
+    orderAmended: false,
+  });
+  return false;
 }
 
 function context(req: AuthenticatedRequest) {
@@ -914,6 +928,7 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
 
 router.post('/connections/:exchange/reuse-readonly', async (req: AuthenticatedRequest, res) => {
   try {
+    if (!requireLiveOrderCapability(req, res)) return;
     const { userId, repository, execution } = context(req);
     const exchange = exchangeValue(req.params.exchange);
     if (req.body?.confirmed !== true) {
@@ -1030,6 +1045,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
       Object.entries(safeCredentials).filter(([, value]) => Boolean(value)),
     );
     const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
+    if (accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     if (accountMode === 'live') {
       const purpose = String(req.body?.purpose ?? '').trim().toLowerCase();
       const permissionSet = new Set(permissions);
@@ -1062,6 +1078,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
 
 router.post('/connections/:exchange/verify', async (req: AuthenticatedRequest, res) => {
   try {
+    if (!requireLiveOrderCapability(req, res)) return;
     const { userId, execution } = context(req);
     const exchange = exchangeValue(req.params.exchange);
     if (req.body?.confirmed !== true) {
@@ -1102,6 +1119,7 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     const { userId, repository, automation, execution, splitExecution } = context(req);
     const input = req.body as TradingPlanInput;
     exchangeValue(input.exchange);
+    if (input.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
       repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
     ]);
@@ -1135,8 +1153,11 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, automation, execution, splitExecution } = context(req);
+    const { userId, repository, automation, execution, splitExecution } = context(req);
     if (req.body?.approved !== true) return res.status(409).json({ ok: false, error: 'EXPLICIT_APPROVAL_REQUIRED' });
+    const currentPlan = await repository.getPlan(userId, String(req.params.id));
+    if (!currentPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const plan = await automation.approvePlan(userId, String(req.params.id));
     const result = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
     return res.json({ ok: true, plan, ...result });
@@ -2988,6 +3009,7 @@ router.post('/orders/:id/amend', async (req: AuthenticatedRequest, res) => {
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
     const plan = await repository.getPlan(userId, order.planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    if (plan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const result = await amendment.amend(userId, order, plan, {
       requestId: String(req.body?.requestId ?? ''),
       price: Number(req.body?.price),
