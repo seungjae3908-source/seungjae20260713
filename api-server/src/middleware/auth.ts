@@ -15,6 +15,7 @@ export type MemberProfile = {
   status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'revoked' | 'withdrawn' | 'disabled' | 'inactive';
   membership_level?: MemberTier | null;
   is_active?: boolean | null;
+  membership_expires_at?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
