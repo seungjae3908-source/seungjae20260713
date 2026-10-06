@@ -1,0 +1,65 @@
+name: Research Crypto Lead-Lag V3 Spot Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-crypto-leadlag-v3-spot-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN_ID: "37415125157"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pandas
+        run: python -m pip install "pandas>=2.2,<3"
+      - name: Download Spot artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: crypto-full-universe-leadlag-v3-CRYPTO_SPOT-*
+          path: spot-v3
+      - name: Audit candidate grid
+        run: |
+          python - <<'PY'
+          import json,pandas as pd
+          from pathlib import Path
+          files=list(Path('spot-v3').glob('**/candidate-grid.csv'))
+          if not files: raise SystemExit('candidate-grid.csv missing')
+          df=pd.read_csv(files[0])
+          def n(s): return int(s.fillna(False).sum())
+          audit={
+            'candidates':len(df),
+            'trainPositive':n(df.trainReturn>0),
+            'trainPFgt1':n(df.trainPF>1),
+            'trainPass':n(df.trainPass==True),
+            'calPositive':n(df.calibrationReturn>0),
+            'calPFgt1':n(df.calibrationPF>1),
+            'calPass':n(df.calibrationPass==True),
+            'valPositive':n(df.validationReturn>0),
+            'valPFgt1':n(df.validationPF>1),
+            'valPass':n(df.validationPass==True),
+            'freshPositive':n(df.freshOosReturn>0),
+            'freshPFgt1':n(df.freshOosPF>1),
+            'freshPass':n(df.freshOosPass==True),
+          }
+          cols=['candidate','family','topN','exit','holdBars','trainReturn','trainPF','trainMDD','trainPosMonthRate','trainTrades','calibrationReturn','calibrationPF','calibrationMDD','calibrationPosMonthRate','calibrationTrades','validationReturn','validationPF','validationMDD','validationPosMonthRate','validationTrades','freshOosReturn','freshOosPF','freshOosMDD','freshOosPosMonthRate','freshOosTrades','distinctSymbols']
+          top_train=df.sort_values(['trainReturn','trainPF'],ascending=False).head(12)[cols].to_dict('records')
+          top_cal=df.sort_values(['calibrationReturn','calibrationPF'],ascending=False).head(12)[cols].to_dict('records')
+          top_val=df.sort_values(['validationReturn','validationPF'],ascending=False).head(12)[cols].to_dict('records')
+          top_fresh=df.sort_values(['freshOosReturn','freshOosPF'],ascending=False).head(12)[cols].to_dict('records')
+          print(json.dumps({'SPOT_LEADLAG_AUDIT':audit,'TOP_TRAIN':top_train,'TOP_CAL':top_cal,'TOP_VAL_DIAGNOSTIC_ONLY':top_val,'TOP_FRESH_DIAGNOSTIC_ONLY':top_fresh},ensure_ascii=False))
+          PY
