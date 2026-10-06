@@ -39,6 +39,27 @@ test('existing isolated Research provider env is reused before app or PM2 bootst
   assert.doesNotMatch(script, /source\s+"\$PROVIDER_ENV"|\.\s+"\$PROVIDER_ENV"/);
 });
 
+test('runtime policy files require explicit YouTube approval and free AI provider selection', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /AI_RESEARCH_POLICY_ENV_MISSING/);
+  assert.match(script, /VIDEO_RESEARCH_POLICY_ENV_MISSING/);
+  assert.match(script, /RESEARCH_AI_FREE_TIER_CONFIRMED/);
+  assert.match(script, /AI_CHAT_PROVIDER/);
+  assert.match(script, /RESEARCH_VIDEO_DISCOVERY_APPROVED/);
+  assert.match(script, /AI_RESEARCH_FREE_TIER_CONFIRMATION_REQUIRED/);
+  assert.match(script, /VIDEO_RESEARCH_DISCOVERY_APPROVAL_REQUIRED/);
+  assert.doesNotMatch(script, /source\s+"\$AI_POLICY_ENV"|source\s+"\$VIDEO_POLICY_ENV"/);
+});
+
+test('provider materialization fallback is non-recursive and preserves existing isolated env first', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const start = script.indexOf('materialize_or_reuse_provider_env()');
+  const end = script.indexOf('require_runtime_policy_env()', start);
+  assert.ok(start >= 0 && end > start);
+  const helper = script.slice(start, end);
+  assert.match(helper, /research-provider-bootstrap\.mjs" materialize/);
+  assert.equal((helper.match(/materialize_or_reuse_provider_env/g) ?? []).length, 1);
+});
 test('provider env is readable by the isolated Research service user', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   assert.match(script, /chown root:investment-research/);
@@ -57,6 +78,21 @@ test('one-shot workers must succeed before recurring timers are enabled', async 
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT=success/);
 });
 
+test('fresh one-shot provider evidence is required before recurring timers enable', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const ai = script.indexOf('systemctl start research-production-ai-review.service');
+  const video = script.indexOf('systemctl start research-production-video-discovery.service');
+  const proof = script.indexOf('verify_one_shot_evidence "$one_shot_started_ms"');
+  const enable = script.indexOf('systemctl enable --now');
+  assert.ok(ai >= 0 && video > ai && proof > video && enable > proof);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_COMPLETE/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_NETWORK_PROOF_MISSING/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_SOURCE_MISSING/);
+  assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_STALE/);
+});
 test('AI activation preserves no-trading authority contract', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   for (const token of [
