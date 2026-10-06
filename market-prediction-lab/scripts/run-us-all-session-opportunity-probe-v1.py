@@ -79,14 +79,15 @@ def query_sql(path: Path) -> str:
             ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
           ),0
         ) AS vwap30,
+        lead(ts,1) OVER (PARTITION BY symbol,date ORDER BY ts) AS entryTime,
         lead(open,1) OVER (PARTITION BY symbol,date ORDER BY ts) AS entryPrice,
         max(high) OVER (
           PARTITION BY symbol,date ORDER BY ts
-          ROWS BETWEEN 1 FOLLOWING AND {HORIZON} FOLLOWING
+          RANGE BETWEEN INTERVAL '1 minute' FOLLOWING AND INTERVAL '60 minutes' FOLLOWING
         ) AS futureHigh,
         min(low) OVER (
           PARTITION BY symbol,date ORDER BY ts
-          ROWS BETWEEN 1 FOLLOWING AND {HORIZON} FOLLOWING
+          RANGE BETWEEN INTERVAL '1 minute' FOLLOWING AND INTERVAL '60 minutes' FOLLOWING
         ) AS futureLow
       FROM session
     ),
