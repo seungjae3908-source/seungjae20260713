@@ -49,7 +49,8 @@ as $function$
     when p.membership_level in ('pending', 'associate', 'regular', 'admin') then p.membership_level
     when p.role in ('admin', 'master') then 'admin'
     when p.role = 'associate' then 'associate'
-    else 'regular'
+    when p.role in ('user', 'regular', 'full') then 'regular'
+    else 'pending'
   end
   from public.profiles p
   where p.id = auth.uid()
