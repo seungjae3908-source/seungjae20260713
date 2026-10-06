@@ -232,7 +232,7 @@ def union_signals(features: pl.DataFrame, market: str):
 
 
 def simulate_union(pdf: pd.DataFrame, union: pl.DataFrame, market: str) -> pl.DataFrame:
-    sig={(str(r.symbol),pd.Timestamp(r.timestamp)):True for r in union.select(["symbol","timestamp"]).iter_rows(named=True)}
+    sig={(str(r["symbol"]),pd.Timestamp(r["timestamp"])):True for r in union.select(["symbol","timestamp"]).iter_rows(named=True)}
     rows=[]
     cost=COSTS[market]
     for (symbol,segment_id),g in pdf.groupby(["symbol","segmentId"],sort=False):
