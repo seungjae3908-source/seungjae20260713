@@ -22,6 +22,7 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     "'READY_FOR_ACTIVATION'",
     "'ACTIVE_VERIFIED'",
     'telegramActivationReady',
+    'telegramUserConnectionRequired',
     'telegramConnectedBefore',
     'telegramRuntimeReady',
     'telegramTestDelivered',
@@ -46,6 +47,8 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     '/transfer',
     '/withdraw',
   ]) assert.equal(spec.includes(forbidden), false, forbidden);
+
+  assert.equal(spec.includes('must change atomically'), false);
 
   for (const privacy of ["trace: 'off'", "video: 'off'", "screenshot: 'off'"]) {
     assert.ok(config.includes(privacy), privacy);
