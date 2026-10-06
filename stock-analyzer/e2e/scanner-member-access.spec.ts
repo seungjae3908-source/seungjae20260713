@@ -85,7 +85,9 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(portfolioSource).toContain('<UnifiedTradeJournalPanel');
 
   expect(apiRoutesSource).toContain("aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures'");
-  expect(apiRoutesSource).toContain("req.path === '/tickers' || req.path === '/candles'");
+  expect(apiRoutesSource).toContain("req.path === '/tickers'");
+  expect(apiRoutesSource).toContain("req.path === '/candles'");
+  expect(apiRoutesSource).toContain("(?:snapshot|flow)");
 
   expect(autoTradingPageSource).toContain("disabled={item.value === 'crypto_futures' && !canFutures}");
   expect(autoTradingWorkerSource).toContain("mapping.assetClass === 'crypto_futures' && !hasCapability(member.profile, 'canAccessFutures')");
