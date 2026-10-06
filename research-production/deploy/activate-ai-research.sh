@@ -7,6 +7,8 @@ RESEARCH_ROOT="${RESEARCH_ROOT:-/opt/investment-research/current}"
 STATE_ROOT="${STATE_ROOT:-/var/lib/investment-research-production}"
 ENV_ROOT="${ENV_ROOT:-/etc/investment-research}"
 PROVIDER_ENV="$ENV_ROOT/research-providers.env"
+AI_POLICY_ENV="$ENV_ROOT/research-ai.env"
+VIDEO_POLICY_ENV="$ENV_ROOT/research-video.env"
 APP_ROOT="${APP_ROOT:-/opt/stock-app}"
 
 if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -128,9 +130,194 @@ materialize_or_reuse_provider_env() {
     printf '%s\n' "AI_RESEARCH_PROVIDER_ENV_SOURCE=EXISTING_RESEARCH_PROVIDER_ENV"
     return 0
   fi
-  materialize_or_reuse_provider_env
+  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" materialize \
+    --app-root "$APP_ROOT" \
+    --process-name stock-app \
+    --output-root "$ENV_ROOT" >/dev/null
   provider_env_ready >/dev/null
   printf '%s\n' "AI_RESEARCH_PROVIDER_ENV_SOURCE=BOOTSTRAP_MATERIALIZED"
+}
+
+require_runtime_policy_env() {
+  [[ -r "$AI_POLICY_ENV" ]] || {
+    echo "AI_RESEARCH_POLICY_ENV_MISSING:$AI_POLICY_ENV" >&2
+    exit 71
+  }
+  [[ -r "$VIDEO_POLICY_ENV" ]] || {
+    echo "VIDEO_RESEARCH_POLICY_ENV_MISSING:$VIDEO_POLICY_ENV" >&2
+    exit 72
+  }
+
+  "${SUDO[@]}" node - "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV" <<'NODE'
+const fs = require('node:fs');
+const { parseEnv } = require('node:util');
+
+const aiPath = process.argv[2];
+const videoPath = process.argv[3];
+const ai = parseEnv(fs.readFileSync(aiPath, 'utf8'));
+const video = parseEnv(fs.readFileSync(videoPath, 'utf8'));
+
+const selected = String(ai.AI_CHAT_PROVIDER ?? '').trim().toLowerCase();
+const allowedAiKeys = new Set([
+  'RESEARCH_AI_FREE_TIER_CONFIRMED',
+  'AI_CHAT_PROVIDER',
+  'RESEARCH_AI_MAX_CALLS_PER_SCAN',
+]);
+const allowedVideoKeys = new Set([
+  'RESEARCH_VIDEO_DISCOVERY_APPROVED',
+  'RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS',
+  'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON',
+]);
+
+for (const key of Object.keys(ai)) {
+  if (!allowedAiKeys.has(key)) throw new Error('AI_RESEARCH_POLICY_UNSUPPORTED_KEY:' + key);
+}
+for (const key of Object.keys(video)) {
+  if (!allowedVideoKeys.has(key)) throw new Error('VIDEO_RESEARCH_POLICY_UNSUPPORTED_KEY:' + key);
+}
+
+if (String(ai.RESEARCH_AI_FREE_TIER_CONFIRMED ?? '').trim().toLowerCase() !== 'true') {
+  throw new Error('AI_RESEARCH_FREE_TIER_CONFIRMATION_REQUIRED');
+}
+if (!['gemini','groq'].includes(selected)) {
+  throw new Error('AI_RESEARCH_PROVIDER_SELECTION_REQUIRED');
+}
+const maxCalls = Number(ai.RESEARCH_AI_MAX_CALLS_PER_SCAN ?? '3');
+if (!Number.isSafeInteger(maxCalls) || maxCalls < 1 || maxCalls > 3) {
+  throw new Error('AI_RESEARCH_MAX_CALLS_INVALID');
+}
+
+if (String(video.RESEARCH_VIDEO_DISCOVERY_APPROVED ?? '').trim().toLowerCase() !== 'true') {
+  throw new Error('VIDEO_RESEARCH_DISCOVERY_APPROVAL_REQUIRED');
+}
+const maxResults = Number(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? '3');
+if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 3) {
+  throw new Error('VIDEO_RESEARCH_MAX_RESULTS_INVALID');
+}
+
+process.stdout.write(JSON.stringify({
+  schemaVersion: 'research-ai-runtime-policy-readiness-v1',
+  ai: {
+    freeTierConfirmed: true,
+    provider: selected,
+    maxCalls,
+  },
+  video: {
+    approved: true,
+    maxResults,
+  },
+  credentialValuesExposed: false,
+  executionAuthority: 'NONE'
+}) + '\n');
+NODE
+
+  if command -v runuser >/dev/null 2>&1; then
+    "${SUDO[@]}" runuser -u investment-research -- test -r "$AI_POLICY_ENV"
+    "${SUDO[@]}" runuser -u investment-research -- test -r "$VIDEO_POLICY_ENV"
+  else
+    sudo -n -u investment-research test -r "$AI_POLICY_ENV"
+    sudo -n -u investment-research test -r "$VIDEO_POLICY_ENV"
+  fi
+}
+
+verify_one_shot_evidence() {
+  local started_ms="$1"
+  "${SUDO[@]}" node - "$STATE_ROOT" "$TARGET_SHA" "$started_ms" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+
+const stateRoot = process.argv[2];
+const targetSha = process.argv[3];
+const startedMs = Number(process.argv[4]);
+
+const aiPath = path.join(stateRoot, 'ai-review', 'latest.json');
+const videoPath = path.join(stateRoot, 'video-research', 'latest.json');
+
+const ai = JSON.parse(fs.readFileSync(aiPath, 'utf8'));
+const video = JSON.parse(fs.readFileSync(videoPath, 'utf8'));
+
+if (ai?.schemaVersion !== 'research-production-ai-scan-v1') {
+  throw new Error('AI_RESEARCH_ONE_SHOT_SCHEMA_INVALID');
+}
+if (ai?.researchSha !== targetSha) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_SHA_MISMATCH');
+}
+if (ai?.status !== 'COMPLETE') {
+  throw new Error('AI_RESEARCH_ONE_SHOT_NOT_COMPLETE:' + String(ai?.status ?? 'MISSING'));
+}
+if (!['gemini','groq'].includes(String(ai?.provider ?? ''))) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_PROVIDER_INVALID');
+}
+if (!Number.isSafeInteger(ai?.providerNetworkCalls) || ai.providerNetworkCalls < 1 || ai.providerNetworkCalls > 3) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_NETWORK_PROOF_MISSING');
+}
+if (!Array.isArray(ai?.reviews) || ai.reviews.length < 1) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_REVIEW_MISSING');
+}
+if (!Array.isArray(ai?.blockedProfiles) || ai.blockedProfiles.length !== 0) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_BLOCKED_PROFILE');
+}
+if (!Number.isSafeInteger(ai?.observedAt) || ai.observedAt < startedMs) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_STALE');
+}
+if (ai?.safety?.executionAuthority !== 'NONE'
+  || ai?.safety?.liveTrading !== false
+  || ai?.safety?.privateTradingApiAllowed !== false
+  || ai?.safety?.orderAllowed !== false
+  || ai?.evidenceCredit !== 0
+  || ai?.profitabilityProven !== false) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_SAFETY_INVALID');
+}
+
+if (video?.schemaVersion !== 'research-video-discovery-scan-v1') {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_SCHEMA_INVALID');
+}
+if (video?.researchSha !== targetSha) {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_SHA_MISMATCH');
+}
+if (video?.status !== 'COMPLETE') {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE:' + String(video?.status ?? 'MISSING'));
+}
+if (video?.provider !== 'YOUTUBE_DATA_API_V3') {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_PROVIDER_INVALID');
+}
+if (video?.providerNetworkCalls !== 1) {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING');
+}
+if (!Number.isSafeInteger(video?.sourceCount) || video.sourceCount < 1) {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_SOURCE_MISSING');
+}
+const videoObservedAtMs = Date.parse(String(video?.observedAt ?? ''));
+if (!Number.isFinite(videoObservedAtMs) || videoObservedAtMs < startedMs) {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_STALE');
+}
+if (video?.safety?.executionAuthority !== 'NONE'
+  || video?.safety?.liveTrading !== false
+  || video?.safety?.privateTradingApiAllowed !== false
+  || video?.safety?.realOrderEnabled !== false
+  || video?.safety?.profitabilityCredit !== 0
+  || video?.safety?.economicEvidenceCredit !== 0) {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_SAFETY_INVALID');
+}
+
+process.stdout.write(JSON.stringify({
+  schemaVersion: 'research-ai-one-shot-proof-v1',
+  targetSha,
+  ai: {
+    status: ai.status,
+    provider: ai.provider,
+    providerNetworkCalls: ai.providerNetworkCalls,
+    reviewCount: ai.reviews.length,
+  },
+  video: {
+    status: video.status,
+    providerNetworkCalls: video.providerNetworkCalls,
+    sourceCount: video.sourceCount,
+  },
+  credentialValuesExposed: false,
+  executionAuthority: 'NONE'
+}) + '\n');
+NODE
 }
 
 verify_unit_sources() {
@@ -153,6 +340,7 @@ preflight() {
   require_exact_research_release
   require_research_safety_env
   provider_preflight
+  require_runtime_policy_env
   verify_unit_sources
   printf '%s\n'     "AI_RESEARCH_PREFLIGHT=PASS"     "TARGET_SHA=$TARGET_SHA"     "PROVIDER_YOUTUBE=PRESENT"     "PROVIDER_GEMINI=PRESENT"     "PROVIDER_GROQ=PRESENT"     "LIVE_TRADING=false"     "PRIVATE_TRADING_API_ALLOWED=false"     "REAL_ORDER_ENABLED=false"     "executionAuthority=NONE"
 }
@@ -176,7 +364,7 @@ activate() {
 
   RESEARCH_RELEASE_ROOT="$RESEARCH_ROOT"     bash "$RESEARCH_ROOT/research-production/deploy/install-ai-research-units.sh"
 
-  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" materialize     --app-root "$APP_ROOT"     --process-name stock-app     --output-root "$ENV_ROOT" >/dev/null
+  materialize_or_reuse_provider_env
 
   "${SUDO[@]}" chown root:investment-research "$PROVIDER_ENV"
   "${SUDO[@]}" chmod 0640 "$PROVIDER_ENV"
@@ -188,8 +376,10 @@ activate() {
 
   "${SUDO[@]}" systemctl daemon-reload
 
-  # A successful one-shot proves credentials, network/provider access, worker schema,
-  # and state-directory permissions before recurring timers are enabled.
+  # A successful one-shot must prove fresh provider network activity, validated
+  # output schema, exact Research SHA, and no trading authority before timers enable.
+  local one_shot_started_ms
+  one_shot_started_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
   "${SUDO[@]}" systemctl start research-production-ai-review.service
   "${SUDO[@]}" systemctl start research-production-video-discovery.service
 
@@ -203,6 +393,8 @@ activate() {
       exit 70
     }
   done
+
+  verify_one_shot_evidence "$one_shot_started_ms"
 
   "${SUDO[@]}" systemctl enable --now "${timers[@]}"
   local timer
