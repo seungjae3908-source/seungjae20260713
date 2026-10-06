@@ -1,0 +1,58 @@
+name: Research Four-Market Strategy Factory V2 Crypto Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-four-market-strategy-factory-v2-crypto-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN_ID: "37411605046"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pandas
+        run: python -m pip install "pandas>=2.2,<3"
+      - name: Download completed crypto artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: four-market-strategy-factory-v2-CRYPTO_*
+          path: crypto-v2
+      - name: Audit near misses
+        run: |
+          python - <<'PY'
+          import json, pandas as pd
+          from pathlib import Path
+          out={}
+          for p in Path('crypto-v2').glob('**/candidate-grid.csv'):
+              df=pd.read_csv(p)
+              market='CRYPTO_FUTURES' if 'FUTURES' in str(p) else 'CRYPTO_SPOT'
+              def records(x):
+                  cols=['candidate','lane','direction','family','topN','exit','trainPass','trainReturn','trainPF','trainMDD','trainPosMonthRate','trainTrades','calibrationPass','calibrationReturn','calibrationPF','calibrationMDD','calibrationPosMonthRate','calibrationTrades','validationPass','validationReturn','validationPF','validationMDD','validationPosMonthRate','validationTrades','distinctSymbols','activeDates']
+                  return x[cols].to_dict('records')
+              out[market]={
+                'rows':len(df),
+                'trainPassCount':int(df['trainPass'].astype(bool).sum()),
+                'calibrationPassCount':int(df['calibrationPass'].astype(bool).sum()),
+                'bothTrainCalibrationPassCount':int((df['trainPass'].astype(bool)&df['calibrationPass'].astype(bool)).sum()),
+                'validationPassRawCount':int(df['validationPass'].astype(bool).sum()),
+                'topTrain':records(df.sort_values(['trainReturn','trainPF'],ascending=False).head(12)),
+                'topCalibration':records(df.sort_values(['calibrationReturn','calibrationPF'],ascending=False).head(12)),
+                'topValidationDiagnosticOnly':records(df.sort_values(['validationReturn','validationPF'],ascending=False).head(12)),
+              }
+          print(json.dumps({'V2_CRYPTO_AUDIT':out},ensure_ascii=False))
+          PY
