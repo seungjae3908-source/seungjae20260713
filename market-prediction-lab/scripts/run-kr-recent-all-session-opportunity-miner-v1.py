@@ -110,38 +110,56 @@ def grid_day(g:pd.DataFrame)->pd.DataFrame:
     return z.reset_index(drop=True)
 
 
-def feature_day(g:pd.DataFrame)->pd.DataFrame:
+def feature_day(g:pd.DataFrame, history_tail:pd.DataFrame|None=None)->tuple[pd.DataFrame,pd.DataFrame]:
     z=grid_day(g)
-    if len(z)<90:
-        return pd.DataFrame()
-    c=z["close"].astype(float);v=z["minuteVolume"].astype(float)
-    dollar=c*v
-    z["ret1"]=c/c.shift(1)-1
-    z["ret5"]=c/c.shift(5)-1
-    z["ret15"]=c/c.shift(15)-1
-    priorv=v.shift(1).rolling(60,min_periods=20).mean()
-    priord=dollar.shift(1).rolling(60,min_periods=20).mean()
-    z["rvol60"]=v/priorv.replace(0,np.nan)
-    z["dollarAccel5"]=dollar.rolling(5,min_periods=3).mean()/priord.replace(0,np.nan)
-    ph=c.shift(1).rolling(30,min_periods=10).max()
-    pl=c.shift(1).rolling(30,min_periods=10).min()
-    z["distHigh30"]=c/ph-1
-    z["distLow30"]=c/pl-1
-    z["closeRangeLoc"]=(c-pl)/(ph-pl).replace(0,np.nan)
-    roll_dollar=dollar.rolling(30,min_periods=10).sum()
-    roll_vol=v.rolling(30,min_periods=10).sum()
-    z["vwap30"]=roll_dollar/roll_vol.replace(0,np.nan)
-    z["vwapDist"]=c/z["vwap30"]-1
-    z["priorDollar60"]=priord
-    z["entryPriceProxy"]=c.shift(-1)
-    future=c.shift(-1).iloc[::-1].rolling(HORIZON_MINUTES,min_periods=1).max().iloc[::-1]
-    z["futureMaxClose60"]=future
-    z["labelClose3"]=(future>=z["entryPriceProxy"]*1.03).astype(int)
-    z["labelClose5"]=(future>=z["entryPriceProxy"]*1.05).astype(int)
-    z["labelClose10"]=(future>=z["entryPriceProxy"]*1.10).astype(int)
-    z["forwardCloseMFE60"]=future/z["entryPriceProxy"]-1
-    return z.dropna(subset=["ret15","rvol60","dollarAccel5","distHigh30","distLow30","vwapDist","entryPriceProxy"])
+    if z.empty:
+        return pd.DataFrame(), pd.DataFrame()
 
+    # Keep the previous session's final observed minute context so the scanner can
+    # compute features from 09:00 instead of silently dropping the opening hour.
+    # This is previous-observed-bar context across the overnight gap, not continuous
+    # clock-time history; labels remain strictly inside the current session.
+    history=(history_tail.copy() if history_tail is not None else pd.DataFrame())
+    base_cols=["close","minuteVolume","timestamp","date","minuteOfSession"]
+    if len(history):
+        ctx=pd.concat([history[base_cols],z[base_cols]],ignore_index=True)
+    else:
+        ctx=z[base_cols].copy()
+
+    cctx=ctx["close"].astype(float)
+    vctx=ctx["minuteVolume"].astype(float)
+    dctx=cctx*vctx
+    ctx["ret1"]=cctx/cctx.shift(1)-1
+    ctx["ret5"]=cctx/cctx.shift(5)-1
+    ctx["ret15"]=cctx/cctx.shift(15)-1
+    priorv=vctx.shift(1).rolling(60,min_periods=20).mean()
+    priord=dctx.shift(1).rolling(60,min_periods=20).mean()
+    ctx["rvol60"]=vctx/priorv.replace(0,np.nan)
+    ctx["dollarAccel5"]=dctx.rolling(5,min_periods=3).mean()/priord.replace(0,np.nan)
+    ph=cctx.shift(1).rolling(30,min_periods=10).max()
+    pl=cctx.shift(1).rolling(30,min_periods=10).min()
+    ctx["distHigh30"]=cctx/ph-1
+    ctx["distLow30"]=cctx/pl-1
+    ctx["closeRangeLoc"]=(cctx-pl)/(ph-pl).replace(0,np.nan)
+    roll_dollar=dctx.rolling(30,min_periods=10).sum()
+    roll_vol=vctx.rolling(30,min_periods=10).sum()
+    ctx["vwap30"]=roll_dollar/roll_vol.replace(0,np.nan)
+    ctx["vwapDist"]=cctx/ctx["vwap30"]-1
+    ctx["priorDollar60"]=priord
+
+    current=ctx.tail(len(z)).copy().reset_index(drop=True)
+    c=z["close"].astype(float)
+    current["entryPriceProxy"]=c.shift(-1).to_numpy()
+    future=c.shift(-1).iloc[::-1].rolling(HORIZON_MINUTES,min_periods=1).max().iloc[::-1]
+    current["futureMaxClose60"]=future.to_numpy()
+    current["labelClose3"]=(future>=c.shift(-1)*1.03).astype(int).to_numpy()
+    current["labelClose5"]=(future>=c.shift(-1)*1.05).astype(int).to_numpy()
+    current["labelClose10"]=(future>=c.shift(-1)*1.10).astype(int).to_numpy()
+    current["forwardCloseMFE60"]=(future/c.shift(-1)-1).to_numpy()
+
+    next_history=z[base_cols].tail(60).copy().reset_index(drop=True)
+    current=current.dropna(subset=["ret15","rvol60","dollarAccel5","distHigh30","distLow30","vwapDist","entryPriceProxy"])
+    return current,next_history
 
 def process_symbol(symbol:str,market:str):
     raw,err=fetch_rows(symbol)
@@ -152,8 +170,9 @@ def process_symbol(symbol:str,market:str):
     states=0;pos3=0;pos5=0;pos10=0
     opening3=0;outside3=0
     days=0
+    history_tail=None
     for _,g in raw.groupby("date",sort=True):
-        f=feature_day(g)
+        f,history_tail=feature_day(g,history_tail)
         if f.empty:
             continue
         days+=1
@@ -249,6 +268,8 @@ def main():
             "sourceIsRecentOnlyNotThreeYearHistory":True,
             "sourceProvidesMinuteCloseAndCumulativeVolumeNotTrueOhlc":True,
             "minuteVolumeDerivedFromCumulativeDifference":True,
+            "openingFeaturesUsePriorSessionObservedMinuteTail":True,
+            "overnightContextIsPreviousObservedBarsNotContinuousClockMinutes":True,
             "futureLabelUsesClockMinuteGridAndFutureCloseMax":True,
             "labelsAreClosePathProxyNotIntrabarHighMfe":True,
             "notTradingPnlProof":True,
