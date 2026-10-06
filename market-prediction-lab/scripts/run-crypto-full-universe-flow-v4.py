@@ -220,7 +220,8 @@ def process_raw_files(frames,market):
             print(json.dumps({"flowV4ProcessedRaw":idx,"files":len(frames),"featureFrames":len(feature_frames),"outcomeFrames":len(outcome_frames),"failed":len(failures)}),flush=True)
     if not feature_frames or not outcome_frames:
         raise RuntimeError("FLOW_V4_NO_EXACT_FEATURES_OR_OUTCOMES")
-    # Binance archives can infer integer dtypes for all-integer monthly columns; relax to a common numeric supertype before cross-symbol concat.\n    features=pl.concat(feature_frames,how="vertical_relaxed").unique(subset=["timestamp","symbol"])
+    # Binance archives can infer integer dtypes for all-integer monthly columns; relax to a common numeric supertype before cross-symbol concat.
+    features=pl.concat(feature_frames,how="vertical_relaxed").unique(subset=["timestamp","symbol"])
     outcomes=pl.concat(outcome_frames,how="vertical_relaxed")
     return features,outcomes,failures
 
