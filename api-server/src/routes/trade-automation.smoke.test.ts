@@ -316,7 +316,7 @@ async function unavailableMarketIntelligence(
   );
 }
 
-async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
+async function startServer(authenticated = true, role: 'associate' | 'regular' | 'admin' = 'regular') {
   const app = express();
   app.use(express.json());
   if (authenticated) app.use((req, _res, next) => {
@@ -1402,6 +1402,43 @@ test('exit preview follows Toss fractional and Kiwoom integer US-stock quantity 
   } finally {
     setTradeExitPreviewReadersFactoryForTests(null);
     await close(server);
+  }
+});
+
+test('associate automatic policy cannot enable crypto futures without futures capability', async () => {
+  const associate = await startServer(true, 'associate');
+  try {
+    const response = await fetch(`${associate.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        marketEnabled: {
+          domestic_stock: true,
+          us_stock: true,
+          crypto_spot: true,
+          crypto_futures: true,
+        },
+        exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+        enabledAssets: { bitget: ['BTCUSDT'], upbit: [], kiwoom: [], toss: [] },
+        enabledStrategies: [],
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      policy: {
+        marketEnabled: { crypto_futures: boolean };
+        exchangeEnabled: { bitget: boolean };
+        enabledAssets: { bitget: string[] };
+      };
+    };
+    assert.equal(body.policy.marketEnabled.crypto_futures, false);
+    assert.equal(body.policy.exchangeEnabled.bitget, false);
+    assert.deepEqual(body.policy.enabledAssets.bitget, []);
+  } finally {
+    await close(associate.server);
   }
 });
 
