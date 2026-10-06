@@ -10,7 +10,10 @@ const password = process.env.PRODUCTION_QA_PASSWORD ?? '';
 const expectedSha = process.env.EXPECTED_DEPLOY_SHA?.trim().toLowerCase() ?? '';
 const productionDeployRunId = Number(process.env.EXPECTED_PRODUCTION_DEPLOY_RUN_ID ?? 0);
 const artifactDir = path.resolve(process.env.PRODUCTION_LIVE_CREDENTIAL_REUSE_ARTIFACT_DIR ?? 'production-live-credential-reuse-artifacts');
-const providers = ['toss', 'kiwoom', 'upbit', 'bitget'] as const;
+// Toss is intentionally last. The preceding Account QA already performs a real
+// Toss read, so verifying the other providers first avoids an immediate second
+// token burst while preserving the required four-provider sequence.
+const providers = ['kiwoom', 'upbit', 'bitget', 'toss'] as const;
 type Provider = typeof providers[number];
 
 function accessTokenFromUnknown(value: unknown, depth = 0): string | null {
