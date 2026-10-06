@@ -91,7 +91,14 @@ def select_threshold(cal:pd.DataFrame,label:str,score:np.ndarray,recall_floor:fl
     ]))
     thresholds=np.unique(np.quantile(score,qs))
     rows=[weighted_metrics(cal,label,score,float(t)) for t in thresholds]
-    eligible=[r for r in rows if r["recall"]>=recall_floor]
+    eligible=[
+        r for r in rows
+        if r["recall"]>=recall_floor
+        and (
+            r["eventClusterRecall"] is None
+            or r["eventClusterRecall"]>=recall_floor
+        )
+    ]
     if eligible:
         winner=max(
             eligible,
