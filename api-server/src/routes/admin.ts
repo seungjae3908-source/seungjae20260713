@@ -157,7 +157,12 @@ async function applyMemberChange(
       p_membership_level: requested.membershipLevel ?? null,
       p_is_active: requested.isActive ?? null,
       p_membership_expires_at: requested.membershipExpiresAt === undefined
-        ? current.membership_expires_at ?? null
+        ? (
+          (current.membership_level === 'associate' || current.membership_level === 'regular')
+          && (current.status === 'approved' || current.status === 'suspended')
+            ? current.membership_expires_at ?? null
+            : null
+        )
         : requested.membershipExpiresAt,
       p_reason: requested.reason,
       p_expected_permissions_updated_at: current.permissions_updated_at,
