@@ -132,9 +132,8 @@ def enrich_oi(trades: pl.DataFrame) -> tuple[pl.DataFrame, dict]:
         else:
             t = t.tz_convert("UTC")
 
-        times = df["create_time"].to_numpy(dtype="datetime64[ns]")
-        target = np.datetime64(t.tz_localize(None).to_datetime64())
-        pos = int(np.searchsorted(times, target, side="right") - 1)
+        # Compare timezone-aware timestamps directly to avoid numpy tz coercion edge cases.
+        pos = int(df["create_time"].searchsorted(t, side="right") - 1)
         if pos < 12:
             continue
 
@@ -177,7 +176,9 @@ def enrich_oi(trades: pl.DataFrame) -> tuple[pl.DataFrame, dict]:
 
 
 def build_base_trades() -> tuple[dict[int,pl.DataFrame], dict]:
-    raw, source_meta = flow.load_bars(MARKET)
+    # Reuse the exact V3 data pipeline that already passed end-to-end:
+    # load_bars -> add_features -> signal_frame -> simulate_union.
+    raw, source = flow.load_bars(MARKET)
     features_pd = flow.add_features(raw)
     features = pl.from_pandas(features_pd).with_columns([
         pl.col("timestamp").cast(pl.Datetime(time_zone="UTC")),
@@ -187,28 +188,39 @@ def build_base_trades() -> tuple[dict[int,pl.DataFrame], dict]:
     sigs = {}
     union_frames = []
     for top_n in BASE_TOP_NS:
-        s = flow.signal_frame(
-            features, MARKET, "FLOW_RECLAIM", "SHORT",
-            0.4, 2.5, None, top_n
+        sig = flow.signal_frame(
+            features,
+            MARKET,
+            "FLOW_RECLAIM",
+            "SHORT",
+            0.4,
+            2.5,
+            None,
+            top_n,
         )
-        if s.is_empty():
+        if sig.is_empty():
             raise RuntimeError(f"BASE_SIGNAL_EMPTY:TOP{top_n}")
-        sigs[top_n] = s
-        union_frames.append(s.select(["timestamp","symbol","date"]))
-    union = pl.concat(union_frames,how="vertical").unique(subset=["timestamp","symbol"])
+        sigs[top_n] = sig
+        union_frames.append(sig.select(["timestamp","symbol","date"]))
+
+    union = (
+        pl.concat(union_frames, how="vertical")
+        .unique(subset=["timestamp","symbol"])
+    )
     outcomes = flow.simulate_union(features_pd, union, MARKET).filter(
-        (pl.col("targetPct")==TARGET)
-        & (pl.col("stopPct")==STOP)
-        & (pl.col("holdBars")==HOLD)
+        (pl.col("targetPct") == TARGET)
+        & (pl.col("stopPct") == STOP)
+        & (pl.col("holdBars") == HOLD)
     )
 
     result = {}
-    for top_n,s in sigs.items():
-        joined = s.join(outcomes,on=["timestamp","symbol"],how="inner")
+    for top_n, sig in sigs.items():
+        base_name = f"FLOW_RECLAIM_SHORT_T0.4_RV2.5_TOP{top_n}_TP5_SL0.015_H32"
+        joined = sig.join(outcomes, on=["timestamp","symbol"], how="inner")
         trades = joined.with_columns([
             pl.lit(MARKET).alias("market"),
             pl.lit("SHORT").alias("direction"),
-            pl.lit(f"FLOW_RECLAIM_SHORT_T0.4_RV2.5_TOP{top_n}_TP5_SL0.015_H32").alias("baseCandidate"),
+            pl.lit(base_name).alias("baseCandidate"),
             pl.col("timestamp").dt.date().alias("date"),
             pl.col("entryPrice"),
             pl.col("shortExitPrice").alias("exitPrice"),
@@ -222,8 +234,10 @@ def build_base_trades() -> tuple[dict[int,pl.DataFrame], dict]:
         result[top_n] = trades
 
     return result, {
-        **source_meta,
-        "featureRows":len(features_pd),
+        "sourceV3": source,
+        "featureRows": len(features_pd),
+        "unionSignals": union.height,
+        "outcomeRows": outcomes.height,
     }
 
 
@@ -255,6 +269,14 @@ def main():
     args = ap.parse_args()
     out = Path(args.out_dir)
     out.mkdir(parents=True,exist_ok=True)
+    (out / "run-started.json").write_text(
+        json.dumps({
+            "contract":"full-universe-3pct-hunter-futures-oi-v31",
+            "status":"STARTED",
+            "executionAuthority":"NONE"
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     base_by_top, source = build_base_trades()
     all_base = pl.concat(list(base_by_top.values()),how="vertical")
