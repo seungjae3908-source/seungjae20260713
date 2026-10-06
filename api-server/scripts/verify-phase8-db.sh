@@ -166,4 +166,8 @@ echo "[phase8-db] recheck concurrent fast-move split cancellation race after rea
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
 
+run_sql "apply member S/AI access hardening" "api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql"
+run_sql "reapply member S/AI access hardening idempotently" "api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql"
+run_sql "verify associate analytics RLS and membership expiry" "api-server/supabase/test/member_access_s_ai_hardening_integration.sql"
+
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"
