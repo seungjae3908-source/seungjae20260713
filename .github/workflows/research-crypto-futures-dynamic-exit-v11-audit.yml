@@ -1,0 +1,59 @@
+name: Research Crypto Futures Dynamic Exit V1.1 Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-crypto-futures-dynamic-exit-v11-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_RUN_ID: "37403198853"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pandas
+        run: python -m pip install "pandas>=2.2,<3"
+      - name: Download V1.1 artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: crypto-futures-dynamic-exit-v11-*
+          path: v11
+      - name: Audit policy grid
+        run: |
+          python - <<'PY'
+          import json, pandas as pd
+          from pathlib import Path
+          files=list(Path('v11').glob('**/policy-grid.csv'))
+          if not files: raise SystemExit('policy-grid missing')
+          df=pd.read_csv(files[0])
+          cal=df[df['calibrationPass'].astype(str).str.lower().eq('true')].copy()
+          val=cal[cal['validationPass'].astype(str).str.lower().eq('true')].copy()
+          def rows(x,n=15,sort='validationReturn'):
+              if x.empty:return []
+              y=x.sort_values(sort,ascending=False).head(n)
+              cols=['policy','early','post','threshold','minHold','confirm','calibrationReturn','calibrationPF','calibrationMDD','calibrationPosMonthRate','validationPass','validationReturn','validationPF','validationMDD','validationPosMonthRate','benchmarkReturn','benchmarkPF','benchmarkMDD','benchmarkPosMonthRate']
+              return y[cols].where(pd.notnull(y[cols]),None).to_dict('records')
+          out={
+            'allPolicies':len(df),
+            'calibrationPass':len(cal),
+            'calibrationAndValidationPass':len(val),
+            'topValidationAmongCalPass':rows(cal,15,'validationReturn'),
+            'validationPassPolicies':rows(val,30,'validationReturn'),
+            'bestBenchmarkDiagnosticAmongCalPass':rows(cal,10,'benchmarkReturn'),
+          }
+          print(json.dumps({'V11_AUDIT':out},ensure_ascii=False))
+          PY
