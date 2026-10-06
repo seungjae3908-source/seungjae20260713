@@ -225,6 +225,7 @@ const memberAccessReviewed=[
  '.github/workflows/production-deploy.yml',
  '.github/workflows/research-center-predeploy-validation.yml',
  'api-server/scripts/apply-staging-supabase-bootstrap.mjs',
+ 'api-server/scripts/verify-member-permission-audit-contract.mjs',
  'api-server/scripts/verify-phase8-db.sh',
  'api-server/scripts/verify-member-permission-audit-contract.mjs',
  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
