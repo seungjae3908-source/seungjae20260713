@@ -35,59 +35,70 @@ jobs:
       - name: Probe public Naver minute history without credentials
         run: |
           python - <<'PY'
-          import ast
           import json
           import re
           from pathlib import Path
           import requests
-          from bs4 import BeautifulSoup
 
           out=Path("market-prediction-lab/docs/kr-naver-minute-history-probe-v2")
           out.mkdir(parents=True,exist_ok=True)
           headers={"User-Agent":"Mozilla/5.0 market-prediction-lab/research"}
 
-          results=[]
+          def parse_rows(text):
+              # Naver minute response is JS-like, not strict JSON: null values and
+              # whitespace make literal_eval unreliable. Timestamp is 12 digits.
+              stamps=re.findall(r'\["(\d{12})"\s*,',text)
+              closes=[]
+              for m in re.finditer(r'\["(\d{12})"\s*,([^\]]+)\]',text):
+                  vals=[v.strip() for v in m.group(2).split(",")]
+                  closes.append({"stamp":m.group(1),"values":vals[:6]})
+              return stamps,closes
 
-          # JSON-like minute endpoint. Probe only; no private/broker credentials.
-          for count in (1,50,500):
-              url=f"https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=0&count={count}&timeframe=minute"
+          cases=[
+            ("latest_r0_c1","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=0&count=1&timeframe=minute"),
+            ("latest_r0_c500","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=0&count=500&timeframe=minute"),
+            ("r1_2024_day","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=1&startTime=20240701&endTime=20240701&timeframe=minute"),
+            ("r1_2023_day","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=1&startTime=20230703&endTime=20230703&timeframe=minute"),
+            ("r2_2024_1530_c500","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=2&startTime=202407011530&count=500&timeframe=minute"),
+            ("r2_2023_1530_c500","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=2&startTime=202307031530&count=500&timeframe=minute"),
+            ("r2_2026_1530_c500","https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=2&startTime=202603311530&count=500&timeframe=minute"),
+          ]
+
+          results=[]
+          for name,url in cases:
               try:
                   r=requests.get(url,headers=headers,timeout=30)
-                  text=r.text.strip()
-                  parsed=None
-                  try:
-                      parsed=ast.literal_eval(text)
-                  except Exception:
-                      pass
-                  rows=(len(parsed)-1) if isinstance(parsed,list) and len(parsed)>1 else 0
-                  first=str(parsed[1][0]) if rows and isinstance(parsed[1],(list,tuple)) else None
-                  last=str(parsed[-1][0]) if rows and isinstance(parsed[-1],(list,tuple)) else None
-                  results.append({"type":"siseJson","count":count,"status":r.status_code,"rows":rows,"first":first,"last":last,"preview":text[:240]})
+                  stamps,rows=parse_rows(r.text)
+                  dates=sorted(set(s[:8] for s in stamps))
+                  results.append({
+                    "type":"siseJson","case":name,"status":r.status_code,
+                    "rows":len(stamps),"first":stamps[0] if stamps else None,
+                    "last":stamps[-1] if stamps else None,
+                    "dates":dates[:20],"dateCount":len(dates),
+                    "rowPreview":rows[:3],"textPreview":r.text[:180]
+                  })
               except Exception as exc:
-                  results.append({"type":"siseJson","count":count,"error":repr(exc)})
+                  results.append({"type":"siseJson","case":name,"error":repr(exc)})
 
-          # PC time-series endpoint with explicit historical thistime.
+          # Old HTML endpoint is also recorded for completeness.
           for stamp in ("20261006153000","20260331153000","20240701153000","20230703153000"):
-              row_count=0; times=[]; statuses=[]
-              for page in (1,2,10,40):
-                  url=f"https://finance.naver.com/item/sise_time.naver?code=005930&thistime={stamp}&page={page}"
-                  try:
-                      r=requests.get(url,headers=headers,timeout=30)
-                      statuses.append(r.status_code)
-                      soup=BeautifulSoup(r.text,"html.parser")
-                      for tr in soup.select("table.type2 tr"):
-                          tds=[td.get_text(" ",strip=True) for td in tr.select("td")]
-                          if tds and re.fullmatch(r"\d{2}:\d{2}",tds[0] or ""):
-                              row_count+=1
-                              times.append(tds[0])
-                  except Exception as exc:
-                      statuses.append(repr(exc))
-              results.append({"type":"sise_time","stamp":stamp,"rows":row_count,"timesPreview":times[:10],"statuses":statuses})
+              url=f"https://finance.naver.com/item/sise_time.naver?code=005930&thistime={stamp}&page=1"
+              try:
+                  r=requests.get(url,headers=headers,timeout=30)
+                  results.append({"type":"sise_time","stamp":stamp,"status":r.status_code,"bytes":len(r.content)})
+              except Exception as exc:
+                  results.append({"type":"sise_time","stamp":stamp,"error":repr(exc)})
 
+          historical_targets={"20230703","20240701","20260331"}
+          seen_dates=set()
+          for x in results:
+              seen_dates.update(x.get("dates") or [])
           result={
             "contract":"kr-naver-minute-history-probe-v2",
             "results":results,
             "hasMinuteRows":any(int(x.get("rows") or 0)>0 for x in results),
+            "historicalTargetsSeen":sorted(historical_targets & seen_dates),
+            "historicalMinuteAvailable":bool(historical_targets & seen_dates),
             "truthBoundary":{
               "publicReadOnlyHttpOnly":True,
               "noBrokerCredentials":True,
