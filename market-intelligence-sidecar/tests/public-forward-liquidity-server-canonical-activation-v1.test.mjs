@@ -43,6 +43,7 @@ const MAIN = 'a'.repeat(40);
 const OLD_MAIN = 'b'.repeat(40);
 const RECEIPT_ID = 12345;
 const AUTHORITY_ID = 23456;
+const COMPONENT = 'd'.repeat(64);
 const bindingDigest = sha256(canonicalJson(ACTIVATION_BINDING));
 
 function shadowReceipt({ authorizedAtMs, slotIndex = 100 } = {}) {
@@ -112,6 +113,9 @@ function validInputs() {
       releaseControlOpen: true,
       action: 'AUTHORIZE',
       targetMainSha: MAIN,
+      currentMainSha: MAIN,
+      componentDigest: COMPONENT,
+      componentEquivalentCurrentMain: true,
       activationBindingDigest: bindingDigest,
       commentId: RECEIPT_ID,
       authorAssociation: 'OWNER',
@@ -155,6 +159,10 @@ function validInputs() {
     },
     serverRuntime: {
       deployedSha: MAIN,
+      evidenceSha: MAIN,
+      currentMainSha: MAIN,
+      componentDigest: COMPONENT,
+      componentEquivalentCurrentMain: true,
       timerEnabled: true,
       timerActive: true,
       persistent: false,
