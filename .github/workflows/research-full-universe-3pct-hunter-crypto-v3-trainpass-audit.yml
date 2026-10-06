@@ -1,0 +1,56 @@
+name: Research Crypto V3 TrainPass Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-full-universe-3pct-hunter-crypto-v3-trainpass-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN_ID: "37398830789"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: full-universe-3pct-hunter-crypto-flow-v3-*
+          path: crypto-v3
+      - name: Print train-pass rows only
+        run: |
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          out={}
+          for f in Path('crypto-v3').glob('**/candidate-grid.csv'):
+              market=f.parent.name
+              rows=list(csv.DictReader(f.open(encoding='utf-8-sig')))
+              picked=[]
+              for r in rows:
+                  if str(r.get('trainPass','')).lower()!='true':
+                      continue
+                  def fv(k):
+                      try:return float(r.get(k) or 0)
+                      except:return 0.0
+                  def iv(k):
+                      try:return int(float(r.get(k) or 0))
+                      except:return 0
+                  picked.append({
+                    'candidate':r.get('candidate'),'direction':r.get('direction'),'family':r.get('family'),
+                    'trainReturn':fv('trainReturn'),'trainPF':fv('trainPF'),'trainMDD':fv('trainMDD'),'trainPosMonthRate':fv('trainPosMonthRate'),'trainTrades':iv('trainTrades'),
+                    'validationPass':str(r.get('validationPass','')).lower()=='true','validationReturn':fv('validationReturn'),'validationPF':fv('validationPF'),'validationMDD':fv('validationMDD'),'validationPosMonthRate':fv('validationPosMonthRate'),'validationTrades':iv('validationTrades'),
+                    'freshOosReturn':fv('oosReturn'),'freshOosPF':fv('oosPF'),'freshOosMDD':fv('oosMDD'),'freshOosPosMonthRate':fv('oosPosMonthRate'),'freshOosTrades':iv('oosTrades'),
+                  })
+              out[market]=picked
+          print(json.dumps({'CRYPTO_V3_TRAINPASS_AUDIT':out},ensure_ascii=False))
+          PY
