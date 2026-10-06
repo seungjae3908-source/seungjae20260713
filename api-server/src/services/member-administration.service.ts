@@ -206,7 +206,9 @@ export function planMemberChange(
   // states require an explicit membershipLevel change before they can be approved.
   const currentTier = storedMemberTier(current);
   const currentActive = current.is_active === true;
-  const currentExpiry = current.membership_expires_at ?? null;
+  const currentExpiry = currentTier === 'associate' || currentTier === 'regular'
+    ? current.membership_expires_at ?? null
+    : null;
   const nextTier = request.membershipLevel ?? currentTier;
   const requestedActive = request.isActive ?? currentActive;
   const nextActive = nextTier === 'pending' ? false : requestedActive;
