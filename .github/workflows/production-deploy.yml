@@ -40,6 +40,9 @@ on:
       - ops/apply-production-paper-journal-privileges.mjs
       - ops/classify-production-paper-journal-privilege-failure.mjs
       - ops/verify-production-paper-journal-privileges.mjs
+      - ops/apply-production-member-access-hardening.mjs
+      - ops/verify-production-member-access-hardening.mjs
+      - api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
       - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
       - api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
       - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
@@ -110,6 +113,8 @@ jobs:
         run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
       - name: Verify Production paper journal privilege contract
         run: node ops/verify-production-paper-journal-privileges.mjs --static
+      - name: Verify Production member access hardening contract
+        run: node ops/verify-production-member-access-hardening.mjs --static
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
 
@@ -404,11 +409,59 @@ jobs:
             printf 'paper_journal_artifact=%s\n' "$paper_artifact" >> "$GITHUB_OUTPUT"
           )
 
+          (
+            member_artifact="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.json")"
+            member_stderr="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.stderr")"
+            member_archive="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.tar.gz")"
+            remote_dir="$({
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/member-access-hardening.XXXXXX'
+            })"
+            [[ "$remote_dir" =~ ^/tmp/member-access-hardening\.[A-Za-z0-9]+$ ]] || {
+              echo 'Production member access temporary directory was rejected.' >&2
+              exit 1
+            }
+            quoted_remote_dir="$(printf '%q' "$remote_dir")"
+            cleanup_member_gate() {
+              rm -f "$member_stderr" "$member_archive"
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" \
+                "case $quoted_remote_dir in /tmp/member-access-hardening.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+                >/dev/null 2>&1 || true
+            }
+            trap cleanup_member_gate EXIT
+            tar -czf "$member_archive" \
+              ops/apply-production-member-access-hardening.mjs \
+              api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
+            scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$member_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+            member_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-member-access-hardening.mjs' \
+              "$remote_dir" "$TARGET_SHA")"
+            if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+              -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$member_command" > "$member_artifact" 2> "$member_stderr"; then
+              classification="$(grep -Eo '^\[production-member-access-hardening\] [A-Za-z0-9_:-]+' "$member_stderr" | tail -n 1 | sed 's/^\[production-member-access-hardening\] //' || true)"
+              [[ -n "$classification" ]] || classification='unknown_safe_failure'
+              echo "Production member access hardening failed safely: $classification" >&2
+              exit 1
+            fi
+            node ops/verify-production-member-access-hardening.mjs --artifact "$member_artifact"
+            printf 'member_access_artifact=%s\n' "$member_artifact" >> "$GITHUB_OUTPUT"
+          )
+
       - name: Upload sanitized Production paper journal privilege evidence
         uses: actions/upload-artifact@v4
         with:
           name: production-paper-journal-privileges-${{ env.TARGET_SHA }}
           path: ${{ steps.database-gates.outputs.paper_journal_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload sanitized Production member access hardening evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-access-hardening-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.member_access_artifact }}
           if-no-files-found: error
           retention-days: 30
 
