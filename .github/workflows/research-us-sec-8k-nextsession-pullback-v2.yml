@@ -1,0 +1,70 @@
+name: Research US SEC 8-K Next-Session Pullback V2
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-us-sec-8k-nextsession-pullback-v2.py
+      - .github/workflows/research-us-sec-8k-nextsession-pullback-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-us-sec-8k-nextsession-pullback-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SOURCE_RUN_ID: "37482537143"
+      SOURCE_ARTIFACT: "us-sec-8k-event-universe-probe-v1-47acc6b9e32c0185eca3816e7a973b8c0b57e086"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_XET: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-us-sec-8k-nextsession-pullback-v2.py
+          python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-census-v2.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas==2.3.3" "numpy==2.5.3" "pyarrow==21.0.0" "polars==1.44.2" "duckdb==1.5.6" "requests==2.34.2" "huggingface_hub==0.36.2"
+      - name: Download frozen SEC 8-K event universe
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: sec8k-v1
+      - name: Run next-session event backtest
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVENTS="$(find sec8k-v1 -name mapped-8k-events.csv -print -quit)"
+          test -n "$EVENTS"
+          python market-prediction-lab/scripts/run-us-sec-8k-nextsession-pullback-v2.py \
+            --events "$EVENTS" \
+            --out-dir market-prediction-lab/docs/us-sec-8k-nextsession-pullback-v2
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-sec-8k-nextsession-pullback-v2-${{ github.sha }}
+          path: market-prediction-lab/docs/us-sec-8k-nextsession-pullback-v2
+          if-no-files-found: error
+          retention-days: 14
