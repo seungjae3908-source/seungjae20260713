@@ -121,7 +121,7 @@ test('reactivation restores stored associate tier and approved state', () => {
   assert.equal(plan.changes.membership_level, 'associate');
   assert.equal(plan.changes.role, 'associate');
   assert.equal(plan.changes.status, 'approved');
-  assert.equal(plan.changes.is_active, false);
+  assert.equal(plan.changes.is_active, true);
 });
 
 test('reactivation restores legacy suspended full tier without canonical membership', () => {
@@ -157,7 +157,7 @@ test('revoked stale admin cannot regain admin by reactivation alone', () => {
   assert.equal(plan.changes.membership_level, 'pending');
   assert.equal(plan.changes.role, 'pending');
   assert.equal(plan.changes.status, 'pending');
-  assert.equal(plan.changes.is_active, true);
+  assert.equal(plan.changes.is_active, false);
 });
 
 test('rejected member requires explicit tier assignment before approval', () => {
@@ -269,8 +269,9 @@ test('permission timestamp uses server time', () => {
   assert.equal(plan.changes.updated_at, NOW.toISOString());
 });
 
-test('active admin detection requires approved status and active flag', () => {
+test('active admin detection requires approved, active and unexpired authority', () => {
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved' })), true);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', membership_expires_at: '2020-01-01T00:00:00.000Z' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'pending' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'rejected' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: false })), false);
