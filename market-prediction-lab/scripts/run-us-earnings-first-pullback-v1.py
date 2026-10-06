@@ -144,9 +144,9 @@ def replay_month(path:Path,candidates:pl.DataFrame)->pd.DataFrame:
 
             for exit_name,target,stop in EXITS:
                 tp=entry*(1.0+target)
-                sl=max(entry*(1.0-stop),float(pullback_low)*0.997 if pullback_low is not None else entry*(1.0-stop))
-                # Ensure risk does not exceed configured hard stop.
-                sl=max(sl,entry*(1.0-stop))
+                structural=(float(pullback_low)*0.997) if pullback_low is not None else entry*(1.0-stop)
+                # Structural stop may tighten risk but can never sit above the entry.
+                sl=min(entry*(1.0-0.001),max(entry*(1.0-stop),structural))
                 exit_price=float(future["close"].iloc[-1])
                 exit_reason="EOD"
                 exit_time=future["local_ts"].iloc[-1]
