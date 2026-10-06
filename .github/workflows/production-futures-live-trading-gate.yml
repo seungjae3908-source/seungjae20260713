@@ -9,6 +9,8 @@ on:
       - .github/scripts/production-trading-gate-conflicts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/scripts/production-preactivation-evidence-paths.cjs
+      - .github/scripts/production-preactivation-evidence-paths.test.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/workflows/production-account-readonly-live-qa.yml
       - .github/workflows/production-account-readonly-live-qa-dispatch-bridge.yml
@@ -73,6 +75,7 @@ jobs:
           grep -Fq "REAL_ORDER_SUBMITTED=false" "$workflow"
           grep -Fq "CONFIRM_NO_OPEN_FUTURES_POSITIONS_OR_ORDERS" "$workflow"
           grep -Fq 'run.name.startsWith(`${name} ${target} `)' "$workflow"
+          node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
           ! grep -Eq '^[[:space:]]{2}(workflow_dispatch|schedule):' "$workflow"
           ! grep -Eq 'AUTO_TRADING:[[:space:]]+["'\'']?true' "$workflow"
           ! grep -Eq 'LIVE_AUTOMATIC_TRADING_ENABLED:[[:space:]]+["'\'']?true' "$workflow"
