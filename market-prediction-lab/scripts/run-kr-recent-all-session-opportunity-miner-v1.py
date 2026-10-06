@@ -50,7 +50,7 @@ def current_universe():
         live_error=repr(exc)
     return sorted(base),base,{
         "frozenMeta":meta,
-        "frozenActiveSymbols":len(frozen-delisted),
+        "frozenActiveSymbols":len(set(frozen)-set(delisted)),
         "liveAddedSymbols":live_added,
         "liveListingError":live_error,
         "combinedSymbols":len(base),
