@@ -88,7 +88,7 @@ def fetch_metrics(args):
             cutoff = pd.Timestamp("2026-06-25", tz="UTC")
             df["effective_time"] = df["create_time"]
             m = df["create_time"] >= cutoff
-            df.loc[m, "effective_time"] = df.loc[m, "create_time"] + pd.Timedelta(minutes=5)
+            df.loc[m, "effective_time"] = df.loc[m, "create_time"] + pd.Timedelta("5min")
             df["symbol"] = symbol
             return symbol, day, df, "OK"
         except Exception as exc:
@@ -137,17 +137,28 @@ def add_oi_features(metrics: pd.DataFrame) -> pd.DataFrame:
         subset=["oi1h","oi15m","countLS","sumTopLS","metricTakerRatio"]
     )
 
+def _utc_ns(series: pd.Series) -> pd.Series:
+    parsed = pd.to_datetime(series, utc=True, errors="coerce")
+    return parsed.astype("datetime64[ns, UTC]")
+
+
 def asof_join_signals(signal_pdf: pd.DataFrame, metrics: pd.DataFrame) -> pd.DataFrame:
     pieces=[]
     for symbol,g in signal_pdf.groupby("symbol",sort=False):
-        mg=metrics[metrics["symbol"]==symbol].sort_values("effective_time")
+        mg=metrics[metrics["symbol"]==symbol].sort_values("effective_time").copy()
         if mg.empty: continue
         sg=g.sort_values("timestamp").copy()
+        sg["timestamp"] = _utc_ns(sg["timestamp"])
+        mg["effective_time"] = _utc_ns(mg["effective_time"])
+        sg = sg.dropna(subset=["timestamp"]).sort_values("timestamp")
+        mg = mg.dropna(subset=["effective_time"]).sort_values("effective_time")
+        if sg.empty or mg.empty:
+            continue
         j=pd.merge_asof(
             sg, mg,
             left_on="timestamp", right_on="effective_time",
             direction="backward",
-            tolerance=pd.Timedelta(minutes=30),
+            tolerance=pd.Timedelta("30min"),
             suffixes=("","_metric"),
         )
         pieces.append(j)
