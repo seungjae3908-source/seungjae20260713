@@ -66,8 +66,10 @@ def load_file(path:Path):
 
 
 def features(x:pl.DataFrame):
-    y=x.with_columns([
-        (pl.col("close")*pl.col("volume")).alias("dollar"),
+    y=x.with_columns(
+        (pl.col("close")*pl.col("volume")).alias("dollar")
+    )
+    y=y.with_columns([
         pl.col("high").shift(1).rolling_max(16,min_samples=8).alias("priorHigh16"),
         pl.col("low").shift(1).rolling_min(16,min_samples=8).alias("priorLow16"),
         pl.col("high").shift(1).rolling_max(8,min_samples=4).alias("priorHigh8"),
