@@ -16,6 +16,10 @@ const memberAccessSource = fs.readFileSync(
   path.resolve(process.cwd(), '../packages/member-access/src/index.js'),
   'utf8',
 );
+const portfolioSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/portfolio.tsx'),
+  'utf8',
+);
 
 function technicalItem(id: string) {
   const group = APP_NAVIGATION.find((item) => item.id === 'technical');
@@ -62,4 +66,8 @@ test('associate scanner access uses the unified workspace while advanced capabil
   const autoTradingAccess = appSource.match(/function AutoTradingAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
   expect(autoTradingAccess).toContain("gated('canAccessAutoTrading'");
   expect(autoTradingAccess).toContain("builder('AUTO_TRADING', <AutoTradingPage />)");
+
+  expect(portfolioSource).toContain("auth.can('canAccessAiTradingReview')");
+  expect(portfolioSource).toContain('<TradingAiReviewPanel');
+  expect(portfolioSource).toContain('<UnifiedTradeJournalPanel');
 });
