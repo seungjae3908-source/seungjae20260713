@@ -122,9 +122,11 @@ export function buildServerCanonicalCutoverReadiness({
     add(blockers, 'SERVER_CANONICAL_BINDING_DIGEST_MISMATCH');
   }
 
+  const evidenceSha = latestActivationReceipt?.targetMainSha;
+  const componentDigest = latestActivationReceipt?.componentDigest;
   const expectedActivationReceiptBody = [
     '/authorize-public-only-partial-fill-v3-schedule-activation',
-    currentMainSha,
+    evidenceSha,
     activationBindingDigest,
   ].join(' ');
   const releaseControlTitle = String(latestActivationReceipt?.issueTitle ?? '');
@@ -134,7 +136,10 @@ export function buildServerCanonicalCutoverReadiness({
     || latestActivationReceipt?.releaseControlOpen !== true
     || !validReleaseControlTitle
     || latestActivationReceipt?.action !== 'AUTHORIZE'
-    || latestActivationReceipt?.targetMainSha !== currentMainSha
+    || !exactSha(evidenceSha)
+    || latestActivationReceipt?.currentMainSha !== currentMainSha
+    || !exactDigest(componentDigest)
+    || latestActivationReceipt?.componentEquivalentCurrentMain !== true
     || latestActivationReceipt?.activationBindingDigest !== activationBindingDigest
     || !positiveInteger(latestActivationReceipt?.commentId)
     || latestActivationReceipt?.authorAssociation !== 'OWNER'
@@ -189,7 +194,11 @@ export function buildServerCanonicalCutoverReadiness({
     add(blockers, 'SERVER_CANONICAL_REPOSITORY_SCHEDULE_HEALTH_NOT_OBSERVED');
   }
 
-  if (serverRuntime?.deployedSha !== currentMainSha
+  if (serverRuntime?.deployedSha !== evidenceSha
+    || serverRuntime?.evidenceSha !== evidenceSha
+    || serverRuntime?.currentMainSha !== currentMainSha
+    || serverRuntime?.componentDigest !== componentDigest
+    || serverRuntime?.componentEquivalentCurrentMain !== true
     || serverRuntime?.timerEnabled !== true
     || serverRuntime?.timerActive !== true
     || serverRuntime?.persistent !== false
@@ -239,8 +248,8 @@ export function buildServerCanonicalCutoverReadiness({
     || shadowReceipt.mode !== 'SHADOW_ONLY'
     || shadowReceipt.shadowOnly !== true
     || shadowReceipt.serverCanonical !== false
-    || shadowReceipt.codeSha !== currentMainSha
-    || shadowReceipt.activationReceiptMainSha !== currentMainSha
+    || shadowReceipt.codeSha !== evidenceSha
+    || shadowReceipt.activationReceiptMainSha !== evidenceSha
     || shadowReceipt.activationReceiptCommentId !== latestActivationReceipt?.commentId
     || shadowReceipt.activationBindingDigest !== activationBindingDigest
     || shadowReceipt.policyDigest !== contract.policyDigest
@@ -344,6 +353,11 @@ export function buildServerCanonicalCutoverReadiness({
     observedAtMs: positiveInteger(githubDelivery?.observedAtMs)
       ? githubDelivery.observedAtMs
       : null,
+    evidenceSha: exactSha(evidenceSha) ? evidenceSha : null,
+    currentMainSha: exactSha(currentMainSha) ? currentMainSha : null,
+    componentDigest: exactDigest(componentDigest) ? componentDigest : null,
+    componentEquivalentCurrentMain:
+      latestActivationReceipt?.componentEquivalentCurrentMain === true,
     blockers: Object.freeze(blockers),
     safety: Object.freeze({
       replayCredit: 0,
