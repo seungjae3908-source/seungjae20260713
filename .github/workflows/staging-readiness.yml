@@ -394,6 +394,8 @@ jobs:
       - name: Assess and run required staging database and recovery validation
         if: steps.deploy.outcome == 'success'
         continue-on-error: true
+        env:
+          STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ steps.paper_publisher.outputs.publisher_sha256 }}
         run: |
           set -Eeuo pipefail
           result_file="$STAGING_ARTIFACT_DIR/staging-database-verification.json"
