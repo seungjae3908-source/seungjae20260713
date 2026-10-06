@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibration.mjs';
@@ -213,6 +214,23 @@ function validInputs() {
     contract,
   };
 }
+
+test('server schedule health lookup is exact-main and cache resistant', async () => {
+  const runner = await readFile(
+    new URL('../scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.ok(runner.includes("url.searchParams.set('_canonical_observed_at_ms', String(Date.now()));"));
+  assert.ok(runner.includes("'Cache-Control': 'no-cache'"));
+  assert.ok(runner.includes("Pragma: 'no-cache'"));
+  assert.ok(runner.includes(
+    `/actions/runs?event=schedule&branch=main&head_sha=\${encodeURIComponent(currentMainSha)}&per_page=100`,
+  ));
+  assert.equal(
+    runner.includes("githubJson('/actions/runs?event=schedule&branch=main&per_page=100')"),
+    false,
+  );
+});
 
 test('protected activation stays future-only and zero-credit', () => {
   const record = prepareProtectedServerCanonicalActivation(validInputs());
