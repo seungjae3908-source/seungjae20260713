@@ -10,6 +10,7 @@ const deploySource = fs.readFileSync(deployPath, 'utf8');
 const storageApplySource = fs.readFileSync(storageApplyPath, 'utf8');
 const appReleaseSource = fs.readFileSync(path.join(root, '.github/workflows/production-app-release-control.yml'), 'utf8');
 const personalWorkerSource = fs.readFileSync(path.join(root, 'api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts'), 'utf8');
+const databaseEvidenceSource = fs.readFileSync(path.join(root, 'api-server/scripts/telegram-database-evidence.cjs'), 'utf8');
 
 const requiredFragments = [
   'name: Telegram Production Release',
@@ -33,6 +34,10 @@ const requiredFragments = [
   'ai-privacy/verified',
   'futures-public-network-smoke/verified',
   'staging-postgres-auth-${targetSha}',
+  'production-paper-journal-privileges-${targetSha}',
+  "sourceType: 'production_database'",
+  "accepted.sourceType ??= 'staging_auth'",
+  'telegram-database-evidence.cjs',
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
   'Validate complete Telegram runtime and external reachability before any mutation',
@@ -106,6 +111,39 @@ const missing = requiredFragments.filter((fragment) => !source.includes(fragment
 if (missing.length > 0) {
   console.error(`[telegram-production-release-contract] missing safeguards: ${missing.join(', ')}`);
   process.exit(1);
+}
+
+for (const fragment of [
+  "run.name === 'Production Deploy'",
+  "run.path === '.github/workflows/production-deploy.yml'",
+  "run.event === 'workflow_dispatch'",
+  "run.status === 'completed'",
+  "run.conclusion === 'success'",
+  'candidate.expired !== true',
+  'candidate.workflow_run?.head_sha === targetSha',
+]) {
+  if (!source.includes(fragment)) {
+    throw new Error(`TELEGRAM_DATABASE_EVIDENCE_PROVENANCE_MISSING:${fragment}`);
+  }
+}
+for (const fragment of [
+  "schemaVersion === 'production-paper-journal-storage-v2'",
+  'approved_target_sha',
+  'production_project_match === true',
+  'database_changed === false',
+  'raw_credentials_exposed === false',
+  'order_submitted === false',
+  'cancel_submitted === false',
+  'amend_submitted === false',
+  'transfer_submitted === false',
+  'withdrawal_submitted === false',
+  'private_trading_api_count === 0',
+  'live_trading_authority_granted === false',
+  'auto_trading_authority_granted === false',
+]) {
+  if (!databaseEvidenceSource.includes(fragment)) {
+    throw new Error(`TELEGRAM_DATABASE_EVIDENCE_FAIL_CLOSED_CHECK_MISSING:${fragment}`);
+  }
 }
 
 if (source.includes('github.event.issue.number == 23')
