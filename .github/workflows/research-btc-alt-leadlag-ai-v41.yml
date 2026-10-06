@@ -45,7 +45,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1" "requests>=2.32,<3" "lightgbm>=4.5,<5"
+          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1" "requests>=2.32,<3" "scikit-learn>=1.5,<2" "lightgbm>=4.5,<5"
       - name: Run AI BTC-alt 1m lead-lag V4.1
         run: |
           python market-prediction-lab/scripts/run-btc-alt-leadlag-ai-v41.py \
