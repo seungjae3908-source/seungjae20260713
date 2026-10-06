@@ -22,6 +22,7 @@ requireText(workflow, '/activate-production-auto-trading ', 'AUTO_GATE_ACTIVATE_
 requireText(workflow, '/disable-production-auto-trading ', 'AUTO_GATE_DISABLE_COMMAND_MISSING');
 requireText(workflow, 'all4', 'AUTO_GATE_ALL4_SCOPE_MISSING');
 requireText(workflow, 'environment: production', 'AUTO_GATE_PROTECTED_ENV_MISSING');
+requireText(workflow, 'merge-multiple: true', 'AUTO_GATE_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
   requireText(workflow, provider, 'AUTO_GATE_PROVIDER_MISSING');
@@ -77,6 +78,7 @@ requireText(manualSpotGate, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false
 requireText(manualSpotGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_SPOT_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualSpotGate, "const allowed = new Set(['toss', 'kiwoom', 'upbit']);", 'MANUAL_SPOT_THREE_PROVIDER_SET_DRIFT');
 requireText(manualSpotGate, 'name.startsWith(`${workflowName} ${target} `)', 'MANUAL_SPOT_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(manualSpotGate, 'merge-multiple: true', 'MANUAL_SPOT_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 requireText(manualFuturesGate, "FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED'", 'MANUAL_FUTURES_AUTHORITY_MISSING');
 requireText(manualFuturesGate, "FUTURES_LIVE_MARKET_ALLOWLIST: 'CRYPTO_FUTURES'", 'MANUAL_FUTURES_MARKET_MISSING');
@@ -86,6 +88,7 @@ requireText(manualFuturesGate, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'MANUAL_F
 requireText(manualFuturesGate, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
 requireText(manualFuturesGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_FUTURES_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualFuturesGate, 'run.name.startsWith(`${name} ${target} `)', 'MANUAL_FUTURES_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(manualFuturesGate, 'merge-multiple: true', 'MANUAL_FUTURES_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled[\s\S]*?\r?\n}\r?\n/);
 if (!autoFn) throw new Error('AUTOMATIC_LIVE_EXECUTION_FUNCTION_MISSING');
