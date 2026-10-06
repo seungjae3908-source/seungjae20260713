@@ -126,8 +126,14 @@ def add_oi_features(metrics: pd.DataFrame) -> pd.DataFrame:
     out=[]
     for symbol,g in metrics.groupby("symbol",sort=False):
         g=g.sort_values("effective_time").copy()
-        g["oi1h"] = g["sum_open_interest"] / g["sum_open_interest"].shift(12) - 1.0
-        g["oi15m"] = g["sum_open_interest"] / g["sum_open_interest"].shift(3) - 1.0
+        prev_1h = g["sum_open_interest"].shift(12)
+        prev_15m = g["sum_open_interest"].shift(3)
+        dt_1h = g["effective_time"] - g["effective_time"].shift(12)
+        dt_15m = g["effective_time"] - g["effective_time"].shift(3)
+        valid_1h = (dt_1h >= pd.Timedelta("55min")) & (dt_1h <= pd.Timedelta("65min"))
+        valid_15m = (dt_15m >= pd.Timedelta("10min")) & (dt_15m <= pd.Timedelta("20min"))
+        g["oi1h"] = np.where(valid_1h, g["sum_open_interest"] / prev_1h - 1.0, np.nan)
+        g["oi15m"] = np.where(valid_15m, g["sum_open_interest"] / prev_15m - 1.0, np.nan)
         g["countLS"] = g["count_long_short_ratio"]
         g["sumTopLS"] = g["sum_toptrader_long_short_ratio"]
         g["countTopLS"] = g["count_toptrader_long_short_ratio"]
