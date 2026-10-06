@@ -9,6 +9,8 @@ on:
       - .github/scripts/production-trading-gate-conflicts.test.cjs
       - .github/scripts/production-preactivation-prerequisites.cjs
       - .github/scripts/verify-production-preactivation-evidence.cjs
+      - .github/scripts/production-preactivation-evidence-paths.cjs
+      - .github/scripts/production-preactivation-evidence-paths.test.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
       - stock-analyzer/e2e/production-live-disable-provider-readonly-audit.spec.ts
@@ -95,6 +97,7 @@ jobs:
           bash -n ops/production-live-disable-readonly-audit.sh
           node --check ops/production-toss-fresh-readonly-probe.mjs
           node ops/verify-production-live-disable-readonly-audit.mjs --static
+          node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
           grep -Fq 'production-toss-fresh-readonly-probe.mjs' "$workflow"
           grep -Fq 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS_TOKEN_AUTH_FAILED' ops/production-toss-fresh-readonly-probe.mjs
           grep -Fq 'BLOCKED_EXTERNAL_CREDENTIAL:TOSS_ACCOUNT_API_AUTH_FAILED' ops/production-toss-fresh-readonly-probe.mjs
