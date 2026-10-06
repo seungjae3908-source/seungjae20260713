@@ -20,7 +20,7 @@ const expected: Record<MemberTier, MemberCapability[]> = {
     'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
   regular: [
-    'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures',
+    'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures', 'canAccessAiChart',
     'canAccessRiskPreview', 'canAccessBacktests', 'canAccessPaperTrading', 'canAccessAutoTrading',
     'canConnectPersonalTelegram', 'canAccessJournalSync', 'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
