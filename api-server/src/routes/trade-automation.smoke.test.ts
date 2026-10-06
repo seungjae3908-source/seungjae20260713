@@ -1438,6 +1438,11 @@ test('associate automatic policy cannot enable crypto futures without futures ca
     assert.equal(body.policy.exchangeEnabled.bitget, false);
     assert.deepEqual(body.policy.enabledAssets.bitget, []);
   } finally {
+    await fetch(`${associate.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'approval' }),
+    }).catch(() => undefined);
     await close(associate.server);
   }
 });
