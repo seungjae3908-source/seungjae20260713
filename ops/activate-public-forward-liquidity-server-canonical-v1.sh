@@ -7,6 +7,8 @@ ACTIVATION_RECEIPT_COMMENT_ID="${ACTIVATION_RECEIPT_COMMENT_ID:-${2:-}}"
 ACTIVATION_BINDING_DIGEST="${ACTIVATION_BINDING_DIGEST:-${3:-}}"
 CANONICAL_AUTHORITY_COMMENT_ID="${CANONICAL_AUTHORITY_COMMENT_ID:-${4:-}}"
 CANONICAL_AUTHORIZED_AT_MS="${CANONICAL_AUTHORIZED_AT_MS:-${5:-}}"
+ACTIVATION_RECEIPT_MAIN_SHA="${ACTIVATION_RECEIPT_MAIN_SHA:-${6:-}}"
+EXPECTED_COMPONENT_DIGEST="${EXPECTED_COMPONENT_DIGEST:-${7:-}}"
 SOURCE_DIR="${SOURCE_DIR:-$(pwd)}"
 
 RUNTIME_ROOT=/opt/stock-app-server-evidence-canonical-v1
@@ -27,6 +29,7 @@ RUNNER_REL=market-intelligence-sidecar/scripts/run-public-forward-liquidity-serv
 RUNNER_SOURCE="$SOURCE_DIR/$RUNNER_REL"
 SERVICE_SOURCE="$SOURCE_DIR/market-intelligence-sidecar/deploy/$CANONICAL_SERVICE"
 TIMER_SOURCE="$SOURCE_DIR/market-intelligence-sidecar/deploy/$CANONICAL_TIMER"
+COMPONENT_CHECKER="$SOURCE_DIR/ops/check-public-forward-liquidity-server-component-equivalence-v1.sh"
 
 PREVIOUS_CURRENT=""
 PREVIOUS_SERVICE=""
@@ -76,6 +79,8 @@ trap restore_on_error EXIT
 [[ "$ACTIVATION_BINDING_DIGEST" =~ ^[0-9a-f]{64}$ ]] || fail "activation binding digest required" 2
 [[ "$CANONICAL_AUTHORITY_COMMENT_ID" =~ ^[1-9][0-9]*$ ]] || fail "canonical authority comment ID required" 2
 [[ "$CANONICAL_AUTHORIZED_AT_MS" =~ ^[1-9][0-9]*$ ]] || fail "canonical authority timestamp required" 2
+[[ "$ACTIVATION_RECEIPT_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "activation receipt main SHA required" 2
+[[ "$EXPECTED_COMPONENT_DIGEST" =~ ^[0-9a-f]{64}$ ]] || fail "component digest required" 2
 [[ ! -e "$ACTIVATION_PATH" ]] || fail "canonical activation record already exists; explicit rollback/re-authority required" 3
 
 for command_name in git node systemctl timedatectl rsync install readlink sha256sum awk find sort xargs mktemp; do
@@ -83,13 +88,22 @@ for command_name in git node systemctl timedatectl rsync install readlink sha256
 done
 [[ -d "$SOURCE_DIR/.git" ]] || fail "SOURCE_DIR must be exact Git checkout" 5
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$TARGET_SHA" ]] || fail "SOURCE_DIR HEAD mismatch" 5
-[[ -r "$RUNNER_SOURCE" && -r "$SERVICE_SOURCE" && -r "$TIMER_SOURCE" ]] || fail "canonical runtime files missing" 6
+[[ -r "$RUNNER_SOURCE" && -r "$SERVICE_SOURCE" && -r "$TIMER_SOURCE" && -r "$COMPONENT_CHECKER" ]] || fail "canonical runtime files missing" 6
 [[ -f "$SHADOW_ROOT/current/.deploy/current-sha" ]] || fail "shadow runtime missing" 7
-[[ "$(tr -d '[:space:]' < "$SHADOW_ROOT/current/.deploy/current-sha")" == "$TARGET_SHA" ]] || fail "shadow runtime not rebound to target main" 7
+SHADOW_SHA="$(tr -d '[:space:]' < "$SHADOW_ROOT/current/.deploy/current-sha")"
+[[ "$SHADOW_SHA" == "$ACTIVATION_RECEIPT_MAIN_SHA" ]] || fail "shadow runtime does not match activation receipt main" 7
 [[ -f "$SHADOW_ENV" ]] || fail "shadow activation env missing" 7
 grep -Fxq "SERVER_EVIDENCE_ACTIVATION_RECEIPT_COMMENT_ID=$ACTIVATION_RECEIPT_COMMENT_ID" "$SHADOW_ENV" || fail "shadow receipt not rebound" 7
-grep -Fxq "SERVER_EVIDENCE_ACTIVATION_RECEIPT_MAIN_SHA=$TARGET_SHA" "$SHADOW_ENV" || fail "shadow main not rebound" 7
+grep -Fxq "SERVER_EVIDENCE_ACTIVATION_RECEIPT_MAIN_SHA=$ACTIVATION_RECEIPT_MAIN_SHA" "$SHADOW_ENV" || fail "shadow main not rebound" 7
 grep -Fxq "SERVER_EVIDENCE_EXPECTED_BINDING_DIGEST=$ACTIVATION_BINDING_DIGEST" "$SHADOW_ENV" || fail "shadow binding not rebound" 7
+
+git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$ACTIVATION_RECEIPT_MAIN_SHA"
+COMPONENT_JSON="$(
+  SOURCE_DIR="$SOURCE_DIR" BASE_SHA="$ACTIVATION_RECEIPT_MAIN_SHA" HEAD_SHA="$TARGET_SHA" bash "$COMPONENT_CHECKER"
+)" || fail "shadow/current-main component equivalence rejected" 7
+COMPONENT_DIGEST="$(node -e 'const v=JSON.parse(process.argv[1]); if(v.componentEquivalentCurrentMain!==true||v.evidenceSha!==process.env.ACTIVATION_RECEIPT_MAIN_SHA||v.currentMainSha!==process.env.TARGET_SHA||!/^[a-f0-9]{64}$/.test(String(v.currentComponentDigest||""))) process.exit(1); process.stdout.write(v.currentComponentDigest);' "$COMPONENT_JSON")" || fail "component equivalence evidence invalid" 7
+[[ "$COMPONENT_DIGEST" == "$EXPECTED_COMPONENT_DIGEST" ]] || fail "component digest mismatch" 7
+
 systemctl is-enabled --quiet "$SHADOW_TIMER" || fail "shadow timer not enabled" 7
 systemctl is-active --quiet "$SHADOW_TIMER" || fail "shadow timer not active" 7
 [[ "$(timedatectl show -p NTPSynchronized --value | tr '[:upper:]' '[:lower:]')" == "yes" ]] || fail "host NTP not synchronized" 7
@@ -141,6 +155,9 @@ SERVER_EVIDENCE_ACTIVATION_RECEIPT_COMMENT_ID="$ACTIVATION_RECEIPT_COMMENT_ID" \
 SERVER_EVIDENCE_EXPECTED_BINDING_DIGEST="$ACTIVATION_BINDING_DIGEST" \
 SERVER_EVIDENCE_CANONICAL_AUTHORITY_COMMENT_ID="$CANONICAL_AUTHORITY_COMMENT_ID" \
 SERVER_EVIDENCE_CANONICAL_AUTHORIZED_AT_MS="$CANONICAL_AUTHORIZED_AT_MS" \
+SERVER_EVIDENCE_ACTIVATION_RECEIPT_MAIN_SHA="$ACTIVATION_RECEIPT_MAIN_SHA" \
+SERVER_EVIDENCE_COMPONENT_DIGEST="$COMPONENT_DIGEST" \
+SERVER_EVIDENCE_COMPONENT_EQUIVALENT_CURRENT_MAIN=true \
 SERVER_EVIDENCE_CANONICAL_ACTIVATION_PATH="$ACTIVATION_PATH" \
 SERVER_EVIDENCE_STATE_ROOT="$STATE_ROOT" \
 SERVER_EVIDENCE_SHADOW_STATE_ROOT="$SHADOW_STATE_ROOT" \
