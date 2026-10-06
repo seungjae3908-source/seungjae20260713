@@ -17,6 +17,7 @@ const telegramStorage = await read('api-server/supabase/migrations/2026081501_pe
 const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql');
 const telegramPolicyCleanupNormalized = telegramPolicyCleanup.replaceAll('\r\n', '\n');
 const memberWatchlistStorage = await read('api-server/supabase/migrations/2026082704_member_watchlist_items.sql');
+const memberAccessHardening = await read('api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
 const watchlistVerifier = await read('api-server/scripts/verify-staging-watchlist-store.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
@@ -36,6 +37,16 @@ assert(manifest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'ma
 assert(runner.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'atomic runner must include personal Telegram policy cleanup');
 assert(manifest.includes('2026082704_member_watchlist_items.sql'), 'manifest must include authenticated member watchlist storage');
 assert(runner.includes('2026082704_member_watchlist_items.sql'), 'atomic runner must include authenticated member watchlist storage');
+assert(manifest.includes('2026100601_member_access_s_ai_hardening.sql'), 'manifest must include member S/AI hardening');
+assert(runner.includes('2026100601_member_access_s_ai_hardening.sql'), 'atomic runner must include member S/AI hardening');
+assert(memberAccessHardening.includes('membership_expires_at'), 'member hardening must add membership expiry');
+assert(memberAccessHardening.includes("public.current_membership_level() in ('associate', 'regular', 'admin')"), 'member hardening must allow associate own-journal analytics reads');
+assert(memberAccessHardening.includes('member.password.reset'), 'member hardening must allow audited password reset actions');
+assert(assertion.includes("'membership_expires_at'"), 'final assertion must require membership expiry');
+assert(assertion.includes("'profiles_membership_expiry_idx'"), 'final assertion must require membership expiry index');
+assert(assertion.includes('associate own-journal analytics read policy'), 'final assertion must verify associate journal analytics RLS');
+assert(dbVerifier.includes('2026100601_member_access_s_ai_hardening.sql'), 'database CI must apply member S/AI hardening');
+assert(dbVerifier.includes('member_access_s_ai_hardening_integration.sql'), 'database CI must run member S/AI hardening integration');
 
 for (const marker of [
   'create table if not exists public.member_watchlist_items',
