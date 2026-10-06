@@ -316,7 +316,7 @@ async function unavailableMarketIntelligence(
   );
 }
 
-async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
+async function startServer(authenticated = true, role: 'associate' | 'regular' | 'admin' = 'regular') {
   const app = express();
   app.use(express.json());
   if (authenticated) app.use((req, _res, next) => {
@@ -1405,6 +1405,72 @@ test('exit preview follows Toss fractional and Kiwoom integer US-stock quantity 
   }
 });
 
+test('associate automatic policy cannot enable crypto futures without futures capability', async () => {
+  const associate = await startServer(true, 'associate');
+  try {
+    const response = await fetch(`${associate.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        marketEnabled: {
+          domestic_stock: true,
+          us_stock: true,
+          crypto_spot: true,
+          crypto_futures: true,
+        },
+        exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+        enabledAssets: { bitget: ['BTCUSDT'], upbit: [], kiwoom: [], toss: [] },
+        enabledStrategies: [],
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      policy: {
+        marketEnabled: { crypto_futures: boolean };
+        exchangeEnabled: { bitget: boolean };
+        enabledAssets: { bitget: string[] };
+      };
+    };
+    assert.equal(body.policy.marketEnabled.crypto_futures, false);
+    assert.equal(body.policy.exchangeEnabled.bitget, false);
+    assert.deepEqual(body.policy.enabledAssets.bitget, []);
+  } finally {
+    await close(associate.server);
+  }
+});
+
+test('regular members keep Paper automation but cannot create live execution capability', async () => {
+  const regular = await startServer(true, 'regular');
+  try {
+    const connection = await fetch(`${regular.baseUrl}/api/trade-automation/connections/upbit/reuse-readonly`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true }),
+    });
+    assert.equal(connection.status, 403);
+    const connectionBody = await connection.json() as { error: string; capability: string; orderSubmitted: boolean };
+    assert.equal(connectionBody.error, 'CAPABILITY_REQUIRED');
+    assert.equal(connectionBody.capability, 'canPlaceOrders');
+    assert.equal(connectionBody.orderSubmitted, false);
+
+    const livePlan = await fetch(`${regular.baseUrl}/api/trade-automation/plans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ exchange: 'upbit', accountMode: 'live' }),
+    });
+    assert.equal(livePlan.status, 403);
+    const planBody = await livePlan.json() as { error: string; capability: string; orderSubmitted: boolean };
+    assert.equal(planBody.error, 'CAPABILITY_REQUIRED');
+    assert.equal(planBody.capability, 'canPlaceOrders');
+    assert.equal(planBody.orderSubmitted, false);
+  } finally {
+    await close(regular.server);
+  }
+});
+
 test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {
   const unauthenticated = await startServer(false);
   try {
@@ -1663,7 +1729,7 @@ test('saved read-only Toss credentials without accountSeq auto-select the broker
   }));
 
   await repository.deleteConnection(USER, 'toss');
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   const nativeFetch = globalThis.fetch;
   let financialMutationRequests = 0;
   let buyingPowerAccountHeader: string | null = null;
@@ -1797,7 +1863,7 @@ test('saved read-only Upbit credentials can be reused and verified without secre
   }));
 
   await repository.deleteConnection(USER, 'upbit');
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   const nativeFetch = globalThis.fetch;
   let providerMutationRequests = 0;
   try {
@@ -1877,7 +1943,7 @@ test('saved read-only Upbit credentials can be reused and verified without secre
 });
 
 test('Toss live connection save keeps accountSeq optional', async () => {
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/connections/toss`, {
       method: 'PUT',
@@ -1902,7 +1968,7 @@ test('Toss live connection save keeps accountSeq optional', async () => {
 });
 
 test('connection registration rejects withdrawal permission and does not echo secrets', async () => {
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   try {
     const rejected = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -1943,7 +2009,7 @@ test('live trading connection requires explicit purpose plus read+orders and nev
   process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
   process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ';
   process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   try {
     const credentials = { accessKey: 'live-access-secret', secretKey: 'live-signing-secret' };
 
