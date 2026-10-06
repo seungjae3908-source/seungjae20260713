@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const path = require('node:path');
 const {
   REQUIRED_PROVIDERS,
   ZERO_COUNTERS,
@@ -11,6 +10,7 @@ const {
   assertCredentialReceipt,
   assertTradingCoreReceipt,
 } = require('./production-postdeploy-qa-evidence.cjs');
+const { findUniqueEvidenceFile } = require('./production-preactivation-evidence-paths.cjs');
 
 const args = process.argv.slice(2);
 if (args.length < 4) {
@@ -30,14 +30,15 @@ let activation;
 
 if (args.length === 4 && fs.existsSync(args[3]) && fs.statSync(args[3]).isDirectory()) {
   const root = args[3];
-  const activationPath = path.join(root, `production-postdeploy-activation-ready-${String(targetSha).toLowerCase()}.json`);
-  account = read(path.join(root, 'production-account-readonly-live-qa.json'));
-  credential = read(path.join(root, 'production-live-credential-reuse-qa.json'));
+  const evidence = (filename) => findUniqueEvidenceFile(root, filename);
+  const activationPath = evidence(`production-postdeploy-activation-ready-${String(targetSha).toLowerCase()}.json`);
+  account = read(evidence('production-account-readonly-live-qa.json'));
+  credential = read(evidence('production-live-credential-reuse-qa.json'));
   activation = read(activationPath);
   if (activation?.qaScope === 'trading_core') {
-    tradingCore = read(path.join(root, 'production-trading-core-qa.json'));
+    tradingCore = read(evidence('production-trading-core-qa.json'));
   } else {
-    comprehensive = read(path.join(root, 'production-comprehensive-readonly-qa.json'));
+    comprehensive = read(evidence('production-comprehensive-readonly-qa.json'));
   }
 } else {
   const [, , , comprehensivePath, accountPath, credentialPath, activationPath] = args;
