@@ -1,0 +1,87 @@
+name: Research KR PyQQQ Minute Source Probe V1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-kr-pyqqq-minute-source-probe-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-kr-pyqqq-minute-source-probe-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install probe dependency
+        run: python -m pip install --upgrade pyqqq pandas
+      - name: Probe historical all-symbol KRX minute snapshots
+        run: |
+          python - <<'PY'
+          import datetime as dt
+          import json
+          from pathlib import Path
+          from pyqqq.data.minutes import get_all_minute_data
+
+          out=Path("market-prediction-lab/docs/kr-pyqqq-minute-source-probe-v1")
+          out.mkdir(parents=True,exist_ok=True)
+          tests=[
+            dt.datetime(2023,7,3,9,30),
+            dt.datetime(2024,10,2,12,0),
+            dt.datetime(2026,3,31,15,0),
+          ]
+          rows=[]
+          for t in tests:
+              try:
+                  df=get_all_minute_data(t,source="kis",adjusted=True,exchange="KRX")
+                  rows.append({
+                    "time":t.isoformat(),
+                    "ok":df is not None and len(df)>0,
+                    "rows":0 if df is None else int(len(df)),
+                    "columns":[] if df is None else [str(c) for c in df.columns],
+                    "indexPreview":[] if df is None else [str(x) for x in df.index[:5]],
+                  })
+              except Exception as exc:
+                  rows.append({"time":t.isoformat(),"ok":False,"error":repr(exc)})
+          result={
+            "contract":"kr-pyqqq-minute-source-probe-v1",
+            "tests":rows,
+            "allPassed":all(x.get("ok") for x in rows),
+            "truthBoundary":{
+              "readOnlyPublicDataProbe":True,
+              "noBrokerCredentialsInjected":True,
+              "noPrivateTradingApi":True,
+              "profitabilityProven":False,
+              "executionAuthority":"NONE"
+            }
+          }
+          (out/"summary.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+          print(json.dumps({"FINAL":result},ensure_ascii=False),flush=True)
+          if not any(x.get("ok") for x in rows):
+              raise SystemExit(1)
+          PY
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kr-pyqqq-minute-source-probe-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/kr-pyqqq-minute-source-probe-v1
+          if-no-files-found: error
+          retention-days: 14
