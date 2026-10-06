@@ -23,6 +23,8 @@ on:
       - ops/apply-production-personal-telegram-storage.mjs
       - ops/verify-production-personal-telegram-storage.mjs
       - ops/verify-production-telegram-active-readiness.mjs
+      - ops/verify-production-telegram-runtime-readiness.mjs
+      - .github/tests/production-telegram-runtime-readiness.test.mjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
       - .github/tests/production-telegram-active-readiness.test.mjs
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
@@ -432,6 +434,7 @@ jobs:
               'TELEGRAM_CHAT_ID',
               'TELEGRAM_STOCK_CHAT_ID',
               'TELEGRAM_CRYPTO_CHAT_ID',
+              'TELEGRAM_AUTO_TRADING_CHAT_ID',
               'TELEGRAM_BOT_USERNAME',
               'TELEGRAM_WEBHOOK_SECRET',
             ];
@@ -673,17 +676,16 @@ jobs:
         id: smoke
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.run_id }}
           PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}
           PRE_PM_UPTIME: ${{ steps.before.outputs.pm_uptime }}
           PRE_LOG_SIZE: ${{ steps.before.outputs.log_size }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           set -Eeuo pipefail
-          smoke_file="$(mktemp)"
-          cleanup() { rm -f "$smoke_file"; }
-          trap cleanup EXIT
-          remote_env="$(printf 'TARGET_SHA=%q PRE_ACTIVE_SHA=%q PRE_PM_UPTIME=%q PRE_LOG_SIZE=%q SOURCE_COMMENT_ID=%q PUBLIC_BASE_URL=%q NODE_OPTIONS=%q' \
-            "$TARGET_SHA" "$PRE_ACTIVE_SHA" "$PRE_PM_UPTIME" "$PRE_LOG_SIZE" "$SOURCE_COMMENT_ID" "$PUBLIC_BASE_URL" "$TELEGRAM_REMOTE_NODE_OPTIONS")"
+          smoke_file="$RUNNER_TEMP/production-telegram-runtime-proof.json"
+          remote_env="$(printf 'TARGET_SHA=%q PRODUCTION_DEPLOY_RUN_ID=%q PRE_ACTIVE_SHA=%q PRE_PM_UPTIME=%q PRE_LOG_SIZE=%q SOURCE_COMMENT_ID=%q PUBLIC_BASE_URL=%q NODE_OPTIONS=%q' \
+            "$TARGET_SHA" "$PRODUCTION_DEPLOY_RUN_ID" "$PRE_ACTIVE_SHA" "$PRE_PM_UPTIME" "$PRE_LOG_SIZE" "$SOURCE_COMMENT_ID" "$PUBLIC_BASE_URL" "$TELEGRAM_REMOTE_NODE_OPTIONS")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node -" > "$smoke_file" <<'NODE'
           const fs = require('node:fs');
@@ -691,12 +693,15 @@ jobs:
 
           (async () => {
             const targetSha = String(process.env.TARGET_SHA ?? '');
+            const productionDeployRunId = Number(process.env.PRODUCTION_DEPLOY_RUN_ID ?? 0);
             const preActiveSha = String(process.env.PRE_ACTIVE_SHA ?? '');
             const prePmUptime = Number(process.env.PRE_PM_UPTIME ?? 0);
             const preLogSize = Number(process.env.PRE_LOG_SIZE ?? 0);
             const sourceCommentId = String(process.env.SOURCE_COMMENT_ID ?? '');
             const publicBaseUrl = String(process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
-            if (!/^[0-9a-f]{40}$/.test(targetSha)) process.exit(2);
+            if (!/^[0-9a-f]{40}$/.test(targetSha)
+              || !Number.isSafeInteger(productionDeployRunId)
+              || productionDeployRunId <= 0) process.exit(2);
 
             const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
             const selectedProcesses = Array.isArray(processes) ? processes.filter((item) => item?.name === 'stock-app') : [];
@@ -761,6 +766,7 @@ jobs:
                 'TELEGRAM_CHAT_ID',
                 'TELEGRAM_STOCK_CHAT_ID',
                 'TELEGRAM_CRYPTO_CHAT_ID',
+                'TELEGRAM_AUTO_TRADING_CHAT_ID',
                 'TELEGRAM_BOT_USERNAME',
                 'TELEGRAM_WEBHOOK_SECRET',
               ];
@@ -809,6 +815,7 @@ jobs:
               'TELEGRAM_CHAT_ID',
               'TELEGRAM_STOCK_CHAT_ID',
               'TELEGRAM_CRYPTO_CHAT_ID',
+              'TELEGRAM_AUTO_TRADING_CHAT_ID',
               'TELEGRAM_BOT_USERNAME',
               'TELEGRAM_WEBHOOK_SECRET',
             ];
@@ -1169,8 +1176,11 @@ jobs:
             }
 
             process.stdout.write(JSON.stringify({
+              schemaVersion: 'production-telegram-runtime-readiness-v1',
+              status: 'ACTIVE_VERIFIED',
               ok: true,
-              exactSha: targetSha,
+              targetSha,
+              productionDeployRunId,
               identityMatch: true,
               workerStarted: true,
               personalWorkerStarted: true,
@@ -1180,14 +1190,23 @@ jobs:
               telegramRoomsVerified: true,
               telegramWebhookVerified: true,
               telegramRoomDeliveryVerified: true,
+              autoTradingRoomVerified: true,
+              memberLinkRequiredForRuntimeActivation: false,
               telegramAccepted: true,
               telegramEditInPlaceAccepted: true,
               messageId,
               verifiedAt,
               orderSubmitted: false,
+              orderRequests: 0,
+              cancelRequests: 0,
+              amendRequests: 0,
+              transferRequests: 0,
+              withdrawalRequests: 0,
+              financialMutationCount: 0,
               privateTradingApiCount: 0,
-              liveTradingAuthority: false,
-              secretsRecorded: false,
+              liveTradingAuthorityGranted: false,
+              autoTradingAuthorityGranted: false,
+              secretValuesRecorded: false,
             }));
           })().catch((error) => {
             const code = error instanceof Error && /^TELEGRAM_[A-Z0-9_]+$/.test(error.message)
@@ -1202,6 +1221,10 @@ jobs:
           const fs = require('node:fs');
           const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const valid = value?.ok === true
+            && value?.schemaVersion === 'production-telegram-runtime-readiness-v1'
+            && value?.status === 'ACTIVE_VERIFIED'
+            && value?.targetSha === process.env.TARGET_SHA
+            && Number(value?.productionDeployRunId) === Number(process.env.PRODUCTION_DEPLOY_RUN_ID)
             && value?.identityMatch === true
             && value?.workerStarted === true
             && value?.personalWorkerStarted === true
@@ -1211,14 +1234,23 @@ jobs:
             && value?.telegramRoomsVerified === true
             && value?.telegramWebhookVerified === true
             && value?.telegramRoomDeliveryVerified === true
+            && value?.autoTradingRoomVerified === true
+            && value?.memberLinkRequiredForRuntimeActivation === false
             && value?.telegramAccepted === true
             && value?.telegramEditInPlaceAccepted === true
             && Number.isSafeInteger(value?.messageId)
             && value?.messageId > 0
             && value?.orderSubmitted === false
+            && value?.orderRequests === 0
+            && value?.cancelRequests === 0
+            && value?.amendRequests === 0
+            && value?.transferRequests === 0
+            && value?.withdrawalRequests === 0
+            && value?.financialMutationCount === 0
             && value?.privateTradingApiCount === 0
-            && value?.liveTradingAuthority === false
-            && value?.secretsRecorded === false;
+            && value?.liveTradingAuthorityGranted === false
+            && value?.autoTradingAuthorityGranted === false
+            && value?.secretValuesRecorded === false;
           if (!valid) {
             console.error('Sanitized Telegram Production proof failed validation.');
             process.exit(1);
@@ -1226,10 +1258,19 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, [
             `message_id=${value.messageId}`,
             `verified_at=${value.verifiedAt}`,
+            `artifact=${process.argv[2]}`,
             '',
           ].join('\n'));
           console.log(JSON.stringify(value));
           NODE
+
+      - name: Upload exact-SHA Telegram runtime ACTIVE_VERIFIED evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-production-runtime-verification-${{ steps.command.outputs.sha }}
+          path: ${{ steps.smoke.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1242,7 +1283,7 @@ jobs:
         working-directory: stock-analyzer
         run: pnpm exec playwright install chromium
 
-      - name: Verify member-linked Telegram delivery and restored four-market AUTO policy
+      - name: Observe member Telegram link and restored four-market AUTO policy
         id: member-telegram-qa
         env:
           EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
@@ -1256,20 +1297,11 @@ jobs:
         working-directory: stock-analyzer
         run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
 
-      - name: Require exact member Telegram ACTIVE_VERIFIED receipt
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.run_id }}
-        run: >-
-          node ops/verify-production-telegram-active-readiness.mjs
-          --artifact stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json
-          "$TARGET_SHA" "$PRODUCTION_DEPLOY_RUN_ID"
-
-      - name: Upload exact-SHA member Telegram active verification
+      - name: Upload exact-SHA member Telegram observation
         if: ${{ always() && steps.member-telegram-qa.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
-          name: telegram-production-active-verification-${{ steps.command.outputs.sha }}
+          name: telegram-production-member-observation-${{ steps.command.outputs.sha }}
           path: |
             stock-analyzer/production-trading-core-artifacts
             stock-analyzer/production-login-diagnostics/telegram-active
@@ -1299,6 +1331,8 @@ jobs:
                 '- Public and loopback health identity: `MATCH`',
                 '- Telegram worker startup: `VERIFIED`',
                 '- Telegram runtime configuration: `VERIFIED`',
+                '- Automatic-trading notification room: `VERIFIED`',
+                '- Personal member link: `OBSERVED_SEPARATELY`',
                 '- Telegram API accepted verification message: `true`',
                 '- Telegram same-message edit verification: `true`',
                 `- Telegram message ID: \`${process.env.TELEGRAM_MESSAGE_ID}\``,

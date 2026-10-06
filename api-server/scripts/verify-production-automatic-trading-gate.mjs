@@ -59,8 +59,9 @@ requireText(workflow, "validated.status !== 'READY'", 'AUTO_GATE_PAPER_HANDOFF_R
 requireText(paperReadiness, 'production-paper-forward-runtime-readiness-v1', 'AUTO_GATE_PAPER_READINESS_SCHEMA_MISSING');
 requireText(paperReadiness, 'RUNTIME_HANDOFF_CANONICAL_VALIDATION_MISSING', 'AUTO_GATE_PAPER_CANONICAL_EVIDENCE_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED', 'AUTO_GATE_TELEGRAM_RELEASE_RECEIPT_MISSING');
-requireText(workflow, 'telegram-production-active-verification-', 'AUTO_GATE_TELEGRAM_ACTIVE_ARTIFACT_MISSING');
-requireText(workflow, 'ops/verify-production-telegram-active-readiness.mjs', 'AUTO_GATE_MEMBER_TELEGRAM_VERIFIER_MISSING');
+requireText(workflow, 'telegram-production-runtime-verification-', 'AUTO_GATE_TELEGRAM_RUNTIME_ARTIFACT_MISSING');
+requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'AUTO_GATE_TELEGRAM_RUNTIME_VERIFIER_MISSING');
+requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
 
 requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');

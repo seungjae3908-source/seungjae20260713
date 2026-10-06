@@ -354,19 +354,20 @@ check('Telegram seam rejects missing approval, wrong identity, mixed state and m
   ];
   for (const key of [
     'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID',
+    'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
   ]) invalid.push([{ ...readyRuntime, [key]: '' }, {}]);
   for (const [runtime, options] of invalid) {
     const result = activation(runtime, options);
     assert(result.error); assert.equal(result.calls.length, 0);
   }
 });
-check('Telegram seam accepts absent optional room overrides and owner mapping without weakening core routing', () => {
+check('Telegram seam accepts absent optional market overrides and owner mapping while preserving the required AUTO room', () => {
   const runtime = { ...readyRuntime };
   for (const key of [
     'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
     'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
-    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
     'TELEGRAM_OWNER_MEMBER_ID',
   ]) delete runtime[key];
   const result = activation(runtime);
@@ -374,6 +375,7 @@ check('Telegram seam accepts absent optional room overrides and owner mapping wi
   const env = result.calls[0][2].env;
   assert.equal(env.TELEGRAM_STOCK_CHAT_ID, readyRuntime.TELEGRAM_STOCK_CHAT_ID);
   assert.equal(env.TELEGRAM_CRYPTO_CHAT_ID, readyRuntime.TELEGRAM_CRYPTO_CHAT_ID);
+  assert.equal(env.TELEGRAM_AUTO_TRADING_CHAT_ID, readyRuntime.TELEGRAM_AUTO_TRADING_CHAT_ID);
   assert.equal(env.TELEGRAM_KR_STOCK_CHAT_ID, undefined);
   assert.equal(env.TELEGRAM_OWNER_MEMBER_ID, undefined);
 });

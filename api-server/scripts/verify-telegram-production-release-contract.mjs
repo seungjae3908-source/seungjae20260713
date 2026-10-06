@@ -97,8 +97,9 @@ const requiredFragments = [
   'telegramEditInPlaceAccepted: true',
   'orderSubmitted: false',
   'privateTradingApiCount: 0',
-  'liveTradingAuthority: false',
-  'secretsRecorded: false',
+  'liveTradingAuthorityGranted: false',
+  'autoTradingAuthorityGranted: false',
+  'secretValuesRecorded: false',
 ];
 
 const missing = requiredFragments.filter((fragment) => !source.includes(fragment));
@@ -131,6 +132,7 @@ for (const [marker, label] of requiredConfigBlocks) {
     'TELEGRAM_CHAT_ID',
     'TELEGRAM_STOCK_CHAT_ID',
     'TELEGRAM_CRYPTO_CHAT_ID',
+    'TELEGRAM_AUTO_TRADING_CHAT_ID',
     'TELEGRAM_BOT_USERNAME',
     'TELEGRAM_WEBHOOK_SECRET',
   ]) {
@@ -142,7 +144,6 @@ for (const [marker, label] of requiredConfigBlocks) {
     'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
     'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
     'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
-    'TELEGRAM_AUTO_TRADING_CHAT_ID',
     'TELEGRAM_OWNER_MEMBER_ID',
   ]) {
     if (block.includes(optionalKey)) throw new Error(`${label}_OPTIONAL_KEY_MUST_NOT_BLOCK_RELEASE:${optionalKey}`);
@@ -173,7 +174,6 @@ for (const optionalKey of [
   'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
   'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
   'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
-  'TELEGRAM_AUTO_TRADING_CHAT_ID',
   'TELEGRAM_OWNER_MEMBER_ID',
 ]) {
   if (activationFunctionBlock.includes(`'${optionalKey}',`)) {
@@ -359,21 +359,28 @@ if (!source.includes("const telegramFeatureFlags = [")
 }
 
 for (const required of [
-  'Verify member-linked Telegram delivery and restored four-market AUTO policy',
+  'Upload exact-SHA Telegram runtime ACTIVE_VERIFIED evidence',
+  'production-telegram-runtime-readiness-v1',
+  'ops/verify-production-telegram-runtime-readiness.mjs',
+  'telegram-production-runtime-verification-${{ steps.command.outputs.sha }}',
+  'autoTradingRoomVerified: true',
+  'memberLinkRequiredForRuntimeActivation: false',
+  'Observe member Telegram link and restored four-market AUTO policy',
   'playwright.production-trading-core.config.ts',
-  'ops/verify-production-telegram-active-readiness.mjs',
-  'telegram-production-active-verification-${{ steps.command.outputs.sha }}',
   'PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}',
   'PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}',
 ]) {
   if (!source.includes(required)) {
-    throw new Error(`Telegram Production release is missing authenticated member verification: ${required}`);
+    throw new Error(`Telegram Production release is missing runtime/member observation verification: ${required}`);
   }
 }
-const memberVerificationIndex = source.indexOf('Verify member-linked Telegram delivery and restored four-market AUTO policy');
+const runtimeVerificationIndex = source.indexOf('Upload exact-SHA Telegram runtime ACTIVE_VERIFIED evidence');
+const memberVerificationIndex = source.indexOf('Observe member Telegram link and restored four-market AUTO policy');
 const completionIndex = source.indexOf('Record sanitized Production completion evidence');
-if (memberVerificationIndex <= activationIndex || completionIndex <= memberVerificationIndex) {
-  throw new Error('Telegram completion must follow authenticated member delivery verification');
+if (runtimeVerificationIndex <= activationIndex
+  || memberVerificationIndex <= runtimeVerificationIndex
+  || completionIndex <= memberVerificationIndex) {
+  throw new Error('Telegram completion must follow runtime verification and non-blocking member observation');
 }
 
 const forbiddenPatterns = [
@@ -425,4 +432,4 @@ for (const name of secretNames) {
 }
 
 await import('./verify-production-telegram-preservation.mjs');
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, full Telegram config preflight, PM2-owned env preservation, personal/intelligence/signal worker startup, bot identity, room reachability, webhook registration, sanitized Telegram proof, and zero-trading-authority contracts verified');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, full Telegram config preflight, PM2-owned env preservation, personal/intelligence/signal worker startup, bot identity, AUTO-room reachability, webhook registration, member-independent sanitized runtime proof, and zero-trading-authority contracts verified');
