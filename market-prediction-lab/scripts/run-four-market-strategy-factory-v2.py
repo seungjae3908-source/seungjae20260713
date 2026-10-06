@@ -132,7 +132,10 @@ def score_ai(raw:pl.DataFrame,model)->pl.DataFrame:
     pdf=raw.select(["date","symbol",*AI_FEATURES]).to_pandas()
     X=pdf[AI_FEATURES].replace([np.inf,-np.inf],np.nan).to_numpy(float)
     pdf["aiProb"]=model.predict_proba(X)[:,1]
-    scored=pl.from_pandas(pdf[["date","symbol","aiProb"]])
+    scored=pl.from_pandas(pdf[["date","symbol","aiProb"]]).with_columns([
+        pl.col("date").cast(pl.Date),
+        pl.col("symbol").cast(pl.String),
+    ])
     return raw.join(scored,on=["date","symbol"],how="inner")
 
 
