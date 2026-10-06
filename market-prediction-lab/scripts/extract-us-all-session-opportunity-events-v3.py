@@ -63,9 +63,7 @@ def extract_month(path:Path,month:str,negative_sample_pct:int)->tuple[pd.DataFra
         max(labelMfe3) OVER (PARTITION BY symbol,bucket15) AS bucketHasMfe3,
         row_number() OVER (
           PARTITION BY symbol,bucket15
-          ORDER BY
-            CASE WHEN labelMfe3=1 THEN 0 ELSE 1 END,
-            CASE WHEN labelMfe3=1 THEN epoch(ts) ELSE hash(symbol || ':' || CAST(epoch(ts) AS VARCHAR)) END
+          ORDER BY labelMfe3 DESC, ts ASC
         ) AS bucketRow
       FROM eligible
     )
@@ -134,10 +132,16 @@ def extract_month(path:Path,month:str,negative_sample_pct:int)->tuple[pd.DataFra
         "allMfe3Buckets":int(cnt[2] or 0),
         "sampleRows":int(len(df)),
         "samplePositiveBuckets":int((df["labelMfe3"]==1).sum()),
+        "positiveBucketRepresentatives":int((df["bucketHasMfe3"]==1).sum()),
+        "representativePositiveMismatch":int(((df["bucketHasMfe3"]==1)&(df["labelMfe3"]!=1)).sum()),
         "sampleNegativeBuckets":int((df["labelMfe3"]==0).sum()),
         "sampleStrict3":int(df["labelStrict3"].sum()) if len(df) else 0,
         "positiveEventClusters":int(df["eventCluster"].nunique(dropna=True)),
     }
+    if audit["representativePositiveMismatch"] != 0:
+        raise RuntimeError(
+            f"POSITIVE_REPRESENTATIVE_MISMATCH:{month}:{audit['representativePositiveMismatch']}"
+        )
     if audit["samplePositiveBuckets"] != audit["allMfe3Buckets"]:
         raise RuntimeError(
             f"POSITIVE_BUCKET_LOSS:{month}:{audit['samplePositiveBuckets']}/{audit['allMfe3Buckets']}"
