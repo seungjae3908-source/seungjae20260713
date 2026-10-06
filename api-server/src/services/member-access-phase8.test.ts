@@ -36,12 +36,14 @@ for (const tier of ['pending', 'associate', 'regular', 'admin'] as const) {
   }
 }
 
-test('legacy approved user maps to regular', () => {
-  assert.equal(deriveMemberTier({ role: 'user', status: 'approved' }), 'regular');
+test('legacy approved user requires explicit active state', () => {
+  assert.equal(deriveMemberTier({ role: 'user', status: 'approved' }), 'pending');
+  assert.equal(deriveMemberTier({ role: 'user', status: 'approved', is_active: true }), 'regular');
 });
 
-test('legacy approved admin maps to admin', () => {
-  assert.equal(deriveMemberTier({ role: 'admin', status: 'approved' }), 'admin');
+test('legacy approved admin requires explicit active state', () => {
+  assert.equal(deriveMemberTier({ role: 'admin', status: 'approved' }), 'pending');
+  assert.equal(deriveMemberTier({ role: 'admin', status: 'approved', is_active: true }), 'admin');
 });
 
 test('legacy pending admin does not gain admin access', () => {
