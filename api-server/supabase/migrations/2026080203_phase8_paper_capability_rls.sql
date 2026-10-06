@@ -1,5 +1,6 @@
 -- Phase 8 capability overlay for Phase 7 paper tables.
--- Review/CI only. Do not apply to the production database in this phase.
+-- Production use is allowed only inside the protected exact-SHA atomic paper
+-- journal bootstrap after current_membership_level() has been verified.
 
 begin;
 
