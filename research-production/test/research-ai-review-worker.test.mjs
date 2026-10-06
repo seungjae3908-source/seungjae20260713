@@ -120,6 +120,22 @@ test('cycle projection exposes only structural runtime state and binds it to exa
   assert.throws(() => buildResearchAiEvidence({ ...cycle('forward'), researchSha: 'b'.repeat(40) }, SHA), /WRONG_RELEASE_SHA/);
 });
 
+test('top-level blocked_data cycle is valid structural evidence rather than a technical failure', () => {
+  const input = {
+    ...cycle('fast-historical'),
+    status: 'blocked_data',
+    successCount: 1,
+    blockedDataCount: 1,
+    failedCount: 0,
+  };
+  const projected = buildResearchAiEvidence(input, SHA);
+  assert.equal(projected.evidence.status, 'blocked_data');
+  assert.equal(projected.evidence.profile, 'fast-historical');
+  assert.equal(projected.role, 'PROPOSER');
+  assert.equal(JSON.stringify(projected.evidence).includes('profit'), false);
+  assert.equal(JSON.stringify(projected.evidence).includes(SECRET), false);
+});
+
 test('scan reviews each unseen profile once, caches by evidence digest and never grants economic authority', async () => {
   const root = await mkdtemp(join(tmpdir(), 'research-ai-worker-'));
   let calls = 0;
