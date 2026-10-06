@@ -1,0 +1,62 @@
+name: Research Crypto Futures V4.6 Bitget Portability V4.7
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/probe-crypto-futures-v46-bitget-portability-v47.py
+      - .github/workflows/research-crypto-futures-v46-bitget-portability-v47.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-futures-v46-bitget-portability-v47-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      V44_RUN_ID: "37453972448"
+      V44_ARTIFACT: "crypto-futures-v43-short-exact1m-v44-ddbb6cc79873efb6645a09156f5791fccb1a4241"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/probe-crypto-futures-v46-bitget-portability-v47.py
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3"
+      - name: Download frozen V4.4 exact evidence
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.V44_RUN_ID }}
+          name: ${{ env.V44_ARTIFACT }}
+          path: frozen-v44
+      - name: Probe Bitget historical tradability and price basis
+        run: |
+          EVENTS="$(find frozen-v44 -name exact-events.parquet -print -quit)"
+          test -n "$EVENTS"
+          python market-prediction-lab/scripts/probe-crypto-futures-v46-bitget-portability-v47.py \
+            --exact-events "$EVENTS" \
+            --out-dir market-prediction-lab/docs/crypto-futures-v46-bitget-portability-v47
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-v46-bitget-portability-v47-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-v46-bitget-portability-v47
+          if-no-files-found: error
+          retention-days: 14
