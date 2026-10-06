@@ -184,9 +184,18 @@ test('pending state does not create approved timestamp or contradictory active s
   assert.equal(plan.changes.approved_at, null);
 });
 
-test('associate expiry changes are audited as membership expiry changes', () => {
+test('associate expiry changes preserve original approval provenance', () => {
+  const originalApprovedAt = '2026-07-01T00:00:00.000Z';
+  const originalApprovedBy = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
   const plan = planMemberChange(
-    profile({ membership_level: 'associate', role: 'associate', status: 'approved', membership_expires_at: null }),
+    profile({
+      membership_level: 'associate',
+      role: 'associate',
+      status: 'approved',
+      membership_expires_at: null,
+      approved_at: originalApprovedAt,
+      approved_by: originalApprovedBy,
+    }),
     { membershipExpiresAt: '2027-01-01T00:00:00.000Z', reason: '회원 기간 설정' },
     ADMIN,
     1,
@@ -194,6 +203,8 @@ test('associate expiry changes are audited as membership expiry changes', () => 
   );
   assert.equal(plan.action, 'member.membership.expiry.change');
   assert.equal(plan.changes.membership_expires_at, '2027-01-01T00:00:00.000Z');
+  assert.equal(plan.changes.approved_at, originalApprovedAt);
+  assert.equal(plan.changes.approved_by, originalApprovedBy);
 });
 
 test('last active admin cannot be demoted', () => {
