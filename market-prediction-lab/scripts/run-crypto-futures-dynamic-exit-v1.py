@@ -694,6 +694,8 @@ def main():
             "modelFitOnlyBefore2024_07_01":True,
             "policyThresholdSelectedOnlyOn2024_07_to_2025_03Calibration":True,
             "validationNotUsedForDynamicPolicySelection":True,
+            "entryStrategyWasPreviouslySelectedUsing2025_04_to_2026_03Validation":True,
+            "combinedSystemValidationFullyIndependent":False,
             "post2026AprilBenchmarkPreviouslyExposed":True,
             "profitabilityProven":False,
             "executionAuthority":"NONE",
