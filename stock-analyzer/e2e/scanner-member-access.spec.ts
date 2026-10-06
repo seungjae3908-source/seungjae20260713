@@ -20,6 +20,10 @@ const portfolioSource = fs.readFileSync(
   path.resolve(process.cwd(), 'src/pages/portfolio.tsx'),
   'utf8',
 );
+const apiRoutesSource = fs.readFileSync(
+  path.resolve(process.cwd(), '../api-server/src/routes/index.ts'),
+  'utf8',
+);
 
 function technicalItem(id: string) {
   const group = APP_NAVIGATION.find((item) => item.id === 'technical');
@@ -71,4 +75,7 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(portfolioSource).toContain("auth.can('canAccessAiTradingReview')");
   expect(portfolioSource).toContain('<TradingAiReviewPanel');
   expect(portfolioSource).toContain('<UnifiedTradeJournalPanel');
+
+  expect(apiRoutesSource).toContain("aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures'");
+  expect(apiRoutesSource).toContain("req.path === '/tickers' || req.path === '/candles'");
 });
