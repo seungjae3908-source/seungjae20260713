@@ -1,4 +1,4 @@
-name: Research US Earnings Surprise Pullback V2
+# Explicit rerun after V8.6 price-state family failed; research branch only.\nname: Research US Earnings Surprise Pullback V2
 
 on:
   push:
