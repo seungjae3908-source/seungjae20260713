@@ -15,7 +15,7 @@ import {
 const expected: Record<MemberTier, MemberCapability[]> = {
   pending: [],
   associate: [
-    'canAccessBasicInfo', 'canAccessSpot', 'canAccessRiskPreview',
+    'canAccessBasicInfo', 'canAccessSpot', 'canAccessAiChart',
     'canAccessPaperTrading', 'canAccessAutoTrading', 'canConnectPersonalTelegram',
     'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
@@ -60,6 +60,7 @@ test('expired associate is treated as pending and loses AI capabilities', () => 
     membership_expires_at: '2020-01-01T00:00:00.000Z',
   };
   assert.equal(deriveMemberTier(profile), 'pending');
+  assert.equal(hasCapability(profile, 'canAccessAiChart'), false);
   assert.equal(hasCapability(profile, 'canAccessRiskPreview'), false);
   assert.equal(hasCapability(profile, 'canAccessTradingAnalytics'), false);
   assert.equal(hasCapability(profile, 'canAccessAiTradingReview'), false);
@@ -73,7 +74,8 @@ test('future-dated associate keeps S/AI member capabilities', () => {
     membership_expires_at: '2099-01-01T00:00:00.000Z',
   };
   assert.equal(deriveMemberTier(profile), 'associate');
-  assert.equal(hasCapability(profile, 'canAccessRiskPreview'), true);
+  assert.equal(hasCapability(profile, 'canAccessAiChart'), true);
+  assert.equal(hasCapability(profile, 'canAccessRiskPreview'), false);
   assert.equal(hasCapability(profile, 'canAccessTradingAnalytics'), true);
   assert.equal(hasCapability(profile, 'canAccessAiTradingReview'), true);
 });
