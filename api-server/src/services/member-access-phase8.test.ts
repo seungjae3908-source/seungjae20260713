@@ -49,7 +49,7 @@ test('legacy pending admin does not gain admin access', () => {
 });
 
 test('explicit associate tier is preserved', () => {
-  assert.equal(deriveMemberTier({ membership_level: 'associate', role: 'user', status: 'approved' }), 'associate');
+  assert.equal(deriveMemberTier({ membership_level: 'associate', role: 'user', status: 'approved', is_active: true }), 'associate');
 });
 
 test('expired associate is treated as pending and loses AI capabilities', () => {
@@ -85,7 +85,7 @@ test('inactive regular is treated as pending', () => {
 });
 
 test('suspended admin is treated as pending', () => {
-  assert.equal(deriveMemberTier({ membership_level: 'admin', status: 'suspended' }), 'pending');
+  assert.equal(deriveMemberTier({ membership_level: 'admin', status: 'suspended', is_active: false }), 'pending');
 });
 
 test('unknown client role does not gain capabilities', () => {
