@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Deterministic spot V6.2 workflow trigger.
+
 
 import argparse
 import concurrent.futures
