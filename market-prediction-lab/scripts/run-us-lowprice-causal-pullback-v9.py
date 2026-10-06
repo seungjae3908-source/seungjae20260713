@@ -57,9 +57,9 @@ def daily_current(path:Path)->pd.DataFrame:
       SELECT
         upper(ticker) symbol,
         timezone('America/New_York',timestamp) local_ts,
-        CAST(open AS DOUBLE) open,
-        CAST(close AS DOUBLE) close,
-        CAST(volume AS DOUBLE) volume
+        CAST(open AS DOUBLE) AS px_open,
+        CAST(close AS DOUBLE) AS px_close,
+        CAST(volume AS DOUBLE) AS px_volume
       FROM read_parquet('{path.as_posix()}')
       WHERE open>0 AND close>0 AND volume>=0
     ),
@@ -71,8 +71,8 @@ def daily_current(path:Path)->pd.DataFrame:
         AND regexp_matches(symbol,'^[A-Z][A-Z0-9.\\-]{{0,9}}$')
     )
     SELECT symbol,date,
-      arg_max(close,local_ts) close,
-      sum(close*volume) dollar
+      arg_max(px_close,local_ts) AS close_px,
+      sum(px_close*px_volume) AS dollar
     FROM r GROUP BY symbol,date
     ORDER BY symbol,date
     """
@@ -106,11 +106,11 @@ def month_events(path:Path, prev_daily:pd.DataFrame, month:str)->pd.DataFrame:
       SELECT
         upper(ticker) symbol,
         timezone('America/New_York',timestamp) ts,
-        CAST(open AS DOUBLE) open,
-        CAST(high AS DOUBLE) high,
-        CAST(low AS DOUBLE) low,
-        CAST(close AS DOUBLE) close,
-        CAST(volume AS DOUBLE) volume
+        CAST(open AS DOUBLE) AS px_open,
+        CAST(high AS DOUBLE) AS px_high,
+        CAST(low AS DOUBLE) AS px_low,
+        CAST(close AS DOUBLE) AS px_close,
+        CAST(volume AS DOUBLE) AS px_volume
       FROM read_parquet('{path.as_posix()}')
       WHERE open>0 AND high>0 AND low>0 AND close>0 AND volume>=0
     ),
@@ -130,25 +130,25 @@ def month_events(path:Path, prev_daily:pd.DataFrame, month:str)->pd.DataFrame:
     ),
     j AS (
       SELECT r.*,p.prevClose,p.prevDollar,
-        sum(r.close*r.volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) cumDollar,
-        max(r.high) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) runningHigh,
-        sum(((r.high+r.low+r.close)/3.0)*r.volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-          / nullif(sum(r.volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),0) vwap,
-        max(r.high) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) prior3High,
-        avg(r.volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING) prior10Vol,
-        avg(r.close*r.volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) prior20DollarPerMin,
-        lead(r.open) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts) nextOpen,
+        sum(r.px_close*r.px_volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) cumDollar,
+        max(r.px_high) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) runningHigh,
+        sum(((r.px_high+r.px_low+r.px_close)/3.0)*r.px_volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+          / nullif(sum(r.px_volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),0) vwap,
+        max(r.px_high) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING) prior3High,
+        avg(r.px_volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING) prior10Vol,
+        avg(r.px_close*r.px_volume) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) prior20DollarPerMin,
+        lead(r.px_open) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts) nextOpen,
         lead(r.ts) OVER (PARTITION BY r.symbol,r.date ORDER BY r.ts) nextTs
       FROM raw r
       JOIN prev_daily p ON p.symbol=r.symbol AND p.date=r.date
     ),
     state0 AS (
       SELECT *,
-        close/prevClose-1.0 gapPct,
-        close/runningHigh-1.0 drawdown,
-        volume/nullif(prior10Vol,0) volumeAccel,
-        (close*volume)/nullif(prior20DollarPerMin,0) dollarAccel,
-        (close-low)/nullif(high-low,0) closeLoc
+        px_close/prevClose-1.0 gapPct,
+        px_close/runningHigh-1.0 drawdown,
+        px_volume/nullif(prior10Vol,0) volumeAccel,
+        (px_close*px_volume)/nullif(prior20DollarPerMin,0) dollarAccel,
+        (px_close-px_low)/nullif(px_high-px_low,0) closeLoc
       FROM j
       WHERE prevClose BETWEEN 0.50 AND 20.0
         AND prevDollar>=1000000
@@ -172,10 +172,10 @@ def month_events(path:Path, prev_daily:pd.DataFrame, month:str)->pd.DataFrame:
         AND cumDollar>=100000
         AND recentMinDrawdown<=-0.03
         AND recentMinDrawdown>=-0.15
-        AND close>prior3High
-        AND close>=vwap
+        AND px_close>prior3High
+        AND px_close>=vwap
         AND volumeAccel>=1.10
-        AND close>=runningHigh*0.97
+        AND px_close>=runningHigh*0.97
         AND nextOpen>0 AND nextTs IS NOT NULL
     ),
     onset AS (
@@ -195,12 +195,12 @@ def month_events(path:Path, prev_daily:pd.DataFrame, month:str)->pd.DataFrame:
     f AS (
       SELECT
         e.eventId,
-        min(r.ts) FILTER(WHERE r.high>=e.entryPrice*(1.0+{TARGET})) firstTargetTs,
-        min(r.ts) FILTER(WHERE r.low<=e.entryPrice*(1.0-{STOP})) firstStopTs,
-        arg_max(r.close,r.ts) lastClose,
+        min(r.ts) FILTER(WHERE r.px_high>=e.entryPrice*(1.0+{TARGET})) firstTargetTs,
+        min(r.ts) FILTER(WHERE r.px_low<=e.entryPrice*(1.0-{STOP})) firstStopTs,
+        arg_max(r.px_close,r.ts) lastClose,
         max(r.ts) lastTs,
-        max(r.high) futureHigh,
-        min(r.low) futureLow,
+        max(r.px_high) futureHigh,
+        min(r.px_low) futureLow,
         count(r.ts) futureBars
       FROM e
       LEFT JOIN raw r
