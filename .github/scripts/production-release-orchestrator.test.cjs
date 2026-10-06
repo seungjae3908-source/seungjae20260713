@@ -4,12 +4,61 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   activeRuns,
+  githubReadFailureCode,
+  retryGithubRead,
   selectReusableExactStagingRun,
   stagingArtifactAccepted,
 } = require('./production-release-orchestrator.cjs');
 
 const SHA = 'a'.repeat(40);
 const OTHER_SHA = 'b'.repeat(40);
+
+test('classifies only bounded read-only GitHub transport and response failures as retryable', () => {
+  assert.equal(githubReadFailureCode(new SyntaxError('Unexpected end of JSON input')), 'EMPTY_OR_INVALID_JSON');
+  assert.equal(githubReadFailureCode({ status: 503 }), 'HTTP_503');
+  assert.equal(githubReadFailureCode({ code: 'ECONNRESET' }), 'ECONNRESET');
+  assert.equal(githubReadFailureCode(new Error('permission denied')), null);
+});
+
+test('read-only GitHub calls retry bounded transient failures and return the first valid response', async () => {
+  let calls = 0;
+  const delays = [];
+  const value = await retryGithubRead(async () => {
+    calls += 1;
+    if (calls < 3) throw new SyntaxError('Unexpected end of JSON input');
+    return { ok: true };
+  }, {
+    label: 'list-staging-runs',
+    attempts: 3,
+    baseDelayMs: 10,
+    sleep: async (milliseconds) => { delays.push(milliseconds); },
+  });
+  assert.deepEqual(value, { ok: true });
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [10, 20]);
+});
+
+test('read-only GitHub retries fail closed with a sanitized code and never retry permanent failures', async () => {
+  let transientCalls = 0;
+  await assert.rejects(
+    retryGithubRead(async () => {
+      transientCalls += 1;
+      throw Object.assign(new Error('upstream body omitted'), { status: 502 });
+    }, { label: 'current-main', attempts: 2, baseDelayMs: 0, sleep: async () => {} }),
+    /GITHUB_READ_RETRY_EXHAUSTED:current-main:HTTP_502/,
+  );
+  assert.equal(transientCalls, 2);
+
+  let permanentCalls = 0;
+  await assert.rejects(
+    retryGithubRead(async () => {
+      permanentCalls += 1;
+      throw Object.assign(new Error('forbidden'), { status: 403 });
+    }, { label: 'current-main', attempts: 3, baseDelayMs: 0, sleep: async () => {} }),
+    /forbidden/,
+  );
+  assert.equal(permanentCalls, 1);
+});
 
 test('active release runs are deterministic and completed runs are excluded', () => {
   assert.deepEqual(activeRuns([
