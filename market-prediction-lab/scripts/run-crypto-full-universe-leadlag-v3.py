@@ -180,65 +180,77 @@ def select_topn(signals:pl.DataFrame,top_n:int):
     )
 
 
-def simulate_selected(selected:pl.DataFrame,file_map:dict[str,Path],sub:str,market:str,target:float,stop:float,hold:int,name:str):
+def simulate_selected_grid(selected:pl.DataFrame,file_map:dict[str,Path],sub:str,market:str,configs:list[tuple]):
     by_symbol={k:v for k,v in selected.partition_by("symbol",as_dict=True).items()}
-    rows=[]
+    rows_by={name:[] for name,_,_,_ in configs}
     cost=COSTS[market]
     for key,sig in by_symbol.items():
         sym=key[0] if isinstance(key,tuple) else key
         p=file_map.get(str(sym))
-        if p is None: continue
+        if p is None:
+            continue
         x=load_15m(p)
-        if x is None: continue
+        if x is None:
+            continue
         pdf=x.to_pandas()
         pdf["date"]=pd.to_datetime(pdf["date"],utc=True)
         index={pd.Timestamp(t):i for i,t in enumerate(pdf["date"])}
+        opens=pdf["open"].to_numpy(float)
+        highs=pdf["high"].to_numpy(float)
+        lows=pdf["low"].to_numpy(float)
+        closes=pdf["close"].to_numpy(float)
+        times=list(pdf["date"])
         for r in sig.iter_rows(named=True):
             t=pd.Timestamp(r["date"])
             i=index.get(t)
-            if i is None or i+1>=len(pdf): continue
+            if i is None or i+1>=len(pdf):
+                continue
             entry_i=i+1
-            entry=float(pdf["open"].iloc[entry_i])
-            if entry<=0: continue
-            end_i=min(len(pdf)-1,entry_i+hold-1)
+            entry=float(opens[entry_i])
+            if entry<=0:
+                continue
             direction=str(r["direction"])
-            exit_i=end_i
-            exit_price=float(pdf["close"].iloc[end_i])
-            reason="TIME"
-            if direction=="LONG":
-                tp=entry*(1+target); sl=entry*(1-stop)
-                for j in range(entry_i,end_i+1):
-                    # Conservative intrabar ordering.
-                    if float(pdf["low"].iloc[j])<=sl:
-                        exit_i=j; exit_price=sl; reason="STOP"; break
-                    if float(pdf["high"].iloc[j])>=tp:
-                        exit_i=j; exit_price=tp; reason="TARGET"; break
-                gross=exit_price/entry-1.0
-                mfe=float(pdf["high"].iloc[entry_i:end_i+1].max())/entry-1.0
-                mae=1.0-float(pdf["low"].iloc[entry_i:end_i+1].min())/entry
-            else:
-                tp=entry*(1-target); sl=entry*(1+stop)
-                for j in range(entry_i,end_i+1):
-                    if float(pdf["high"].iloc[j])>=sl:
-                        exit_i=j; exit_price=sl; reason="STOP"; break
-                    if float(pdf["low"].iloc[j])<=tp:
-                        exit_i=j; exit_price=tp; reason="TARGET"; break
-                gross=1.0-exit_price/entry
-                mfe=1.0-float(pdf["low"].iloc[entry_i:end_i+1].min())/entry
-                mae=float(pdf["high"].iloc[entry_i:end_i+1].max())/entry-1.0
-            rows.append({
+            common={
                 "market":market,"date":t.date(),"timestamp":t,"symbol":str(sym),
-                "direction":direction,"family":r["family"],"candidate":name,
-                "entryTime":str(pdf["date"].iloc[entry_i]),"exitTime":str(pdf["date"].iloc[exit_i]),
-                "entryPrice":entry,"exitPrice":exit_price,"grossReturn":gross,
-                "roundTripCost":cost,"netReturn":gross-cost,"MFE":mfe,"MAE":mae,
-                "exitReason":reason,
+                "direction":direction,"family":r["family"],
                 "btcRet15":r["btcRet15"],"btcRet30":r["btcRet30"],
                 "altRet15":r["altRet15"],"altRet30":r["altRet30"],
                 "rvol15":r["rvol15"],"priorDollar24h":r["priorDollar24h"],
-            })
-    return pd.DataFrame(rows)
-
+            }
+            for name,target,stop,hold in configs:
+                end_i=min(len(pdf)-1,entry_i+hold-1)
+                exit_i=end_i
+                exit_price=float(closes[end_i])
+                reason="TIME"
+                if direction=="LONG":
+                    tp=entry*(1+target); sl=entry*(1-stop)
+                    for j in range(entry_i,end_i+1):
+                        if lows[j]<=sl:
+                            exit_i=j; exit_price=sl; reason="STOP"; break
+                        if highs[j]>=tp:
+                            exit_i=j; exit_price=tp; reason="TARGET"; break
+                    gross=exit_price/entry-1.0
+                    mfe=float(np.max(highs[entry_i:end_i+1]))/entry-1.0
+                    mae=1.0-float(np.min(lows[entry_i:end_i+1]))/entry
+                else:
+                    tp=entry*(1-target); sl=entry*(1+stop)
+                    for j in range(entry_i,end_i+1):
+                        if highs[j]>=sl:
+                            exit_i=j; exit_price=sl; reason="STOP"; break
+                        if lows[j]<=tp:
+                            exit_i=j; exit_price=tp; reason="TARGET"; break
+                    gross=1.0-exit_price/entry
+                    mfe=1.0-float(np.min(lows[entry_i:end_i+1]))/entry
+                    mae=float(np.max(highs[entry_i:end_i+1]))/entry-1.0
+                rows_by[name].append({
+                    **common,
+                    "candidate":name,
+                    "entryTime":str(times[entry_i]),"exitTime":str(times[exit_i]),
+                    "entryPrice":entry,"exitPrice":exit_price,"grossReturn":gross,
+                    "roundTripCost":cost,"netReturn":gross-cost,"MFE":mfe,"MAE":mae,
+                    "exitReason":reason,
+                })
+    return {name:pd.DataFrame(rows) for name,rows in rows_by.items()}
 
 def to_pl(pdf):
     if pdf.empty:
@@ -322,27 +334,34 @@ def main():
         for fd in families:
             family=fd["family"]; direction=fd["direction"]
             s=selected.filter((pl.col("family")==family)&(pl.col("direction")==direction))
+            configs=[]
+            meta={}
             for exit_name,target,stop in EXITS:
                 for hold in HOLDS:
                     name=f"{direction}_{family}_TOP{top_n}_{exit_name}_H{hold}"
-                    pdf=simulate_selected(s,file_map,sub,market,target,stop,hold,name)
-                    mm=split_metrics(pdf,market)
-                    gt=gate(mm["train"],80); gc=gate(mm["calibration"],25); gv=gate(mm["validation"],40); go=gate(mm["freshOos"],15)
-                    eligible=gt["pass"] and gc["pass"]
-                    reports[name]={
-                        "direction":direction,"family":family,"topN":top_n,"exit":exit_name,"holdBars":hold,
-                        **mm,"trainGate":gt,"calibrationGate":gc,"validationGate":gv,"freshOosGate":go,
-                        "eligibleAfterCalibration":eligible,
-                    }
-                    if eligible: ledgers[name]=pdf
-                    grid.append({
-                        "candidate":name,"direction":direction,"family":family,"topN":top_n,"exit":exit_name,"holdBars":hold,
-                        "trainPass":gt["pass"],"trainReturn":mm["train"].get("totalReturn"),"trainPF":mm["train"].get("profitFactor"),"trainMDD":mm["train"].get("mdd"),"trainPosMonthRate":mm["train"].get("positiveMonthRate"),"trainTrades":mm["train"].get("tradeCount"),
-                        "calibrationPass":gc["pass"],"calibrationReturn":mm["calibration"].get("totalReturn"),"calibrationPF":mm["calibration"].get("profitFactor"),"calibrationMDD":mm["calibration"].get("mdd"),"calibrationPosMonthRate":mm["calibration"].get("positiveMonthRate"),"calibrationTrades":mm["calibration"].get("tradeCount"),
-                        "validationPass":gv["pass"],"validationReturn":mm["validation"].get("totalReturn"),"validationPF":mm["validation"].get("profitFactor"),"validationMDD":mm["validation"].get("mdd"),"validationPosMonthRate":mm["validation"].get("positiveMonthRate"),"validationTrades":mm["validation"].get("tradeCount"),
-                        "freshOosPass":go["pass"],"freshOosReturn":mm["freshOos"].get("totalReturn"),"freshOosPF":mm["freshOos"].get("profitFactor"),"freshOosMDD":mm["freshOos"].get("mdd"),"freshOosPosMonthRate":mm["freshOos"].get("positiveMonthRate"),"freshOosTrades":mm["freshOos"].get("tradeCount"),
-                        "distinctSymbols":int(pdf["symbol"].nunique()) if len(pdf) else 0,
-                    })
+                    configs.append((name,target,stop,hold))
+                    meta[name]=(exit_name,hold)
+            pdfs=simulate_selected_grid(s,file_map,sub,market,configs)
+            for name,target,stop,hold in configs:
+                exit_name,_=meta[name]
+                pdf=pdfs[name]
+                mm=split_metrics(pdf,market)
+                gt=gate(mm["train"],80); gc=gate(mm["calibration"],25); gv=gate(mm["validation"],40); go=gate(mm["freshOos"],15)
+                eligible=gt["pass"] and gc["pass"]
+                reports[name]={
+                    "direction":direction,"family":family,"topN":top_n,"exit":exit_name,"holdBars":hold,
+                    **mm,"trainGate":gt,"calibrationGate":gc,"validationGate":gv,"freshOosGate":go,
+                    "eligibleAfterCalibration":eligible,
+                }
+                if eligible: ledgers[name]=pdf
+                grid.append({
+                    "candidate":name,"direction":direction,"family":family,"topN":top_n,"exit":exit_name,"holdBars":hold,
+                    "trainPass":gt["pass"],"trainReturn":mm["train"].get("totalReturn"),"trainPF":mm["train"].get("profitFactor"),"trainMDD":mm["train"].get("mdd"),"trainPosMonthRate":mm["train"].get("positiveMonthRate"),"trainTrades":mm["train"].get("tradeCount"),
+                    "calibrationPass":gc["pass"],"calibrationReturn":mm["calibration"].get("totalReturn"),"calibrationPF":mm["calibration"].get("profitFactor"),"calibrationMDD":mm["calibration"].get("mdd"),"calibrationPosMonthRate":mm["calibration"].get("positiveMonthRate"),"calibrationTrades":mm["calibration"].get("tradeCount"),
+                    "validationPass":gv["pass"],"validationReturn":mm["validation"].get("totalReturn"),"validationPF":mm["validation"].get("profitFactor"),"validationMDD":mm["validation"].get("mdd"),"validationPosMonthRate":mm["validation"].get("positiveMonthRate"),"validationTrades":mm["validation"].get("tradeCount"),
+                    "freshOosPass":go["pass"],"freshOosReturn":mm["freshOos"].get("totalReturn"),"freshOosPF":mm["freshOos"].get("profitFactor"),"freshOosMDD":mm["freshOos"].get("mdd"),"freshOosPosMonthRate":mm["freshOos"].get("positiveMonthRate"),"freshOosTrades":mm["freshOos"].get("tradeCount"),
+                    "distinctSymbols":int(pdf["symbol"].nunique()) if len(pdf) else 0,
+                })
 
     eligible=[n for n,d in reports.items() if d["eligibleAfterCalibration"]]
     val_pass=[n for n in eligible if reports[n]["validationGate"]["pass"]]
@@ -381,7 +400,7 @@ def main():
             "candidateSelectionUsesTrainAndCalibrationOnly":True,
             "validationExcludedFromSelection":True,
             "freshOosExcludedFromSelection":True,
-            "profitabilityProven":False,
+            "duplicateParquetReadsAcrossExitConfigsEliminated":True,\n            "profitabilityProven":False,
             "executionAuthority":"NONE",
         },
     }
