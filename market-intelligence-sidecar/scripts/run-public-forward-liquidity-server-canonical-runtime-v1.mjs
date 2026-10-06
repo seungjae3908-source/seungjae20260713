@@ -127,6 +127,7 @@ function issueNumberFromComment(comment, code) {
 
 async function verifyProtectedAuthorityComments({
   targetSha,
+  receiptTargetSha,
   activationReceiptCommentId,
   bindingDigest,
   authorityCommentId,
@@ -139,7 +140,7 @@ async function verifyProtectedAuthorityComments({
   const owner = REPOSITORY.split('/')[0];
   const receiptBody = [
     '/authorize-public-only-partial-fill-v3-schedule-activation',
-    targetSha,
+    receiptTargetSha,
     bindingDigest,
   ].join(' ');
   if (Number(receipt?.id) !== activationReceiptCommentId
@@ -202,7 +203,7 @@ async function verifyProtectedAuthorityComments({
           '/authorize-public-only-partial-fill-v3-schedule-activation',
           '/revoke-public-only-partial-fill-v3-schedule-activation',
         ].includes(parts[0])
-        || parts[1] !== targetSha
+        || parts[1] !== receiptTargetSha
         || parts[2] !== bindingDigest) continue;
       latest = {
         commentId: Number(comment.id),
@@ -223,6 +224,7 @@ async function verifyProtectedAuthorityComments({
     issueNumber: receiptIssueNumber,
     issueTitle: releaseControlTitle,
     releaseControlOpen: true,
+    receiptTargetSha,
   });
 }
 
@@ -472,10 +474,26 @@ async function prepareActivation() {
     process.env.SERVER_EVIDENCE_CANONICAL_AUTHORIZED_AT_MS,
     'SERVER_CANONICAL_AUTHORIZED_AT_INVALID',
   );
+  const receiptTargetSha = exactSha(
+    process.env.SERVER_EVIDENCE_ACTIVATION_RECEIPT_MAIN_SHA,
+    'SERVER_CANONICAL_RECEIPT_MAIN_SHA_INVALID',
+  );
+  const componentDigest = exactDigest(
+    process.env.SERVER_EVIDENCE_COMPONENT_DIGEST,
+    'SERVER_CANONICAL_COMPONENT_DIGEST_INVALID',
+  );
+  const componentEquivalentCurrentMain = bool(
+    process.env.SERVER_EVIDENCE_COMPONENT_EQUIVALENT_CURRENT_MAIN,
+    'SERVER_CANONICAL_COMPONENT_EQUIVALENCE_INVALID',
+  );
+  if (componentEquivalentCurrentMain !== true) {
+    throw new Error('SERVER_CANONICAL_COMPONENT_EQUIVALENCE_REQUIRED');
+  }
   const remote = await remoteMainSha();
   if (remote !== targetSha) throw new Error('SERVER_CANONICAL_MAIN_MOVED_BEFORE_ACTIVATION');
   const authorityEvidence = await verifyProtectedAuthorityComments({
     targetSha,
+    receiptTargetSha,
     activationReceiptCommentId,
     bindingDigest,
     authorityCommentId,
@@ -484,7 +502,7 @@ async function prepareActivation() {
   const ci = await requiredCi(targetSha);
   if (ci.workflowId !== REQUIRED_WORKFLOW_ID) throw new Error('SERVER_CANONICAL_REQUIRED_CI_WORKFLOW_INVALID');
   const shadow = await shadowEvidenceSnapshot({
-    targetSha,
+    targetSha: receiptTargetSha,
     receiptCommentId: activationReceiptCommentId,
     bindingDigest,
   });
@@ -495,6 +513,10 @@ async function prepareActivation() {
   const deployed = await deployedSha('/opt/stock-app-server-evidence-shadow-v1/current/.deploy/current-sha');
   const serverRuntime = Object.freeze({
     deployedSha: deployed,
+    evidenceSha: receiptTargetSha,
+    currentMainSha: targetSha,
+    componentDigest,
+    componentEquivalentCurrentMain,
     timerEnabled,
     timerActive,
     persistent: false,
@@ -536,7 +558,10 @@ async function prepareActivation() {
     issueTitle: authorityEvidence.issueTitle,
     releaseControlOpen: authorityEvidence.releaseControlOpen,
     action: 'AUTHORIZE',
-    targetMainSha: targetSha,
+    targetMainSha: receiptTargetSha,
+    currentMainSha: targetSha,
+    componentDigest,
+    componentEquivalentCurrentMain,
     activationBindingDigest: bindingDigest,
     commentId: activationReceiptCommentId,
     authorAssociation: authorityEvidence.receipt.author_association,
@@ -565,6 +590,9 @@ async function prepareActivation() {
   process.stdout.write(`${JSON.stringify({
     status: 'PROTECTED_CANONICAL_ACTIVATION_RECORD_READY',
     targetSha,
+    receiptTargetSha,
+    componentDigest,
+    componentEquivalentCurrentMain,
     activationReceiptCommentId,
     authorityCommentId,
     cutoverAuthorizedAtMs: record.authorizedAtMs,
