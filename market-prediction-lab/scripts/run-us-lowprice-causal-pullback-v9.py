@@ -179,9 +179,9 @@ def month_events(path:Path, prev_daily:pd.DataFrame, month:str)->pd.DataFrame:
         AND nextOpen>0 AND nextTs IS NOT NULL
     ),
     onset AS (
-      SELECT *
+      SELECT DISTINCT ON (symbol,date) *
       FROM broad
-      QUALIFY row_number() OVER(PARTITION BY symbol,date ORDER BY ts)=1
+      ORDER BY symbol,date,ts
     ),
     e AS (
       SELECT
