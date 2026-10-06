@@ -47,13 +47,14 @@ type AuthContextValue = {
   retryBootstrap(): void;
   signIn(loginName: string, password: string): Promise<void>;
   signUp(loginName: string, password: string): Promise<void>;
+  changePassword(password: string): Promise<void>;
   signOut(): Promise<void>;
   refreshProfile(): Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const normalizeName = (value: string) => value.trim().normalize('NFKC').toLowerCase();
-const PROFILE_AUTO_REFRESH_MS = 30_000;
+const PROFILE_AUTO_REFRESH_MS = 5_000;
 
 function validate(loginName: string, password: string) {
   const name = loginName.trim();
@@ -407,6 +408,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         options: { data: { display_name: name, login_name: normalized } },
       });
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
+    },
+    async changePassword(password) {
+      if (password.length < 8 || password.length > 72) throw new Error('비밀번호는 8~72자로 입력해 주세요.');
+      if (!sessionRef.current) throw new Error('로그인이 필요합니다.');
+      const { error } = await getSupabase().auth.updateUser({ password });
+      if (error) throw new Error(authMessage(error));
     },
     async signOut() {
       if (signOutTaskRef.current) return signOutTaskRef.current;
