@@ -1,0 +1,67 @@
+name: Research BTC Alt Lag Probe V1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-btc-alt-lag-probe-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3" "requests>=2.32,<3"
+      - name: Count BTC one-minute shock days
+        run: |
+          python - <<'PY'
+          import io, zipfile, requests, pandas as pd, json
+          start=pd.Period('2023-04',freq='M'); end=pd.Period('2026-10',freq='M')
+          frames=[]; failed=[]
+          cur=start
+          while cur<end:
+              m=str(cur)
+              url=f'https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-{m}.zip'
+              try:
+                  r=requests.get(url,timeout=60,headers={'User-Agent':'market-prediction-lab/btc-lag-probe'})
+                  if r.status_code!=200:
+                      failed.append({'month':m,'status':r.status_code}); cur+=1; continue
+                  with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                      raw=pd.read_csv(z.open(z.namelist()[0]),header=None)
+                  try: float(raw.iloc[0,0])
+                  except Exception: raw=raw.iloc[1:].reset_index(drop=True)
+                  raw=raw.iloc[:,:12]
+                  raw.columns=['open_time','open','high','low','close','volume','close_time','quote_volume','trades','taker_buy_volume','taker_buy_quote','ignore']
+                  raw['open_time']=pd.to_numeric(raw['open_time'],errors='coerce')
+                  raw['close']=pd.to_numeric(raw['close'],errors='coerce')
+                  raw=raw.dropna(subset=['open_time','close'])
+                  unit='us' if float(raw['open_time'].median())>1e14 else 'ms'
+                  raw['timestamp']=pd.to_datetime(raw['open_time'].astype('int64'),unit=unit,utc=True)
+                  frames.append(raw[['timestamp','close']])
+              except Exception as e:
+                  failed.append({'month':m,'error':repr(e)})
+              cur+=1
+          x=pd.concat(frames,ignore_index=True).sort_values('timestamp')
+          x['ret1']=x['close'].pct_change()
+          thresholds=[0.001,0.0015,0.002,0.003,0.005,0.01]
+          out={}
+          for t in thresholds:
+              mask=x['ret1'].abs()>=t
+              z=x.loc[mask,['timestamp','ret1']].copy()
+              out[str(t)]={
+                'events':len(z),
+                'days':z['timestamp'].dt.date.nunique(),
+                'positiveEvents':int((z['ret1']>=t).sum()),
+                'negativeEvents':int((z['ret1']<=-t).sum()),
+              }
+          print(json.dumps({'BTC_1M_LAG_PROBE':{'rows':len(x),'months':len(frames),'failed':failed,'thresholds':out}},ensure_ascii=False))
+          PY
