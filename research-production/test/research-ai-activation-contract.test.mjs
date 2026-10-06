@@ -26,6 +26,19 @@ test('provider readiness is proven before timer activation and secrets are not p
   assert.doesNotMatch(script, /echo .*API_KEY|printf .*API_KEY/);
 });
 
+
+test('existing isolated Research provider env is reused before app or PM2 bootstrap', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const ready = script.indexOf('provider_env_ready()');
+  const fallback = script.indexOf('research-provider-bootstrap.mjs" preflight');
+  const materialize = script.indexOf('materialize_or_reuse_provider_env');
+  assert.ok(ready >= 0 && fallback > ready && materialize > ready);
+  assert.match(script, /EXISTING_RESEARCH_PROVIDER_ENV/);
+  assert.match(script, /credentialValuesExposed: false/);
+  assert.match(script, /executionAuthority: 'NONE'/);
+  assert.doesNotMatch(script, /source\s+"\$PROVIDER_ENV"|\.\s+"\$PROVIDER_ENV"/);
+});
+
 test('provider env is readable by the isolated Research service user', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   assert.match(script, /chown root:investment-research/);
