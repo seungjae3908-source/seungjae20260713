@@ -8,6 +8,7 @@ const CAPABILITY_LABELS: Record<MemberCapability, string> = {
   canAccessBasicInfo: '기본 정보',
   canAccessSpot: '코인 현물',
   canAccessFutures: '코인 선물',
+  canAccessAiChart: 'AI 차트',
   canAccessRiskPreview: '리스크 미리보기',
   canAccessBacktests: '백테스트',
   canAccessPaperTrading: '모의매매',
