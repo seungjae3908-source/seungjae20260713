@@ -25,7 +25,7 @@ jobs:
       V8_RUN_ID: "37441335961"
       V8_ARTIFACT: "us-all-session-target-first-ai-v8-38500a40278149e2d48e89e0a5efbb4947c752f3"
       V82_RUN_ID: "37444336518"
-      V82_ARTIFACT: "us-all-session-target-first-ai-v82-recall-34021959e578c1941f336eb0cef5950e"
+      V82_ARTIFACT: "us-all-session-target-first-ai-v82-recall-34021959e578be14c07f392cbc40f6a17df36a78"
       LIVE_TRADING: "false"
       AUTO_TRADING: "false"
       REAL_ORDER_ENABLED: "false"
