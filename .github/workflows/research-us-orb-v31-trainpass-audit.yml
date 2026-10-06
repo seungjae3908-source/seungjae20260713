@@ -1,0 +1,51 @@
+name: Research US ORB V3.1 TrainPass Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-us-orb-v31-trainpass-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_RUN_ID: "37400188216"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: full-universe-3pct-hunter-us-orb-v31-*
+          path: orb-v31
+      - name: Print train-pass rows
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          rows=[]
+          for f in Path('orb-v31').glob('**/candidate-grid.csv'):
+              for r in csv.DictReader(f.open(encoding='utf-8-sig')):
+                  if str(r.get('trainPass','')).lower()!='true': continue
+                  def fv(k):
+                      try:return float(r.get(k) or 0)
+                      except:return 0.0
+                  def iv(k):
+                      try:return int(float(r.get(k) or 0))
+                      except:return 0
+                  rows.append({
+                    'candidate':r.get('candidate'),
+                    'trainReturn':fv('trainReturn'),'trainPF':fv('trainPF'),'trainMDD':fv('trainMDD'),'trainPosMonthRate':fv('trainPosMonthRate'),'trainTrades':iv('trainTrades'),
+                    'validationPass':str(r.get('validationPass','')).lower()=='true','validationReturn':fv('validationReturn'),'validationPF':fv('validationPF'),'validationMDD':fv('validationMDD'),'validationPosMonthRate':fv('validationPosMonthRate'),'validationTrades':iv('validationTrades'),
+                    'benchmarkReturn':fv('benchmarkReturn'),'benchmarkPF':fv('benchmarkPF'),'benchmarkMDD':fv('benchmarkMDD'),'benchmarkPosMonthRate':fv('benchmarkPosMonthRate'),'benchmarkTrades':iv('benchmarkTrades'),
+                  })
+          print(json.dumps({'US_ORB_V31_TRAINPASS':rows},ensure_ascii=False))
+          PY
