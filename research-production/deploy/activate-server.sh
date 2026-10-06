@@ -115,21 +115,103 @@ activate() {
   ENV_DIR=/etc/investment-research
   ENV_FILE="$ENV_DIR/research-production.env"
   APP_SHA_BEFORE="$(read_app_sha)"
+  PREVIOUS_CURRENT="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+  ROLLBACK_ENV="$ROOT/.research-production-env-rollback-$$"
+  declare -a CORE_TIMERS=(
+    research-production-fast-historical.timer
+    research-production-long-history.timer
+    research-production-forward.timer
+    research-production-temporal-evidence.timer
+    research-production-factory-status.timer
+    research-production-maintenance.timer
+  )
+  declare -a AI_TIMERS=(
+    research-production-ai-review.timer
+    research-production-video-discovery.timer
+    research-production-approved-job-intake.timer
+  )
+  declare -a AI_DAEMONS=(
+    research-production-workspace-worker.service
+  )
+  declare -A WAS_ENABLED=()
+  for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}"; do
+    if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+      WAS_ENABLED["$timer"]=1
+    else
+      WAS_ENABLED["$timer"]=0
+    fi
+  done
+  if "${SUDO[@]}" test -f "$ENV_FILE"; then
+    "${SUDO[@]}" cp -p "$ENV_FILE" "$ROLLBACK_ENV"
+  fi
 
   cleanup_transient() {
     "${SUDO[@]}" rm -rf -- "$STAGED_RELEASE" >/dev/null 2>&1 || true
     "${SUDO[@]}" rm -f -- "$NEXT_CURRENT" >/dev/null 2>&1 || true
   }
 
+  verify_timers_stopped() {
+    local timer active_state unit_state
+    for timer in "$@"; do
+      active_state="$("${SUDO[@]}" systemctl show "$timer" -p ActiveState --value 2>/dev/null || true)"
+      unit_state="$("${SUDO[@]}" systemctl show "$timer" -p UnitFileState --value 2>/dev/null || true)"
+      case "$active_state" in
+        active|activating|reloading)
+          echo "RESEARCH_TIMER_STILL_ACTIVE:$timer:$active_state" >&2
+          return 1
+          ;;
+      esac
+      case "$unit_state" in
+        enabled|enabled-runtime|linked|linked-runtime)
+          echo "RESEARCH_TIMER_STILL_ENABLED:$timer:$unit_state" >&2
+          return 1
+          ;;
+      esac
+    done
+  }
+
+  restore_previous_runtime() {
+    if [[ -n "$PREVIOUS_CURRENT" && -d "$PREVIOUS_CURRENT" ]]; then
+      local rollback_link="$ROOT/.rollback-current-$$"
+      "${SUDO[@]}" rm -f -- "$rollback_link"
+      "${SUDO[@]}" ln -s -- "$PREVIOUS_CURRENT" "$rollback_link"
+      "${SUDO[@]}" mv -Tf -- "$rollback_link" "$CURRENT"
+    fi
+    if "${SUDO[@]}" test -f "$ROLLBACK_ENV"; then
+      "${SUDO[@]}" cp -p "$ROLLBACK_ENV" "$ENV_FILE"
+    fi
+    if [[ -n "$PREVIOUS_CURRENT" && -d "$PREVIOUS_CURRENT/research-production/deploy" ]]; then
+      local source unit timer_name
+      source="$PREVIOUS_CURRENT/research-production/deploy"
+      for unit in research-production@.service research-production-temporal-evidence.service research-production-factory-status.service research-production-maintenance.service; do
+        if "${SUDO[@]}" test -f "$source/$unit"; then
+          "${SUDO[@]}" install -o root -g root -m 0644 "$source/$unit" "/etc/systemd/system/$unit"
+        fi
+      done
+      for timer_name in fast-historical long-history forward temporal-evidence factory-status maintenance; do
+        if "${SUDO[@]}" test -f "$source/research-production-$timer_name.timer"; then
+          "${SUDO[@]}" install -o root -g root -m 0644 "$source/research-production-$timer_name.timer" "/etc/systemd/system/research-production-$timer_name.timer"
+        fi
+      done
+      "${SUDO[@]}" systemctl daemon-reload
+    fi
+    local timer
+    for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}"; do
+      if [[ "${WAS_ENABLED[$timer]:-0}" == "1" ]]; then
+        "${SUDO[@]}" systemctl enable --now "$timer" >/dev/null 2>&1 || true
+      fi
+    done
+  }
+
   fail_safe() {
     local status=$?
     if (( status != 0 )); then
-      "${SUDO[@]}" systemctl disable --now \
-        research-production-fast-historical.timer \
-        research-production-long-history.timer \
-        research-production-forward.timer >/dev/null 2>&1 || true
+      "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" >/dev/null 2>&1 || true
+      restore_previous_runtime || true
+      echo "RESEARCH_PRODUCTION_ROLLBACK_ATTEMPTED=true" >&2
     fi
     cleanup_transient
+    "${SUDO[@]}" rm -f -- "$ROLLBACK_ENV" >/dev/null 2>&1 || true
     return "$status"
   }
   trap fail_safe EXIT
@@ -141,6 +223,13 @@ activate() {
     "${SUDO[@]}" test -f "$candidate/research-production/src/engine.mjs" || return 1
     "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production@.service" || return 1
     "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-forward.timer" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-temporal-evidence.service" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-temporal-evidence.timer" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-factory-status.service" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-factory-status.timer" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-maintenance.service" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/deploy/research-production-maintenance.timer" || return 1
+    "${SUDO[@]}" test -f "$candidate/research-production/bin/research-maintenance.mjs" || return 1
     local candidate_sha
     candidate_sha="$("${SUDO[@]}" git -C "$candidate" rev-parse HEAD 2>/dev/null || true)"
     [[ "$candidate_sha" == "$TARGET_SHA" ]]
@@ -152,6 +241,11 @@ activate() {
   "${SUDO[@]}" install -d -o root -g root -m 0755 "$ROOT" "$RELEASES"
   "${SUDO[@]}" install -d -o investment-research -g investment-research -m 0750 "$STATE"
   "${SUDO[@]}" install -d -o root -g investment-research -m 0750 "$ENV_DIR"
+
+  # Freeze every Research scheduler before changing /current or its SHA-bound environment.
+  # AI/Video stays disabled after a successful core cutover until the exact-SHA AI gate runs.
+  "${SUDO[@]}" systemctl disable --now "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" >/dev/null 2>&1 || true
+  verify_timers_stopped "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}"
 
   if release_is_valid "$RELEASE"; then
     echo "RESEARCH_RELEASE_REUSED=true"
@@ -226,7 +320,12 @@ activate() {
 
   local env_tmp
   env_tmp="$(mktemp)"
-  cat > "$env_tmp" <<ENV
+  # Preserve only safe Research tuning keys from the previous release.
+  # SHA/path/trading/private/order authority fields are always regenerated below.
+  if "${SUDO[@]}" test -f "$ENV_FILE"; then
+    "${SUDO[@]}" grep -E '^(RESEARCH_TEMPORAL_CRYPTO_SYMBOLS|RESEARCH_TEMPORAL_LONG_SHORT_PERIOD|RESEARCH_ADAPTIVE_POLICY_RECORD_PATH|RESEARCH_DATA_FACTORY_EVIDENCE_PATH|RESEARCH_ADAPTIVE_EVIDENCE_CATALOG_PATH|RESEARCH_ADAPTIVE_DEVELOPMENT_DIAGNOSTICS_PATH|RESEARCH_ADAPTIVE_RUNTIME_BINDINGS_PATH)=' "$ENV_FILE" > "$env_tmp" || true
+  fi
+  cat >> "$env_tmp" <<ENV
 RESEARCH_REPO_ROOT=$CURRENT
 RESEARCH_STATE_ROOT=$STATE
 RESEARCH_CODE_SHA=$TARGET_SHA
@@ -268,11 +367,16 @@ ENV
   "${SUDO[@]}" install -o root -g investment-research -m 0640 "$env_tmp" "$ENV_FILE"
   rm -f "$env_tmp"
 
-  "${SUDO[@]}" install -o root -g root -m 0644 \
-    "$CURRENT/research-production/deploy/research-production@.service" \
-    /etc/systemd/system/research-production@.service
+  local unit
+  for unit in research-production@.service research-production-temporal-evidence.service research-production-factory-status.service research-production-maintenance.service; do
+    systemd-analyze verify "$CURRENT/research-production/deploy/$unit" >/dev/null
+    "${SUDO[@]}" install -o root -g root -m 0644 \
+      "$CURRENT/research-production/deploy/$unit" \
+      "/etc/systemd/system/$unit"
+  done
   local timer
-  for timer in fast-historical long-history forward; do
+  for timer in fast-historical long-history forward temporal-evidence factory-status maintenance; do
+    systemd-analyze verify "$CURRENT/research-production/deploy/research-production-$timer.timer" >/dev/null
     "${SUDO[@]}" install -o root -g root -m 0644 \
       "$CURRENT/research-production/deploy/research-production-$timer.timer" \
       "/etc/systemd/system/research-production-$timer.timer"
@@ -307,15 +411,9 @@ ENV
       --state-root "$STATE" \
       --research-sha "$TARGET_SHA"
 
-  "${SUDO[@]}" systemctl enable --now \
-    research-production-fast-historical.timer \
-    research-production-long-history.timer \
-    research-production-forward.timer
+  "${SUDO[@]}" systemctl enable --now "${CORE_TIMERS[@]}"
 
-  for timer in \
-    research-production-fast-historical.timer \
-    research-production-long-history.timer \
-    research-production-forward.timer; do
+  for timer in "${CORE_TIMERS[@]}"; do
     "${SUDO[@]}" systemctl is-enabled --quiet "$timer"
     "${SUDO[@]}" systemctl is-active --quiet "$timer"
   done
@@ -338,10 +436,8 @@ ENV
     "PRIVATE_API=false" \
     "ORDER_AUTHORITY=false"
 
-  "${SUDO[@]}" systemctl list-timers --all \
-    research-production-fast-historical.timer \
-    research-production-long-history.timer \
-    research-production-forward.timer --no-pager
+  "${SUDO[@]}" systemctl list-timers --all "${CORE_TIMERS[@]}" --no-pager
+  printf '%s\n' "AI_REVIEW_TIMER_ENABLED=false" "VIDEO_DISCOVERY_TIMER_ENABLED=false" "APPROVED_JOB_INTAKE_TIMER_ENABLED=false" "WORKSPACE_WORKER_ENABLED=false"
 }
 
 case "$MODE" in

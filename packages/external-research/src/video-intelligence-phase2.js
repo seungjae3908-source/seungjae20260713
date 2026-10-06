@@ -86,11 +86,17 @@ export function createYoutubeDiscoveryClientV2({ apiKey = null, fetchImpl = glob
     scheduleActive: false,
     providerCredentialMutation: false,
     limits: { maxResultsPerQuery, maxPagesPerRun, maxVideosPerResearchBatch },
-    async discover({ query, channelId = null, relevanceLanguage = null, regionCode = null, requireCaptions = false, maxResults = maxResultsPerQuery, maxPages = 1, discoveredAt = new Date().toISOString(), discoveryReason = 'KEYWORD_RESEARCH' } = {}) {
+    async discover({ query, channelId = null, relevanceLanguage = null, regionCode = null, requireCaptions = false,
+      order = 'relevance', publishedAfter = null, maxResults = maxResultsPerQuery, maxPages = 1,
+      discoveredAt = new Date().toISOString(), discoveryReason = 'KEYWORD_RESEARCH' } = {}) {
       const q = text(query, 'VIDEO_DISCOVERY_QUERY_REQUIRED');
       const requestedResults = boundedInt(maxResults, maxResultsPerQuery, 1, maxResultsPerQuery, 'VIDEO_DISCOVERY_MAX_RESULTS_INVALID');
       const requestedPages = boundedInt(maxPages, 1, 1, maxPagesPerRun, 'VIDEO_DISCOVERY_MAX_PAGES_INVALID');
       const timestamp = iso(discoveredAt, 'VIDEO_DISCOVERY_TIME_INVALID');
+      const normalizedOrder = text(order, 'VIDEO_DISCOVERY_ORDER_INVALID').toLowerCase();
+      if (!['date','relevance'].includes(normalizedOrder)) fail('VIDEO_DISCOVERY_ORDER_INVALID');
+      const normalizedPublishedAfter = publishedAfter == null ? null : iso(publishedAfter, 'VIDEO_DISCOVERY_PUBLISHED_AFTER_INVALID');
+      if (normalizedPublishedAfter && normalizedPublishedAfter > timestamp) fail('VIDEO_DISCOVERY_PUBLISHED_AFTER_INVALID');
       if (!configured) return freeze({ status:'PROVIDER_NOT_CONFIGURED',provider:'YOUTUBE_DATA_API_V3',query:q,records:[],pagesUsed:0,quotaState:'NOT_CONFIGURED',safety:safety() });
       if (typeof fetchImpl !== 'function') return freeze({ status:'PROVIDER_UNAVAILABLE',provider:'YOUTUBE_DATA_API_V3',query:q,records:[],pagesUsed:0,quotaState:'UNKNOWN',safety:safety() });
 
@@ -104,6 +110,8 @@ export function createYoutubeDiscoveryClientV2({ apiKey = null, fetchImpl = glob
         searchUrl.searchParams.set('q', q);
         searchUrl.searchParams.set('maxResults', String(Math.min(requestedResults, maxVideosPerResearchBatch - records.length)));
         searchUrl.searchParams.set('key', apiKey.trim());
+        searchUrl.searchParams.set('order', normalizedOrder);
+        if (normalizedPublishedAfter) searchUrl.searchParams.set('publishedAfter', normalizedPublishedAfter);
         if (channelId) searchUrl.searchParams.set('channelId', text(channelId, 'VIDEO_DISCOVERY_CHANNEL_ID_INVALID'));
         if (relevanceLanguage) searchUrl.searchParams.set('relevanceLanguage', text(relevanceLanguage, 'VIDEO_DISCOVERY_LANGUAGE_INVALID'));
         if (regionCode) searchUrl.searchParams.set('regionCode', text(regionCode, 'VIDEO_DISCOVERY_REGION_INVALID'));

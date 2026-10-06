@@ -163,6 +163,8 @@ test('scan reviews each unseen profile once, caches by evidence digest and never
     assert.equal(first.safety.orderAllowed, false);
     assert.equal(first.invocationMode, 'MANUAL');
     assert.equal(first.scheduledInvocationObserved, false);
+    assert.equal(first.profileCoverage.allProfilesCurrentAndReviewed, true);
+    assert.deepEqual(first.profileCoverage.reviewedProfiles, ['fast-historical','forward','long-history']);
 
     for (const review of first.reviews) {
       const artifact = JSON.parse(await readFile(join(root, 'ai-review', 'reviews', `${review.evidenceDigest}.json`), 'utf8'));
@@ -233,6 +235,8 @@ test('stale-release profile evidence is deferred instead of blocking fresh exact
     assert.equal(result.evidenceCredit, 0);
     assert.equal(result.profitabilityProven, false);
     assert.equal(result.safety.executionAuthority, 'NONE');
+    assert.equal(result.profileCoverage.allProfilesCurrentAndReviewed, false);
+    assert.deepEqual(result.profileCoverage.staleProfiles, ['fast-historical','long-history']);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
