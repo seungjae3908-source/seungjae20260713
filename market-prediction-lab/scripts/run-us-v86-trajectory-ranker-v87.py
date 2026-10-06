@@ -198,8 +198,16 @@ def enrich_trajectory(raw_path: Path, confirmed_path: Path, out_path: Path):
 
     q = f"""
     COPY (
-      WITH state AS (
+      WITH state_raw AS (
         {state_sql}
+      ),
+      state AS (
+        SELECT *
+        FROM state_raw
+        QUALIFY row_number() OVER (
+          PARTITION BY symbol,timestamp
+          ORDER BY entryTime,entryPrice
+        )=1
       ),
       e AS (
         SELECT * FROM read_parquet('{confirmed_path.as_posix()}')
