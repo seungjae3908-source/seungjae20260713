@@ -84,13 +84,23 @@ def extract_month(path:Path,month:str,negative_sample_pct:int)->tuple[pd.DataFra
     """
     df=con.execute(q).fetchdf()
     countq=base+"""
+    , eligible_count AS (
+      SELECT
+        symbol,
+        floor(epoch(ts)/900) AS bucket15,
+        CASE WHEN futureHigh>=entryPrice*1.03 THEN 1 ELSE 0 END AS labelMfe3
+      FROM f
+      WHERE close>=1.0 AND priorDollar60>=100000
+    ),
+    bucket_count AS (
+      SELECT symbol,bucket15,max(labelMfe3) AS bucketHasMfe3
+      FROM eligible_count
+      GROUP BY symbol,bucket15
+    )
     SELECT
-      count(*) AS states,
-      count(*) FILTER (WHERE futureHigh>=entryPrice*1.03) AS mfe3States,
-      count(DISTINCT symbol || ':' || CAST(floor(epoch(ts)/900) AS VARCHAR))
-        FILTER (WHERE futureHigh>=entryPrice*1.03) AS mfe3Buckets
-    FROM f
-    WHERE close>=1.0 AND priorDollar60>=100000
+      (SELECT count(*) FROM eligible_count) AS states,
+      (SELECT count(*) FROM eligible_count WHERE labelMfe3=1) AS mfe3States,
+      (SELECT count(*) FROM bucket_count WHERE bucketHasMfe3=1) AS mfe3Buckets
     """
     cnt=con.execute(countq).fetchone()
     con.close()
