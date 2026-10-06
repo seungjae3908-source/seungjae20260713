@@ -1,0 +1,65 @@
+name: Research Hunter V3 Final Combine
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/combine-hunter-v3-final.py
+      - .github/workflows/research-hunter-v3-final.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  final:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KR_RUN: "37394188919"
+      US_RUN: "37394499080"
+      CRYPTO_RUN: "37394616551"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for exact source runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 180); do
+            us=$(gh api repos/${{ github.repository }}/actions/runs/${US_RUN} --jq '.status+":"+(.conclusion//"")')
+            cr=$(gh api repos/${{ github.repository }}/actions/runs/${CRYPTO_RUN} --jq '.status+":"+(.conclusion//"")')
+            krjob=$(gh api repos/${{ github.repository }}/actions/runs/${KR_RUN}/jobs --jq '[.jobs[]|select(.name=="v3 (KR_STOCK)")][0]|.status+":"+(.conclusion//"")')
+            echo "KR=$krjob US=$us CRYPTO=$cr"
+            if [[ "$us" == "completed:failure" || "$us" == "completed:cancelled" ]]; then exit 1; fi
+            if [[ "$cr" == "completed:failure" || "$cr" == "completed:cancelled" ]]; then exit 1; fi
+            if [[ "$krjob" == "completed:success" && "$us" == "completed:success" && "$cr" == "completed:success" ]]; then exit 0; fi
+            sleep 20
+          done
+          exit 1
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.KR_RUN }}
+          pattern: hunter-v3-KR_STOCK-*
+          path: sources/KR
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.US_RUN }}
+          pattern: hunter-v3-US_STOCK-clean-*
+          path: sources/US
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.CRYPTO_RUN }}
+          pattern: hunter-v3-CRYPTO*
+          path: sources/CRYPTO
+      - run: mkdir -p out && python market-prediction-lab/scripts/combine-hunter-v3-final.py --input-root sources --out-dir out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v3-final-${{ github.sha }}
+          path: out
+          if-no-files-found: error
+          retention-days: 14
