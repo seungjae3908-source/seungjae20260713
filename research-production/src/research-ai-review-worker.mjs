@@ -153,7 +153,7 @@ export function buildResearchAiEvidence(cycle, expectedResearchSha) {
   if (!PROFILES.includes(row.profile)) throw new Error('UNKNOWN_PROFILE');
   if (!/^[0-9a-f]{40}$/i.test(String(row.researchSha ?? ''))) throw new Error('INVALID_CYCLE_SHA');
   if (String(row.researchSha).toLowerCase() !== String(expectedResearchSha).toLowerCase()) throw new Error('WRONG_RELEASE_SHA');
-  if (!['complete', 'partial_failure'].includes(String(row.status))) throw new Error('UNSUPPORTED_CYCLE_STATUS');
+  if (!['complete', 'partial_failure', 'blocked_data'].includes(String(row.status))) throw new Error('UNSUPPORTED_CYCLE_STATUS');
   const results = Array.isArray(row.results) ? row.results : [];
   const tasks = results.slice(0, 100).map((value) => {
     const task = record(value) ?? {};
