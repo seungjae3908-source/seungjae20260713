@@ -1012,7 +1012,6 @@ router.post('/connections/:exchange/reuse-readonly', async (req: AuthenticatedRe
 
 router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
   try {
-    if (!requireLiveOrderCapability(req, res)) return;
     const { userId, repository } = context(req);
     const exchange = exchangeValue(req.params.exchange);
     const credentials = req.body?.credentials;
@@ -1046,6 +1045,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
       Object.entries(safeCredentials).filter(([, value]) => Boolean(value)),
     );
     const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
+    if (accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     if (accountMode === 'live') {
       const purpose = String(req.body?.purpose ?? '').trim().toLowerCase();
       const permissionSet = new Set(permissions);
