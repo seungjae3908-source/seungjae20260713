@@ -27,6 +27,7 @@ jobs:
       REAL_ORDER_ENABLED: "false"
       PRIVATE_TRADING_API_ALLOWED: "false"
       EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_XET: "1"
 
     steps:
       - uses: actions/checkout@v4
