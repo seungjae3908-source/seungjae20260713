@@ -40,6 +40,8 @@ on:
       - ops/apply-production-paper-journal-privileges.mjs
       - ops/classify-production-paper-journal-privilege-failure.mjs
       - ops/verify-production-paper-journal-privileges.mjs
+      - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
+      - api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
       - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
       - .github/scripts/build-production-postdeploy-context.mjs
       - .github/scripts/build-production-postdeploy-evidence.cjs
@@ -383,6 +385,8 @@ jobs:
             tar -czf "$paper_archive" \
               ops/apply-production-paper-journal-privileges.mjs \
               ops/classify-production-paper-journal-privilege-failure.mjs \
+              api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql \
+              api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql \
               api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
             scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
               "$paper_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
