@@ -254,8 +254,16 @@ begin
       membership_expires_at = v_next_expiry,
       role = v_next_role,
       status = v_next_status,
-      approved_at = case when v_next_status = 'approved' then v_now else null end,
-      approved_by = case when v_next_status = 'approved' then v_actor_id else null end,
+      approved_at = case
+        when v_next_status <> 'approved' then null
+        when v_current.status = 'approved' and v_current.approved_at is not null then v_current.approved_at
+        else v_now
+      end,
+      approved_by = case
+        when v_next_status <> 'approved' then null
+        when v_current.status = 'approved' and v_current.approved_by is not null then v_current.approved_by
+        else v_actor_id
+      end,
       permissions_updated_at = v_now,
       updated_at = v_now
   where id = p_target_user_id
