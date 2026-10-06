@@ -1,0 +1,58 @@
+name: Research Crypto BTC Alt Lag Scan V1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-crypto-btc-alt-lag-scan-v1.py
+      - .github/workflows/research-crypto-btc-alt-lag-scan-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-btc-alt-lag-scan-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [CRYPTO_SPOT, CRYPTO_FUTURES]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-crypto-btc-alt-lag-scan-v1.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "huggingface_hub>=0.30,<1"
+      - name: Run all-symbol BTC-alt lag scan
+        run: |
+          python market-prediction-lab/scripts/run-crypto-btc-alt-lag-scan-v1.py \
+            --market ${{ matrix.market }} \
+            --out-dir market-prediction-lab/docs/crypto-btc-alt-lag-scan-v1/${{ matrix.market }}
+      - name: Upload scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-btc-alt-lag-scan-v1-${{ matrix.market }}-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-btc-alt-lag-scan-v1/${{ matrix.market }}
+          if-no-files-found: error
+          retention-days: 14
