@@ -5,8 +5,8 @@ on:
     branches:
       - research/full-universe-3pct-hunter-3y-v1-20261006
     paths:
-      - market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v5422.py
-      - .github/workflows/research-crypto-futures-causal-long-opportunity-ranker-v5422.yml
+      - market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v542.py
+      - .github/workflows/research-crypto-futures-causal-long-opportunity-ranker-v542.yml
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: research-crypto-futures-causal-long-opportunity-ranker-v5422-${{ github.ref }}
+  group: research-crypto-futures-causal-long-opportunity-ranker-v542-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
 
       - name: Syntax check
         run: |
-          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v5422.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v542.py
           python -m py_compile market-prediction-lab/scripts/run-crypto-full-universe-flow-v4.py
 
       - name: Install dependencies
@@ -48,7 +48,7 @@ jobs:
 
       - name: Run full-universe causal LONG opportunity ranker
         run: |
-          python market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v5422.py             --out-dir market-prediction-lab/docs/crypto-futures-causal-long-opportunity-ranker-v542
+          python market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v542.py             --out-dir market-prediction-lab/docs/crypto-futures-causal-long-opportunity-ranker-v542
 
       - name: Upload evidence
         if: always()
