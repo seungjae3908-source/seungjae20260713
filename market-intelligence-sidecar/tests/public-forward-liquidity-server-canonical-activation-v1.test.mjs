@@ -107,7 +107,9 @@ function validInputs() {
     currentMainSha: MAIN,
     activationBindingDigest: bindingDigest,
     latestActivationReceipt: {
-      issueNumber: 23,
+      issueNumber: 1555,
+      issueTitle: 'Staging Readiness Control — Rollover 2026-10-02',
+      releaseControlOpen: true,
       action: 'AUTHORIZE',
       targetMainSha: MAIN,
       activationBindingDigest: bindingDigest,

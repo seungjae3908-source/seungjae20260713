@@ -83,7 +83,9 @@ function requiredCi(overrides = {}) {
 
 function activationReceipt(overrides = {}) {
   return {
-    issueNumber: 23,
+    issueNumber: 1555,
+    issueTitle: 'Staging Readiness Control — Rollover 2026-10-02',
+    releaseControlOpen: true,
     action: 'AUTHORIZE',
     commentId: RECEIPT_COMMENT_ID,
     targetMainSha: MAIN,
