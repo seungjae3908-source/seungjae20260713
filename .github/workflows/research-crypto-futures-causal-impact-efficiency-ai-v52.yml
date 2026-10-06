@@ -1,0 +1,73 @@
+name: Research Crypto Futures Causal Impact Efficiency AI V5.2
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-crypto-futures-causal-impact-efficiency-ai-v52.py
+      - .github/workflows/research-crypto-futures-causal-impact-efficiency-ai-v52.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-futures-causal-impact-efficiency-ai-v52-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SOURCE_RUN_ID: "37467915233"
+      SOURCE_ARTIFACT: "crypto-futures-causal-targetfirst-ai-v51-3a3778a2e15732faf59b6351217dad20d90f681d"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-causal-impact-efficiency-ai-v52.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-orderflow-impact-efficiency-ai-v54.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "scikit-learn>=1.5,<2" "lightgbm>=4.5,<5"
+
+      - name: Download frozen causal V5.1 evidence
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: causal-v51
+
+      - name: Run causal impact-efficiency family
+        run: |
+          EVENTS="$(find causal-v51 -name causal-short-events.parquet -print -quit)"
+          SUMMARY="$(find causal-v51 -name summary.json -print -quit)"
+          test -n "$EVENTS"
+          test -n "$SUMMARY"
+          python market-prediction-lab/scripts/run-crypto-futures-causal-impact-efficiency-ai-v52.py             --events "$EVENTS"             --v51-summary "$SUMMARY"             --out-dir market-prediction-lab/docs/crypto-futures-causal-impact-efficiency-ai-v52
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-causal-impact-efficiency-ai-v52-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-causal-impact-efficiency-ai-v52
+          if-no-files-found: error
+          retention-days: 14
