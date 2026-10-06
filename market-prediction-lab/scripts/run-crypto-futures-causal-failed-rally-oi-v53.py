@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Workflow trigger after registration.
+
 import argparse, importlib.util, json
 from pathlib import Path
 import numpy as np
