@@ -44,7 +44,6 @@ TARGET=0.03
 STOP=0.015
 HOLD_BARS=32
 NEG_SAMPLE_PCT=2
-SAMPLE_LIMIT=500_000
 
 
 def period_of(ts:pd.Timestamp)->str:
@@ -290,9 +289,10 @@ def main():
             period_states[k]+=int(v)
         for k,v in r.get("periodPositives",{}).items():
             period_pos[k]+=int(v)
-        if len(samples)<SAMPLE_LIMIT:
-            room=SAMPLE_LIMIT-len(samples)
-            samples.extend(r["sample"][:room])
+        # Preserve every positive state plus the deterministic 2% negative sample
+        # from every processed symbol. Do not cap by file order; that would bias
+        # the training sample toward early alphabetic symbols.
+        samples.extend(r["sample"])
         if idx%50==0 or idx==len(files):
             print(json.dumps({
                 "filesComplete":idx,
@@ -361,6 +361,8 @@ def main():
             "entryUsesNextCompletedSignalBarOpen":True,
             "labelPathUsesFutureOnlyAfterSignal":True,
             "freshOosExcludedFromEventDefinitionTuning":True,
+            "allPositiveAndSampledNegativeRowsRetainedAcrossFullUniverse":True,
+            "noFileOrderSampleCap":True,
             "thisIsLabelProbeNotFinalStrategy":True,
             "profitabilityProven":False,
             "executionAuthority":"NONE",
