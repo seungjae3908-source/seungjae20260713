@@ -1,0 +1,67 @@
+name: Research Crypto V3 Short Candidate Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-full-universe-3pct-hunter-crypto-v3-short-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_RUN_ID: "37398830789"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download futures V3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: full-universe-3pct-hunter-crypto-flow-v3-CRYPTO_FUTURES-*
+          path: v3-artifacts
+      - name: Print train-pass candidates without fresh OOS
+        run: |
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          files=list(Path('v3-artifacts').glob('**/candidate-grid.csv'))
+          if not files: raise SystemExit('candidate-grid missing')
+          rows=list(csv.DictReader(files[0].open(encoding='utf-8-sig')))
+          def b(v): return str(v).lower()=='true'
+          def f(v):
+              try:return float(v)
+              except:return None
+          def i(v):
+              try:return int(float(v))
+              except:return None
+          out=[]
+          for r in rows:
+              if r.get('direction')!='SHORT' or not b(r.get('trainPass')): continue
+              out.append({
+                'candidate':r.get('candidate'),
+                'family':r.get('family'),
+                'trainReturn':f(r.get('trainReturn')),
+                'trainPF':f(r.get('trainPF')),
+                'trainMDD':f(r.get('trainMDD')),
+                'trainPositiveMonthRate':f(r.get('trainPosMonthRate')),
+                'trainTrades':i(r.get('trainTrades')),
+                'validationPass':b(r.get('validationPass')),
+                'validationReturn':f(r.get('validationReturn')),
+                'validationPF':f(r.get('validationPF')),
+                'validationMDD':f(r.get('validationMDD')),
+                'validationPositiveMonthRate':f(r.get('validationPosMonthRate')),
+                'validationTrades':i(r.get('validationTrades')),
+              })
+          print(json.dumps({'SHORT_TRAIN_PASS_AUDIT':out},ensure_ascii=False))
+          PY
