@@ -908,6 +908,11 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const policy = normalizeTradingPolicy(req.body);
+    if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
+      policy.marketEnabled.crypto_futures = false;
+      policy.exchangeEnabled.bitget = false;
+      policy.enabledAssets.bitget = [];
+    }
     const enablingAutomatic = policy.mode === 'automatic'
       && (policy.automaticEnabled
         || Object.values(policy.marketEnabled).some(Boolean)
