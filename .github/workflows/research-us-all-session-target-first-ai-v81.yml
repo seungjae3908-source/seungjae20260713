@@ -1,0 +1,86 @@
+name: Research US All-Session Target-First AI V8.1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/train-us-all-session-target-first-ai-v81.py
+      - .github/workflows/research-us-all-session-target-first-ai-v81.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-us-all-session-target-first-ai-v81-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SOURCE_V8_RUN_ID: "37441335961"
+      SOURCE_V8_ARTIFACT: "us-all-session-target-first-ai-v8-38500a40278149e2d48e89e0a5efbb4947c752f3"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/extract-us-all-session-opportunity-events-v3.py
+          python -m py_compile market-prediction-lab/scripts/label-us-all-session-target-first-v8.py
+          python -m py_compile market-prediction-lab/scripts/train-us-all-session-target-first-ai-v8.py
+          python -m py_compile market-prediction-lab/scripts/train-us-all-session-target-first-ai-v81.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "duckdb>=1.3,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "polars>=1.30,<2" "huggingface_hub>=0.30,<1" "lightgbm==4.5.0" "scikit-learn==1.5.2"
+      - name: Download frozen V8 combined dataset
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_V8_RUN_ID }}
+          name: ${{ env.SOURCE_V8_ARTIFACT }}
+          path: source-v8
+      - name: Extract untouched March 2026 full-session events
+        run: |
+          python market-prediction-lab/scripts/extract-us-all-session-opportunity-events-v3.py \
+            --month 2026-03 \
+            --negative-sample-pct 3 \
+            --out-dir march-source
+      - name: Label untouched March target-before-stop paths
+        run: |
+          python market-prediction-lab/scripts/label-us-all-session-target-first-v8.py \
+            --events march-source/events.parquet \
+            --month 2026-03 \
+            --out-dir march-labeled
+      - name: Train frozen model and score untouched March holdout
+        run: |
+          FROZEN="$(find source-v8 -name events-target-first.parquet -print -quit)"
+          MARCH="$(find march-labeled -name events-target-first.parquet -print -quit)"
+          test -n "$FROZEN"
+          test -n "$MARCH"
+          python market-prediction-lab/scripts/train-us-all-session-target-first-ai-v81.py \
+            --events "$FROZEN" \
+            --diagnostic "$MARCH" \
+            --out-dir result-v81
+      - name: Upload V8.1 holdout evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-all-session-target-first-ai-v81-${{ github.sha }}
+          path: |
+            march-source
+            march-labeled
+            result-v81
+          if-no-files-found: error
+          retention-days: 14
