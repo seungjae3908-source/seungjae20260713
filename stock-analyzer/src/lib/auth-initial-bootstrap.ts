@@ -11,9 +11,10 @@ export type InitialMemberProfile = {
   login_name: string;
   display_name: string;
   role: string;
-  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
+  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'revoked' | 'withdrawn' | 'disabled' | 'inactive';
   membership_level?: 'pending' | 'associate' | 'regular' | 'admin' | null;
   is_active?: boolean | null;
+  membership_expires_at?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
