@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createResearchWorkerQueue, runResearchWorkerLoop, runResearchWorkerOnce } from '../src/research-workspace-worker-v9.js';
 import { runExistingProvidersCli } from './run-existing-research-providers-v8.mjs';
+import { runResearchWorkspaceOneShotCliV12 } from './run-research-one-shot-v12.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const sha=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 function parse(argv){
@@ -22,10 +23,16 @@ export async function runResearchWorkerCli(argv,{env=process.env,clock=()=>new D
   if(o['--status'])return queue.status();
   if(o['--enqueue']){const job=JSON.parse(await readFile(o['--enqueue'],'utf8'));return queue.enqueue(job);}
   const handler=async job=>{
-    if(job.task.runner!=='EXISTING_PROVIDER_VIDEO_V8')fail('WORKER_TASK_UNSUPPORTED');
-    const args=[...job.task.argv];if(o['--existing-env'])args.push('--existing-env',o['--existing-env']);
-    const result=await runExistingProvidersCli(args,{env,clock});
-    return {status:result.status,resultDigest:sha(result)};
+    if(job.task.runner==='EXISTING_PROVIDER_VIDEO_V8'){
+      const args=[...job.task.argv];if(o['--existing-env'])args.push('--existing-env',o['--existing-env']);
+      const result=await runExistingProvidersCli(args,{env,clock});
+      return {status:result.status,resultDigest:sha(result)};
+    }
+    if(job.task.runner==='RESEARCH_ONE_SHOT_V12'){
+      const result=await runResearchWorkspaceOneShotCliV12([...job.task.argv],{env,clock});
+      return {status:result.status,resultDigest:sha(result)};
+    }
+    fail('WORKER_TASK_UNSUPPORTED');
   };
   if(o['--once'])return runResearchWorkerOnce(queue,{workerId:o['--worker-id'],handler,retryableCodes:['PROVIDER_RUNTIME_UNAVAILABLE','WORKER_HANDLER_UNAVAILABLE']});
   const poll=Number(o['--poll-ms']??5000);if(!Number.isSafeInteger(poll)||poll<250||poll>60000)fail('WORKER_CLI_ARGUMENTS_INVALID');

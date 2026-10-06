@@ -11,6 +11,10 @@ on:
       - research-production/deploy/research-production-ai-review.timer
       - research-production/deploy/research-production-video-discovery.service
       - research-production/deploy/research-production-video-discovery.timer
+      - research-production/deploy/research-production-approved-job-intake.service
+      - research-production/deploy/research-production-approved-job-intake.timer
+      - research-production/deploy/research-production-workspace-worker.service
+      - research-production/bin/research-approved-job-intake.mjs
       - research-production/bin/research-provider-bootstrap.mjs
       - research-production/bin/research-ai-review.mjs
       - research-production/bin/research-video-discovery.mjs
@@ -54,7 +58,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n research-production/deploy/activate-ai-research.sh
           bash -n research-production/deploy/install-ai-research-units.sh
-          systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer
+          systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
           node --test             research-production/test/research-ai-activation-contract.test.mjs             research-production/test/research-ai-units-install-contract.test.mjs             research-production/test/research-provider-bootstrap.test.mjs
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-ai ')" .github/workflows/research-ai-production-activation.yml
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-ai-production-activation.yml
@@ -161,6 +165,7 @@ jobs:
               owner: context.repo.owner, repo: context.repo.repo, issue_number: hubIssue, per_page: 100,
             });
             const researchReceipt = [...comments].reverse().find((comment) => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
               const text = String(comment.body ?? '');
               return text.includes('[RESEARCH_PRODUCTION_ACTIVATION]')
                 && text.includes('status: success')
@@ -174,6 +179,7 @@ jobs:
               return;
             }
             const duplicate = [...comments].reverse().find((comment) => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
               const text = String(comment.body ?? '');
               return text.includes('[RESEARCH_AI_PRODUCTION_ACTIVATION]')
                 && text.includes('status: success')
@@ -217,11 +223,17 @@ jobs:
           umask 077
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
-            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
-          fi
+          test -n "$SSH_KNOWN_HOSTS"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Re-check exact main after Production approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actual="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          test "$actual" = "$TARGET_SHA"
 
       - name: Read-only AI Research preflight
         shell: bash
@@ -244,6 +256,8 @@ jobs:
           grep -Fxq 'VIDEO_DISCOVERY_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt"
           grep -Fxq 'AI_REVIEW_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
           grep -Fxq 'VIDEO_DISCOVERY_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'APPROVED_JOB_INTAKE_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
+          grep -Fxq 'WORKSPACE_WORKER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
           grep -Fxq 'REAL_ORDER_SUBMITTED=false' "$RUNNER_TEMP/ai-research-activation.txt"
 
       - name: Record sanitized AI Research activation receipt
@@ -268,6 +282,8 @@ jobs:
                 'video_discovery_one_shot: success',
                 'ai_review_timer_enabled: true',
                 'video_discovery_timer_enabled: true',
+                'approved_job_intake_timer_enabled: true',
+                'workspace_worker_enabled: true',
                 'live_trading: false',
                 'private_trading_api_allowed: false',
                 'real_order_enabled: false',
