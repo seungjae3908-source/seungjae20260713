@@ -528,5 +528,5 @@ jobs:
               'WAITING_GENUINE_EVIDENCE is a valid non-ready terminal: it means technical/configuration repair is complete but a genuine Natural Position/Settlement has not occurred yet.',
             ].join('\n');
             await github.rest.issues.createComment({
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.issue.number, body,
             });
