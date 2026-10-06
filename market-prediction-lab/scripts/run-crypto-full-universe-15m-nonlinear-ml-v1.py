@@ -159,6 +159,10 @@ def process_symbol(path:str,market:str):
         short_gross=np.where(short_sl,-STOP,np.where(short_tp & ~short_sl,TARGET,1.0-g["endClose"]/entry))
         g["longNet"]=long_gross-COSTS[market]
         g["shortNet"]=short_gross-COSTS[market]
+        g["longMFE"]=g["futureHigh"]/entry-1.0
+        g["longMAE"]=1.0-g["futureLow"]/entry
+        g["shortMFE"]=1.0-g["futureLow"]/entry
+        g["shortMAE"]=g["futureHigh"]/entry-1.0
         g["priorDollar96"]=prior_dollar96
 
         activity=(
@@ -170,7 +174,7 @@ def process_symbol(path:str,market:str):
         )
         sample=(np.arange(len(g))%SAMPLE_EVERY)==0
         good=activity & sample & (g["priorDollar96"]>=MIN_DOLLAR_15M) & (g["atr16"]>=0.002) & g["entryPrice"].notna() & g["endClose"].notna()
-        keep=g.loc[good,["timestamp","entryPrice","longLabel","shortLabel","longNet","shortNet"]+FEATURES].copy()
+        keep=g.loc[good,["timestamp","entryPrice","longLabel","shortLabel","longNet","shortNet","longMFE","longMAE","shortMFE","shortMAE"]+FEATURES].copy()
         if keep.empty:
             continue
         keep["symbol"]=symbol
@@ -222,9 +226,15 @@ def fit_model(train:pd.DataFrame,label:str):
 
 
 def metric_frame(pdf:pd.DataFrame,net_col:str):
+    prefix="long" if net_col=="longNet" else "short"
+    mfe_col=f"{prefix}MFE"
+    mae_col=f"{prefix}MAE"
     if pdf.empty:
-        return pl.DataFrame(schema={"date":pl.Date,"netReturn":pl.Float64})
-    return pl.from_pandas(pdf[["date",net_col]].rename(columns={net_col:"netReturn"})).with_columns(pl.col("date").cast(pl.Date))
+        return pl.DataFrame(schema={"date":pl.Date,"netReturn":pl.Float64,"MFE":pl.Float64,"MAE":pl.Float64})
+    cols=["date",net_col,mfe_col,mae_col]
+    return pl.from_pandas(
+        pdf[cols].rename(columns={net_col:"netReturn",mfe_col:"MFE",mae_col:"MAE"})
+    ).with_columns(pl.col("date").cast(pl.Date))
 
 
 def metrics(pdf,market,net_col,start,end):
