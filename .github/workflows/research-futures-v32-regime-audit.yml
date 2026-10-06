@@ -1,0 +1,87 @@
+name: Research Futures V3.2 Regime Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-futures-v32-regime-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN_ID: "37400970413"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3"
+      - name: Download Funding V3.2 artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: full-universe-3pct-hunter-futures-funding-v32-*
+          path: v32
+      - name: Audit feature and symbol drift
+        run: |
+          python - <<'PY'
+          import json, pandas as pd, numpy as np
+          from pathlib import Path
+
+          files=list(Path('v32').glob('**/winner-ledger.csv'))
+          if not files:
+              raise SystemExit('winner-ledger.csv missing')
+          df=pd.read_csv(files[0])
+          df['date']=pd.to_datetime(df['date'],errors='coerce')
+          df=df.dropna(subset=['date','netReturn']).copy()
+          periods={
+            'TRAIN':(pd.Timestamp('2023-05-01'),pd.Timestamp('2025-04-01')),
+            'VALIDATION':(pd.Timestamp('2025-04-01'),pd.Timestamp('2026-04-01')),
+            'BENCHMARK_EXPOSED':(pd.Timestamp('2026-04-01'),pd.Timestamp('2026-10-01')),
+          }
+          features=['fundingPrev','fundingMean3','oi15','oi60','topPosRatio','allAccountRatio','flow4','rvol','ret4','takerRatio']
+          out={}
+          for name,(a,b) in periods.items():
+              x=df[(df['date']>=a)&(df['date']<b)].copy()
+              item={
+                'trades':len(x),
+                'winRate':float((x['netReturn']>0).mean()) if len(x) else None,
+                'meanNet':float(x['netReturn'].mean()) if len(x) else None,
+                'medianNet':float(x['netReturn'].median()) if len(x) else None,
+                'sumNet':float(x['netReturn'].sum()) if len(x) else None,
+                'features':{},
+                'topSymbols':x['symbol'].value_counts().head(12).to_dict() if len(x) else {},
+              }
+              for c in features:
+                  if c not in x.columns or not len(x):
+                      continue
+                  s=pd.to_numeric(x[c],errors='coerce').dropna()
+                  if not len(s): continue
+                  item['features'][c]={
+                    'mean':float(s.mean()),'median':float(s.median()),
+                    'q10':float(s.quantile(.10)),'q25':float(s.quantile(.25)),
+                    'q75':float(s.quantile(.75)),'q90':float(s.quantile(.90)),
+                  }
+              out[name]=item
+
+          # Month-level returns and hit rates; diagnostic only, no optimization.
+          monthly=[]
+          for month,g in df.groupby(df['date'].dt.to_period('M')):
+              monthly.append({
+                'month':str(month),'trades':len(g),
+                'winRate':float((g['netReturn']>0).mean()),
+                'meanNet':float(g['netReturn'].mean()),
+                'sumNet':float(g['netReturn'].sum()),
+              })
+          print(json.dumps({'V32_REGIME_AUDIT':out,'MONTHLY':monthly},ensure_ascii=False))
+          PY
