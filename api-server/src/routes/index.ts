@@ -173,7 +173,11 @@ router.use('/', stockOrderbookRouter);
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
 router.use('/crypto/futures', (req, res, next) => {
   const aiChartPublicRead = req.method === 'GET'
-    && (req.path === '/tickers' || req.path === '/candles');
+    && (
+      req.path === '/tickers'
+      || req.path === '/candles'
+      || /^\/[^/]+\/(?:snapshot|flow)$/u.test(req.path)
+    );
   return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
 });
 router.use('/crypto', requireCapability('canAccessBasicInfo'));
