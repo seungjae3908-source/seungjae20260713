@@ -77,7 +77,7 @@ def daily_current(path:Path)->pd.DataFrame:
     ORDER BY symbol,date
     """
     df=con.execute(q).df();con.close()
-    return df
+    return df.rename(columns={"close_px":"close"})
 
 def attach_previous(daily:pd.DataFrame,last_by_symbol:dict[str,tuple[float,float]]):
     x=daily.sort_values(["symbol","date"]).copy()
