@@ -54,6 +54,8 @@ def prepare_features(loaded: pl.DataFrame, market: str) -> pl.DataFrame:
         (-pl.col("ret5_prev")).alias("_shortRet5"),
         (-pl.col("ret20_prev")).alias("_shortRet20"),
         (-pl.col("distance_prior_low20")).alias("_shortNearLow"),
+    ])
+    x = x.with_columns([
         (-pl.col("compressionRatio")).alias("_compressionGood"),
     ])
     x = x.with_columns([
