@@ -32,6 +32,7 @@ HOLD = 32
 TRAIN_END = flow.TRAIN_END
 VALID_END = flow.VALID_END
 OOS_END = flow.OOS_END
+METRICS_LABEL_SHIFT_DATE = pd.Timestamp("2026-06-25").date()
 
 OVERLAYS = {
     "OI15_NONNEG": lambda x: x["oi15"] >= 0.0,
@@ -80,6 +81,13 @@ def fetch_metrics(symbol: str, date):
             for c in needed[1:]:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
             df = df.dropna(subset=needed).sort_values("create_time").reset_index(drop=True)
+            # Binance UM metrics archive changed its create_time labeling convention
+            # starting 2026-06-25. Before the cutoff, row T represents the prior
+            # 5-minute window and is usable at T. From the cutoff onward, row T
+            # represents [T, T+5m), so it becomes usable only at T+5m.
+            metric_date = pd.Timestamp(date).date()
+            shift = pd.Timedelta(minutes=5) if metric_date >= METRICS_LABEL_SHIFT_DATE else pd.Timedelta(0)
+            df["available_time"] = df["create_time"] + shift
             return (symbol, str(date)), df, None
         except Exception as exc:
             last = exc
@@ -133,7 +141,7 @@ def enrich_oi(trades: pl.DataFrame) -> tuple[pl.DataFrame, dict]:
             t = t.tz_convert("UTC")
 
         # Compare timezone-aware timestamps directly to avoid numpy tz coercion edge cases.
-        pos = int(df["create_time"].searchsorted(t, side="right") - 1)
+        pos = int(df["available_time"].searchsorted(t, side="right") - 1)
         if pos < 12:
             continue
 
@@ -328,6 +336,7 @@ def main():
         "truthBoundary":{
             "oiJoinedAtOrBeforeSignalBarClose":True,
             "oi15AndOi60UseOnlyPastMetrics":True,
+            "metricsAvailabilityShiftFrom2026_06_25Applied":True,
             "freshOosUsedForOverlaySelection":False,
             "profitabilityProven":False,
             "executionAuthority":"NONE",
