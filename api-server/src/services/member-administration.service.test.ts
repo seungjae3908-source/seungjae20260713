@@ -69,7 +69,19 @@ test('unknown atomic mutation failure remains fail closed', () => {
 
 test('parses valid associate approval', () => {
   assert.deepEqual(parseMemberChangeRequest({ membershipLevel: 'associate', isActive: true, reason: '신규 회원 승인' }), {
-    membershipLevel: 'associate', isActive: true, reason: '신규 회원 승인',
+    membershipLevel: 'associate', isActive: true, membershipExpiresAt: undefined, reason: '신규 회원 승인',
+  });
+});
+
+test('parses and normalizes membership expiry', () => {
+  assert.deepEqual(parseMemberChangeRequest({
+    membershipExpiresAt: '2027-01-01T00:00:00+09:00',
+    reason: '회원 기간 설정',
+  }), {
+    membershipLevel: undefined,
+    isActive: undefined,
+    membershipExpiresAt: '2026-12-31T15:00:00.000Z',
+    reason: '회원 기간 설정',
   });
 });
 
@@ -145,7 +157,7 @@ test('revoked stale admin cannot regain admin by reactivation alone', () => {
   assert.equal(plan.changes.membership_level, 'pending');
   assert.equal(plan.changes.role, 'pending');
   assert.equal(plan.changes.status, 'pending');
-  assert.equal(plan.changes.is_active, true);
+  assert.equal(plan.changes.is_active, false);
 });
 
 test('rejected member requires explicit tier assignment before approval', () => {
@@ -163,11 +175,25 @@ test('rejected member requires explicit tier assignment before approval', () => 
   assert.equal(plan.changes.approved_by, ADMIN);
 });
 
-test('pending state does not create approved timestamp', () => {
-  const plan = planMemberChange(profile({ membership_level: 'associate', status: 'approved' }), { membershipLevel: 'pending', reason: '승인 대기로 전환' }, ADMIN, 1, NOW);
+test('pending state does not create approved timestamp or contradictory active state', () => {
+  const plan = planMemberChange(profile({ membership_level: 'associate', status: 'approved' }), { membershipLevel: 'pending', isActive: true, reason: '승인 대기로 전환' }, ADMIN, 1, NOW);
   assert.equal(plan.changes.status, 'pending');
   assert.equal(plan.changes.role, 'pending');
+  assert.equal(plan.changes.is_active, false);
+  assert.equal(plan.changes.membership_expires_at, null);
   assert.equal(plan.changes.approved_at, null);
+});
+
+test('associate expiry changes are audited as membership expiry changes', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'associate', role: 'associate', status: 'approved', membership_expires_at: null }),
+    { membershipExpiresAt: '2027-01-01T00:00:00.000Z', reason: '회원 기간 설정' },
+    ADMIN,
+    1,
+    NOW,
+  );
+  assert.equal(plan.action, 'member.membership.expiry.change');
+  assert.equal(plan.changes.membership_expires_at, '2027-01-01T00:00:00.000Z');
 });
 
 test('last active admin cannot be demoted', () => {
@@ -232,8 +258,8 @@ test('admin may be demoted when another active admin exists', () => {
 
 test('audit values include actor-independent before and after data', () => {
   const plan = planMemberChange(profile(), { membershipLevel: 'associate', reason: '회원 승인 처리' }, ADMIN, 1, NOW);
-  assert.deepEqual(plan.beforeValue, { membershipLevel: 'pending', isActive: true, role: 'user', status: 'pending' });
-  assert.deepEqual(plan.afterValue, { membershipLevel: 'associate', isActive: true, role: 'associate', status: 'approved' });
+  assert.deepEqual(plan.beforeValue, { membershipLevel: 'pending', isActive: true, membershipExpiresAt: null, role: 'user', status: 'pending' });
+  assert.deepEqual(plan.afterValue, { membershipLevel: 'associate', isActive: true, membershipExpiresAt: null, role: 'associate', status: 'approved' });
   assert.equal(plan.reason, '회원 승인 처리');
 });
 
@@ -243,8 +269,9 @@ test('permission timestamp uses server time', () => {
   assert.equal(plan.changes.updated_at, NOW.toISOString());
 });
 
-test('active admin detection requires approved status and active flag', () => {
+test('active admin detection requires approved, active and unexpired authority', () => {
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved' })), true);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', membership_expires_at: '2020-01-01T00:00:00.000Z' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'pending' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'rejected' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: false })), false);
