@@ -144,7 +144,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   input.qaScope = 'trading_core';
   input.comprehensive = null;
   input.tradingCore = {
-    schemaVersion: 'production-trading-core-qa-v2',
+    schemaVersion: 'production-trading-core-qa-v3',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
@@ -157,6 +157,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
     executionSyncInserted: 1,
     telegramActivationState: 'ACTIVE_VERIFIED',
     telegramActivationReady: true,
+    telegramUserConnectionRequired: false,
     telegramConnectedBefore: true,
     telegramRuntimeReady: true,
     telegramDeliveryQueued: 1,
@@ -181,7 +182,7 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
   input.qaScope = 'trading_core';
   input.comprehensive = null;
   input.tradingCore = {
-    schemaVersion: 'production-trading-core-qa-v2',
+    schemaVersion: 'production-trading-core-qa-v3',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
@@ -194,6 +195,7 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
     executionSyncInserted: 1,
     telegramActivationState: 'READY_FOR_ACTIVATION',
     telegramActivationReady: true,
+    telegramUserConnectionRequired: true,
     telegramConnectedBefore: false,
     telegramRuntimeReady: false,
     telegramDeliveryQueued: 0,
@@ -209,6 +211,14 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
   assert.equal(evidence.telegramActivationState, 'READY_FOR_ACTIVATION');
   assert.equal(evidence.telegramActivationReady, true);
   assert.equal(evidence.telegramActivationVerified, false);
+
+  input.tradingCore.telegramRuntimeReady = true;
+  assert.equal(buildProductionPostdeployQaEvidence(input).activationReady, true);
+
+  input.tradingCore.telegramRuntimeReady = false;
+  input.tradingCore.telegramConnectedBefore = true;
+  input.tradingCore.telegramUserConnectionRequired = false;
+  assert.equal(buildProductionPostdeployQaEvidence(input).activationReady, true);
 
   input.tradingCore.telegramRuntimeReady = true;
   assert.throws(() => buildProductionPostdeployQaEvidence(input), /TRADING_CORE_INVALID/);
