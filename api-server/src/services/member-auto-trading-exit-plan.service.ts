@@ -107,5 +107,6 @@ export function buildAutomaticExitPlanInput(input: {
     estimatedSlippagePercent: entryPlan.estimatedSlippagePercent,
     averageSpreadPercent: entryPlan.averageSpreadPercent,
     economics: null,
+    researchLineage: entryPlan.researchLineage ?? null,
   };
 }
