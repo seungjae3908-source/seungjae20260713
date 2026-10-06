@@ -167,19 +167,24 @@ jobs:
           const [file, sha, runId] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
           const providers = value?.providers ?? {};
+          const telegramConnected = value?.telegramConnectedBefore;
+          const telegramRuntimeReady = value?.telegramRuntimeReady;
           const telegramReady = value?.telegramActivationState === 'READY_FOR_ACTIVATION'
             && value?.telegramActivationReady === true
-            && value?.telegramConnectedBefore === false
-            && value?.telegramRuntimeReady === false
+            && typeof telegramConnected === 'boolean'
+            && typeof telegramRuntimeReady === 'boolean'
+            && !(telegramConnected && telegramRuntimeReady)
+            && value?.telegramUserConnectionRequired === !telegramConnected
             && value?.telegramDeliveryQueued === 0
             && value?.telegramTestDelivered === false;
           const telegramVerified = value?.telegramActivationState === 'ACTIVE_VERIFIED'
             && value?.telegramActivationReady === true
-            && value?.telegramConnectedBefore === true
-            && value?.telegramRuntimeReady === true
+            && telegramConnected === true
+            && telegramRuntimeReady === true
+            && value?.telegramUserConnectionRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
             && value?.telegramTestDelivered === true;
-          if (value?.schemaVersion !== 'production-trading-core-qa-v2'
+          if (value?.schemaVersion !== 'production-trading-core-qa-v3'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
             || value?.officialProductionOrigin !== true

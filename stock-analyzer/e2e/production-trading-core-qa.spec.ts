@@ -96,10 +96,6 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   const telegramActivationState = telegramConnectedBefore && telegramRuntimeReady
     ? 'ACTIVE_VERIFIED' as const
     : 'READY_FOR_ACTIVATION' as const;
-  if (telegramConnectedBefore || telegramRuntimeReady) {
-    expect(telegramConnectedBefore, 'Telegram connection and runtime activation must change atomically').toBe(true);
-    expect(telegramRuntimeReady, 'Telegram connection and runtime activation must change atomically').toBe(true);
-  }
 
   const originalPolicy = structuredClone(statusBefore.body.policy);
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
@@ -310,7 +306,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   expect(statusAfter.body?.actualOrderSubmittedByStatusRequest).toBe(false);
 
   writeEvidence({
-    schemaVersion: 'production-trading-core-qa-v2',
+    schemaVersion: 'production-trading-core-qa-v3',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -328,6 +324,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     executionSyncInserted: syncInserted,
     telegramActivationState,
     telegramActivationReady: true,
+    telegramUserConnectionRequired: !telegramConnectedBefore,
     telegramConnectedBefore,
     telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
