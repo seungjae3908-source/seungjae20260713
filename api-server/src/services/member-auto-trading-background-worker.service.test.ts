@@ -397,7 +397,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
       return [{
         userId: USER,
         policy: futuresPolicy,
-        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
       }];
     },
     async resolveFx() {
