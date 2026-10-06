@@ -12,15 +12,21 @@ on:
       - .github/scripts/production-preactivation-evidence-paths.cjs
       - .github/scripts/production-preactivation-evidence-paths.test.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/tests/production-paper-forward-readiness.test.mjs
+      - .github/tests/production-telegram-active-readiness.test.mjs
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - ops/verify-production-paper-forward-readiness.mjs
+      - ops/verify-production-telegram-active-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
       - .github/workflows/production-futures-live-trading-gate.yml
+      - .github/workflows/telegram-production-release.yml
       - ops/deploy-production.sh
       - stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts
+      - stock-analyzer/e2e/production-trading-core-qa.spec.ts
   issue_comment:
     types: [created]
 
@@ -54,7 +60,11 @@ jobs:
         with:
           node-version: "22"
       - run: node api-server/scripts/verify-production-automatic-trading-gate.mjs
-      - run: node --test .github/scripts/production-preactivation-evidence-paths.test.cjs
+      - run: >-
+          node --test
+          .github/scripts/production-preactivation-evidence-paths.test.cjs
+          .github/tests/production-paper-forward-readiness.test.mjs
+          .github/tests/production-telegram-active-readiness.test.mjs
 
   activate:
     name: Owner-approved four-market Production automatic-trading activation
@@ -127,6 +137,85 @@ jobs:
               core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
               return;
             }
+            const telegramRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: target,
+              branch: 'main',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            const telegramArtifactName = `telegram-production-active-verification-${target}`;
+            let telegramRun = null;
+            for (const candidate of telegramRuns
+              .filter((run) => run.name === 'Telegram Production Release'
+                && run.path === '.github/workflows/telegram-production-release.yml'
+                && run.head_sha === target
+                && run.head_branch === 'main'
+                && run.event === 'issue_comment'
+                && run.status === 'completed'
+                && run.conclusion === 'success')
+              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))) {
+              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: candidate.id,
+                per_page: 100,
+              });
+              const artifact = (artifactResponse.data.artifacts ?? []).find((item) =>
+                item.name === telegramArtifactName
+                  && item.expired !== true
+                  && item.size_in_bytes > 0);
+              if (artifact) {
+                telegramRun = candidate;
+                break;
+              }
+            }
+            if (!telegramRun) {
+              core.setFailed('AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED:' + target);
+              return;
+            }
+            const paperRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: target,
+              branch: 'main',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            const paperArtifactName = `paper-forward-no-deploy-${target}`;
+            let paperRun = null;
+            for (const run of paperRuns
+              .filter((candidate) => candidate.name === 'Paper Forward No-Deploy Schedule Activation'
+                && candidate.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
+                && candidate.head_sha === target
+                && candidate.head_branch === 'main'
+                && candidate.event === 'issue_comment'
+                && candidate.status === 'completed'
+                && candidate.conclusion === 'success'
+                && Date.parse(candidate.updated_at || candidate.created_at || '') >= productionCompletedAt)
+              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))) {
+              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
+                candidate.name === paperArtifactName
+                  && candidate.expired !== true
+                  && candidate.size_in_bytes > 0);
+              if (artifact) {
+                paperRun = run;
+                break;
+              }
+            }
+            if (!paperRun) {
+              core.setFailed('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED:' + target);
+              return;
+            }
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
             });
@@ -181,6 +270,8 @@ jobs:
             core.setOutput('spot_receipt_comment_id', String(spotReceipt.id));
             core.setOutput('futures_receipt_comment_id', String(futuresReceipt.id));
             core.setOutput('futures_max_leverage', leverage);
+            core.setOutput('paper_forward_run_id', String(paperRun.id));
+            core.setOutput('telegram_release_run_id', String(telegramRun.id));
 
       - name: Download exact Production post-deploy evidence
         uses: actions/download-artifact@v4
@@ -203,6 +294,47 @@ jobs:
           test -d "$root"
           node .github/scripts/verify-production-preactivation-evidence.cjs \
             "$TARGET_SHA" "$PRODUCTION_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$root"
+
+      - name: Download exact-SHA member Telegram active verification
+        uses: actions/download-artifact@v4
+        with:
+          name: telegram-production-active-verification-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/telegram-active-verification
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.gate.outputs.telegram_release_run_id }}
+
+      - name: Require member-linked Telegram ACTIVE_VERIFIED evidence
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$(find "${{ runner.temp }}/telegram-active-verification" -type f -name production-trading-core-qa.json -print -quit)"
+          test -n "$evidence"
+          node ops/verify-production-telegram-active-readiness.mjs \
+            --artifact "$evidence" "$TARGET_SHA" "$PRODUCTION_RUN_ID"
+
+      - name: Download exact-SHA Paper Forward runtime evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: paper-forward-no-deploy-${{ steps.command.outputs.sha }}
+          path: ${{ runner.temp }}/paper-forward-runtime-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.gate.outputs.paper_forward_run_id }}
+
+      - name: Verify exact-SHA Paper Forward activation evidence
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$(find "${{ runner.temp }}/paper-forward-runtime-evidence" -type f -name natural-cycle.json -print -quit)"
+          test -n "$evidence"
+          node ops/verify-production-paper-forward-readiness.mjs \
+            --activation-artifact "$evidence" "$TARGET_SHA"
 
       - name: Download exact-SHA four-provider Account QA evidence
         if: ${{ false }}
@@ -307,6 +439,125 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
+
+      - name: Require fresh canonical Paper Forward handoff before AUTO authority
+        id: paper-runtime
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$RUNNER_TEMP/production-paper-forward-runtime-readiness.json"
+          printf -v remote_command 'node --input-type=module - %q' "$TARGET_SHA"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$evidence" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { existsSync, lstatSync, readFileSync } from 'node:fs';
+          import { pathToFileURL } from 'node:url';
+
+          const targetSha = String(process.argv[2] ?? '').trim().toLowerCase();
+          if (!/^[0-9a-f]{40}$/u.test(targetSha)) throw new Error('PAPER_FORWARD_TARGET_SHA_INVALID');
+          const root = '/opt/stock-app-data/paper-forward-v1';
+          const runtimeRoot = `${root}/runtime-state`;
+          const paths = {
+            marker: '/opt/stock-app/.deploy/current-sha',
+            activation: `${root}/activation.json`,
+            invocations: `${runtimeRoot}/status/invocations.jsonl`,
+            handoff: `${runtimeRoot}/handoff/member-auto-trading-latest.json`,
+            validator: `${root}/releases/${targetSha}/market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js`,
+          };
+          const read = (file) => {
+            const stat = lstatSync(file);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('PAPER_FORWARD_FILE_UNSAFE');
+            return readFileSync(file, 'utf8');
+          };
+          const productionSha = read(paths.marker).trim();
+          if (productionSha !== targetSha) throw new Error('PAPER_FORWARD_PRODUCTION_SHA_MISMATCH');
+          const activation = JSON.parse(read(paths.activation));
+          if (activation?.schemaVersion !== 'paper-forward-schedule-no-deploy-activation-v2'
+            || activation?.paperRuntimeSourceSha !== targetSha
+            || activation?.productionAppShaBefore !== targetSha
+            || activation?.scheduleActive !== true
+            || activation?.externalFinancialMutationAllowed !== false
+            || activation?.liveTrading !== false
+            || activation?.privateAccountAccess !== false
+            || activation?.orderAuthority !== false) {
+            throw new Error('PAPER_FORWARD_ACTIVATION_STATE_INVALID');
+          }
+          const invocationLines = read(paths.invocations).trim().split(/\r?\n/u).filter(Boolean);
+          const invocation = invocationLines.map((line) => JSON.parse(line))
+            .filter((row) => row?.triggerSource === 'cron')
+            .at(-1);
+          if (!invocation || invocation.status !== 'COMPLETED'
+            || invocation.naturalScheduleInvocation !== true
+            || invocation.mutationCount !== 1
+            || invocation.publicForwardEvidenceAccumulating !== true
+            || invocation.paperTradeOutcomeAccumulationEnabled !== true
+            || invocation.privateRequestCount !== 0
+            || invocation.financialMutationCount !== 0
+            || invocation.orderCount !== 0
+            || invocation.liveTrading !== false
+            || invocation.orderAuthority !== false) {
+            throw new Error('PAPER_FORWARD_LAST_INVOCATION_INVALID');
+          }
+          const nowMs = Date.now();
+          const freshMs = 30 * 60 * 1000;
+          const completedAtMs = Number(invocation.completedAtMs);
+          if (!Number.isFinite(completedAtMs) || completedAtMs > nowMs || nowMs - completedAtMs > freshMs) {
+            throw new Error('PAPER_FORWARD_LAST_INVOCATION_STALE');
+          }
+          const providerLanes = Array.isArray(invocation.providerLanes) ? invocation.providerLanes : [];
+          const markets = providerLanes.map((lane) => String(lane?.market ?? '')).sort();
+          const requiredMarkets = ['CRYPTO_FUTURES', 'CRYPTO_SPOT', 'KR_STOCK', 'US_STOCK'];
+          if (JSON.stringify(markets) !== JSON.stringify(requiredMarkets)
+            || providerLanes.some((lane) => lane?.status !== 'READY')) {
+            throw new Error('PAPER_FORWARD_FOUR_MARKET_LANES_NOT_READY');
+          }
+          const handoff = JSON.parse(read(paths.handoff));
+          const validator = await import(`${pathToFileURL(paths.validator).href}?sha=${targetSha}`);
+          const validated = validator.validateMemberAutoTradingPaperHandoff(handoff, nowMs);
+          if (validated.status !== 'READY') throw new Error('PAPER_FORWARD_HANDOFF_NOT_READY');
+          if (nowMs - Number(validated.evaluatedAtMs) > freshMs) throw new Error('PAPER_FORWARD_HANDOFF_STALE');
+          const cron = execFileSync('crontab', ['-l'], { encoding: 'utf8' });
+          const cronMatches = cron.split(/\r?\n/u).filter((line) => line.includes('# stock-app-paper-forward-v1')).length;
+          if (cronMatches !== 1) throw new Error('PAPER_FORWARD_CRON_COUNT_INVALID');
+          const disabledSentinelPresent = existsSync(`${root}/DISABLED`) || existsSync(`${runtimeRoot}/DISABLED`);
+          if (disabledSentinelPresent) throw new Error('PAPER_FORWARD_DISABLED_SENTINEL_PRESENT');
+          process.stdout.write(`${JSON.stringify({
+            schemaVersion: 'production-paper-forward-runtime-readiness-v1',
+            status: 'passed',
+            targetSha,
+            productionSha,
+            paperRuntimeSha: activation.paperRuntimeSourceSha,
+            scheduleActive: true,
+            oneCronEntry: true,
+            freshWithinMinutes: 30,
+            invocationFresh: true,
+            handoffFresh: true,
+            handoffStatus: validated.status,
+            handoffEntryCount: validated.entryCount,
+            handoffDigest: validated.handoffDigest,
+            handoffValidatedByCanonicalModule: true,
+            providerLanes: providerLanes.map((lane) => ({ market: lane.market, provider: lane.provider, status: lane.status })),
+            privateRequestCount: 0,
+            financialMutationCount: 0,
+            orderCount: 0,
+            liveTrading: false,
+            disabledSentinelPresent: false,
+            rawCredentialsExposed: false,
+          }, null, 2)}\n`);
+          NODE
+          node ops/verify-production-paper-forward-readiness.mjs \
+            --runtime-artifact "$evidence" "$TARGET_SHA"
+          printf 'artifact=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized Paper Forward runtime readiness evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-paper-forward-runtime-${{ steps.command.outputs.sha }}
+          path: ${{ steps.paper-runtime.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Activate automatic execution across all four markets
         shell: bash

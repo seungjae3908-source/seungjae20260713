@@ -182,6 +182,7 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && typeof telegramRuntimeReady === 'boolean'
     && !(telegramConnected && telegramRuntimeReady)
     && tradingCore?.telegramUserConnectionRequired === !telegramConnected
+    && tradingCore?.telegramPersonalActivationRequired === true
     && tradingCore?.telegramDeliveryQueued === 0
     && tradingCore?.telegramTestDelivered === false;
   const telegramVerified = telegramState === 'ACTIVE_VERIFIED'
@@ -189,9 +190,18 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && telegramConnected === true
     && telegramRuntimeReady === true
     && tradingCore?.telegramUserConnectionRequired === false
+    && tradingCore?.telegramPersonalActivationRequired === false
     && Number(tradingCore?.telegramDeliveryQueued) >= 1
     && tradingCore?.telegramTestDelivered === true;
-  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v3'
+  const memberAutoPolicyReady = tradingCore?.memberAutoPolicyReady === true
+    && Array.isArray(tradingCore?.memberAutoPolicyBlockers)
+    && tradingCore.memberAutoPolicyBlockers.length === 0
+    && ['kiwoom', 'toss'].includes(tradingCore?.memberAutoDomesticBroker)
+    && Number.isInteger(tradingCore?.memberAutoBitgetLeverage)
+    && tradingCore.memberAutoBitgetLeverage >= 2
+    && tradingCore.memberAutoBitgetLeverage <= 7
+    && ['limited-50', 'validated'].includes(tradingCore?.memberAutoPilotStage);
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v4'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
     || tradingCore?.authenticatedProductionSession !== true
@@ -200,6 +210,7 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     || tradingCore?.journalVisible !== true
     || !(Number(tradingCore?.executionSyncInserted) >= 1)
     || (!telegramReady && !telegramVerified)
+    || !memberAutoPolicyReady
     || tradingCore?.policyRestored !== true
     || tradingCore?.realOrderSubmitted !== false
     || tradingCore?.liveTradingAuthorityGranted !== false
@@ -311,6 +322,9 @@ function buildProductionPostdeployQaEvidence({
       : false,
     telegramActivationVerified: qaScope === 'trading_core'
       ? tradingCore.telegramActivationState === 'ACTIVE_VERIFIED'
+      : false,
+    memberAutoPolicyReady: qaScope === 'trading_core'
+      ? tradingCore.memberAutoPolicyReady
       : false,
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',

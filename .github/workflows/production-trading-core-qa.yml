@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/production-trading-core-qa.yml'
       - '.github/tests/production-trading-core-qa-contract.test.mjs'
+      - '.github/scripts/production-postdeploy-qa-evidence.cjs'
+      - '.github/scripts/production-postdeploy-qa-evidence.test.cjs'
       - 'stock-analyzer/e2e/production-trading-core-qa.spec.ts'
       - 'stock-analyzer/playwright.production-trading-core.config.ts'
       - 'api-server/src/routes/trade-automation.ts'
@@ -175,6 +177,7 @@ jobs:
             && typeof telegramRuntimeReady === 'boolean'
             && !(telegramConnected && telegramRuntimeReady)
             && value?.telegramUserConnectionRequired === !telegramConnected
+            && value?.telegramPersonalActivationRequired === true
             && value?.telegramDeliveryQueued === 0
             && value?.telegramTestDelivered === false;
           const telegramVerified = value?.telegramActivationState === 'ACTIVE_VERIFIED'
@@ -182,9 +185,18 @@ jobs:
             && telegramConnected === true
             && telegramRuntimeReady === true
             && value?.telegramUserConnectionRequired === false
+            && value?.telegramPersonalActivationRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
             && value?.telegramTestDelivered === true;
-          if (value?.schemaVersion !== 'production-trading-core-qa-v3'
+          const memberAutoPolicyReady = value?.memberAutoPolicyReady === true
+            && Array.isArray(value?.memberAutoPolicyBlockers)
+            && value.memberAutoPolicyBlockers.length === 0
+            && ['kiwoom', 'toss'].includes(value?.memberAutoDomesticBroker)
+            && Number.isInteger(value?.memberAutoBitgetLeverage)
+            && value.memberAutoBitgetLeverage >= 2
+            && value.memberAutoBitgetLeverage <= 7
+            && ['limited-50', 'validated'].includes(value?.memberAutoPilotStage);
+          if (value?.schemaVersion !== 'production-trading-core-qa-v4'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
             || value?.officialProductionOrigin !== true
@@ -196,6 +208,7 @@ jobs:
             || value?.journalVisible !== true
             || !(Number(value?.executionSyncInserted) >= 1)
             || (!telegramReady && !telegramVerified)
+            || !memberAutoPolicyReady
             || value?.policyRestored !== true
             || value?.realOrderSubmitted !== false
             || value?.liveTradingAuthorityGranted !== false
@@ -232,5 +245,5 @@ jobs:
             echo '- Research/AI Chart/Backtester/other UI: not evaluated'
             echo '- real orders/cancels/amends/transfers/withdrawals: 0/0/0/0/0'
             echo '- Paper canary: one bounded QA trade'
-            echo '- Telegram: one [TEST] delivery plus execution outbox proof'
+            echo '- Telegram: explicit READY_FOR_ACTIVATION or ACTIVE_VERIFIED receipt; [TEST] delivery required only for ACTIVE_VERIFIED'
           } >> "$GITHUB_STEP_SUMMARY"
