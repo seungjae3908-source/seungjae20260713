@@ -21,6 +21,10 @@ import {
 } from './scanner-quant-strategy.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import { ScannerUniverseService } from './scanner-universe.service';
+import {
+  evaluateOwnerSelectedStockStrategy,
+  isOwnerSelectedStrategyId,
+} from './owner-selected-live-strategy.service';
 
 export interface StockSignalScanRequest {
   memberId: string;
@@ -30,6 +34,8 @@ export interface StockSignalScanRequest {
   cursor: number;
   batchSize: number;
   strategyMode?: ScannerStrategyMode;
+  /** Internal production worker hint. Public scanner callers do not need this. */
+  ownerSelectedStrategyId?: string;
   signal?: AbortSignal;
 }
 
@@ -253,7 +259,18 @@ export const StockSignalScannerService = {
         candles,
         strategyMode,
       });
-      return applyUniverseStaleness(marketCandidate, universe.stale);
+      const selectedStrategy = isOwnerSelectedStrategyId(request.ownerSelectedStrategyId)
+        ? evaluateOwnerSelectedStockStrategy({
+          market: request.market === 'KR' ? 'KR_STOCK' : 'US_STOCK',
+          card: marketCandidate,
+          candles,
+        })
+        : null;
+      const withOwnerSelected: ScannerSignalCard = selectedStrategy != null
+        && selectedStrategy.strategyId === request.ownerSelectedStrategyId
+        ? { ...marketCandidate, ownerSelectedStrategy: selectedStrategy }
+        : marketCandidate;
+      return applyUniverseStaleness(withOwnerSelected, universe.stale);
     }).filter((card): card is ScannerSignalCard => card != null)
       .filter((card) => request.filters.maximumRiskScore == null || (card.riskScore != null && card.riskScore <= request.filters.maximumRiskScore));
 
