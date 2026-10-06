@@ -47,6 +47,7 @@ const READONLY_TARGETS = {
     origin: 'https://api.bitget.com',
     paths: new Set([
       '/api/v2/mix/account/accounts',
+      '/api/v2/mix/account/account',
       '/api/v2/mix/position/all-position',
       '/api/v2/mix/order/orders-pending',
       '/api/v3/account/settings',
