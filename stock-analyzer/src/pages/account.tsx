@@ -16,6 +16,8 @@ export default function AccountPage() {
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -40,11 +42,42 @@ export default function AccountPage() {
     } finally { setBusy(false); }
   }
 
+  const membershipExpired = Boolean(
+    auth.profile?.membership_expires_at
+    && Number.isFinite(Date.parse(auth.profile.membership_expires_at))
+    && Date.parse(auth.profile.membership_expires_at) <= Date.now(),
+  );
   const stateMessage = auth.bootstrapError ? ''
+    : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
     : auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
     : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
-    : auth.profile?.status === 'withdrawn' ? '탈퇴 처리된 계정입니다.'
+    : membershipExpired ? '회원 이용 기간이 만료되었습니다.'
     : auth.membershipLevel === 'pending' ? '관리자 승인 대기 중입니다.' : '';
+
+  async function logout() {
+    setError(''); setNotice('');
+    try {
+      await auth.signOut();
+    } catch {
+      setError('로그아웃에 실패했습니다. 연결 상태를 확인한 뒤 다시 시도해 주세요.');
+    }
+  }
+
+  async function changePassword() {
+    setError(''); setNotice('');
+    if (newPassword !== newPasswordConfirm) { setError('새 비밀번호 확인이 일치하지 않습니다.'); return; }
+    setBusy(true);
+    try {
+      await auth.changePassword(newPassword);
+      setNewPassword('');
+      setNewPasswordConfirm('');
+      setNotice('비밀번호를 변경했습니다.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '비밀번호 변경에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const backButton = auth.isApproved ? (
     <button type="button" aria-label="뒤로 가기" onClick={() => navigate('/settings')} className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border bg-card">
@@ -81,7 +114,13 @@ export default function AccountPage() {
         {stateMessage && <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-warning/10 p-4 text-center text-sm font-semibold text-warning"><Clock3 className="h-5 w-5 shrink-0" /><span className="min-w-0 break-words">{stateMessage}</span></div>}
         {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-center text-sm font-semibold text-positive">현재 등급에 허용된 기능을 사용할 수 있습니다.</p>}
         {auth.isAdmin && <button type="button" onClick={() => navigate('/admin')} className="mt-4 min-h-11 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">회원 관리</button>}
-        <button type="button" onClick={() => void auth.signOut()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
+        <div className="mt-4 space-y-3 rounded-2xl border border-card-border bg-background p-3">
+          <p className="text-sm font-semibold">비밀번호 변경</p>
+          <Field label="새 비밀번호"><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} maxLength={72} autoComplete="new-password" className="input" placeholder="8자 이상" /></Field>
+          <Field label="새 비밀번호 확인"><input type="password" value={newPasswordConfirm} onChange={(e) => setNewPasswordConfirm(e.target.value)} minLength={8} maxLength={72} autoComplete="new-password" className="input" placeholder="비밀번호 다시 입력" /></Field>
+          <button type="button" disabled={busy || newPassword.length < 8 || newPasswordConfirm.length < 8} onClick={() => void changePassword()} className="min-h-11 w-full rounded-xl border border-primary px-3 py-2 text-sm font-semibold text-primary disabled:opacity-40">비밀번호 변경</button>
+        </div>
+        <button type="button" onClick={() => void logout()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
       </Card> : !auth.loading && auth.configured && <Card>
         <div className="flex rounded-2xl bg-secondary p-1"><button type="button" aria-label="로그인 탭" aria-pressed={!register} onClick={() => setRegister(false)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${!register ? 'bg-card shadow' : ''}`}>로그인</button><button type="button" aria-label="회원가입 탭" aria-pressed={register} onClick={() => setRegister(true)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${register ? 'bg-card shadow' : ''}`}>회원가입</button></div>
         <form onSubmit={submit} className="mt-5 space-y-4">
