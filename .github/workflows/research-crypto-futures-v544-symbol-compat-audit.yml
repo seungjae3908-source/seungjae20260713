@@ -1,0 +1,116 @@
+name: Research Bitget V5.4.4 Symbol Compatibility Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-crypto-futures-v544-symbol-compat-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_RUN_ID: "37480886013"
+      SOURCE_ARTIFACT: "crypto-futures-v544-coverage-audit-3e54298edf1d2c6535f30c6217b0a03a7ef21029"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "requests==2.34.2"
+      - name: Download coverage audit
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: source-audit
+      - name: Compare failed symbols to Bitget contracts
+        run: |
+          python - <<'PY'
+          import json,re
+          from pathlib import Path
+          import requests
+
+          p=next(Path("source-audit").glob("**/summary.json"))
+          src=json.loads(p.read_text(encoding="utf-8"))
+          failed=sorted(set(src.get("failedSymbols") or []))
+
+          r=requests.get(
+              "https://api.bitget.com/api/v2/mix/market/contracts",
+              params={"productType":"USDT-FUTURES"},
+              timeout=30,
+              headers={"User-Agent":"market-prediction-lab/1.0 research-only"},
+          )
+          r.raise_for_status()
+          body=r.json()
+          if body.get("code")!="00000":
+              raise SystemExit(f"BITGET_CONTRACTS_ERROR:{body}")
+          contracts={str(x.get("symbol") or "").upper():x for x in body.get("data") or []}
+          symbols=set(contracts)
+
+          rows=[]
+          for sym in failed:
+              base=sym[:-4] if sym.endswith("USDT") else sym
+              exact=sym in symbols
+              alias=None
+              alias_kind=None
+              m=re.match(r"^(1000|10000|100000|1000000)(.+)$",base)
+              if not exact and m:
+                  cand=f"{m.group(2)}USDT"
+                  if cand in symbols:
+                      alias=cand
+                      alias_kind="SAFE_MULTIPLIER_STRIP"
+              rows.append({
+                  "sourceSymbol":sym,
+                  "exactCurrentContract":exact,
+                  "safeAlias":alias,
+                  "safeAliasKind":alias_kind,
+                  "classification":(
+                      "EXACT_CURRENT"
+                      if exact else
+                      "SAFE_STATIC_ALIAS"
+                      if alias else
+                      "NO_SAFE_CURRENT_MATCH"
+                  ),
+              })
+
+          counts={}
+          for row in rows:
+              counts[row["classification"]]=counts.get(row["classification"],0)+1
+          out={
+              "contract":"crypto-futures-v544-symbol-compat-audit",
+              "failedSymbols":len(failed),
+              "currentBitgetContracts":len(symbols),
+              "classificationCounts":counts,
+              "rows":rows,
+              "truthBoundary":{
+                  "diagnosticOnly":True,
+                  "currentContractListNotHistoricalAvailabilityProof":True,
+                  "onlyMultiplierPrefixNormalizationAcceptedAsSafeAlias":True,
+                  "ambiguousSuffixOrTokenNameMappingsForbidden":True,
+                  "signalsAndThresholdFrozen":True,
+                  "profitabilityProven":False,
+                  "executionAuthority":"NONE",
+              },
+          }
+          Path("symbol-audit").mkdir(exist_ok=True)
+          Path("symbol-audit/summary.json").write_text(json.dumps(out,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+          print(json.dumps({"FINAL":out},ensure_ascii=False))
+          PY
+      - name: Upload audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-v544-symbol-compat-audit-${{ github.sha }}
+          path: symbol-audit
+          if-no-files-found: error
+          retention-days: 14
