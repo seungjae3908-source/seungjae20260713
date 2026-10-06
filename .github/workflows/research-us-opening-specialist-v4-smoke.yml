@@ -1,0 +1,61 @@
+name: Research US Opening Specialist V4 Smoke
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-us-opening-specialist-v4-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1" "requests>=2.32,<3"
+      - name: Probe one month end-to-end
+        run: |
+          python - <<'PY'
+          import importlib.util, tempfile, pandas as pd, json
+          from pathlib import Path
+          p=Path('market-prediction-lab/scripts/run-us-opening-specialist-v4.py')
+          spec=importlib.util.spec_from_file_location('usv4',p)
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          month=pd.Timestamp('2025-04-01')
+          with tempfile.TemporaryDirectory() as td:
+              path=Path(td)/'ohlcv_2025-04.parquet'
+              m.census._download_us_month(month,path)
+              base=m.orb.aggregate_month(path).select(['symbol','date','open','close','volume','dollar_volume','first5_high','first5_low','first5_close','first5_volume']).sort(['symbol','date'])
+              # Use same month alone for smoke; derive prior columns with nulls then drop, so also load March history.
+              p2=Path(td)/'ohlcv_2025-03.parquet'
+              m.census._download_us_month(pd.Timestamp('2025-03-01'),p2)
+              hist=m.orb.aggregate_month(p2).select(['symbol','date','open','close','volume','dollar_volume','first5_high','first5_low','first5_close','first5_volume']).sort(['symbol','date'])
+              combined=m.pl.concat([hist,base],how='vertical').sort(['symbol','date'])
+              cur=m.build_current_features(combined,pd.Timestamp('2025-04-01').date(),pd.Timestamp('2025-05-01').date())
+              broad=m.broad_candidates(cur)
+              raw=m.raw_month(path,broad)
+              dmap={(str(r['symbol']),pd.Timestamp(r['date']).date()):r for r in broad.to_dicts()}
+              groups=0;matched=0;events=0;outcomes=0
+              for (sym,date),g in raw.groupby(['symbol','date'],sort=False):
+                  groups+=1; nd=pd.Timestamp(date).date(); meta=dmap.get((str(sym),nd))
+                  if meta is None: continue
+                  matched+=1
+                  types=['OPEN_DRIVE','GAPUP_PB_75','GAPUP_PB_150'] if float(meta['gap'])>=0.015 else ['GAPDOWN_RECLAIM']
+                  for typ in types:
+                      det=m.detect_event(g,typ)
+                      if det is None: continue
+                      events+=1; entry_i,_=det; sg=g.sort_values('local_ts').reset_index(drop=True)
+                      if m.simulate(sg,entry_i,0.03,0.015,60) is not None: outcomes+=1
+              out={'dailyRows':cur.height,'broadDays':broad.height,'rawGroups':groups,'matched':matched,'events':events,'outcomes':outcomes}
+              print(json.dumps({'US_V4_SMOKE':out}))
+              if broad.height<=0 or groups<=0 or matched<=0 or events<=0 or outcomes<=0: raise SystemExit(1)
+          PY
