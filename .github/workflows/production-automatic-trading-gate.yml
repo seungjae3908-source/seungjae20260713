@@ -184,6 +184,7 @@ jobs:
         with:
           pattern: production-*
           path: ${{ runner.temp }}/production-preactivation-evidence
+          merge-multiple: true
           github-token: ${{ github.token }}
           run-id: ${{ steps.gate.outputs.production_run_id }}
 
