@@ -344,7 +344,8 @@ def main():
             "candidateSelectionUsesTrainAndCalibrationOnly":True,
             "validationExcludedFromSelection":True,
             "freshPost2026MarchIntradayOosAvailable":False,
-            "intradayPathsCompressedToOutcomeGridAtDetection":True,\n            "profitabilityProven":False,
+            "intradayPathsCompressedToOutcomeGridAtDetection":True,
+            "profitabilityProven":False,
             "executionAuthority":"NONE",
         },
     }
