@@ -40,6 +40,9 @@ on:
       - market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
       - .github/workflows/public-forward-liquidity-server-shadow-activation.yml
       - .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
+      - ops/activate-public-forward-liquidity-server-canonical-v1.sh
+      - ops/check-public-forward-liquidity-server-component-equivalence-v1.sh
+      - market-intelligence-sidecar/config/public-forward-liquidity-server-component-paths-v1.txt
       - market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
       - market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs
       - market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
@@ -292,6 +295,9 @@ jobs:
           allowed=(
             .github/workflows/public-forward-liquidity-server-shadow-activation.yml
             .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
+            ops/activate-public-forward-liquidity-server-canonical-v1.sh
+            ops/check-public-forward-liquidity-server-component-equivalence-v1.sh
+            market-intelligence-sidecar/config/public-forward-liquidity-server-component-paths-v1.txt
             market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
             market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs
             market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
