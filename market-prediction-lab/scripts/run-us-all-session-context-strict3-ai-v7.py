@@ -43,11 +43,18 @@ FEATURES=BASE_FEATURES+CONTEXT_FEATURES
 def context_query(path:Path)->str:
     base=probe.query_sql(path)
     return base+"""
-    , eligible_ctx AS (
-      SELECT *
+    , event_times AS (
+      SELECT DISTINCT timestamp AS ts
+      FROM sample_events
+      WHERE timestamp IS NOT NULL
+    ),
+    eligible_ctx AS (
+      SELECT f.*
       FROM f
-      WHERE close>=1.0
-        AND priorDollar60>=100000
+      INNER JOIN event_times et
+        ON et.ts=f.ts
+      WHERE f.close>=1.0
+        AND f.priorDollar60>=100000
     ),
     ctx0 AS (
       SELECT
@@ -229,7 +236,8 @@ def main():
         "truthBoundary":{
             "sameFrozenEventDatasetAsV4":True,
             "clockFeaturesExcluded":True,
-            "marketBreadthComputedFromFullEligibleMinuteUniverse":True,
+            "marketBreadthComputedFromFullEligibleMinuteUniverseAtSampleTimestamps":True,
+            "nonSampleTimestampsPrunedBeforeCrossSectionalContext":True,
             "crossSectionalRanksComputedBeforeSampleJoin":True,
             "spyQqqIwmContextUsesSameCompletedMinute":True,
             "strict3PathAwareLabel":True,
