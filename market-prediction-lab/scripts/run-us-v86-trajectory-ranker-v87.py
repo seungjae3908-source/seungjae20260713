@@ -103,6 +103,7 @@ def score_confirmed_with_features(
                     if lag <= MAX_CONFIRM_LAG:
                         if score >= threshold and score >= p["onsetScore"]:
                             rec = {
+                                "confirmedEventId": int(confirmed_count),
                                 "symbol": sym,
                                 "timestamp": ts,
                                 "date": row.date,
@@ -220,6 +221,7 @@ def enrich_trajectory(raw_path: Path, confirmed_path: Path, out_path: Path):
         f"""
         SELECT
           count(*) AS rows,
+          count(DISTINCT confirmedEventId) AS distinctEvents,
           sum(lagAvailable5) AS a5,
           sum(lagAvailable15) AS a15,
           sum(lagAvailable30) AS a30,
@@ -229,15 +231,20 @@ def enrich_trajectory(raw_path: Path, confirmed_path: Path, out_path: Path):
     ).fetchone()
     con.close()
     n = int(row[0] or 0)
+    distinct_events = int(row[1] or 0)
     if n == 0:
         raise RuntimeError("V87_TRAJECTORY_EMPTY")
+    if distinct_events != n:
+        raise RuntimeError(f"V87_TRAJECTORY_DUPLICATED:{n}:{distinct_events}")
     return {
         "rows": n,
+        "distinctConfirmedEventIds": distinct_events,
+        "duplicateRows": int(n - distinct_events),
         "lagCoverage": {
-            "t5": float((row[1] or 0) / n),
-            "t15": float((row[2] or 0) / n),
-            "t30": float((row[3] or 0) / n),
-            "t60": float((row[4] or 0) / n),
+            "t5": float((row[2] or 0) / n),
+            "t15": float((row[3] or 0) / n),
+            "t30": float((row[4] or 0) / n),
+            "t60": float((row[5] or 0) / n),
         },
     }
 
@@ -254,7 +261,7 @@ def label_exact(
     COPY (
       WITH e AS (
         SELECT
-          row_number() OVER () AS eventId,
+          confirmedEventId AS eventId,
           *,
           CAST(entryPrice AS DOUBLE)*(1.0+{ENTRY_SLIPPAGE}) AS entryPriceExec
         FROM read_parquet('{trajectory_path.as_posix()}')
@@ -388,6 +395,10 @@ def extract_mode(args):
             )
             ca = score_confirmed_with_features(raw, confirmed, model, threshold)
             ta = enrich_trajectory(raw, confirmed, trajectory)
+            if int(ta["rows"]) != int(ca["confirmedEvents"]):
+                raise RuntimeError(
+                    f"V87_CONFIRMED_TRAJECTORY_COUNT_MISMATCH:{ca['confirmedEvents']}:{ta['rows']}"
+                )
             la = label_exact(raw, trajectory, labeled, args.period, month)
             frames.append(pd.read_parquet(labeled))
             audits.append(
@@ -696,6 +707,8 @@ def train_mode(args):
             "march2026UsedAsDiagnosticOnlyAfterThresholdFreeze": True,
             "trajectoryInputsUseOnlyPastAndCurrentStates": True,
             "lagsAreExactMinuteJoinsAndMissingLagsRemainMissing": True,
+            "lagStateJoinDeduplicatedBySymbolTimestamp": True,
+            "confirmedEventIdPreservedOneToOne": True,
             "noOpeningClockRequirement": True,
             "preRegularPostAllEligible": True,
             "exactTargetStopPathAndCostsUsedForEconomicLabels": True,
