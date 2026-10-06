@@ -336,6 +336,31 @@ export function PaperClosedLoopObserver({
         </p>
       </div>
 
+      <div
+        className={`mt-4 rounded-xl border p-3 ${journalBinding?.liveFeedback.status === 'VERIFIED'
+          ? 'border-emerald-500/30 bg-emerald-500/10'
+          : 'border-border bg-muted/20'}`}
+        data-testid="paper-live-research-feedback"
+      >
+        <p className="text-[10px] font-black text-primary">실자동매매 → Research 관찰</p>
+        {journalBindingLoading && !journalBinding ? (
+          <p className="mt-1 text-xs text-muted-foreground">실자동매매 lineage를 조회하고 있습니다.</p>
+        ) : journalBindingError ? (
+          <p className="mt-1 text-xs text-muted-foreground">실자동매매 feedback 조회 실패 · 완료로 추정하지 않습니다.</p>
+        ) : (
+          <>
+            <p className="mt-1 text-sm font-black">
+              {journalBinding?.liveFeedback.status ?? 'NOT_AVAILABLE'} ·
+              {' '}검증 {journalBinding?.liveFeedback.lineageVerifiedCount ?? 0}/{journalBinding?.liveFeedback.autoTradeCount ?? 0}
+            </p>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+              불일치 {journalBinding?.liveFeedback.mismatchTradeCount ?? 0} · 미확인 {journalBinding?.liveFeedback.unavailableTradeCount ?? 0} ·
+              종료 관찰 {journalBinding?.liveFeedback.closedObservedCount ?? 0}. 이 값은 관찰 전용이며 Research mutation/promotion 권한이 없고 profitabilityCredit=0입니다.
+            </p>
+          </>
+        )}
+      </div>
+
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {stages.map((stage, index) => (
           <div key={stage.key} className="contents">
