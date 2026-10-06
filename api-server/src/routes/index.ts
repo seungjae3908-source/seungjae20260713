@@ -96,6 +96,7 @@ router.get('/auth/profile', requireAuthenticatedProfileBootstrap, (req: Authenti
     status: profile.status,
     membership_level: profile.membership_level ?? null,
     is_active: profile.is_active ?? null,
+    membership_expires_at: profile.membership_expires_at ?? null,
     permissions_updated_at: profile.permissions_updated_at ?? null,
     updated_at: profile.updated_at ?? null,
   });
@@ -170,7 +171,11 @@ router.use('/stocks/:ticker/orderbook', requireCapability('canAccessBasicInfo'))
 router.use('/', stockOrderbookRouter);
 
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
-router.use('/crypto/futures', requireCapability('canAccessFutures'));
+router.use('/crypto/futures', (req, res, next) => {
+  const aiChartPublicRead = req.method === 'GET'
+    && (req.path === '/tickers' || req.path === '/candles');
+  return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
+});
 router.use('/crypto', requireCapability('canAccessBasicInfo'));
 router.use('/', cryptoRouter);
 
@@ -184,7 +189,24 @@ router.use('/backtests', requireCapability('canAccessBacktests'));
 router.use('/', backtestsRouter);
 router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
-router.use('/paper-journal', requireCapability('canAccessJournalSync'));
+router.use('/paper-journal', (req, res, next) => {
+  const subpath = req.path;
+  if (
+    subpath === '/analytics'
+    || subpath === '/unified-ledger'
+    || subpath === '/unified-ledger/status'
+  ) {
+    return requireCapability('canAccessTradingAnalytics')(req, res, next);
+  }
+  if (
+    subpath === '/review-dataset'
+    || subpath.startsWith('/ai-review/')
+    || subpath.startsWith('/portfolio-advisor/')
+  ) {
+    return requireCapability('canAccessAiTradingReview')(req, res, next);
+  }
+  return requireCapability('canAccessJournalSync')(req, res, next);
+});
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessAutoTrading'));
