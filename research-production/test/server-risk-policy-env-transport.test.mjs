@@ -70,7 +70,11 @@ function activate(value, { mode = 'activate', legacy, supplemental, decision } =
       writeFileSync(join(bin, command), '#!/usr/bin/env bash\nexec "$REAL_NODE" "$HARNESS_ROOT/shim.mjs" ' + command + ' "$@"\n', { mode: 0o755 });
     }
     for (const prefix of [`research/releases/${SHA}`, 'research/current']) {
-      for (const file of ['bin/research-cycle.mjs', 'src/engine.mjs', 'deploy/research-production@.service',
+      for (const file of ['bin/research-cycle.mjs', 'bin/research-maintenance.mjs', 'src/engine.mjs',
+        'deploy/research-production@.service',
+        'deploy/research-production-temporal-evidence.service', 'deploy/research-production-temporal-evidence.timer',
+        'deploy/research-production-factory-status.service', 'deploy/research-production-factory-status.timer',
+        'deploy/research-production-maintenance.service', 'deploy/research-production-maintenance.timer',
         ...['fast-historical', 'long-history', 'forward'].map(t => `deploy/research-production-${t}.timer`)]) {
         const path = join(root, prefix, 'research-production', file);
         mkdirSync(resolve(path, '..'), { recursive: true });

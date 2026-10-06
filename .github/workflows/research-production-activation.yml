@@ -73,10 +73,12 @@ jobs:
       !github.event.issue.pull_request &&
       github.event.comment.user.login == github.repository_owner &&
       github.event.comment.author_association == 'OWNER' &&
-      startsWith(github.event.comment.body, '/activate-research-production ')
+      (startsWith(github.event.comment.body, '/activate-research-production ') ||
+       startsWith(github.event.comment.body, '/repair-research-production '))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
+      activation_mode: ${{ steps.gate.outputs.activation_mode }}
       target_sha: ${{ steps.gate.outputs.target_sha }}
       research_head_sha: ${{ steps.gate.outputs.research_head_sha }}
       source_merge_sha: ${{ steps.gate.outputs.source_merge_sha }}
@@ -110,18 +112,19 @@ jobs:
         with:
           script: |
             const body = String(context.payload.comment?.body ?? '').trim();
-            const match = body.match(/^\/activate-research-production ([0-9a-f]{40})$/i);
+            const match = body.match(/^\/(activate-research-production|repair-research-production) ([0-9a-f]{40})$/i);
             if (!match) {
-              core.setFailed('Expected /activate-research-production <40-char-main-sha>');
+              core.setFailed('Expected /activate-research-production <sha> or /repair-research-production <sha>');
               return;
             }
+            const activationMode = match[1].toLowerCase() === 'repair-research-production' ? 'repair' : 'activate';
             const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
             const eventIssue = Number(context.payload.issue?.number ?? 0);
             if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || eventIssue !== canonicalHub) {
               core.setFailed(`Activation command must be posted on canonical Hub #${canonicalHub || 'UNKNOWN'}; got #${eventIssue || 'UNKNOWN'}.`);
               return;
             }
-            const targetSha = match[1].toLowerCase();
+            const targetSha = match[2].toLowerCase();
             const main = await github.rest.repos.getBranch({
               owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
             });
@@ -150,8 +153,12 @@ jobs:
                 && lines.includes('order_authority: false')
                 && lines.includes('real_order_count: 0');
             });
-            if (successfulActivationReceipt) {
+            if (activationMode === 'activate' && successfulActivationReceipt) {
               core.setFailed(`DUPLICATE_TARGET_ACTIVATION_BLOCKED: target ${targetSha} already has successful receipt ${successfulActivationReceipt.html_url ?? successfulActivationReceipt.id}`);
+              return;
+            }
+            if (activationMode === 'repair' && !successfulActivationReceipt) {
+              core.setFailed('REPAIR_REQUIRES_PRIOR_SUCCESSFUL_ACTIVATION_RECEIPT');
               return;
             }
 
@@ -316,6 +323,7 @@ jobs:
 
             core.info(`Accepted source exact-head Application CI Run ${acceptedRun.id} with Required 6/6 SUCCESS.`);
             core.info(`Accepted Exact current main Required CI Run ${targetAcceptedRun.id} with Required 6/6 SUCCESS.`);
+            core.setOutput('activation_mode', activationMode);
             core.setOutput('target_sha', targetSha);
             core.setOutput('research_head_sha', headSha);
             core.setOutput('source_merge_sha', sourceMergeSha);
@@ -345,7 +353,13 @@ jobs:
             research-production/deploy/research-production@.service \
             research-production/deploy/research-production-fast-historical.timer \
             research-production/deploy/research-production-long-history.timer \
-            research-production/deploy/research-production-forward.timer
+            research-production/deploy/research-production-forward.timer \
+            research-production/deploy/research-production-temporal-evidence.service \
+            research-production/deploy/research-production-temporal-evidence.timer \
+            research-production/deploy/research-production-factory-status.service \
+            research-production/deploy/research-production-factory-status.timer \
+            research-production/deploy/research-production-maintenance.service \
+            research-production/deploy/research-production-maintenance.timer
           npm --prefix research-production test
           node research-production/bin/research-cycle.mjs preflight \
             --repo-root "$GITHUB_WORKSPACE" \
@@ -364,6 +378,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      ACTIVATION_MODE: ${{ needs.authorize.outputs.activation_mode }}
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       RESEARCH_HEAD_SHA: ${{ needs.authorize.outputs.research_head_sha }}
       SOURCE_MERGE_SHA: ${{ needs.authorize.outputs.source_merge_sha }}
@@ -395,11 +410,17 @@ jobs:
           umask 077
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
-            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
-          fi
+          test -n "$SSH_KNOWN_HOSTS"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Re-check exact main after Production approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          actual="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          test "$actual" = "$TARGET_SHA"
 
       - name: Reject already-current Research release before mutation
         shell: bash
@@ -410,10 +431,14 @@ jobs:
               "$SSH_USER@$SSH_HOST" \
               'readlink -f /opt/investment-research/current 2>/dev/null || true'
           )"
-          if [[ "$current_release" == "/opt/investment-research/releases/$TARGET_SHA" ]]; then
+          if [[ "$ACTIVATION_MODE" == "activate" && "$current_release" == "/opt/investment-research/releases/$TARGET_SHA" ]]; then
             echo 'DUPLICATE_TARGET_ACTIVATION_BLOCKED=true'
-            echo "Target Research release $TARGET_SHA is already current; refusing to reapply activation." >&2
+            echo "Target Research release $TARGET_SHA is already current; use the explicit repair command instead." >&2
             exit 78
+          fi
+          if [[ "$ACTIVATION_MODE" == "repair" && "$current_release" != "/opt/investment-research/releases/$TARGET_SHA" ]]; then
+            echo "REPAIR_TARGET_NOT_CURRENT:expected=/opt/investment-research/releases/$TARGET_SHA:actual=$current_release" >&2
+            exit 79
           fi
 
       - name: Read-only server preflight
@@ -432,7 +457,17 @@ jobs:
           remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PAPER_FORWARD_RISK_POLICY_DECISION_PATH=%q' "$TARGET_SHA" "$REPOSITORY_URL" "$PAPER_FORWARD_RISK_POLICY_DECISION_PATH")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" \
-            < research-production/deploy/activate-server.sh
+            < research-production/deploy/activate-server.sh \
+            | tee "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'RESEARCH_PRODUCTION_ACTIVATED=true' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq "TARGET_SHA=$TARGET_SHA" "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'LIVE_TRADING=false' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'PRIVATE_API=false' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'ORDER_AUTHORITY=false' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'AI_REVIEW_TIMER_ENABLED=false' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'VIDEO_DISCOVERY_TIMER_ENABLED=false' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'APPROVED_JOB_INTAKE_TIMER_ENABLED=false' "$RUNNER_TEMP/research-production-activation.txt"
+          grep -Fxq 'WORKSPACE_WORKER_ENABLED=false' "$RUNNER_TEMP/research-production-activation.txt"
 
       - name: Report success to Central Hub
         if: success()
@@ -453,7 +488,11 @@ jobs:
                 `application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
                 `target_application_ci_run: ${process.env.TARGET_APPLICATION_RUN_ID}`,
                 'exact_main_research_self_check: success',
-                'timers: fast-historical=enabled; long-history=enabled; forward=enabled',
+                'timers: fast-historical=enabled; long-history=enabled; forward=enabled; temporal-evidence=enabled; factory-status=enabled; maintenance=enabled',
+                'ai_review_timer_enabled: false',
+                'video_discovery_timer_enabled: false',
+                'approved_job_intake_timer_enabled: false',
+                'workspace_worker_enabled: false',
                 'existing_app_deploy_mutation: 0',
                 'production_db_mutation: 0',
                 'live_trading: false',

@@ -373,3 +373,178 @@ test("valid-grid parameter mutation with stale parameterIdentity is rejected bef
     "PARAMETER_IDENTITY_MISMATCH",
   );
 });
+
+
+function compiledFuturesShortFormula() {
+  const source = paper();
+  const hypothesis = createStrategyHypothesisV1({
+    title: "Evidence backed futures short evaluator hypothesis",
+    statement: "Negative momentum may support bounded futures short research.",
+    marketScope: ["CRYPTO_FUTURES"],
+    assetClass: "CRYPTO_FUTURES",
+    timeframeScope: ["15m"],
+    directionality: "NEGATIVE",
+    rationale: "Fixture validates exact bounded SHORT FormulaCandidate execution only.",
+    supportingPaperIds: [source.paperId],
+    contradictoryPaperIds: [],
+    evidenceStrength: { supporting: "STRONG", contradictory: "NONE" },
+    expectedEffect: {
+      observable: "NEXT_WINDOW_EXCESS_RETURN",
+      direction: "DECREASE",
+      minimumMagnitude: null,
+      unit: "DECIMAL_RETURN",
+      evaluationWindow: "15m",
+    },
+    falsificationCriteria: {
+      observable: "NEXT_WINDOW_EXCESS_RETURN",
+      metric: "MEAN_CONDITIONAL_EXCESS_RETURN",
+      operator: "GTE",
+      threshold: 0,
+      unit: "DECIMAL_RETURN",
+      evaluationWindow: "15m",
+      minimumObservations: 200,
+      rejectionStatement: "Reject when measured conditional mean is non-negative.",
+    },
+    requiredData: [{
+      dataset: "PUBLIC_CRYPTO_FUTURES_BARS",
+      fields: ["security_id", "open", "high", "low", "close", "volume"],
+      frequency: "15m",
+      provenanceRequired: true,
+      licenseRequired: true,
+    }],
+    knownLimitations: ["Research-only fixture; no live authority."],
+    createdAt: "2026-08-25T00:00:00.000Z",
+    generator: { name: "futures-short-evaluator-test", version: "1.0.0" },
+    evidencePolicy: { requireKnownContentLicense: true, requireResolvedCorrections: true },
+  }, [source]);
+  const decision = createHypothesisDecisionV1({
+    hypothesis,
+    papers: [source],
+    verdict: "APPROVE_FOR_RESEARCH",
+    rationale: "Research-only approval.",
+    decidedAt: "2026-08-25T01:00:00.000Z",
+    committee: { name: "Research Committee", version: "1.0.0", members: ["reviewer-a"] },
+  });
+  const rawIndicator = (name, input, periodName) => ({ kind: "INDICATOR", name, input, parameters: { period: periodName } });
+  const template = {
+    templateId: "evidence-backed-futures-short-momentum-v1",
+    hypothesisBinding: {
+      hypothesisId: hypothesis.hypothesisId,
+      hypothesisConfigHash: hypothesis.configHash,
+      decisionId: decision.decisionId,
+      decisionHash: decision.decisionHash,
+    },
+    strategyFamily: "FUTURES_NEGATIVE_MOMENTUM",
+    market: "CRYPTO_FUTURES",
+    timeframe: "15m",
+    direction: "SHORT",
+    entryDsl: {
+      action: "SHORT",
+      rules: [operator("LT", [rawIndicator("ROC", "close", "rocPeriod"), parameter("rocMax")])],
+    },
+    exitDsl: {
+      rules: [
+        { type: "ATR_STOP", atrIndicator: rawIndicator("ATR", "ohlc", "atrPeriod"), multiplierParameter: "atrStop" },
+        { type: "TARGET", distanceParameter: "targetDistance" },
+        { type: "TIME_EXIT", barsParameter: "timeBars" },
+      ],
+    },
+    parameterSpace: [
+      { name: "atrPeriod", domain: "PERIOD", valueType: "INTEGER", min: 2, max: 2, step: 1 },
+      { name: "atrStop", domain: "POSITIVE_MULTIPLIER", valueType: "NUMBER", min: 1, max: 1, step: 0.5 },
+      { name: "rocPeriod", domain: "PERIOD", valueType: "INTEGER", min: 2, max: 2, step: 1 },
+      { name: "rocMax", domain: "SIGNED_VALUE", valueType: "NUMBER", min: -0.01, max: -0.01, step: 0.01 },
+      { name: "targetDistance", domain: "PRICE_FRACTION", valueType: "NUMBER", min: 0.02, max: 0.02, step: 0.01 },
+      { name: "timeBars", domain: "BAR_COUNT", valueType: "INTEGER", min: 2, max: 2, step: 1 },
+    ],
+    limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
+  };
+  const formula = compileStrategyHypothesisToFormulaCandidatesV1({
+    hypothesis,
+    decision,
+    templates: [template],
+    policy: {
+      compilerId: "safe-hypothesis-formula-compiler",
+      compilerVersion: "1.0.0",
+      costPolicyIdentity: "CRYPTO_FUTURES_COST_V1",
+      riskPolicyIdentity: "RESEARCH_RISK_V1",
+      datasetIdentity: "dataset:train:futures-short-v1",
+      datasetRole: "TRAIN",
+      budget: generationBudget(),
+    },
+  })[0];
+  const generated = generateBoundedFormulaCandidatesV1({
+    formulaCandidates: [formula],
+    budget: generationBudget(),
+    search: {
+      method: "BOUNDED_GRID",
+      seed: 11,
+      requestedCandidates: 1,
+      datasetIdentity: "dataset:train:futures-short-v1",
+      finalHoldoutAccess: false,
+    },
+  }).generatedCandidates[0];
+  return { formula, generated };
+}
+
+test("crypto futures SHORT formula uses the reviewed bearish rule and #690 one-pass backtest", () => {
+  const { formula, generated } = compiledFuturesShortFormula();
+  assert.equal(formula.market, "CRYPTO_FUTURES");
+  assert.equal(formula.direction, "SHORT");
+  assert.equal(formula.entryDsl.action, "SHORT");
+  const executionParameters = buildEvidenceBackedFormulaExecutionParametersV1({ formulaCandidate: formula, generatedCandidate: generated });
+  const { signalEvaluator, evaluatorContract } = createEvidenceBackedFormulaSignalEvaluatorV1({ formulaCandidate: formula, generatedCandidate: generated });
+  const series = candles([110, 109, 108, 104, 102, 100, 98, 96, 94, 92]);
+  const directSignal = signalEvaluator({ market: "CRYPTO_FUTURES", side: "short", timeframe: "15m", candles: series, index: 3 });
+  assert.equal(directSignal.safeDslSignal, true);
+  assert.equal(directSignal.signalTimestamp, series[3].timestamp);
+  expectCode(
+    () => signalEvaluator({ market: "CRYPTO_FUTURES", side: "long", timeframe: "15m", candles: series, index: 3 }),
+    "BACKTEST_CONTEXT_FORMULA_MISMATCH",
+  );
+  const result = runOnePassCandidateBacktestV1({
+    formulaCandidate: formula,
+    generatedCandidate: generated,
+    datasetIdentity: "dataset:train:futures-short-v1",
+    backtestInput: {
+      market: "CRYPTO_FUTURES",
+      symbol: "BTCUSDT",
+      timeframe: "15m",
+      side: "short",
+      candles: series,
+      initialCapital: 10_000,
+      riskModel: { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 },
+      costModel: {
+        entryFeeRate: 0.0006,
+        exitFeeRate: 0.0006,
+        taxRate: 0,
+        slippageRate: 0.0002,
+        spreadRate: 0.0002,
+        latencyBars: 0,
+        latencyDriftRate: 0,
+      },
+      fundingRates: [],
+    },
+    executionParameters,
+    signalEvaluator,
+    evaluatorContract,
+    period: { startTime: series[0].timestamp, endTime: series.at(-1).timestamp, includeFinalHoldout: false },
+    liquidityImpactEvidence: { value: 0, evidenceId: "fixture:futures-liquidity-observed-zero" },
+  });
+  assert.equal(result.canonicalBacktestOwner, "#690");
+  assert.equal(result.executionEquivalent, true);
+  assert.equal(result.safety.executionAuthority, "NONE");
+  assert.ok(result.trades.length >= 1);
+  assert.ok(result.trades.every((trade) => trade.side === "short" && trade.action === "SHORT"));
+});
+
+test("cash-market evaluator still rejects any non-LONG formula before execution", () => {
+  const { formula } = compiledMomentumFormula();
+  const forged = structuredClone(formula);
+  forged.direction = "SHORT";
+  forged.entryDsl = { ...forged.entryDsl, action: "SHORT" };
+  assert.throws(
+    () => createEvidenceBackedFormulaSignalEvaluatorV1({ formulaCandidate: forged, generatedCandidate: null }),
+    /FORMULA_HASH_MISMATCH/,
+  );
+});

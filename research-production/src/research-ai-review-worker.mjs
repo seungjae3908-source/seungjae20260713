@@ -394,11 +394,22 @@ export async function runResearchAiReviewScan({
     }
   }
 
+  const reviewedProfiles = [...new Set(reviews.map((row) => row.profile))].sort();
+  const staleProfiles = deferredProfiles.filter((row) => row.reason === 'STALE_RELEASE_EVIDENCE').map((row) => row.profile).sort();
+  const profileCoverage = Object.freeze({
+    totalProfiles: PROFILES.length,
+    reviewedProfiles: Object.freeze(reviewedProfiles),
+    missingProfiles: Object.freeze([...missingProfiles].sort()),
+    staleProfiles: Object.freeze(staleProfiles),
+    blockedProfiles: Object.freeze(blockedProfiles.map((row) => row.profile).sort()),
+    allProfilesCurrentAndReviewed: reviewedProfiles.length === PROFILES.length
+      && missingProfiles.length === 0 && staleProfiles.length === 0 && blockedProfiles.length === 0,
+  });
   const result = Object.freeze({
     schemaVersion: 'research-production-ai-scan-v1',
     status: blockedProfiles.length > 0 ? 'PARTIAL_AI_UNAVAILABLE' : reviews.length > 0 ? 'COMPLETE' : 'NO_NEW_EVIDENCE',
     observedAt, researchSha: base.researchSha, provider: policy.provider, model: policy.model, reason: policy.reason,
-    providerNetworkCalls, cacheHits,
+    providerNetworkCalls, cacheHits, profileCoverage,
     invocationMode: parseInvocationMode(env), scheduledInvocationObserved: false,
     reviews: Object.freeze(reviews), missingProfiles: Object.freeze(missingProfiles),
     blockedProfiles: Object.freeze(blockedProfiles), deferredProfiles: Object.freeze(deferredProfiles),
