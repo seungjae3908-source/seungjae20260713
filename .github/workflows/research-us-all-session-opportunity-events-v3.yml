@@ -7,6 +7,7 @@ on:
     paths:
       - market-prediction-lab/scripts/extract-us-all-session-opportunity-events-v3.py
       - market-prediction-lab/scripts/run-us-all-session-opportunity-probe-v1.py
+      - market-prediction-lab/scripts/train-us-all-session-opportunity-ai-v4.py
       - .github/workflows/research-us-all-session-opportunity-events-v3.yml
   workflow_dispatch:
 
@@ -85,8 +86,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install combine dependencies
-        run: python -m pip install "pandas>=2.2,<3" "pyarrow>=18,<22"
+      - name: Install combine and AI dependencies
+        run: python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "lightgbm==4.5.0" "scikit-learn==1.5.2"
       - uses: actions/download-artifact@v4
         with:
           pattern: us-all-session-opportunity-events-v3-*
@@ -144,7 +145,12 @@ jobs:
           (out/"summary.json").write_text(json.dumps(result,ensure_ascii=False,indent=2,default=str)+"\n",encoding="utf-8")
           print(json.dumps({"FINAL_COMBINED":result},ensure_ascii=False,default=str))
           PY
-      - name: Upload combined event dataset
+      - name: Train frozen-period nonlinear opportunity AI
+        run: |
+          python market-prediction-lab/scripts/train-us-all-session-opportunity-ai-v4.py \
+            --events combined/events.parquet \
+            --out-dir combined/ai-v4
+      - name: Upload combined event dataset and AI evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
