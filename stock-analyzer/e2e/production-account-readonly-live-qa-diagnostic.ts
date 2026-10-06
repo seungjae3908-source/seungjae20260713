@@ -25,6 +25,7 @@ const requestPaths = new Set([
   '/api/v3/account/assets',
   '/api/v3/position/current-position',
   '/api/v3/trade/unfilled-orders',
+  '/api/v2/mix/account/account',
   '/api/v2/mix/account/accounts',
   '/api/v2/mix/position/all-position',
   '/api/v2/mix/order/orders-pending',
