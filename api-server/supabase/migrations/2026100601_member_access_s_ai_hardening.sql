@@ -101,7 +101,7 @@ alter table public.member_permission_audit
 
 drop function if exists public.apply_member_permission_change(uuid, text, boolean, text, timestamptz);
 
-create function public.apply_member_permission_change(
+create or replace function public.apply_member_permission_change(
   p_target_user_id uuid,
   p_membership_level text,
   p_is_active boolean,
