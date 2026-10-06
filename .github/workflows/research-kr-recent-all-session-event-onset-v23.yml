@@ -1,0 +1,69 @@
+name: Research KR Recent All-Session Event-Onset V2.3
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-kr-recent-all-session-event-onset-v23.py
+      - .github/workflows/research-kr-recent-all-session-event-onset-v23.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-kr-recent-all-session-event-onset-v23-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SOURCE_RUN_ID: "37439160159"
+      SOURCE_ARTIFACT: "kr-recent-all-session-path-miner-v2-eb051cdeb97b3c418a5b568d90cd3d8ee7827c05"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-kr-recent-all-session-event-onset-v23.py
+          python -m py_compile market-prediction-lab/scripts/run-kr-recent-all-session-recall-first-v22.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "lightgbm==4.5.0" "scikit-learn==1.5.2" "polars>=1.30,<2"
+      - name: Download frozen KR path events
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: source
+      - name: Run event-onset exact replay
+        run: |
+          EVENTS="$(find source -name events.parquet -print -quit)"
+          if [ -z "$EVENTS" ]; then
+            EVENTS="$(find source -name '*.parquet' -print -quit)"
+          fi
+          test -n "$EVENTS"
+          python market-prediction-lab/scripts/run-kr-recent-all-session-event-onset-v23.py \
+            --events "$EVENTS" \
+            --out-dir market-prediction-lab/docs/kr-recent-all-session-event-onset-v23
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kr-recent-all-session-event-onset-v23-${{ github.sha }}
+          path: market-prediction-lab/docs/kr-recent-all-session-event-onset-v23
+          if-no-files-found: error
+          retention-days: 14
