@@ -90,9 +90,11 @@ test('suspended admin is treated as pending', () => {
   assert.equal(deriveMemberTier({ membership_level: 'admin', status: 'suspended', is_active: false }), 'pending');
 });
 
-test('unknown client role does not gain capabilities', () => {
-  assert.equal(deriveMemberTier({ role: 'superadmin', status: 'pending' }), 'pending');
-  assert.equal(hasCapability({ role: 'superadmin', status: 'pending' }, 'canManageMembers'), false);
+test('unknown client role does not gain capabilities even when approved and active', () => {
+  assert.equal(deriveMemberTier({ role: 'superadmin', status: 'pending', is_active: true }), 'pending');
+  assert.equal(deriveMemberTier({ role: 'superadmin', status: 'approved', is_active: true }), 'pending');
+  assert.equal(hasCapability({ role: 'superadmin', status: 'approved', is_active: true }, 'canAccessBasicInfo'), false);
+  assert.equal(hasCapability({ role: 'superadmin', status: 'approved', is_active: true }, 'canManageMembers'), false);
 });
 
 test('membership labels use the requested Korean names', () => {
