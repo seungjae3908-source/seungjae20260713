@@ -207,7 +207,7 @@ test('prior-release profile evidence is treated as missing for the current relea
     assert.equal(result.providerNetworkCalls, 1);
     assert.equal(result.reviews.length, 1);
     assert.equal(result.reviews[0].profile, 'forward');
-    assert.deepEqual(result.missingProfiles.sort(), ['fast-historical', 'long-history']);
+    assert.deepEqual([...result.missingProfiles].sort(), ['fast-historical', 'long-history']);
     assert.equal(result.blockedProfiles.length, 0);
     assert.equal(calls, 1);
   } finally {
