@@ -624,7 +624,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: 1T · Focused Trading Core Production QA
+      - name: 1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA
         id: trading_core_qa
         if: ${{ inputs.qa_scope == 'trading_core' }}
         env:
@@ -634,6 +634,7 @@ jobs:
           PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
           PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
           PRODUCTION_TRADING_CORE_QA: 'true'
+          PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'
           PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
           PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/trading-core
         working-directory: stock-analyzer
