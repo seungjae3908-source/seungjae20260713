@@ -68,6 +68,51 @@ function providerState(connections: any[], provider: string) {
   return connections.find((row) => String(row?.exchange ?? row?.provider ?? '').toLowerCase() === provider) ?? null;
 }
 
+function memberAutoPolicyReadiness(policy: any) {
+  const blockers: string[] = [];
+  const requireTrue = (value: unknown, code: string) => {
+    if (value !== true) blockers.push(code);
+  };
+  const requirePositive = (value: unknown, code: string) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) blockers.push(code);
+  };
+
+  if (policy?.mode !== 'automatic') blockers.push('MODE_NOT_AUTOMATIC');
+  requireTrue(policy?.automaticEnabled, 'MEMBER_AUTOMATIC_DISABLED');
+  if (policy?.emergencyStopped !== false) blockers.push('EMERGENCY_STOPPED');
+  if (policy?.newEntriesStopped !== false) blockers.push('NEW_ENTRIES_STOPPED');
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    requireTrue(policy?.marketEnabled?.[market], `MARKET_DISABLED:${market}`);
+  }
+
+  const domesticBroker = policy?.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  for (const provider of ['kiwoom', 'upbit', 'bitget', domesticBroker]) {
+    requireTrue(policy?.exchangeEnabled?.[provider], `PROVIDER_DISABLED:${provider}`);
+  }
+  if (policy?.stockBrokerByMarket?.us_stock !== 'kiwoom') blockers.push('US_STOCK_BROKER_NOT_KIWOOM');
+
+  const leverage = Number(policy?.bitgetLeverage);
+  if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) blockers.push('BITGET_LEVERAGE_OUT_OF_POLICY');
+  requireTrue(policy?.riskOptimizationEnabled, 'RISK_OPTIMIZATION_DISABLED');
+  if (!['limited-50', 'validated'].includes(String(policy?.pilotStage ?? ''))) {
+    blockers.push('PILOT_LIVE_DISABLED');
+  }
+  for (const key of ['totalCapitalKrw', 'maxOrderKrw', 'maxInstrumentKrw', 'maxOpenPositions', 'maxDailyOrders']) {
+    requirePositive(policy?.[key], `INVALID_LIMIT:${key}`);
+  }
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    requirePositive(policy?.maxAssetClassKrw?.[market], `INVALID_MARKET_LIMIT:${market}`);
+  }
+
+  return {
+    ready: blockers.length === 0,
+    blockers,
+    domesticBroker,
+    bitgetLeverage: leverage,
+    pilotStage: String(policy?.pilotStage ?? ''),
+  };
+}
+
 test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with zero real order authority', async ({ page }) => {
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
@@ -98,6 +143,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     : 'READY_FOR_ACTIVATION' as const;
 
   const originalPolicy = structuredClone(statusBefore.body.policy);
+  const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
   const canarySignalId = `trading-core-qa:${expectedDeploySha.slice(0, 12)}:${Date.now()}`;
   const canaryStrategy = 'TRADING_CORE_QA_CANARY';
@@ -306,7 +352,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   expect(statusAfter.body?.actualOrderSubmittedByStatusRequest).toBe(false);
 
   writeEvidence({
-    schemaVersion: 'production-trading-core-qa-v3',
+    schemaVersion: 'production-trading-core-qa-v4',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -325,11 +371,17 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramActivationState,
     telegramActivationReady: true,
     telegramUserConnectionRequired: !telegramConnectedBefore,
+    telegramPersonalActivationRequired: !telegramConnectedBefore || !telegramRuntimeReady,
     telegramConnectedBefore,
     telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
     policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
+    memberAutoPolicyReady: originalPolicyReadiness.ready,
+    memberAutoPolicyBlockers: originalPolicyReadiness.blockers,
+    memberAutoDomesticBroker: originalPolicyReadiness.domesticBroker,
+    memberAutoBitgetLeverage: originalPolicyReadiness.bitgetLeverage,
+    memberAutoPilotStage: originalPolicyReadiness.pilotStage,
     realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,
