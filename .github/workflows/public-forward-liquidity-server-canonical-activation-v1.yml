@@ -103,8 +103,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
       !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/activate-public-forward-liquidity-server-canonical-v1 ')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -132,8 +134,10 @@ jobs:
               core.setFailed('SERVER_CANONICAL_ACTIVATION_OWNER_REQUIRED');
               return;
             }
-            if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control') {
+            const releaseControlTitle = String(context.payload.issue?.title ?? '');
+            const validReleaseControl = releaseControlTitle === 'Staging Readiness Control'
+              || releaseControlTitle.startsWith('Staging Readiness Control — Rollover ');
+            if (context.payload.issue?.state !== 'open' || !validReleaseControl) {
               core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID');
               return;
             }
@@ -229,7 +233,7 @@ jobs:
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
             const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.issue.number, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             let latest = null;
@@ -302,7 +306,7 @@ jobs:
               return;
             }
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.issue.number, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';

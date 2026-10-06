@@ -38,6 +38,8 @@ on:
       - market-prediction-lab/tests/adaptive-multi-evidence-strategy-health-v2.test.js
       - market-prediction-lab/tests/adaptive-multi-evidence-strategy-portfolio-v2.test.js
       - market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
+      - .github/workflows/public-forward-liquidity-server-shadow-activation.yml
+      - .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
@@ -284,6 +286,8 @@ jobs:
           git cat-file -e "$base^{commit}"
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           allowed=(
+            .github/workflows/public-forward-liquidity-server-shadow-activation.yml
+            .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
             .github/workflows/paper-forward-schedule-validation.yml
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
