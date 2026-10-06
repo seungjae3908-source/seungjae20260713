@@ -72,7 +72,7 @@ def add_features(df:pl.DataFrame,market_map:dict[str,str])->pl.DataFrame:
         (pl.col("prevClose")/pl.col("priorLow20")-1).alias("nearLow20"),
         ((((pl.col("prevHigh")-pl.col("prevLow"))/pl.col("prevClose"))/pl.col("preRange20"))).alias("compression"),
         ((pl.col("prevClose")-pl.col("prevLow"))/(pl.col("prevHigh")-pl.col("prevLow")).clip(1e-9,None)).alias("closePosition"),
-        pl.col("preDollar20").log1p().alias("prevDollarLog"),
+        (pl.col("preDollar20")+1.0).log().alias("prevDollarLog"),
         ((pl.col("prevHigh")-pl.col("prevLow"))/pl.col("prevClose")).alias("prevRangePct"),
         (pl.col("prevClose")/pl.col("prevOpen")-1).alias("prevBodyReturn"),
         (pl.col("high")/pl.col("open")-1>=0.03).cast(pl.Int8).alias("label3"),
@@ -150,10 +150,11 @@ def main():
     feat=add_features(raw,market_map)
     pdf=feat.select(["date","symbol","open","high","low","close","label3",*FEATURES]).to_pandas()
     pdf["date"]=pd.to_datetime(pdf["date"]).dt.date
-    td=[d.date() for d in pd.date_range("2023-05-01","2024-09-30",freq="D")]
-    tuned=[d.date() for d in pd.date_range("2024-10-01","2025-03-31",freq="D")]
-    vd=[d.date() for d in pd.date_range("2025-04-01","2026-03-31",freq="D")]
-    od=[d.date() for d in pd.date_range("2026-04-01","2026-09-30",freq="D")]
+    all_dates=sorted(pdf["date"].unique().tolist())
+    td=[d for d in all_dates if d<FIT_END]
+    tuned=[d for d in all_dates if FIT_END<=d<TUNE_END]
+    vd=[d for d in all_dates if TUNE_END<=d<VALID_END]
+    od=[d for d in all_dates if VALID_END<=d<OOS_END]
 
     model1,fit_meta=fit_model(pdf,FIT_END)
     tune,auc_tune=score_period(model1,pdf,FIT_END,TUNE_END)
