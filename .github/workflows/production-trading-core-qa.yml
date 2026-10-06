@@ -167,7 +167,19 @@ jobs:
           const [file, sha, runId] = process.argv.slice(2);
           const value = JSON.parse(fs.readFileSync(file, 'utf8'));
           const providers = value?.providers ?? {};
-          if (value?.schemaVersion !== 'production-trading-core-qa-v1'
+          const telegramReady = value?.telegramActivationState === 'READY_FOR_ACTIVATION'
+            && value?.telegramActivationReady === true
+            && value?.telegramConnectedBefore === false
+            && value?.telegramRuntimeReady === false
+            && value?.telegramDeliveryQueued === 0
+            && value?.telegramTestDelivered === false;
+          const telegramVerified = value?.telegramActivationState === 'ACTIVE_VERIFIED'
+            && value?.telegramActivationReady === true
+            && value?.telegramConnectedBefore === true
+            && value?.telegramRuntimeReady === true
+            && Number(value?.telegramDeliveryQueued) >= 1
+            && value?.telegramTestDelivered === true;
+          if (value?.schemaVersion !== 'production-trading-core-qa-v2'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
             || value?.officialProductionOrigin !== true
@@ -178,8 +190,7 @@ jobs:
             || value?.paperFilled !== true
             || value?.journalVisible !== true
             || !(Number(value?.executionSyncInserted) >= 1)
-            || !(Number(value?.telegramDeliveryQueued) >= 1)
-            || value?.telegramTestDelivered !== true
+            || (!telegramReady && !telegramVerified)
             || value?.policyRestored !== true
             || value?.realOrderSubmitted !== false
             || value?.liveTradingAuthorityGranted !== false
