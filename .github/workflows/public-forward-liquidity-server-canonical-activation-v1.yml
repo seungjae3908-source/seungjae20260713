@@ -132,8 +132,10 @@ jobs:
               core.setFailed('SERVER_CANONICAL_ACTIVATION_OWNER_REQUIRED');
               return;
             }
-            if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control') {
+            const releaseControlTitle = String(context.payload.issue?.title ?? '');
+            const validReleaseControl = releaseControlTitle === 'Staging Readiness Control'
+              || releaseControlTitle.startsWith('Staging Readiness Control — Rollover ');
+            if (context.payload.issue?.state !== 'open' || !validReleaseControl) {
               core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID');
               return;
             }
