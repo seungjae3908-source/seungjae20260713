@@ -408,6 +408,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         options: { data: { display_name: name, login_name: normalized } },
       });
       if (error || data.user?.identities?.length === 0) throw new Error(authMessage(error ?? new Error('already')));
+      if (!data.session) {
+        throw new Error('회원가입 확인 메일 설정이 활성화되어 있어 이 아이디 방식으로 로그인할 수 없습니다. 관리자에게 계정 인증 설정 확인을 요청해 주세요.');
+      }
     },
     async changePassword(password) {
       if (password.length < 8 || password.length > 72) throw new Error('비밀번호는 8~72자로 입력해 주세요.');
