@@ -185,8 +185,6 @@ on:
       - .github/workflows/research-production-forward-one-shot.yml
       - research-production/test/research-production-forward-one-shot-workflow.test.mjs
       - ops/install-paper-forward-schedule.sh
-      - ops/verify-paper-forward-genuine-cost-window.mjs
-      - .github/tests/paper-forward-genuine-cost-window.test.mjs
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
@@ -477,8 +475,6 @@ jobs:
             .github/workflows/research-production-forward-one-shot.yml
             research-production/test/research-production-forward-one-shot-workflow.test.mjs
             ops/install-paper-forward-schedule.sh
-            ops/verify-paper-forward-genuine-cost-window.mjs
-            .github/tests/paper-forward-genuine-cost-window.test.mjs
             ops/bridge-paper-forward-no-deploy-snapshot.mjs
             ops/run-paper-forward-flat-snapshot-republish.mjs
             ops/collect-paper-forward-no-deploy-diagnostics.mjs
