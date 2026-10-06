@@ -1,0 +1,61 @@
+name: Research KR Recent All-Session Opportunity AI V1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/train-kr-recent-all-session-opportunity-ai-v1.py
+      - .github/workflows/research-kr-recent-all-session-opportunity-ai-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-kr-recent-all-session-opportunity-ai-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_RUN_ID: "37431510636"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/train-kr-recent-all-session-opportunity-ai-v1.py
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "lightgbm==4.5.0" "scikit-learn==1.5.2"
+      - name: Download frozen recent KRX opportunity data
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          pattern: kr-recent-all-session-opportunity-miner-v1-*
+          path: source
+      - name: Train recent all-session detection AI
+        run: |
+          EVENTS="$(find source -name events.parquet -type f | head -n1)"
+          test -n "$EVENTS"
+          python market-prediction-lab/scripts/train-kr-recent-all-session-opportunity-ai-v1.py \
+            --events "$EVENTS" \
+            --out-dir market-prediction-lab/docs/kr-recent-all-session-opportunity-ai-v1
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kr-recent-all-session-opportunity-ai-v1-${{ github.sha }}
+          path: market-prediction-lab/docs/kr-recent-all-session-opportunity-ai-v1
+          if-no-files-found: error
+          retention-days: 14
