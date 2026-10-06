@@ -3,8 +3,16 @@ export function classifyProductionPaperJournalPrivilegeFailure(result) {
 
   const stderr = String(result.stderr ?? '');
   const knownFailures = [
+    [/PAPER_JOURNAL_PARTIAL_SCHEMA:/, 'paper_journal_partial_schema'],
+    [/PAPER_JOURNAL_REQUIRED_ROLE_MISSING/, 'paper_journal_required_role_missing'],
+    [/PAPER_JOURNAL_AUTH_USERS_MISSING/, 'paper_journal_auth_users_missing'],
+    [/PAPER_JOURNAL_REQUIRED_CAPABILITY_MISSING/, 'paper_journal_required_capability_missing'],
     [/PAPER_JOURNAL_TABLE_MISSING:/, 'paper_journal_table_missing'],
     [/PAPER_JOURNAL_RLS_DISABLED:/, 'paper_journal_rls_disabled'],
+    [/PAPER_JOURNAL_COLUMN_CONTRACT_INVALID:/, 'paper_journal_column_contract_invalid'],
+    [/PAPER_JOURNAL_PRIMARY_KEY_INVALID:/, 'paper_journal_primary_key_invalid'],
+    [/PAPER_JOURNAL_INDEX_CONTRACT_INVALID/, 'paper_journal_index_contract_invalid'],
+    [/PAPER_JOURNAL_POLICY_CONTRACT_INVALID:/, 'paper_journal_policy_contract_invalid'],
     [/PAPER_JOURNAL_AUTHENTICATED_CRUD_MISSING:/, 'paper_journal_authenticated_crud_missing'],
     [/PAPER_JOURNAL_ANON_PRIVILEGE_EXPOSED:/, 'paper_journal_anon_privilege_exposed'],
     [/PAPER_JOURNAL_PUBLIC_PRIVILEGE_EXPOSED:/, 'paper_journal_public_privilege_exposed'],
