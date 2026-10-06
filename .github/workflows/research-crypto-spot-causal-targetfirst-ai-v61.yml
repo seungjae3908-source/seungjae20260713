@@ -1,0 +1,118 @@
+name: Research Crypto Spot Causal TargetFirst AI V6.1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-crypto-spot-causal-targetfirst-ai-v61.py
+      - .github/workflows/research-crypto-spot-causal-targetfirst-ai-v61.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-spot-causal-targetfirst-ai-v61-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SOURCE_RUN_ID: "37468226538"
+      SOURCE_ARTIFACT: "crypto-spot-causal-prescreen-v60-probe-ed085ac94f067c8c9bc06b562ea5d44277a704bb"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_XET: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-crypto-spot-causal-targetfirst-ai-v61.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-orderflow-targetfirst-ai-v43.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "requests>=2.32,<3" "polars>=1.30,<2" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<0.32" "lightgbm==4.5.0" "scikit-learn==1.5.2"
+      - name: Download causal Top50 evidence
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: causal-v60
+      - name: Build causal LONG labeled shard
+        run: |
+          SELECTED="$(find causal-v60 -name causal-selected.csv -print -quit)"
+          test -n "$SELECTED"
+          python market-prediction-lab/scripts/run-crypto-spot-causal-targetfirst-ai-v61.py \
+            --mode shard \
+            --selected "$SELECTED" \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-count 8 \
+            --out-dir "market-prediction-lab/docs/crypto-spot-causal-targetfirst-ai-v61/shard-${{ matrix.shard }}"
+      - name: Upload shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-spot-causal-v61-shard-${{ matrix.shard }}-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-spot-causal-targetfirst-ai-v61/shard-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 14
+
+  merge:
+    needs: shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-crypto-spot-causal-targetfirst-ai-v61.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "lightgbm==4.5.0" "scikit-learn==1.5.2"
+      - name: Download all V6.1 shard evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: crypto-spot-causal-v61-shard-*-${{ github.sha }}
+          path: v61-shards
+          merge-multiple: false
+      - name: Train and audit causal LONG model
+        run: |
+          python market-prediction-lab/scripts/run-crypto-spot-causal-targetfirst-ai-v61.py \
+            --mode merge \
+            --input-root v61-shards \
+            --out-dir market-prediction-lab/docs/crypto-spot-causal-targetfirst-ai-v61/merged
+      - name: Upload merged evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-spot-causal-targetfirst-ai-v61-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-spot-causal-targetfirst-ai-v61/merged
+          if-no-files-found: error
+          retention-days: 14
