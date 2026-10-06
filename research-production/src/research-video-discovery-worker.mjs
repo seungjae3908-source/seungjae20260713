@@ -6,10 +6,14 @@ import { runAndPublishSanitizedVideoResearchSnapshotV1 } from '../../packages/ex
 import { preflightResearchProduction } from './engine.mjs';
 
 const DEFAULT_QUERIES = Object.freeze([
-  'korea stock trading strategy',
-  'us stock day trading strategy',
-  'crypto spot trading strategy',
-  'crypto futures trading strategy',
+  '국내 주식 단타 거래량 돌파 전략',
+  '미국 주식 데이트레이딩 RVOL ORB 전략',
+  '코인 현물 CVD 오더플로우 VWAP 전략',
+  '코인 선물 OI CVD 테이커 플로우 전략',
+  'korea stock momentum volume breakout strategy',
+  'US stocks in play RVOL ORB retest strategy',
+  'crypto spot order flow CVD VWAP reclaim strategy',
+  'crypto futures open interest CVD trend strategy',
 ]);
 const MAX_QUERY_COUNT = 8;
 const MAX_RESULTS = 3;
@@ -57,6 +61,24 @@ function parseQueries(env) {
     throw new Error('VIDEO_DISCOVERY_QUERIES_INVALID');
   }
   return queries;
+}
+
+function parseDiscoveryScope(env) {
+  const regionRaw = String(env.RESEARCH_VIDEO_DISCOVERY_REGION_CODE ?? '').trim().toUpperCase();
+  const languageRaw = String(env.RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE ?? '').trim();
+  if (regionRaw && !/^[A-Z]{2}$/.test(regionRaw)) throw new Error('VIDEO_DISCOVERY_REGION_INVALID');
+  if (languageRaw && !/^[A-Za-z]{2,3}(?:-[A-Za-z]{2})?$/.test(languageRaw)) {
+    throw new Error('VIDEO_DISCOVERY_LANGUAGE_INVALID');
+  }
+  const publishedAfterHours = Number(env.RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS ?? 720);
+  if (!Number.isSafeInteger(publishedAfterHours) || publishedAfterHours < 1 || publishedAfterHours > 2160) {
+    throw new Error('VIDEO_DISCOVERY_FRESHNESS_WINDOW_INVALID');
+  }
+  return Object.freeze({
+    regionCode: regionRaw || null,
+    relevanceLanguage: languageRaw || null,
+    publishedAfterHours,
+  });
 }
 
 function parseInvocationMode(env) {
@@ -108,11 +130,12 @@ export function resolveResearchVideoDiscoveryPolicy(env = process.env) {
   const maxResultsRaw = Number(env.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? MAX_RESULTS);
   const maxResults = Number.isSafeInteger(maxResultsRaw) && maxResultsRaw >= 1 && maxResultsRaw <= MAX_RESULTS
     ? maxResultsRaw : MAX_RESULTS;
-  if (!approved) return Object.freeze({ ready: false, reason: 'VIDEO_DISCOVERY_NOT_APPROVED', apiKey: null, queries, maxResults });
+  const scope = parseDiscoveryScope(env);
+  if (!approved) return Object.freeze({ ready: false, reason: 'VIDEO_DISCOVERY_NOT_APPROVED', apiKey: null, queries, maxResults, ...scope });
   if (apiKey.length < 8 || apiKey.length > 512 || /[\s\u0000-\u001f]/u.test(apiKey)) {
-    return Object.freeze({ ready: false, reason: 'YOUTUBE_PROVIDER_NOT_CONFIGURED', apiKey: null, queries, maxResults });
+    return Object.freeze({ ready: false, reason: 'YOUTUBE_PROVIDER_NOT_CONFIGURED', apiKey: null, queries, maxResults, ...scope });
   }
-  return Object.freeze({ ready: true, reason: 'CONFIGURED_UNPROBED', apiKey, queries, maxResults });
+  return Object.freeze({ ready: true, reason: 'CONFIGURED_UNPROBED', apiKey, queries, maxResults, ...scope });
 }
 
 export async function preflightResearchVideoDiscovery({
@@ -132,6 +155,9 @@ export async function preflightResearchVideoDiscovery({
     provider: 'YOUTUBE_DATA_API_V3',
     queryCount: policy.queries.length,
     maxResults: policy.maxResults,
+    regionCode: policy.regionCode,
+    relevanceLanguage: policy.relevanceLanguage,
+    publishedAfterHours: policy.publishedAfterHours,
     reason: policy.reason,
     providerNetworkCalls: 0,
     invocationMode: parseInvocationMode(env),
@@ -157,6 +183,7 @@ export async function runResearchVideoDiscoveryScan({
   const invocationMode = parseInvocationMode(env);
   const observedAt = iso(clock());
   if (!observedAt) throw new Error('VIDEO_DISCOVERY_CLOCK_INVALID');
+  const publishedAfter = new Date(Date.parse(observedAt) - policy.publishedAfterHours * 60 * 60 * 1000).toISOString();
 
   if (!policy.ready) {
     const waiting = Object.freeze({
@@ -188,6 +215,7 @@ export async function runResearchVideoDiscoveryScan({
   const query = policy.queries[queryIndex];
   const stagingDir = join(root, 'provider-staging', `${observedAt.replace(/[:.]/g, '-')}-${process.pid}`);
 
+  let providerNetworkCalls = 0;
   try {
     const outcome = await discover({
       query,
@@ -196,7 +224,12 @@ export async function runResearchVideoDiscoveryScan({
       observedAt,
       env: { YOUTUBE_DATA_API_KEY: policy.apiKey },
       maxResults: policy.maxResults,
+      relevanceLanguage: policy.relevanceLanguage,
+      regionCode: policy.regionCode,
+      order: 'date',
+      publishedAfter,
     });
+    providerNetworkCalls = Number.isSafeInteger(outcome?.providerNetworkCalls) ? outcome.providerNetworkCalls : 0;
     if (outcome?.published !== true || !outcome.snapshot) {
       const error = new Error('VIDEO_DISCOVERY_SNAPSHOT_NOT_PUBLISHED');
       error.code = 'VIDEO_DISCOVERY_SNAPSHOT_NOT_PUBLISHED';
@@ -227,7 +260,11 @@ export async function runResearchVideoDiscoveryScan({
         title: record.title,
         channelOrPublisher: record.channelOrPublisher,
         publishedAt: record.publishedAt,
+        language: record.language,
+        durationSec: record.durationSec,
         transcriptStatus: record.transcriptStatus,
+        contentAccessStatus: record.contentAccessStatus,
+        captionsKnownPresent: record.captionsKnownPresent,
         sourceTrustTier: record.sourceTrustTier,
         reviewStatus: 'SOURCE_REVIEW_REQUIRED',
       }))),
@@ -269,7 +306,7 @@ export async function runResearchVideoDiscoveryScan({
       snapshotDigest,
       sourceReviewDigest,
       reviewInboxCreated: inboxCreated,
-      providerNetworkCalls: 1,
+      providerNetworkCalls,
       invocationMode,
       scheduledInvocationObserved: false,
       reason: null,
@@ -291,7 +328,7 @@ export async function runResearchVideoDiscoveryScan({
       queryCount: policy.queries.length,
       sourceCount: null,
       snapshotDigest: null,
-      providerNetworkCalls: 1,
+      providerNetworkCalls,
       invocationMode,
       scheduledInvocationObserved: false,
       reason: safeError(error),

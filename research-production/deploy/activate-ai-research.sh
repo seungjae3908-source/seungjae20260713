@@ -26,6 +26,11 @@ fi
 timers=(
   research-production-ai-review.timer
   research-production-video-discovery.timer
+  research-production-approved-job-intake.timer
+)
+
+daemon_services=(
+  research-production-workspace-worker.service
 )
 
 services=(
@@ -35,6 +40,29 @@ services=(
 
 disable_timers() {
   "${SUDO[@]}" systemctl disable --now "${timers[@]}" >/dev/null 2>&1 || true
+  local timer
+  for timer in "${timers[@]}"; do
+    if "${SUDO[@]}" systemctl is-active --quiet "$timer" 2>/dev/null; then
+      echo "AI_RESEARCH_TIMER_STILL_ACTIVE:$timer" >&2
+      return 1
+    fi
+    if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+      echo "AI_RESEARCH_TIMER_STILL_ENABLED:$timer" >&2
+      return 1
+    fi
+  done
+  "${SUDO[@]}" systemctl disable --now "${daemon_services[@]}" >/dev/null 2>&1 || true
+  local service
+  for service in "${daemon_services[@]}"; do
+    if "${SUDO[@]}" systemctl is-active --quiet "$service" 2>/dev/null; then
+      echo "AI_RESEARCH_DAEMON_STILL_ACTIVE:$service" >&2
+      return 1
+    fi
+    if "${SUDO[@]}" systemctl is-enabled --quiet "$service" 2>/dev/null; then
+      echo "AI_RESEARCH_DAEMON_STILL_ENABLED:$service" >&2
+      return 1
+    fi
+  done
 }
 
 research_sha() {
@@ -73,38 +101,60 @@ require_research_safety_env() {
   done
 }
 
-provider_env_ready() {
+provider_credentials_present() {
   [[ -e "$PROVIDER_ENV" ]] || return 1
   "${SUDO[@]}" node - "$PROVIDER_ENV" <<'NODE'
 const fs = require('node:fs');
 const { parseEnv } = require('node:util');
-const file = process.argv[2];
-const raw = fs.readFileSync(file, 'utf8');
-const env = parseEnv(raw);
+const env = parseEnv(fs.readFileSync(process.argv[2], 'utf8'));
+const allowed = new Set(['YOUTUBE_DATA_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY','GEMINI_MODEL','GROQ_API_KEY','GROQ_MODEL']);
+for (const key of Object.keys(env)) if (!allowed.has(key)) process.exit(3);
 const keyPattern = /^[A-Za-z0-9_.-]{8,512}$/u;
 const present = (key) => typeof env[key] === 'string' && keyPattern.test(env[key].trim());
-const youtube = present('YOUTUBE_DATA_API_KEY');
-const gemini = present('GEMINI_API_KEY') || present('GOOGLE_API_KEY');
-const groq = present('GROQ_API_KEY');
-if (!youtube || !gemini || !groq) process.exit(2);
+const geminiValues = ['GEMINI_API_KEY','GOOGLE_API_KEY'].map(k => env[k]?.trim()).filter(Boolean);
+if (!present('YOUTUBE_DATA_API_KEY') || !present('GROQ_API_KEY') || geminiValues.length < 1
+  || new Set(geminiValues).size !== 1 || !geminiValues.every(v => keyPattern.test(v))) process.exit(2);
 process.stdout.write(JSON.stringify({
-  schemaVersion: 'research-provider-env-readiness-v1',
-  source: 'EXISTING_RESEARCH_PROVIDER_ENV',
-  providers: { youtube: 'PRESENT', gemini: 'PRESENT', groq: 'PRESENT' },
-  credentialValuesExposed: false,
-  executionAuthority: 'NONE'
-}) + '\n');
+  schemaVersion:'research-provider-credential-readiness-v1',
+  providers:{youtube:'PRESENT',gemini:'PRESENT',groq:'PRESENT'},
+  credentialValuesExposed:false,executionAuthority:'NONE'
+})+'\n');
+NODE
+}
+
+provider_env_ready() {
+  provider_credentials_present >/dev/null || return 1
+  "${SUDO[@]}" node - "$PROVIDER_ENV" <<'NODE'
+const fs = require('node:fs');
+const { parseEnv } = require('node:util');
+const env = parseEnv(fs.readFileSync(process.argv[2], 'utf8'));
+if (String(env.GEMINI_MODEL ?? '').trim() !== 'gemini-3.1-flash-lite'
+  || String(env.GROQ_MODEL ?? '').trim() !== 'openai/gpt-oss-20b') process.exit(2);
+process.stdout.write(JSON.stringify({
+  schemaVersion:'research-provider-env-readiness-v2',
+  providers:{youtube:'PRESENT',gemini:'PRESENT',groq:'PRESENT'},
+  models:{gemini:'EXPLICIT_FIXED',groq:'EXPLICIT_FIXED'},
+  credentialValuesExposed:false,executionAuthority:'NONE'
+})+'\n');
 NODE
 }
 
 provider_preflight() {
-  if provider_env_ready; then
+  if provider_env_ready >/dev/null; then
+    provider_env_ready
+    return 0
+  fi
+  if provider_credentials_present >/dev/null; then
+    provider_credentials_present
+    printf '%s\n' "AI_RESEARCH_PROVIDER_MODEL_REPAIR_REQUIRED=true"
     return 0
   fi
   local evidence
   evidence="$(mktemp)"
   trap 'rm -f "$evidence"' RETURN
-  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" preflight     --app-root "$APP_ROOT"     --process-name stock-app > "$evidence"
+  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" preflight \
+    --app-root "$APP_ROOT" \
+    --process-name stock-app > "$evidence"
   node - "$evidence" <<'NODE'
 const fs = require('node:fs');
 const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -125,9 +175,40 @@ if (value?.schemaVersion !== 'research-provider-bootstrap-v1'
 NODE
 }
 
+normalize_existing_provider_env() {
+  provider_credentials_present >/dev/null
+  local tmp
+  tmp="$(mktemp)"
+  "${SUDO[@]}" node - "$PROVIDER_ENV" "$tmp" <<'NODE'
+const fs = require('node:fs');
+const { parseEnv } = require('node:util');
+const env = parseEnv(fs.readFileSync(process.argv[2], 'utf8'));
+const geminiValues = ['GEMINI_API_KEY','GOOGLE_API_KEY'].map(k => env[k]?.trim()).filter(Boolean);
+if (geminiValues.length < 1 || new Set(geminiValues).size !== 1) throw new Error('PROVIDER_GEMINI_CONFIGURATION_UNRESOLVED');
+const rows = [
+  '# Research provider-only environment. Trading/account secrets are forbidden.',
+  'YOUTUBE_DATA_API_KEY=' + env.YOUTUBE_DATA_API_KEY.trim(),
+  'GEMINI_API_KEY=' + geminiValues[0],
+  'GEMINI_MODEL=gemini-3.1-flash-lite',
+  'GROQ_API_KEY=' + env.GROQ_API_KEY.trim(),
+  'GROQ_MODEL=openai/gpt-oss-20b',
+  '',
+];
+fs.writeFileSync(process.argv[3], rows.join('\n'), {mode:0o600,flag:'w'});
+NODE
+  "${SUDO[@]}" install -o root -g investment-research -m 0640 "$tmp" "$PROVIDER_ENV"
+  rm -f "$tmp"
+  provider_env_ready >/dev/null
+}
+
 materialize_or_reuse_provider_env() {
   if provider_env_ready >/dev/null; then
     printf '%s\n' "AI_RESEARCH_PROVIDER_ENV_SOURCE=EXISTING_RESEARCH_PROVIDER_ENV"
+    return 0
+  fi
+  if provider_credentials_present >/dev/null; then
+    normalize_existing_provider_env
+    printf '%s\n' "AI_RESEARCH_PROVIDER_ENV_SOURCE=EXISTING_RESEARCH_PROVIDER_ENV_MODELS_NORMALIZED"
     return 0
   fi
   "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-provider-bootstrap.mjs" materialize \
@@ -167,6 +248,9 @@ const allowedVideoKeys = new Set([
   'RESEARCH_VIDEO_DISCOVERY_APPROVED',
   'RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS',
   'RESEARCH_VIDEO_DISCOVERY_QUERIES_JSON',
+  'RESEARCH_VIDEO_DISCOVERY_REGION_CODE',
+  'RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE',
+  'RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS',
 ]);
 
 for (const key of Object.keys(ai)) {
@@ -194,6 +278,18 @@ const maxResults = Number(video.RESEARCH_VIDEO_DISCOVERY_MAX_RESULTS ?? '3');
 if (!Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 3) {
   throw new Error('VIDEO_RESEARCH_MAX_RESULTS_INVALID');
 }
+const region = String(video.RESEARCH_VIDEO_DISCOVERY_REGION_CODE ?? '').trim().toUpperCase();
+if (region && !/^[A-Z]{2}$/.test(region)) {
+  throw new Error('VIDEO_RESEARCH_REGION_INVALID');
+}
+const language = String(video.RESEARCH_VIDEO_DISCOVERY_RELEVANCE_LANGUAGE ?? '').trim();
+if (language && !/^[A-Za-z]{2,3}(?:-[A-Za-z]{2})?$/.test(language)) {
+  throw new Error('VIDEO_RESEARCH_LANGUAGE_INVALID');
+}
+const publishedAfterHours = Number(video.RESEARCH_VIDEO_DISCOVERY_PUBLISHED_AFTER_HOURS ?? '720');
+if (!Number.isSafeInteger(publishedAfterHours) || publishedAfterHours < 1 || publishedAfterHours > 2160) {
+  throw new Error('VIDEO_RESEARCH_FRESHNESS_WINDOW_INVALID');
+}
 
 process.stdout.write(JSON.stringify({
   schemaVersion: 'research-ai-runtime-policy-readiness-v1',
@@ -205,6 +301,9 @@ process.stdout.write(JSON.stringify({
   video: {
     approved: true,
     maxResults,
+    region: region || null,
+    language: language || null,
+    publishedAfterHours,
   },
   credentialValuesExposed: false,
   executionAuthority: 'NONE'
@@ -281,11 +380,11 @@ if (video?.status !== 'COMPLETE') {
 if (video?.provider !== 'YOUTUBE_DATA_API_V3') {
   throw new Error('VIDEO_DISCOVERY_ONE_SHOT_PROVIDER_INVALID');
 }
-if (video?.providerNetworkCalls !== 1) {
+if (!Number.isSafeInteger(video?.providerNetworkCalls) || video.providerNetworkCalls < 1 || video.providerNetworkCalls > 2) {
   throw new Error('VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING');
 }
-if (!Number.isSafeInteger(video?.sourceCount) || video.sourceCount < 1) {
-  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_SOURCE_MISSING');
+if (!Number.isSafeInteger(video?.sourceCount) || video.sourceCount < 0) {
+  throw new Error('VIDEO_DISCOVERY_ONE_SHOT_SOURCE_COUNT_INVALID');
 }
 const videoObservedAtMs = Date.parse(String(video?.observedAt ?? ''));
 if (!Number.isFinite(videoObservedAtMs) || videoObservedAtMs < startedMs) {
@@ -322,7 +421,7 @@ NODE
 
 verify_unit_sources() {
   local unit
-  for unit in "${services[@]}" "${timers[@]}"; do
+  for unit in "${services[@]}" "${timers[@]}" "${daemon_services[@]}"; do
     local source="$RESEARCH_ROOT/research-production/deploy/$unit"
     [[ -f "$source" ]] || {
       echo "AI_RESEARCH_UNIT_MISSING:$source" >&2
@@ -352,8 +451,9 @@ activate() {
   fail_safe() {
     local status=$?
     if (( status != 0 )); then
-      disable_timers
-      printf '%s\n'         "AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=true"         "TARGET_SHA=$TARGET_SHA" >&2
+      local safe_disabled=false
+      if disable_timers; then safe_disabled=true; fi
+      printf '%s\n' "AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=$safe_disabled" "TARGET_SHA=$TARGET_SHA" >&2
     fi
     return "$status"
   }
@@ -366,8 +466,8 @@ activate() {
 
   materialize_or_reuse_provider_env
 
-  "${SUDO[@]}" chown root:investment-research "$PROVIDER_ENV"
-  "${SUDO[@]}" chmod 0640 "$PROVIDER_ENV"
+  "${SUDO[@]}" chown root:investment-research "$PROVIDER_ENV" "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV"
+  "${SUDO[@]}" chmod 0640 "$PROVIDER_ENV" "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV"
   if command -v runuser >/dev/null 2>&1; then
     "${SUDO[@]}" runuser -u investment-research -- test -r "$PROVIDER_ENV"
   else
@@ -396,11 +496,16 @@ activate() {
 
   verify_one_shot_evidence "$one_shot_started_ms"
 
-  "${SUDO[@]}" systemctl enable --now "${timers[@]}"
+  "${SUDO[@]}" systemctl enable --now "${timers[@]}" "${daemon_services[@]}"
   local timer
   for timer in "${timers[@]}"; do
     "${SUDO[@]}" systemctl is-enabled --quiet "$timer"
     "${SUDO[@]}" systemctl is-active --quiet "$timer"
+  done
+  local daemon
+  for daemon in "${daemon_services[@]}"; do
+    "${SUDO[@]}" systemctl is-enabled --quiet "$daemon"
+    "${SUDO[@]}" systemctl is-active --quiet "$daemon"
   done
 
   require_exact_research_release
@@ -408,7 +513,7 @@ activate() {
   activated=true
   trap - EXIT
 
-  printf '%s\n'     "AI_RESEARCH_ACTIVATED=$activated"     "TARGET_SHA=$TARGET_SHA"     "AI_REVIEW_ONE_SHOT=success"     "VIDEO_DISCOVERY_ONE_SHOT=success"     "AI_REVIEW_TIMER_ENABLED=true"     "VIDEO_DISCOVERY_TIMER_ENABLED=true"     "PROVIDER_YOUTUBE=PRESENT"     "PROVIDER_GEMINI=PRESENT"     "PROVIDER_GROQ=PRESENT"     "PROVIDER_ENV_READABLE_BY_RESEARCH_USER=true"     "LIVE_TRADING=false"     "PRIVATE_TRADING_API_ALLOWED=false"     "REAL_ORDER_ENABLED=false"     "executionAuthority=NONE"     "REAL_ORDER_SUBMITTED=false"
+  printf '%s\n'     "AI_RESEARCH_ACTIVATED=$activated"     "TARGET_SHA=$TARGET_SHA"     "AI_REVIEW_ONE_SHOT=success"     "VIDEO_DISCOVERY_ONE_SHOT=success"     "AI_REVIEW_TIMER_ENABLED=true"     "VIDEO_DISCOVERY_TIMER_ENABLED=true"     "APPROVED_JOB_INTAKE_TIMER_ENABLED=true"     "WORKSPACE_WORKER_ENABLED=true"     "PROVIDER_YOUTUBE=PRESENT"     "PROVIDER_GEMINI=PRESENT"     "PROVIDER_GROQ=PRESENT"     "PROVIDER_ENV_READABLE_BY_RESEARCH_USER=true"     "LIVE_TRADING=false"     "PRIVATE_TRADING_API_ALLOWED=false"     "REAL_ORDER_ENABLED=false"     "executionAuthority=NONE"     "REAL_ORDER_SUBMITTED=false"
 }
 
 case "$MODE" in

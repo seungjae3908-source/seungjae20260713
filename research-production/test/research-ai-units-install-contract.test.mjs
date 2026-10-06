@@ -8,6 +8,8 @@ test('AI research unit installer installs only and never activates timers', asyn
   assert.match(script,/systemctl daemon-reload/);
   assert.match(script,/AI_REVIEW_TIMER_ENABLED=false/);
   assert.match(script,/VIDEO_DISCOVERY_TIMER_ENABLED=false/);
+  assert.match(script,/APPROVED_JOB_INTAKE_TIMER_ENABLED=false/);
+  assert.match(script,/WORKSPACE_WORKER_ENABLED=false/);
   assert.doesNotMatch(script,/systemctl\s+(?:enable|start|restart|reload)\b/);
   assert.doesNotMatch(script,/enable\s+--now|--now\s+enable/);
   assert.doesNotMatch(script,/pm2\s+(?:start|restart|reload)/);
@@ -40,4 +42,11 @@ test('provider credentials load after policy files so empty policy values cannot
   assert.doesNotMatch(aiPolicy,/^GROQ_API_KEY=/m);
   assert.doesNotMatch(aiPolicy,/^GEMINI_API_KEY=/m);
   assert.doesNotMatch(videoPolicy,/^YOUTUBE_DATA_API_KEY=/m);
+});
+
+
+test('approved-job intake and worker units are install-only and fail closed', async () => {
+  const script=await readFile(new URL('../deploy/install-ai-research-units.sh', import.meta.url),'utf8');
+  for(const token of ['research-production-approved-job-intake.service','research-production-approved-job-intake.timer','research-production-workspace-worker.service']) assert.match(script,new RegExp(token));
+  assert.match(script,/Refusing implicit activation: research-production-workspace-worker.service/);
 });
