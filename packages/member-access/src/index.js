@@ -11,6 +11,7 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessBasicInfo',
   'canAccessSpot',
   'canAccessFutures',
+  'canAccessAiChart',
   'canAccessRiskPreview',
   'canAccessBacktests',
   'canAccessPaperTrading',
@@ -28,9 +29,12 @@ const ASSOCIATE = Object.freeze({
   ...NONE,
   canAccessBasicInfo: true,
   canAccessSpot: true,
+  canAccessAiChart: true,
   canAccessPaperTrading: true,
   canAccessAutoTrading: true,
   canConnectPersonalTelegram: true,
+  canAccessTradingAnalytics: true,
+  canAccessAiTradingReview: true,
 });
 const REGULAR = Object.freeze({
   ...ASSOCIATE,
@@ -62,13 +66,20 @@ export function deriveMemberTier(profile) {
     : typeof value.membershipLevel === 'string'
       ? value.membershipLevel
       : null;
-  const active = value.is_active !== false && value.isActive !== false;
+  const active = value.is_active === true || value.isActive === true;
   const status = typeof value.status === 'string' ? value.status : null;
+  const expiry = typeof value.membership_expires_at === 'string'
+    ? value.membership_expires_at
+    : typeof value.membershipExpiresAt === 'string'
+      ? value.membershipExpiresAt
+      : null;
+  const expiryMs = expiry && expiry.trim() ? Date.parse(expiry) : null;
+  const expired = expiryMs != null && (!Number.isFinite(expiryMs) || expiryMs <= Date.now());
 
   // Profile-object authorization is fail closed: only an explicitly approved,
-  // active database profile may receive member capabilities. Direct tier strings
-  // remain supported for the static permission-matrix API below.
-  if (!active || status !== 'approved') return 'pending';
+  // active, unexpired database profile may receive member capabilities. Direct
+  // tier strings remain supported for the static permission-matrix API below.
+  if (!active || status !== 'approved' || expired) return 'pending';
   if (explicit && MEMBER_TIERS.includes(explicit)) return explicit;
   if (value.role === 'admin' || value.role === 'master') return 'admin';
   if (value.role === 'associate') return 'associate';
