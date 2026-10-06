@@ -222,7 +222,7 @@ export function createPaperJournalRouter(
   });
 
   const requireAiReview = (request: AuthenticatedRequest) => {
-    if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 정회원과 관리자만 사용할 수 있습니다.', request.member ? 403 : 401);
+    if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 준회원 이상 사용할 수 있습니다.', request.member ? 403 : 401);
     return request.member.id;
   };
 
