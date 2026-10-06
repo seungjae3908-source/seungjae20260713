@@ -4,6 +4,7 @@ export type MemberCapability =
   | 'canAccessBasicInfo'
   | 'canAccessSpot'
   | 'canAccessFutures'
+  | 'canAccessAiChart'
   | 'canAccessRiskPreview'
   | 'canAccessBacktests'
   | 'canAccessPaperTrading'
@@ -22,6 +23,8 @@ export type MemberAccessProfile = {
   status?: string | null;
   is_active?: boolean | null;
   isActive?: boolean | null;
+  membership_expires_at?: string | null;
+  membershipExpiresAt?: string | null;
 };
 
 export const MEMBER_TIERS: readonly MemberTier[];
