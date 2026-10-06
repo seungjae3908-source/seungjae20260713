@@ -155,14 +155,17 @@ def asof_join_signals(signal_pdf: pd.DataFrame, metrics: pd.DataFrame) -> pd.Dat
         if mg.empty: continue
         sg=g.sort_values("timestamp").copy()
         sg["timestamp"] = _utc_ns(sg["timestamp"])
+        # The Flow V3 signal is computed from a COMPLETED 15m bar.
+        # Information cutoff is therefore the bar close, not the bar open timestamp.
+        sg["signal_close_time"] = sg["timestamp"] + pd.Timedelta("15min")
         mg["effective_time"] = _utc_ns(mg["effective_time"])
-        sg = sg.dropna(subset=["timestamp"]).sort_values("timestamp")
+        sg = sg.dropna(subset=["signal_close_time"]).sort_values("signal_close_time")
         mg = mg.dropna(subset=["effective_time"]).sort_values("effective_time")
         if sg.empty or mg.empty:
             continue
         j=pd.merge_asof(
             sg, mg,
-            left_on="timestamp", right_on="effective_time",
+            left_on="signal_close_time", right_on="effective_time",
             direction="backward",
             tolerance=pd.Timedelta("30min"),
             suffixes=("","_metric"),
@@ -287,7 +290,7 @@ def main():
         "truthBoundary":{
             "freshOosUsedForSelection":False,
             "post2026June25MetricRowsShiftedBy5m":True,
-            "metricsJoinedOnlyAtOrBeforeSignalTime":True,
+            "metricsJoinedOnlyAtOrBeforeCompleted15mSignalBarClose":True,
             "executionAuthority":"NONE",
         },
     }
