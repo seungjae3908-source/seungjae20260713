@@ -1,0 +1,41 @@
+name: Research KR Naver Investor Trend Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-kr-naver-investor-trend-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requests
+        run: python -m pip install "requests>=2.32,<3"
+      - name: Probe trend endpoint
+        run: |
+          python - <<'PY'
+          import json, requests
+          out=[]
+          for code in ['005930','247540','086520']:
+              url='https://m.stock.naver.com/front-api/stock/domestic/trend'
+              r=requests.get(url,params={'code':code},timeout=30,headers={'User-Agent':'Mozilla/5.0','Referer':f'https://m.stock.naver.com/domestic/stock/{code}/total'})
+              item={'code':code,'status':r.status_code,'text':r.text[:500]}
+              if r.ok:
+                  try:
+                      j=r.json()
+                      item={'code':code,'status':r.status_code,'type':type(j).__name__,'keys':list(j.keys()) if isinstance(j,dict) else None,'jsonPreview':j if len(r.text)<5000 else str(j)[:4500]}
+                  except Exception as e:
+                      item['jsonError']=repr(e)
+              out.append(item)
+          print(json.dumps({'NAVER_TREND_PROBE':out},ensure_ascii=False,default=str))
+          PY
