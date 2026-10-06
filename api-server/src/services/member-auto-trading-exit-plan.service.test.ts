@@ -79,3 +79,36 @@ test('fresh mark identity allows a safe retry only after a prior automatic exit 
   assert.ok(first.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
   assert.ok(retry.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
 });
+
+test('automatic exit preserves immutable Research lineage without creating authority', () => {
+  const entryPlan = plan('long', 'bitget');
+  const entryOrder = order(entryPlan);
+  const researchLineage = Object.freeze({
+    schemaVersion: 'trading-research-lineage-v1' as const,
+    candidateId: 'paper-candidate-v1:' + 'a'.repeat(64),
+    market: 'CRYPTO_FUTURES' as const,
+    symbol: 'BTCUSDT',
+    timeframe: '15m',
+    direction: 'LONG' as const,
+    strategyId: entryPlan.strategyId,
+    strategyVersion: 'v1',
+    parameterHash: 'params-v1',
+    researchCodeSha: 'b'.repeat(40),
+    costPolicyVersion: 'cost-v1',
+    handoffId: 'paper-auto-handoff:sha256:' + 'c'.repeat(64),
+    source: 'MEMBER_AUTO_TRADING_PAPER_HANDOFF' as const,
+    executionAuthority: 'NONE' as const,
+    profitabilityCredit: 0 as const,
+  });
+  const exit = buildAutomaticExitPlanInput({
+    entryPlan: { ...entryPlan, researchLineage },
+    entryOrder,
+    mark: { market: 'CRYPTO_FUTURES', symbol: 'BTC', price: 94, observedAt: NOW, source: 'public' },
+    fx: { market: 'CRYPTO_FUTURES', krwPerQuoteCurrency: 1400, source: 'USDT_KRW', observedAt: NOW, stale: false },
+    reason: 'TAKE_PROFIT',
+  });
+  assert.deepEqual(exit.researchLineage, researchLineage);
+  assert.equal(exit.researchLineage?.executionAuthority, 'NONE');
+  assert.equal(exit.researchLineage?.profitabilityCredit, 0);
+});
+
