@@ -26,6 +26,23 @@ function plan(id:string, accountMode:'live'|'paper', executionMode:'manual'|'aut
     },
     entryPrice:100_000_000, entryZoneLow:null, entryZoneHigh:null,
     estimatedSlippagePercent:null, averageSpreadPercent:null, economics:null,
+    researchLineage: executionMode === 'automatic' ? {
+      schemaVersion:'trading-research-lineage-v1',
+      candidateId:'paper-candidate-v1:'+'a'.repeat(64),
+      market:'CRYPTO_SPOT',
+      symbol:'BTC',
+      timeframe:'15m',
+      direction:'BUY',
+      strategyId:'strategy-v1',
+      strategyVersion:'v1',
+      parameterHash:'params-v1',
+      researchCodeSha:'b'.repeat(40),
+      costPolicyVersion:'cost-v1',
+      handoffId:'paper-auto-handoff:sha256:'+'c'.repeat(64),
+      source:'MEMBER_AUTO_TRADING_PAPER_HANDOFF',
+      executionAuthority:'NONE',
+      profitabilityCredit:0,
+    } : null,
   };
 }
 
@@ -66,6 +83,11 @@ test('canonical execution ledger separates manual live, automatic live, and auto
     orderIds: ['order-auto'],
     fillIds: ['fill-order-auto'],
   });
+  const researchLineage = automatic?.researchLineage as Record<string, unknown> | undefined;
+  assert.equal(researchLineage?.candidateId, 'paper-candidate-v1:'+'a'.repeat(64));
+  assert.equal(researchLineage?.researchCodeSha, 'b'.repeat(40));
+  assert.equal(researchLineage?.executionAuthority, 'NONE');
+  assert.equal(researchLineage?.profitabilityCredit, 0);
 });
 
 
@@ -74,12 +96,19 @@ test('Bitget reduce-only exit keeps the original position side so entry and exit
   const entry={...plan('future-entry','live','automatic'),
     exchange:'bitget' as const,market:'USDT-FUTURES',side:'long' as const,
     leverage:2,marginMode:'isolated' as const,quantity:1,quoteAmount:null,
-    estimatedKrw:1_000_000,reduceOnly:false};
+    estimatedKrw:1_000_000,reduceOnly:false,
+    researchLineage:{
+      ...plan('future-entry','live','automatic').researchLineage!,
+      market:'CRYPTO_FUTURES' as const,
+      symbol:'BTCUSDT',
+      direction:'LONG' as const,
+    }};
   const exit={...plan('future-exit','live','automatic'),
     exchange:'bitget' as const,market:'USDT-FUTURES',side:'short' as const,
     leverage:2,marginMode:'isolated' as const,quantity:1,quoteAmount:null,
     estimatedKrw:1_000_000,reduceOnly:true,
-    signalReasons:['AUTO_EXIT_ENTRY_PLAN:future-entry','AUTO_EXIT_REASON:TAKE_PROFIT']};
+    signalReasons:['AUTO_EXIT_ENTRY_PLAN:future-entry','AUTO_EXIT_REASON:TAKE_PROFIT'],
+    researchLineage:entry.researchLineage};
   await repository.savePlan(entry);
   await repository.savePlan(exit);
   await repository.saveOrder({...order('future-entry-order','future-entry'),exchange:'bitget'});
@@ -105,4 +134,6 @@ test('Bitget reduce-only exit keeps the original position side so entry and exit
   assert.deepEqual(journal.trades[0]?.canonicalLineage ? [...journal.trades[0].canonicalLineage.fillIds].sort() : undefined,[
     'fill-future-entry-order','fill-future-exit-order',
   ].sort());
+  assert.equal(journal.trades[0]?.researchLineage?.candidateId, entry.researchLineage?.candidateId);
+  assert.equal(journal.integrityIssues.some((issue)=>issue.code==='RESEARCH_LINEAGE_MISMATCH'),false);
 });
