@@ -10,6 +10,7 @@ export type MemberAdministrationProfile = {
   status?: string | null;
   membership_level?: MemberTier | string | null;
   is_active?: boolean | null;
+  membership_expires_at?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
@@ -17,6 +18,7 @@ export type MemberAdministrationProfile = {
 export type MemberChangeRequest = {
   membershipLevel?: MemberTier;
   isActive?: boolean;
+  membershipExpiresAt?: string | null;
   reason: string;
 };
 
@@ -24,6 +26,7 @@ export type MemberChangePlan = {
   changes: {
     membership_level: MemberTier;
     is_active: boolean;
+    membership_expires_at: string | null;
     role: 'pending' | 'associate' | 'full' | 'admin';
     status: 'pending' | 'approved' | 'suspended';
     approved_at: string | null;
@@ -31,7 +34,7 @@ export type MemberChangePlan = {
     permissions_updated_at: string;
     updated_at: string;
   };
-  action: 'member.approve' | 'member.membership.change' | 'member.active.change' | 'member.status.change';
+  action: 'member.approve' | 'member.membership.change' | 'member.active.change' | 'member.membership.expiry.change' | 'member.status.change';
   beforeValue: Record<string, unknown>;
   afterValue: Record<string, unknown>;
   reason: string;
@@ -140,21 +143,40 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
   if ('isActive' in value && typeof value.isActive !== 'boolean') {
     throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 활성 상태 값을 확인하세요.');
   }
+  if (
+    'membershipExpiresAt' in value
+    && value.membershipExpiresAt !== null
+    && typeof value.membershipExpiresAt !== 'string'
+  ) {
+    throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 만료일 값을 확인하세요.');
+  }
 
   const membershipLevel = typeof value.membershipLevel === 'string'
     ? value.membershipLevel as MemberTier
     : undefined;
   const isActive = typeof value.isActive === 'boolean' ? value.isActive : undefined;
+  let membershipExpiresAt: string | null | undefined;
+  if ('membershipExpiresAt' in value) {
+    if (value.membershipExpiresAt == null || value.membershipExpiresAt === '') {
+      membershipExpiresAt = null;
+    } else {
+      const timestamp = Date.parse(value.membershipExpiresAt);
+      if (!Number.isFinite(timestamp)) {
+        throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 만료일 값을 확인하세요.');
+      }
+      membershipExpiresAt = new Date(timestamp).toISOString();
+    }
+  }
   const reason = typeof value.reason === 'string' ? value.reason.trim() : '';
 
-  if (membershipLevel == null && isActive == null) {
-    throw new MemberAdministrationError('NO_VALID_CHANGE', '변경할 등급 또는 활성 상태가 필요합니다.');
+  if (membershipLevel == null && isActive == null && membershipExpiresAt === undefined) {
+    throw new MemberAdministrationError('NO_VALID_CHANGE', '변경할 등급·활성 상태·만료일이 필요합니다.');
   }
   if (reason.length < 3 || reason.length > 500) {
     throw new MemberAdministrationError('CHANGE_REASON_REQUIRED', '변경 사유를 3~500자로 입력하세요.');
   }
 
-  return { membershipLevel, isActive, reason };
+  return { membershipLevel, isActive, membershipExpiresAt, reason };
 }
 
 export function isActiveAdmin(profile: MemberAdministrationProfile) {
@@ -187,8 +209,12 @@ export function planMemberChange(
   // states require an explicit membershipLevel change before they can be approved.
   const currentTier = storedMemberTier(current);
   const currentActive = current.is_active === true;
+  const currentExpiry = current.membership_expires_at ?? null;
   const nextTier = request.membershipLevel ?? currentTier;
-  const nextActive = request.isActive ?? currentActive;
+  const requestedActive = request.isActive ?? currentActive;
+  const nextActive = nextTier === 'pending' ? false : requestedActive;
+  const requestedExpiry = request.membershipExpiresAt === undefined ? currentExpiry : request.membershipExpiresAt;
+  const nextExpiry = nextTier === 'pending' || nextTier === 'admin' ? null : requestedExpiry;
 
   if (isActiveAdmin(current) && (nextTier !== 'admin' || !nextActive) && activeAdminCount <= 1) {
     throw new MemberAdministrationError(
@@ -199,7 +225,7 @@ export function planMemberChange(
   }
 
   const timestamp = now.toISOString();
-  const status = !nextActive ? 'suspended' : nextTier === 'pending' ? 'pending' : 'approved';
+  const status = nextTier === 'pending' ? 'pending' : !nextActive ? 'suspended' : 'approved';
   const role = legacyRoleForTier(nextTier);
   const action = currentTier === 'pending' && nextTier === 'associate' && nextActive
     ? 'member.approve'
@@ -207,16 +233,20 @@ export function planMemberChange(
       ? 'member.membership.change'
       : currentActive !== nextActive
         ? 'member.active.change'
-        : 'member.status.change';
+        : currentExpiry !== nextExpiry
+          ? 'member.membership.expiry.change'
+          : 'member.status.change';
   const beforeValue = {
     membershipLevel: currentTier,
     isActive: currentActive,
+    membershipExpiresAt: currentExpiry,
     role: current.role ?? null,
     status: current.status ?? null,
   };
   const afterValue = {
     membershipLevel: nextTier,
     isActive: nextActive,
+    membershipExpiresAt: nextExpiry,
     role,
     status,
   };
@@ -225,6 +255,7 @@ export function planMemberChange(
     changes: {
       membership_level: nextTier,
       is_active: nextActive,
+      membership_expires_at: nextExpiry,
       role,
       status,
       approved_at: status === 'approved' ? timestamp : null,
