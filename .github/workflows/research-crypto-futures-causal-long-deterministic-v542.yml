@@ -1,0 +1,55 @@
+name: Research Crypto Futures Deterministic LONG V5.4.2
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/audit-crypto-futures-causal-long-deterministic-v542.py
+      - .github/workflows/research-crypto-futures-causal-long-deterministic-v542.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-crypto-futures-causal-long-deterministic-v542-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_XET: "1"
+      HF_HUB_ENABLE_HF_TRANSFER: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/audit-crypto-futures-causal-long-deterministic-v542.py
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-causal-long-opportunity-ranker-v54.py
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas==2.3.3" "numpy==2.5.3" "pyarrow==21.0.0" "polars==1.44.2" "huggingface_hub==0.36.2" "requests==2.34.2" "duckdb==1.5.6" "lightgbm==4.7.0" "scikit-learn==1.9.1"
+      - name: Run deterministic pinned LONG audit
+        run: |
+          python market-prediction-lab/scripts/audit-crypto-futures-causal-long-deterministic-v542.py \
+            --out-dir market-prediction-lab/docs/crypto-futures-causal-long-deterministic-v542
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-causal-long-deterministic-v542-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-causal-long-deterministic-v542
+          if-no-files-found: error
+          retention-days: 14
