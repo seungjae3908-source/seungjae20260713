@@ -24,6 +24,7 @@ TRAIN_END=pd.Timestamp("2024-10-01",tz="UTC")
 CAL_END=pd.Timestamp("2025-04-01",tz="UTC")
 VAL_END=pd.Timestamp("2026-04-01",tz="UTC")
 END=pd.Timestamp("2026-10-01",tz="UTC")
+OHLCV_AVAILABLE_END=pd.Timestamp("2026-04-01",tz="UTC")  # exclusive; source currently ends at 2026-03
 
 TARGET=0.03
 STOP=0.015
@@ -301,7 +302,8 @@ def main():
     frames=[];audit=[]
     with tempfile.TemporaryDirectory() as td:
       root=Path(td)
-      for idx,month in enumerate(census._month_iter(START,END),1):
+      eval_end=min(END,OHLCV_AVAILABLE_END)
+      for idx,month in enumerate(census._month_iter(START,eval_end),1):
         ms=month.strftime("%Y-%m")
         path=root/f"ohlcv_{ms}.parquet"
         census._download_us_month(month,path)
@@ -322,6 +324,9 @@ def main():
       "schemaVersion":1,"contract":"us-sec-8k-nextsession-pullback-v2",
       "sourceProbeRun":37482537143,
       "sourceEventRows":int(len(events)),
+      "ohlcvAvailableThroughMonth":"2026-03",
+      "evaluatedEventRows":int((pd.to_datetime(events["filingDate"])<OHLCV_AVAILABLE_END.tz_localize(None)).sum()),
+      "deferredUnavailableEventRows":int((pd.to_datetime(events["filingDate"])>=OHLCV_AVAILABLE_END.tz_localize(None)).sum()),
       "broadSignalRows":int(len(allx)),
       "symbols":int(allx["symbol"].nunique()),
       "candidateCount":len(reports),
@@ -341,6 +346,8 @@ def main():
         "trainAndCalibrationOnlySelectFamily":True,
         "validationAndFreshNeverSelectFamily":True,
         "plus10bpStressRequiredForS":True,
+        "ohlcvMonthsAfter2026MarchExcludedInsteadOfRetried":True,
+        "eventsBeyondAvailableOhlcvMarkedDeferredNotFailed":True,
         "currentTickerMapMayHaveSurvivorshipCoverageLimit":True,
         "profitabilityProven":s_pass,
         "executionAuthority":"NONE",
