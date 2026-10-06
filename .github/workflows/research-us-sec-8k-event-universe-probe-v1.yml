@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "pandas==2.3.3" "requests==2.34.2"
+          python -m pip install "pandas==2.3.3" "requests==2.34.2" "duckdb==1.5.6"
       - name: Probe SEC 8-K event universe
         run: |
           python market-prediction-lab/scripts/probe-us-sec-8k-event-universe-v1.py \
