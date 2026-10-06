@@ -233,7 +233,7 @@ jobs:
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
             const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.issue.number, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             let latest = null;
@@ -306,7 +306,7 @@ jobs:
               return;
             }
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.issue.number, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';

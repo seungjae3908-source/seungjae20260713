@@ -251,7 +251,7 @@ jobs:
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: context.payload.issue.number,
               per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
@@ -350,7 +350,7 @@ jobs:
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: context.payload.issue.number,
               per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
