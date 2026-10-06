@@ -1092,7 +1092,7 @@ export class MemberAutoTradingBackgroundWorker {
               }
             }
 
-            if (liveBackgroundEnabled()) {
+            if (liveBackgroundEnabled() && hasCapability(member.profile, 'canPlaceOrders')) {
               const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
               const liveSeed = await buildLivePlanInput({
@@ -1220,7 +1220,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     });
     if (rows.length === 0) return [];
     const { data: profiles, error: profileError } = await this.client.from('profiles')
-      .select('id,role,status,membership_level,is_active').in('id', rows.map((row) => row.userId));
+      .select('id,role,status,membership_level,is_active,membership_expires_at').in('id', rows.map((row) => row.userId));
     if (profileError) throw new Error('BACKGROUND_MEMBER_LIST_FAILED');
     const byId = new Map((profiles ?? []).map((profile) => [String(profile.id), profile as MemberAccessProfile & { id: string }]));
     return rows.flatMap((row) => {
