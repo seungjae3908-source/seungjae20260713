@@ -1,4 +1,5 @@
 name: Research KR Recent All-Session Smoke V1
+# rerun after prior-session opening-context fix
 
 on:
   push:
