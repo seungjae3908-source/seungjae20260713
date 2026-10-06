@@ -56,7 +56,7 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(technicalWorkspaceSource).toContain("const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessAiChart')");
   expect(technicalWorkspaceSource).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
   expect(technicalWorkspaceSource).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
-  expect(technicalWorkspaceSource).toContain('if (!canAccessRiskPreview)');
+  expect(technicalWorkspaceSource).toContain('if (!canAccessAiChart)');
   expect(technicalWorkspaceSource).toContain("import.meta.env.VITE_PHASE11_E2E === 'true'");
   expect(technicalWorkspaceSource).toContain("location.startsWith('/__phase11-technical-workspace-e2e')");
 
