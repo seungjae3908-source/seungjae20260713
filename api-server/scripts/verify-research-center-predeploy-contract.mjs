@@ -122,7 +122,11 @@ requireText(promotionClient, "executionAuthority !== 'NONE'", 'promotion authori
 requireText(promotionClient, 'automaticAdoptionAllowed !== false', 'promotion automatic-adoption lock');
 requireText(promotionClient, 'liveTradingAllowed !== false', 'promotion live-trading lock');
 
-requireText(routeIndex, "router.use('/paper-journal', requireCapability('canAccessJournalSync'));", 'paper journal capability mount');
+requireText(routeIndex, "subpath === '/analytics'", 'paper journal analytics capability split');
+requireText(routeIndex, "return requireCapability('canAccessTradingAnalytics')(req, res, next);", 'paper journal analytics capability');
+requireText(routeIndex, "subpath.startsWith('/ai-review/')", 'paper journal AI review capability split');
+requireText(routeIndex, "return requireCapability('canAccessAiTradingReview')(req, res, next);", 'paper journal AI review capability');
+requireText(routeIndex, "return requireCapability('canAccessJournalSync')(req, res, next);", 'paper journal mutation capability fallback');
 requireText(routeIndex, "router.use('/', paperJournalRouter);", 'paper journal router mount');
 requireText(journalClient, "authorizedFetch('/api/paper-journal/unified-ledger?source=APP_PAPER&range=ALL'", 'journal client endpoint');
 requireText(paperRoute, "router.get('/paper-journal/unified-ledger'", 'unified journal API');
