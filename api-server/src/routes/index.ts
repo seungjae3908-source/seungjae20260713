@@ -96,6 +96,7 @@ router.get('/auth/profile', requireAuthenticatedProfileBootstrap, (req: Authenti
     status: profile.status,
     membership_level: profile.membership_level ?? null,
     is_active: profile.is_active ?? null,
+    membership_expires_at: profile.membership_expires_at ?? null,
     permissions_updated_at: profile.permissions_updated_at ?? null,
     updated_at: profile.updated_at ?? null,
   });
