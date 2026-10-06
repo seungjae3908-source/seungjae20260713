@@ -1,0 +1,49 @@
+name: Research Full-Universe 3pct Hunter Crypto V3 Grid Audit
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-full-universe-3pct-hunter-crypto-v3-grid-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37398830789
+          pattern: full-universe-3pct-hunter-crypto-flow-v3-*
+          path: crypto-v3-artifacts
+      - name: Audit train-pass and near-pass candidates
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          out={}
+          for file in sorted(Path('crypto-v3-artifacts').glob('**/candidate-grid.csv')):
+              rows=list(csv.DictReader(file.open(encoding='utf-8-sig')))
+              def b(x): return str(x).lower()=='true'
+              def f(x):
+                  try:return float(x)
+                  except:return 0.0
+              def slim(r):
+                  return {k:r.get(k) for k in ['candidate','direction','family']} | {
+                      'trainReturn':f(r.get('trainReturn')),'trainPF':f(r.get('trainPF')),'trainMDD':f(r.get('trainMDD')),'trainPosMonthRate':f(r.get('trainPosMonthRate')),'trainTrades':int(float(r.get('trainTrades') or 0)),
+                      'validationPass':b(r.get('validationPass')),'validationReturn':f(r.get('validationReturn')),'validationPF':f(r.get('validationPF')),'validationMDD':f(r.get('validationMDD')),'validationPosMonthRate':f(r.get('validationPosMonthRate')),'validationTrades':int(float(r.get('validationTrades') or 0)),
+                      'oosReturn':f(r.get('oosReturn')),'oosPF':f(r.get('oosPF')),'oosMDD':f(r.get('oosMDD')),'oosPosMonthRate':f(r.get('oosPosMonthRate')),'oosTrades':int(float(r.get('oosTrades') or 0)),
+                  }
+              train_pass=[r for r in rows if b(r.get('trainPass'))]
+              top_train=sorted(rows,key=lambda r:(f(r.get('trainPF')),f(r.get('trainReturn'))),reverse=True)[:10]
+              out[file.parent.name]={'candidateCount':len(rows),'trainPass':[slim(r) for r in train_pass],'topByTrainPF':[slim(r) for r in top_train]}
+          print(json.dumps({'CRYPTO_V3_GRID_AUDIT':out},ensure_ascii=False))
+          PY
