@@ -33,7 +33,8 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(associateBlock).toContain('canAccessBasicInfo: true');
   expect(associateBlock).toContain('canAccessSpot: true');
   expect(associateBlock).not.toContain('canAccessFutures: true');
-  expect(associateBlock).toContain('canAccessRiskPreview: true');
+  expect(associateBlock).toContain('canAccessAiChart: true');
+  expect(associateBlock).not.toContain('canAccessRiskPreview: true');
   expect(associateBlock).toContain('canAccessPaperTrading: true');
   expect(associateBlock).toContain('canAccessAutoTrading: true');
   expect(associateBlock).toContain('canAccessTradingAnalytics: true');
@@ -41,14 +42,14 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(associateBlock).not.toContain('canPlaceOrders: true');
 
   expect(technicalItem('scanner').capability).toBe('canAccessBasicInfo');
-  expect(technicalItem('ai-chart').capability).toBe('canAccessRiskPreview');
+  expect(technicalItem('ai-chart').capability).toBe('canAccessAiChart');
   expect(technicalItem('auto-trading').capability).toBe('canAccessAutoTrading');
 
   expect(appSource).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(appSource).not.toContain('function BasicScannerWorkspace()');
   expect(appSource).not.toContain('scanner-workspace-basic');
 
-  expect(technicalWorkspaceSource).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
+  expect(technicalWorkspaceSource).toContain("const canAccessAiChart = phase11FullCapabilityFixture || auth.can('canAccessAiChart')");
   expect(technicalWorkspaceSource).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
   expect(technicalWorkspaceSource).toContain("const canAccessAutoTrading = phase11FullCapabilityFixture || auth.can('canAccessAutoTrading')");
   expect(technicalWorkspaceSource).toContain('if (!canAccessRiskPreview)');
@@ -60,7 +61,7 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(responsiveTabsSource).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");
 
   const aiChartAccess = appSource.match(/function AiChartAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
-  expect(aiChartAccess).toContain("gated('canAccessRiskPreview'");
+  expect(aiChartAccess).toContain("gated('canAccessAiChart'");
   expect(aiChartAccess).toContain("builder('AI_CHART', <AiChartPage />)");
 
   const autoTradingAccess = appSource.match(/function AutoTradingAccess\(\) \{([^\n]+)\}/)?.[1] ?? '';
