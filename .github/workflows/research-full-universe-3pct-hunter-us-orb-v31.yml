@@ -1,0 +1,212 @@
+name: Research Full-Universe 3pct Hunter US ORB V3.1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-full-universe-3pct-hunter-us-orb-v31.py
+      - .github/workflows/research-full-universe-3pct-hunter-us-orb-v31.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-full-universe-3pct-hunter-us-orb-v31-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  aggregate:
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        month:
+          - "2023-04"
+          - "2023-05"
+          - "2023-06"
+          - "2023-07"
+          - "2023-08"
+          - "2023-09"
+          - "2023-10"
+          - "2023-11"
+          - "2023-12"
+          - "2024-01"
+          - "2024-02"
+          - "2024-03"
+          - "2024-04"
+          - "2024-05"
+          - "2024-06"
+          - "2024-07"
+          - "2024-08"
+          - "2024-09"
+          - "2024-10"
+          - "2024-11"
+          - "2024-12"
+          - "2025-01"
+          - "2025-02"
+          - "2025-03"
+          - "2025-04"
+          - "2025-05"
+          - "2025-06"
+          - "2025-07"
+          - "2025-08"
+          - "2025-09"
+          - "2025-10"
+          - "2025-11"
+          - "2025-12"
+          - "2026-01"
+          - "2026-02"
+          - "2026-03"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-us-orb-v31.py
+      - name: Install dependencies
+        run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "huggingface_hub>=0.30,<1" "duckdb>=1.3,<2" "requests>=2.32,<3"
+      - name: Aggregate month
+        run: |
+          python market-prediction-lab/scripts/run-full-universe-3pct-hunter-us-orb-v31.py aggregate \
+            --month ${{ matrix.month }} \
+            --out-dir us-orb-v31-daily/${{ matrix.month }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-orb-v31-daily-${{ matrix.month }}
+          path: us-orb-v31-daily/${{ matrix.month }}
+          if-no-files-found: error
+          retention-days: 14
+
+  candidates:
+    needs: aggregate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "huggingface_hub>=0.30,<1" "duckdb>=1.3,<2" "requests>=2.32,<3"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: us-orb-v31-daily-*
+          path: daily-artifacts
+      - name: Build causal candidate map
+        run: |
+          python market-prediction-lab/scripts/run-full-universe-3pct-hunter-us-orb-v31.py candidates \
+            --input-root daily-artifacts \
+            --out-dir us-orb-v31-candidates
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-orb-v31-candidates
+          path: us-orb-v31-candidates
+          if-no-files-found: error
+          retention-days: 14
+
+  replay:
+    needs: candidates
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        month:
+          - "2023-04"
+          - "2023-05"
+          - "2023-06"
+          - "2023-07"
+          - "2023-08"
+          - "2023-09"
+          - "2023-10"
+          - "2023-11"
+          - "2023-12"
+          - "2024-01"
+          - "2024-02"
+          - "2024-03"
+          - "2024-04"
+          - "2024-05"
+          - "2024-06"
+          - "2024-07"
+          - "2024-08"
+          - "2024-09"
+          - "2024-10"
+          - "2024-11"
+          - "2024-12"
+          - "2025-01"
+          - "2025-02"
+          - "2025-03"
+          - "2025-04"
+          - "2025-05"
+          - "2025-06"
+          - "2025-07"
+          - "2025-08"
+          - "2025-09"
+          - "2025-10"
+          - "2025-11"
+          - "2025-12"
+          - "2026-01"
+          - "2026-02"
+          - "2026-03"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "huggingface_hub>=0.30,<1" "duckdb>=1.3,<2" "requests>=2.32,<3"
+      - uses: actions/download-artifact@v4
+        with:
+          name: us-orb-v31-candidates
+          path: candidate-artifact
+      - name: Replay month
+        run: |
+          python market-prediction-lab/scripts/run-full-universe-3pct-hunter-us-orb-v31.py replay \
+            --month ${{ matrix.month }} \
+            --candidate-file candidate-artifact/broad-candidates.parquet \
+            --out-dir us-orb-v31-outcomes/${{ matrix.month }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-orb-v31-outcomes-${{ matrix.month }}
+          path: us-orb-v31-outcomes/${{ matrix.month }}
+          if-no-files-found: error
+          retention-days: 14
+
+  combine:
+    needs: replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "huggingface_hub>=0.30,<1" "duckdb>=1.3,<2" "requests>=2.32,<3"
+      - uses: actions/download-artifact@v4
+        with:
+          name: us-orb-v31-candidates
+          path: candidate-artifact
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: us-orb-v31-outcomes-*
+          path: outcome-artifacts
+      - name: Combine ORB V3.1 results
+        run: |
+          python market-prediction-lab/scripts/run-full-universe-3pct-hunter-us-orb-v31.py combine \
+            --input-root outcome-artifacts \
+            --candidate-dir candidate-artifact \
+            --out-dir market-prediction-lab/docs/full-universe-3pct-hunter-us-orb-v31
+      - uses: actions/upload-artifact@v4
+        with:
+          name: full-universe-3pct-hunter-us-orb-v31-${{ github.sha }}
+          path: market-prediction-lab/docs/full-universe-3pct-hunter-us-orb-v31
+          if-no-files-found: error
+          retention-days: 14
