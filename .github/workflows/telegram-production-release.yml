@@ -22,6 +22,12 @@ on:
       - api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql
       - ops/apply-production-personal-telegram-storage.mjs
       - ops/verify-production-personal-telegram-storage.mjs
+      - ops/verify-production-telegram-active-readiness.mjs
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/tests/production-telegram-active-readiness.test.mjs
+      - stock-analyzer/e2e/production-trading-core-qa.spec.ts
+      - stock-analyzer/e2e/support/production-readonly-login.ts
+      - stock-analyzer/playwright.production-trading-core.config.ts
 
 permissions:
   contents: read
@@ -51,6 +57,7 @@ jobs:
       - run: |
           node api-server/scripts/verify-telegram-production-release-contract.mjs
           node ops/verify-production-personal-telegram-storage.mjs --static
+          node --test .github/tests/production-telegram-active-readiness.test.mjs
 
   release:
     name: Owner-approved Telegram production release and delivery verification
@@ -1215,6 +1222,51 @@ jobs:
           ].join('\n'));
           console.log(JSON.stringify(value));
           NODE
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install exact locked QA dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install isolated Chromium for authenticated Telegram verification
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Verify member-linked Telegram delivery and restored four-market AUTO policy
+        id: member-telegram-qa
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_TRADING_CORE_QA: 'true'
+          PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/telegram-active
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
+
+      - name: Require exact member Telegram ACTIVE_VERIFIED receipt
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.run_id }}
+        run: >-
+          node ops/verify-production-telegram-active-readiness.mjs
+          --artifact stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json
+          "$TARGET_SHA" "$PRODUCTION_DEPLOY_RUN_ID"
+
+      - name: Upload exact-SHA member Telegram active verification
+        if: ${{ always() && steps.member-telegram-qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-production-active-verification-${{ steps.command.outputs.sha }}
+          path: |
+            stock-analyzer/production-trading-core-artifacts
+            stock-analyzer/production-login-diagnostics/telegram-active
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Record sanitized Production completion evidence
         if: success()

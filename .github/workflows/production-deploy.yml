@@ -37,6 +37,9 @@ on:
       - .github/scripts/run-production-readonly-qa.sh
       - .github/scripts/verify-production-qa-receipt.cjs
       - .github/scripts/verify-production-deploy-execution.cjs
+      - ops/apply-production-paper-journal-privileges.mjs
+      - ops/verify-production-paper-journal-privileges.mjs
+      - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
       - .github/scripts/build-production-postdeploy-context.mjs
       - .github/scripts/build-production-postdeploy-evidence.cjs
       - .github/scripts/production-postdeploy-qa-evidence.cjs
@@ -102,6 +105,8 @@ jobs:
         run: node api-server/scripts/verify-production-verification-contract.mjs
       - name: Verify Production trade schema read-only gate contract
         run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
+      - name: Verify Production paper journal privilege contract
+        run: node ops/verify-production-paper-journal-privileges.mjs --static
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
 
@@ -306,7 +311,8 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-      - name: Require canonical Production trade schema before application mutation
+      - name: Require canonical Production trade schema and journal privileges before application mutation
+        id: database-gates
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -351,6 +357,54 @@ jobs:
           NODE
             exit "$audit_status"
           fi
+
+          (
+            paper_artifact="$(mktemp "$RUNNER_TEMP/production-paper-journal-privileges.XXXXXX.json")"
+            paper_stderr="$(mktemp "$RUNNER_TEMP/production-paper-journal-privileges.XXXXXX.stderr")"
+            paper_archive="$(mktemp "$RUNNER_TEMP/production-paper-journal-privileges.XXXXXX.tar.gz")"
+            remote_dir="$({
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/paper-journal-privileges.XXXXXX'
+            })"
+            [[ "$remote_dir" =~ ^/tmp/paper-journal-privileges\.[A-Za-z0-9]+$ ]] || {
+              echo 'Production paper journal temporary directory was rejected.' >&2
+              exit 1
+            }
+            quoted_remote_dir="$(printf '%q' "$remote_dir")"
+            cleanup_paper_gate() {
+              rm -f "$paper_stderr" "$paper_archive"
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" \
+                "case $quoted_remote_dir in /tmp/paper-journal-privileges.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+                >/dev/null 2>&1 || true
+            }
+            trap cleanup_paper_gate EXIT
+            tar -czf "$paper_archive" \
+              ops/apply-production-paper-journal-privileges.mjs \
+              api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
+            scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$paper_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+            paper_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-paper-journal-privileges.mjs' \
+              "$remote_dir" "$TARGET_SHA")"
+            if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+              -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$paper_command" > "$paper_artifact" 2> "$paper_stderr"; then
+              classification="$(grep -Eo '^\[production-paper-journal-privileges\] [A-Za-z0-9_:-]+' "$paper_stderr" | tail -n 1 | sed 's/^\[production-paper-journal-privileges\] //' || true)"
+              [[ -n "$classification" ]] || classification='unknown_safe_failure'
+              echo "Production paper journal privilege apply failed safely: $classification" >&2
+              exit 1
+            fi
+            node ops/verify-production-paper-journal-privileges.mjs --artifact "$paper_artifact"
+            printf 'paper_journal_artifact=%s\n' "$paper_artifact" >> "$GITHUB_OUTPUT"
+          )
+
+      - name: Upload sanitized Production paper journal privilege evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-paper-journal-privileges-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.paper_journal_artifact }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Deploy exact approved revision
         env:

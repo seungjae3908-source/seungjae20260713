@@ -328,6 +328,24 @@ if (!source.includes("const telegramFeatureFlags = [")
   throw new Error('Telegram activation must not treat a partial feature-flag state as already complete');
 }
 
+for (const required of [
+  'Verify member-linked Telegram delivery and restored four-market AUTO policy',
+  'playwright.production-trading-core.config.ts',
+  'ops/verify-production-telegram-active-readiness.mjs',
+  'telegram-production-active-verification-${{ steps.command.outputs.sha }}',
+  'PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}',
+  'PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}',
+]) {
+  if (!source.includes(required)) {
+    throw new Error(`Telegram Production release is missing authenticated member verification: ${required}`);
+  }
+}
+const memberVerificationIndex = source.indexOf('Verify member-linked Telegram delivery and restored four-market AUTO policy');
+const completionIndex = source.indexOf('Record sanitized Production completion evidence');
+if (memberVerificationIndex <= activationIndex || completionIndex <= memberVerificationIndex) {
+  throw new Error('Telegram completion must follow authenticated member delivery verification');
+}
+
 const forbiddenPatterns = [
   [/pull_request_target\s*:/, 'pull_request_target is forbidden'],
   [/repository_dispatch\s*:/, 'repository_dispatch is forbidden'],
