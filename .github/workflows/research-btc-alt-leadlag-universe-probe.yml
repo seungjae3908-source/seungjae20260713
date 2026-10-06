@@ -1,0 +1,70 @@
+name: Research BTC-Alt LeadLag Universe Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-btc-alt-leadlag-universe-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [CRYPTO_SPOT, CRYPTO_FUTURES]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "duckdb>=1.3,<2" "huggingface_hub>=0.30,<1" "requests>=2.32,<3"
+      - name: Probe monthly USDT universe
+        run: |
+          python - <<'PY'
+          import importlib.util, json
+          from pathlib import Path
+          import pandas as pd
+          root=Path.cwd()
+          p=root/'market-prediction-lab/scripts/run-full-universe-3pct-hunter-causal-backtest-v1.py'
+          spec=importlib.util.spec_from_file_location('v1',p); v1=importlib.util.module_from_spec(spec); spec.loader.exec_module(v1)
+          market='${{ matrix.market }}'
+          raw,meta=v1.census.load_crypto(market)
+          pdf=raw.select(['symbol','date','close','volume']).to_pandas()
+          pdf['date']=pd.to_datetime(pdf['date']); pdf['month']=pdf['date'].dt.to_period('M').astype(str)
+          pdf=pdf[pdf['symbol'].astype(str).str.endswith('USDT')].copy()
+          pdf=pdf[~pdf['symbol'].astype(str).isin(['BTCUSDT','USDCUSDT','FDUSDUSDT','TUSDUSDT','BUSDUSDT','DAIUSDT','USDPUSDT'])]
+          pdf['dollar']=pd.to_numeric(pdf['close'],errors='coerce')*pd.to_numeric(pdf['volume'],errors='coerce')
+          g=pdf.groupby(['month','symbol'],as_index=False).agg(days=('date','nunique'),avgDollar=('dollar','mean'))
+          g=g[(g['days']>=5)&g['avgDollar'].notna()]
+          months=sorted(g['month'].unique())
+          rows=[]
+          for m in months:
+              x=g[g['month']==m].copy()
+              rows.append({
+                'month':m,'allSymbols':int(len(x)),
+                'ge100k':int((x['avgDollar']>=100_000).sum()),
+                'ge500k':int((x['avgDollar']>=500_000).sum()),
+                'ge1m':int((x['avgDollar']>=1_000_000).sum()),
+                'medianDollar':float(x['avgDollar'].median()) if len(x) else None,
+              })
+          out={
+            'market':market,
+            'distinctUSDTAlts':int(g['symbol'].nunique()),
+            'allSymbolMonths':int(len(g)),
+            'symbolMonthsGe100k':int((g['avgDollar']>=100_000).sum()),
+            'symbolMonthsGe500k':int((g['avgDollar']>=500_000).sum()),
+            'symbolMonthsGe1m':int((g['avgDollar']>=1_000_000).sum()),
+            'months':rows,
+          }
+          print(json.dumps({'LEADLAG_UNIVERSE_PROBE':out},ensure_ascii=False))
+          PY
