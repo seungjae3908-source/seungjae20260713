@@ -258,7 +258,11 @@ const memberAccessContractChanged=changed.some((p)=>memberAccessReviewed.include
 if(memberAccessContractChanged){
  const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
   const aiChartPublicRead = req.method === 'GET'
-    && (req.path === '/tickers' || req.path === '/candles');
+    && (
+      req.path === '/tickers'
+      || req.path === '/candles'
+      || /^\\/[^/]+\\/(?:snapshot|flow)$/u.test(req.path)
+    );
   return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
 });`;
  const canonicalFuturesGate="router.use('/crypto/futures', requireCapability('canAccessFutures'));";
