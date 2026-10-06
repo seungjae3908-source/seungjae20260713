@@ -344,7 +344,7 @@ check('only canonical Telegram seam creates activation after exact approval iden
   for (const key of ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED']) assert.equal(env[key], 'false');
   assert.equal(env.executionAuthority, 'NONE');
 });
-check('Telegram seam rejects missing approval, wrong identity, mixed state and any missing runtime configuration before mutation', () => {
+check('Telegram seam rejects missing approval, wrong identity, mixed state and missing core runtime configuration before mutation', () => {
   const invalid = [
     [readyRuntime, { commentId: '' }], [readyRuntime, { sha: 'main' }], [readyRuntime, { marker: previous }],
     [{ ...readyRuntime, DEPLOY_SHA: previous }, {}], [{ ...readyRuntime, status: 'stopped' }, {}],
@@ -354,15 +354,52 @@ check('Telegram seam rejects missing approval, wrong identity, mixed state and a
   ];
   for (const key of [
     'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
-    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
-    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID', 'TELEGRAM_OWNER_MEMBER_ID',
-    'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
+    'TELEGRAM_CRYPTO_CHAT_ID', 'TELEGRAM_BOT_USERNAME', 'TELEGRAM_WEBHOOK_SECRET',
   ]) invalid.push([{ ...readyRuntime, [key]: '' }, {}]);
   for (const [runtime, options] of invalid) {
     const result = activation(runtime, options);
     assert(result.error); assert.equal(result.calls.length, 0);
   }
+});
+check('Telegram seam accepts absent optional room overrides and owner mapping without weakening core routing', () => {
+  const runtime = { ...readyRuntime };
+  for (const key of [
+    'TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID',
+    'TELEGRAM_OWNER_MEMBER_ID',
+  ]) delete runtime[key];
+  const result = activation(runtime);
+  assert.ifError(result.error); assert.equal(result.result, true); assert.equal(result.calls.length, 2);
+  const env = result.calls[0][2].env;
+  assert.equal(env.TELEGRAM_STOCK_CHAT_ID, readyRuntime.TELEGRAM_STOCK_CHAT_ID);
+  assert.equal(env.TELEGRAM_CRYPTO_CHAT_ID, readyRuntime.TELEGRAM_CRYPTO_CHAT_ID);
+  assert.equal(env.TELEGRAM_KR_STOCK_CHAT_ID, undefined);
+  assert.equal(env.TELEGRAM_OWNER_MEMBER_ID, undefined);
+});
+check('Telegram seam converts PM2 restart and persistence failures into sanitized stable diagnostics', () => {
+  const restartFailure = vm.runInNewContext(`(${activationFunction.trim()})`, {
+    process: { env: {} },
+    execFileSync: () => { throw new Error('sensitive child-process detail must not escape'); },
+  });
+  assert.throws(
+    () => restartFailure(readyRuntime, target, target, '123'),
+    error => error?.message === 'TELEGRAM_PM2_RESTART_FAILED',
+  );
+
+  let calls = 0;
+  const saveFailure = vm.runInNewContext(`(${activationFunction.trim()})`, {
+    process: { env: {} },
+    execFileSync: () => {
+      calls += 1;
+      if (calls === 2) throw new Error('sensitive persistence detail must not escape');
+      return '';
+    },
+  });
+  assert.throws(
+    () => saveFailure(readyRuntime, target, target, '123'),
+    error => error?.message === 'TELEGRAM_PM2_SAVE_FAILED',
+  );
 });
 check('Telegram-specific repeat approval does not restart fully active state', () => {
   const result = activation(completeTelegramRuntime);
