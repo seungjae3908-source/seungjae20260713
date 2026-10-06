@@ -66,7 +66,7 @@ export function deriveMemberTier(profile) {
     : typeof value.membershipLevel === 'string'
       ? value.membershipLevel
       : null;
-  const active = value.is_active !== false && value.isActive !== false;
+  const active = value.is_active === true || value.isActive === true;
   const status = typeof value.status === 'string' ? value.status : null;
   const expiry = typeof value.membership_expires_at === 'string'
     ? value.membership_expires_at
