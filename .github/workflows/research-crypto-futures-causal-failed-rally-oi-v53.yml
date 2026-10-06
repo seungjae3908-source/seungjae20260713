@@ -1,0 +1,66 @@
+name: Research Crypto Futures Causal Failed-Rally OI V5.3
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/run-crypto-futures-causal-failed-rally-oi-v53.py
+      - .github/workflows/research-crypto-futures-causal-failed-rally-oi-v53.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-futures-causal-failed-rally-oi-v53-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SOURCE_RUN_ID: "37467915233"
+      SOURCE_ARTIFACT: "crypto-futures-causal-targetfirst-ai-v51-3a3778a2e15732faf59b6351217dad20d90f681d"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax check
+        run: |
+          python -m py_compile market-prediction-lab/scripts/run-crypto-futures-causal-failed-rally-oi-v53.py
+          python -m py_compile market-prediction-lab/scripts/run-full-universe-3pct-hunter-futures-oi-v4.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2.2,<3" "numpy>=2.0,<3" "pyarrow>=18,<22" "polars>=1.30,<2" "requests>=2.32,<3"
+      - name: Download frozen causal V5.1 events
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: frozen-v51
+      - name: Run failed-rally OI family
+        shell: bash
+        run: |
+          set -euo pipefail
+          EVENTS="$(find frozen-v51 -name causal-short-events.parquet -print -quit)"
+          test -n "$EVENTS"
+          python market-prediction-lab/scripts/run-crypto-futures-causal-failed-rally-oi-v53.py             --events "$EVENTS"             --out-dir market-prediction-lab/docs/crypto-futures-causal-failed-rally-oi-v53
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-causal-failed-rally-oi-v53-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-causal-failed-rally-oi-v53
+          if-no-files-found: error
+          retention-days: 14
