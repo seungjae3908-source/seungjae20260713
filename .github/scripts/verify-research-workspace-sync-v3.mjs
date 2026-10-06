@@ -336,7 +336,10 @@ if(memberAccessContractChanged){
  const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
  if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
  if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
- current=current.replace(aiChartFuturesGate,canonicalFuturesGate).replace(journalSplitGate,canonicalJournalGate);
+ current=current
+  .replace(aiChartFuturesGate,canonicalFuturesGate)
+  .replace(journalSplitGate,canonicalJournalGate)
+  .replace("    membership_expires_at: profile.membership_expires_at ?? null,\n",'');
 }
 // Older owner history may not be an ancestor after squash/integration merges. Only
 // normalize away the legacy video mount when the exact current main itself does
