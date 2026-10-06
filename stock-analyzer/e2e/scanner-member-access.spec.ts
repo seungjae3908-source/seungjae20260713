@@ -29,9 +29,11 @@ test('associate scanner access uses the unified workspace while advanced capabil
   expect(associateBlock).toContain('canAccessBasicInfo: true');
   expect(associateBlock).toContain('canAccessSpot: true');
   expect(associateBlock).not.toContain('canAccessFutures: true');
-  expect(associateBlock).not.toContain('canAccessRiskPreview: true');
+  expect(associateBlock).toContain('canAccessRiskPreview: true');
   expect(associateBlock).toContain('canAccessPaperTrading: true');
   expect(associateBlock).toContain('canAccessAutoTrading: true');
+  expect(associateBlock).toContain('canAccessTradingAnalytics: true');
+  expect(associateBlock).toContain('canAccessAiTradingReview: true');
   expect(associateBlock).not.toContain('canPlaceOrders: true');
 
   expect(technicalItem('scanner').capability).toBe('canAccessBasicInfo');
