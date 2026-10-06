@@ -18,7 +18,6 @@ const runtimeEntry = await read('api-server/src/index.ts');
 const identityGuard = await read('api-server/src/middleware/paper-journal-query-identity.ts');
 const adminRoute = await read('api-server/src/routes/admin.ts');
 const memberAuthAdmin = await read('api-server/src/services/member-auth-admin.service.ts');
-const memberAuthAdmin = await read('api-server/src/services/member-auth-admin.service.ts');
 const smoke = await read('api-server/src/routes/paper-journal-query-identity.smoke.test.ts');
 const tests = await read('api-server/test.mjs');
 const manifest = await read('api-server/supabase/bootstrap/staging-bootstrap.sql');
