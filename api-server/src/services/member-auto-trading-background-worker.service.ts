@@ -246,6 +246,7 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
   const policy = member.policy;
   const mapping = marketMapping(entry.identity.market, policy);
+  if (mapping.assetClass === 'crypto_futures' && !hasCapability(member.profile, 'canAccessFutures')) return false;
   if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) return false;
   if (!policy.marketEnabled[mapping.assetClass] || !policy.exchangeEnabled[mapping.exchange]) return false;
   const symbol = mapping.exchange === 'upbit'
