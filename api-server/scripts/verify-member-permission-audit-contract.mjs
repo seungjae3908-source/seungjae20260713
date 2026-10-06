@@ -55,9 +55,23 @@ assert(smoke.includes("for (const queryKey of ['userId', 'user_id'])"), 'smoke t
 assert(smoke.includes('response.status, 400'), 'smoke test must require fail-closed HTTP 400');
 assert(tests.includes('paper-journal-query-identity.smoke.test.ts'), 'smoke test must be registered');
 
-assert(adminRoute.includes("import { getUserSupabase } from '../lib/supabase';"), 'admin routes must use the authenticated user-scoped Supabase client');
+assert(adminRoute.includes('getUserSupabase') && adminRoute.includes("from '../lib/supabase';"), 'admin routes must import the authenticated user-scoped Supabase client');
 assert(adminRoute.includes('return getUserSupabase(req.accessToken!);'), 'admin database access must preserve the caller token for RLS');
-assert(!adminRoute.includes('getSupabase') && !adminRoute.includes('hasSupabaseServerKey'), 'admin routes must not bypass RLS with a server key');
+
+const passwordResetStart = adminRoute.indexOf("router.post('/members/:id/password-reset'");
+const passwordResetEnd = adminRoute.indexOf("router.get('/audit-logs'", passwordResetStart);
+assert(passwordResetStart >= 0 && passwordResetEnd > passwordResetStart, 'password reset route must be explicitly bounded');
+const passwordResetRoute = adminRoute.slice(passwordResetStart, passwordResetEnd);
+const ordinaryAdminRoutes = adminRoute.slice(0, passwordResetStart) + adminRoute.slice(passwordResetEnd);
+assert(!/\\bgetSupabase\\(\\)/u.test(ordinaryAdminRoutes), 'ordinary admin data routes must never use the service-role client');
+assert(!/\\bhasSupabaseServerKey\\(\\)/u.test(ordinaryAdminRoutes), 'ordinary admin data routes must never depend on the service-role key');
+assert(passwordResetRoute.includes('hasSupabaseServerKey()'), 'password reset must fail closed without the server key');
+assert(passwordResetRoute.includes('const service = getSupabase();'), 'password reset may use the service-role client only inside its bounded route');
+assert(passwordResetRoute.includes("action: 'member.password.reset'"), 'password reset must write the dedicated audit action');
+assert(passwordResetRoute.includes("before_value: { password: 'REDACTED' }"), 'password reset audit must never store the previous password');
+assert(passwordResetRoute.includes('credentialStored: false'), 'password reset audit must state that credentials are not stored');
+assert(passwordResetRoute.indexOf("from('member_permission_audit').insert") < passwordResetRoute.indexOf('auth.admin.updateUserById'), 'password reset audit must succeed before the Auth mutation');
+assert(passwordResetRoute.includes("res.setHeader('Cache-Control', 'no-store, max-age=0')"), 'password reset response must be non-cacheable');
 
 for (const source of [manifest, runner]) {
   assert(source.includes('2026080502_member_permission_audit_authenticated_privileges.sql'), 'bootstrap must include the new migration');
