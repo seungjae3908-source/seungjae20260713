@@ -239,6 +239,7 @@ const memberAccessReviewed=[
  'api-server/src/services/member-access-phase8.test.ts',
  'api-server/src/services/member-administration.service.test.ts',
  'api-server/src/services/member-administration.service.ts',
+ 'api-server/src/services/member-auth-admin.service.ts',
  'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
  'api-server/src/services/member-auto-trading-background-worker.service.ts',
  'api-server/src/services/scanner-access-control.service.test.ts',
