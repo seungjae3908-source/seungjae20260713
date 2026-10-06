@@ -1,0 +1,67 @@
+name: Research Crypto Futures Causal Prescreen Capacity V5.0.1
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/audit-crypto-futures-causal-prescreen-capacity-v501.py
+      - .github/workflows/research-crypto-futures-causal-prescreen-capacity-v501.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-crypto-futures-causal-prescreen-capacity-v501-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SOURCE_RUN_ID: "37466870802"
+      SOURCE_ARTIFACT: "crypto-futures-causal-prescreen-v50-probe-996d8ef0c386aecf9afb0bc03f3d2028a990c4fb"
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m py_compile market-prediction-lab/scripts/audit-crypto-futures-causal-prescreen-capacity-v501.py
+
+      - name: Install dependencies
+        run: python -m pip install "pandas>=2.2,<3"
+
+      - name: Download causal Top50 prescreen evidence
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          name: ${{ env.SOURCE_ARTIFACT }}
+          path: causal-v50
+
+      - name: Compare causal capacity caps without PnL
+        run: |
+          SELECTED="$(find causal-v50 -name causal-selected.csv -print -quit)"
+          test -n "$SELECTED"
+          python market-prediction-lab/scripts/audit-crypto-futures-causal-prescreen-capacity-v501.py             --selected "$SELECTED"             --out-dir market-prediction-lab/docs/crypto-futures-causal-prescreen-capacity-v501
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-causal-prescreen-capacity-v501-${{ github.sha }}
+          path: market-prediction-lab/docs/crypto-futures-causal-prescreen-capacity-v501
+          if-no-files-found: error
+          retention-days: 14
