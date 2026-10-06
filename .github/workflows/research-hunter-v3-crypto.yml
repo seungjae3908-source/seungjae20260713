@@ -1,0 +1,77 @@
+name: Research Hunter V3 Crypto
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - market-prediction-lab/scripts/hunter_v3_common.py
+      - market-prediction-lab/scripts/run-hunter-crypto-intraday-v3-shard.py
+      - market-prediction-lab/scripts/combine-hunter-crypto-intraday-v3.py
+      - .github/workflows/research-hunter-v3-crypto.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: research-hunter-v3-crypto-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [CRYPTO_SPOT, CRYPTO_FUTURES]
+        shard: [0,1,2,3,4,5,6,7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m py_compile market-prediction-lab/scripts/run-hunter-crypto-intraday-v3-shard.py
+      - run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "pyarrow>=18,<22" "huggingface_hub>=0.30,<1"
+      - run: python market-prediction-lab/scripts/run-hunter-crypto-intraday-v3-shard.py --market ${{ matrix.market }} --shard-index ${{ matrix.shard }} --shard-count 8 --out-dir out/${{ matrix.market }}/${{ matrix.shard }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v3-shard-${{ matrix.market }}-${{ matrix.shard }}-${{ github.sha }}
+          path: out/${{ matrix.market }}/${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 14
+
+  combine:
+    needs: shard
+    strategy:
+      fail-fast: false
+      matrix:
+        market: [CRYPTO_SPOT, CRYPTO_FUTURES]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install "polars>=1.30,<2" "pandas>=2.2,<3" "numpy>=2,<3" "pyarrow>=18,<22"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hunter-v3-shard-${{ matrix.market }}-*
+          path: shards
+      - run: mkdir -p out/${{ matrix.market }} && python market-prediction-lab/scripts/combine-hunter-crypto-intraday-v3.py --market ${{ matrix.market }} --input-root shards --out-dir out/${{ matrix.market }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hunter-v3-${{ matrix.market }}-${{ github.sha }}
+          path: out/${{ matrix.market }}
+          if-no-files-found: error
+          retention-days: 14
