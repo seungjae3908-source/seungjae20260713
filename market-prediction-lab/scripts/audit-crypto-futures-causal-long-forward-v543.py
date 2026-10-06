@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Deterministic V5.4.3 workflow trigger.
+
 # Workflow registered; frozen forward audit trigger.
 
 # Trigger registered frozen forward audit.
