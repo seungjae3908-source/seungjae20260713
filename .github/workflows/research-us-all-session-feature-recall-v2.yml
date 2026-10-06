@@ -44,8 +44,8 @@ jobs:
         run: |
           python market-prediction-lab/scripts/run-us-all-session-feature-recall-v2.py \
             --month 2023-06 \
-            --month 2024-12 \
-            --month 2026-03 \
+            --month 2024-06 \
+            --month 2025-02 \
             --out-dir market-prediction-lab/docs/us-all-session-feature-recall-v2
       - name: Upload evidence
         if: always()
