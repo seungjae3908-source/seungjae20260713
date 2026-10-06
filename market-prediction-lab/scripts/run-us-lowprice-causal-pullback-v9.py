@@ -211,7 +211,7 @@ def month_events(path:Path, prev_daily:pd.DataFrame, month:str)->pd.DataFrame:
     )
     SELECT
       e.*,
-      '{month}' month,
+      '{month}' AS "month",
       CASE
         WHEN f.firstStopTs IS NOT NULL AND (f.firstTargetTs IS NULL OR f.firstStopTs<=f.firstTargetTs)
         THEN -{STOP}-{ROUND_TRIP_COST}
