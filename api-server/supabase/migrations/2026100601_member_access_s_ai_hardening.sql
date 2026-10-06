@@ -12,7 +12,10 @@ alter table public.profiles
 -- without approving or elevating anyone.
 update public.profiles
 set is_active = false,
-    status = 'pending',
+    status = case
+      when status is null or status = 'approved' then 'pending'
+      else status
+    end,
     membership_expires_at = null,
     approved_at = null,
     approved_by = null,
@@ -21,8 +24,11 @@ set is_active = false,
 where membership_level = 'pending'
   and (
     is_active is true
-    or coalesce(status, 'pending') <> 'pending'
+    or status is null
+    or status = 'approved'
     or membership_expires_at is not null
+    or approved_at is not null
+    or approved_by is not null
   );
 
 create index if not exists profiles_membership_expiry_idx
@@ -179,7 +185,7 @@ begin
     else 'regular'
   end;
   v_current_active := v_current.is_active is true;
-  v_current_expiry := v_current.membership_expires_at;
+  v_current_expiry := case when v_current_tier in ('associate', 'regular') then v_current.membership_expires_at else null end;
 
   v_next_tier := coalesce(p_membership_level, v_current_tier);
   v_next_active := case
