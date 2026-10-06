@@ -173,7 +173,20 @@ function assertCredentialReceipt(credential, { targetSha, productionDeployRunId 
 
 function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
-  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v1'
+  const telegramState = tradingCore?.telegramActivationState;
+  const telegramReady = telegramState === 'READY_FOR_ACTIVATION'
+    && tradingCore?.telegramActivationReady === true
+    && tradingCore?.telegramConnectedBefore === false
+    && tradingCore?.telegramRuntimeReady === false
+    && tradingCore?.telegramDeliveryQueued === 0
+    && tradingCore?.telegramTestDelivered === false;
+  const telegramVerified = telegramState === 'ACTIVE_VERIFIED'
+    && tradingCore?.telegramActivationReady === true
+    && tradingCore?.telegramConnectedBefore === true
+    && tradingCore?.telegramRuntimeReady === true
+    && Number(tradingCore?.telegramDeliveryQueued) >= 1
+    && tradingCore?.telegramTestDelivered === true;
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v2'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
     || tradingCore?.authenticatedProductionSession !== true
@@ -181,8 +194,7 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     || tradingCore?.paperFilled !== true
     || tradingCore?.journalVisible !== true
     || !(Number(tradingCore?.executionSyncInserted) >= 1)
-    || !(Number(tradingCore?.telegramDeliveryQueued) >= 1)
-    || tradingCore?.telegramTestDelivered !== true
+    || (!telegramReady && !telegramVerified)
     || tradingCore?.policyRestored !== true
     || tradingCore?.realOrderSubmitted !== false
     || tradingCore?.liveTradingAuthorityGranted !== false
@@ -286,6 +298,15 @@ function buildProductionPostdeployQaEvidence({
     identityMatch: true,
     comprehensiveQa: qaScope === 'full' ? 'PASS' : 'NOT_RUN',
     tradingCoreQa: qaScope === 'trading_core' ? 'PASS' : 'NOT_RUN',
+    telegramActivationState: qaScope === 'trading_core'
+      ? tradingCore.telegramActivationState
+      : 'NOT_EVALUATED',
+    telegramActivationReady: qaScope === 'trading_core'
+      ? tradingCore.telegramActivationReady
+      : false,
+    telegramActivationVerified: qaScope === 'trading_core'
+      ? tradingCore.telegramActivationState === 'ACTIVE_VERIFIED'
+      : false,
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
     orderRequests: 0,

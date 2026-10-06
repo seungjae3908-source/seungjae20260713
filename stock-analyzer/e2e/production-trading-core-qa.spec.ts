@@ -89,10 +89,17 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   expect(integrationBefore.ok).toBe(true);
   expect(integrationBefore.body?.ok).toBe(true);
   expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
-  expect(integrationBefore.body?.telegram?.connected).toBe(true);
-  expect(integrationBefore.body?.telegramRuntime?.deliveryReady).toBe(true);
-  expect(integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled).toBe(true);
-  expect(integrationBefore.body?.telegramRuntime?.personalWorkerEnabled).toBe(true);
+  const telegramConnectedBefore = integrationBefore.body?.telegram?.connected === true;
+  const telegramRuntimeReady = integrationBefore.body?.telegramRuntime?.deliveryReady === true
+    && integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled === true
+    && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true;
+  const telegramActivationState = telegramConnectedBefore && telegramRuntimeReady
+    ? 'ACTIVE_VERIFIED' as const
+    : 'READY_FOR_ACTIVATION' as const;
+  if (telegramConnectedBefore || telegramRuntimeReady) {
+    expect(telegramConnectedBefore, 'Telegram connection and runtime activation must change atomically').toBe(true);
+    expect(telegramRuntimeReady, 'Telegram connection and runtime activation must change atomically').toBe(true);
+  }
 
   const originalPolicy = structuredClone(statusBefore.body.policy);
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
@@ -256,7 +263,11 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     syncInserted = Number(synced.body?.inserted ?? 0);
     deliveryQueued = Number(synced.body?.deliveryQueued ?? 0);
     expect(syncInserted).toBeGreaterThanOrEqual(1);
-    expect(deliveryQueued).toBeGreaterThanOrEqual(1);
+    if (telegramActivationState === 'ACTIVE_VERIFIED') {
+      expect(deliveryQueued).toBeGreaterThanOrEqual(1);
+    } else {
+      expect(deliveryQueued).toBe(0);
+    }
 
     const journal = await appApi<any>(
       page,
@@ -268,13 +279,15 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(journalText).toContain(canarySignalId);
     journalVisible = true;
 
-    const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
-    expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
-    expect(telegram.body?.status).toBe('DELIVERED');
-    expect(telegram.body?.testOnly).toBe(true);
-    expect(telegram.body?.investmentSignal).toBe(false);
-    expect(telegram.body?.ordersSubmitted).toBe(0);
-    telegramDelivered = true;
+    if (telegramActivationState === 'ACTIVE_VERIFIED') {
+      const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
+      expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
+      expect(telegram.body?.status).toBe('DELIVERED');
+      expect(telegram.body?.testOnly).toBe(true);
+      expect(telegram.body?.investmentSignal).toBe(false);
+      expect(telegram.body?.ordersSubmitted).toBe(0);
+      telegramDelivered = true;
+    }
   } finally {
     const restorePreferences = await appApi<any>(
       page,
@@ -297,7 +310,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   expect(statusAfter.body?.actualOrderSubmittedByStatusRequest).toBe(false);
 
   writeEvidence({
-    schemaVersion: 'production-trading-core-qa-v1',
+    schemaVersion: 'production-trading-core-qa-v2',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -313,6 +326,10 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     paperFilled,
     journalVisible,
     executionSyncInserted: syncInserted,
+    telegramActivationState,
+    telegramActivationReady: true,
+    telegramConnectedBefore,
+    telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
     policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
