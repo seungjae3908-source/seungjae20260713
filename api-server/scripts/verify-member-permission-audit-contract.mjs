@@ -17,6 +17,7 @@ const build = await read('api-server/build.mjs');
 const runtimeEntry = await read('api-server/src/index.ts');
 const identityGuard = await read('api-server/src/middleware/paper-journal-query-identity.ts');
 const adminRoute = await read('api-server/src/routes/admin.ts');
+const memberAuthAdmin = await read('api-server/src/services/member-auth-admin.service.ts');
 const smoke = await read('api-server/src/routes/paper-journal-query-identity.smoke.test.ts');
 const tests = await read('api-server/test.mjs');
 const manifest = await read('api-server/supabase/bootstrap/staging-bootstrap.sql');
@@ -65,13 +66,19 @@ const passwordResetRoute = adminRoute.slice(passwordResetStart, passwordResetEnd
 const ordinaryAdminRoutes = adminRoute.slice(0, passwordResetStart) + adminRoute.slice(passwordResetEnd);
 assert(!/\\bgetSupabase\\(\\)/u.test(ordinaryAdminRoutes), 'ordinary admin data routes must never use the service-role client');
 assert(!/\\bhasSupabaseServerKey\\(\\)/u.test(ordinaryAdminRoutes), 'ordinary admin data routes must never depend on the service-role key');
-assert(passwordResetRoute.includes('hasSupabaseServerKey()'), 'password reset must fail closed without the server key');
-assert(passwordResetRoute.includes('const service = getSupabase();'), 'password reset may use the service-role client only inside its bounded route');
+assert(passwordResetRoute.includes('memberPasswordResetAvailable()'), 'password reset must fail closed without the isolated server-key helper');
+assert(passwordResetRoute.includes('resetMemberPasswordCredential(targetId, temporaryPassword)'), 'password reset must delegate only the Auth credential mutation to the isolated helper');
 assert(passwordResetRoute.includes("action: 'member.password.reset'"), 'password reset must write the dedicated audit action');
 assert(passwordResetRoute.includes("before_value: { password: 'REDACTED' }"), 'password reset audit must never store the previous password');
 assert(passwordResetRoute.includes('credentialStored: false'), 'password reset audit must state that credentials are not stored');
-assert(passwordResetRoute.indexOf("from('member_permission_audit').insert") < passwordResetRoute.indexOf('auth.admin.updateUserById'), 'password reset audit must succeed before the Auth mutation');
+assert(passwordResetRoute.includes("adminDb(req).from('member_permission_audit').insert"), 'password reset audit must use the caller-scoped RLS client');
+assert(passwordResetRoute.indexOf("adminDb(req).from('member_permission_audit').insert") < passwordResetRoute.indexOf('resetMemberPasswordCredential(targetId, temporaryPassword)'), 'password reset audit must succeed before the Auth mutation helper');
 assert(passwordResetRoute.includes("res.setHeader('Cache-Control', 'no-store, max-age=0')"), 'password reset response must be non-cacheable');
+
+assert(memberAuthAdmin.includes('hasSupabaseServerKey()'), 'isolated Auth reset helper must fail closed without a server key');
+assert(memberAuthAdmin.includes('getSupabase().auth.admin.updateUserById'), 'isolated Auth reset helper may perform only the privileged Auth credential mutation');
+assert(!memberAuthAdmin.includes("from('member_permission_audit')"), 'isolated Auth reset helper must not bypass audit-table RLS');
+assert(!/\.(?:from|rpc)\(/u.test(memberAuthAdmin), 'isolated Auth reset helper must not perform database table or RPC operations');
 
 for (const source of [manifest, runner]) {
   assert(source.includes('2026080502_member_permission_audit_authenticated_privileges.sql'), 'bootstrap must include the new migration');
