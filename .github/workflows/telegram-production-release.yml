@@ -29,7 +29,7 @@ permissions:
 concurrency:
   group: >-
     ${{ github.event_name == 'issue_comment'
-        && github.event.issue.number == 23
+        && github.event.issue.number == 1555
         && github.event.comment.user.login == 'seungjae3908-source'
         && github.event.comment.author_association == 'OWNER'
         && startsWith(github.event.comment.body, '/run-telegram-production ')
@@ -62,10 +62,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-telegram-production ')
@@ -585,7 +585,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Owner-approved Telegram-only Production release gate accepted.',
                 '',
@@ -1230,7 +1230,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Telegram-only Production release completed and verified.',
                 '',
@@ -1263,7 +1263,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Telegram-only Production release failed safely.',
                 '',
