@@ -174,19 +174,24 @@ function assertCredentialReceipt(credential, { targetSha, productionDeployRunId 
 function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   const telegramState = tradingCore?.telegramActivationState;
+  const telegramConnected = tradingCore?.telegramConnectedBefore;
+  const telegramRuntimeReady = tradingCore?.telegramRuntimeReady;
   const telegramReady = telegramState === 'READY_FOR_ACTIVATION'
     && tradingCore?.telegramActivationReady === true
-    && tradingCore?.telegramConnectedBefore === false
-    && tradingCore?.telegramRuntimeReady === false
+    && typeof telegramConnected === 'boolean'
+    && typeof telegramRuntimeReady === 'boolean'
+    && !(telegramConnected && telegramRuntimeReady)
+    && tradingCore?.telegramUserConnectionRequired === !telegramConnected
     && tradingCore?.telegramDeliveryQueued === 0
     && tradingCore?.telegramTestDelivered === false;
   const telegramVerified = telegramState === 'ACTIVE_VERIFIED'
     && tradingCore?.telegramActivationReady === true
-    && tradingCore?.telegramConnectedBefore === true
-    && tradingCore?.telegramRuntimeReady === true
+    && telegramConnected === true
+    && telegramRuntimeReady === true
+    && tradingCore?.telegramUserConnectionRequired === false
     && Number(tradingCore?.telegramDeliveryQueued) >= 1
     && tradingCore?.telegramTestDelivered === true;
-  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v2'
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v3'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
     || tradingCore?.authenticatedProductionSession !== true
