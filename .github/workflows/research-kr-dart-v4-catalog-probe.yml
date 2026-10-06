@@ -1,0 +1,44 @@
+name: Research KR DART V4 Catalog Probe
+
+on:
+  push:
+    branches:
+      - research/full-universe-3pct-hunter-3y-v1-20261006
+    paths:
+      - .github/workflows/research-kr-dart-v4-catalog-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_XET: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install "huggingface_hub>=0.30,<1" "pandas>=2.2,<3" "pyarrow>=18,<22"
+      - name: Probe catalog
+        run: |
+          python - <<'PY'
+          import json, pandas as pd
+          from huggingface_hub import HfApi, hf_hub_download
+          repo='eddmpython/dartlab-data'
+          api=HfApi()
+          files=api.list_repo_files(repo_id=repo,repo_type='dataset')
+          matches=[f for f in files if f.endswith('allFilings.catalog_snapshot.parquet') or f.endswith('main.current.catalog_snapshot.parquet') or ('searchCatalog' in f and f.endswith('.parquet'))]
+          out={'matches':matches[:200],'matchCount':len(matches)}
+          preferred=next((f for f in matches if f.endswith('allFilings.catalog_snapshot.parquet')),None)
+          if preferred:
+              p=hf_hub_download(repo_id=repo,repo_type='dataset',filename=preferred)
+              df=pd.read_parquet(p)
+              out['schema']={'path':preferred,'rows':len(df),'columns':[str(c) for c in df.columns],'head':df.head(5).astype(str).to_dict('records')}
+          print(json.dumps({'KR_DART_V4_CATALOG_PROBE':out},ensure_ascii=False))
+          PY
