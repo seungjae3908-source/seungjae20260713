@@ -11,6 +11,8 @@ export type MemberAdministrationProfile = {
   membership_level?: MemberTier | string | null;
   is_active?: boolean | null;
   membership_expires_at?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
@@ -226,6 +228,16 @@ export function planMemberChange(
   const timestamp = now.toISOString();
   const status = nextTier === 'pending' ? 'pending' : !nextActive ? 'suspended' : 'approved';
   const role = legacyRoleForTier(nextTier);
+  const approvedAt = status !== 'approved'
+    ? null
+    : current.status === 'approved' && current.approved_at
+      ? current.approved_at
+      : timestamp;
+  const approvedBy = status !== 'approved'
+    ? null
+    : current.status === 'approved' && current.approved_by
+      ? current.approved_by
+      : actorId;
   const action = currentTier === 'pending' && nextTier === 'associate' && nextActive
     ? 'member.approve'
     : currentTier !== nextTier
@@ -257,8 +269,8 @@ export function planMemberChange(
       membership_expires_at: nextExpiry,
       role,
       status,
-      approved_at: status === 'approved' ? timestamp : null,
-      approved_by: status === 'approved' ? actorId : null,
+      approved_at: approvedAt,
+      approved_by: approvedBy,
       permissions_updated_at: timestamp,
       updated_at: timestamp,
     },
