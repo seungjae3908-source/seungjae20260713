@@ -1033,6 +1033,40 @@ jobs:
 
           const before = readEnv();
           const preserved = manual(before);
+          const automaticWasEnabled = bool(before, 'AUTO_TRADING')
+            || bool(before, 'LIVE_AUTOMATIC_TRADING_ENABLED')
+            || bool(before, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || bool(before, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED');
+          if (automaticWasEnabled) {
+            const port = String(before.PORT || before.API_PORT || '8080');
+            let health;
+            try {
+              health = JSON.parse(execFileSync('curl', [
+                '--fail', '--silent', '--show-error', '--max-time', '3',
+                'http://127.0.0.1:' + port + '/api/health',
+              ], { encoding: 'utf8' }));
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_HEALTH_UNAVAILABLE');
+            }
+            const autoHealth = health?.autoTradingBackground;
+            const lastTickMs = Date.parse(String(autoHealth?.lastTickAt || ''));
+            const nowMs = Date.now();
+            if (autoHealth?.enabled !== true
+              || autoHealth?.liveModeRequested !== true
+              || autoHealth?.tickOk !== true
+              || !Number.isFinite(lastTickMs)
+              || lastTickMs > nowMs
+              || nowMs - lastTickMs > 360_000) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_HEALTH_STALE_OR_INVALID');
+            }
+            const openLivePositions = Number(autoHealth?.liveTrackedPositions);
+            if (!Number.isInteger(openLivePositions) || openLivePositions < 0) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_LIVE_POSITION_COUNT_INVALID');
+            }
+            if (openLivePositions > 0) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_OPEN_LIVE_POSITIONS:' + openLivePositions);
+            }
+          }
           rmSync(liveEntryArmPath, { force: true });
           execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
             stdio: 'inherit',
