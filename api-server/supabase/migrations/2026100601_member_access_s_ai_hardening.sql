@@ -221,8 +221,6 @@ alter table public.member_permission_audit
     'member.password.reset'
   ));
 
-drop function if exists public.apply_member_permission_change(uuid, text, boolean, text, timestamptz);
-
 create or replace function public.apply_member_permission_change(
   p_target_user_id uuid,
   p_membership_level text,
@@ -433,5 +431,44 @@ $function$;
 
 revoke all on function public.apply_member_permission_change(uuid, text, boolean, timestamptz, text, timestamptz) from public;
 grant execute on function public.apply_member_permission_change(uuid, text, boolean, timestamptz, text, timestamptz) to authenticated;
+
+-- Backward-compatible bridge for the immediately preceding Production app.
+-- The database hardening is applied before the new app cutover, so keeping the
+-- prior five-argument RPC prevents a short-lived old-app/new-schema mismatch
+-- and makes a post-QA application rollback safe. Authorization and mutation
+-- remain owned by the canonical six-argument SECURITY DEFINER function above.
+create or replace function public.apply_member_permission_change(
+  p_target_user_id uuid,
+  p_membership_level text,
+  p_is_active boolean,
+  p_reason text,
+  p_expected_permissions_updated_at timestamptz
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $legacy_bridge$
+declare
+  v_current_expiry timestamptz;
+begin
+  select membership_expires_at
+  into v_current_expiry
+  from public.profiles
+  where id = p_target_user_id;
+
+  return public.apply_member_permission_change(
+    p_target_user_id,
+    p_membership_level,
+    p_is_active,
+    v_current_expiry,
+    p_reason,
+    p_expected_permissions_updated_at
+  );
+end
+$legacy_bridge$;
+
+revoke all on function public.apply_member_permission_change(uuid, text, boolean, text, timestamptz) from public;
+grant execute on function public.apply_member_permission_change(uuid, text, boolean, text, timestamptz) to authenticated;
 
 commit;
