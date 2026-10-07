@@ -363,8 +363,8 @@ test('auto-trading rehearsal tab proves the safe four-market chain and displays 
   await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('OFF');
   await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('실주문:');
   await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('0건');
-  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('TOSS');
-  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('BITGET');
+  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('toss');
+  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('bitget');
   expect(rehearsalRequest).toEqual({
     confirmed: true,
     journalReadReady: true,
