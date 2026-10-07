@@ -78,7 +78,7 @@ try {
   fail('migration_source_invalid');
 }
 
-const preflightSql = String.raw\`
+const preflightSql = String.raw`
 do $member_access_hardening_preflight$
 declare
   profile_count bigint;
@@ -121,9 +121,9 @@ begin
   perform set_config('app.member_preserved_statuses_before', preserved_status_counts::text, true);
 end
 $member_access_hardening_preflight$;
-\`;
+`;
 
-const verificationSql = String.raw\`
+const verificationSql = String.raw`
 do $member_access_hardening_verify$
 declare
   current_level_definition text;
@@ -255,7 +255,7 @@ begin
   ) then raise exception 'MEMBER_PENDING_STATE_NOT_NORMALIZED'; end if;
 end
 $member_access_hardening_verify$;
-\`;
+`;
 
 const sql = [
   '\\set ON_ERROR_STOP on',
