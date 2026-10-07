@@ -1091,6 +1091,11 @@ export class MemberAutoTradingBackgroundWorker {
             result.executionEventsInserted += synced.inserted;
             result.notificationDeliveriesQueued += synced.deliveryQueued;
             result.executionSyncMissingReferences += synced.missingReferences;
+            if (synced.missingReferences > 0) {
+              result.executionSyncBlocks += 1;
+              result.newEntriesFailClosed = true;
+              return false;
+            }
             return true;
           } catch {
             // Notification/journal fan-out must never change canonical order state.
