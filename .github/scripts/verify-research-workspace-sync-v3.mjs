@@ -224,6 +224,7 @@ const memberAccessReviewed=[
  '.github/scripts/verify-research-workspace-sync-v3.mjs',
  '.github/workflows/production-deploy.yml',
  '.github/workflows/production-postdeploy-qa.yml',
+ '.github/workflows/post-merge-release-provenance.yml',
  '.github/workflows/research-center-predeploy-validation.yml',
  '.github/scripts/run-production-readonly-qa.sh',
  '.github/scripts/production-postdeploy-qa-evidence.cjs',
