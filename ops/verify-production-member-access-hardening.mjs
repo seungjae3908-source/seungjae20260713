@@ -54,6 +54,9 @@ if (staticMode) {
     "public.current_membership_level() in ('associate', 'regular', 'admin')",
     "public.apply_member_permission_change(uuid, text, boolean, text, timestamptz)",
     "v_current_expiry",
+    "revoke all on function public.handle_new_user() from public, anon, authenticated",
+    "grant execute on function public.current_membership_level() to authenticated",
+    "grant execute on function public.is_approved_member() to authenticated",
   ]) requireText(migration, marker, marker);
 
   if (/(?:placeOrder|cancelOrder|amendOrder|transfer\(|withdraw\()/i.test(apply)) {
