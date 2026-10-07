@@ -53,7 +53,7 @@ begin
   select count(*) into missing_columns
   from unnest(array[
     'id', 'login_name', 'display_name', 'role', 'status', 'approved_at',
-    'approved_by', 'membership_level', 'is_active',
+    'approved_by', 'membership_level', 'is_active', 'membership_expires_at',
     'permissions_updated_at', 'created_at', 'updated_at'
   ]) as required(column_name)
   where not exists (
@@ -94,9 +94,21 @@ begin
     raise exception 'staging bootstrap missing profiles membership constraint';
   end if;
 
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'paper_journal_entries'
+      and policyname = 'paper_journal_entries select own'
+      and qual ilike '%associate%'
+  ) then
+    raise exception 'staging bootstrap missing associate own-journal analytics read policy';
+  end if;
+
   foreach required_index in array array[
     'profiles_login_name_unique_idx',
     'profiles_membership_active_idx',
+    'profiles_membership_expiry_idx',
     'watchlist_items_device_idx',
     'market_cache_expires_idx',
     'portfolio_holdings_user_idx',

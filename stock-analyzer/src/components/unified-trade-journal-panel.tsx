@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '@/lib/auth';
 import { AlertTriangle, BarChart3, BookOpenCheck, FileSpreadsheet, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { JournalPaperLinkageSummary } from '@/components/journal-paper-linkage-summary';
 import {
@@ -286,6 +287,8 @@ export function UnifiedTradeJournalPanel({
   const [journalBook, setJournalBook] = useState<JournalBook>('ALL');
   const [periodStart, setPeriodStart] = useState('');
   const [periodEnd, setPeriodEnd] = useState('');
+  const auth = useAuth();
+  const canSyncJournal = auth.can('canAccessJournalSync');
   const [importBusy, setImportBusy] = useState(false);
   const [importMessage, setImportMessage] = useState('');
   const [data, setData] = useState<UnifiedTradeJournal | null>(null);
@@ -407,9 +410,9 @@ export function UnifiedTradeJournalPanel({
           <button type="button" className={buttonClass} disabled={busy} onClick={() => setRefreshVersion((value) => value + 1)} data-testid="unified-journal-refresh">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}새로고침
           </button>
-          <button type="button" className={buttonClass} disabled={busy || importBusy} onClick={() => void importExistingHistory()} data-testid="unified-journal-import-history">
+          {canSyncJournal ? <button type="button" className={buttonClass} disabled={busy || importBusy} onClick={() => void importExistingHistory()} data-testid="unified-journal-import-history">
             {importBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookOpenCheck className="h-4 w-4" />}기존 거래 가져오기
-          </button>
+          </button> : null}
           <button type="button" className={buttonClass} disabled={!visibleTrades.length} onClick={() => downloadExcelJournal(visibleTrades, journalBook, periodStart, periodEnd)} data-testid="unified-journal-excel">
             <FileSpreadsheet className="h-4 w-4" />엑셀 다운로드
           </button>
