@@ -174,13 +174,18 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(connection?.lastErrorCode ?? null, `${provider} must have no verification error`).toBeNull();
   }
 
+  const productionPolicyBeforeQa = structuredClone(statusBefore.body.policy);
+  const productionPolicyReadiness = memberAutoPolicyReadiness(productionPolicyBeforeQa);
+  const memberAutoStrategyAllowlistReady = Array.isArray(productionPolicyBeforeQa?.enabledStrategies)
+    && productionPolicyBeforeQa.enabledStrategies.length > 0;
+
   let memberAutoPolicyPrepared = false;
   if (prepareMemberAutoPolicy) {
     const prepared = await appApi<any>(
       page,
       '/api/trade-automation/policy',
       'PUT',
-      preparedMemberAutoPolicy(statusBefore.body.policy, 'TRADING_CORE_QA_CANARY'),
+      preparedMemberAutoPolicy(productionPolicyBeforeQa, 'TRADING_CORE_QA_CANARY'),
     );
     expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
     expect(prepared.body?.ok).toBe(true);
@@ -224,10 +229,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     ? 'ACTIVE_VERIFIED' as const
     : 'READY_FOR_ACTIVATION' as const;
 
-  const originalPolicy = structuredClone(statusBefore.body.policy);
-  const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
-  const memberAutoStrategyAllowlistReady = Array.isArray(originalPolicy?.enabledStrategies)
-    && originalPolicy.enabledStrategies.length > 0;
+  const originalPolicy = productionPolicyBeforeQa;
+  const originalPolicyReadiness = productionPolicyReadiness;
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
   const canarySignalId = `trading-core-qa:${expectedDeploySha.slice(0, 12)}:${Date.now()}`;
   const canaryStrategy = 'TRADING_CORE_QA_CANARY';
