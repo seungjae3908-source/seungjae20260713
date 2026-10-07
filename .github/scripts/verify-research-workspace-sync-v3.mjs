@@ -218,7 +218,7 @@ const researchProductionClosureReviewed=[
  'research-production/test/research-ai-units-install-contract.test.mjs',
  'research-production/test/research-approved-job-intake.test.mjs',
  'research-production/test/research-maintenance.test.mjs',
- 'research-production/test/server-risk-policy-env-transport.test.mjs',
+ 'research-production/test/research-engine.test.mjs', 'research-production/test/server-risk-policy-env-transport.test.mjs',
 ];
 const memberAccessReviewed=[
  '.github/scripts/verify-research-workspace-sync-v3.mjs',
@@ -443,6 +443,7 @@ const protectedPathExceptions=new Map([
   'research-production/test/research-ai-units-install-contract.test.mjs',
   'research-production/test/research-approved-job-intake.test.mjs',
   'research-production/test/research-maintenance.test.mjs',
+  'research-production/test/research-engine.test.mjs',
   'research-production/test/server-risk-policy-env-transport.test.mjs',
  ])],
  ['research-dashboard',new Set([
