@@ -360,9 +360,15 @@ verify_workspace_worker_health() {
   local evidence
   evidence="$(mktemp)"
   trap 'rm -f "$evidence"' RETURN
+  local -a research_user_cmd
+  if command -v runuser >/dev/null 2>&1; then
+    research_user_cmd=("${SUDO[@]}" runuser -u investment-research --)
+  else
+    research_user_cmd=(sudo -n -u investment-research)
+  fi
   local attempt
   for attempt in {1..10}; do
-    if "${SUDO[@]}" runuser -u investment-research -- \
+    if "${research_user_cmd[@]}" \
       /usr/bin/env node "$RESEARCH_ROOT/packages/external-research/scripts/run-research-worker-v9.mjs" \
       --root "$STATE_ROOT/workspace-worker" --status >"$evidence" 2>/dev/null; then
       if node - "$evidence" <<'NODE'
