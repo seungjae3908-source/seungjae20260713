@@ -133,24 +133,22 @@ test('activation requires current-sha forward evidence before provider one-shot'
 });
 
 
-test('activation rejects current-sha forward cycles whose tasks are blocked_data', async () => {
+test('current-sha blocked_data remains structural AI evidence instead of blocking AI activation', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_RUNTIME_BLOCKED/);
-  assert.match(script, /forward\?\.successCount !== forward\.taskCount/);
-  assert.match(script, /forward\?\.blockedDataCount !== 0/);
-  assert.match(script, /forward\?\.failedCount !== 0/);
-  assert.match(script, /task\?\.status !== 'success'/);
-  assert.match(script, /task\?\.exitCode !== 0/);
+  assert.match(script, /allowedStatus = new Set\(\['complete', 'partial_failure', 'blocked_data'\]\)/);
+  assert.doesNotMatch(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_RUNTIME_BLOCKED/);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING/);
 });
 
-test('forward Paper Shadow runtime diagnostic runs before provider preflight', async () => {
+test('forward Paper Shadow runtime diagnostic is informational before provider preflight', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  const runtimeGate = script.indexOf('require_forward_runtime_ready');
+  const diagnostic = script.indexOf('print_forward_runtime_diagnostic');
   const providerGate = script.indexOf('provider_preflight', script.indexOf('preflight()'));
-  assert.ok(runtimeGate >= 0);
-  assert.ok(providerGate > runtimeGate);
+  assert.ok(diagnostic >= 0);
+  assert.ok(providerGate > diagnostic);
   assert.match(script, /research-forward-runtime-diagnostic\.mjs/);
-  assert.match(script, /AI_RESEARCH_FORWARD_RUNTIME_NOT_READY/);
+  assert.match(script, /research-forward-runtime-diagnostic\.mjs[\s\S]*\|\| true/);
+  assert.doesNotMatch(script, /AI_RESEARCH_FORWARD_RUNTIME_NOT_READY/);
 });
 
 test('activation exposes leaf diagnostics and accepts current cache proof', async () => {
