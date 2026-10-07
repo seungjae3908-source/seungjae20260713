@@ -11,6 +11,7 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
 
   for (const required of [
     '/api/trade-automation/status',
+    '/api/trade-automation/background-readiness',
     '/api/trade-automation/policy',
     '/api/trade-automation/plans',
     '/api/user-integrations/execution/sync',
@@ -31,6 +32,12 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'memberAutoPolicyReadiness',
     'preparedMemberAutoPolicy',
     'memberAutoPolicyPrepared',
+    'backgroundWorkerSourceReady',
+    'backgroundWorkerReadinessBlockers',
+    'backgroundHandoffState',
+    'backgroundEligibleMembers',
+    'backgroundPaperAccountsReady',
+    'memberAutoStrategyAllowlistReady',
     'Member policy preparation must not grant LIVE AUTO server authority',
     "pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50'",
     'memberAutoPolicyReady',
