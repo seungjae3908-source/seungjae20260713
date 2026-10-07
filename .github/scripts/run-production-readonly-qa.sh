@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 MODE="${1:-}"
 case "$MODE" in
-  comprehensive|account|credential) ;;
-  *) echo 'Usage: run-production-readonly-qa.sh <comprehensive|account|credential>' >&2; exit 2 ;;
+  comprehensive|account|credential|member) ;;
+  *) echo 'Usage: run-production-readonly-qa.sh <comprehensive|account|credential|member>' >&2; exit 2 ;;
 esac
 
 : "${EXPECTED_DEPLOY_SHA:?EXPECTED_DEPLOY_SHA is required}"
@@ -101,6 +101,17 @@ case "$MODE" in
       pnpm exec playwright test --config=playwright.production-live-credential-reuse.config.ts
     )
     receipt="$artifact_dir/production-live-credential-reuse-qa.json"
+    ;;
+  member)
+    artifact_dir='stock-analyzer/production-member-readonly-artifacts'
+    rm -rf -- "$artifact_dir"
+    export PRODUCTION_MEMBER_READONLY_QA=true
+    export PRODUCTION_MEMBER_READONLY_ARTIFACT_DIR=production-member-readonly-artifacts
+    (
+      cd stock-analyzer
+      pnpm exec playwright test --config=playwright.production-member.config.ts
+    )
+    receipt="$artifact_dir/production-member-readonly-qa.json"
     ;;
 esac
 
