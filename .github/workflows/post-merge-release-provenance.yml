@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  actions: read
+  actions: write
   contents: read
   pull-requests: read
   statuses: write
@@ -191,7 +191,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Dispatch exact-main Required CI
+        if: steps.provenance.outputs.stale != 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const targetSha = String(context.sha || '').toLowerCase();
+            const main = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            const currentMainSha = String(main.data.commit.sha || '').toLowerCase();
+            if (currentMainSha !== targetSha) {
+              core.notice('Main advanced after provenance verification; skip stale exact-main CI dispatch.');
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'futures-public-network-smoke.yml',
+              ref: 'main',
+              inputs: {
+                target_sha: targetSha,
+              },
+            });
+            core.info('Exact-main Application CI dispatched for ' + targetSha);
+
       - name: Boundary
         run: |
-          echo 'This workflow verifies pre-merge Required CI provenance and exact Git tree identity only.'
+          echo 'This workflow verifies pre-merge Required CI provenance and exact Git tree identity, then dispatches exact-main Required CI only.'
           echo 'It cannot merge, deploy, mutate databases/secrets, enable trading, or place/cancel/modify/transfer/withdraw orders.'
