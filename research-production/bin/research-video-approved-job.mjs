@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { mkdir, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { assertResearchVideoSourceV1 } from '../../packages/external-research/src/video-intelligence.js';
 import { prepareVideoResearch, verifyVideoCallApproval } from '../../packages/external-research/src/research-workspace-video-v7.js';
@@ -201,7 +201,16 @@ export async function createApprovedVideoResearchJob({
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+function isDirectRun() {
+  try {
+    return Boolean(process.argv[1])
+      && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
   try {
     const args = parseArgs(process.argv.slice(2));
     const result = await createApprovedVideoResearchJob({
