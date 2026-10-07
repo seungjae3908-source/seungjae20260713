@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   PAPER_STATE_READONLY_TRANSPORT_VERSION,
   preparePaperStateReadonlyTransport,
@@ -189,4 +191,25 @@ test('systemd forward worker stages only the read-only canonical Paper transport
   );
   assert.match(unit, /^ReadOnlyPaths=-\/opt\/stock-app-data\/paper-forward-v1$/mu);
   assert.doesNotMatch(unit, /^ReadWritePaths=.*paper-forward-v1/mu);
+});
+
+
+test('paper-state prestart CLI executes through current release symlink', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'research-paper-prestart-symlink-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const current = join(root, 'current');
+  await symlink(repoRoot, current, 'dir');
+  const cli = join(current, 'research-production', 'deploy', 'prepare-paper-state-readonly-transport.mjs');
+  const run = spawnSync(process.execPath, [cli, '--profile', 'fast-historical'], {
+    encoding: 'utf8',
+    env: { ...process.env, RUNTIME_DIRECTORY: join(root, 'runtime') },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.notEqual(run.stdout.trim(), '');
+  const output = JSON.parse(run.stdout);
+  assert.equal(output.schemaVersion, PAPER_STATE_READONLY_TRANSPORT_VERSION);
+  assert.equal(output.status, 'NOT_APPLICABLE');
+  assert.equal(output.copiedFileCount, 0);
+  assert.equal(output.sensitiveValuesEmitted, false);
 });
