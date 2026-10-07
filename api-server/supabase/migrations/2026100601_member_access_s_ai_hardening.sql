@@ -81,7 +81,7 @@ create index if not exists member_permission_audit_actor_idx
 
 alter table public.member_permission_audit enable row level security;
 revoke all privileges on table public.member_permission_audit from public, anon, authenticated;
-grant select on table public.member_permission_audit to authenticated;
+grant select, insert on table public.member_permission_audit to authenticated;
 
 
 alter table public.profiles
@@ -182,7 +182,15 @@ create policy "member audit admins select"
   using (public.current_membership_level() = 'admin');
 
 drop policy if exists "member audit admins insert" on public.member_permission_audit;
-revoke insert, update, delete on table public.member_permission_audit from public, anon, authenticated;
+create policy "member audit admins insert"
+  on public.member_permission_audit for insert
+  with check (
+    public.current_membership_level() = 'admin'
+    and auth.uid() = actor_id
+  );
+
+revoke update, delete on table public.member_permission_audit from public, anon, authenticated;
+grant select, insert on table public.member_permission_audit to authenticated;
 
 -- Privileged profile changes have one auditable path through the SECURITY DEFINER
 -- mutation function below. Remove the legacy direct UPDATE route.
