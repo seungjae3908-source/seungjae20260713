@@ -157,8 +157,8 @@ as $function$
   )
 $function$;
 
-revoke all on function public.current_membership_level() from public;
-revoke all on function public.is_approved_member() from public;
+revoke all on function public.current_membership_level() from public, anon;
+revoke all on function public.is_approved_member() from public, anon;
 grant execute on function public.current_membership_level() to authenticated;
 grant execute on function public.is_approved_member() to authenticated;
 
@@ -173,7 +173,7 @@ as $function$
   select coalesce(public.current_membership_level() = 'admin', false)
 $function$;
 
-revoke all on function public.is_admin() from public;
+revoke all on function public.is_admin() from public, anon;
 grant execute on function public.is_admin() to authenticated;
 
 -- Trigger/internal SECURITY DEFINER helpers must not be callable through the
