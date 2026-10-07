@@ -182,6 +182,9 @@ begin
   if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,timestamptz,text,timestamptz)') is null then
     raise exception 'MEMBER_PERMISSION_CHANGE_SIGNATURE_MISSING';
   end if;
+  if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,text,timestamptz)') is null then
+    raise exception 'MEMBER_PERMISSION_CHANGE_LEGACY_BRIDGE_MISSING';
+  end if;
 
   select qual into policy_qual
   from pg_catalog.pg_policies
