@@ -7,6 +7,7 @@ const manualSpotGate = read('.github/workflows/production-live-trading-gate.yml'
 const manualFuturesGate = read('.github/workflows/production-futures-live-trading-gate.yml');
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+const apiIndex = read('api-server/src/index.ts');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
@@ -62,6 +63,14 @@ requireText(workflow, 'AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED', 'AUTO
 requireText(workflow, 'telegram-production-runtime-verification-', 'AUTO_GATE_TELEGRAM_RUNTIME_ARTIFACT_MISSING');
 requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'AUTO_GATE_TELEGRAM_RUNTIME_VERIFIER_MISSING');
 requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
+requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
+requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
+requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
+requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
+requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false', 'AUTO_GATE_FIRST_TICK_ENTRY_BLOCK_PROOF_MISSING');
+requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_ORDER_PROOF_MISSING');
+requireText(workflow, 'LIVE_ENTRY_ARM_WRITTEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_RECEIPT_MISSING');
+requireText(workflow, "rmSync(liveEntryArmPath, { force: true });", 'AUTO_GATE_DISABLE_DISARM_MISSING');
 
 requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
@@ -125,9 +134,21 @@ for (const token of [
   'readMarketMark',
   'paperExitOrders',
   'liveExitOrders',
+  'liveEntryWarmupComplete',
+  'liveEntryArmPresent',
+  'executionSyncBlocks',
+  'newEntriesFailClosed',
+  'runtimeRefreshes',
+  'const refreshRuntime = async () =>',
+  'let entryProjectionHealthy = await syncExecutionProjection();',
+  'if (!entryProjectionHealthy) {',
+  'await refreshRuntime();',
+  'if (liveEntriesArmedThisTick && hasCapability',
+  "member-auto-trading-live-entry-arm-v1",
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
+requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 
 requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPER_AUTO_RESET_MISSING');
@@ -166,6 +187,10 @@ console.log(JSON.stringify({
   disablePreservesSpotAndFuturesManualAuthority: true,
   paperBackgroundWorkerCoupled: true,
   liveBackgroundWorkerCoupled: true,
+  liveEntryTwoPhaseArm: true,
+  startupWarmupProofRequired: true,
+  sameTickRiskRefreshRequired: true,
+  executionProjectionFailClosed: true,
   automaticExitClosedLoop: true,
   accountQaSchemaVersion: 'v3',
 }));
