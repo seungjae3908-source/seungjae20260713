@@ -123,11 +123,17 @@ test('existing provider credentials are normalized with fixed Research models wi
 });
 
 
-test('activation requires current-sha forward evidence before provider one-shot', async () => {
+test('activation refreshes current-sha forward evidence before provider one-shot', async () => {
   const script = await readFile(scriptUrl, 'utf8');
-  const readiness = script.indexOf('require_current_sha_ai_evidence_ready');
+  const refreshHelper = script.indexOf('refresh_current_sha_forward_evidence()');
+  const forwardStart = script.indexOf('systemctl start "$service"', refreshHelper);
+  const readiness = script.indexOf('require_current_sha_ai_evidence_ready', refreshHelper);
+  const refreshCall = script.lastIndexOf('refresh_current_sha_forward_evidence');
   const aiStart = script.indexOf('systemctl start research-production-ai-review.service');
-  assert.ok(readiness >= 0 && aiStart > readiness);
+  assert.ok(refreshHelper >= 0 && forwardStart > refreshHelper && readiness > forwardStart);
+  assert.ok(refreshCall > readiness && aiStart > refreshCall);
+  assert.match(script, /research-production@forward\.service/);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_REFRESH_FAILED/);
   assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING/);
   assert.match(script, /research-ai-current-sha-readiness-v1/);
 });
@@ -192,6 +198,8 @@ test('activation workflow preserves sanitized diagnostics and failed-closed Hub 
   assert.match(workflow, /id: activate_ai/);
   assert.match(workflow, /2>&1 \| tee "\$RUNNER_TEMP\/ai-research-activation\.txt"/);
   assert.match(workflow, /AI_RESEARCH_ACTIVATION_PROOF_INVALID/);
+  assert.match(workflow, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=/);
+  assert.match(workflow, /grep -Ev '\\^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED='/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
   assert.match(workflow, /status: failed_closed/);
