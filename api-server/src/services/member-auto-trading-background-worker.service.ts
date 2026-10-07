@@ -1428,6 +1428,7 @@ export class MemberAutoTradingBackgroundWorker {
 
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
+  private memberBatchOffset = 0;
 
   constructor(
     private readonly client: SupabaseClient = getSupabase(),
@@ -1449,13 +1450,18 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   }
 
   async listEligibleMembers() {
+    const offset = this.memberBatchOffset;
     const { data, error } = await this.client.from('trade_automation_profiles')
       .select('user_id,payload')
       .contains('payload', { mode: 'automatic', automaticEnabled: true })
-      .order('updated_at', { ascending: false })
-      .limit(MAX_MEMBERS_PER_TICK);
+      .order('user_id', { ascending: true })
+      .range(offset, offset + MAX_MEMBERS_PER_TICK);
     if (error) throw new Error('BACKGROUND_POLICY_LIST_FAILED');
-    const rows = (data ?? []).flatMap((row) => {
+    const fetched = data ?? [];
+    const hasMore = fetched.length > MAX_MEMBERS_PER_TICK;
+    const batch = fetched.slice(0, MAX_MEMBERS_PER_TICK);
+    this.memberBatchOffset = hasMore ? offset + MAX_MEMBERS_PER_TICK : 0;
+    const rows = batch.flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
       if (!userId) return [];
       const policy = normalizeTradingPolicy((row.payload ?? {}) as Partial<TradingPolicy>);
