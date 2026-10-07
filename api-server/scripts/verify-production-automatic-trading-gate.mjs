@@ -80,6 +80,7 @@ requireText(workflow, 'verifyLiveEntryArmReadable();', 'AUTO_GATE_ARM_READABILIT
 requireText(workflow, 'NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true', 'AUTO_GATE_NEXT_TICK_ZERO_MUTATION_PROOF_MISSING');
 requireText(workflow, 'Number(health?.liveOrderEligibleMembers ?? 0) > 0', 'AUTO_GATE_LIVE_ORDER_ELIGIBLE_MEMBER_PROOF_MISSING');
 requireText(workflow, 'Number(health?.livePolicyReadyMembers ?? 0) > 0', 'AUTO_GATE_LIVE_POLICY_READY_MEMBER_PROOF_MISSING');
+requireText(workflow, 'Number(health?.liveAllFourPolicyReadyMembers ?? 0) > 0', 'AUTO_GATE_ALL4_POLICY_READY_MEMBER_PROOF_MISSING');
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
 requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE', 'AUTO_GATE_TELEGRAM_PM2_FLAGS_MISSING');
@@ -96,6 +97,7 @@ requireText(workflow, "'live_entry_arm_written=true'", 'AUTO_GATE_ARM_HUB_RECEIP
 requireText(workflow, "'live_entry_arm_readback_proven=true'", 'AUTO_GATE_ARM_READBACK_HUB_RECEIPT_MISSING');
 requireText(workflow, "'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true'", 'AUTO_GATE_NEXT_TICK_REHEARSAL_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_order_eligible_member_count=>=1'", 'AUTO_GATE_MEMBER_READY_HUB_RECEIPT_MISSING');
+requireText(workflow, "'live_all_four_policy_ready_member_count=>=1'", 'AUTO_GATE_ALL4_MEMBER_READY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'global_emergency_stop=false'", 'AUTO_GATE_GLOBAL_STOP_HUB_RECEIPT_MISSING');
 requireText(workflow, "'telegram_delivery_worker_post_restart=HEALTHY'", 'AUTO_GATE_TELEGRAM_POST_RESTART_HUB_RECEIPT_MISSING');
 requireText(workflow, "rmSync(liveEntryArmPath, { force: true });", 'AUTO_GATE_DISABLE_DISARM_MISSING');
@@ -180,8 +182,10 @@ for (const token of [
   'overlapSkipped',
   'liveOrderEligibleMembers',
   'livePolicyReadyMembers',
+  'liveAllFourPolicyReadyMembers',
   'globalEmergencyStopActive',
   'automaticPolicyHasRunnableMarket',
+  'automaticPolicyHasAllFourMarkets',
   'const refreshRuntime = async () =>',
   'Always re-read canonical exposure at the entry boundary',
   'let entryProjectionHealthy = await syncExecutionProjection();',
@@ -202,6 +206,8 @@ requireText(paperWorkerTest, 'assert.equal(armed.liveOrders, 0);', 'AUTO_GATE_AC
 requireText(paperWorkerTest, 'assert.equal(armed.privateTradingRequests, 0);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ZERO_PROVIDER_MUTATION_PROOF_MISSING');
 requireText(paperWorkerTest, 'live activation warmup stays fail-closed when no member can place real orders', 'AUTO_GATE_NO_LIVE_MEMBER_FAIL_CLOSED_TEST_MISSING');
 requireText(paperWorkerTest, 'first live warmup suppresses automatic exits for existing live positions before exact-SHA arm', 'AUTO_GATE_LIVE_EXIT_WARMUP_TEST_MISSING');
+requireText(paperWorkerTest, 'all-four activation readiness requires one order-capable futures member with all four markets enabled', 'AUTO_GATE_ALL4_POLICY_READINESS_TEST_MISSING');
+requireText(paperWorkerTest, 'assert.equal(result.liveAllFourPolicyReadyMembers, 1);', 'AUTO_GATE_ALL4_POLICY_READINESS_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);', 'AUTO_GATE_LIVE_EXIT_WARMUP_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);', 'AUTO_GATE_NO_LIVE_MEMBER_ASSERTION_MISSING');
 
@@ -263,6 +269,7 @@ console.log(JSON.stringify({
   productionActivationStaysZeroOrder: true,
   liveExitOrdersArmGuarded: true,
   liveMemberAndPolicyReadinessRequired: true,
+  allFourMemberPolicyReadinessRequired: true,
   globalEmergencyStopMustBeClear: true,
   telegramDeliveryHealthRequiredAfterRestart: true,
   manualGatesPreservePersonalTelegramDelivery: true,
