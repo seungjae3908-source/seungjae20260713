@@ -19,6 +19,7 @@ on:
       - research-production/bin/research-provider-bootstrap.mjs
       - research-production/bin/research-ai-review.mjs
       - research-production/bin/research-ai-diagnostic.mjs
+      - research-production/bin/research-forward-runtime-diagnostic.mjs
       - research-production/bin/research-video-discovery.mjs
       - research-production/bin/research-video-approved-job.mjs
       - packages/external-research/scripts/run-research-worker-v9.mjs
@@ -28,6 +29,7 @@ on:
       - market-prediction-lab/tests/shadow-prospective-evidence-contract.test.js
       - research-production/test/research-ai-activation-contract.test.mjs
       - research-production/test/research-ai-diagnostic.test.mjs
+      - research-production/test/research-forward-runtime-diagnostic.test.mjs
       - research-production/test/research-ai-review-worker.test.mjs
       - research-production/test/research-ai-units-install-contract.test.mjs
       - research-production/test/research-provider-bootstrap.test.mjs
@@ -73,6 +75,7 @@ jobs:
           node --test \
             research-production/test/research-ai-activation-contract.test.mjs \
             research-production/test/research-ai-diagnostic.test.mjs \
+            research-production/test/research-forward-runtime-diagnostic.test.mjs \
             research-production/test/research-ai-review-worker.test.mjs \
             research-production/test/research-ai-units-install-contract.test.mjs \
             research-production/test/research-provider-bootstrap.test.mjs \
