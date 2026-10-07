@@ -31,6 +31,8 @@ const stocks = read('stock-analyzer/src/pages/stocks.tsx');
 const recommendationService = read('api-server/src/services/recommendation.service.ts');
 const recommendationDeadline = read('api-server/src/services/recommendation-deadline.ts');
 const productionQaSpec = read('stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts');
+const memberQaSpec = read('stock-analyzer/e2e/production-member-readonly-qa.spec.ts');
+const memberQaConfig = read('stock-analyzer/playwright.production-member.config.ts');
 const deployScript = read('ops/deploy-production.sh');
 
 requireText(deploy, 'environment: production', 'PRODUCTION_DEPLOY_PROTECTION_REMOVED');
@@ -70,7 +72,7 @@ const qaTail = deployJob.split('- name: Destroy deployment authority before read
 for (const value of ['PROD_SSH_', 'PROD_DATABASE_URL', 'AGENT_HUB_GITHUB_TOKEN']) {
   forbidText(qaTail, value, `INLINE_QA_DEPLOY_AUTHORITY_FORBIDDEN:${value}`);
 }
-for (const mode of ['comprehensive', 'account', 'credential']) {
+for (const mode of ['comprehensive', 'account', 'credential', 'member']) {
   requireText(qaTail, `run-production-readonly-qa.sh ${mode}`, `INLINE_QA_SHARED_RUNNER_MISSING:${mode}`);
 }
 
@@ -90,6 +92,7 @@ for (const [name, workflow] of Object.entries({ comprehensive, account, credenti
 
 requireText(command, '/run-production-postdeploy-qa <40-char-sha>', 'POSTDEPLOY_OWNER_COMMAND_MISSING');
 requireText(command, '/run-production-trading-core-release <40-char-sha>', 'TRADING_CORE_OWNER_COMMAND_MISSING');
+requireText(command, '/run-production-member-release <40-char-sha>', 'MEMBER_OWNER_COMMAND_MISSING');
 requireText(command, '/run-staging-trading-core <40-char-sha>', 'TRADING_CORE_STAGING_COMMAND_MISSING');
 requireText(command, "workflow_id: 'staging-readiness.yml'", 'TRADING_CORE_STAGING_DISPATCH_MISSING');
 requireText(command, "run_full_validation: 'true'", 'TRADING_CORE_STAGING_FULL_VALIDATION_MISSING');
@@ -121,6 +124,10 @@ requireText(releaseOrchestrator, "run.head_branch === 'main'", 'ONE_COMMAND_RELE
 requireText(command, "qa_scope: qaScope", 'TRADING_CORE_OWNER_COMMAND_SCOPE_MISSING');
 requireText(deploy, 'qa_scope:', 'PRODUCTION_QA_SCOPE_INPUT_MISSING');
 requireText(deploy, "inputs.qa_scope == 'trading_core'", 'TRADING_CORE_INLINE_QA_CONDITION_MISSING');
+requireText(deploy, "inputs.qa_scope == 'member'", 'MEMBER_INLINE_QA_CONDITION_MISSING');
+requireText(deploy, '1M · Member-only Production read-only QA', 'MEMBER_INLINE_QA_STEP_MISSING');
+requireText(deploy, "run-production-readonly-qa.sh member", 'MEMBER_INLINE_QA_RUNNER_MISSING');
+requireText(deploy, "inputs.qa_scope != 'member'", 'MEMBER_SCOPE_PROVIDER_QA_SKIP_MISSING');
 requireText(deploy, '1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA', 'TRADING_CORE_INLINE_QA_STEP_MISSING');
 requireText(deploy, "PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'", 'TRADING_CORE_MEMBER_POLICY_PREPARATION_MISSING');
 requireOrder(deploy, [
@@ -145,6 +152,15 @@ for (const flag of [
 ]) {
   requireText(runner, flag, `SHARED_RUNNER_LIVE_FLAG_GUARD_MISSING:${flag}`);
 }
+requireText(memberQaSpec, "schemaVersion: 'production-member-readonly-qa-v1'", 'MEMBER_QA_RECEIPT_SCHEMA_MISSING');
+requireText(memberQaSpec, "/api/auth/profile", 'MEMBER_QA_PROFILE_CHECK_MISSING');
+requireText(memberQaSpec, "grade=S", 'MEMBER_QA_S_GRADE_CHECK_MISSING');
+requireText(memberQaSpec, "getByTestId('ai-review-panel')", 'MEMBER_QA_AI_REVIEW_CHECK_MISSING');
+requireText(memberQaSpec, "getByTestId('trade-execution-connections')", 'MEMBER_QA_LIVE_ORDER_SURFACE_CHECK_MISSING');
+requireText(memberQaSpec, "installProductionReadOnlyPolicy", 'MEMBER_QA_READONLY_POLICY_MISSING');
+requireText(memberQaConfig, "trace: 'off'", 'MEMBER_QA_TRACE_RETENTION_FORBIDDEN');
+requireText(memberQaConfig, "screenshot: 'off'", 'MEMBER_QA_SCREENSHOT_RETENTION_FORBIDDEN');
+requireText(runner, "comprehensive|account|credential|member", 'MEMBER_QA_RUNNER_MODE_MISSING');
 requireText(contextBuilder, 'activeConflictingTradingGates: conflicts', 'POSTDEPLOY_GATE_CONFLICT_CONTEXT_MISSING');
 requireText(contextBuilder, "mode === 'inline'", 'INLINE_DEPLOY_CONTEXT_MODE_MISSING');
 requireText(evidenceBuilder, "deploymentVerificationMode === 'inline-approved-job'", 'INLINE_DEPLOY_EVIDENCE_MODE_MISSING');
@@ -176,6 +192,7 @@ console.log(JSON.stringify({
   runtimeEnvironmentAndSecretMutationRemoved: true,
   ownerCommand: '/run-production-postdeploy-qa <40-char-sha>',
   tradingCoreOwnerCommand: '/run-production-trading-core-release <40-char-sha>',
+  memberOwnerCommand: '/run-production-member-release <40-char-sha>',
   tradingCoreStagingCommand: '/run-staging-trading-core <40-char-sha>',
   recommendationsFallbackBudgetMs: 5000,
 }));
