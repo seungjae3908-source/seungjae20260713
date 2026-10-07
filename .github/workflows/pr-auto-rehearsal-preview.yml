@@ -1,0 +1,268 @@
+name: PR Auto Rehearsal Preview
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-auto-rehearsal-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Isolated PR rehearsal preview
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'drift/decouple-paper-auto-from-oos-policy-20261007'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: staging
+    env:
+      TARGET_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PREVIEW_PORT: '19182'
+      PREVIEW_CANARY_PORT: '19183'
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Require exact same-repository PR revision
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$PR_NUMBER" == "1682" ]]
+          echo "Preview target: PR #$PR_NUMBER @ $TARGET_SHA"
+
+      - name: Configure isolated staging SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Deploy PR SHA to isolated preview runtime
+        env:
+          REMOTE_SECRET_FILE: /tmp/seungja-pr-preview-${{ github.run_id }}-${{ github.run_attempt }}.env
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          local_secret_file="$(mktemp)"
+          cleanup() {
+            rm -f "$local_secret_file"
+            ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$STAGING_SSH_USER@$STAGING_SSH_HOST" "rm -f -- $(printf '%q' "$REMOTE_SECRET_FILE")" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          {
+            printf 'STAGING_SUPABASE_URL=%q\n' "$STAGING_SUPABASE_URL"
+            printf 'STAGING_SUPABASE_ANON_KEY=%q\n' "$STAGING_SUPABASE_ANON_KEY"
+            printf 'STAGING_SUPABASE_SECRET_KEY=%q\n' "$STAGING_SUPABASE_SECRET_KEY"
+          } > "$local_secret_file"
+          chmod 600 "$local_secret_file"
+          scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$local_secret_file" "$STAGING_SSH_USER@$STAGING_SSH_HOST:$REMOTE_SECRET_FILE"
+
+          remote_command="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PREVIEW_SECRET_FILE=%q PR_NUMBER=%q PREVIEW_PORT=%q PREVIEW_CANARY_PORT=%q bash -s' \
+            "$TARGET_SHA" "$REPOSITORY_URL" "$REMOTE_SECRET_FILE" "$PR_NUMBER" "$PREVIEW_PORT" "$PREVIEW_CANARY_PORT")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          chmod 600 "$PREVIEW_SECRET_FILE"
+          # shellcheck disable=SC1090
+          source "$PREVIEW_SECRET_FILE"
+
+          PREVIEW_DIR="/srv/seungjae-staging/pr-$PR_NUMBER"
+          PREVIEW_PM2_NAME="seungjae-staging-pr-$PR_NUMBER"
+          RELEASE_ROOT="/srv/seungjae-staging-pr-$PR_NUMBER-releases"
+          BACKUP_ROOT="/srv/seungjae-staging-pr-$PR_NUMBER-backups"
+          LOCK_FILE="/var/lock/seungjae-staging-pr-$PR_NUMBER.lock"
+          SOURCE_DIR="$(mktemp -d /tmp/seungja-pr-preview-source.XXXXXX)"
+          cleanup_remote() {
+            rm -rf -- "$SOURCE_DIR"
+            rm -f -- "$PREVIEW_SECRET_FILE"
+          }
+          trap cleanup_remote EXIT
+
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          RESOLVED_SHA="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
+          [[ "$RESOLVED_SHA" == "$TARGET_SHA" ]] || { echo 'Resolved preview SHA mismatch' >&2; exit 1; }
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+
+          PUBLISHER_DIGEST="$(printf 'pr-%s-preview-publisher' "$PR_NUMBER" | sha256sum | awk '{print $1}')"
+          chmod 700 "$SOURCE_DIR/ops/deploy-staging.sh"
+          SOURCE_DIR="$SOURCE_DIR" \
+          STAGING_DIR="$PREVIEW_DIR" \
+          STAGING_PM2_NAME="$PREVIEW_PM2_NAME" \
+          STAGING_PORT="$PREVIEW_PORT" \
+          STAGING_CANARY_PORT="$PREVIEW_CANARY_PORT" \
+          STAGING_BASE_URL="http://127.0.0.1:$PREVIEW_PORT" \
+          STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL" \
+          STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
+          STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
+          STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PUBLISHER_DIGEST" \
+          RELEASE_ROOT="$RELEASE_ROOT" \
+          BACKUP_ROOT="$BACKUP_ROOT" \
+          LOCK_FILE="$LOCK_FILE" \
+          "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+
+          cat >> "$PREVIEW_DIR/api-server/.env.staging" <<'SAFETY'
+          LIVE_TRADING_ENABLED=false
+          AUTO_TRADING_ENABLED=false
+          AUTOMATIC_LIVE_EXECUTION_ENABLED=false
+          TOSS_LIVE_ORDER_ENABLED=false
+          KIWOOM_LIVE_ORDER_ENABLED=false
+          UPBIT_LIVE_ORDER_ENABLED=false
+          BITGET_LIVE_ORDER_ENABLED=false
+          FUTURES_LIVE_TRADING_ENABLED=false
+          EXECUTION_AUTHORITY=NONE
+          BACKGROUND_WORKERS_ENABLED=false
+          SAFETY
+          chmod 600 "$PREVIEW_DIR/api-server/.env.staging"
+          pm2 restart "$PREVIEW_PM2_NAME" --update-env >/dev/null
+          sleep 2
+          curl --fail --silent --show-error --max-time 15 "http://127.0.0.1:$PREVIEW_PORT/api/health" | \
+            node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const v=JSON.parse(s);if(v.ok!==true||v.deploySha!==process.env.TARGET_SHA||v.backgroundWorkersEnabled!==false)process.exit(1);console.log(JSON.stringify(v));});"
+
+          mkdir -p "$PREVIEW_DIR/.deploy"
+          TUNNEL_BIN="$PREVIEW_DIR/.deploy/cloudflared"
+          TUNNEL_LOG="$PREVIEW_DIR/.deploy/cloudflared.log"
+          TUNNEL_PID_FILE="$PREVIEW_DIR/.deploy/cloudflared.pid"
+          PREVIEW_URL_FILE="$PREVIEW_DIR/.deploy/preview-url"
+
+          if [[ -s "$TUNNEL_PID_FILE" ]]; then
+            OLD_PID="$(cat "$TUNNEL_PID_FILE" 2>/dev/null || true)"
+            if [[ "$OLD_PID" =~ ^[0-9]+$ ]] && kill -0 "$OLD_PID" 2>/dev/null; then
+              kill "$OLD_PID" 2>/dev/null || true
+              sleep 1
+            fi
+          fi
+
+          case "$(uname -m)" in
+            x86_64|amd64) CLOUDFLARED_ASSET='cloudflared-linux-amd64' ;;
+            aarch64|arm64) CLOUDFLARED_ASSET='cloudflared-linux-arm64' ;;
+            *) echo "Unsupported preview server architecture: $(uname -m)" >&2; exit 70 ;;
+          esac
+          if [[ ! -x "$TUNNEL_BIN" ]]; then
+            curl --fail --location --silent --show-error \
+              "https://github.com/cloudflare/cloudflared/releases/latest/download/$CLOUDFLARED_ASSET" \
+              -o "$TUNNEL_BIN"
+            chmod 700 "$TUNNEL_BIN"
+          fi
+
+          : > "$TUNNEL_LOG"
+          nohup "$TUNNEL_BIN" tunnel --no-autoupdate --url "http://127.0.0.1:$PREVIEW_PORT" \
+            > "$TUNNEL_LOG" 2>&1 </dev/null &
+          TUNNEL_PID=$!
+          printf '%s\n' "$TUNNEL_PID" > "$TUNNEL_PID_FILE"
+
+          PREVIEW_URL=''
+          for _ in $(seq 1 45); do
+            PREVIEW_URL="$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' "$TUNNEL_LOG" | tail -n 1 || true)"
+            if [[ -n "$PREVIEW_URL" ]]; then
+              break
+            fi
+            kill -0 "$TUNNEL_PID" 2>/dev/null || { cat "$TUNNEL_LOG" >&2; exit 71; }
+            sleep 2
+          done
+          [[ "$PREVIEW_URL" =~ ^https://[-a-z0-9]+\.trycloudflare\.com$ ]] || {
+            cat "$TUNNEL_LOG" >&2
+            echo 'Preview tunnel URL was not issued.' >&2
+            exit 72
+          }
+
+          printf '%s\n' "$PREVIEW_URL" > "$PREVIEW_URL_FILE"
+          chmod 600 "$PREVIEW_URL_FILE"
+
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 15 "$PREVIEW_URL/api/health" | \
+              TARGET_SHA="$TARGET_SHA" node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const v=JSON.parse(s);if(v.ok!==true||v.deploySha!==process.env.TARGET_SHA)process.exit(1);});"
+            then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$TUNNEL_LOG" >&2
+          echo 'External preview health verification failed.' >&2
+          exit 73
+          REMOTE
+
+      - name: Resolve and verify public rehearsal URL
+        id: preview
+        run: |
+          set -Eeuo pipefail
+          PREVIEW_URL="$(ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "cat /srv/seungjae-staging/pr-$PR_NUMBER/.deploy/preview-url")"
+          [[ "$PREVIEW_URL" =~ ^https://[-a-z0-9]+\.trycloudflare\.com$ ]]
+          HEALTH="$(curl --fail --silent --show-error --max-time 20 "$PREVIEW_URL/api/health")"
+          HEALTH="$HEALTH" TARGET_SHA="$TARGET_SHA" node <<'NODE'
+          const health = JSON.parse(process.env.HEALTH);
+          if (health.ok !== true) throw new Error('preview health not ok');
+          if (health.deploySha !== process.env.TARGET_SHA) throw new Error('preview SHA mismatch');
+          if (health.backgroundWorkersEnabled !== false) throw new Error('preview background workers must remain disabled');
+          NODE
+          REHEARSAL_URL="${PREVIEW_URL%/}/auto-trading?section=rehearsal"
+          echo "base_url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
+          echo "rehearsal_url=$REHEARSAL_URL" >> "$GITHUB_OUTPUT"
+          {
+            echo '## PR #1682 isolated rehearsal preview'
+            echo
+            echo "- Exact SHA: `$TARGET_SHA`"
+            echo "- Rehearsal URL: $REHEARSAL_URL"
+            echo '- Runtime: isolated staging directory / port / PM2'
+            echo '- Background workers: OFF'
+            echo '- LIVE/AUTO/provider order flags: OFF'
+            echo '- Production: untouched'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish clickable preview link on PR
+        uses: actions/github-script@v8
+        env:
+          REHEARSAL_URL: ${{ steps.preview.outputs.rehearsal_url }}
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const body = [
+              '<!-- pr-1682-auto-rehearsal-preview -->',
+              '## 자동매매 리허설 Preview 준비 완료',
+              '',
+              `- [리허설 화면 바로 열기](${process.env.REHEARSAL_URL})`,
+              `- Exact SHA: \`${process.env.TARGET_SHA}\``,
+              '- 격리 Staging Preview',
+              '- LIVE/AUTO/실주문 권한 OFF',
+              '- Background worker OFF',
+              '- 기존 Staging/Production 미변경',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
