@@ -116,6 +116,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   overlapSkipped: boolean;
   liveOrderEligibleMembers: number;
   livePolicyReadyMembers: number;
+  liveAllFourPolicyReadyMembers: number;
   globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
@@ -161,6 +162,7 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   executionSyncMissingReferences: number;
   liveOrderEligibleMembers: number;
   livePolicyReadyMembers: number;
+  liveAllFourPolicyReadyMembers: number;
   globalEmergencyStopActive: boolean;
   errorCode: string | null;
 }>;
@@ -185,6 +187,7 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   executionSyncMissingReferences: 0,
   liveOrderEligibleMembers: 0,
   livePolicyReadyMembers: 0,
+  liveAllFourPolicyReadyMembers: 0,
   globalEmergencyStopActive: false,
   errorCode: null,
 });
@@ -345,6 +348,21 @@ function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
     || (policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom)
     || (policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit)
     || (policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget);
+}
+
+function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
+  if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) {
+    return false;
+  }
+  const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  return policy.marketEnabled.domestic_stock
+    && policy.marketEnabled.us_stock
+    && policy.marketEnabled.crypto_spot
+    && policy.marketEnabled.crypto_futures
+    && policy.exchangeEnabled[domesticBroker]
+    && policy.exchangeEnabled.kiwoom
+    && policy.exchangeEnabled.upbit
+    && policy.exchangeEnabled.bitget;
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -1049,6 +1067,7 @@ export class MemberAutoTradingBackgroundWorker {
       overlapSkipped: false,
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
+      liveAllFourPolicyReadyMembers: 0,
       globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
@@ -1121,6 +1140,13 @@ export class MemberAutoTradingBackgroundWorker {
           && !persistentGlobalStop
           && !environmentGlobalStop) {
           result.livePolicyReadyMembers += 1;
+        }
+        if (hasCapability(member.profile, 'canPlaceOrders')
+          && hasCapability(member.profile, 'canAccessFutures')
+          && automaticPolicyHasAllFourMarkets(member.policy)
+          && !persistentGlobalStop
+          && !environmentGlobalStop) {
+          result.liveAllFourPolicyReadyMembers += 1;
         }
 
         const refreshRuntime = async () => {
@@ -1499,6 +1525,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveEntryWarmupComplete: false,
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
+      liveAllFourPolicyReadyMembers: 0,
       globalEmergencyStopActive: false,
       errorCode: null,
     });
@@ -1516,6 +1543,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveEntryWarmupComplete: false,
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
+      liveAllFourPolicyReadyMembers: 0,
       globalEmergencyStopActive: false,
       errorCode: 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED',
     });
@@ -1579,6 +1607,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         executionSyncMissingReferences: result.executionSyncMissingReferences,
         liveOrderEligibleMembers: result.liveOrderEligibleMembers,
         livePolicyReadyMembers: result.livePolicyReadyMembers,
+        liveAllFourPolicyReadyMembers: result.liveAllFourPolicyReadyMembers,
         globalEmergencyStopActive: result.globalEmergencyStopActive,
         errorCode: null,
       });
