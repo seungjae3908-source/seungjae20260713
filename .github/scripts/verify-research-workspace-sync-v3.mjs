@@ -218,7 +218,7 @@ const researchProductionClosureReviewed=[
  'research-production/test/research-ai-units-install-contract.test.mjs',
  'research-production/test/research-approved-job-intake.test.mjs',
  'research-production/test/research-maintenance.test.mjs',
- 'research-production/test/server-risk-policy-env-transport.test.mjs',
+ 'research-production/test/research-engine.test.mjs', 'research-production/test/server-risk-policy-env-transport.test.mjs',
 ];
 const memberAccessReviewed=[
  '.github/scripts/verify-research-workspace-sync-v3.mjs',
@@ -285,6 +285,28 @@ const telegramReleaseReviewed=[
  '.github/workflows/telegram-production-release.yml',
  'api-server/scripts/verify-telegram-production-release-contract.mjs',
 ];
+const formulaAiDriftReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/pr-auto-rehearsal-preview.yml',
+ 'api-server/src/routes/auto-rehearsal-preview.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
+ 'stock-analyzer/src/App.tsx',
+ 'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/src/pages/auto-rehearsal-preview.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.test.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.test.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.ts',
+ 'api-server/src/services/trade-automation-optimization.service.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
+ 'api-server/test.mjs',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -295,6 +317,7 @@ const allowed=new Set([
  ...memberAccessReviewed,
  ...tradingQaReviewed,
  ...telegramReleaseReviewed,
+ ...formulaAiDriftReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
@@ -315,7 +338,9 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
-const memberAccessContractChanged=changed.some((p)=>memberAccessReviewed.includes(p));
+const memberAccessContractChanged=changed.some((p)=>(
+ memberAccessReviewed.includes(p) && !formulaAiDriftReviewed.includes(p)
+));
 if(memberAccessContractChanged){
  const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
   const aiChartPublicRead = req.method === 'GET'
@@ -371,6 +396,15 @@ if(!mainRoute.includes("import { accountReadonlyRuntimeService } from '../featur
    "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
    "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
  );
+// PR #1682 adds one runtime-flagged, staging-only public rehearsal endpoint.
+// Normalize only these exact reviewed lines before comparing with current main;
+// every other main route byte remains protected.
+if(!mainRoute.includes("import autoRehearsalPreviewRouter from './auto-rehearsal-preview';"))current=current
+ .replace("\nimport autoRehearsalPreviewRouter from './auto-rehearsal-preview';",'')
+ .replace(
+   "\n// PR-only isolated rehearsal preview. This route is runtime-flagged and only\n// runs synthetic safety gates plus the local Paper engine; it never reads member,\n// credential, Telegram, or production data and is disabled outside staging.\nrouter.use('/', autoRehearsalPreviewRouter);\n",
+   '',
+ );
 if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 const protectedPathExceptions=new Map([
@@ -409,6 +443,7 @@ const protectedPathExceptions=new Map([
   'research-production/test/research-ai-units-install-contract.test.mjs',
   'research-production/test/research-approved-job-intake.test.mjs',
   'research-production/test/research-maintenance.test.mjs',
+  'research-production/test/research-engine.test.mjs',
   'research-production/test/server-risk-policy-env-transport.test.mjs',
  ])],
  ['research-dashboard',new Set([

@@ -12,7 +12,11 @@ const groups = {
     path.join(root, 'src/services/futures-market-data.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/futures-market-format.test.ts'),
   ],
-  risk: [path.join(root, 'src/services/trading-risk-engine.service.test.ts')],
+  risk: [
+    path.join(root, 'src/services/trading-risk-engine.service.test.ts'),
+    path.join(root, 'src/services/formula-ai-live-exception.service.test.ts'),
+    path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
+  ],
   phase4: [
     path.join(root, 'src/services/futures-contract-rules.service.test.ts'),
     path.join(root, 'src/services/trading-risk-contract-rules.test.ts'),
@@ -108,6 +112,7 @@ const groups = {
     path.join(root, 'src/services/three-provider-predeploy-readiness.service.test.ts'),
     path.join(root, 'src/services/trade-approval-paper-guard.service.test.ts'),
     path.join(root, 'src/services/trade-automation-integration.test.ts'),
+    path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-paper-position-bridge.service.test.ts'),
