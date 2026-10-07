@@ -368,10 +368,12 @@ test('provider-facing schema stays within Gemini-supported structured-output sub
 });
 
 test('ordinary return wording is allowed while performance-return claims remain blocked', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'research-ai-return-language-'));
+  const acceptedRoot = await mkdtemp(join(tmpdir(), 'research-ai-return-language-safe-'));
+  const blockedRoot = await mkdtemp(join(tmpdir(), 'research-ai-return-language-blocked-'));
   try {
-    await writeCycles(root, ['forward']);
     const env = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: SECRET };
+
+    await writeCycles(acceptedRoot, ['forward']);
     const ordinary = JSON.stringify({
       summary: 'Return to source provenance before inference.',
       findings: [],
@@ -380,14 +382,14 @@ test('ordinary return wording is allowed while performance-return claims remain 
       disposition: 'NEEDS_REVIEW',
     });
     const accepted = await runResearchAiReviewScan({
-      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
-      verifyGitHead: false, preflight: fakePreflight(root),
+      repoRoot: '/TEST_ONLY/repo', stateRoot: acceptedRoot, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(acceptedRoot),
       invoke: async ({ policy }) => ({ answer: ordinary, model: policy.model, provider: policy.provider }),
       now: () => Date.parse('2026-09-05T08:00:00Z'),
     });
     assert.equal(accepted.status, 'PARTIAL_COVERAGE_COMPLETE');
 
-    await writeCycles(root, ['forward']);
+    await writeCycles(blockedRoot, ['forward']);
     const performanceClaim = JSON.stringify({
       summary: 'Expected return is strong.',
       findings: [],
@@ -396,14 +398,15 @@ test('ordinary return wording is allowed while performance-return claims remain 
       disposition: 'NEEDS_REVIEW',
     });
     const blocked = await runResearchAiReviewScan({
-      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
-      verifyGitHead: false, preflight: fakePreflight(root),
+      repoRoot: '/TEST_ONLY/repo', stateRoot: blockedRoot, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(blockedRoot),
       invoke: async ({ policy }) => ({ answer: performanceClaim, model: policy.model, provider: policy.provider }),
       now: () => Date.parse('2026-09-05T09:00:00Z'),
     });
     assert.equal(blocked.status, 'PARTIAL_AI_UNAVAILABLE');
     assert.equal(blocked.blockedProfiles[0].reason, 'FORBIDDEN_AI_AUTHORITY');
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(acceptedRoot, { recursive: true, force: true });
+    await rm(blockedRoot, { recursive: true, force: true });
   }
 });
