@@ -22,4 +22,6 @@ test('account UI keeps primary touch targets at least 44px and avoids provider j
   expect(account).toContain('계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.');
   expect(account).not.toContain('Supabase 연결 정보를 관리자 설정에 등록해 주세요.');
   expect(account).toContain("role={error ? 'alert' : 'status'}");
+  expect(account.indexOf("auth.profile?.status === 'pending' ? '관리자 승인 대기 중입니다.'"))
+    .toBeLessThan(account.indexOf("auth.profile?.status === 'suspended' || auth.profile?.is_active === false"));
 });
