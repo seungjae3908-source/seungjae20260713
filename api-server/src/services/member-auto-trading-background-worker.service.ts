@@ -1184,6 +1184,10 @@ export class MemberAutoTradingBackgroundWorker {
           }
           result.evaluated += 1;
           try {
+            // Always re-read canonical exposure at the entry boundary. This also
+            // covers a prior entry that mutated an order and then failed during
+            // lifecycle/projection post-processing before its normal refresh.
+            await refreshRuntime();
             let fx = fxCache.get(entry.identity.market);
             if (!fx) {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
