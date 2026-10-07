@@ -553,7 +553,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
           <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
-          <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '위험검사 통과 전략 전체'}</dd>
+          <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '없음 · 자동진입 차단'}</dd>
           <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
           <dt className="font-bold">코인현물</dt><dd>Upbit 고정</dd>
