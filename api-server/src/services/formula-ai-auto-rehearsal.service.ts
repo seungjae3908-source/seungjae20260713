@@ -42,7 +42,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
   if (!Number.isFinite(at.getTime())) throw new Error('FORMULA_AI_REHEARSAL_INVALID_TIME');
   const observedAt = at.toISOString();
   const state = createPaperTradingState(500_000, at);
-  const result = applyPaperTradingAction(state, {
+  const entryResult = applyPaperTradingAction(state, {
     type: 'place_order',
     eventId: `formula-ai-rehearsal-${at.getTime()}`,
     request: {
@@ -109,19 +109,44 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
     },
   }, at);
 
-  const paperAutoReady = result.order?.status === 'filled' && result.position?.status === 'open';
-  const paperFillReady = result.fills.length > 0;
-  const journalReady = result.state.journal.length > 0;
-  const riskReady = result.order?.riskResult?.allowed === true;
+  const paperAutoReady = entryResult.order?.status === 'filled' && entryResult.position?.status === 'open';
+  const riskReady = entryResult.order?.riskResult?.allowed === true;
+  const closeAt = new Date(at.getTime() + 1_000);
+  const closeResult = entryResult.position
+    ? applyPaperTradingAction(entryResult.state, {
+        type: 'close_position',
+        eventId: `formula-ai-rehearsal-${at.getTime()}-close`,
+        positionId: entryResult.position.id,
+        percentage: 100,
+        reason: 'manual_close',
+        market: {
+          symbol: 'BTCUSDT',
+          price: 103,
+          lastPrice: 103,
+          markPrice: 103,
+          bidPrice: 102.9,
+          askPrice: 103.1,
+          fundingRate: 0.0001,
+          status: 'live',
+          updatedAt: closeAt.toISOString(),
+          warnings: [],
+        },
+      }, closeAt)
+    : null;
+  const paperFillReady = entryResult.fills.length > 0
+    && Boolean(closeResult?.fills.length);
+  const journalReady = Boolean(closeResult?.state.journal.length);
+  const fillCount = entryResult.fills.length + (closeResult?.fills.length ?? 0);
+  const journalEntryCount = closeResult?.state.journal.length ?? entryResult.state.journal.length;
 
   return Object.freeze({
     paperAutoReady,
     paperFillReady,
     journalReady,
     riskReady,
-    orderState: result.order?.status ?? null,
-    fillCount: result.fills.length,
-    journalEntryCount: result.state.journal.length,
+    orderState: entryResult.order?.status ?? null,
+    fillCount,
+    journalEntryCount,
     executionAuthority: 'NONE',
     realOrderSubmitted: false,
     exchangeRequestSent: false,
