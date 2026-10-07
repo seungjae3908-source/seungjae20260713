@@ -162,7 +162,7 @@ function DirectAiChartDataPrewarm() {
       !directAiChartPrewarmSelection
       || auth.loading
       || !auth.isApproved
-      || !auth.can('canAccessRiskPreview')
+      || !auth.can('canAccessAiChart')
     ) return;
 
     const { market, ticker, timeframe } = directAiChartPrewarmSelection;
@@ -289,7 +289,7 @@ function ScannerAccess() {
 function TelegramSignalOrderAccess() {
   return gated('canAccessBasicInfo', <TelegramSignalOrderPage />);
 }
-function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
+function AiChartAccess() { return gated('canAccessAiChart', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
