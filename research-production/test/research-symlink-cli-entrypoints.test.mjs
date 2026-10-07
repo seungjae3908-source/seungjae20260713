@@ -17,6 +17,23 @@ async function symlinkedRepo(t) {
   return { root, alias };
 }
 
+
+test('paper-state prestart CLI executes through a symlinked current release path', async (t) => {
+  const { alias } = await symlinkedRepo(t);
+  const cli = join(alias, 'research-production', 'deploy', 'prepare-paper-state-readonly-transport.mjs');
+  const run = spawnSync(process.execPath, [cli, '--profile', 'fast-historical'], {
+    encoding: 'utf8',
+    env: { ...process.env, RUNTIME_DIRECTORY: '/tmp/research-symlink-unused' },
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.notEqual(run.stdout.trim(), '');
+  const output = JSON.parse(run.stdout);
+  assert.equal(output.schemaVersion, 'research-production-paper-state-readonly-transport-v1');
+  assert.equal(output.status, 'NOT_APPLICABLE');
+  assert.equal(output.copiedFileCount, 0);
+  assert.equal(output.sensitiveValuesEmitted, false);
+});
+
 test('workspace worker CLI executes through a symlinked current release path', async (t) => {
   const { root, alias } = await symlinkedRepo(t);
   const stateRoot = join(root, 'workspace-worker');
