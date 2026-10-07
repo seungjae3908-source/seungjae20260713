@@ -196,7 +196,7 @@ jobs:
             && value.memberAutoBitgetLeverage >= 2
             && value.memberAutoBitgetLeverage <= 7
             && ['limited-50', 'validated'].includes(value?.memberAutoPilotStage);
-          if (value?.schemaVersion !== 'production-trading-core-qa-v4'
+          if (value?.schemaVersion !== 'production-trading-core-qa-v5'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
             || value?.officialProductionOrigin !== true
@@ -209,6 +209,13 @@ jobs:
             || !(Number(value?.executionSyncInserted) >= 1)
             || (!telegramReady && !telegramVerified)
             || !memberAutoPolicyReady
+            || value?.backgroundWorkerSourceReady !== true
+            || !Array.isArray(value?.backgroundWorkerReadinessBlockers)
+            || value.backgroundWorkerReadinessBlockers.length !== 0
+            || !['MISSING', 'READY', 'BLOCKED_DATA'].includes(value?.backgroundHandoffState)
+            || !(Number(value?.backgroundEligibleMembers) >= 1)
+            || !(Number(value?.backgroundPaperAccountsReady) >= 1)
+            || typeof value?.memberAutoStrategyAllowlistReady !== 'boolean'
             || value?.policyRestored !== true
             || value?.realOrderSubmitted !== false
             || value?.liveTradingAuthorityGranted !== false
