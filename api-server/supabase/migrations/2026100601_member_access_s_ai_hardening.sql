@@ -5,6 +5,85 @@
 
 begin;
 
+-- Production compatibility bootstrap for legacy member schemas. Preserve the
+-- existing effective access while materializing the canonical member columns
+-- expected by the S/AI access hardening below.
+alter table public.profiles
+  add column if not exists membership_level text,
+  add column if not exists is_active boolean,
+  add column if not exists permissions_updated_at timestamptz;
+
+update public.profiles
+set membership_level = case
+      when status::text = 'suspended' then case
+        when membership_level in ('pending', 'associate', 'regular', 'admin') then membership_level
+        when role in ('admin', 'master') then 'admin'
+        when role = 'associate' then 'associate'
+        when role in ('full', 'regular') then 'regular'
+        else 'pending'
+      end
+      when status::text <> 'approved' then 'pending'
+      when membership_level in ('pending', 'associate', 'regular', 'admin') then membership_level
+      when role in ('admin', 'master') then 'admin'
+      when role = 'associate' then 'associate'
+      when role in ('full', 'regular') then 'regular'
+      else 'regular'
+    end,
+    is_active = case
+      when status::text <> 'approved' then false
+      when is_active is false then false
+      else true
+    end,
+    permissions_updated_at = coalesce(permissions_updated_at, updated_at, created_at, now())
+where membership_level is null
+   or membership_level not in ('pending', 'associate', 'regular', 'admin')
+   or is_active is null
+   or permissions_updated_at is null
+   or (status::text = 'suspended' and is_active is true)
+   or (status::text not in ('approved', 'suspended')
+       and (membership_level <> 'pending' or is_active is true));
+
+alter table public.profiles
+  alter column membership_level set default 'pending',
+  alter column membership_level set not null,
+  alter column is_active set default false,
+  alter column is_active set not null,
+  alter column permissions_updated_at set default now(),
+  alter column permissions_updated_at set not null;
+
+alter table public.profiles drop constraint if exists profiles_membership_level_check;
+alter table public.profiles
+  add constraint profiles_membership_level_check
+  check (membership_level in ('pending', 'associate', 'regular', 'admin'));
+
+create table if not exists public.member_permission_audit (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid not null references auth.users(id) on delete restrict,
+  target_user_id uuid not null references auth.users(id) on delete cascade,
+  action text not null check (action in (
+    'member.approve',
+    'member.membership.change',
+    'member.active.change',
+    'member.membership.expiry.change',
+    'member.status.change',
+    'member.password.reset'
+  )),
+  before_value jsonb not null default '{}'::jsonb,
+  after_value jsonb not null default '{}'::jsonb,
+  reason text not null check (char_length(reason) between 3 and 500),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists member_permission_audit_target_idx
+  on public.member_permission_audit (target_user_id, created_at desc);
+create index if not exists member_permission_audit_actor_idx
+  on public.member_permission_audit (actor_id, created_at desc);
+
+alter table public.member_permission_audit enable row level security;
+revoke all privileges on table public.member_permission_audit from public, anon, authenticated;
+grant select on table public.member_permission_audit to authenticated;
+
+
 alter table public.profiles
   add column if not exists membership_expires_at timestamptz;
 
@@ -83,6 +162,34 @@ revoke all on function public.is_approved_member() from public;
 grant execute on function public.current_membership_level() to anon, authenticated;
 grant execute on function public.is_approved_member() to anon, authenticated;
 
+
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $function$
+  select coalesce(public.current_membership_level() = 'admin', false)
+$function$;
+
+revoke all on function public.is_admin() from public;
+grant execute on function public.is_admin() to anon, authenticated;
+
+drop policy if exists "member audit admins select" on public.member_permission_audit;
+create policy "member audit admins select"
+  on public.member_permission_audit for select
+  using (public.current_membership_level() = 'admin');
+
+drop policy if exists "member audit admins insert" on public.member_permission_audit;
+revoke insert, update, delete on table public.member_permission_audit from public, anon, authenticated;
+
+-- Privileged profile changes have one auditable path through the SECURITY DEFINER
+-- mutation function below. Remove the legacy direct UPDATE route.
+drop policy if exists "admins update profiles" on public.profiles;
+revoke insert, update, delete on table public.profiles from public, anon, authenticated;
+
+
 -- Associate members may view only their own journal evidence for trading analytics
 -- and AI review. Mutation policies stay unchanged (regular/admin only).
 drop policy if exists "paper_journal_entries select own" on public.paper_journal_entries;
@@ -132,7 +239,7 @@ declare
   v_next_active boolean;
   v_next_expiry timestamptz;
   v_next_role text;
-  v_next_status text;
+  v_next_status public.profiles.status%type;
   v_action text;
   v_reason text := btrim(coalesce(p_reason, ''));
   v_active_admin_count integer;
