@@ -141,6 +141,8 @@ export type MemberAutoTradingBackgroundRuntimeStatus = Readonly<{
   lastPaperOrders: number;
   lastExecutionEventsInserted: number;
   lastNotificationDeliveriesQueued: number;
+  lastFailures: number;
+  lastExecutionSyncFailures: number;
 }>;
 
 const backgroundRuntimeState: {
@@ -156,6 +158,8 @@ const backgroundRuntimeState: {
   lastPaperOrders: number;
   lastExecutionEventsInserted: number;
   lastNotificationDeliveriesQueued: number;
+  lastFailures: number;
+  lastExecutionSyncFailures: number;
 } = {
   started: false,
   startedAt: null,
@@ -169,6 +173,8 @@ const backgroundRuntimeState: {
   lastPaperOrders: 0,
   lastExecutionEventsInserted: 0,
   lastNotificationDeliveriesQueued: 0,
+  lastFailures: 0,
+  lastExecutionSyncFailures: 0,
 };
 
 export function getMemberAutoTradingBackgroundRuntimeStatus(): MemberAutoTradingBackgroundRuntimeStatus {
@@ -1471,6 +1477,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       backgroundRuntimeState.lastPaperOrders = result.filledOrders;
       backgroundRuntimeState.lastExecutionEventsInserted = result.executionEventsInserted;
       backgroundRuntimeState.lastNotificationDeliveriesQueued = result.notificationDeliveriesQueued;
+      backgroundRuntimeState.lastFailures = result.failures;
+      backgroundRuntimeState.lastExecutionSyncFailures = result.executionSyncFailures;
       if (result.evaluated > 0 || result.paperExitOrders > 0 || result.liveExitOrders > 0
         || result.exitBlocked > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
