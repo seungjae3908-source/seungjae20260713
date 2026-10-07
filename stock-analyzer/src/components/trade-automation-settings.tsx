@@ -56,6 +56,7 @@ type Status = {
   backgroundAutomationRuntime?: {
     masterEnabled: boolean;
     operational: boolean;
+    handoffReady?: boolean;
     workerFlagEnabled: boolean;
     liveBackgroundEnabled: boolean;
     serviceRoleConfigured: boolean;
@@ -368,8 +369,11 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         label="Worker"
         ready={workerRuntime?.operational === true}
         detail={workerRuntime?.operational
-          ? 'ACTIVE'
-          : (workerRuntime?.startBlockedReason ?? 'INACTIVE')}
+          ? 'ACTIVE · HANDOFF READY'
+          : (workerRuntime?.lastTickErrorCode
+            ?? (workerRuntime?.lastHandoffStatus && workerRuntime.lastHandoffStatus !== 'UNKNOWN'
+              ? `HANDOFF ${workerRuntime.lastHandoffStatus}`
+              : workerRuntime?.startBlockedReason ?? 'INACTIVE'))}
       />
       <RuntimeState
         label="허용 전략"
