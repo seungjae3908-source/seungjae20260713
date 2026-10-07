@@ -942,6 +942,7 @@ test('first live warmup suppresses automatic exits for existing live positions b
     const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
     assert.equal(result.liveEntriesArmed, false);
     assert.equal(result.liveExitOrders, 0);
+    assert.equal(result.liveTrackedPositions, 1);
     assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);
     assert.equal(result.privateTradingRequests, 0);
     assert.equal(liveReads, 0);
@@ -997,6 +998,7 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
     assert.equal(warmup.liveEntryWarmupComplete, true);
     assert.equal(warmup.liveOrders, 0);
     assert.equal(warmup.liveExitOrders, 0);
+    assert.equal(warmup.liveTrackedPositions, 0);
     assert.equal(warmup.privateTradingRequests, 0);
     assert.equal(warmup.executionSyncFailures, 0);
     assert.equal(warmup.executionSyncMissingReferences, 0);
@@ -1018,6 +1020,7 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
     assert.equal(armed.liveEntryWarmupComplete, true);
     assert.equal(armed.liveOrders, 0);
     assert.equal(armed.liveExitOrders, 0);
+    assert.equal(armed.liveTrackedPositions, 0);
     assert.equal(armed.privateTradingRequests, 0);
     assert.equal(armed.executionSyncFailures, 0);
     assert.equal(armed.executionSyncMissingReferences, 0);
