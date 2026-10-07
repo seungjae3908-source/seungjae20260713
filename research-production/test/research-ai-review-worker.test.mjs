@@ -349,3 +349,61 @@ test('retry backoff preserves the leaf reason instead of degrading to no-new-evi
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test('provider-facing schema stays within Gemini-supported structured-output subset', () => {
+  const forbidden = new Set(['minLength', 'maxLength', 'pattern']);
+  const seen = [];
+  const walk = (value, path = '$') => {
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      if (forbidden.has(key)) seen.push(path + '.' + key);
+      walk(child, path + '.' + key);
+    }
+  };
+  walk(RESEARCH_AI_RESPONSE_SCHEMA);
+  assert.deepEqual(seen, []);
+  assert.equal(RESEARCH_AI_RESPONSE_SCHEMA.additionalProperties, false);
+  assert.equal(RESEARCH_AI_RESPONSE_SCHEMA.properties.hypotheses.items.additionalProperties, false);
+});
+
+test('ordinary return wording is allowed while performance-return claims remain blocked', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-return-language-'));
+  try {
+    await writeCycles(root, ['forward']);
+    const env = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: SECRET };
+    const ordinary = JSON.stringify({
+      summary: 'Return to source provenance before inference.',
+      findings: [],
+      hypotheses: [],
+      risks: [],
+      disposition: 'NEEDS_REVIEW',
+    });
+    const accepted = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async ({ policy }) => ({ answer: ordinary, model: policy.model, provider: policy.provider }),
+      now: () => Date.parse('2026-09-05T08:00:00Z'),
+    });
+    assert.equal(accepted.status, 'PARTIAL_COVERAGE_COMPLETE');
+
+    await writeCycles(root, ['forward']);
+    const performanceClaim = JSON.stringify({
+      summary: 'Expected return is strong.',
+      findings: [],
+      hypotheses: [],
+      risks: [],
+      disposition: 'NEEDS_REVIEW',
+    });
+    const blocked = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async ({ policy }) => ({ answer: performanceClaim, model: policy.model, provider: policy.provider }),
+      now: () => Date.parse('2026-09-05T09:00:00Z'),
+    });
+    assert.equal(blocked.status, 'PARTIAL_AI_UNAVAILABLE');
+    assert.equal(blocked.blockedProfiles[0].reason, 'FORBIDDEN_AI_AUTHORITY');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
