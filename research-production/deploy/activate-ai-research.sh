@@ -36,6 +36,7 @@ daemon_services=(
 services=(
   research-production-ai-review.service
   research-production-video-discovery.service
+  research-production-approved-job-intake.service
 )
 
 disable_timers() {
@@ -319,6 +320,71 @@ NODE
   fi
 }
 
+print_ai_diagnostic() {
+  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-ai-diagnostic.mjs" \
+    --state-root "$STATE_ROOT" \
+    --research-sha "$TARGET_SHA" >&2 || true
+}
+
+require_current_sha_ai_evidence_ready() {
+  "${SUDO[@]}" node - "$STATE_ROOT" "$TARGET_SHA" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const stateRoot = process.argv[2];
+const targetSha = process.argv[3];
+const allowedStatus = new Set(['complete', 'partial_failure', 'blocked_data']);
+const current = [];
+for (const profile of ['forward', 'fast-historical', 'long-history']) {
+  const file = path.join(stateRoot, 'latest', profile + '.json');
+  if (!fs.existsSync(file)) continue;
+  let value;
+  try { value = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch { throw new Error('AI_RESEARCH_CURRENT_SHA_EVIDENCE_JSON_INVALID:' + profile); }
+  if (String(value?.researchSha ?? '').toLowerCase() !== targetSha) continue;
+  if (value?.schemaVersion !== 'research-production-cycle-v1'
+    || value?.profile !== profile
+    || !allowedStatus.has(String(value?.status ?? ''))) {
+    throw new Error('AI_RESEARCH_CURRENT_SHA_EVIDENCE_INVALID:' + profile);
+  }
+  current.push(profile);
+}
+if (!current.includes('forward')) throw new Error('AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING');
+process.stdout.write(JSON.stringify({
+  schemaVersion: 'research-ai-current-sha-readiness-v1',
+  targetSha, currentProfiles: current, forwardReady: true, executionAuthority: 'NONE'
+}) + '\n');
+NODE
+}
+
+verify_workspace_worker_health() {
+  local evidence
+  evidence="$(mktemp)"
+  trap 'rm -f "$evidence"' RETURN
+  local attempt
+  for attempt in {1..10}; do
+    if "${SUDO[@]}" runuser -u investment-research -- \
+      /usr/bin/env node "$RESEARCH_ROOT/packages/external-research/scripts/run-research-worker-v9.mjs" \
+      --root "$STATE_ROOT/workspace-worker" --status >"$evidence" 2>/dev/null; then
+      if node - "$evidence" <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (value?.schemaVersion !== 'research-worker-status-v9'
+  || value?.available !== true
+  || value?.workerState !== 'ACTIVE'
+  || !value?.lastHeartbeatAt
+  || value?.authority?.executionAuthority !== 'NONE'
+  || value?.authority?.providerCallsFromStatus !== 0) process.exit(2);
+NODE
+      then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  echo "AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE" >&2
+  return 1
+}
+
 verify_one_shot_evidence() {
   local started_ms="$1"
   "${SUDO[@]}" node - "$STATE_ROOT" "$TARGET_SHA" "$started_ms" <<'NODE'
@@ -341,14 +407,21 @@ if (ai?.schemaVersion !== 'research-production-ai-scan-v1') {
 if (ai?.researchSha !== targetSha) {
   throw new Error('AI_RESEARCH_ONE_SHOT_SHA_MISMATCH');
 }
-if (ai?.status !== 'COMPLETE') {
-  throw new Error('AI_RESEARCH_ONE_SHOT_NOT_COMPLETE:' + String(ai?.status ?? 'MISSING'));
+const acceptableAiStatus = new Set(['COMPLETE', 'PARTIAL_COVERAGE_COMPLETE']);
+if (!acceptableAiStatus.has(String(ai?.status ?? ''))) {
+  const leaf = [...(Array.isArray(ai?.blockedProfiles) ? ai.blockedProfiles : []),
+    ...(Array.isArray(ai?.deferredProfiles) ? ai.deferredProfiles : [])]
+    .map((row) => String(row?.profile ?? 'unknown') + '=' + String(row?.reason ?? 'UNKNOWN'))
+    .slice(0, 6).join(',');
+  throw new Error('AI_RESEARCH_ONE_SHOT_NOT_READY:' + String(ai?.status ?? 'MISSING') + (leaf ? ':' + leaf : ''));
 }
 if (!['gemini','groq'].includes(String(ai?.provider ?? ''))) {
   throw new Error('AI_RESEARCH_ONE_SHOT_PROVIDER_INVALID');
 }
-if (!Number.isSafeInteger(ai?.providerNetworkCalls) || ai.providerNetworkCalls < 1 || ai.providerNetworkCalls > 3) {
-  throw new Error('AI_RESEARCH_ONE_SHOT_NETWORK_PROOF_MISSING');
+if (!Number.isSafeInteger(ai?.providerNetworkCalls) || ai.providerNetworkCalls < 0 || ai.providerNetworkCalls > 3
+  || !Number.isSafeInteger(ai?.cacheHits) || ai.cacheHits < 0 || ai.cacheHits > 3
+  || (ai.providerNetworkCalls < 1 && ai.cacheHits < 1)) {
+  throw new Error('AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING');
 }
 if (!Array.isArray(ai?.reviews) || ai.reviews.length < 1) {
   throw new Error('AI_RESEARCH_ONE_SHOT_REVIEW_MISSING');
@@ -406,7 +479,9 @@ process.stdout.write(JSON.stringify({
     status: ai.status,
     provider: ai.provider,
     providerNetworkCalls: ai.providerNetworkCalls,
+    cacheHits: ai.cacheHits,
     reviewCount: ai.reviews.length,
+    profileCoverage: ai.profileCoverage,
   },
   video: {
     status: video.status,
@@ -476,12 +551,16 @@ activate() {
 
   "${SUDO[@]}" systemctl daemon-reload
 
-  # A successful one-shot must prove fresh provider network activity, validated
-  # output schema, exact Research SHA, and no trading authority before timers enable.
+  # Fail before provider calls when the current release has no usable forward evidence.
+  require_current_sha_ai_evidence_ready
+
+  # A successful one-shot must prove validated current-release review evidence,
+  # exact Research SHA, provider identity, and no trading authority before timers enable.
   local one_shot_started_ms
   one_shot_started_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
-  "${SUDO[@]}" systemctl start research-production-ai-review.service
-  "${SUDO[@]}" systemctl start research-production-video-discovery.service
+  "${SUDO[@]}" systemctl start research-production-ai-review.service || true
+  "${SUDO[@]}" systemctl start research-production-video-discovery.service || true
+  "${SUDO[@]}" systemctl start research-production-approved-job-intake.service || true
 
   local service
   for service in "${services[@]}"; do
@@ -489,6 +568,9 @@ activate() {
     result="$("${SUDO[@]}" systemctl show "$service" -p Result --value)"
     status="$("${SUDO[@]}" systemctl show "$service" -p ExecMainStatus --value)"
     [[ "$result" == "success" && "$status" == "0" ]] || {
+      if [[ "$service" == "research-production-ai-review.service" ]]; then
+        print_ai_diagnostic
+      fi
       echo "AI_RESEARCH_ONE_SHOT_FAILED:$service:result=$result:status=$status" >&2
       exit 70
     }
@@ -507,6 +589,7 @@ activate() {
     "${SUDO[@]}" systemctl is-enabled --quiet "$daemon"
     "${SUDO[@]}" systemctl is-active --quiet "$daemon"
   done
+  verify_workspace_worker_health
 
   require_exact_research_release
   require_research_safety_env
