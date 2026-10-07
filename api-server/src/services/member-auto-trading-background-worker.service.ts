@@ -1232,7 +1232,6 @@ export class MemberAutoTradingBackgroundWorker {
           }
         }
 
-        entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
         if (!entryProjectionHealthy) result.newEntriesFailClosed = true;
       }
 
