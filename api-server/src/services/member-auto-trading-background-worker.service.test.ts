@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
@@ -746,6 +749,79 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
     assert.equal(liveReads, 0);
     assert.ok(syncCalls.count >= 2);
   } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+    'DEPLOY_SHA',
+    'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const root = await mkdtemp(join(tmpdir(), 'auto-trading-activation-rehearsal-'));
+  const armPath = join(root, 'live-entry-arm.json');
+  const targetSha = 'b'.repeat(40);
+  const empty = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+  empty.entries = [];
+  empty.entryCount = 0;
+  const base = source(repository, nowMs, { syncCalls });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return empty as never; },
+    async readLiveAccountSnapshot() {
+      throw new Error('ZERO_MUTATION_REHEARSAL_LIVE_ACCOUNT_READ_FORBIDDEN');
+    },
+  });
+
+  try {
+    for (const key of keys.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = targetSha;
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+
+    const warmup = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(warmup.handoffReady, true);
+    assert.equal(warmup.liveEntryArmPresent, false);
+    assert.equal(warmup.liveEntriesArmed, false);
+    assert.equal(warmup.liveEntryWarmupComplete, true);
+    assert.equal(warmup.liveOrders, 0);
+    assert.equal(warmup.privateTradingRequests, 0);
+    assert.equal(warmup.executionSyncFailures, 0);
+    assert.equal(warmup.executionSyncMissingReferences, 0);
+
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      targetSha,
+      armed: true,
+      armedAt: new Date(nowMs + 500).toISOString(),
+    }) + '\n', { mode: 0o600, flag: 'wx' });
+
+    const armed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(armed.handoffReady, true);
+    assert.equal(armed.liveEntryArmPresent, true);
+    assert.equal(armed.liveEntriesArmed, true);
+    assert.equal(armed.liveEntryWarmupComplete, true);
+    assert.equal(armed.liveOrders, 0);
+    assert.equal(armed.privateTradingRequests, 0);
+    assert.equal(armed.executionSyncFailures, 0);
+    assert.equal(armed.executionSyncMissingReferences, 0);
+    assert.equal((await repository.listOrders(USER)).length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
     for (const key of keys) {
       const value = previous[key];
       if (value == null) delete process.env[key];
