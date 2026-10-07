@@ -52,6 +52,8 @@ if (staticMode) {
     "member.password.reset",
     "member.membership.expiry.change",
     "public.current_membership_level() in ('associate', 'regular', 'admin')",
+    "public.apply_member_permission_change(uuid, text, boolean, text, timestamptz)",
+    "v_current_expiry",
   ]) requireText(migration, marker, marker);
 
   if (/(?:placeOrder|cancelOrder|amendOrder|transfer\(|withdraw\()/i.test(apply)) {
