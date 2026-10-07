@@ -88,7 +88,7 @@ test('fresh one-shot provider evidence is required before recurring timers enabl
   const proof = script.indexOf('verify_one_shot_evidence "$one_shot_started_ms"');
   const enable = script.indexOf('systemctl enable --now');
   assert.ok(ai >= 0 && video > ai && proof > video && enable > proof);
-  assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_COMPLETE/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_READY/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE/);
