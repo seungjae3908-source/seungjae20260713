@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Power, RefreshCw, ShieldAlert } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
@@ -168,10 +168,12 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
   const [loading, setLoading] = useState(!fixture);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const refreshInFlight = useRef(false);
 
-  async function load() {
-    if (fixture) return;
-    setLoading(true);
+  async function load({ syncDraft = true }: { syncDraft?: boolean } = {}) {
+    if (fixture || refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    if (syncDraft) setLoading(true);
     try {
       const response = await authorizedFetch('/api/trade-automation/status');
       const payload = await response.json() as Status & { ok?: boolean; status?: string; error?: string };
@@ -182,19 +184,22 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         throw new Error(message);
       }
       setStatus(payload);
-      setDraft(normalizeUiPolicy(payload.policy));
-      setMessage('');
+      if (syncDraft) {
+        setDraft(normalizeUiPolicy(payload.policy));
+        setMessage('');
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.');
+      if (syncDraft) setMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.');
     } finally {
-      setLoading(false);
+      refreshInFlight.current = false;
+      if (syncDraft) setLoading(false);
     }
   }
 
   useEffect(() => {
     if (fixture) return;
     void load();
-    const timer = window.setInterval(() => { void load(); }, 15_000);
+    const timer = window.setInterval(() => { void load({ syncDraft: false }); }, 15_000);
     return () => window.clearInterval(timer);
   }, [fixture]);
 
