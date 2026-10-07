@@ -127,6 +127,21 @@ export async function createApprovedVideoResearchJob({
   }
   const inboxSource = inbox.sources.find((row) => row?.videoId === source.videoId && row?.canonicalUrl === source.canonicalUrl);
   if (!inboxSource || spec.videoUrl !== source.canonicalUrl) fail('VIDEO_APPROVAL_BRIDGE_SOURCE_NOT_DISCOVERED');
+  if (source.provider !== 'YOUTUBE' || source.sourceType !== 'YOUTUBE_VIDEO') {
+    fail('VIDEO_APPROVAL_BRIDGE_SOURCE_PROVIDER_MISMATCH');
+  }
+  const sameNullable = (left, right) => (left ?? null) === (right ?? null);
+  const metadataMatches = inboxSource.title === source.title
+    && inboxSource.channelOrPublisher === source.channelOrPublisher
+    && sameNullable(inboxSource.publishedAt, source.publishedAt)
+    && sameNullable(inboxSource.language, source.language)
+    && sameNullable(inboxSource.durationSec, source.durationSec)
+    && inboxSource.transcriptStatus === source.transcriptStatus
+    && inboxSource.contentAccessStatus === source.contentAccessStatus;
+  if (!metadataMatches) fail('VIDEO_APPROVAL_BRIDGE_SOURCE_METADATA_MISMATCH');
+  if (source.durationSec != null && spec.durationSec !== source.durationSec) {
+    fail('VIDEO_APPROVAL_BRIDGE_DURATION_MISMATCH');
+  }
 
   const plan = prepareVideoResearch(spec);
   const recomputed = createResearchOneShotManifestV12({
