@@ -139,9 +139,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   useEffect(() => {
     const next = tradingRouteState();
-    setMarket(next.market);
+    setMarket(next.market === 'crypto_futures' && !canFutures ? 'domestic_stock' : next.market);
     setSection(next.section);
-  }, [location]);
+  }, [canFutures, location]);
 
   useEffect(() => {
     if (fixture) {
@@ -405,7 +405,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 시장 선택" data-testid="trading-market-tabs">
             {MARKETS.map((item) => (
-              <SegmentedButton key={item.value} active={market === item.value} onClick={() => setMarket(item.value)} testId={'trading-market-' + item.value}>
+              <SegmentedButton
+                key={item.value}
+                active={market === item.value}
+                disabled={item.value === 'crypto_futures' && !canFutures}
+                onClick={() => setMarket(item.value)}
+                testId={'trading-market-' + item.value}
+              >
                 {item.label}
               </SegmentedButton>
             ))}
