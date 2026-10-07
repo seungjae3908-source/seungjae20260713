@@ -63,6 +63,21 @@ type Status = {
     readyForAutomaticOrderEvaluation: boolean;
     blockers: string[];
   }>>;
+  liveAutomaticReadinessByMarket?: Partial<Record<Market, {
+    exchange: Exchange;
+    connectionConfigured: boolean;
+    providerVerified: boolean;
+    manualServerGateEnabled: boolean;
+    automaticServerGateEnabled: boolean;
+    automaticPolicyEnabled: boolean;
+    marketAutomaticEnabled: boolean;
+    exchangeAutomaticEnabled: boolean;
+    memberOrderCapability: boolean;
+    memberStopped: boolean;
+    globalStopped: boolean;
+    readyForAutomaticOrderEvaluation: boolean;
+    blockers: string[];
+  }>>;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
@@ -474,8 +489,16 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         const providerVerified = Boolean(
           connection?.configured && connection.lastVerifiedAt && !connection.lastErrorCode,
         );
-        const automaticGateEnabled = status?.liveAutomaticExecutionServerEnabled?.[exchange] === true;
-        const automaticReady = status?.liveExecutionReadiness?.[exchange]?.readyForAutomaticOrderEvaluation === true;
+        const marketReadiness = selectedMarket
+          ? status?.liveAutomaticReadinessByMarket?.[selectedMarket]
+          : null;
+        const marketReadinessOwnsExchange = marketReadiness?.exchange === exchange;
+        const automaticGateEnabled = marketReadinessOwnsExchange
+          ? marketReadiness?.automaticServerGateEnabled === true
+          : status?.liveAutomaticExecutionServerEnabled?.[exchange] === true;
+        const automaticReady = marketReadinessOwnsExchange
+          ? marketReadiness?.readyForAutomaticOrderEvaluation === true
+          : status?.liveExecutionReadiness?.[exchange]?.readyForAutomaticOrderEvaluation === true;
         return <div key={exchange} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`connection-${exchange}`}>
           <div className="flex items-center gap-2">
             {automaticReady
