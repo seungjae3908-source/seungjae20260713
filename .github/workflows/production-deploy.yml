@@ -810,5 +810,7 @@ jobs:
             echo '- liveTradingAuthorityGranted: `false`'
             echo '- autoTradingAuthorityGranted: `false`'
             echo '- active conflicting trading gates: `0`'
-            echo '- ACTIVATION_READY: `true`'
+            if [[ "$QA_SCOPE" != "member" ]]; then
+              echo '- ACTIVATION_READY: `true`'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
