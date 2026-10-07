@@ -1,4 +1,5 @@
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -216,4 +217,31 @@ test("invalid predecessor identity fails closed without moving Paper state", asy
     /predecessor identity is invalid/,
   );
   await access(statePath);
+});
+
+
+test("Shadow accumulates public OI/long-short evidence without training-parity bypass", async () => {
+  const source = await readFile(new URL("../scripts/run-shadow-cycle.js", import.meta.url), "utf8");
+  assert.match(source, /collectLongShortRatioHistory/);
+  assert.match(source, /longShortSnapshots/);
+  assert.match(source, /RESEARCH_TEMPORAL_LONG_SHORT_PERIOD/);
+  assert.match(source, /openInterestTrainingParityConfirmed:\s*false/);
+  assert.match(source, /longShortTrainingParityConfirmed:\s*false/);
+  assert.doesNotMatch(source, /openInterestTrainingParityConfirmed:\s*true/);
+  assert.doesNotMatch(source, /longShortTrainingParityConfirmed:\s*true/);
+  assert.match(source, /CANONICAL_CRYPTO_BENCHMARK_SOURCE_NOT_DEFINED/);
+  assert.match(source, /CANONICAL_CRYPTO_SENTIMENT_SOURCE_NOT_DEFINED/);
+  assert.match(source, /defaultFeatureFallbackAllowed:\s*false/);
+  assert.match(source, /syntheticFeatureFallbackAllowed:\s*false/);
+});
+
+test("Shadow preserves newly collected prospective evidence when inference remains blocked", async () => {
+  const source = await readFile(new URL("../scripts/run-shadow-cycle.js", import.meta.url), "utf8");
+  assert.match(source, /inferenceBlocker\.partialState = Object\.freeze/);
+  assert.match(source, /nextState\.groups\[config\.group\] = error\?\.partialState/);
+  assert.match(source, /prospectiveEvidenceAppended/);
+  assert.match(source, /modelObservationCreditAdded:\s*false/);
+  assert.match(source, /policyCreditAdded:\s*false/);
+  assert.match(source, /usesPublicMarketDataOnly:\s*true/);
+  assert.match(source, /usesAccountOrOrderApi:\s*false/);
 });
