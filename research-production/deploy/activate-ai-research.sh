@@ -326,6 +326,31 @@ print_ai_diagnostic() {
     --research-sha "$TARGET_SHA" >&2 || true
 }
 
+require_forward_runtime_ready() {
+  local evidence status
+  evidence="$(mktemp)"
+  trap 'rm -f "$evidence"' RETURN
+  set +e
+  "${SUDO[@]}" node "$RESEARCH_ROOT/research-production/bin/research-forward-runtime-diagnostic.mjs" \
+    --state-root "$STATE_ROOT" \
+    --research-sha "$TARGET_SHA" \
+    --env-file "$ENV_ROOT/research-production.env" >"$evidence"
+  status=$?
+  set -e
+  cat "$evidence"
+  if (( status != 0 )); then
+    local blockers
+    blockers="$(node - "$evidence" <<'NODE'
+const fs = require('node:fs');
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+process.stdout.write((Array.isArray(value?.blockers) ? value.blockers : ['UNKNOWN']).slice(0,12).join(','));
+NODE
+)"
+    echo "AI_RESEARCH_FORWARD_RUNTIME_NOT_READY:${blockers:-UNKNOWN}" >&2
+    return 1
+  fi
+}
+
 require_current_sha_ai_evidence_ready() {
   "${SUDO[@]}" node - "$STATE_ROOT" "$TARGET_SHA" <<'NODE'
 const fs = require('node:fs');
@@ -349,9 +374,22 @@ for (const profile of ['forward', 'fast-historical', 'long-history']) {
   current.push(profile);
 }
 if (!current.includes('forward')) throw new Error('AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING');
+const forward = JSON.parse(fs.readFileSync(path.join(stateRoot, 'latest', 'forward.json'), 'utf8'));
+const tasks = Array.isArray(forward?.results) ? forward.results : [];
+if (forward?.status !== 'complete'
+  || !Number.isSafeInteger(forward?.taskCount)
+  || forward.taskCount < 1
+  || forward?.successCount !== forward.taskCount
+  || forward?.blockedDataCount !== 0
+  || forward?.failedCount !== 0
+  || tasks.length !== forward.taskCount
+  || tasks.some((task) => task?.status !== 'success' || task?.exitCode !== 0 || task?.timedOut === true)) {
+  throw new Error('AI_RESEARCH_CURRENT_SHA_FORWARD_RUNTIME_BLOCKED');
+}
 process.stdout.write(JSON.stringify({
   schemaVersion: 'research-ai-current-sha-readiness-v1',
-  targetSha, currentProfiles: current, forwardReady: true, executionAuthority: 'NONE'
+  targetSha, currentProfiles: current, forwardReady: true, forwardTaskCount: forward.taskCount,
+  executionAuthority: 'NONE'
 }) + '\n');
 NODE
 }
@@ -519,6 +557,7 @@ preflight() {
   command -v systemd-analyze >/dev/null
   require_exact_research_release
   require_research_safety_env
+  require_forward_runtime_ready
   provider_preflight
   require_runtime_policy_env
   verify_unit_sources
