@@ -26,6 +26,17 @@ test('shadow reports unresolved canonical market feature sources instead of fabr
   assert.match(source, /temporalEvidenceReadiness/);
 });
 
+
+test('blocked inference persists newly collected prospective evidence without granting model or policy credit', async () => {
+  const source = await readFile(shadowUrl, 'utf8');
+  assert.match(source, /inferenceBlocker\.partialState = Object\.freeze/);
+  assert.match(source, /nextState\.groups\[config\.group\] = error\?\.partialState/);
+  assert.match(source, /prospectiveEvidenceAppended/);
+  assert.match(source, /modelObservationCreditAdded:\s*false/);
+  assert.match(source, /policyCreditAdded:\s*false/);
+  assert.match(source, /canonicalEvidence:\s*previousCanonical \?\? null/);
+});
+
 test('shadow keeps public-only research safety while prospective evidence accumulates', async () => {
   const source = await readFile(shadowUrl, 'utf8');
   assert.match(source, /usesPublicMarketDataOnly:\s*true/);
