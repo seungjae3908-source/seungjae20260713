@@ -112,6 +112,11 @@ async function fixture() {
       canonicalUrl: VIDEO_URL,
       title: source.title,
       channelOrPublisher: source.channelOrPublisher,
+      publishedAt: source.publishedAt,
+      language: source.language,
+      durationSec: source.durationSec,
+      transcriptStatus: source.transcriptStatus,
+      contentAccessStatus: source.contentAccessStatus,
       reviewStatus: 'SOURCE_REVIEW_REQUIRED',
     }],
     nextRequiredStep: 'REVIEW_SOURCE_THEN_USE_EXISTING_V7_APPROVED_ONE_SHOT',
@@ -194,6 +199,30 @@ test('bridge fails closed when the explicit source-review binding is not approve
         clock: () => NOW,
       }),
       /VIDEO_APPROVAL_BRIDGE_SOURCE_REVIEW_NOT_BOUND/,
+    );
+  } finally {
+    await rm(x.root, { recursive: true, force: true });
+  }
+});
+
+
+test('bridge rejects a source file whose metadata no longer matches the discovered inbox', async () => {
+  const x = await fixture();
+  try {
+    await privateJson(x.paths.source, { ...x.source, title: 'Forged title after discovery' });
+    await assert.rejects(
+      createApprovedVideoResearchJob({
+        stateRoot: x.root,
+        researchSha: SHA,
+        sourceReviewDigest: REVIEW_DIGEST,
+        sourcePath: x.paths.source,
+        specPath: x.paths.spec,
+        manifestPath: x.paths.manifest,
+        videoApprovalPath: x.paths.videoApproval,
+        groqApprovalPath: x.paths.groqApproval,
+        clock: () => NOW,
+      }),
+      /VIDEO_APPROVAL_BRIDGE_SOURCE_METADATA_MISMATCH/,
     );
   } finally {
     await rm(x.root, { recursive: true, force: true });
