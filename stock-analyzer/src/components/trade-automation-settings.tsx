@@ -590,6 +590,10 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       </p>
     </div>
 
+    <p className="mt-3 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-[11px] font-semibold leading-5 text-warning-foreground" data-testid="live-position-stop-warning">
+      긴급정지 또는 자동매매 OFF는 새 자동진입을 막지만 기존 Live 자동포지션의 후속 자동청산 감시도 중단될 수 있습니다. 실계좌의 열린 포지션과 보호주문을 직접 확인한 뒤 사용하세요.
+    </p>
+
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
       <button type="button" onClick={() => setConfirming(true)} disabled={effectiveStopped} className={cn(
         'rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground',
