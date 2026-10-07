@@ -66,6 +66,8 @@ type Status = {
     lastTickStartedAt: string | null;
     lastTickCompletedAt: string | null;
     lastTickErrorCode: string | null;
+    lastFailures?: number;
+    lastExecutionSyncFailures?: number;
     lastHandoffStatus: 'UNKNOWN' | 'MISSING' | 'BLOCKED_DATA' | 'READY';
   };
 };
@@ -371,9 +373,13 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         detail={workerRuntime?.operational
           ? 'ACTIVE · HANDOFF READY'
           : (workerRuntime?.lastTickErrorCode
-            ?? (workerRuntime?.lastHandoffStatus && workerRuntime.lastHandoffStatus !== 'UNKNOWN'
-              ? `HANDOFF ${workerRuntime.lastHandoffStatus}`
-              : workerRuntime?.startBlockedReason ?? 'INACTIVE'))}
+            ?? ((workerRuntime?.lastFailures ?? 0) > 0
+              ? `WORKER FAIL ${workerRuntime?.lastFailures}`
+              : (workerRuntime?.lastExecutionSyncFailures ?? 0) > 0
+                ? `SYNC FAIL ${workerRuntime?.lastExecutionSyncFailures}`
+                : (workerRuntime?.lastHandoffStatus && workerRuntime.lastHandoffStatus !== 'UNKNOWN'
+                  ? `HANDOFF ${workerRuntime.lastHandoffStatus}`
+                  : workerRuntime?.startBlockedReason ?? 'INACTIVE')))}
       />
       <RuntimeState
         label="허용 전략"
