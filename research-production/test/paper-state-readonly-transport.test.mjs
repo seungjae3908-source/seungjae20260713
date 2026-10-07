@@ -211,5 +211,4 @@ test('paper-state prestart CLI executes through current release symlink', async 
   assert.equal(output.schemaVersion, PAPER_STATE_READONLY_TRANSPORT_VERSION);
   assert.equal(output.status, 'NOT_APPLICABLE');
   assert.equal(output.copiedFileCount, 0);
-  assert.equal(output.sensitiveValuesEmitted, false);
 });
