@@ -16,6 +16,7 @@ const artifactDir = path.resolve(process.env.PRODUCTION_LIVE_CREDENTIAL_REUSE_AR
 const providers = ['kiwoom', 'upbit', 'bitget', 'toss'] as const;
 type Provider = typeof providers[number];
 
+// Release candidate note: merge only after canonical Full CI is fully completed/success.
 // Backend verification can legitimately consume multiple 4s provider probes plus
 // two transient retries (1s/2s backoff). Keep the browser wait budget above the
 // provider-specific worst case so QA does not time out while the server is still
