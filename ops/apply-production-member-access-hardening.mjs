@@ -83,24 +83,36 @@ do $member_access_hardening_preflight$
 declare
   profile_count bigint;
   journal_count bigint;
-  audit_count bigint;
+  audit_count bigint := 0;
   preserved_status_counts jsonb;
 begin
   if to_regclass('public.profiles') is null then raise exception 'MEMBER_PROFILES_TABLE_MISSING'; end if;
   if to_regclass('public.paper_journal_entries') is null then raise exception 'MEMBER_JOURNAL_TABLE_MISSING'; end if;
-  if to_regclass('public.member_permission_audit') is null then raise exception 'MEMBER_AUDIT_TABLE_MISSING'; end if;
-  if to_regprocedure('public.current_membership_level()') is null then raise exception 'MEMBER_LEVEL_FUNCTION_MISSING'; end if;
+
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'id'
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'role'
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'status'
+  ) then raise exception 'MEMBER_LEGACY_PROFILE_COLUMNS_MISSING'; end if;
 
   select count(*) into profile_count from public.profiles;
   select count(*) into journal_count from public.paper_journal_entries;
-  select count(*) into audit_count from public.member_permission_audit;
-  select coalesce(jsonb_object_agg(status, count_value), '{}'::jsonb)
+  if to_regclass('public.member_permission_audit') is not null then
+    execute 'select count(*) from public.member_permission_audit' into audit_count;
+  end if;
+
+  select coalesce(jsonb_object_agg(status_text, count_value), '{}'::jsonb)
   into preserved_status_counts
   from (
-    select status, count(*)::bigint as count_value
+    select status::text as status_text, count(*)::bigint as count_value
     from public.profiles
-    where status in ('rejected','suspended','revoked','withdrawn','disabled','inactive')
-    group by status
+    where status::text in ('rejected','suspended','revoked','withdrawn','disabled','inactive')
+    group by status::text
   ) snapshot;
 
   perform set_config('app.member_profiles_before', profile_count::text, true);
@@ -116,6 +128,7 @@ do $member_access_hardening_verify$
 declare
   current_level_definition text;
   approved_definition text;
+  admin_definition text;
   policy_qual text;
   action_constraint text;
   preserved_status_counts jsonb;
@@ -128,8 +141,22 @@ begin
       and data_type = 'timestamp with time zone'
   ) then raise exception 'MEMBER_EXPIRY_COLUMN_MISSING'; end if;
 
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'membership_level'
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'is_active'
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'permissions_updated_at'
+  ) then raise exception 'MEMBER_CANONICAL_COLUMNS_MISSING'; end if;
+
   if to_regclass('public.profiles_membership_expiry_idx') is null then
     raise exception 'MEMBER_EXPIRY_INDEX_MISSING';
+  end if;
+  if to_regclass('public.member_permission_audit') is null then
+    raise exception 'MEMBER_AUDIT_TABLE_MISSING';
   end if;
 
   select pg_get_functiondef('public.current_membership_level()'::regprocedure)
@@ -144,6 +171,12 @@ begin
   if approved_definition not ilike '%membership_expires_at%'
      or approved_definition not ilike '%now()%' then
     raise exception 'MEMBER_APPROVAL_EXPIRY_GUARD_MISSING';
+  end if;
+
+  select pg_get_functiondef('public.is_admin()'::regprocedure)
+  into admin_definition;
+  if admin_definition not ilike '%current_membership_level%' then
+    raise exception 'MEMBER_ADMIN_CANONICAL_GUARD_MISSING';
   end if;
 
   if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,timestamptz,text,timestamptz)') is null then
@@ -172,6 +205,32 @@ begin
     raise exception 'MEMBER_AUDIT_ACTION_CONTRACT_INVALID';
   end if;
 
+  if exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public'
+      and tablename = 'profiles'
+      and policyname = 'admins update profiles'
+  ) then raise exception 'MEMBER_LEGACY_DIRECT_ADMIN_UPDATE_POLICY_PRESENT'; end if;
+
+  if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
+     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'SELECT')
+     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE') then
+    raise exception 'MEMBER_DIRECT_MUTATION_PRIVILEGE_INVALID';
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public'
+      and tablename = 'member_permission_audit'
+      and policyname = 'member audit admins insert'
+      and cmd = 'INSERT'
+      and with_check ilike '%current_membership_level%'
+      and with_check ilike '%auth.uid()%'
+      and with_check ilike '%actor_id%'
+  ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
+
   if (select count(*) from public.profiles) <> current_setting('app.member_profiles_before')::bigint then
     raise exception 'MEMBER_PROFILE_ROWS_CHANGED';
   end if;
@@ -182,13 +241,13 @@ begin
     raise exception 'MEMBER_AUDIT_ROWS_CHANGED';
   end if;
 
-  select coalesce(jsonb_object_agg(status, count_value), '{}'::jsonb)
+  select coalesce(jsonb_object_agg(status_text, count_value), '{}'::jsonb)
   into preserved_status_counts
   from (
-    select status, count(*)::bigint as count_value
+    select status::text as status_text, count(*)::bigint as count_value
     from public.profiles
-    where status in ('rejected','suspended','revoked','withdrawn','disabled','inactive')
-    group by status
+    where status::text in ('rejected','suspended','revoked','withdrawn','disabled','inactive')
+    group by status::text
   ) snapshot;
   if preserved_status_counts <> current_setting('app.member_preserved_statuses_before')::jsonb then
     raise exception 'MEMBER_HISTORICAL_STATUS_COUNTS_CHANGED';
@@ -201,7 +260,7 @@ begin
       and (
         is_active is true
         or membership_expires_at is not null
-        or status = 'approved'
+        or status::text = 'approved'
         or approved_at is not null
         or approved_by is not null
       )
