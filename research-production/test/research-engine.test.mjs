@@ -113,7 +113,11 @@ test('Shadow NOT_EVALUABLE is fail-closed BLOCKED_DATA with explicit missing evi
     'EXISTING_TEMPORAL_EVIDENCE_ONLY',
     'defaultFeatureFallbackAllowed: false',
     'syntheticFeatureFallbackAllowed: false',
-    'if (inferenceBlocker) throw inferenceBlocker',
+    'inferenceBlocker.partialState = Object.freeze',
+    'throw inferenceBlocker',
+    'prospectiveEvidenceAppended',
+    'modelObservationCreditAdded: false',
+    'policyCreditAdded: false',
     'if (nextSummary.status === "blocked_data") process.exitCode = 2',
   ]) {
     assert.ok(source.includes(token), `missing Shadow BLOCKED_DATA contract: ${token}`);
