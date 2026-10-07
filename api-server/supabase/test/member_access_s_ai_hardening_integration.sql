@@ -2,6 +2,26 @@
 
 begin;
 
+do $member_function_acl_contract$
+begin
+  if has_function_privilege('anon', 'public.current_membership_level()', 'EXECUTE')
+     or has_function_privilege('anon', 'public.is_approved_member()', 'EXECUTE')
+     or has_function_privilege('anon', 'public.is_admin()', 'EXECUTE') then
+    raise exception 'anonymous role can execute member SECURITY DEFINER helpers';
+  end if;
+  if not has_function_privilege('authenticated', 'public.current_membership_level()', 'EXECUTE')
+     or not has_function_privilege('authenticated', 'public.is_approved_member()', 'EXECUTE')
+     or not has_function_privilege('authenticated', 'public.is_admin()', 'EXECUTE') then
+    raise exception 'authenticated role cannot execute required member RLS helpers';
+  end if;
+  if to_regprocedure('public.handle_new_user()') is not null
+     and (has_function_privilege('anon', 'public.handle_new_user()', 'EXECUTE')
+       or has_function_privilege('authenticated', 'public.handle_new_user()', 'EXECUTE')) then
+    raise exception 'Auth trigger helper is exposed as a callable RPC';
+  end if;
+end
+$member_function_acl_contract$;
+
 -- The immediately preceding Production app uses the five-argument member RPC.
 -- Prove that the compatibility bridge delegates safely and preserves expiry.
 set role authenticated;
