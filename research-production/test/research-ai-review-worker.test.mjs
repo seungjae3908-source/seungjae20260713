@@ -414,7 +414,7 @@ test('invalid provider response body gets a stable transient leaf code', async (
 });
 
 test('provider-facing schema stays within Gemini-supported structured-output subset', () => {
-  const forbidden = new Set(['minLength', 'maxLength', 'pattern']);
+  const forbidden = new Set(['minLength', 'maxLength', 'pattern', 'maxItems', 'minItems']);
   const seen = [];
   const walk = (value, path = '$') => {
     if (!value || typeof value !== 'object') return;
