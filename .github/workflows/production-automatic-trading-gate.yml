@@ -617,10 +617,10 @@ jobs:
             }
             return env;
           };
-          const requireWorkerWarmup = (env, { requireCurrentArm }) => {
+          const requireWorkerWarmup = (env, { requireCurrentArm, requireArmedEntries = false }) => {
             const port = String(env.PORT || env.API_PORT || '8080');
             let last = null;
-            for (let attempt = 0; attempt < 30; attempt += 1) {
+            for (let attempt = 0; attempt < 45; attempt += 1) {
               try {
                 last = JSON.parse(execFileSync('curl', [
                   '--fail', '--silent', '--show-error', '--max-time', '3',
@@ -638,13 +638,23 @@ jobs:
                   && health?.firstWarmupTickLiveOrders === 0
                   && health?.executionSyncFailures === 0
                   && health?.executionSyncMissingReferences === 0
-                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
+                  && Number(health?.liveOrderEligibleMembers ?? 0) > 0
+                  && Number(health?.livePolicyReadyMembers ?? 0) > 0
+                  && health?.globalEmergencyStopActive === false
+                  && last?.userTelegramDelivery?.enabled === true
+                  && last?.userTelegramDelivery?.tickOk === true
+                  && last?.userTelegramDelivery?.errorCode == null
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)
+                  && (!requireArmedEntries || health?.liveEntriesArmed === true)) {
                   return health;
                 }
               } catch {}
               execFileSync('sleep', ['1']);
             }
-            throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify(last?.autoTradingBackground ?? null));
+            throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify({
+              autoTradingBackground: last?.autoTradingBackground ?? null,
+              userTelegramDelivery: last?.userTelegramDelivery ?? null,
+            }));
           };
           const manualState = (env) => ({
             live: bool(env, 'LIVE_TRADING'),
@@ -666,11 +676,17 @@ jobs:
             futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
             futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
             futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || '').toLowerCase(),
+            telegramApproved: bool(env, 'LIVE_TELEGRAM_ACTIVATION_APPROVED'),
+            telegramIntelligenceWorker: bool(env, 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+            telegramDeliveryWorker: bool(env, 'PERSONAL_TELEGRAM_WORKER_ENABLED'),
           });
           const assertAllFourManual = (env, expectedAuto) => {
             const manual = manualState(env);
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
+            }
+            if (!manual.telegramApproved || !manual.telegramIntelligenceWorker || !manual.telegramDeliveryWorker) {
+              throw new Error('AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE');
             }
             if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
               || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
@@ -735,7 +751,7 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
-            requireWorkerWarmup(persisted, { requireCurrentArm: true });
+            requireWorkerWarmup(persisted, { requireCurrentArm: true, requireArmedEntries: true });
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
@@ -756,7 +772,7 @@ jobs:
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
-            requireWorkerWarmup(after, { requireCurrentArm: false });
+            requireWorkerWarmup(after, { requireCurrentArm: false, requireArmedEntries: false });
             armLiveEntries();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
@@ -764,6 +780,10 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            const armedHealth = requireWorkerWarmup(persisted, {
+              requireCurrentArm: true,
+              requireArmedEntries: true,
+            });
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
@@ -783,6 +803,11 @@ jobs:
               FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false,
               FIRST_WARMUP_TICK_LIVE_ORDERS: 0,
               LIVE_ENTRY_ARM_WRITTEN: true,
+              LIVE_ENTRIES_ARMED_PROVEN: true,
+              LIVE_ORDER_ELIGIBLE_MEMBERS: armedHealth.liveOrderEligibleMembers,
+              LIVE_POLICY_READY_MEMBERS: armedHealth.livePolicyReadyMembers,
+              GLOBAL_EMERGENCY_STOP_ACTIVE: armedHealth.globalEmergencyStopActive,
+              TELEGRAM_DELIVERY_WORKER_POST_RESTART: 'HEALTHY',
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
@@ -850,6 +875,11 @@ jobs:
                 'first_warmup_tick_live_entries_armed=false',
                 'first_warmup_tick_live_orders=0',
                 'live_entry_arm_written=true',
+                'live_entries_armed_proven=true',
+                'live_order_eligible_member_count=>=1',
+                'live_policy_ready_member_count=>=1',
+                'global_emergency_stop=false',
+                'telegram_delivery_worker_post_restart=HEALTHY',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',
