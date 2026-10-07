@@ -171,6 +171,35 @@ function assertCredentialReceipt(credential, { targetSha, productionDeployRunId 
 }
 
 
+function assertMemberReceipt(member, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
+  if (member?.schemaVersion !== 'production-member-readonly-qa-v1'
+    || member?.complete !== true
+    || member?.productionDeployRunId !== deployRunId
+    || member?.officialProductionOrigin !== true
+    || member?.authenticatedProductionSession !== true
+    || !['associate', 'regular', 'admin'].includes(member?.membershipLevel)
+    || member?.profileStatus !== 'approved'
+    || member?.memberActive !== true
+    || member?.membershipExpiryValid !== true
+    || member?.sGradeAccessAllowed !== true
+    || member?.aiChartAccessible !== true
+    || member?.tradingAnalyticsAccessible !== true
+    || member?.aiTradingReviewAccessible !== true
+    || member?.adminSurfaceMatchedTier !== true
+    || member?.liveOrderSurfaceMatchedTier !== true
+    || member?.mobileAccountLayoutSafe !== true
+    || member?.blockedMutationRequests !== 0
+    || member?.realOrderSubmitted !== false
+    || member?.secretValuesRecorded !== false
+    || member?.accountValuesRecorded !== false) {
+    throw new Error('POSTDEPLOY_QA_MEMBER_INVALID');
+  }
+  requireExactSha(member.targetSha, sha, 'POSTDEPLOY_QA_MEMBER_SHA_MISMATCH');
+  requireZeroAuthority(member, 'POSTDEPLOY_QA_MEMBER');
+  assertNoForbiddenEvidenceKeys(member);
+}
+
 function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
   const telegramState = tradingCore?.telegramActivationState;
@@ -365,6 +394,7 @@ module.exports = {
   assertAccountReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
+  assertMemberReceipt,
   assertTradingCoreReceipt,
   buildProductionPostdeployQaEvidence,
 };

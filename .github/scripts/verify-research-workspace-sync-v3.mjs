@@ -220,6 +220,62 @@ const researchProductionClosureReviewed=[
  'research-production/test/research-maintenance.test.mjs',
  'research-production/test/server-risk-policy-env-transport.test.mjs',
 ];
+const memberAccessReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/production-deploy.yml',
+ '.github/workflows/production-postdeploy-qa.yml',
+ '.github/workflows/research-center-predeploy-validation.yml',
+ '.github/scripts/run-production-readonly-qa.sh',
+ '.github/scripts/production-postdeploy-qa-evidence.cjs',
+ '.github/scripts/verify-production-qa-receipt.cjs',
+ '.github/scripts/verify-production-postdeploy-qa-contract.mjs',
+ 'api-server/scripts/apply-staging-supabase-bootstrap.mjs',
+ 'api-server/scripts/verify-member-permission-audit-contract.mjs',
+ 'api-server/scripts/verify-phase8-db.sh',
+ 'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ 'api-server/scripts/verify-staging-bootstrap-contract.mjs',
+ 'api-server/src/middleware/auth.ts',
+ 'api-server/src/routes/admin.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/paper-journal.smoke.test.ts',
+ 'api-server/src/routes/paper-journal.ts',
+ 'api-server/src/routes/signal-scanner-auth.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'api-server/src/services/member-access-phase8.test.ts',
+ 'api-server/src/services/member-administration.service.test.ts',
+ 'api-server/src/services/member-administration.service.ts',
+ 'api-server/src/services/member-auth-admin.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.ts',
+ 'api-server/src/services/scanner-access-control.service.test.ts',
+ 'api-server/src/services/scanner-access-control.service.ts',
+ 'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
+ 'api-server/supabase/bootstrap/staging-bootstrap.sql',
+ 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
+ 'api-server/supabase/test/member_access_s_ai_hardening_integration.sql',
+ 'ops/apply-production-member-access-hardening.mjs',
+ 'ops/verify-production-member-access-hardening.mjs',
+ 'packages/member-access/src/index.d.ts',
+ 'packages/member-access/src/index.js',
+ 'stock-analyzer/e2e/scanner-member-access.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/account-touch-korean-ui.spec.ts',
+ 'stock-analyzer/e2e/account-connection-credentials.spec.ts',
+ 'stock-analyzer/e2e/production-member-readonly-qa.spec.ts',
+ 'stock-analyzer/playwright.production-member.config.ts',
+ 'stock-analyzer/src/App.tsx',
+ 'stock-analyzer/src/components/capability-gate.tsx',
+ 'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/src/lib/auth-initial-bootstrap.ts',
+ 'stock-analyzer/src/lib/auth.tsx',
+ 'stock-analyzer/src/pages/account.tsx',
+ 'stock-analyzer/src/pages/admin.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/src/pages/portfolio.tsx',
+ 'stock-analyzer/src/pages/technical-workspace.tsx',
+];
 const tradingQaReviewed=[
  'api-server/src/services/trade-execution.service.ts',
  'api-server/src/services/trade-execution-toss-verification.test.ts',
@@ -256,6 +312,7 @@ const allowed=new Set([
  ...portfolioReviewed,
  ...researchCenterIntegrationReviewed,
  ...researchProductionClosureReviewed,
+ ...memberAccessReviewed,
  ...tradingQaReviewed,
  ...telegramReleaseReviewed,
  ...formulaAiDriftReviewed,
@@ -279,6 +336,44 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
+const memberAccessContractChanged=changed.some((p)=>memberAccessReviewed.includes(p));
+if(memberAccessContractChanged){
+ const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
+  const aiChartPublicRead = req.method === 'GET'
+    && (
+      req.path === '/tickers'
+      || req.path === '/candles'
+      || /^\\/[^/]+\\/(?:snapshot|flow)$/u.test(req.path)
+    );
+  return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
+});`;
+ const canonicalFuturesGate="router.use('/crypto/futures', requireCapability('canAccessFutures'));";
+ const journalSplitGate=`router.use('/paper-journal', (req, res, next) => {
+  const subpath = req.path;
+  if (
+    subpath === '/analytics'
+    || subpath === '/unified-ledger'
+    || subpath === '/unified-ledger/status'
+  ) {
+    return requireCapability('canAccessTradingAnalytics')(req, res, next);
+  }
+  if (
+    subpath === '/review-dataset'
+    || subpath.startsWith('/ai-review/')
+    || subpath.startsWith('/portfolio-advisor/')
+  ) {
+    return requireCapability('canAccessAiTradingReview')(req, res, next);
+  }
+  return requireCapability('canAccessJournalSync')(req, res, next);
+});`;
+ const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
+ if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
+ if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
+ current=current
+  .replace(aiChartFuturesGate,canonicalFuturesGate)
+  .replace(journalSplitGate,canonicalJournalGate)
+  .replace("    membership_expires_at: profile.membership_expires_at ?? null,\n",'');
+}
 // Older owner history may not be an ancestor after squash/integration merges. Only
 // normalize away the legacy video mount when the exact current main itself does
 // not contain that reviewed mount. Never delete content that main now owns.
@@ -353,6 +448,12 @@ const protectedPathExceptions=new Map([
  ['stock-analyzer/src/pages/research-center.tsx',new Set([
   'stock-analyzer/src/pages/research-center.tsx',
  ])],
+ ['api-server/src/middleware/auth.ts',memberAccessContractChanged
+   ? new Set(['api-server/src/middleware/auth.ts'])
+   : new Set()],
+ ['packages/member-access',memberAccessContractChanged
+   ? new Set(['packages/member-access/src/index.js','packages/member-access/src/index.d.ts'])
+   : new Set()],
 ]);
 for(const p of protectedPaths){
  const exceptions=protectedPathExceptions.get(p);
