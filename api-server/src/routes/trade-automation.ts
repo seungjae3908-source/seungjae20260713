@@ -812,7 +812,7 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
           liveConnectionVerified,
           reusableReadonlyCredential: credential.reusable,
           readOnlyVerified: credential.readOnlyVerified,
-          ready: liveConnectionVerified || credential.readOnlyVerified,
+          ready: !connection?.lastErrorCode && (liveConnectionVerified || credential.readOnlyVerified),
           lastErrorCode: connection?.lastErrorCode ?? credential.errorCode,
           credentialsExposed: false,
         }];
