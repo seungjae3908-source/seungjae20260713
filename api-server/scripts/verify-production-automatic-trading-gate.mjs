@@ -69,10 +69,10 @@ requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'A
 requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
-requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false, requireArmedEntries: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
+requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
-requireText(workflow, 'requireArmedEntries: true', 'AUTO_GATE_POST_ARM_SECOND_TICK_PROOF_MISSING');
-requireText(workflow, 'health?.liveEntriesArmed === true', 'AUTO_GATE_LIVE_ENTRIES_ARMED_HEALTH_PROOF_MISSING');
+requireText(workflow, 'LIVE_ENTRY_ARM_READBACK_PROVEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_READBACK_PROOF_MISSING');
+requireText(workflow, 'NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true', 'AUTO_GATE_NEXT_TICK_ZERO_MUTATION_PROOF_MISSING');
 requireText(workflow, 'Number(health?.liveOrderEligibleMembers ?? 0) > 0', 'AUTO_GATE_LIVE_ORDER_ELIGIBLE_MEMBER_PROOF_MISSING');
 requireText(workflow, 'Number(health?.livePolicyReadyMembers ?? 0) > 0', 'AUTO_GATE_LIVE_POLICY_READY_MEMBER_PROOF_MISSING');
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
@@ -86,7 +86,8 @@ requireText(workflow, "'worker_warmup_proven=true'", 'AUTO_GATE_WARMUP_HUB_RECEI
 requireText(workflow, "'first_warmup_tick_live_entries_armed=false'", 'AUTO_GATE_FIRST_TICK_ARM_HUB_RECEIPT_MISSING');
 requireText(workflow, "'first_warmup_tick_live_orders=0'", 'AUTO_GATE_FIRST_TICK_ORDER_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_entry_arm_written=true'", 'AUTO_GATE_ARM_HUB_RECEIPT_MISSING');
-requireText(workflow, "'live_entries_armed_proven=true'", 'AUTO_GATE_ARMED_HUB_RECEIPT_MISSING');
+requireText(workflow, "'live_entry_arm_readback_proven=true'", 'AUTO_GATE_ARM_READBACK_HUB_RECEIPT_MISSING');
+requireText(workflow, "'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true'", 'AUTO_GATE_NEXT_TICK_REHEARSAL_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_order_eligible_member_count=>=1'", 'AUTO_GATE_MEMBER_READY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'global_emergency_stop=false'", 'AUTO_GATE_GLOBAL_STOP_HUB_RECEIPT_MISSING');
 requireText(workflow, "'telegram_delivery_worker_post_restart=HEALTHY'", 'AUTO_GATE_TELEGRAM_POST_RESTART_HUB_RECEIPT_MISSING');
@@ -235,7 +236,8 @@ console.log(JSON.stringify({
   sameTickRiskRefreshRequired: true,
   executionProjectionFailClosed: true,
   zeroMutationActivationRehearsal: true,
-  postArmSecondTickProofRequired: true,
+  postArmExactShaReadbackRequired: true,
+  productionActivationStaysZeroOrder: true,
   liveMemberAndPolicyReadinessRequired: true,
   globalEmergencyStopMustBeClear: true,
   telegramDeliveryHealthRequiredAfterRestart: true,
