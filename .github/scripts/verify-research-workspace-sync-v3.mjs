@@ -230,6 +230,10 @@ const telegramReleaseReviewed=[
  'api-server/scripts/verify-telegram-production-release-contract.mjs',
 ];
 const formulaAiDriftReviewed=[
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
  'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
  'api-server/src/services/formula-ai-auto-rehearsal.service.test.ts',
  'api-server/src/services/formula-ai-auto-rehearsal.service.ts',
