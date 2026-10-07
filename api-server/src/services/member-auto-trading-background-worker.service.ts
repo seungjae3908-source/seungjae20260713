@@ -58,6 +58,7 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+export const MEMBER_AUTO_TRADING_HANDOFF_MAX_AGE_MS = 30 * 60 * 1000;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
@@ -77,6 +78,21 @@ type MemberRuntimeState = Readonly<{
   plans: readonly TradingPlan[];
   orders: readonly TradingOrder[];
 }>;
+
+export function assertMemberAutoTradingBackgroundHandoffFreshness(
+  handoff: MemberAutoTradingPaperHandoff,
+  nowMs: number,
+  maxAgeMs = MEMBER_AUTO_TRADING_HANDOFF_MAX_AGE_MS,
+) {
+  const evaluatedAtMs = Number(handoff.evaluatedAtMs);
+  if (!Number.isFinite(nowMs) || nowMs <= 0
+    || !Number.isFinite(evaluatedAtMs) || evaluatedAtMs <= 0
+    || evaluatedAtMs > nowMs
+    || nowMs - evaluatedAtMs > maxAgeMs) {
+    throw new Error('BACKGROUND_HANDOFF_STALE');
+  }
+  return handoff;
+}
 
 export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
@@ -1288,7 +1304,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
       throw error;
     }
-    return validateMemberAutoTradingPaperHandoff(parsed, nowMs);
+    return assertMemberAutoTradingBackgroundHandoffFreshness(
+      validateMemberAutoTradingPaperHandoff(parsed, nowMs),
+      nowMs,
+    );
   }
 
   async listEligibleMembers() {
