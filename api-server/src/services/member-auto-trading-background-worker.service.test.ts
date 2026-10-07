@@ -489,6 +489,51 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal(second.liveOrders, 0);
 });
 
+test('same-tick automatic entries refresh canonical exposure before evaluating the next signal', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const bounded = normalizeTradingPolicy({ ...policy(), maxOpenPositions: 1, maxDailyOrders: 100 });
+  await repository.savePolicy(USER, bounded);
+
+  const two = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
+  const second = JSON.parse(JSON.stringify(two.entries[0]));
+  second.handoffId = 'paper-auto-handoff:sha256:' + '9'.repeat(64);
+  second.identity.signalId = 'signal-worker-2';
+  second.identity.candidateId = 'paper-candidate-v1:' + '8'.repeat(64);
+  second.identity.symbol = 'ETH';
+  second.signal.signalId = 'signal-worker-2';
+  second.signal.symbol = 'ETH';
+  second.signal.strategyIdentity.candidateId = second.identity.candidateId;
+  second.signal.learningSnapshot.referencePrice = 50_000;
+  second.signal.learningSnapshot.entryPrice = 50_000;
+  second.signal.learningSnapshot.stopLoss = 47_500;
+  second.signal.learningSnapshot.target1 = 55_000;
+  second.signal.learningSnapshot.target2 = 60_000;
+  second.publicQuote = { bid: 50_000, ask: 50_050, last: 50_025, asOfMs: nowMs - 1_000, maxAgeMs: 30_000 };
+  two.entries.push(second);
+  two.entryCount = 2;
+
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return two as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: bounded,
+        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 1);
+  assert.equal(result.filledOrders, 1);
+  assert.ok(result.runtimeRefreshes >= 1);
+  assert.ok(result.blocked >= 1);
+  assert.equal((await repository.listOrders(USER)).length, 1);
+});
+
 test('background worker automatically projects canonical execution events without requiring the manual sync endpoint', async () => {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
@@ -504,10 +549,12 @@ test('background worker automatically projects canonical execution events withou
   assert.equal(result.notificationDeliveriesQueued, 1);
   assert.equal(result.executionSyncMissingReferences, 0);
   assert.equal(result.executionSyncFailures, 0);
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
   assert.equal(result.privateTradingRequests, 0);
 });
 
-test('execution event fan-out failure is non-fatal to canonical trading state and is observable', async () => {
+test('execution event fan-out failure fail-closes new entries before canonical order mutation', async () => {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER, policy());
@@ -519,10 +566,13 @@ test('execution event fan-out failure is non-fatal to canonical trading state an
   const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
   assert.equal(syncCalls.count, 1);
   assert.equal(result.executionSyncFailures, 1);
+  assert.equal(result.executionSyncBlocks, 1);
+  assert.equal(result.newEntriesFailClosed, true);
   assert.equal(result.failures, 0);
-  assert.equal(result.createdPlans, 1);
-  assert.equal(result.filledOrders, 1);
-  assert.equal((await repository.listOrders(USER))[0]?.state, 'FILLED');
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listOrders(USER)).length, 0);
 });
 
 test('execution projection failure is isolated from canonical trading state', async () => {
@@ -621,6 +671,54 @@ test('live background lane requires every explicit live authority flag', () => {
     process.env.PRIVATE_TRADING_API_ALLOWED = 'true';
     process.env.REAL_ORDER_ENABLED = 'false';
     assert.equal(liveBackgroundEnabled(), false);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('first live-enabled worker tick is a read/sync warmup and cannot create a live entry', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  let liveReads = 0;
+  const base = source(repository, nowMs, { syncCalls });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: policy(),
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+      }];
+    },
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('FIRST_TICK_LIVE_READ_FORBIDDEN');
+    },
+  });
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveEntriesArmed, false);
+    assert.equal(result.liveEntriesSuppressedByWarmup, 1);
+    assert.equal(result.liveEntryWarmupComplete, true);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(liveReads, 0);
+    assert.ok(syncCalls.count >= 2);
   } finally {
     for (const key of keys) {
       const value = previous[key];
