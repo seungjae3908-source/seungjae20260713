@@ -142,6 +142,8 @@ for (const token of [
   'liveEntryWarmupComplete',
   'liveEntryArmPresent',
   'executionSyncBlocks',
+  'executionSyncMissingReferences',
+  'if (synced.missingReferences > 0)',
   'newEntriesFailClosed',
   'runtimeRefreshes',
   'const refreshRuntime = async () =>',
