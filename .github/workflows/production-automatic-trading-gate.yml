@@ -565,7 +565,6 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
           QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
-          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
@@ -792,6 +791,7 @@ jobs:
           SPOT_RECEIPT_ID: ${{ steps.gate.outputs.spot_receipt_comment_id }}
           FUTURES_RECEIPT_ID: ${{ steps.gate.outputs.futures_receipt_comment_id }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         with:
           script: |
             await github.rest.issues.createComment({
