@@ -6,6 +6,7 @@ const FIXTURE: TradeAutomationStatus = {
     mode: 'automatic',
     automaticEnabled: false,
     emergencyStopped: false,
+    newEntriesStopped: false,
     marketEnabled: {
       domestic_stock: true,
       us_stock: true,
