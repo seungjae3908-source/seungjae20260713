@@ -8,7 +8,8 @@ const PROFILES = Object.freeze(['forward', 'fast-historical', 'long-history']);
 const GROQ_MODEL = 'openai/gpt-oss-20b';
 const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
-const RETRY_AFTER_MS = 15 * 60 * 1_000;
+const TRANSIENT_RETRY_AFTER_MS = 15 * 60 * 1_000;
+const SEMANTIC_RETRY_AFTER_MS = 6 * 60 * 60 * 1_000;
 const ALLOWED_DISPOSITIONS = new Set(['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA']);
 const ALLOWED_TOP_LEVEL = new Set(['summary', 'findings', 'hypotheses', 'risks', 'disposition']);
 const ALLOWED_HYPOTHESIS = new Set(['hypothesisId', 'thesis', 'requiredEvidence', 'falsification', 'intendedRegime', 'independenceRationale']);
@@ -108,7 +109,10 @@ function parseAiAnswer(answer) {
   if (typeof answer !== 'string' || answer.length > 16_000) throw new Error('INVALID_AI_OUTPUT');
   const raw = answer.trim();
   if (!raw.startsWith('{') || !raw.endsWith('}') || raw.includes('```')) throw new Error('MALFORMED_AI_JSON');
-  const row = record(JSON.parse(raw));
+  let decoded;
+  try { decoded = JSON.parse(raw); }
+  catch { throw new Error('MALFORMED_AI_JSON'); }
+  const row = record(decoded);
   if (!row) throw new Error('INVALID_AI_OUTPUT');
   exactKeys(row, ALLOWED_TOP_LEVEL, 'response');
   const disposition = cleanText(row.disposition, 32);
@@ -300,7 +304,9 @@ export async function invokeResearchFreeAi({ policy, prompt, fetchImpl = globalT
     if (response.status === 408 || response.status === 504) throw new Error('FREE_AI_TIMEOUT');
     if (response.status >= 500) throw new Error('FREE_AI_PROVIDER_UNAVAILABLE');
     if (!response.ok) throw new Error('FREE_AI_PROVIDER_ERROR');
-    const body = await response.json();
+    let body;
+    try { body = await response.json(); }
+    catch { throw new Error('FREE_AI_PROVIDER_RESPONSE_INVALID'); }
     const answer = policy.provider === 'groq' ? readOpenAiText(body) : readGeminiText(body);
     if (!answer) throw new Error('FREE_AI_EMPTY_RESPONSE');
     return Object.freeze({ answer, model: policy.model, provider: policy.provider });
@@ -331,6 +337,17 @@ async function atomicJson(path, value, env) {
 function safeError(error) {
   const code = cleanText(error?.message, 120).replace(/[^A-Za-z0-9_.:-]/g, '_');
   return code || 'AI_RESEARCH_UNAVAILABLE';
+}
+
+function retryAfterMsForReason(reason) {
+  return new Set([
+    'FREE_AI_RATE_LIMITED',
+    'FREE_AI_TIMEOUT',
+    'FREE_AI_PROVIDER_UNAVAILABLE',
+    'FREE_AI_PROVIDER_ERROR',
+    'FREE_AI_AUTH_REJECTED',
+    'FREE_AI_PROVIDER_RESPONSE_INVALID',
+  ]).has(reason) ? TRANSIENT_RETRY_AFTER_MS : SEMANTIC_RETRY_AFTER_MS;
 }
 
 export async function preflightResearchAiReview({ repoRoot, stateRoot, researchSha, env = process.env, verifyGitHead = true, preflight = preflightResearchProduction } = {}) {
@@ -452,7 +469,7 @@ export async function runResearchAiReviewScan({
       reviews.push(Object.freeze({ profile, evidenceDigest: projection.evidenceDigest, status: 'READY', cacheHit: false, role: projection.role }));
     } catch (error) {
       const reason = safeError(error);
-      const retryAfterAt = observedAt + RETRY_AFTER_MS;
+      const retryAfterAt = observedAt + retryAfterMsForReason(reason);
       await atomicJson(attemptPath, {
         status: 'AI_RESEARCH_UNAVAILABLE', observedAt, retryAfterAt, reason,
         researchSha: base.researchSha, provider: policy.provider, model: policy.model,
