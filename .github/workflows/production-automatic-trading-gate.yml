@@ -670,6 +670,7 @@ jobs:
                   && health?.executionSyncMissingReferences === 0
                   && Number(health?.liveOrderEligibleMembers ?? 0) > 0
                   && Number(health?.livePolicyReadyMembers ?? 0) > 0
+                  && Number(health?.liveAllFourPolicyReadyMembers ?? 0) > 0
                   && health?.globalEmergencyStopActive === false
                   && last?.userTelegramDelivery?.enabled === true
                   && last?.userTelegramDelivery?.tickOk === true
@@ -832,6 +833,7 @@ jobs:
               NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
               LIVE_ORDER_ELIGIBLE_MEMBERS: warmupHealth.liveOrderEligibleMembers,
               LIVE_POLICY_READY_MEMBERS: warmupHealth.livePolicyReadyMembers,
+              LIVE_ALL_FOUR_POLICY_READY_MEMBERS: warmupHealth.liveAllFourPolicyReadyMembers,
               GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
               TELEGRAM_DELIVERY_WORKER_POST_RESTART: 'HEALTHY',
               REAL_ORDER_SUBMITTED: false,
@@ -906,6 +908,7 @@ jobs:
                 'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
                 'live_order_eligible_member_count=>=1',
                 'live_policy_ready_member_count=>=1',
+                'live_all_four_policy_ready_member_count=>=1',
                 'global_emergency_stop=false',
                 'telegram_delivery_worker_post_restart=HEALTHY',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
