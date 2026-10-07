@@ -6,6 +6,7 @@ const preactivation = read('.github/scripts/production-preactivation-prerequisit
 const manualSpotGate = read('.github/workflows/production-live-trading-gate.yml');
 const manualFuturesGate = read('.github/workflows/production-futures-live-trading-gate.yml');
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
+const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
 const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
 const telegramWorker = read('api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
@@ -217,12 +218,14 @@ requireText(paperWorkerTest, 'assert.equal(result.liveExitsSuppressedByWarmupOrA
 requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);', 'AUTO_GATE_NO_LIVE_MEMBER_ASSERTION_MISSING');
 
 requireText(autoTradingPage, 'readyForAutomaticOrderEvaluation', 'AUTO_UI_RUNTIME_READINESS_MISSING');
+requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
 requireText(autoTradingPage, "auth.can('canPlaceOrders')", 'AUTO_UI_MEMBER_ORDER_CAPABILITY_MISSING');
 requireText(autoTradingPage, '계정 주문 권한 없음', 'AUTO_UI_MEMBER_ORDER_CAPABILITY_LABEL_MISSING');
 forbid(autoTradingPage, /value="서버 Gate 필요"/u, 'AUTO_UI_HARDCODED_SERVER_GATE_FORBIDDEN');
 requireText(autoTradingSettings, 'liveAutomaticExecutionServerEnabled', 'AUTO_SETTINGS_LIVE_AUTO_GATE_MISSING');
 requireText(autoTradingSettings, 'readyForAutomaticOrderEvaluation', 'AUTO_SETTINGS_RUNTIME_READINESS_MISSING');
+requireText(autoTradingSettings, 'liveAutomaticReadinessByMarket', 'AUTO_SETTINGS_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingSettings, "load({ syncDraft: false })", 'AUTO_SETTINGS_RUNTIME_REFRESH_MISSING');
 requireText(autoTradingSettings, 'refreshInFlight', 'AUTO_SETTINGS_REFRESH_DEDUP_MISSING');
 requireText(autoTradingSettings, 'if (syncDraft) {', 'AUTO_SETTINGS_DRAFT_PRESERVATION_MISSING');
@@ -241,6 +244,13 @@ requireText(tradeAutomationRoute, 'resumeMemberTradingPolicy(current)', 'AUTO_RO
 requireText(tradeAutomationPolicyGuard, 'Emergency/new-entry stops are sticky', 'AUTO_POLICY_STICKY_STOP_CONTRACT_MISSING');
 requireText(tradeAutomationPolicyGuard, 'newEntriesStopped: false', 'AUTO_POLICY_CONFIRMED_RESUME_CLEAR_MISSING');
 requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', 'AUTO_ROUTE_MEMBER_RESUME_SMOKE_MISSING');
+
+requireText(tradeAutomationRoute, 'liveAutomaticReadinessByMarket', 'AUTO_STATUS_MARKET_READINESS_MISSING');
+requireText(tradeAutomationRoute, "'MEMBER_ORDER_CAPABILITY_REQUIRED'", 'AUTO_STATUS_MEMBER_CAPABILITY_BLOCKER_MISSING');
+requireText(tradeAutomationRoute, "'AUTOMATIC_POLICY_OFF'", 'AUTO_STATUS_POLICY_OFF_BLOCKER_MISSING');
+requireText(tradeAutomationRoute, "'MEMBER_POLICY_STOPPED'", 'AUTO_STATUS_MEMBER_STOP_BLOCKER_MISSING');
+requireText(tradeAutomationRoute, "'GLOBAL_EMERGENCY_STOP_ACTIVE'", 'AUTO_STATUS_GLOBAL_STOP_BLOCKER_MISSING');
+requireText(tradeAutomationRoute, "'MARKET_AUTOMATIC_DISABLED'", 'AUTO_STATUS_MARKET_DISABLED_BLOCKER_MISSING');
 
 requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPER_AUTO_RESET_MISSING');
@@ -295,6 +305,7 @@ console.log(JSON.stringify({
   manualGatesPreservePersonalTelegramDelivery: true,
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
+  marketScopedAutomaticReadiness: true,
   stickyMemberStopRequiresConfirmedResume: true,
   externalEmergencyStopReflectedInSettings: true,
   automaticExitClosedLoop: true,
