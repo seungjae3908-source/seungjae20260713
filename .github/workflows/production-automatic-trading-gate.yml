@@ -665,6 +665,7 @@ jobs:
                   && health?.startupWarmupObserved === true
                   && health?.firstWarmupTickLiveEntriesArmed === false
                   && health?.firstWarmupTickLiveOrders === 0
+                  && health?.firstWarmupTickLiveExitOrders === 0
                   && health?.executionSyncFailures === 0
                   && health?.executionSyncMissingReferences === 0
                   && Number(health?.liveOrderEligibleMembers ?? 0) > 0
@@ -825,6 +826,7 @@ jobs:
               WORKER_WARMUP_PROVEN: true,
               FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false,
               FIRST_WARMUP_TICK_LIVE_ORDERS: 0,
+              FIRST_WARMUP_TICK_LIVE_EXIT_ORDERS: 0,
               LIVE_ENTRY_ARM_WRITTEN: true,
               LIVE_ENTRY_ARM_READBACK_PROVEN: true,
               NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
@@ -898,6 +900,7 @@ jobs:
                 'worker_warmup_proven=true',
                 'first_warmup_tick_live_entries_armed=false',
                 'first_warmup_tick_live_orders=0',
+                'first_warmup_tick_live_exit_orders=0',
                 'live_entry_arm_written=true',
                 'live_entry_arm_readback_proven=true',
                 'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
