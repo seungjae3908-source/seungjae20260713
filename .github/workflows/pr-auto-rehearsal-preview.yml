@@ -253,6 +253,24 @@ jobs:
           if (health.deploySha !== process.env.TARGET_SHA) throw new Error('preview SHA mismatch');
           if (health.backgroundWorkersEnabled !== false) throw new Error('preview background workers must remain disabled');
           NODE
+          curl --fail --silent --show-error --max-time 20 "$PREVIEW_URL/auto-rehearsal-preview" >/tmp/pr-rehearsal-preview-page.html
+          grep -q '<div id="root"></div>' /tmp/pr-rehearsal-preview-page.html
+          REHEARSAL_PROBE="$(curl --fail --silent --show-error --max-time 20 \
+            -H 'content-type: application/json' \
+            -d '{"confirmed":true}' \
+            "$PREVIEW_URL/api/preview/auto-rehearsal/run")"
+          REHEARSAL_PROBE="$REHEARSAL_PROBE" node <<'NODE'
+          const probe = JSON.parse(process.env.REHEARSAL_PROBE);
+          if (probe.ok !== true) throw new Error('rehearsal preview probe not ok');
+          if (probe.mode !== 'ISOLATED_PR_PREVIEW') throw new Error('unexpected rehearsal preview mode');
+          if (probe.preview?.passed !== true) throw new Error('rehearsal preview chain did not pass');
+          if (probe.paper?.paperFillReady !== true || probe.paper?.journalReady !== true || probe.paper?.riskReady !== true) {
+            throw new Error('Paper rehearsal engine evidence missing');
+          }
+          if (probe.executionAuthority !== 'NONE') throw new Error('preview execution authority must be NONE');
+          if (probe.realOrderSubmitted !== false || probe.actualOrderSubmitted !== false) throw new Error('preview submitted a real order');
+          if (probe.providerMutationRequests !== 0 || probe.productionMutationAllowed !== false) throw new Error('preview mutation safety violated');
+          NODE
           REHEARSAL_URL="${PREVIEW_URL%/}/auto-rehearsal-preview"
           echo "base_url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
           echo "rehearsal_url=$REHEARSAL_URL" >> "$GITHUB_OUTPUT"
