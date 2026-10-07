@@ -815,6 +815,7 @@ jobs:
           SPOT_RECEIPT_ID: ${{ steps.gate.outputs.spot_receipt_comment_id }}
           FUTURES_RECEIPT_ID: ${{ steps.gate.outputs.futures_receipt_comment_id }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         with:
           script: |
             await github.rest.issues.createComment({
@@ -845,6 +846,10 @@ jobs:
                 'paper_automatic_execution=true',
                 'live_automatic_background_execution=true',
                 'persistence_readback=PASS',
+                'worker_warmup_proven=true',
+                'first_warmup_tick_live_entries_armed=false',
+                'first_warmup_tick_live_orders=0',
+                'live_entry_arm_written=true',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',
