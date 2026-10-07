@@ -185,3 +185,190 @@ test('paper mode exposes the same four-market navigation without enabling live a
   await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('LIVE/AUTO/REAL/Private API Gate');
   expectNoBrowserFailures(failures);
 });
+
+
+test('auto-trading rehearsal tab proves the safe four-market chain and displays zero real orders', async ({ page }) => {
+  await page.unroute(/\/api\/user-integrations(?:\?.*)?$/);
+  const forbiddenTradingMutations: string[] = [];
+  let rehearsalRequest: Record<string, unknown> | null = null;
+
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      request.method() !== 'GET'
+      && path.startsWith('/api/trade-automation/')
+      && path !== '/api/trade-automation/rehearsal/run'
+    ) {
+      forbiddenTradingMutations.push(`${request.method()} ${path}`);
+    }
+  });
+
+  await page.route(/\/api\/paper-journal\/snapshot(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        mode: 'journal-sync-only',
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+        records: [],
+      }),
+    });
+  });
+
+  await page.route(/\/api\/user-integrations(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        telegram: { connected: true, status: 'ACTIVE', connectedAt: '2026-10-07T00:00:00.000Z' },
+        telegramRuntime: { deliveryReady: true },
+        brokerConnections: [],
+        preferences: {},
+      }),
+    });
+  });
+
+  await page.route(/\/api\/user-integrations\/telegram\/test$/, async (route) => {
+    expect(route.request().method()).toBe('POST');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        privateApiRequests: 0,
+        ordersSubmitted: 0,
+        ordersCancelled: 0,
+      }),
+    });
+  });
+
+  await page.route(/\/api\/trade-automation\/rehearsal\/run$/, async (route) => {
+    expect(route.request().method()).toBe('POST');
+    rehearsalRequest = route.request().postDataJSON() as Record<string, unknown>;
+    const providers = Object.fromEntries(
+      ['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => [provider, {
+        configured: true,
+        accountMode: 'live',
+        liveConnectionVerified: true,
+        reusableReadonlyCredential: true,
+        readOnlyVerified: true,
+        ready: true,
+        lastErrorCode: null,
+        credentialsExposed: false,
+      }]),
+    );
+    const market = (
+      name: string,
+      direction: string,
+      strategyId: string,
+      providerList: string[],
+    ) => ({
+      market: name,
+      direction,
+      strategyId,
+      providers: providerList,
+      aiDecision: 'PASS',
+      status: 'ACTIVE_REHEARSAL',
+      wouldActivateLiveAuto: true,
+      blockers: [],
+      exceptionPolicyApplied: true,
+      oosRequiredForRehearsal: false,
+      profitabilityPromotionRequiredForRehearsal: false,
+      executionAuthority: 'NONE',
+      realOrderSubmitted: false,
+      productionMutationAllowed: false,
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        schemaVersion: 'formula-ai-auto-rehearsal-runtime-v1',
+        mode: 'DRIFT_REHEARSAL',
+        exceptionPolicy: 'FORMULA_AI_LIVE_EXCEPTION_V1',
+        signal: { source: 'SYNTHETIC_REHEARSAL_SIGNAL', deterministicRuleReady: true, productionSignalCreated: false },
+        ai: {
+          positiveDecision: 'PASS',
+          vetoDecision: 'VETO',
+          vetoBlocked: true,
+          vetoBlockers: ['FORMULA_AI_AI_PASS_REQUIRED'],
+          liveAiProviderInvokedByThisEndpoint: false,
+        },
+        providers,
+        credentialReuse: Object.fromEntries(
+          ['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => [provider, {
+            configured: true,
+            reusable: true,
+            readOnlyVerified: true,
+            errorCode: null,
+            credentialsExposed: false,
+          }]),
+        ),
+        paper: {
+          paperAutoReady: true,
+          paperFillReady: true,
+          journalReady: true,
+          riskReady: true,
+          orderState: 'filled',
+          fillCount: 1,
+          journalEntryCount: 1,
+          executionAuthority: 'NONE',
+          realOrderSubmitted: false,
+          exchangeRequestSent: false,
+          providerMutationRequests: 0,
+          productionMutationAllowed: false,
+        },
+        journal: {
+          paperJournalProjectionReady: true,
+          journalEndpointReadReady: true,
+          ready: true,
+          persistentMutationPerformedByThisEndpoint: false,
+        },
+        telegram: { ready: true, testMessageRequestedByThisEndpoint: false },
+        futures: { marginMode: 'isolated', maxLeverage: 7, isolatedReady: true, leverageReady: true },
+        markets: [
+          market('KR_STOCK', 'BUY', 'KR_PRESSURE_BREAKOUT_V1', ['toss', 'kiwoom']),
+          market('US_STOCK', 'BUY', 'US_STOCKS_IN_PLAY_ORB_RETEST_V1', ['kiwoom']),
+          market('CRYPTO_SPOT', 'BUY', 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1', ['upbit']),
+          market('CRYPTO_FUTURES', 'LONG', 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1', ['bitget']),
+          market('CRYPTO_FUTURES', 'SHORT', 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1', ['bitget']),
+        ],
+        allProvidersReady: true,
+        allCredentialReuseReady: true,
+        wouldActivateLiveAuto: true,
+        executionAuthority: 'NONE',
+        realOrderSubmitted: false,
+        actualOrderSubmitted: false,
+        exchangeRequestSent: false,
+        providerMutationRequests: 0,
+        productionMutationAllowed: false,
+        liveTradingActivated: false,
+        automaticLiveExecutionActivated: false,
+      }),
+    });
+  });
+
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-rehearsal').click();
+  await expect(page.getByTestId('formula-ai-auto-rehearsal-panel')).toBeVisible();
+  await expect(page.getByTestId('run-auto-rehearsal')).toContainText('자동매매 활성화 리허설 실행');
+
+  await page.getByTestId('run-auto-rehearsal').click();
+
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('자동매매 활성화 가능');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('실주문 권한:');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('OFF');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('실주문:');
+  await expect(page.getByTestId('auto-rehearsal-final-verdict')).toContainText('0건');
+  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('TOSS');
+  await expect(page.getByTestId('rehearsal-provider-grid')).toContainText('BITGET');
+  expect(rehearsalRequest).toEqual({
+    confirmed: true,
+    journalReadReady: true,
+    telegramReady: true,
+  });
+  expect(forbiddenTradingMutations).toEqual([]);
+});
