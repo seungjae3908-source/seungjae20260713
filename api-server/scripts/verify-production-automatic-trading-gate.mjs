@@ -206,7 +206,10 @@ requireText(autoTradingPage, '계정 주문 권한 없음', 'AUTO_UI_MEMBER_ORDE
 forbid(autoTradingPage, /value="서버 Gate 필요"/u, 'AUTO_UI_HARDCODED_SERVER_GATE_FORBIDDEN');
 requireText(autoTradingSettings, 'liveAutomaticExecutionServerEnabled', 'AUTO_SETTINGS_LIVE_AUTO_GATE_MISSING');
 requireText(autoTradingSettings, 'readyForAutomaticOrderEvaluation', 'AUTO_SETTINGS_RUNTIME_READINESS_MISSING');
-requireText(autoTradingSettings, "window.setInterval(() => { void load(); }, 15_000)", 'AUTO_SETTINGS_RUNTIME_REFRESH_MISSING');
+requireText(autoTradingSettings, "load({ syncDraft: false })", 'AUTO_SETTINGS_RUNTIME_REFRESH_MISSING');
+requireText(autoTradingSettings, 'refreshInFlight', 'AUTO_SETTINGS_REFRESH_DEDUP_MISSING');
+requireText(autoTradingSettings, 'if (syncDraft) {', 'AUTO_SETTINGS_DRAFT_PRESERVATION_MISSING');
+forbid(autoTradingSettings, /window\.setInterval\(\(\) => \{ void load\(\); \}, 15_000\)/u, 'AUTO_SETTINGS_DESTRUCTIVE_REFRESH_FORBIDDEN');
 
 requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPER_AUTO_RESET_MISSING');
