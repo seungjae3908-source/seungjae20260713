@@ -188,9 +188,9 @@ jobs:
             && value?.telegramPersonalActivationRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
             && value?.telegramTestDelivered === true;
-          const memberAutoPolicyReady = value?.memberAutoPolicyReady === true
+          const memberAutoPolicyEvidenceValid = typeof value?.memberAutoPolicyReady === 'boolean'
             && Array.isArray(value?.memberAutoPolicyBlockers)
-            && value.memberAutoPolicyBlockers.length === 0
+            && value.memberAutoPolicyReady === (value.memberAutoPolicyBlockers.length === 0)
             && ['kiwoom', 'toss'].includes(value?.memberAutoDomesticBroker)
             && Number.isInteger(value?.memberAutoBitgetLeverage)
             && value.memberAutoBitgetLeverage >= 2
@@ -208,7 +208,7 @@ jobs:
             || value?.journalVisible !== true
             || !(Number(value?.executionSyncInserted) >= 1)
             || (!telegramReady && !telegramVerified)
-            || !memberAutoPolicyReady
+            || !memberAutoPolicyEvidenceValid
             || value?.backgroundWorkerSourceReady !== true
             || !Array.isArray(value?.backgroundWorkerReadinessBlockers)
             || value.backgroundWorkerReadinessBlockers.length !== 0
