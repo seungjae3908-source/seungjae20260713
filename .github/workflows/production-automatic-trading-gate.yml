@@ -576,7 +576,7 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
           import { execFileSync } from 'node:child_process';
-          import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+          import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
           import { dirname } from 'node:path';
 
           const target = String(process.env.TARGET_SHA || '');
@@ -584,6 +584,29 @@ jobs:
           const pm2Name = 'stock-app';
           const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
           const disarmLiveEntries = () => rmSync(liveEntryArmPath, { force: true });
+          const productionWorkerUid = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1 || !Number.isInteger(Number(matches[0]?.pid)) || Number(matches[0].pid) <= 1) {
+              throw new Error('AUTOMATIC_TRADING_PM2_PID_INVALID');
+            }
+            return statSync('/proc/' + Number(matches[0].pid)).uid;
+          };
+          const verifyLiveEntryArmReadable = () => {
+            const stat = lstatSync(liveEntryArmPath);
+            if (!stat.isFile() || stat.isSymbolicLink()
+              || stat.size <= 0 || stat.size > 16 * 1024
+              || (stat.mode & 0o077) !== 0
+              || stat.uid !== productionWorkerUid()) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READABILITY_INVALID');
+            }
+            const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
+              || value?.armed !== true || value?.targetSha !== target) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READBACK_FAILED');
+            }
+            return true;
+          };
           const armLiveEntries = () => {
             mkdirSync(dirname(liveEntryArmPath), { recursive: true });
             const temp = liveEntryArmPath + '.tmp-' + process.pid;
@@ -600,6 +623,7 @@ jobs:
               || value?.armed !== true || value?.targetSha !== target) {
               throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WRITE_FAILED');
             }
+            verifyLiveEntryArmReadable();
           };
           if (!['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
