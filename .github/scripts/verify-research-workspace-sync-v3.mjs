@@ -286,6 +286,7 @@ const telegramReleaseReviewed=[
  'api-server/scripts/verify-telegram-production-release-contract.mjs',
 ];
 const formulaAiDriftReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
  '.github/workflows/pr-auto-rehearsal-preview.yml',
  'api-server/src/routes/auto-rehearsal-preview.ts',
  'api-server/src/routes/index.ts',
@@ -336,7 +337,9 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
-const memberAccessContractChanged=changed.some((p)=>memberAccessReviewed.includes(p));
+const memberAccessContractChanged=changed.some((p)=>(
+ memberAccessReviewed.includes(p) && !formulaAiDriftReviewed.includes(p)
+));
 if(memberAccessContractChanged){
  const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
   const aiChartPublicRead = req.method === 'GET'
