@@ -308,7 +308,11 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       }
       const normalized = normalizeUiPolicy(payload.policy);
       setDraft(normalized);
-      setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
+      setStatus((current) => current ? {
+        ...current,
+        policy: payload.policy!,
+        emergencyStopped: payload.effectiveGlobalEmergencyStopped === true,
+      } : current);
       setMessage(payload.effectiveGlobalEmergencyStopped
         ? '회원 비상정지는 해제됐지만 서버 전체 비상정지가 남아 있습니다. 자동매매는 OFF 상태입니다.'
         : '재개 준비 완료: 자동매매는 OFF입니다. 설정을 다시 확인하고 저장해야 켜집니다.');
@@ -358,7 +362,12 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
   const connections = Object.fromEntries(
     (status?.connections ?? []).map((item) => [item.exchange, item]),
   ) as Partial<Record<Exchange, Status['connections'][number]>>;
-  const memberStopped = draft.emergencyStopped || draft.newEntriesStopped;
+  const memberStopped = draft.emergencyStopped
+    || draft.newEntriesStopped
+    || status?.policy.emergencyStopped === true
+    || status?.policy.newEntriesStopped === true;
+  const effectiveStopped = memberStopped || status?.emergencyStopped === true;
+  const globalOnlyStopped = !memberStopped && status?.emergencyStopped === true;
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -385,10 +394,10 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     <button
       type="button"
       onClick={toggleAutomatic}
-      disabled={memberStopped}
+      disabled={effectiveStopped}
       className={cn(
         'mt-4 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background p-4',
-        memberStopped && 'cursor-not-allowed opacity-60',
+        effectiveStopped && 'cursor-not-allowed opacity-60',
       )}
       data-testid="automatic-trading-master-toggle"
       aria-pressed={draft.automaticEnabled}
@@ -396,11 +405,13 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <span>
         <span className="block text-sm font-extrabold">자동매매</span>
         <span className="mt-1 block text-[11px] text-muted-foreground">
-          {memberStopped
-            ? '비상정지 상태 · 재개 준비 후 다시 설정 저장 필요'
-            : draft.automaticEnabled
-              ? '켜짐 · 활성 시장의 적격 신호를 자동 처리'
-              : '꺼짐 · 신호를 주문으로 자동 전환하지 않음'}
+          {globalOnlyStopped
+            ? '서버 전체 비상정지 상태 · 관리자 해제 필요'
+            : memberStopped
+              ? '회원 비상정지 상태 · 재개 준비 후 다시 설정 저장 필요'
+              : draft.automaticEnabled
+                ? '켜짐 · 활성 시장의 적격 신호를 자동 처리'
+                : '꺼짐 · 신호를 주문으로 자동 전환하지 않음'}
         </span>
       </span>
       <Switch active={draft.automaticEnabled} />
@@ -557,9 +568,9 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     </div>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-      <button type="button" onClick={() => setConfirming(true)} disabled={memberStopped} className={cn(
+      <button type="button" onClick={() => setConfirming(true)} disabled={effectiveStopped} className={cn(
         'rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground',
-        memberStopped && 'cursor-not-allowed opacity-50',
+        effectiveStopped && 'cursor-not-allowed opacity-50',
       )}>
         설정 저장
       </button>
@@ -567,9 +578,13 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         ? <button type="button" onClick={() => void resumeTrading()} data-testid="member-trading-resume" className="flex items-center justify-center gap-2 rounded-2xl border border-card-border bg-secondary px-4 py-3 text-sm font-extrabold">
             재개 준비
           </button>
-        : <button type="button" onClick={() => void emergencyStop()} className="flex items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-extrabold text-destructive">
-            <Power className="h-4 w-4" />긴급정지
-          </button>}
+        : globalOnlyStopped
+          ? <div data-testid="global-trading-stop" className="flex items-center justify-center rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-center text-sm font-extrabold text-destructive">
+              서버 전체 비상정지 · 관리자 해제 필요
+            </div>
+          : <button type="button" onClick={() => void emergencyStop()} className="flex items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-extrabold text-destructive">
+              <Power className="h-4 w-4" />긴급정지
+            </button>}
     </div>
 
     {message && <p role="status" className="mt-3 rounded-2xl bg-secondary p-3 text-xs font-bold">{message}</p>}
