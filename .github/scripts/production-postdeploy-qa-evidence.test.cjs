@@ -113,9 +113,9 @@ function fixture() {
   };
 }
 
-test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () => {
+test('full QA remains deployment-safe but is not sufficient for automatic activation', () => {
   const evidence = buildProductionPostdeployQaEvidence(fixture());
-  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.activationReady, false);
   assert.equal(evidence.credentialReuse, '4/4 PASS');
   assert.equal(evidence.activeConflictingTradingGates, 0);
   assert.equal(evidence.realOrderSubmitted, false);
@@ -125,7 +125,7 @@ test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () =
   assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
 });
 
-test('builds ACTIVATION_READY inside the same approved in-progress Production Deploy job', () => {
+test('inline full QA remains non-activating even inside the approved Production Deploy job', () => {
   const input = fixture();
   Object.assign(input.context, {
     deploymentVerificationMode: 'inline-approved-job',
@@ -135,7 +135,7 @@ test('builds ACTIVATION_READY inside the same approved in-progress Production De
     latestSuccessfulDeployRunId: null,
   });
   const evidence = buildProductionPostdeployQaEvidence(input);
-  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.activationReady, false);
   assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v4');
 });
 
