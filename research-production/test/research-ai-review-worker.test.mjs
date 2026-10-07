@@ -377,6 +377,42 @@ test('caution in one clause cannot mask an unsafe performance claim in another c
   }
 });
 
+
+test('malformed provider JSON gets a stable leaf code and semantic backoff', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-malformed-json-'));
+  try {
+    await writeCycles(root, ['forward']);
+    const env = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: SECRET };
+    const at = Date.parse('2026-09-05T11:00:00Z');
+    const result = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async ({ policy }) => ({ answer: '{invalid}', model: policy.model, provider: policy.provider }),
+      now: () => at,
+    });
+    assert.equal(result.status, 'PARTIAL_AI_UNAVAILABLE');
+    assert.equal(result.blockedProfiles[0].reason, 'MALFORMED_AI_JSON');
+    assert.equal(result.blockedProfiles[0].retryAfterAt, at + 6 * 60 * 60 * 1000);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('invalid provider response body gets a stable transient leaf code', async () => {
+  await assert.rejects(
+    invokeResearchFreeAi({
+      policy: { provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: 'TEST_ONLY' },
+      prompt: 'test',
+      fetchImpl: async () => ({
+        status: 200,
+        ok: true,
+        json: async () => { throw new SyntaxError('bad upstream json'); },
+      }),
+    }),
+    /FREE_AI_PROVIDER_RESPONSE_INVALID/,
+  );
+});
+
 test('provider-facing schema stays within Gemini-supported structured-output subset', () => {
   const forbidden = new Set(['minLength', 'maxLength', 'pattern']);
   const seen = [];
