@@ -6,20 +6,24 @@ import {
   isIgnorableProductionRequestFailure,
 } from './support/production-readonly-policy';
 
-const required = (name: string) => {
-  const value = String(process.env[name] ?? '').trim();
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-};
-
-const baseUrl = required('PRODUCTION_BASE_URL').replace(/\/$/, '');
-const productionOrigin = new URL(baseUrl).origin;
-const expectedSha = required('EXPECTED_DEPLOY_SHA').toLowerCase();
-const deployRunId = Number(required('PRODUCTION_DEPLOY_RUN_ID'));
-const qaLogin = required('PRODUCTION_QA_LOGIN');
-const qaPassword = required('PRODUCTION_QA_PASSWORD');
+const enabled = process.env.PRODUCTION_MEMBER_READONLY_QA === 'true';
+const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').trim().replace(/\/$/, '');
+const expectedSha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
+const deployRunId = Number(process.env.PRODUCTION_DEPLOY_RUN_ID ?? 0);
+const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '').trim();
+const qaPassword = String(process.env.PRODUCTION_QA_PASSWORD ?? '');
+const productionOrigin = enabled && baseUrl ? new URL(baseUrl).origin : 'https://lsj119.com';
 const artifactDir = path.resolve(process.env.PRODUCTION_MEMBER_READONLY_ARTIFACT_DIR ?? 'production-member-readonly-artifacts');
-fs.mkdirSync(artifactDir, { recursive: true });
+
+test.skip(!enabled, 'Production member-only QA runs only in the dedicated protected workflow.');
+
+if (enabled) {
+  if (!baseUrl || new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('Official Production origin is required');
+  if (!qaLogin || !qaPassword) throw new Error('Production QA login credential is required');
+  if (!/^[0-9a-f]{40}$/.test(expectedSha)) throw new Error('EXPECTED_DEPLOY_SHA must be exact');
+  if (!Number.isSafeInteger(deployRunId) || deployRunId <= 0) throw new Error('PRODUCTION_DEPLOY_RUN_ID must be exact');
+  fs.mkdirSync(artifactDir, { recursive: true });
+}
 
 type MemberTier = 'associate' | 'regular' | 'admin';
 type Diagnostic = { kind: string; path: string; detail: string; status?: number };
