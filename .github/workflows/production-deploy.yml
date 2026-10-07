@@ -501,7 +501,7 @@ jobs:
           git fetch --quiet --no-tags --depth 1 origin "$previous_sha"
           previous_admin="$(git show "$previous_sha:api-server/src/routes/admin.ts" 2>/dev/null || true)"
           rollback_schema_compatible=false
-          if [[ "$previous_admin" == *"p_membership_expires_at"*             && "$previous_admin" == *"membership_expires_at"*             && "$previous_admin" == *"apply_member_permission_change"* ]]; then
+          if [[ "$previous_admin" == *"apply_member_permission_change"*             && "$previous_admin" == *"p_expected_permissions_updated_at"*             && "$previous_admin" == *"permissions_updated_at"* ]]; then
             rollback_schema_compatible=true
           fi
           echo "schema_compatible=$rollback_schema_compatible" >> "$GITHUB_OUTPUT"
