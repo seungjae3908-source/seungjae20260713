@@ -102,6 +102,13 @@ export interface MemberAutoTradingBackgroundSource {
 
 export type MemberAutoTradingBackgroundRunResult = {
   handoffStatus: 'MISSING' | 'BLOCKED_DATA' | 'READY';
+  handoffReady: boolean;
+  newEntriesFailClosed: boolean;
+  liveEntriesArmed: boolean;
+  liveEntryWarmupComplete: boolean;
+  liveEntriesSuppressedByWarmup: number;
+  runtimeRefreshes: number;
+  executionSyncBlocks: number;
   members: number;
   entries: number;
   evaluated: number;
@@ -922,12 +929,22 @@ function errorCode(error: unknown) {
 
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
+  private liveEntryWarmupComplete = false;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
+    const liveModeRequested = liveBackgroundEnabled();
+    const liveEntriesArmedThisTick = liveModeRequested && this.liveEntryWarmupComplete;
     const result: MemberAutoTradingBackgroundRunResult = {
       handoffStatus: 'MISSING',
+      handoffReady: false,
+      newEntriesFailClosed: false,
+      liveEntriesArmed: liveEntriesArmedThisTick,
+      liveEntryWarmupComplete: this.liveEntryWarmupComplete,
+      liveEntriesSuppressedByWarmup: 0,
+      runtimeRefreshes: 0,
+      executionSyncBlocks: 0,
       members: 0,
       entries: 0,
       evaluated: 0,
@@ -956,11 +973,13 @@ export class MemberAutoTradingBackgroundWorker {
       const nowMs = now.getTime();
       const handoff = await this.source.readHandoff(nowMs);
       if (handoff) result.handoffStatus = handoff.status;
+      result.handoffReady = handoff?.status === 'READY';
+      if (!result.handoffReady) result.newEntriesFailClosed = true;
 
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
-      const entries = handoff?.status === 'READY'
-        ? handoff.entries.slice(0, MAX_ENTRIES_PER_TICK)
+      const entries = result.handoffReady
+        ? handoff!.entries.slice(0, MAX_ENTRIES_PER_TICK)
         : [];
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
@@ -977,9 +996,36 @@ export class MemberAutoTradingBackgroundWorker {
           runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
         } catch {
           result.blocked += entries.length;
+          result.newEntriesFailClosed = true;
           continue;
         }
 
+        const refreshRuntime = async () => {
+          runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          result.runtimeRefreshes += 1;
+        };
+        const syncExecutionProjection = async () => {
+          if (!this.source.syncExecutionEvents) return true;
+          try {
+            const synced = await this.source.syncExecutionEvents({
+              userId: member.userId,
+              profile: member.profile,
+              repository,
+              paperJournalRepository: paper,
+            });
+            result.executionEventsInserted += synced.inserted;
+            result.notificationDeliveriesQueued += synced.deliveryQueued;
+            result.executionSyncMissingReferences += synced.missingReferences;
+            return true;
+          } catch {
+            result.executionSyncFailures += 1;
+            result.executionSyncBlocks += 1;
+            result.newEntriesFailClosed = true;
+            return false;
+          }
+        };
+
+        let entryProjectionHealthy = await syncExecutionProjection();
         let exitChanged = false;
         for (const position of trackedAutomaticPositions(runtime, 'paper')) {
           try {
@@ -1039,12 +1085,19 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         if (exitChanged) {
+          entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
           try {
-            runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+            await refreshRuntime();
           } catch {
             result.exitBlocked += 1;
+            result.newEntriesFailClosed = true;
             continue;
           }
+        }
+
+        if (!entryProjectionHealthy) {
+          result.blocked += entries.length;
+          continue;
         }
 
         for (const entry of entries) {
@@ -1091,9 +1144,19 @@ export class MemberAutoTradingBackgroundWorker {
               } else if (paperRun.order.state === 'REJECTED' || paperRun.order.state === 'RECOVERY_REQUIRED') {
                 result.blocked += 1;
               }
+              await refreshRuntime();
+              entryProjectionHealthy = await syncExecutionProjection();
+              if (!entryProjectionHealthy) {
+                result.blocked += 1;
+                break;
+              }
             }
 
-            if (liveBackgroundEnabled() && hasCapability(member.profile, 'canPlaceOrders')) {
+            if (liveModeRequested && !liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
+              result.liveEntriesSuppressedByWarmup += 1;
+            }
+
+            if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
               const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
               const liveSeed = await buildLivePlanInput({
@@ -1151,6 +1214,12 @@ export class MemberAutoTradingBackgroundWorker {
                   result.liveOrders += 1;
                 }
                 if (liveRun.order.state === 'REJECTED') result.blocked += 1;
+                await refreshRuntime();
+                entryProjectionHealthy = await syncExecutionProjection();
+                if (!entryProjectionHealthy) {
+                  result.blocked += 1;
+                  break;
+                }
               }
             }
           } catch (error) {
@@ -1163,23 +1232,18 @@ export class MemberAutoTradingBackgroundWorker {
           }
         }
 
-        if (this.source.syncExecutionEvents) {
-          try {
-            const synced = await this.source.syncExecutionEvents({
-              userId: member.userId,
-              profile: member.profile,
-              repository,
-              paperJournalRepository: paper,
-            });
-            result.executionEventsInserted += synced.inserted;
-            result.notificationDeliveriesQueued += synced.deliveryQueued;
-            result.executionSyncMissingReferences += synced.missingReferences;
-          } catch {
-            // Notification/journal fan-out must never change canonical order state.
-            result.executionSyncFailures += 1;
-          }
-        }
+        entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
+        if (!entryProjectionHealthy) result.newEntriesFailClosed = true;
       }
+
+      if (liveModeRequested) {
+        this.liveEntryWarmupComplete = result.handoffReady
+          && result.executionSyncFailures === 0
+          && result.executionSyncMissingReferences === 0;
+      } else {
+        this.liveEntryWarmupComplete = false;
+      }
+      result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       return result;
     } finally {
       this.running = false;
@@ -1291,8 +1355,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   const tick = async () => {
     try {
       const result = await worker.runOnce(new Date());
-      if (result.evaluated > 0 || result.paperExitOrders > 0 || result.liveExitOrders > 0
-        || result.exitBlocked > 0 || result.failures > 0) {
+      if (result.handoffStatus !== 'READY' || result.evaluated > 0
+        || result.paperExitOrders > 0 || result.liveExitOrders > 0
+        || result.exitBlocked > 0 || result.executionSyncBlocks > 0
+        || result.liveEntriesSuppressedByWarmup > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
