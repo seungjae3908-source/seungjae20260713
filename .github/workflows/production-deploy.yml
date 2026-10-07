@@ -25,6 +25,7 @@ on:
         options:
           - full
           - trading_core
+          - member
   pull_request:
     paths:
       - .github/workflows/production-deploy.yml
@@ -34,7 +35,11 @@ on:
       - .github/tests/production-trading-core-qa-contract.test.mjs
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
       - stock-analyzer/playwright.production-trading-core.config.ts
+      - stock-analyzer/e2e/production-member-readonly-qa.spec.ts
+      - stock-analyzer/playwright.production-member.config.ts
       - .github/scripts/run-production-readonly-qa.sh
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/scripts/verify-production-qa-receipt.cjs
       - .github/scripts/verify-production-qa-receipt.cjs
       - .github/scripts/verify-production-deploy-execution.cjs
       - ops/apply-production-paper-journal-privileges.mjs
@@ -596,8 +601,47 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: 1M · Member-only Production read-only QA
+        id: member_qa
+        if: ${{ inputs.qa_scope == 'member' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+        run: bash .github/scripts/run-production-readonly-qa.sh member
+
+      - name: Upload Member-only QA evidence
+        if: ${{ always() && steps.member_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-readonly-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-member-readonly-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
       - name: 2 · Four-provider Account Production read-only QA
         id: account_qa
+        if: ${{ inputs.qa_scope != 'member' }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
@@ -639,6 +683,7 @@ jobs:
 
       - name: 3 · Production Credential Reuse QA
         id: credential_qa
+        if: ${{ inputs.qa_scope != 'member' }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
@@ -714,6 +759,7 @@ jobs:
           "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
 
       - name: Assemble exact-run post-deploy evidence
+        if: ${{ inputs.qa_scope != 'member' }}
         run: |
           set -Eeuo pipefail
           if [[ "$QA_SCOPE" == "full" ]]; then
@@ -729,6 +775,7 @@ jobs:
           node .github/scripts/build-production-postdeploy-evidence.cjs postdeploy-evidence "$TARGET_SHA" "$GITHUB_RUN_ID" "$QA_SCOPE"
 
       - name: Upload immutable ACTIVATION_READY evidence
+        if: ${{ inputs.qa_scope != 'member' }}
         uses: actions/upload-artifact@v4
         with:
           name: production-postdeploy-activation-ready-${{ env.TARGET_SHA }}
@@ -750,7 +797,11 @@ jobs:
             echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'
             echo "- QA scope: `$QA_SCOPE`"
-            if [[ "$QA_SCOPE" == "trading_core" ]]; then
+            if [[ "$QA_SCOPE" == "member" ]]; then
+              echo '- Member login/profile/tier/S-grade/AI Chart/trading analytics/AI review/admin-boundary/mobile account: `PASS`'
+              echo '- Account provider / Credential Reuse / Trading Core / Comprehensive: `NOT_RUN`'
+              echo '- ACTIVATION_READY: `NOT_EVALUATED`'
+            elif [[ "$QA_SCOPE" == "trading_core" ]]; then
               echo '- Trading Core / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
             else
               echo '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
