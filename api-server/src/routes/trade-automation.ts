@@ -894,7 +894,6 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       return {
         market: item.market,
         direction: item.direction,
-        strategyId: item.strategyId,
         providers: item.providers,
         aiDecision: 'PASS' as const,
         ...evaluation,
