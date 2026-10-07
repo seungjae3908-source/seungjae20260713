@@ -3,10 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 function cleanCode(value) {
-  return String(value ?? 'UNKNOWN')
-    .normalize('NFKC')
-    .replace(/[^A-Za-z0-9_.:-]/g, '_')
-    .slice(0, 120) || 'UNKNOWN';
+  const code = String(value ?? '').normalize('NFKC').trim();
+  return /^[A-Z][A-Z0-9_.:-]{0,119}$/u.test(code) ? code : 'UNKNOWN';
+}
+
+function cleanModel(value) {
+  const model = String(value ?? '').trim();
+  return ['gemini-3.1-flash-lite', 'openai/gpt-oss-20b'].includes(model) ? model : null;
 }
 
 function cleanProfile(value) {
@@ -22,6 +25,24 @@ function projectRows(rows) {
     cacheHit: row?.cacheHit === true,
     status: cleanCode(row?.status),
   }));
+}
+
+function projectProfileCoverage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const profiles = (rows) => (Array.isArray(rows) ? rows : [])
+    .map(cleanProfile)
+    .filter((profile) => profile !== 'unknown')
+    .slice(0, 3);
+  return Object.freeze({
+    totalProfiles: Number.isSafeInteger(value.totalProfiles) && value.totalProfiles >= 0 && value.totalProfiles <= 3
+      ? value.totalProfiles : null,
+    reviewedProfiles: profiles(value.reviewedProfiles),
+    missingProfiles: profiles(value.missingProfiles),
+    staleProfiles: profiles(value.staleProfiles),
+    retryDeferredProfiles: profiles(value.retryDeferredProfiles),
+    blockedProfiles: profiles(value.blockedProfiles),
+    allProfilesCurrentAndReviewed: value.allProfilesCurrentAndReviewed === true,
+  });
 }
 
 function parseArgs(argv) {
@@ -73,10 +94,10 @@ try {
     status: cleanCode(latest?.status),
     researchSha: String(latest?.researchSha ?? '').toLowerCase() || null,
     provider: ['gemini', 'groq'].includes(String(latest?.provider ?? '')) ? latest.provider : null,
-    model: String(latest?.model ?? '').slice(0, 120) || null,
+    model: cleanModel(latest?.model),
     providerNetworkCalls: Number.isSafeInteger(latest?.providerNetworkCalls) ? latest.providerNetworkCalls : 0,
     cacheHits: Number.isSafeInteger(latest?.cacheHits) ? latest.cacheHits : 0,
-    profileCoverage: latest?.profileCoverage ?? null,
+    profileCoverage: projectProfileCoverage(latest?.profileCoverage),
     blockedProfiles: projectRows(latest?.blockedProfiles),
     deferredProfiles: projectRows(latest?.deferredProfiles),
     reviews: projectRows(latest?.reviews),
