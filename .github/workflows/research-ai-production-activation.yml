@@ -17,12 +17,20 @@ on:
       - research-production/bin/research-approved-job-intake.mjs
       - research-production/bin/research-provider-bootstrap.mjs
       - research-production/bin/research-ai-review.mjs
+      - research-production/bin/research-ai-diagnostic.mjs
+      - research-production/bin/research-forward-runtime-diagnostic.mjs
       - research-production/bin/research-video-discovery.mjs
+      - research-production/bin/research-video-approved-job.mjs
       - research-production/src/research-ai-review-worker.mjs
       - research-production/src/research-video-discovery-worker.mjs
       - research-production/test/research-ai-activation-contract.test.mjs
+      - research-production/test/research-ai-diagnostic.test.mjs
+      - research-production/test/research-forward-runtime-diagnostic.test.mjs
+      - research-production/test/research-ai-review-worker.test.mjs
       - research-production/test/research-ai-units-install-contract.test.mjs
       - research-production/test/research-provider-bootstrap.test.mjs
+      - research-production/test/research-video-approved-job.test.mjs
+      - research-production/test/research-symlink-cli-entrypoints.test.mjs
       - scripts/agent_hub_rollover_v2.py
   issue_comment:
     types: [created]
@@ -59,7 +67,15 @@ jobs:
           bash -n research-production/deploy/activate-ai-research.sh
           bash -n research-production/deploy/install-ai-research-units.sh
           systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
-          node --test             research-production/test/research-ai-activation-contract.test.mjs             research-production/test/research-ai-units-install-contract.test.mjs             research-production/test/research-provider-bootstrap.test.mjs
+          node --test \
+            research-production/test/research-ai-activation-contract.test.mjs \
+            research-production/test/research-ai-diagnostic.test.mjs \
+            research-production/test/research-forward-runtime-diagnostic.test.mjs \
+            research-production/test/research-ai-review-worker.test.mjs \
+            research-production/test/research-ai-units-install-contract.test.mjs \
+            research-production/test/research-provider-bootstrap.test.mjs \
+            research-production/test/research-video-approved-job.test.mjs \
+            research-production/test/research-symlink-cli-entrypoints.test.mjs
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-ai ')" .github/workflows/research-ai-production-activation.yml
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-ai-production-activation.yml
           ! grep -Eq "LIVE_TRADING:[[:space:]]+['\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\"]?true" .github/workflows/research-ai-production-activation.yml
@@ -246,19 +262,70 @@ jobs:
           grep -Fxq 'executionAuthority=NONE' "$RUNNER_TEMP/ai-research-preflight.txt"
 
       - name: Activate AI Review and Video Discovery timers with one-shot proof
+        id: activate_ai
         shell: bash
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate"             < research-production/deploy/activate-ai-research.sh             | tee "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'AI_RESEARCH_ACTIVATED=true' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'AI_REVIEW_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'VIDEO_DISCOVERY_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'AI_REVIEW_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'VIDEO_DISCOVERY_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'APPROVED_JOB_INTAKE_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'WORKSPACE_WORKER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt"
-          grep -Fxq 'REAL_ORDER_SUBMITTED=false' "$RUNNER_TEMP/ai-research-activation.txt"
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate"             < research-production/deploy/activate-ai-research.sh             2>&1 | tee "$RUNNER_TEMP/ai-research-activation.txt"
+          remote_status=${PIPESTATUS[0]}
+          set -e
+          if (( remote_status != 0 )); then
+            failure_reason="$(grep -Eo 'AI_RESEARCH_[A-Z0-9_.:=-]+' "$RUNNER_TEMP/ai-research-activation.txt" | tail -1 || true)"
+            failure_reason="${failure_reason:-AI_RESEARCH_ACTIVATION_REMOTE_FAILED}"
+            printf 'failure_reason=%s\n' "$failure_reason" >> "$GITHUB_OUTPUT"
+            exit "$remote_status"
+          fi
+          if ! {
+            grep -Fxq 'AI_RESEARCH_ACTIVATED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'AI_REVIEW_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'VIDEO_DISCOVERY_ONE_SHOT=success' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'AI_REVIEW_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'VIDEO_DISCOVERY_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'APPROVED_JOB_INTAKE_TIMER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'WORKSPACE_WORKER_ENABLED=true' "$RUNNER_TEMP/ai-research-activation.txt" &&
+            grep -Fxq 'REAL_ORDER_SUBMITTED=false' "$RUNNER_TEMP/ai-research-activation.txt"
+          }; then
+            printf 'failure_reason=%s\n' 'AI_RESEARCH_ACTIVATION_PROOF_INVALID' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Upload sanitized AI Research activation diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-ai-activation-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ai-research-preflight.txt
+            ${{ runner.temp }}/ai-research-activation.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Record sanitized AI Research failure receipt
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          FAILURE_REASON: ${{ steps.activate_ai.outputs.failure_reason || 'AI_RESEARCH_ACTIVATION_WORKFLOW_FAILED' }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.HUB_ISSUE_NUMBER),
+              body: [
+                '[RESEARCH_AI_PRODUCTION_ACTIVATION]',
+                'status: failed_closed',
+                'target_sha: ' + process.env.TARGET_SHA,
+                'failure_reason: ' + process.env.FAILURE_REASON,
+                'provider_secret_values_exposed: false',
+                'live_trading: false',
+                'private_trading_api_allowed: false',
+                'real_order_enabled: false',
+                'executionAuthority: NONE',
+                'workflow_run: ' + context.runId,
+              ].join('\n'),
+            });
 
       - name: Record sanitized AI Research activation receipt
         uses: actions/github-script@v7
