@@ -812,28 +812,6 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
   const empty = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
   empty.entries = [];
   empty.entryCount = 0;
-test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', async () => {
-  const keys = [
-    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
-    'AUTO_TRADING',
-    'LIVE_AUTOMATIC_TRADING_ENABLED',
-    'LIVE_TRADING',
-    'REAL_ORDER_ENABLED',
-    'PRIVATE_TRADING_API_ALLOWED',
-    'DEPLOY_SHA',
-    'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
-  ] as const;
-  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-  const nowMs = Date.now();
-  const repository = new InMemoryTradingRepository();
-  await repository.savePolicy(USER, policy());
-  const syncCalls = { count: 0 };
-  const root = await mkdtemp(join(tmpdir(), 'auto-trading-activation-rehearsal-'));
-  const armPath = join(root, 'live-entry-arm.json');
-  const targetSha = 'b'.repeat(40);
-  const empty = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
-  empty.entries = [];
-  empty.entryCount = 0;
   const base = source(repository, nowMs, { syncCalls, tier: 'admin' });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
