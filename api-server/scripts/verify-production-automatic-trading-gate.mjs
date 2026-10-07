@@ -218,11 +218,16 @@ requireText(paperWorkerTest, 'first live warmup suppresses automatic exits for e
 requireText(paperWorkerTest, 'all-four activation readiness requires one order-capable futures member with all four markets enabled', 'AUTO_GATE_ALL4_POLICY_READINESS_TEST_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveAllFourPolicyReadyMembers, 1);', 'AUTO_GATE_ALL4_POLICY_READINESS_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);', 'AUTO_GATE_LIVE_EXIT_WARMUP_ASSERTION_MISSING');
+requireText(paperWorkerTest, 'assert.equal(health.liveTrackedPositions, 0);', 'AUTO_GATE_DISABLED_HEALTH_TRACKED_POSITION_RESET_MISSING');
+requireText(paperWorkerTest, 'assert.equal(health.liveAllFourPolicyReadyMembers, 0);', 'AUTO_GATE_DISABLED_HEALTH_ALL4_RESET_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);', 'AUTO_GATE_NO_LIVE_MEMBER_ASSERTION_MISSING');
 
 requireText(autoTradingPage, 'readyForAutomaticOrderEvaluation', 'AUTO_UI_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
+requireText(autoTradingPage, "const newEntriesStopped = policy?.newEntriesStopped === true", 'AUTO_UI_NEW_ENTRY_STOP_STATE_MISSING');
+requireText(autoTradingPage, 'const effectiveEntryStopped = emergencyStopped || newEntriesStopped', 'AUTO_UI_EFFECTIVE_ENTRY_STOP_MISSING');
+requireText(autoTradingPage, '신규진입 차단', 'AUTO_UI_NEW_ENTRY_STOP_LABEL_MISSING');
 requireText(autoTradingPage, "auth.can('canPlaceOrders')", 'AUTO_UI_MEMBER_ORDER_CAPABILITY_MISSING');
 requireText(autoTradingPage, '계정 주문 권한 없음', 'AUTO_UI_MEMBER_ORDER_CAPABILITY_LABEL_MISSING');
 forbid(autoTradingPage, /value="서버 Gate 필요"/u, 'AUTO_UI_HARDCODED_SERVER_GATE_FORBIDDEN');
@@ -311,6 +316,7 @@ console.log(JSON.stringify({
   manualGatesPreservePersonalTelegramDelivery: true,
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
+  stickyStopDashboardTruth: true,
   marketScopedAutomaticReadiness: true,
   stickyMemberStopRequiresConfirmedResume: true,
   externalEmergencyStopReflectedInSettings: true,
