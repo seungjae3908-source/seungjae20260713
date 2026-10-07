@@ -12,6 +12,7 @@ import {
   liveBackgroundEnabled,
   marketMapping,
   resolveMemberStockBroker,
+  readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
@@ -449,6 +450,14 @@ test('background worker is default OFF without explicit activation flag', () => 
   delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
   try {
     assert.equal(startMemberAutoTradingBackgroundWorker(), null);
+    const health = readMemberAutoTradingBackgroundRuntimeHealth();
+    assert.equal(health.enabled, false);
+    assert.equal(health.lastTickAt, null);
+    assert.equal(health.liveTrackedPositions, 0);
+    assert.equal(health.liveAllFourPolicyReadyMembers, 0);
+    assert.equal(health.startupWarmupObserved, false);
+    assert.equal(health.firstWarmupTickLiveOrders, null);
+    assert.equal(health.firstWarmupTickLiveExitOrders, null);
   } finally {
     if (previous == null) delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
     else process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = previous;
