@@ -122,6 +122,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
   const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
+  const canPlaceOrders = testFixtureAccess || auth.can('canPlaceOrders');
   const [mode, setMode] = useState<TradingMode>(initialMode);
   const initialRouteState = useMemo(tradingRouteState, []);
   const [market, setMarket] = useState<TradingMarket>(initialRouteState.market);
@@ -190,11 +191,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const liveReadiness = runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
-    : liveReadiness?.readyForAutomaticOrderEvaluation
-      ? '자동 실거래 준비됨'
-      : liveReadiness?.automaticServerGateEnabled
-        ? '자동 Gate 차단'
-        : '자동 Gate OFF';
+    : !canPlaceOrders
+      ? '계정 주문 권한 없음'
+      : liveReadiness?.readyForAutomaticOrderEvaluation
+        ? '자동 실거래 준비됨'
+        : liveReadiness?.automaticServerGateEnabled
+          ? '자동 Gate 차단'
+          : '자동 Gate OFF';
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
