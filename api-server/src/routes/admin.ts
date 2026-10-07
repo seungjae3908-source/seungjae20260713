@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import {
   requireAdmin,
@@ -5,6 +6,10 @@ import {
   type AuthenticatedRequest,
 } from '../middleware/auth';
 import { getUserSupabase } from '../lib/supabase';
+import {
+  memberPasswordResetAvailable,
+  resetMemberPasswordCredential,
+} from '../services/member-auth-admin.service';
 import {
   MemberAdministrationError,
   classifyAtomicMemberChangeFailure,
@@ -21,7 +26,7 @@ router.use(requireAuthenticated, requireAdmin);
 
 const PROFILE_FIELDS = [
   'id', 'login_name', 'display_name', 'membership_level', 'is_active',
-  'status', 'role', 'approved_at', 'approved_by', 'created_at',
+  'membership_expires_at', 'status', 'role', 'approved_at', 'approved_by', 'created_at',
   'updated_at', 'permissions_updated_at',
 ].join(',');
 
@@ -31,6 +36,14 @@ const RESEARCH_OVERVIEW_URL = 'http://127.0.0.1:18090/api/research/overview';
 // Keep the browser-facing proxy bounded, but leave enough room for that healthy path.
 export const RESEARCH_OVERVIEW_TIMEOUT_MS = 10_000;
 const MEMBER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ADMIN_PAGE_SIZE_DEFAULT = 100;
+const ADMIN_PAGE_SIZE_MAX = 200;
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, parsed));
+}
 
 type AdminProfileRow = MemberAdministrationProfile & {
   login_name?: string | null;
@@ -147,6 +160,14 @@ async function applyMemberChange(
       p_target_user_id: targetId,
       p_membership_level: requested.membershipLevel ?? null,
       p_is_active: requested.isActive ?? null,
+      p_membership_expires_at: requested.membershipExpiresAt === undefined
+        ? (
+          (current.membership_level === 'associate' || current.membership_level === 'regular')
+          && (current.status === 'approved' || current.status === 'suspended')
+            ? current.membership_expires_at ?? null
+            : null
+        )
+        : requested.membershipExpiresAt,
       p_reason: requested.reason,
       p_expected_permissions_updated_at: current.permissions_updated_at,
     });
@@ -172,15 +193,25 @@ router.get('/members', async (req: AuthenticatedRequest, res) => {
   const membershipLevel = ['pending', 'associate', 'regular', 'admin'].includes(requestedTier)
     ? requestedTier
     : '';
+  const page = boundedInteger(req.query.page, 0, 0, 100_000);
+  const pageSize = boundedInteger(req.query.pageSize, ADMIN_PAGE_SIZE_DEFAULT, 1, ADMIN_PAGE_SIZE_MAX);
+  const from = page * pageSize;
   try {
     let query = adminDb(req)
       .from('profiles').select(PROFILE_FIELDS)
-      .order('created_at', { ascending: false }).limit(500);
+      .order('created_at', { ascending: false });
     if (membershipLevel) query = query.eq('membership_level', membershipLevel);
     if (search) query = query.or(`login_name.ilike.%${search}%,display_name.ilike.%${search}%`);
-    const { data, error } = await query;
+    const { data, error } = await query.range(from, from + pageSize);
     if (error) throw new Error('MEMBER_LIST_FAILED');
-    return res.json({ ok: true, members: (data ?? []) as unknown as AdminProfileRow[] });
+    const rows = (data ?? []) as unknown as AdminProfileRow[];
+    return res.json({
+      ok: true,
+      members: rows.slice(0, pageSize),
+      page,
+      pageSize,
+      hasMore: rows.length > pageSize,
+    });
   } catch {
     return sendAdminReadError(res, 'MEMBER_LIST_FAILED');
   }
@@ -217,17 +248,75 @@ router.patch('/members/:id', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+router.post('/members/:id/password-reset', async (req: AuthenticatedRequest, res) => {
+  try {
+    if (!memberPasswordResetAvailable()) {
+      return res.status(503).json({
+        error: 'PASSWORD_RESET_UNAVAILABLE',
+        message: '안전한 비밀번호 재설정 권한이 구성되지 않았습니다.',
+      });
+    }
+    const targetId = routeId(req.params.id);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (reason.length < 3 || reason.length > 500) {
+      throw new MemberAdministrationError('CHANGE_REASON_REQUIRED', '변경 사유를 3~500자로 입력하세요.', 400);
+    }
+    const temporaryPassword = `R9!${randomBytes(18).toString('base64url')}a`;
+
+    // The authorization/audit row always goes through the caller-scoped RLS
+    // client. Only the Auth credential mutation is delegated to a narrow helper.
+    const { error: auditError } = await adminDb(req).from('member_permission_audit').insert({
+      actor_id: req.member!.id,
+      target_user_id: targetId,
+      action: 'member.password.reset',
+      before_value: { password: 'REDACTED' },
+      after_value: { resetAuthorized: true, credentialStored: false },
+      reason,
+    });
+    if (auditError) {
+      throw new MemberAdministrationError(
+        'PASSWORD_RESET_AUDIT_FAILED',
+        '감사기록을 저장하지 못해 비밀번호 재설정을 중단했습니다.',
+        503,
+      );
+    }
+
+    await resetMemberPasswordCredential(targetId, temporaryPassword);
+
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    return res.json({
+      ok: true,
+      temporaryPassword,
+      auditRecorded: true,
+      message: '임시 비밀번호를 발급했습니다. 사용자에게 안전한 경로로 전달하세요.',
+    });
+  } catch (cause) {
+    return sendAdminError(res, cause, 'PASSWORD_RESET_FAILED');
+  }
+});
+
 router.get('/audit-logs', async (req: AuthenticatedRequest, res) => {
   const targetUserId = sanitizeMemberSearch(req.query.targetUserId);
+  const page = boundedInteger(req.query.page, 0, 0, 100_000);
+  const pageSize = boundedInteger(req.query.pageSize, ADMIN_PAGE_SIZE_DEFAULT, 1, ADMIN_PAGE_SIZE_MAX);
+  const from = page * pageSize;
   try {
     let query = adminDb(req)
       .from('member_permission_audit')
       .select('id,actor_id,target_user_id,action,before_value,after_value,reason,created_at')
-      .order('created_at', { ascending: false }).limit(500);
+      .order('created_at', { ascending: false });
     if (targetUserId) query = query.eq('target_user_id', targetUserId);
-    const { data, error } = await query;
+    const { data, error } = await query.range(from, from + pageSize);
     if (error) throw new Error('AUDIT_LIST_FAILED');
-    return res.json({ ok: true, logs: data ?? [] });
+    const rows = data ?? [];
+    return res.json({
+      ok: true,
+      logs: rows.slice(0, pageSize),
+      page,
+      pageSize,
+      hasMore: rows.length > pageSize,
+    });
   } catch {
     return sendAdminReadError(res, 'AUDIT_LIST_FAILED');
   }
