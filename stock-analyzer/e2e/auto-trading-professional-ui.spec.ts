@@ -62,6 +62,7 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(route).toContain('PENDING_ORDER_STATES');
   expect(route).toContain('actualOrderSubmittedByStatusRequest: false');
   expect(page).toContain('readyForAutomaticOrderEvaluation');
+  expect(page).toContain('liveAutomaticReadinessByMarket?.[market]');
   expect(page).toContain('automaticServerGateEnabled');
   expect(page).toContain("auth.can('canPlaceOrders')");
   expect(page).toContain('계정 주문 권한 없음');
