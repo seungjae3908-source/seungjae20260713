@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createResearchWorkerQueue, runResearchWorkerLoop, runResearchWorkerOnce } from '../src/research-workspace-worker-v9.js';
 import { runExistingProvidersCli } from './run-existing-research-providers-v8.mjs';
 import { runResearchWorkspaceOneShotCliV12 } from './run-research-one-shot-v12.mjs';
@@ -41,7 +42,13 @@ export async function runResearchWorkerCli(argv,{env=process.env,clock=()=>new D
   try{await runResearchWorkerLoop(queue,{workerId:o['--worker-id'],handler,retryableCodes:['PROVIDER_RUNTIME_UNAVAILABLE','WORKER_HANDLER_UNAVAILABLE'],pollMs:poll,signal:controller.signal});return {status:'STOPPED'};}
   finally{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);}
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+function isDirectRun(){
+  try{
+    return Boolean(process.argv[1])
+      && realpathSync(resolve(process.argv[1]))===realpathSync(fileURLToPath(import.meta.url));
+  }catch{return false;}
+}
+if(isDirectRun()){
   if(process.argv.includes('--help'))process.stdout.write('No daemon is installed. Actions: --init | --status | --enqueue /absolute/job.json | --once --worker-id ID | --loop --worker-id ID [--poll-ms N]. Always require --root /absolute/private/root. Optional --existing-env is operator-selected and reused through V8. Starting --loop is runtime activation and is not performed by repository installation.\n');
   else runResearchWorkerCli(process.argv.slice(2)).then(x=>process.stdout.write(JSON.stringify(x)+'\n')).catch(e=>{process.stderr.write(JSON.stringify({status:'BLOCKED',reason:/^(?:WORKER|PROVIDER|VIDEO)_[A-Z0-9_]+$/.test(e?.code)?e.code:'WORKER_RUNTIME_UNAVAILABLE'})+'\n');process.exitCode=1;});
 }
