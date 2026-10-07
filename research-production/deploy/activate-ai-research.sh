@@ -363,6 +363,20 @@ process.stdout.write(JSON.stringify({
 NODE
 }
 
+refresh_current_sha_forward_evidence() {
+  local service="research-production@forward.service"
+  "${SUDO[@]}" systemctl start "$service"
+  local result status
+  result="$("${SUDO[@]}" systemctl show "$service" -p Result --value)"
+  status="$("${SUDO[@]}" systemctl show "$service" -p ExecMainStatus --value)"
+  if [[ "$result" != "success" || "$status" != "0" ]]; then
+    print_forward_runtime_diagnostic
+    echo "AI_RESEARCH_CURRENT_SHA_FORWARD_REFRESH_FAILED:$service:result=$result:status=$status" >&2
+    return 1
+  fi
+  require_current_sha_ai_evidence_ready
+}
+
 verify_workspace_worker_health() {
   local evidence
   evidence="$(mktemp)"
@@ -565,8 +579,9 @@ activate() {
 
   "${SUDO[@]}" systemctl daemon-reload
 
-  # Fail before provider calls when the current release has no usable forward evidence.
-  require_current_sha_ai_evidence_ready
+  # Refresh exact-SHA forward evidence synchronously so activation never races the hourly :11 UTC timer.
+  # blocked_data is still valid structural evidence; this only requires a current-release cycle artifact.
+  refresh_current_sha_forward_evidence
 
   # A successful one-shot must prove validated current-release review evidence,
   # exact Research SHA, provider identity, and no trading authority before timers enable.
