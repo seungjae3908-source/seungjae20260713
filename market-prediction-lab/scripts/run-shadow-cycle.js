@@ -478,7 +478,17 @@ async function processGroup({ client, longShortClient, config, previousGroupStat
     const candidate = analyzeMarket(commonInput, { model: selection.candidate });
     const reference = analyzeMarket(commonInput, { model: selection.reference });
     const inferenceBlocker = shadowInferenceBlocker({ candidate, reference, symbol, config });
-    if (inferenceBlocker) throw inferenceBlocker;
+    if (inferenceBlocker) {
+      inferenceBlocker.partialState = Object.freeze({
+        ...groupState,
+        canonicalEvidence: previousCanonical ?? null,
+      });
+      inferenceBlocker.details = Object.freeze({
+        ...(inferenceBlocker.details ?? {}),
+        temporalEvidenceReadiness: shadowTemporalEvidenceReadiness(groupState),
+      });
+      throw inferenceBlocker;
+    }
     const record = createShadowPrediction({
       modelGroup: config.group,
       modelId: selection.candidate.id,
@@ -820,9 +830,12 @@ for (const config of GROUPS) {
     nextState.groups[config.group] = result.state;
     nextSummary.groups[config.group] = { status: "pass", ...result.summary };
   } catch (error) {
-    nextState.groups[config.group] = previous.groups?.[config.group] ?? { records: [], openInterestSnapshots: [], longShortSnapshots: [] };
+    nextState.groups[config.group] = error?.partialState
+      ?? previous.groups?.[config.group]
+      ?? { records: [], openInterestSnapshots: [], longShortSnapshots: [] };
     if (error?.code === "SHADOW_INFERENCE_NOT_EVALUABLE") {
       const details = error.details ?? {};
+      const prospectiveEvidenceAppended = Boolean(error?.partialState);
       nextSummary.groups[config.group] = {
         status: "blocked_data",
         blocker: "SHADOW_INFERENCE_NOT_EVALUABLE",
@@ -832,8 +845,13 @@ for (const config of GROUPS) {
         candidateMissingRequiredFeatures: [...(details.candidateMissingRequiredFeatures ?? [])],
         referenceMissingRequiredFeatures: [...(details.referenceMissingRequiredFeatures ?? [])],
         evidenceSourcePolicy: "EXISTING_TEMPORAL_EVIDENCE_ONLY",
+        temporalEvidenceReadiness: details.temporalEvidenceReadiness
+          ?? shadowTemporalEvidenceReadiness(nextState.groups[config.group]),
         safety: {
-          stateCarriedForwardWithoutMutation: true,
+          stateCarriedForwardWithoutMutation: !prospectiveEvidenceAppended,
+          prospectiveEvidenceAppended,
+          modelObservationCreditAdded: false,
+          policyCreditAdded: false,
           defaultFeatureFallbackAllowed: false,
           syntheticFeatureFallbackAllowed: false,
           profitabilityProven: false,
