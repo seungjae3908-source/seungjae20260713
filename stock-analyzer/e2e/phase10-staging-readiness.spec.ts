@@ -2318,7 +2318,7 @@ test.describe('real staging release readiness', () => {
     expect(response.status()).toBe(403);
   });
 
-  test('associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied', async ({ page }) => {
+  test('associate: stock, spot, scanner, paper/auto trading, portfolio, AI chart and safe AI review preview allowed; futures and privileged APIs denied', async ({ page }) => {
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
@@ -2327,6 +2327,7 @@ test.describe('real staging release readiness', () => {
     await expectHealthyRoute(page, '/paper-trading');
     await expectHealthyRoute(page, '/auto-trading');
     await expectHealthyRoute(page, '/portfolio');
+    await expectHealthyRoute(page, '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&timeframe=5m');
 
     await expectDeniedRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
     await expectScannerAfterFutures(page);
@@ -2336,7 +2337,16 @@ test.describe('real staging release readiness', () => {
       '/api/paper-journal/ai-review/preview',
       { method: 'POST', data: {} },
     );
-    expect(response.status()).toBe(403);
+    const previewDiagnostic = await collectSafeApiDiagnostic(response, {
+      testStep: 'associate-ai-preview',
+      requestPath: '/api/paper-journal/ai-review/preview',
+    });
+    diagnostics.api_diagnostics.push(previewDiagnostic);
+    expect(
+      response.ok(),
+      `safe associate AI preview diagnostic: ${JSON.stringify(previewDiagnostic)}`,
+    ).toBeTruthy();
+    expect(previewDiagnostic.externalAiCalled).toBe(false);
   });
 
   test('regular: futures, scanner, paper trading, and safe AI preview are available without real orders', async ({ page, browser }, testInfo) => {
