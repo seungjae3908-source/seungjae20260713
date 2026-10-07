@@ -3,6 +3,7 @@ name: Production PM2 Watch Normalization
 on:
   pull_request:
     paths:
+      - .github/tests/production-pm2-concurrency-scope.test.mjs
       - .github/workflows/production-pm2-watch-normalize.yml
       - ops/normalize-production-pm2-watch.sh
       - ops/deploy-production.sh
@@ -46,6 +47,8 @@ jobs:
       - name: Verify Production watch-off contract
         working-directory: api-server
         run: node scripts/verify-production-verification-contract.mjs
+      - name: Verify PM2 concurrency command scope
+        run: node --test .github/tests/production-pm2-concurrency-scope.test.mjs
 
   normalize:
     name: Protected one-time Production PM2 watch normalization
