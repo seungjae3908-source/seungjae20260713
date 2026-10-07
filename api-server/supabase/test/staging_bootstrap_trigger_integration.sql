@@ -18,7 +18,7 @@ begin
     and membership_level = 'pending'
     and status = 'pending'
     and role = 'user'
-    and is_active is true;
+    and is_active is false;
   if row_count <> 1 then
     raise exception 'staging bootstrap Auth trigger did not create the expected pending profile';
   end if;
