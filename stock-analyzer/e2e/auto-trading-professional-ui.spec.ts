@@ -61,4 +61,14 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(route).toContain('marketActivityByMarket');
   expect(route).toContain('PENDING_ORDER_STATES');
   expect(route).toContain('actualOrderSubmittedByStatusRequest: false');
+  expect(page).toContain('readyForAutomaticOrderEvaluation');
+  expect(page).toContain('automaticServerGateEnabled');
+  expect(page).toContain('자동 실거래 준비됨');
+  expect(page).not.toContain('value="서버 Gate 필요"');
+
+  const settings = source('src/components/trade-automation-settings.tsx');
+  expect(settings).toContain('liveAutomaticExecutionServerEnabled');
+  expect(settings).toContain('readyForAutomaticOrderEvaluation');
+  expect(settings).toContain('자동게이트 준비');
+  expect(settings).not.toContain("status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON'");
 });
