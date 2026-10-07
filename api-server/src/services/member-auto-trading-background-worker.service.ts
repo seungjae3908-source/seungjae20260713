@@ -112,6 +112,10 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveEntriesSuppressedByWarmupOrArm: number;
   runtimeRefreshes: number;
   executionSyncBlocks: number;
+  overlapSkipped: boolean;
+  liveOrderEligibleMembers: number;
+  livePolicyReadyMembers: number;
+  globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
   evaluated: number;
@@ -152,6 +156,9 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   firstWarmupTickLiveOrders: number | null;
   executionSyncFailures: number;
   executionSyncMissingReferences: number;
+  liveOrderEligibleMembers: number;
+  livePolicyReadyMembers: number;
+  globalEmergencyStopActive: boolean;
   errorCode: string | null;
 }>;
 
@@ -171,6 +178,9 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   firstWarmupTickLiveOrders: null,
   executionSyncFailures: 0,
   executionSyncMissingReferences: 0,
+  liveOrderEligibleMembers: 0,
+  livePolicyReadyMembers: 0,
+  globalEmergencyStopActive: false,
   errorCode: null,
 });
 
@@ -319,6 +329,17 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
   const rate = Number(cost?.[key]);
   return finite(rate) && rate >= 0 ? rate * 100 : null;
+}
+
+function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
+  if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) {
+    return false;
+  }
+  const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  return (policy.marketEnabled.domestic_stock && policy.exchangeEnabled[domesticBroker])
+    || (policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom)
+    || (policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit)
+    || (policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget);
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -1019,6 +1040,10 @@ export class MemberAutoTradingBackgroundWorker {
       liveEntriesSuppressedByWarmupOrArm: 0,
       runtimeRefreshes: 0,
       executionSyncBlocks: 0,
+      overlapSkipped: false,
+      liveOrderEligibleMembers: 0,
+      livePolicyReadyMembers: 0,
+      globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
       evaluated: 0,
@@ -1042,7 +1067,10 @@ export class MemberAutoTradingBackgroundWorker {
       executionSyncFailures: 0,
       liveEntryArmPresent: liveEntryArmPresentThisTick,
     };
-    if (this.running) return result;
+    if (this.running) {
+      result.overlapSkipped = true;
+      return result;
+    }
     this.running = true;
     try {
       const nowMs = now.getTime();
@@ -1053,6 +1081,8 @@ export class MemberAutoTradingBackgroundWorker {
 
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
+      result.liveOrderEligibleMembers = members.filter((member) =>
+        hasCapability(member.profile, 'canPlaceOrders')).length;
       const entries = result.handoffReady
         ? handoff!.entries.slice(0, MAX_ENTRIES_PER_TICK)
         : [];
@@ -1067,12 +1097,24 @@ export class MemberAutoTradingBackgroundWorker {
         const repository = this.source.tradingRepositoryFor(member.userId);
         const paper = this.source.paperJournalRepositoryFor(member.userId);
         let runtime: MemberRuntimeState;
+        let persistentGlobalStop = false;
         try {
-          runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          [runtime, persistentGlobalStop] = await Promise.all([
+            memberRuntimeState(member.userId, repository, paper, nowMs),
+            repository.getGlobalEmergencyStop(),
+          ]);
         } catch {
           result.blocked += entries.length;
           result.newEntriesFailClosed = true;
           continue;
+        }
+        const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+        if (persistentGlobalStop || environmentGlobalStop) result.globalEmergencyStopActive = true;
+        if (hasCapability(member.profile, 'canPlaceOrders')
+          && automaticPolicyHasRunnableMarket(member.policy)
+          && !persistentGlobalStop
+          && !environmentGlobalStop) {
+          result.livePolicyReadyMembers += 1;
         }
 
         const refreshRuntime = async () => {
@@ -1322,9 +1364,15 @@ export class MemberAutoTradingBackgroundWorker {
       }
 
       if (liveModeRequested) {
+        if (result.livePolicyReadyMembers === 0 || result.globalEmergencyStopActive) {
+          result.newEntriesFailClosed = true;
+        }
         this.liveEntryWarmupComplete = result.handoffReady
           && result.executionSyncFailures === 0
-          && result.executionSyncMissingReferences === 0;
+          && result.executionSyncMissingReferences === 0
+          && result.liveOrderEligibleMembers > 0
+          && result.livePolicyReadyMembers > 0
+          && !result.globalEmergencyStopActive;
       } else {
         this.liveEntryWarmupComplete = false;
       }
@@ -1480,6 +1528,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   const tick = async () => {
     try {
       const result = await worker.runOnce(new Date());
+      if (result.overlapSkipped) return;
       const warmupObservedNow = !backgroundRuntimeHealth.startupWarmupObserved
         && result.liveEntryWarmupComplete;
       backgroundRuntimeHealth = Object.freeze({
@@ -1502,6 +1551,9 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
           : backgroundRuntimeHealth.firstWarmupTickLiveOrders,
         executionSyncFailures: result.executionSyncFailures,
         executionSyncMissingReferences: result.executionSyncMissingReferences,
+        liveOrderEligibleMembers: result.liveOrderEligibleMembers,
+        livePolicyReadyMembers: result.livePolicyReadyMembers,
+        globalEmergencyStopActive: result.globalEmergencyStopActive,
         errorCode: null,
       });
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
