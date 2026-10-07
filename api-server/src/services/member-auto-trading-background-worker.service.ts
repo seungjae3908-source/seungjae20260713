@@ -1093,6 +1093,8 @@ export class MemberAutoTradingBackgroundWorker {
             result.executionSyncMissingReferences += synced.missingReferences;
             return true;
           } catch {
+            // Notification/journal fan-out must never change canonical order state.
+            // A projection failure instead fail-closes subsequent new entries for this tick.
             result.executionSyncFailures += 1;
             result.executionSyncBlocks += 1;
             result.newEntriesFailClosed = true;
