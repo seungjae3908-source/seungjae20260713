@@ -143,6 +143,7 @@ const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const recentConfirmedRouteTransitions = new WeakMap<Page, RecentRouteTransitionObservation>();
 const verifierOwnedContextTeardowns = new WeakMap<Page, string>();
+const verifierOwnedTestTeardowns = new WeakMap<Page, string>();
 const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
@@ -401,6 +402,24 @@ function isExpectedVerifierContextTeardownCandleAbortIdentity(input: {
       && parsed.origin === input.origin
       && parsed.searchParams.size === 0
       && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedVerifierTestTeardownMarketSummaryAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  errorText: string | undefined;
+  origin: string;
+}) {
+  try {
+    const parsed = new URL(input.rawUrl);
+    return input.method === 'GET'
+      && input.errorText === 'net::ERR_ABORTED'
+      && parsed.origin === input.origin
+      && parsed.pathname === '/api/market/summary'
+      && parsed.searchParams.size === 0;
   } catch {
     return false;
   }
@@ -714,6 +733,19 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       diagnostics.expected_route_transition_aborts.push({
         ...diagnostic,
         detail: `verifier-owned context teardown: ${diagnostic.detail}`,
+      });
+      return;
+    }
+    const testTeardownOrigin = verifierOwnedTestTeardowns.get(page);
+    if (testTeardownOrigin && isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      errorText: request.failure()?.errorText,
+      origin: testTeardownOrigin,
+    })) {
+      diagnostics.expected_route_transition_aborts.push({
+        ...diagnostic,
+        detail: `verifier-owned test teardown: ${diagnostic.detail}`,
       });
       return;
     }
@@ -2040,6 +2072,20 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   })).toBe(false);
 });
 
+test('verifier-owned final market summary abort classifier is exact and fail-closed', () => {
+  const input = {
+    method: 'GET',
+    rawUrl: 'https://staging.example/api/market/summary',
+    errorText: 'net::ERR_ABORTED',
+    origin: 'https://staging.example',
+  };
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity(input)).toBe(true);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, method: 'POST' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, rawUrl: 'https://staging.example/api/market/movers' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, rawUrl: 'https://other.example/api/market/summary' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, errorText: 'net::ERR_CONNECTION_RESET' })).toBe(false);
+});
+
 test.describe('real staging release readiness', () => {
   test.describe.configure({ mode: 'serial' });
   test.skip(!stagingMode, 'Requires isolated staging, exact SHA, and ephemeral staging-only accounts');
@@ -2379,6 +2425,7 @@ test.describe('real staging release readiness', () => {
     await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
+    verifierOwnedTestTeardowns.set(page, new URL(page.url()).origin);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
