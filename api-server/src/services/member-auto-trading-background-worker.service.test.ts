@@ -211,7 +211,7 @@ function source(
   nowMs: number,
   options: {
     missingRecentMove?: boolean;
-    tier?: 'pending' | 'associate';
+    tier?: 'pending' | 'associate' | 'admin';
     expired?: boolean;
     handoffMissing?: boolean;
     markPrice?: number;
@@ -230,7 +230,7 @@ function source(
         policy: policy(),
         profile: {
           membership_level: options.tier ?? 'associate',
-          role: 'user',
+          role: options.tier === 'admin' ? 'admin' : 'user',
           status: options.tier === 'pending' ? 'pending' : 'approved',
           is_active: true,
           membership_expires_at: options.expired ? new Date(nowMs - 1_000).toISOString() : null,
@@ -724,7 +724,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
   await repository.savePolicy(USER, policy());
   const syncCalls = { count: 0 };
   let liveReads = 0;
-  const base = source(repository, nowMs, { syncCalls });
+  const base = source(repository, nowMs, { syncCalls, tier: 'admin' });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
     async listEligibleMembers() {
@@ -802,6 +802,9 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
     assert.equal(warmup.privateTradingRequests, 0);
     assert.equal(warmup.executionSyncFailures, 0);
     assert.equal(warmup.executionSyncMissingReferences, 0);
+    assert.equal(warmup.liveOrderEligibleMembers, 1);
+    assert.equal(warmup.livePolicyReadyMembers, 1);
+    assert.equal(warmup.globalEmergencyStopActive, false);
 
     await writeFile(armPath, JSON.stringify({
       schemaVersion: 'member-auto-trading-live-entry-arm-v1',
