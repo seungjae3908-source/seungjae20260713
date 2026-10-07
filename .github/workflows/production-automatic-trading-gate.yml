@@ -565,6 +565,7 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
           QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q FUTURES_MAX_LEVERAGE=%q' "$TARGET_SHA" "$FUTURES_MAX_LEVERAGE")"
@@ -620,6 +621,14 @@ jobs:
           });
           const assertAllFourManual = (env, expectedAuto) => {
             const manual = manualState(env);
+            if (env.BACKGROUND_WORKERS_ENABLED === false || env.BACKGROUND_WORKERS_ENABLED === 'false') {
+              throw new Error('AUTOMATIC_TRADING_BACKGROUND_WORKERS_MASTER_OFF');
+            }
+            const supabaseUrl = String(env.SUPABASE_URL || '').trim();
+            const serviceRole = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+            if (!supabaseUrl || !serviceRole) {
+              throw new Error('AUTOMATIC_TRADING_SERVICE_ROLE_RUNTIME_MISSING');
+            }
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
             }
@@ -658,6 +667,31 @@ jobs:
               throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
             }
           };
+          const requireWorkerRuntime = async () => {
+            for (let attempt = 1; attempt <= 12; attempt += 1) {
+              try {
+                const response = await fetch('http://127.0.0.1:8080/api/health', {
+                  headers: { Accept: 'application/json' },
+                  signal: AbortSignal.timeout(3000),
+                });
+                const health = response.ok ? await response.json() : null;
+                const worker = health?.memberAutoTradingBackground;
+                if (health?.ok === true
+                  && health?.backgroundWorkersEnabled === true
+                  && worker?.masterEnabled === true
+                  && worker?.workerFlagEnabled === true
+                  && worker?.serviceRoleConfigured === true
+                  && worker?.started === true
+                  && worker?.liveBackgroundEnabled === true
+                  && worker?.startBlockedReason == null) {
+                  return;
+                }
+              } catch {}
+              if (attempt < 12) await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            throw new Error('AUTOMATIC_TRADING_BACKGROUND_WORKER_NOT_STARTED');
+          };
+
           const restartAutomatic = (enabled) => {
             execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
               stdio: 'inherit',
@@ -686,6 +720,7 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            await requireWorkerRuntime();
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
@@ -703,12 +738,14 @@ jobs:
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
+            await requireWorkerRuntime();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            await requireWorkerRuntime();
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
