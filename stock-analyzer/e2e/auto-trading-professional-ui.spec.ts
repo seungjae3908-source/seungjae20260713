@@ -72,6 +72,8 @@ test('trading shell exposes selected-market read-only activity without creating 
   const settings = source('src/components/trade-automation-settings.tsx');
   expect(settings).toContain('liveAutomaticExecutionServerEnabled');
   expect(settings).toContain('readyForAutomaticOrderEvaluation');
+  expect(settings).toContain('data-testid="live-position-stop-warning"');
+  expect(settings).toContain('기존 Live 자동포지션의 후속 자동청산 감시도 중단될 수 있습니다.');
   expect(settings).toContain('자동게이트 준비');
   expect(settings).toContain('refreshInFlight');
   expect(settings).toContain('load({ syncDraft: false })');
