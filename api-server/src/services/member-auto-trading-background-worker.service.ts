@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, readFile } from 'node:fs/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deriveMemberTier, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import {
@@ -56,6 +57,8 @@ const MIN_INTERVAL_MS = 10_000;
 const MAX_INTERVAL_MS = 300_000;
 const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
+const DEFAULT_LIVE_ENTRY_ARM_PATH =
+  '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
 const executionProjectionTransport: TelegramTransport = {
@@ -130,7 +133,75 @@ export type MemberAutoTradingBackgroundRunResult = {
   notificationDeliveriesQueued: number;
   executionSyncMissingReferences: number;
   executionSyncFailures: number;
+  liveEntryArmPresent: boolean;
 };
+
+export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
+  enabled: boolean;
+  liveModeRequested: boolean;
+  lastTickAt: string | null;
+  tickOk: boolean | null;
+  handoffStatus: MemberAutoTradingBackgroundRunResult['handoffStatus'];
+  handoffReady: boolean;
+  newEntriesFailClosed: boolean;
+  liveEntryArmPresent: boolean;
+  liveEntriesArmed: boolean;
+  liveEntryWarmupComplete: boolean;
+  startupWarmupObserved: boolean;
+  firstWarmupTickLiveEntriesArmed: boolean | null;
+  firstWarmupTickLiveOrders: number | null;
+  executionSyncFailures: number;
+  executionSyncMissingReferences: number;
+  errorCode: string | null;
+}>;
+
+let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.freeze({
+  enabled: false,
+  liveModeRequested: false,
+  lastTickAt: null,
+  tickOk: null,
+  handoffStatus: 'MISSING',
+  handoffReady: false,
+  newEntriesFailClosed: true,
+  liveEntryArmPresent: false,
+  liveEntriesArmed: false,
+  liveEntryWarmupComplete: false,
+  startupWarmupObserved: false,
+  firstWarmupTickLiveEntriesArmed: null,
+  firstWarmupTickLiveOrders: null,
+  executionSyncFailures: 0,
+  executionSyncMissingReferences: 0,
+  errorCode: null,
+});
+
+export function readMemberAutoTradingBackgroundRuntimeHealth() {
+  return backgroundRuntimeHealth;
+}
+
+async function liveEntryArmPresent() {
+  if (!liveBackgroundEnabled()) return false;
+  const targetSha = String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase();
+  if (!/^[a-f0-9]{40}$/u.test(targetSha)) return false;
+  const configured = process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH?.trim()
+    || DEFAULT_LIVE_ENTRY_ARM_PATH;
+  if (!path.isAbsolute(configured)) return false;
+  let handle;
+  try {
+    handle = await open(path.resolve(configured), constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= 0 || stat.size > 16 * 1024
+      || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
+      || (stat.mode & 0o077)) return false;
+    const value = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
+    return value.schemaVersion === 'member-auto-trading-live-entry-arm-v1'
+      && value.armed === true
+      && String(value.targetSha ?? '').toLowerCase() === targetSha;
+  } catch {
+    return false;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -935,7 +1006,10 @@ export class MemberAutoTradingBackgroundWorker {
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
-    const liveEntriesArmedThisTick = liveModeRequested && this.liveEntryWarmupComplete;
+    const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent() : false;
+    const liveEntriesArmedThisTick = liveModeRequested
+      && this.liveEntryWarmupComplete
+      && liveEntryArmPresentThisTick;
     const result: MemberAutoTradingBackgroundRunResult = {
       handoffStatus: 'MISSING',
       handoffReady: false,
@@ -966,6 +1040,7 @@ export class MemberAutoTradingBackgroundWorker {
       notificationDeliveriesQueued: 0,
       executionSyncMissingReferences: 0,
       executionSyncFailures: 0,
+      liveEntryArmPresent: liveEntryArmPresentThisTick,
     };
     if (this.running) return result;
     this.running = true;
@@ -1343,17 +1418,81 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
   if (process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true') {
+    backgroundRuntimeHealth = Object.freeze({
+      ...backgroundRuntimeHealth,
+      enabled: false,
+      liveModeRequested: false,
+      tickOk: null,
+      newEntriesFailClosed: true,
+      liveEntryArmPresent: false,
+      liveEntriesArmed: false,
+      liveEntryWarmupComplete: false,
+      errorCode: null,
+    });
     console.log('[member-auto-trading-background] disabled; explicit enable flag is required');
     return null;
   }
   if (!hasSupabaseServerKey()) {
+    backgroundRuntimeHealth = Object.freeze({
+      ...backgroundRuntimeHealth,
+      enabled: true,
+      liveModeRequested: liveBackgroundEnabled(),
+      tickOk: false,
+      newEntriesFailClosed: true,
+      liveEntriesArmed: false,
+      liveEntryWarmupComplete: false,
+      errorCode: 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED',
+    });
     console.error('[member-auto-trading-background] blocked: service-role Supabase configuration is required');
     return null;
   }
+  backgroundRuntimeHealth = Object.freeze({
+    ...backgroundRuntimeHealth,
+    enabled: true,
+    liveModeRequested: liveBackgroundEnabled(),
+    lastTickAt: null,
+    tickOk: null,
+    handoffStatus: 'MISSING',
+    handoffReady: false,
+    newEntriesFailClosed: true,
+    liveEntryArmPresent: false,
+    liveEntriesArmed: false,
+    liveEntryWarmupComplete: false,
+    startupWarmupObserved: false,
+    firstWarmupTickLiveEntriesArmed: null,
+    firstWarmupTickLiveOrders: null,
+    executionSyncFailures: 0,
+    executionSyncMissingReferences: 0,
+    errorCode: null,
+  });
   const worker = new MemberAutoTradingBackgroundWorker(new SupabaseMemberAutoTradingBackgroundSource());
   const tick = async () => {
     try {
       const result = await worker.runOnce(new Date());
+      const warmupObservedNow = !backgroundRuntimeHealth.startupWarmupObserved
+        && result.liveEntryWarmupComplete;
+      backgroundRuntimeHealth = Object.freeze({
+        enabled: true,
+        liveModeRequested: liveBackgroundEnabled(),
+        lastTickAt: new Date().toISOString(),
+        tickOk: true,
+        handoffStatus: result.handoffStatus,
+        handoffReady: result.handoffReady,
+        newEntriesFailClosed: result.newEntriesFailClosed,
+        liveEntryArmPresent: result.liveEntryArmPresent,
+        liveEntriesArmed: result.liveEntriesArmed,
+        liveEntryWarmupComplete: result.liveEntryWarmupComplete,
+        startupWarmupObserved: backgroundRuntimeHealth.startupWarmupObserved || warmupObservedNow,
+        firstWarmupTickLiveEntriesArmed: warmupObservedNow
+          ? result.liveEntriesArmed
+          : backgroundRuntimeHealth.firstWarmupTickLiveEntriesArmed,
+        firstWarmupTickLiveOrders: warmupObservedNow
+          ? result.liveOrders
+          : backgroundRuntimeHealth.firstWarmupTickLiveOrders,
+        executionSyncFailures: result.executionSyncFailures,
+        executionSyncMissingReferences: result.executionSyncMissingReferences,
+        errorCode: null,
+      });
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
         || result.paperExitOrders > 0 || result.liveExitOrders > 0
         || result.exitBlocked > 0 || result.executionSyncBlocks > 0
@@ -1361,6 +1500,17 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
+      backgroundRuntimeHealth = Object.freeze({
+        ...backgroundRuntimeHealth,
+        enabled: true,
+        liveModeRequested: liveBackgroundEnabled(),
+        lastTickAt: new Date().toISOString(),
+        tickOk: false,
+        newEntriesFailClosed: true,
+        liveEntriesArmed: false,
+        liveEntryWarmupComplete: false,
+        errorCode: errorCode(error),
+      });
       console.error('[member-auto-trading-background] tick failed', {
         errorCode: errorCode(error),
       });
