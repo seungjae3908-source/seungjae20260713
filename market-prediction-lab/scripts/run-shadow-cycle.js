@@ -5,7 +5,7 @@ import { analyzeMarket } from "../src/engine.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
 import { BITGET_TIMEFRAME_MS, collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
-import { collectFundingRateHistory, createTemporalDerivativesProvider } from "../src/derivatives-history.js";
+import { collectFundingRateHistory, collectLongShortRatioHistory, createTemporalDerivativesProvider } from "../src/derivatives-history.js";
 import { collectBitgetDerivedCandles, createTemporalMarketStructureProvider } from "../src/market-structure-history.js";
 import {
   createShadowPrediction,
@@ -299,6 +299,55 @@ function addOpenInterestSnapshot(snapshots, symbol, context) {
   return next.slice(-5000);
 }
 
+function mergeLongShortSnapshots(snapshots, symbol, records) {
+  const next = [...(snapshots ?? [])];
+  for (const row of records ?? []) {
+    const timestamp = Number(row?.timestamp);
+    const ratioRaw = String(row?.ratioRaw ?? "").trim();
+    if (!Number.isInteger(timestamp) || timestamp <= 0 || !ratioRaw) continue;
+    const existing = next.find((item) => item.symbol === symbol && item.timestamp === timestamp);
+    if (existing && existing.ratioRaw !== ratioRaw) {
+      throw new Error(`long-short conflict at ${symbol}:${timestamp}`);
+    }
+    if (!existing) next.push({ symbol, timestamp, ratioRaw });
+  }
+  next.sort((left, right) => left.timestamp - right.timestamp || left.symbol.localeCompare(right.symbol));
+  return next.slice(-5000);
+}
+
+function shadowTemporalEvidenceReadiness(groupState) {
+  const oiCount = Array.isArray(groupState?.openInterestSnapshots) ? groupState.openInterestSnapshots.length : 0;
+  const longShortCount = Array.isArray(groupState?.longShortSnapshots) ? groupState.longShortSnapshots.length : 0;
+  return Object.freeze({
+    openInterestChange: Object.freeze({
+      status: oiCount >= 2 ? "PROSPECTIVE_EVIDENCE_ACCUMULATING" : "INSUFFICIENT_PROSPECTIVE_EVIDENCE",
+      observationCount: oiCount,
+      trainingParityConfirmed: false,
+      reason: "MODEL_WAS_NOT_TRAINED_WITH_HISTORICAL_OPEN_INTEREST",
+    }),
+    longShortBias: Object.freeze({
+      status: longShortCount >= 2 ? "PROSPECTIVE_EVIDENCE_ACCUMULATING" : "INSUFFICIENT_PROSPECTIVE_EVIDENCE",
+      observationCount: longShortCount,
+      trainingParityConfirmed: false,
+      reason: "MODEL_WAS_NOT_TRAINED_WITH_HISTORICAL_LONG_SHORT_RATIO",
+    }),
+    benchmarkReturn: Object.freeze({
+      status: "SOURCE_BINDING_MISSING",
+      observationCount: 0,
+      trainingParityConfirmed: false,
+      reason: "CANONICAL_CRYPTO_BENCHMARK_SOURCE_NOT_DEFINED",
+    }),
+    sentimentScore: Object.freeze({
+      status: "SOURCE_BINDING_MISSING",
+      observationCount: 0,
+      trainingParityConfirmed: false,
+      reason: "CANONICAL_CRYPTO_SENTIMENT_SOURCE_NOT_DEFINED",
+    }),
+    defaultFeatureFallbackAllowed: false,
+    syntheticFeatureFallbackAllowed: false,
+  });
+}
+
 function settleAvailable(groupState, candlesBySymbol) {
   const records = (groupState.records ?? []).map((record) => {
     if (record.status !== "pending") return record;
@@ -338,10 +387,12 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
     createdAt: previousGroupState?.createdAt ?? cycleTime,
     updatedAt: cycleTime,
     openInterestSnapshots: [...(previousGroupState?.openInterestSnapshots ?? [])],
+    longShortSnapshots: [...(previousGroupState?.longShortSnapshots ?? [])],
     records: [...(previousGroupState?.records ?? [])],
   };
   const candlesBySymbol = {};
   const fundingBySymbol = {};
+  const longShortBySymbol = {};
   const markBySymbol = {};
   const indexBySymbol = {};
   const contextBySymbol = {};
@@ -364,6 +415,11 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       startTime: startTime - 12 * 60 * 60 * 1000,
       endTime,
     });
+    longShortBySymbol[symbol] = await collectLongShortRatioHistory({
+      client,
+      symbol,
+      period: String(process.env.RESEARCH_TEMPORAL_LONG_SHORT_PERIOD ?? "1h").trim() || "1h",
+    });
     if (selection.requiresMarketStructure) {
       [markBySymbol[symbol], indexBySymbol[symbol]] = await Promise.all([
         collectBitgetDerivedCandles({ client, kind: "mark", symbol, timeframe: config.timeframe, startTime, endTime }),
@@ -378,6 +434,11 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       markPriceRaw: context.markPriceRaw,
     };
     groupState.openInterestSnapshots = addOpenInterestSnapshot(groupState.openInterestSnapshots, symbol, context);
+    groupState.longShortSnapshots = mergeLongShortSnapshots(
+      groupState.longShortSnapshots,
+      symbol,
+      longShortBySymbol[symbol].records,
+    );
   }
 
   groupState = settleAvailable(groupState, candlesBySymbol);
@@ -390,6 +451,9 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
     const baseProvider = createTemporalDerivativesProvider({
       fundingHistory: fundingBySymbol[symbol].records,
       openInterestSnapshots: groupState.openInterestSnapshots.filter((row) => row.symbol === symbol),
+      longShortHistory: groupState.longShortSnapshots.filter((row) => row.symbol === symbol),
+      openInterestTrainingParityConfirmed: false,
+      longShortTrainingParityConfirmed: false,
     });
     const baseTemporal = baseProvider({ anchorTimestamp: anchor.timestamp });
     const structureTemporal = selection.requiresMarketStructure
@@ -622,6 +686,7 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
         requiresMarketStructure: selection.requiresMarketStructure,
       },
       contexts: contextBySymbol,
+      temporalEvidenceReadiness: shadowTemporalEvidenceReadiness(groupState),
       canonicalEvidence: {
         runtimeStatus: canonicalEvidence.runtimeStatus,
         runtimeReason: canonicalEvidence.runtimeReason,
