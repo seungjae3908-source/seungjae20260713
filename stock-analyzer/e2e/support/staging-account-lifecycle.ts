@@ -170,7 +170,7 @@ async function assignTier(
     login_name: account.loginName,
     display_name: `Staging validation ${account.tier}`,
     membership_level: account.tier,
-    is_active: true,
+    is_active: approved,
     role: account.tier === 'admin' ? 'admin' : 'user',
     status: approved ? 'approved' : 'pending',
     approved_at: approved ? now : null,
@@ -193,7 +193,7 @@ async function assignTier(
   if (
     profile.login_name !== account.loginName
     || profile.membership_level !== account.tier
-    || profile.is_active !== true
+    || profile.is_active !== approved
     || profile.role !== expectedRole
     || profile.status !== expectedStatus
   ) {
