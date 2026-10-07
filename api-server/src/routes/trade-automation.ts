@@ -1078,7 +1078,10 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         operational: backgroundWorkersMasterEnabled
           && backgroundAutomationRuntime.started
           && backgroundAutomationRuntime.workerFlagEnabled
-          && backgroundAutomationRuntime.serviceRoleConfigured,
+          && backgroundAutomationRuntime.serviceRoleConfigured
+          && backgroundAutomationRuntime.lastTickErrorCode == null
+          && backgroundAutomationRuntime.lastHandoffStatus === 'READY',
+        handoffReady: backgroundAutomationRuntime.lastHandoffStatus === 'READY',
         ...backgroundAutomationRuntime,
       },
       spotLiveLimited: spotLiveRuntimeStatus(),
