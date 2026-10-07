@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { createResearchWorkerQueue, researchWorkerJobDigest, runResearchWorkerLoop, runResearchWorkerOnce } from '../src/research-workspace-worker-v9.js';
 const base='2026-09-26T04:00:00.000Z';
@@ -42,4 +44,22 @@ test('dual review reaches durable REVIEW_REQUIRED terminal state without retry-t
   assert.equal(out.status,'SUCCEEDED');assert.equal(out.outcome,'REVIEW_REQUIRED');
   const row=JSON.parse(await readFile(join(root,'done','DUAL1.json'),'utf8'));
   assert.equal(row.status,'SUCCEEDED');assert.equal(row.outcome,'REVIEW_REQUIRED');assert.equal(row.attempts,1);
+});
+
+
+test('worker CLI executes through current release symlink instead of silently exiting zero', async t=>{
+  const root=await mkdtemp(join(tmpdir(),'worker-v9-symlink-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const repoRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..','..','..');
+  const current=join(root,'current');
+  await symlink(repoRoot,current,'dir');
+  const stateRoot=join(root,'worker-state');
+  const cli=join(current,'packages','external-research','scripts','run-research-worker-v9.mjs');
+  const run=spawnSync(process.execPath,[cli,'--root',stateRoot,'--status'],{encoding:'utf8'});
+  assert.equal(run.status,0,run.stderr);
+  assert.notEqual(run.stdout.trim(),'');
+  const output=JSON.parse(run.stdout);
+  assert.equal(output.schemaVersion,'research-worker-status-v9');
+  assert.equal(output.available,false);
+  assert.equal(output.reason,'WORKER_STORE_NOT_INSTALLED');
 });
