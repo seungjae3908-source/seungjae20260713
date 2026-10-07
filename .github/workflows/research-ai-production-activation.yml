@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/research-ai-production-activation.yml
       - research-production/deploy/activate-ai-research.sh
+      - research-production/deploy/activate-server.sh
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
       - research-production/deploy/install-ai-research-units.sh
       - research-production/deploy/research-production-ai-review.service
@@ -30,6 +31,7 @@ on:
       - research-production/test/research-ai-activation-contract.test.mjs
       - research-production/test/research-ai-diagnostic.test.mjs
       - research-production/test/research-forward-runtime-diagnostic.test.mjs
+      - research-production/test/research-server-activation-contract.test.mjs
       - research-production/test/research-ai-review-worker.test.mjs
       - research-production/test/research-ai-units-install-contract.test.mjs
       - research-production/test/research-provider-bootstrap.test.mjs
@@ -70,12 +72,14 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n research-production/deploy/activate-ai-research.sh
+          bash -n research-production/deploy/activate-server.sh
           bash -n research-production/deploy/install-ai-research-units.sh
           systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
           node --test \
             research-production/test/research-ai-activation-contract.test.mjs \
             research-production/test/research-ai-diagnostic.test.mjs \
             research-production/test/research-forward-runtime-diagnostic.test.mjs \
+            research-production/test/research-server-activation-contract.test.mjs \
             research-production/test/research-ai-review-worker.test.mjs \
             research-production/test/research-ai-units-install-contract.test.mjs \
             research-production/test/research-provider-bootstrap.test.mjs \
