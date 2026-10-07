@@ -272,7 +272,7 @@ jobs:
           remote_status=${PIPESTATUS[0]}
           set -e
           if (( remote_status != 0 )); then
-            failure_reason="$(grep -Eo 'AI_RESEARCH_[A-Z0-9_.:=-]+' "$RUNNER_TEMP/ai-research-activation.txt" | tail -1 || true)"
+            failure_reason="$(grep -Eo 'AI_RESEARCH_[A-Z0-9_.:=-]+' "$RUNNER_TEMP/ai-research-activation.txt" | grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=' | tail -1 || true)"
             failure_reason="${failure_reason:-AI_RESEARCH_ACTIVATION_REMOTE_FAILED}"
             printf 'failure_reason=%s\n' "$failure_reason" >> "$GITHUB_OUTPUT"
             exit "$remote_status"
