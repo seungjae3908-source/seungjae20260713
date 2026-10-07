@@ -571,11 +571,31 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
           import { execFileSync } from 'node:child_process';
-          import { readFileSync } from 'node:fs';
+          import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
 
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
+          const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
+          const disarmLiveEntries = () => rmSync(liveEntryArmPath, { force: true });
+          const armLiveEntries = () => {
+            mkdirSync(dirname(liveEntryArmPath), { recursive: true });
+            const temp = liveEntryArmPath + '.tmp-' + process.pid;
+            rmSync(temp, { force: true });
+            writeFileSync(temp, JSON.stringify({
+              schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+              targetSha: target,
+              armed: true,
+              armedAt: new Date().toISOString(),
+            }) + '\n', { mode: 0o600, flag: 'wx' });
+            renameSync(temp, liveEntryArmPath);
+            const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
+              || value?.armed !== true || value?.targetSha !== target) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WRITE_FAILED');
+            }
+          };
           if (!['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
           if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
@@ -596,6 +616,35 @@ jobs:
               throw new Error('AUTOMATIC_TRADING_PM2_IDENTITY_INVALID');
             }
             return env;
+          };
+          const requireWorkerWarmup = (env, { requireCurrentArm }) => {
+            const port = String(env.PORT || env.API_PORT || '8080');
+            let last = null;
+            for (let attempt = 0; attempt < 30; attempt += 1) {
+              try {
+                last = JSON.parse(execFileSync('curl', [
+                  '--fail', '--silent', '--show-error', '--max-time', '3',
+                  'http://127.0.0.1:' + port + '/api/health',
+                ], { encoding: 'utf8' }));
+                const health = last?.autoTradingBackground;
+                if (health?.enabled === true
+                  && health?.liveModeRequested === true
+                  && health?.tickOk === true
+                  && health?.handoffReady === true
+                  && health?.newEntriesFailClosed === false
+                  && health?.liveEntryWarmupComplete === true
+                  && health?.startupWarmupObserved === true
+                  && health?.firstWarmupTickLiveEntriesArmed === false
+                  && health?.firstWarmupTickLiveOrders === 0
+                  && health?.executionSyncFailures === 0
+                  && health?.executionSyncMissingReferences === 0
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
+                  return health;
+                }
+              } catch {}
+              execFileSync('sleep', ['1']);
+            }
+            throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify(last?.autoTradingBackground ?? null));
           };
           const manualState = (env) => ({
             live: bool(env, 'LIVE_TRADING'),
@@ -686,11 +735,14 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
               idempotent: true,
               persistenceReadback: 'PASS',
+              WORKER_WARMUP_PROVEN: true,
+              LIVE_ENTRY_ARM_PRESENT: true,
               REAL_ORDER_SUBMITTED: false,
             }));
             process.exit(0);
@@ -699,10 +751,13 @@ jobs:
           const preserved = manualState(before);
           let mutated = false;
           try {
+            disarmLiveEntries();
             restartAutomatic(true);
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
+            requireWorkerWarmup(after, { requireCurrentArm: false });
+            armLiveEntries();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
@@ -724,11 +779,16 @@ jobs:
               PAPER_AUTOMATIC_EXECUTION: true,
               LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
               persistenceReadback: 'PASS',
+              WORKER_WARMUP_PROVEN: true,
+              FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false,
+              FIRST_WARMUP_TICK_LIVE_ORDERS: 0,
+              LIVE_ENTRY_ARM_WRITTEN: true,
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
             if (mutated) {
               try {
+                disarmLiveEntries();
                 restartAutomatic(false);
                 const rolledBack = snapshot();
                 assertAllFourManual(rolledBack, false);
@@ -859,10 +919,12 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
           import { execFileSync } from 'node:child_process';
-          import { readFileSync } from 'node:fs';
+          import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
 
           const target = String(process.env.TARGET_SHA || '');
           const pm2Name = 'stock-app';
+          const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
           if (readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim() !== target) {
             throw new Error('AUTOMATIC_TRADING_DISABLE_DEPLOY_SHA_MISMATCH');
           }
@@ -905,6 +967,7 @@ jobs:
 
           const before = readEnv();
           const preserved = manual(before);
+          rmSync(liveEntryArmPath, { force: true });
           execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
             stdio: 'inherit',
             env: {
