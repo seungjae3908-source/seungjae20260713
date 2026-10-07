@@ -20,17 +20,18 @@ test('AI diagnostic exposes leaf reason without evidence body or secret-like fie
       status: 'PARTIAL_AI_UNAVAILABLE',
       researchSha: SHA,
       provider: 'groq',
-      model: 'openai/gpt-oss-20b',
+      model: 'SHOULD_NEVER_APPEAR',
       providerNetworkCalls: 1,
       cacheHits: 0,
       profileCoverage: {
         totalProfiles: 3,
-        reviewedProfiles: [],
+        reviewedProfiles: ['forward', 'SHOULD_NEVER_APPEAR'],
         missingProfiles: [],
         staleProfiles: ['fast-historical', 'long-history'],
         retryDeferredProfiles: [],
         blockedProfiles: ['forward'],
         allProfilesCurrentAndReviewed: false,
+        apiKey: 'SHOULD_NEVER_APPEAR',
       },
       blockedProfiles: [{
         profile: 'forward',
@@ -57,6 +58,9 @@ test('AI diagnostic exposes leaf reason without evidence body or secret-like fie
     assert.equal(output.status, 'PARTIAL_AI_UNAVAILABLE');
     assert.equal(output.blockedProfiles[0].profile, 'forward');
     assert.equal(output.blockedProfiles[0].reason, 'FREE_AI_RATE_LIMITED');
+    assert.equal(output.model, null);
+    assert.deepEqual(output.profileCoverage.reviewedProfiles, ['forward']);
+    assert.equal(Object.hasOwn(output.profileCoverage, 'apiKey'), false);
     assert.equal(output.credentialValuesExposed, false);
     assert.equal(output.executionAuthority, 'NONE');
     assert.doesNotMatch(run.stdout, /SHOULD_NEVER_APPEAR|apiKey|providerCredential|rawProviderBody|prompt|evidenceDigest/);
