@@ -109,7 +109,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   newEntriesFailClosed: boolean;
   liveEntriesArmed: boolean;
   liveEntryWarmupComplete: boolean;
-  liveEntriesSuppressedByWarmup: number;
+  liveEntriesSuppressedByWarmupOrArm: number;
   runtimeRefreshes: number;
   executionSyncBlocks: number;
   members: number;
@@ -1016,7 +1016,7 @@ export class MemberAutoTradingBackgroundWorker {
       newEntriesFailClosed: false,
       liveEntriesArmed: liveEntriesArmedThisTick,
       liveEntryWarmupComplete: this.liveEntryWarmupComplete,
-      liveEntriesSuppressedByWarmup: 0,
+      liveEntriesSuppressedByWarmupOrArm: 0,
       runtimeRefreshes: 0,
       executionSyncBlocks: 0,
       members: 0,
@@ -1228,7 +1228,7 @@ export class MemberAutoTradingBackgroundWorker {
             }
 
             if (liveModeRequested && !liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
-              result.liveEntriesSuppressedByWarmup += 1;
+              result.liveEntriesSuppressedByWarmupOrArm += 1;
             }
 
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
@@ -1496,7 +1496,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
         || result.paperExitOrders > 0 || result.liveExitOrders > 0
         || result.exitBlocked > 0 || result.executionSyncBlocks > 0
-        || result.liveEntriesSuppressedByWarmup > 0 || result.failures > 0) {
+        || result.liveEntriesSuppressedByWarmupOrArm > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
