@@ -500,6 +500,9 @@ jobs:
             return {
               status: String(env.status ?? ''),
               deploySha: String(env.DEPLOY_SHA ?? ''),
+              telegramApproved: bool('LIVE_TELEGRAM_ACTIVATION_APPROVED'),
+              telegramIntelligenceWorker: bool('TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+              telegramDeliveryWorker: bool('PERSONAL_TELEGRAM_WORKER_ENABLED'),
               live: bool('LIVE_TRADING'),
               auto: bool('AUTO_TRADING'),
               real: bool('REAL_ORDER_ENABLED'),
@@ -527,6 +530,9 @@ jobs:
 
           const pre = readRuntime();
           if (pre.status !== 'online' || pre.deploySha !== target
+            || pre.telegramApproved !== true
+            || pre.telegramIntelligenceWorker !== true
+            || pre.telegramDeliveryWorker !== true
             || pre.live !== true || pre.auto !== false || pre.real !== true || pre.privateApi !== true
             || pre.orderExecution !== true || pre.activationApproved !== true
             || pre.spotApproved !== true || pre.automaticLive !== false
@@ -548,6 +554,9 @@ jobs:
             execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
               env: {
                 ...process.env,
+                LIVE_TELEGRAM_ACTIVATION_APPROVED: String(pre.telegramApproved),
+                TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(pre.telegramIntelligenceWorker),
+                PERSONAL_TELEGRAM_WORKER_ENABLED: String(pre.telegramDeliveryWorker),
                 FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(pre.futuresApproved),
                 BITGET_FUTURES_LIVE_ORDER_ENABLED: String(pre.bitgetFutures),
                 FUTURES_LIVE_EXECUTION_AUTHORITY: pre.futuresAuthority,
@@ -571,6 +580,9 @@ jobs:
               execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
                 env: {
                   ...process.env,
+                  LIVE_TELEGRAM_ACTIVATION_APPROVED: String(pre.telegramApproved),
+                  TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(pre.telegramIntelligenceWorker),
+                  PERSONAL_TELEGRAM_WORKER_ENABLED: String(pre.telegramDeliveryWorker),
                   AUTO_TRADING: 'false',
                   LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
                   MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
@@ -594,6 +606,9 @@ jobs:
 
             const post = readRuntime();
             if (post.status !== 'online' || post.deploySha !== target
+              || post.telegramApproved !== pre.telegramApproved
+              || post.telegramIntelligenceWorker !== pre.telegramIntelligenceWorker
+              || post.telegramDeliveryWorker !== pre.telegramDeliveryWorker
               || post.live !== true || post.auto !== false || post.real !== true || post.privateApi !== true
               || post.orderExecution !== true || post.activationApproved !== true
               || post.spotApproved !== true || post.automaticLive !== false
