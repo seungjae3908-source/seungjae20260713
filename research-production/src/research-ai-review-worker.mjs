@@ -60,16 +60,17 @@ export const RESEARCH_AI_WORKER_SAFETY = Object.freeze({
 
 const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|비밀번호|계좌번호)\s*[:=]\s*\S{8,})/i;
 const privateDataPattern = /(?:\b\d{6}-[1-4]\d{6}\b|주민등록번호|생년월일)/i;
-const performanceMetricPattern = /(?:\bPF\b|profit\s*factor|\bEV\b|expectancy|\bMDD\b|\bMAE\b|\bMFE\b|Sharpe|\bDSR\b|\bPBO\b|net\s*alpha|full\s*cost|position\s*size|leverage|champion|promotion|profitability|(?:expected|investment|strategy|portfolio|annual|monthly|daily|net|gross)\s+returns?\b|수익률|기대값|기대수익|승률|확률|최대낙폭|레버리지|챔피언|승격|수수료|probability|win\s*rate)/i;
+const performanceMetricPattern = /(?:\bPF\b|profit\s*factor|\bEV\b|expectancy|\bMDD\b|\bMAE\b|\bMFE\b|Sharpe|\bDSR\b|\bPBO\b|\bROI\b|\bPnL\b|\bCAGR\b|\bprofit\b|\bdrawdown\b|net\s*alpha|full\s*cost|position\s*size|leverage|champion|promotion|profitability|(?:expected|investment|strategy|portfolio|annual|monthly|daily|net|gross)\s+returns?\b|수익률|기대값|기대수익|승률|확률|최대낙폭|레버리지|챔피언|승격|수수료|probability|win\s*rate)/i;
 const cautiousMetricContextPattern = /(?:do\s+not|don't|cannot|can't|must\s+not|should\s+not|insufficient|not\s+enough|unknown|unavailable|avoid|forbid|금지|판단(?:하면)?\s*안|판단할\s*수\s*없|평가할\s*수\s*없|단정할\s*수\s*없|추정할\s*수\s*없|자료(?:가)?\s*부족|근거(?:가)?\s*부족|알\s*수\s*없)/i;
 const guaranteedPerformancePattern = /(?:guaranteed\s*(?:profit|return)|risk[- ]?free\s*(?:profit|return)|무조건\s*상승|확실한\s*수익|손실\s*없)/i;
 const unsafeAuthorityPattern = /(?:executionAuthority|orderAllowed|order\s*(?:submit|cancel|amend)|(?:BUY|SELL|LONG|SHORT)\s*(?:NOW|ENTRY|SIGNAL)|(?:매수|매도|롱|숏|진입).{0,16}(?:하세요|하십시오|권장|신호))/i;
 
 function containsUnsafePerformanceClaim(text) {
   if (guaranteedPerformancePattern.test(text)) return true;
-  if (!performanceMetricPattern.test(text)) return false;
-  if (cautiousMetricContextPattern.test(text)) return false;
-  return true;
+  const clauses = String(text).split(/(?:[.!?;。！？]|\bbut\b|\bhowever\b|하지만|그러나)/iu)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return clauses.some((clause) => performanceMetricPattern.test(clause) && !cautiousMetricContextPattern.test(clause));
 }
 
 function digest(value) {
