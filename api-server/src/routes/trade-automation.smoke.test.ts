@@ -1637,6 +1637,74 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
   } finally { await close(server); }
 });
 
+test('member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', async () => {
+  const isolated = new InMemoryTradingRepository();
+  await isolated.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+    emergencyStopped: true,
+    newEntriesStopped: true,
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
+    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+  }));
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const { server, baseUrl } = await startServer();
+  try {
+    const bypass = await fetch(`${baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+        exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(bypass.status, 409);
+    assert.equal((await bypass.json() as { error: string }).error, 'MEMBER_TRADING_RESUME_REQUIRED');
+
+    const missing = await fetch(`${baseUrl}/api/trade-automation/resume`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 409);
+    assert.equal(
+      (await missing.json() as { error: string }).error,
+      'MEMBER_TRADING_RESUME_CONFIRMATION_REQUIRED',
+    );
+
+    const resumed = await fetch(`${baseUrl}/api/trade-automation/resume`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmation: 'RESUME_MEMBER_TRADING' }),
+    });
+    assert.equal(resumed.status, 200);
+    const body = await resumed.json() as {
+      automaticTradingEnabledByThisRequest: boolean;
+      memberEmergencyStopped: boolean;
+      memberNewEntriesStopped: boolean;
+      policy: { automaticEnabled: boolean; emergencyStopped: boolean; newEntriesStopped: boolean };
+    };
+    assert.equal(body.automaticTradingEnabledByThisRequest, false);
+    assert.equal(body.memberEmergencyStopped, false);
+    assert.equal(body.memberNewEntriesStopped, false);
+    assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.policy.emergencyStopped, false);
+    assert.equal(body.policy.newEntriesStopped, false);
+
+    const stored = await isolated.getPolicy(USER);
+    assert.equal(stored.automaticEnabled, false);
+    assert.equal(stored.emergencyStopped, false);
+    assert.equal(stored.newEntriesStopped, false);
+  } finally {
+    await close(server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('persistent global emergency stop requires admin capability and exact confirmation', async () => {
   const regular = await startServer(true, 'regular');
   try {
