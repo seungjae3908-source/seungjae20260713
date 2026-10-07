@@ -26,6 +26,10 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import {
+  enforceMemberTradingPolicy,
+  resumeMemberTradingPolicy,
+} from '../services/trade-automation-policy-guard.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
 import {
@@ -1169,27 +1173,59 @@ router.get('/plans/:id/approval-status', async (req: AuthenticatedRequest, res) 
 router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const policy = normalizeTradingPolicy(req.body);
+    const current = await repository.getPolicy(userId);
+    let candidate = normalizeTradingPolicy(req.body);
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
-      policy.marketEnabled.crypto_futures = false;
-      policy.exchangeEnabled.bitget = false;
-      policy.enabledAssets.bitget = [];
+      candidate.marketEnabled.crypto_futures = false;
+      candidate.exchangeEnabled.bitget = false;
+      candidate.enabledAssets.bitget = [];
     }
-    const enablingAutomatic = policy.mode === 'automatic'
-      && (policy.automaticEnabled
-        || Object.values(policy.marketEnabled).some(Boolean)
-        || Object.values(policy.exchangeEnabled).some(Boolean));
+    const enablingAutomatic = candidate.mode === 'automatic'
+      && (candidate.automaticEnabled
+        || Object.values(candidate.marketEnabled).some(Boolean)
+        || Object.values(candidate.exchangeEnabled).some(Boolean));
     if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
       return res.status(409).json({ ok: false, error: 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED' });
     }
-    if (policy.mode !== 'automatic') {
-      policy.automaticEnabled = false;
-      policy.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
-      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
-      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
+    if ((current.emergencyStopped || current.newEntriesStopped) && enablingAutomatic) {
+      return res.status(409).json({ ok: false, error: 'MEMBER_TRADING_RESUME_REQUIRED' });
     }
+    if (candidate.mode !== 'automatic') {
+      candidate.automaticEnabled = false;
+      candidate.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
+      candidate.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
+      candidate.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
+    }
+    const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/resume', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (req.body?.confirmation !== 'RESUME_MEMBER_TRADING') {
+      return res.status(409).json({
+        ok: false,
+        error: 'MEMBER_TRADING_RESUME_CONFIRMATION_REQUIRED',
+        automaticTradingEnabledByThisRequest: false,
+      });
+    }
+    const [current, persistentGlobalStop] = await Promise.all([
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+    ]);
+    const policy = resumeMemberTradingPolicy(current);
+    await repository.savePolicy(userId, policy);
+    return res.json({
+      ok: true,
+      policy,
+      automaticTradingEnabledByThisRequest: false,
+      memberEmergencyStopped: false,
+      memberNewEntriesStopped: false,
+      effectiveGlobalEmergencyStopped: persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true',
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
