@@ -230,7 +230,15 @@ export function FormulaAiAutoRehearsalPanel() {
     { label: 'Paper 자동주문', pass: result?.paper?.paperFillReady === true, value: result?.paper?.paperFillReady ? `체결 PASS · ${result.paper.fillCount} fill` : '대기' },
     { label: 'Journal', pass: result?.journal?.ready === true, value: probes?.journalMessage ?? '대기' },
     { label: 'Telegram', pass: result?.telegram?.ready === true, value: probes?.telegramMessage ?? '대기' },
-    { label: 'Bitget', pass: result?.futures?.isolatedReady === true && result?.futures?.leverageReady === true, value: result?.futures ? `${result.futures.marginMode ?? '미설정'} / ${result.futures.maxLeverage || '-'}×` : '대기' },
+    {
+      label: 'Bitget',
+      pass: result?.futures?.isolatedReady === true
+        && result?.futures?.leverageReady === true
+        && result?.providers?.bitget?.ready === true,
+      value: result?.futures
+        ? `${result.futures.marginMode ?? '미설정'} / ${result.futures.maxLeverage || '-'}×${result.providers?.bitget?.lastErrorCode ? ` · ${result.providers.bitget.lastErrorCode}` : ' · Provider 오류 없음'}`
+        : '대기',
+    },
     { label: 'OOS 예외', pass: result?.exceptionPolicy === 'FORMULA_AI_LIVE_EXCEPTION_V1', value: result?.exceptionPolicy ?? '대기' },
     { label: 'AUTO 결과', pass: finalReady, value: result ? `WOULD_ACTIVATE = ${finalReady ? 'TRUE' : 'FALSE'}` : '대기' },
     { label: '실제 주문', pass: result?.realOrderSubmitted === false, value: result ? '0건' : '0건' },
