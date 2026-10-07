@@ -72,6 +72,11 @@ requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSI
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
 requireText(workflow, 'LIVE_ENTRY_ARM_READBACK_PROVEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_READBACK_PROOF_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READABILITY_INVALID', 'AUTO_GATE_ARM_WORKER_READABILITY_CHECK_MISSING');
+requireText(workflow, "statSync('/proc/' + Number(matches[0].pid)).uid", 'AUTO_GATE_ARM_WORKER_UID_CHECK_MISSING');
+requireText(workflow, "(stat.mode & 0o077) !== 0", 'AUTO_GATE_ARM_FILE_PERMISSION_CHECK_MISSING');
+requireText(workflow, 'stat.uid !== productionWorkerUid()', 'AUTO_GATE_ARM_OWNER_CHECK_MISSING');
+requireText(workflow, 'verifyLiveEntryArmReadable();', 'AUTO_GATE_ARM_READABILITY_CALL_MISSING');
 requireText(workflow, 'NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true', 'AUTO_GATE_NEXT_TICK_ZERO_MUTATION_PROOF_MISSING');
 requireText(workflow, 'Number(health?.liveOrderEligibleMembers ?? 0) > 0', 'AUTO_GATE_LIVE_ORDER_ELIGIBLE_MEMBER_PROOF_MISSING');
 requireText(workflow, 'Number(health?.livePolicyReadyMembers ?? 0) > 0', 'AUTO_GATE_LIVE_POLICY_READY_MEMBER_PROOF_MISSING');
@@ -120,6 +125,9 @@ requireText(manualSpotGate, "AUTO_TRADING: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP
 requireText(manualSpotGate, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP_LIVE_AUTO_FALSE');
 requireText(manualSpotGate, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
 requireText(manualSpotGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_SPOT_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
+requireText(manualSpotGate, "personalTelegramWorker: bool('PERSONAL_TELEGRAM_WORKER_ENABLED')", 'MANUAL_SPOT_PERSONAL_TELEGRAM_STATE_MISSING');
+requireText(manualSpotGate, "PERSONAL_TELEGRAM_WORKER_ENABLED: String(pre.personalTelegramWorker)", 'MANUAL_SPOT_PERSONAL_TELEGRAM_PRESERVATION_MISSING');
+requireText(manualSpotGate, "post.personalTelegramWorker !== pre.personalTelegramWorker", 'MANUAL_SPOT_PERSONAL_TELEGRAM_POSTCHECK_MISSING');
 requireText(manualSpotGate, "const allowed = new Set(['toss', 'kiwoom', 'upbit']);", 'MANUAL_SPOT_THREE_PROVIDER_SET_DRIFT');
 requireText(manualSpotGate, 'name.startsWith(`${workflowName} ${target} `)', 'MANUAL_SPOT_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
 requireText(manualSpotGate, 'merge-multiple: true', 'MANUAL_SPOT_PREACTIVATION_ARTIFACTS_NOT_MERGED');
@@ -131,6 +139,9 @@ requireText(manualFuturesGate, 'AUTO_TRADING=false', 'MANUAL_FUTURES_GATE_MUST_K
 requireText(manualFuturesGate, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_AUTO_FALSE');
 requireText(manualFuturesGate, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
 requireText(manualFuturesGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_FUTURES_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
+requireText(manualFuturesGate, "telegramDeliveryWorker: bool('PERSONAL_TELEGRAM_WORKER_ENABLED')", 'MANUAL_FUTURES_PERSONAL_TELEGRAM_STATE_MISSING');
+requireText(manualFuturesGate, "PERSONAL_TELEGRAM_WORKER_ENABLED: String(pre.telegramDeliveryWorker)", 'MANUAL_FUTURES_PERSONAL_TELEGRAM_PRESERVATION_MISSING');
+requireText(manualFuturesGate, "post.telegramDeliveryWorker !== pre.telegramDeliveryWorker", 'MANUAL_FUTURES_PERSONAL_TELEGRAM_POSTCHECK_MISSING');
 requireText(manualFuturesGate, 'run.name.startsWith(`${name} ${target} `)', 'MANUAL_FUTURES_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
 requireText(manualFuturesGate, 'merge-multiple: true', 'MANUAL_FUTURES_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
@@ -244,6 +255,8 @@ console.log(JSON.stringify({
   liveMemberAndPolicyReadinessRequired: true,
   globalEmergencyStopMustBeClear: true,
   telegramDeliveryHealthRequiredAfterRestart: true,
+  manualGatesPreservePersonalTelegramDelivery: true,
+  liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
   automaticExitClosedLoop: true,
   accountQaSchemaVersion: 'v3',
