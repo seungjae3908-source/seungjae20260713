@@ -24,6 +24,7 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
+import autoRehearsalPreviewRouter from './auto-rehearsal-preview';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import strategyPromotionRouter from './strategy-promotion';
@@ -54,6 +55,11 @@ router.get('/', (_req, res) => {
 // Health/config probes remain public. Every data or analysis route below this
 // point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
+
+// PR-only isolated rehearsal preview. This route is runtime-flagged and only
+// runs synthetic safety gates plus the local Paper engine; it never reads member,
+// credential, Telegram, or production data and is disabled outside staging.
+router.use('/', autoRehearsalPreviewRouter);
 
 // Telegram webhook is the only unauthenticated integration endpoint. It accepts
 // only Telegram-secret-authenticated /start updates containing a short-lived,
