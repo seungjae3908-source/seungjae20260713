@@ -11,7 +11,7 @@ const script = path.resolve('ops/verify-production-telegram-active-readiness.mjs
 
 function fixture() {
   return {
-    schemaVersion: 'production-trading-core-qa-v4',
+    schemaVersion: 'production-trading-core-qa-v5',
     targetSha: SHA,
     productionDeployRunId: RUN_ID,
     generatedAt: '2026-10-06T00:00:00.000Z',
@@ -36,6 +36,12 @@ function fixture() {
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 7,
     memberAutoPilotStage: 'validated',
+    backgroundWorkerSourceReady: true,
+    backgroundWorkerReadinessBlockers: [],
+    backgroundHandoffState: 'READY',
+    backgroundEligibleMembers: 1,
+    backgroundPaperAccountsReady: 1,
+    memberAutoStrategyAllowlistReady: true,
     realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,
