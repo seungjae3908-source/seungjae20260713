@@ -295,6 +295,7 @@ const formulaAiDriftReviewed=[
  'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
  'stock-analyzer/src/App.tsx',
  'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
  'stock-analyzer/src/pages/auto-rehearsal-preview.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
