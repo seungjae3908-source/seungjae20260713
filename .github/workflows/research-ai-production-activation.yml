@@ -24,6 +24,8 @@ on:
       - packages/external-research/scripts/run-research-worker-v9.mjs
       - research-production/src/research-ai-review-worker.mjs
       - research-production/src/research-video-discovery-worker.mjs
+      - market-prediction-lab/scripts/run-shadow-cycle.js
+      - market-prediction-lab/tests/shadow-prospective-evidence-contract.test.js
       - research-production/test/research-ai-activation-contract.test.mjs
       - research-production/test/research-ai-diagnostic.test.mjs
       - research-production/test/research-ai-review-worker.test.mjs
