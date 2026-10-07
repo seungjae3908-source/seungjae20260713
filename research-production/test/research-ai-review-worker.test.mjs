@@ -436,3 +436,40 @@ test('ordinary return wording is allowed while performance-return claims remain 
     await rm(blockedRoot, { recursive: true, force: true });
   }
 });
+
+
+test('provider or model change invalidates an old retry backoff for the same evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-retry-provider-change-'));
+  try {
+    await writeCycles(root, ['forward']);
+    const firstAt = Date.parse('2026-09-05T08:00:00Z');
+    const groqEnv = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: SECRET };
+    const failed = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env: groqEnv,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async () => { throw new Error('FREE_AI_RATE_LIMITED'); },
+      now: () => firstAt,
+    });
+    assert.equal(failed.status, 'PARTIAL_AI_UNAVAILABLE');
+
+    const geminiEnv = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'gemini', GEMINI_API_KEY: SECRET };
+    let calls = 0;
+    const recovered = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env: geminiEnv,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async ({ policy }) => {
+        calls += 1;
+        return { answer: safeAnswer, model: policy.model, provider: policy.provider };
+      },
+      now: () => firstAt + 60_000,
+    });
+    assert.equal(calls, 1);
+    assert.equal(recovered.status, 'PARTIAL_COVERAGE_COMPLETE');
+    assert.equal(recovered.provider, 'gemini');
+    assert.equal(recovered.providerNetworkCalls, 1);
+    assert.equal(recovered.deferredProfiles.length, 2);
+    assert.equal(recovered.deferredProfiles.every((row) => row.reason === 'STALE_RELEASE_EVIDENCE'), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
