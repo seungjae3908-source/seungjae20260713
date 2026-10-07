@@ -228,6 +228,8 @@ requireText(autoTradingPage, '계정 주문 권한 없음', 'AUTO_UI_MEMBER_ORDE
 forbid(autoTradingPage, /value="서버 Gate 필요"/u, 'AUTO_UI_HARDCODED_SERVER_GATE_FORBIDDEN');
 requireText(autoTradingSettings, 'liveAutomaticExecutionServerEnabled', 'AUTO_SETTINGS_LIVE_AUTO_GATE_MISSING');
 requireText(autoTradingSettings, 'readyForAutomaticOrderEvaluation', 'AUTO_SETTINGS_RUNTIME_READINESS_MISSING');
+requireText(autoTradingSettings, 'live-position-stop-warning', 'AUTO_SETTINGS_LIVE_POSITION_STOP_WARNING_MISSING');
+requireText(autoTradingSettings, '기존 Live 자동포지션의 후속 자동청산 감시도 중단될 수 있습니다.', 'AUTO_SETTINGS_LIVE_POSITION_WARNING_TEXT_MISSING');
 requireText(autoTradingSettings, 'liveAutomaticReadinessByMarket', 'AUTO_SETTINGS_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingSettings, "load({ syncDraft: false })", 'AUTO_SETTINGS_RUNTIME_REFRESH_MISSING');
 requireText(autoTradingSettings, 'refreshInFlight', 'AUTO_SETTINGS_REFRESH_DEDUP_MISSING');
