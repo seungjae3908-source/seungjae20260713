@@ -72,5 +72,9 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(settings).toContain('liveAutomaticExecutionServerEnabled');
   expect(settings).toContain('readyForAutomaticOrderEvaluation');
   expect(settings).toContain('자동게이트 준비');
+  expect(settings).toContain('refreshInFlight');
+  expect(settings).toContain('load({ syncDraft: false })');
+  expect(settings).toContain('if (syncDraft) {');
+  expect(settings).not.toContain('window.setInterval(() => { void load(); }, 15_000)');
   expect(settings).not.toContain("status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON'");
 });
