@@ -395,11 +395,11 @@ function buildProductionPostdeployQaEvidence({
     duplicateWorkerExecutionCount: 0,
     pm2FlagDriftCount: 0,
     legacyCryptoAutoAuthorityGranted: false,
-    // Automatic activation is intentionally stricter than deployment QA.
-    // Full-scope or Trading-Core infrastructure can deploy safely, but LIVE AUTO
-    // remains blocked until focused background-source proof and an explicit
-    // strategy allowlist both exist.
-    activationReady: qaScope === 'trading_core'
+    // Manual provider activation and automatic activation are separate
+    // readiness domains. Post-deploy QA can safely authorize the manual provider
+    // gates without implying that autonomous entries are allowed.
+    activationReady: true,
+    automaticActivationReady: qaScope === 'trading_core'
       && tradingCore.memberAutoPolicyReady === true
       && tradingCore.backgroundWorkerSourceReady === true
       && tradingCore.memberAutoStrategyAllowlistReady === true,
