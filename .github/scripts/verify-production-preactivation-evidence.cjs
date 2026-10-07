@@ -51,6 +51,7 @@ if (args.length === 4 && fs.existsSync(args[3]) && fs.statSync(args[3]).isDirect
   activation = read(activationPath);
 }
 
+const requireAutomaticActivation = process.env.REQUIRE_AUTOMATIC_ACTIVATION === 'true';
 const qaScope = activation?.qaScope === 'trading_core' ? 'trading_core' : 'full';
 if (qaScope === 'trading_core') {
   assertTradingCoreReceipt(tradingCore, context);
@@ -101,6 +102,10 @@ if ((!v3Full && !v4Scoped)
   || activation?.activationReady !== true) {
   throw new Error('PREACTIVATION_ACTIVATION_READY_RECEIPT_INVALID');
 }
+if (requireAutomaticActivation
+  && (qaScope !== 'trading_core' || activation?.automaticActivationReady !== true)) {
+  throw new Error('PREACTIVATION_AUTOMATIC_ACTIVATION_READY_REQUIRED');
+}
 for (const provider of REQUIRED_PROVIDERS) {
   if (activation?.providers?.[provider] !== 'PASS') {
     throw new Error(`PREACTIVATION_PROVIDER_NOT_READY:${provider}`);
@@ -116,4 +121,5 @@ process.stdout.write(JSON.stringify({
   productionDeployRunId,
   qaScope,
   activationReady: true,
+  automaticActivationReady: activation?.automaticActivationReady === true,
 }) + '\n');
