@@ -225,3 +225,11 @@ test('Research server activation rejects ambiguous or unpinned risk-policy decis
     assert.equal(result.environment, null);
   }
 });
+
+
+test('release rotation preserves existing supplemental cost transport only when no replacement is supplied', () => {
+  assert.match(source, /if \[\[ -z "\$\{PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH:-\}" \]\]; then/);
+  assert.match(source, /grep -E '\^PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH='/);
+  assert.match(source, /printf 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="%s"\\n'/);
+  assert.doesNotMatch(source, /LIVE_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true/);
+});
