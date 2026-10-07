@@ -1,3 +1,4 @@
+import { applyPaperTradingAction, createPaperTradingState } from './paper-trading-engine.service';
 import {
   isEvidenceBackedAutoStrategyId,
   evidenceBackedAutoStrategyCatalog,
@@ -20,6 +21,114 @@ export type FormulaAiRehearsalInput = Readonly<{
   futuresMarginMode?: 'isolated' | 'crossed' | null;
   futuresLeverage?: number | null;
 }>;
+
+export type FormulaAiPaperRehearsalProbe = Readonly<{
+  paperAutoReady: boolean;
+  paperFillReady: boolean;
+  journalReady: boolean;
+  riskReady: boolean;
+  orderState: string | null;
+  fillCount: number;
+  journalEntryCount: number;
+  executionAuthority: 'NONE';
+  realOrderSubmitted: false;
+  exchangeRequestSent: false;
+  providerMutationRequests: 0;
+  productionMutationAllowed: false;
+}>;
+
+export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPaperRehearsalProbe {
+  const at = new Date(now);
+  if (!Number.isFinite(at.getTime())) throw new Error('FORMULA_AI_REHEARSAL_INVALID_TIME');
+  const observedAt = at.toISOString();
+  const state = createPaperTradingState(500_000, at);
+  const result = applyPaperTradingAction(state, {
+    type: 'place_order',
+    eventId: `formula-ai-rehearsal-${at.getTime()}`,
+    request: {
+      symbol: 'BTCUSDT',
+      side: 'long',
+      orderType: 'market',
+      leverage: 2,
+      stopLossPrice: 98,
+      takeProfitPrice1: 105,
+      takeProfitPrice2: 108,
+      targetClosePercent1: 50,
+      targetClosePercent2: 50,
+      strategyName: 'FORMULA_AI_REHEARSAL_PROBE',
+      marketRegime: 'rehearsal',
+    },
+    market: {
+      symbol: 'BTCUSDT',
+      price: 100,
+      lastPrice: 100,
+      markPrice: 100,
+      bidPrice: 99.9,
+      askPrice: 100.1,
+      fundingRate: 0.0001,
+      status: 'live',
+      updatedAt: observedAt,
+      warnings: [],
+    },
+    contractRules: {
+      symbol: 'BTCUSDT',
+      quantityStep: 0.001,
+      quantityPrecision: 3,
+      minimumQuantity: 0.001,
+      minimumNotional: 5,
+      maximumLeverage: 7,
+      maintenanceMarginRate: 0.005,
+      status: 'live',
+      updatedAt: observedAt,
+      warnings: [],
+    },
+    riskInput: {
+      market: 'crypto-futures',
+      symbol: 'BTCUSDT',
+      side: 'long',
+      accountBalance: 500_000,
+      entryPrice: 100,
+      stopLossPrice: 98,
+      targetPrice1: 105,
+      targetPrice2: 108,
+      leverage: 2,
+      riskPercent: 0.5,
+      entryFeeRate: 0.0006,
+      exitFeeRate: 0.0006,
+      slippageRate: 0.0005,
+      estimatedFundingRate: 0.0001,
+      quantityStep: 0.001,
+      quantityPrecision: 3,
+      minimumQuantity: 0.001,
+      minimumNotional: 5,
+      maintenanceMarginRate: 0.005,
+      maximumLeverage: 7,
+      appMaximumLeverage: 7,
+      contractRulesStatus: 'live',
+      dataStatus: 'live',
+    },
+  }, at);
+
+  const paperAutoReady = result.order?.status === 'filled' && result.position?.status === 'open';
+  const paperFillReady = result.fills.length > 0;
+  const journalReady = result.state.journal.length > 0;
+  const riskReady = result.order?.riskResult?.allowed === true;
+
+  return Object.freeze({
+    paperAutoReady,
+    paperFillReady,
+    journalReady,
+    riskReady,
+    orderState: result.order?.status ?? null,
+    fillCount: result.fills.length,
+    journalEntryCount: result.state.journal.length,
+    executionAuthority: 'NONE',
+    realOrderSubmitted: false,
+    exchangeRequestSent: false,
+    providerMutationRequests: 0,
+    productionMutationAllowed: false,
+  });
+}
 
 export type FormulaAiRehearsalResult = Readonly<{
   status: 'ACTIVE_REHEARSAL' | 'BLOCKED_REHEARSAL';
