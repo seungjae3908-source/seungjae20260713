@@ -25,6 +25,7 @@ on:
         options:
           - full
           - trading_core
+          - member
   pull_request:
     paths:
       - .github/workflows/production-deploy.yml
@@ -34,12 +35,19 @@ on:
       - .github/tests/production-trading-core-qa-contract.test.mjs
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
       - stock-analyzer/playwright.production-trading-core.config.ts
+      - stock-analyzer/e2e/production-member-readonly-qa.spec.ts
+      - stock-analyzer/playwright.production-member.config.ts
       - .github/scripts/run-production-readonly-qa.sh
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/scripts/verify-production-qa-receipt.cjs
       - .github/scripts/verify-production-qa-receipt.cjs
       - .github/scripts/verify-production-deploy-execution.cjs
       - ops/apply-production-paper-journal-privileges.mjs
       - ops/classify-production-paper-journal-privilege-failure.mjs
       - ops/verify-production-paper-journal-privileges.mjs
+      - ops/apply-production-member-access-hardening.mjs
+      - ops/verify-production-member-access-hardening.mjs
+      - api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
       - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
       - api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
       - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
@@ -110,6 +118,8 @@ jobs:
         run: node ops/verify-production-trade-schema-readonly-audit.mjs --static
       - name: Verify Production paper journal privilege contract
         run: node ops/verify-production-paper-journal-privileges.mjs --static
+      - name: Verify Production member access hardening contract
+        run: node ops/verify-production-member-access-hardening.mjs --static
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
 
@@ -404,11 +414,59 @@ jobs:
             printf 'paper_journal_artifact=%s\n' "$paper_artifact" >> "$GITHUB_OUTPUT"
           )
 
+          (
+            member_artifact="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.json")"
+            member_stderr="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.stderr")"
+            member_archive="$(mktemp "$RUNNER_TEMP/production-member-access-hardening.XXXXXX.tar.gz")"
+            remote_dir="$({
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/member-access-hardening.XXXXXX'
+            })"
+            [[ "$remote_dir" =~ ^/tmp/member-access-hardening\.[A-Za-z0-9]+$ ]] || {
+              echo 'Production member access temporary directory was rejected.' >&2
+              exit 1
+            }
+            quoted_remote_dir="$(printf '%q' "$remote_dir")"
+            cleanup_member_gate() {
+              rm -f "$member_stderr" "$member_archive"
+              ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+                "$SSH_USER@$SSH_HOST" \
+                "case $quoted_remote_dir in /tmp/member-access-hardening.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+                >/dev/null 2>&1 || true
+            }
+            trap cleanup_member_gate EXIT
+            tar -czf "$member_archive" \
+              ops/apply-production-member-access-hardening.mjs \
+              api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
+            scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$member_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+            member_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-member-access-hardening.mjs' \
+              "$remote_dir" "$TARGET_SHA")"
+            if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh \
+              -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$member_command" > "$member_artifact" 2> "$member_stderr"; then
+              classification="$(grep -Eo '^\[production-member-access-hardening\] [A-Za-z0-9_:-]+' "$member_stderr" | tail -n 1 | sed 's/^\[production-member-access-hardening\] //' || true)"
+              [[ -n "$classification" ]] || classification='unknown_safe_failure'
+              echo "Production member access hardening failed safely: $classification" >&2
+              exit 1
+            fi
+            node ops/verify-production-member-access-hardening.mjs --artifact "$member_artifact"
+            printf 'member_access_artifact=%s\n' "$member_artifact" >> "$GITHUB_OUTPUT"
+          )
+
       - name: Upload sanitized Production paper journal privilege evidence
         uses: actions/upload-artifact@v4
         with:
           name: production-paper-journal-privileges-${{ env.TARGET_SHA }}
           path: ${{ steps.database-gates.outputs.paper_journal_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload sanitized Production member access hardening evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-access-hardening-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.member_access_artifact }}
           if-no-files-found: error
           retention-days: 30
 
@@ -543,8 +601,47 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: 1M · Member-only Production read-only QA
+        id: member_qa
+        if: ${{ inputs.qa_scope == 'member' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_DEPLOY_MODE: inline
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          LIVE_TRADING: "false"
+          AUTO_TRADING: "false"
+          REAL_ORDER_ENABLED: "false"
+          PRIVATE_TRADING_API_ALLOWED: "false"
+          ORDER_EXECUTION_ENABLED: "false"
+          LIVE_TRADING_ACTIVATION_APPROVED: "false"
+          SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          LIVE_AUTOMATIC_TRADING_ENABLED: "false"
+          MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: "false"
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: "false"
+          FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: "false"
+          BITGET_FUTURES_LIVE_ORDER_ENABLED: "false"
+          BITGET_LIVE_ORDER_ENABLED: "false"
+          UPBIT_LIVE_ORDER_ENABLED: "false"
+          KIWOOM_LIVE_ORDER_ENABLED: "false"
+          TOSS_LIVE_ORDER_ENABLED: "false"
+        run: bash .github/scripts/run-production-readonly-qa.sh member
+
+      - name: Upload Member-only QA evidence
+        if: ${{ always() && steps.member_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-readonly-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-member-readonly-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
       - name: 2 · Four-provider Account Production read-only QA
         id: account_qa
+        if: ${{ inputs.qa_scope != 'member' }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
@@ -586,6 +683,7 @@ jobs:
 
       - name: 3 · Production Credential Reuse QA
         id: credential_qa
+        if: ${{ inputs.qa_scope != 'member' }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
@@ -661,6 +759,7 @@ jobs:
           "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
 
       - name: Assemble exact-run post-deploy evidence
+        if: ${{ inputs.qa_scope != 'member' }}
         run: |
           set -Eeuo pipefail
           if [[ "$QA_SCOPE" == "full" ]]; then
@@ -676,6 +775,7 @@ jobs:
           node .github/scripts/build-production-postdeploy-evidence.cjs postdeploy-evidence "$TARGET_SHA" "$GITHUB_RUN_ID" "$QA_SCOPE"
 
       - name: Upload immutable ACTIVATION_READY evidence
+        if: ${{ inputs.qa_scope != 'member' }}
         uses: actions/upload-artifact@v4
         with:
           name: production-postdeploy-activation-ready-${{ env.TARGET_SHA }}
@@ -697,7 +797,11 @@ jobs:
             echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'
             echo "- QA scope: `$QA_SCOPE`"
-            if [[ "$QA_SCOPE" == "trading_core" ]]; then
+            if [[ "$QA_SCOPE" == "member" ]]; then
+              echo '- Member login/profile/tier/S-grade/AI Chart/trading analytics/AI review/admin-boundary/mobile account: `PASS`'
+              echo '- Account provider / Credential Reuse / Trading Core / Comprehensive: `NOT_RUN`'
+              echo '- ACTIVATION_READY: `NOT_EVALUATED`'
+            elif [[ "$QA_SCOPE" == "trading_core" ]]; then
               echo '- Trading Core / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
             else
               echo '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
@@ -706,5 +810,7 @@ jobs:
             echo '- liveTradingAuthorityGranted: `false`'
             echo '- autoTradingAuthorityGranted: `false`'
             echo '- active conflicting trading gates: `0`'
-            echo '- ACTIVATION_READY: `true`'
+            if [[ "$QA_SCOPE" != "member" ]]; then
+              echo '- ACTIVATION_READY: `true`'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
