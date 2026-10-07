@@ -22,10 +22,9 @@ export const RESEARCH_AI_RESPONSE_SCHEMA = Object.freeze({
   required: ['summary', 'findings', 'hypotheses', 'risks', 'disposition'],
   properties: {
     summary: { type: 'string' },
-    findings: { type: 'array', maxItems: 8, items: { type: 'string' } },
+    findings: { type: 'array', items: { type: 'string' } },
     hypotheses: {
       type: 'array',
-      maxItems: 4,
       items: {
         type: 'object',
         additionalProperties: false,
@@ -33,14 +32,14 @@ export const RESEARCH_AI_RESPONSE_SCHEMA = Object.freeze({
         properties: {
           hypothesisId: { type: 'string' },
           thesis: { type: 'string' },
-          requiredEvidence: { type: 'array', maxItems: 8, items: { type: 'string' } },
+          requiredEvidence: { type: 'array', items: { type: 'string' } },
           falsification: { type: 'string' },
           intendedRegime: { type: 'string' },
           independenceRationale: { type: 'string' },
         },
       },
     },
-    risks: { type: 'array', maxItems: 8, items: { type: 'string' } },
+    risks: { type: 'array', items: { type: 'string' } },
     disposition: { type: 'string', enum: ['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA'] },
   },
 });
