@@ -1048,6 +1048,54 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         }];
       }),
     );
+    const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+    const marketProvider: Record<TradingAssetClass, TradingExchange> = {
+      domestic_stock: domesticBroker,
+      us_stock: 'kiwoom',
+      crypto_spot: 'upbit',
+      crypto_futures: 'bitget',
+    };
+    const liveAutomaticReadinessByMarket = Object.fromEntries(
+      (Object.keys(marketProvider) as TradingAssetClass[]).map((assetClass) => {
+        const exchange = marketProvider[assetClass];
+        const provider = liveExecutionReadiness[exchange] as {
+          connectionConfigured: boolean;
+          providerVerified: boolean;
+          manualServerGateEnabled: boolean;
+          automaticServerGateEnabled: boolean;
+          blockers: string[];
+        };
+        const blockers = [...provider.blockers];
+        if (!req.member || !hasCapability(req.member, 'canPlaceOrders')) blockers.push('MEMBER_ORDER_CAPABILITY_REQUIRED');
+        if (assetClass === 'crypto_futures'
+          && (!req.member || !hasCapability(req.member, 'canAccessFutures'))) {
+          blockers.push('FUTURES_CAPABILITY_REQUIRED');
+        }
+        if (policy.mode !== 'automatic' || !policy.automaticEnabled) blockers.push('AUTOMATIC_POLICY_OFF');
+        if (policy.emergencyStopped || policy.newEntriesStopped) blockers.push('MEMBER_POLICY_STOPPED');
+        if (persistentGlobalStop || environmentGlobalStop) blockers.push('GLOBAL_EMERGENCY_STOP_ACTIVE');
+        if (!policy.marketEnabled[assetClass]) blockers.push('MARKET_AUTOMATIC_DISABLED');
+        if (!policy.exchangeEnabled[exchange]) blockers.push('EXCHANGE_AUTOMATIC_DISABLED');
+        const uniqueBlockers = [...new Set(blockers)];
+        return [assetClass, {
+          exchange,
+          connectionConfigured: provider.connectionConfigured,
+          providerVerified: provider.providerVerified,
+          manualServerGateEnabled: provider.manualServerGateEnabled,
+          automaticServerGateEnabled: provider.automaticServerGateEnabled,
+          automaticPolicyEnabled: policy.mode === 'automatic' && policy.automaticEnabled,
+          marketAutomaticEnabled: policy.marketEnabled[assetClass],
+          exchangeAutomaticEnabled: policy.exchangeEnabled[exchange],
+          memberOrderCapability: Boolean(req.member && hasCapability(req.member, 'canPlaceOrders')),
+          memberStopped: policy.emergencyStopped || policy.newEntriesStopped,
+          globalStopped: persistentGlobalStop || environmentGlobalStop,
+          readyForAutomaticOrderEvaluation: uniqueBlockers.length === 0,
+          blockers: uniqueBlockers,
+          orderTimeRiskRecheckRequired: true,
+          orderSubmissionPerformedByStatusRequest: false,
+        }];
+      }),
+    );
     return res.json({
       ok: true,
       policy,
@@ -1074,6 +1122,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       futuresLiveLimited: futuresLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
+      liveAutomaticReadinessByMarket,
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
