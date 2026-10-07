@@ -230,10 +230,15 @@ const telegramReleaseReviewed=[
  'api-server/scripts/verify-telegram-production-release-contract.mjs',
 ];
 const formulaAiDriftReviewed=[
+ '.github/workflows/pr-auto-rehearsal-preview.yml',
+ 'api-server/src/routes/auto-rehearsal-preview.ts',
+ 'api-server/src/routes/index.ts',
  'api-server/src/routes/trade-automation.smoke.test.ts',
  'api-server/src/routes/trade-automation.ts',
  'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
+ 'stock-analyzer/src/App.tsx',
  'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
+ 'stock-analyzer/src/pages/auto-rehearsal-preview.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
  'api-server/src/services/formula-ai-auto-rehearsal.service.test.ts',
