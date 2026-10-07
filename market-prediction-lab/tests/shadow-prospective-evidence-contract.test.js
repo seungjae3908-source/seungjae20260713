@@ -9,6 +9,8 @@ test('shadow accumulates public long-short evidence without bypassing training p
   assert.match(source, /collectLongShortRatioHistory/);
   assert.match(source, /longShortSnapshots/);
   assert.match(source, /RESEARCH_TEMPORAL_LONG_SHORT_PERIOD/);
+  assert.match(source, /longShortClient = new BitgetPublicClient\(\{ minIntervalMs: 1_100/);
+  assert.match(source, /client: longShortClient/);
   assert.match(source, /openInterestTrainingParityConfirmed:\s*false/);
   assert.match(source, /longShortTrainingParityConfirmed:\s*false/);
   assert.doesNotMatch(source, /openInterestTrainingParityConfirmed:\s*true/);
