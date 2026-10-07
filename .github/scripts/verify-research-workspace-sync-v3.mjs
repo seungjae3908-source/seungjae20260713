@@ -229,6 +229,16 @@ const telegramReleaseReviewed=[
  '.github/workflows/telegram-production-release.yml',
  'api-server/scripts/verify-telegram-production-release-contract.mjs',
 ];
+const formulaAiDriftReviewed=[
+ 'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.test.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.test.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.ts',
+ 'api-server/src/services/trade-automation-optimization.service.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
+ 'api-server/test.mjs',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -238,6 +248,7 @@ const allowed=new Set([
  ...researchProductionClosureReviewed,
  ...tradingQaReviewed,
  ...telegramReleaseReviewed,
+ ...formulaAiDriftReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
