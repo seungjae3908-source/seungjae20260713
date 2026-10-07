@@ -13,7 +13,6 @@ const telegramWorker = read('api-server/src/features/user-broker-telegram/user-b
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
-const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
 const tradeAutomationPolicyGuard = read('api-server/src/services/trade-automation-policy-guard.service.ts');
 const tradeAutomationSmoke = read('api-server/src/routes/trade-automation.smoke.test.ts');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
