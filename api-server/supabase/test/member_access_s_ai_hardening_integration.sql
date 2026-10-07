@@ -2,6 +2,50 @@
 
 begin;
 
+-- The immediately preceding Production app uses the five-argument member RPC.
+-- Prove that the compatibility bridge delegates safely and preserves expiry.
+set role authenticated;
+select set_config('request.jwt.claim.sub', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', true);
+
+do $legacy_member_rpc_bridge$
+declare
+  expected_version timestamptz;
+  expiry_before timestamptz;
+  expiry_after timestamptz;
+  result jsonb;
+begin
+  if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,text,timestamptz)') is null then
+    raise exception 'legacy member permission RPC bridge is missing';
+  end if;
+  select permissions_updated_at, membership_expires_at
+  into expected_version, expiry_before
+  from public.profiles
+  where id = '33333333-3333-3333-3333-333333333333';
+
+  result := public.apply_member_permission_change(
+    '33333333-3333-3333-3333-333333333333',
+    'associate',
+    true,
+    'legacy bridge integration probe',
+    expected_version
+  );
+
+  select membership_expires_at
+  into expiry_after
+  from public.profiles
+  where id = '33333333-3333-3333-3333-333333333333';
+
+  if expiry_after is distinct from expiry_before then
+    raise exception 'legacy member permission RPC bridge changed membership expiry';
+  end if;
+  if result->'member'->>'id' <> '33333333-3333-3333-3333-333333333333' then
+    raise exception 'legacy member permission RPC bridge returned invalid member';
+  end if;
+end
+$legacy_member_rpc_bridge$;
+
+reset role;
+
 -- Seed evidence as the database owner. The associate must be able to read only
 -- the self-owned journal row after the hardening policy is applied.
 insert into public.paper_journal_entries (user_id, id, payload, version)
