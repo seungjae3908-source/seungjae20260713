@@ -3,6 +3,7 @@ name: Production PM2 Orphan Repair
 on:
   pull_request:
     paths:
+      - .github/tests/production-pm2-concurrency-scope.test.mjs
       - .github/workflows/production-pm2-orphan-repair.yml
       - ops/repair-production-pm2-orphan.sh
       - api-server/scripts/verify-production-pm2-orphan-repair-contract.mjs
@@ -43,6 +44,8 @@ jobs:
       - name: Verify repair safety contract
         working-directory: api-server
         run: node scripts/verify-production-pm2-orphan-repair-contract.mjs
+      - name: Verify PM2 concurrency command scope
+        run: node --test .github/tests/production-pm2-concurrency-scope.test.mjs
 
   repair:
     name: Protected one-time Production PM2 orphan repair
