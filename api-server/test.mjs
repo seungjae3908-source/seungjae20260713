@@ -15,6 +15,7 @@ const groups = {
   risk: [
     path.join(root, 'src/services/trading-risk-engine.service.test.ts'),
     path.join(root, 'src/services/formula-ai-live-exception.service.test.ts'),
+    path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
   ],
   phase4: [
     path.join(root, 'src/services/futures-contract-rules.service.test.ts'),
