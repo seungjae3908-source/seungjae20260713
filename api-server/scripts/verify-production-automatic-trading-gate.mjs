@@ -104,6 +104,9 @@ requireText(workflow, "'live_all_four_policy_ready_member_count=>=1'", 'AUTO_GAT
 requireText(workflow, "'global_emergency_stop=false'", 'AUTO_GATE_GLOBAL_STOP_HUB_RECEIPT_MISSING');
 requireText(workflow, "'telegram_delivery_worker_post_restart=HEALTHY'", 'AUTO_GATE_TELEGRAM_POST_RESTART_HUB_RECEIPT_MISSING');
 requireText(workflow, "rmSync(liveEntryArmPath, { force: true });", 'AUTO_GATE_DISABLE_DISARM_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_DISABLE_OPEN_LIVE_POSITIONS', 'AUTO_GATE_DISABLE_OPEN_POSITION_BLOCK_MISSING');
+requireText(workflow, 'autoHealth?.liveTrackedPositions', 'AUTO_GATE_DISABLE_POSITION_HEALTH_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_DISABLE_HEALTH_STALE_OR_INVALID', 'AUTO_GATE_DISABLE_HEALTH_FRESHNESS_MISSING');
 
 requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
@@ -173,6 +176,7 @@ for (const token of [
   'readMarketMark',
   'paperExitOrders',
   'liveExitOrders',
+  'liveTrackedPositions',
   'liveEntryWarmupComplete',
   'liveEntryArmPresent',
   'liveExitsSuppressedByWarmupOrArm',
@@ -295,6 +299,7 @@ console.log(JSON.stringify({
   zeroMutationActivationRehearsal: true,
   postArmExactShaReadbackRequired: true,
   productionActivationStaysZeroOrder: true,
+  controlledDisableRequiresZeroLivePositions: true,
   liveExitOrdersArmGuarded: true,
   liveMemberAndPolicyReadinessRequired: true,
   allFourMemberPolicyReadinessRequired: true,
