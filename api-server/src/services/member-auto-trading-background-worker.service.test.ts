@@ -43,6 +43,20 @@ function policy(): TradingPolicy {
   });
 }
 
+function allFourPolicy(): TradingPolicy {
+  return normalizeTradingPolicy({
+    ...policy(),
+    marketEnabled: {
+      domestic_stock: true,
+      us_stock: true,
+      crypto_spot: true,
+      crypto_futures: true,
+    },
+    stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: false },
+  });
+}
+
 function handoff(nowMs: number, missingRecentMove = false) {
   const dataTimestamp = new Date(nowMs - (missingRecentMove ? 120_000 : 20_000)).toISOString();
   return {
@@ -782,6 +796,48 @@ test('live activation warmup stays fail-closed when no member can place real ord
     assert.equal(result.liveEntryWarmupComplete, false);
     assert.equal(result.newEntriesFailClosed, true);
     assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('all-four activation readiness requires one order-capable futures member with all four markets enabled', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveOrderEligibleMembers, 1);
+    assert.equal(result.livePolicyReadyMembers, 1);
+    assert.equal(result.liveAllFourPolicyReadyMembers, 1);
+    assert.equal(result.liveEntryWarmupComplete, true);
   } finally {
     for (const key of keys) {
       const value = previous[key];
