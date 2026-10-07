@@ -8,6 +8,24 @@ import type { NotificationDelivery, PortfolioSyncSink, TelegramTransport } from 
 const noopPortfolioSink: PortfolioSyncSink = { async accept() {} };
 const STALE_SENDING_LEASE_MS = 2 * 60 * 1000;
 
+export type UserTelegramDeliveryWorkerHealth = Readonly<{
+  enabled: boolean;
+  lastTickAt: string | null;
+  tickOk: boolean | null;
+  errorCode: string | null;
+}>;
+
+let telegramDeliveryWorkerHealth: UserTelegramDeliveryWorkerHealth = Object.freeze({
+  enabled: false,
+  lastTickAt: null,
+  tickOk: null,
+  errorCode: null,
+});
+
+export function readUserTelegramDeliveryWorkerHealth() {
+  return telegramDeliveryWorkerHealth;
+}
+
 export interface TelegramDeliveryWorkerSource {
   listDue(now: string, limit: number): Promise<Array<Pick<NotificationDelivery, 'userId' | 'id'>>>;
 }
@@ -97,15 +115,33 @@ export function startUserTelegramDeliveryWorker(
 ): TelegramWorkerControl | null {
   if (process.env.PERSONAL_TELEGRAM_WORKER_ENABLED !== 'true'
     || process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true') {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: false,
+      lastTickAt: null,
+      tickOk: null,
+      errorCode: null,
+    });
     console.log('[user-telegram-worker] disabled; explicit worker and activation gates are required');
     return null;
   }
   if (!hasSupabaseServerKey()) {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: null,
+      tickOk: false,
+      errorCode: 'TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED',
+    });
     console.error('[user-telegram-worker] blocked: service-role Supabase configuration is required');
     return null;
   }
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
   if (!transportOverride && !token) {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: null,
+      tickOk: false,
+      errorCode: 'TELEGRAM_BOT_TOKEN_REQUIRED',
+    });
     console.error('[user-telegram-worker] blocked: Telegram bot token is not configured');
     return null;
   }
@@ -119,8 +155,28 @@ export function startUserTelegramDeliveryWorker(
     sendTelegramAlert,
   );
   const worker = new TelegramDeliveryWorker(new SupabaseTelegramDeliveryWorkerSource(), service);
-  const tick = () => void worker.runOnce().catch((error) => {
-    console.error('[user-telegram-worker] delivery tick failed', { code: error instanceof Error ? error.message : 'UNKNOWN' });
+  telegramDeliveryWorkerHealth = Object.freeze({
+    enabled: true,
+    lastTickAt: null,
+    tickOk: null,
+    errorCode: null,
+  });
+  const tick = () => void worker.runOnce().then(() => {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: new Date().toISOString(),
+      tickOk: true,
+      errorCode: null,
+    });
+  }).catch((error) => {
+    const code = error instanceof Error ? error.message.split(':')[0] : 'TELEGRAM_WORKER_FAILED';
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: new Date().toISOString(),
+      tickOk: false,
+      errorCode: /^[A-Z0-9_]+$/u.test(code) ? code : 'TELEGRAM_WORKER_FAILED',
+    });
+    console.error('[user-telegram-worker] delivery tick failed', { code });
   });
   const timer = setInterval(tick, boundedInterval(process.env.PERSONAL_TELEGRAM_WORKER_INTERVAL_MS));
   timer.unref?.();
