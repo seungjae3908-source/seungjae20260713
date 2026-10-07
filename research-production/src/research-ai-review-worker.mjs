@@ -8,10 +8,39 @@ const PROFILES = Object.freeze(['forward', 'fast-historical', 'long-history']);
 const GROQ_MODEL = 'openai/gpt-oss-20b';
 const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
-const RETRY_AFTER_MS = 6 * 60 * 60 * 1_000;
+const RETRY_AFTER_MS = 15 * 60 * 1_000;
 const ALLOWED_DISPOSITIONS = new Set(['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA']);
 const ALLOWED_TOP_LEVEL = new Set(['summary', 'findings', 'hypotheses', 'risks', 'disposition']);
 const ALLOWED_HYPOTHESIS = new Set(['hypothesisId', 'thesis', 'requiredEvidence', 'falsification', 'intendedRegime', 'independenceRationale']);
+
+export const RESEARCH_AI_RESPONSE_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'findings', 'hypotheses', 'risks', 'disposition'],
+  properties: {
+    summary: { type: 'string', minLength: 1, maxLength: 800 },
+    findings: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 500 } },
+    hypotheses: {
+      type: 'array',
+      maxItems: 4,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['hypothesisId', 'thesis', 'requiredEvidence', 'falsification', 'intendedRegime', 'independenceRationale'],
+        properties: {
+          hypothesisId: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,119}$' },
+          thesis: { type: 'string', minLength: 1, maxLength: 700 },
+          requiredEvidence: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 300 } },
+          falsification: { type: 'string', minLength: 1, maxLength: 500 },
+          intendedRegime: { type: 'string', minLength: 1, maxLength: 240 },
+          independenceRationale: { type: 'string', minLength: 1, maxLength: 500 },
+        },
+      },
+    },
+    risks: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 500 } },
+    disposition: { type: 'string', enum: ['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA'] },
+  },
+});
 
 export const RESEARCH_AI_WORKER_SAFETY = Object.freeze({
   researchProposalOnly: true,
@@ -29,8 +58,17 @@ export const RESEARCH_AI_WORKER_SAFETY = Object.freeze({
 
 const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|비밀번호|계좌번호)\s*[:=]\s*\S{8,})/i;
 const privateDataPattern = /(?:\b\d{6}-[1-4]\d{6}\b|주민등록번호|생년월일)/i;
-const forbiddenMetricPattern = /(?:\bPF\b|profit\s*factor|\bEV\b|expectancy|\bMDD\b|\bMAE\b|\bMFE\b|Sharpe|\bDSR\b|\bPBO\b|net\s*alpha|full\s*cost|position\s*size|leverage|champion|promotion|수익률|기대값|기대수익|승률|확률|최대낙폭|레버리지|챔피언|승격|수수료|probability|win\s*rate|guaranteed\s*(?:profit|return)|무조건\s*상승|확실한\s*수익|손실\s*없)/i;
+const performanceMetricPattern = /(?:\bPF\b|profit\s*factor|\bEV\b|expectancy|\bMDD\b|\bMAE\b|\bMFE\b|Sharpe|\bDSR\b|\bPBO\b|net\s*alpha|full\s*cost|position\s*size|leverage|champion|promotion|profitability|\\breturns?\\b|수익률|기대값|기대수익|승률|확률|최대낙폭|레버리지|챔피언|승격|수수료|probability|win\s*rate)/i;
+const cautiousMetricContextPattern = /(?:do\s+not|don't|cannot|can't|must\s+not|should\s+not|insufficient|not\s+enough|unknown|unavailable|avoid|forbid|금지|판단(?:하면)?\s*안|판단할\s*수\s*없|평가할\s*수\s*없|단정할\s*수\s*없|추정할\s*수\s*없|자료(?:가)?\s*부족|근거(?:가)?\s*부족|알\s*수\s*없)/i;
+const guaranteedPerformancePattern = /(?:guaranteed\s*(?:profit|return)|risk[- ]?free\s*(?:profit|return)|무조건\s*상승|확실한\s*수익|손실\s*없)/i;
 const unsafeAuthorityPattern = /(?:executionAuthority|orderAllowed|order\s*(?:submit|cancel|amend)|(?:BUY|SELL|LONG|SHORT)\s*(?:NOW|ENTRY|SIGNAL)|(?:매수|매도|롱|숏|진입).{0,16}(?:하세요|하십시오|권장|신호))/i;
+
+function containsUnsafePerformanceClaim(text) {
+  if (guaranteedPerformancePattern.test(text)) return true;
+  if (!performanceMetricPattern.test(text)) return false;
+  if (cautiousMetricContextPattern.test(text)) return false;
+  return true;
+}
 
 function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -54,8 +92,7 @@ function safeText(value, label, max = 800) {
   const text = cleanText(value, max);
   if (!text) throw new Error(`${label}_REQUIRED`);
   if (secretPattern.test(text) || privateDataPattern.test(text)) throw new Error('PRIVATE_DATA_FORBIDDEN');
-  if (forbiddenMetricPattern.test(text) || unsafeAuthorityPattern.test(text)) throw new Error('FORBIDDEN_AI_AUTHORITY');
-  if (!label.endsWith('.hypothesisId') && /\p{N}|[%％$₩€]/u.test(text)) throw new Error('NUMERIC_AI_CLAIM_FORBIDDEN');
+  if (containsUnsafePerformanceClaim(text) || unsafeAuthorityPattern.test(text)) throw new Error('FORBIDDEN_AI_AUTHORITY');
   return text;
 }
 
@@ -224,10 +261,23 @@ export async function invokeResearchFreeAi({ policy, prompt, fetchImpl = globalT
       response = await fetchImpl(GROQ_ENDPOINT, {
         method: 'POST', signal: controller.signal,
         headers: { 'content-type': 'application/json', authorization: `Bearer ${policy.apiKey}` },
-        body: JSON.stringify({ model: policy.model, temperature: 0.2, max_tokens: 900, messages: [
-          { role: 'system', content: 'Return only bounded qualitative research JSON. Never provide trading authority or numeric performance claims.' },
-          { role: 'user', content: prompt },
-        ] }),
+        body: JSON.stringify({
+          model: policy.model,
+          temperature: 0.2,
+          max_tokens: 900,
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'research_ai_review',
+              strict: true,
+              schema: RESEARCH_AI_RESPONSE_SCHEMA,
+            },
+          },
+          messages: [
+            { role: 'system', content: 'Return only bounded qualitative research JSON. Never provide trading authority or unsupported performance claims.' },
+            { role: 'user', content: prompt },
+          ],
+        }),
       });
     } else if (policy.provider === 'gemini') {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(policy.model)}:generateContent`;
@@ -237,11 +287,15 @@ export async function invokeResearchFreeAi({ policy, prompt, fetchImpl = globalT
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: 'Return only bounded qualitative research JSON. Never provide trading authority or numeric performance claims.' }] },
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: 900, responseMimeType: 'application/json' },
+          generationConfig: { maxOutputTokens: 900, responseMimeType: 'application/json', responseJsonSchema: RESEARCH_AI_RESPONSE_SCHEMA },
         }),
       });
     } else throw new Error('FREE_AI_PROVIDER_NOT_ALLOWED');
     if (response.status === 429) throw new Error('FREE_AI_RATE_LIMITED');
+    if (response.status === 401 || response.status === 403) throw new Error('FREE_AI_AUTH_REJECTED');
+    if (response.status === 400 || response.status === 422) throw new Error('FREE_AI_REQUEST_REJECTED');
+    if (response.status === 408 || response.status === 504) throw new Error('FREE_AI_TIMEOUT');
+    if (response.status >= 500) throw new Error('FREE_AI_PROVIDER_UNAVAILABLE');
     if (!response.ok) throw new Error('FREE_AI_PROVIDER_ERROR');
     const body = await response.json();
     const answer = policy.provider === 'groq' ? readOpenAiText(body) : readGeminiText(body);
@@ -350,7 +404,8 @@ export async function runResearchAiReviewScan({
     catch (error) { blockedProfiles.push(Object.freeze({ profile, reason: safeError(error) })); continue; }
     const successPath = join(aiRoot, 'reviews', `${projection.evidenceDigest}.json`);
     const cached = await readJsonOptional(successPath);
-    if (cached?.status === 'READY' && cached?.evidenceDigest === projection.evidenceDigest) {
+    if (cached?.status === 'READY' && cached?.evidenceDigest === projection.evidenceDigest
+      && cached?.researchSha === base.researchSha && cached?.provider === policy.provider && cached?.model === policy.model) {
       cacheHits += 1;
       reviews.push(Object.freeze({ profile, evidenceDigest: projection.evidenceDigest, status: 'READY', cacheHit: true, role: projection.role }));
       continue;
@@ -396,18 +451,29 @@ export async function runResearchAiReviewScan({
 
   const reviewedProfiles = [...new Set(reviews.map((row) => row.profile))].sort();
   const staleProfiles = deferredProfiles.filter((row) => row.reason === 'STALE_RELEASE_EVIDENCE').map((row) => row.profile).sort();
+  const retryDeferredProfiles = deferredProfiles
+    .filter((row) => row.reason !== 'STALE_RELEASE_EVIDENCE' && row.reason !== 'SCAN_CALL_BUDGET_EXHAUSTED')
+    .map((row) => row.profile).sort();
   const profileCoverage = Object.freeze({
     totalProfiles: PROFILES.length,
     reviewedProfiles: Object.freeze(reviewedProfiles),
     missingProfiles: Object.freeze([...missingProfiles].sort()),
     staleProfiles: Object.freeze(staleProfiles),
+    retryDeferredProfiles: Object.freeze(retryDeferredProfiles),
     blockedProfiles: Object.freeze(blockedProfiles.map((row) => row.profile).sort()),
     allProfilesCurrentAndReviewed: reviewedProfiles.length === PROFILES.length
       && missingProfiles.length === 0 && staleProfiles.length === 0 && blockedProfiles.length === 0,
   });
+  const scanStatus = blockedProfiles.length > 0
+    ? 'PARTIAL_AI_UNAVAILABLE'
+    : reviews.length > 0
+      ? (profileCoverage.allProfilesCurrentAndReviewed ? 'COMPLETE' : 'PARTIAL_COVERAGE_COMPLETE')
+      : retryDeferredProfiles.length > 0
+        ? 'DEFERRED_RETRY'
+        : 'NO_NEW_EVIDENCE';
   const result = Object.freeze({
     schemaVersion: 'research-production-ai-scan-v1',
-    status: blockedProfiles.length > 0 ? 'PARTIAL_AI_UNAVAILABLE' : reviews.length > 0 ? 'COMPLETE' : 'NO_NEW_EVIDENCE',
+    status: scanStatus,
     observedAt, researchSha: base.researchSha, provider: policy.provider, model: policy.model, reason: policy.reason,
     providerNetworkCalls, cacheHits, profileCoverage,
     invocationMode: parseInvocationMode(env), scheduledInvocationObserved: false,
