@@ -19,7 +19,12 @@ on:
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
+      - api-server/src/index.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
+      - stock-analyzer/src/pages/auto-trading.tsx
+      - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
       - .github/workflows/production-futures-live-trading-gate.yml
