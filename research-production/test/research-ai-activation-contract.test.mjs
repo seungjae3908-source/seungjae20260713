@@ -199,7 +199,7 @@ test('activation workflow preserves sanitized diagnostics and failed-closed Hub 
   assert.match(workflow, /2>&1 \| tee "\$RUNNER_TEMP\/ai-research-activation\.txt"/);
   assert.match(workflow, /AI_RESEARCH_ACTIVATION_PROOF_INVALID/);
   assert.match(workflow, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=/);
-  assert.match(workflow, /grep -Ev '\\^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED='/);
+  assert.ok(workflow.includes("grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED='"));
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
   assert.match(workflow, /status: failed_closed/);
