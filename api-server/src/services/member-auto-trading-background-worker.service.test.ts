@@ -27,6 +27,7 @@ function policy(): TradingPolicy {
       crypto_futures: false,
     },
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledStrategies: ['trend-breakout-v1'],
     totalCapitalKrw: 1_000_000,
     maxOrderKrw: 100_000,
     maxInstrumentKrw: 300_000,
@@ -569,6 +570,34 @@ test('pending member cannot receive background automatic Paper work', async () =
   const result = await worker.runOnce(new Date(nowMs));
   assert.equal(result.evaluated, 0);
   assert.equal(result.skipped, 1);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+});
+
+test('empty strategy allowlist blocks every background automatic entry', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const noStrategies = normalizeTradingPolicy({
+    ...policy(),
+    enabledStrategies: [],
+  });
+  await repository.savePolicy(USER, noStrategies);
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: noStrategies,
+        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+      }];
+    },
+  });
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.evaluated, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
   assert.equal((await repository.listPlans(USER)).length, 0);
 });
 

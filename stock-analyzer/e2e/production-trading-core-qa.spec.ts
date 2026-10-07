@@ -114,7 +114,7 @@ function memberAutoPolicyReadiness(policy: any) {
   };
 }
 
-function preparedMemberAutoPolicy(policy: any) {
+function preparedMemberAutoPolicy(policy: any, strategyId: string) {
   const domesticBroker = policy?.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
   const requestedLeverage = Number(policy?.bitgetLeverage);
   const bitgetLeverage = Number.isInteger(requestedLeverage)
@@ -149,6 +149,9 @@ function preparedMemberAutoPolicy(policy: any) {
     },
     bitgetLeverage,
     riskOptimizationEnabled: true,
+    enabledStrategies: Array.isArray(policy?.enabledStrategies) && policy.enabledStrategies.length > 0
+      ? policy.enabledStrategies
+      : [strategyId],
     pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50',
     confirmation: { acknowledged: true },
   };
@@ -177,7 +180,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       page,
       '/api/trade-automation/policy',
       'PUT',
-      preparedMemberAutoPolicy(statusBefore.body.policy),
+      preparedMemberAutoPolicy(statusBefore.body.policy, 'TRADING_CORE_QA_CANARY'),
     );
     expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
     expect(prepared.body?.ok).toBe(true);
@@ -196,6 +199,19 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     memberAutoPolicyPrepared = true;
   }
 
+  const backgroundReadiness = await appApi<any>(page, '/api/trade-automation/background-readiness');
+  expect(backgroundReadiness.ok, JSON.stringify(backgroundReadiness.body)).toBe(true);
+  expect(backgroundReadiness.body?.readOnlyProbe).toBe(true);
+  expect(backgroundReadiness.body?.policyStorageReadable).toBe(true);
+  expect(backgroundReadiness.body?.memberProfileSchemaReadable).toBe(true);
+  expect(backgroundReadiness.body?.serviceRoleConfigured).toBe(true);
+  expect(Number(backgroundReadiness.body?.eligibleMembers)).toBeGreaterThanOrEqual(1);
+  expect(Number(backgroundReadiness.body?.explicitStrategyMembers)).toBeGreaterThanOrEqual(1);
+  expect(Number(backgroundReadiness.body?.paperAccountsReady)).toBeGreaterThanOrEqual(1);
+  expect(backgroundReadiness.body?.financialMutationCount).toBe(0);
+  expect(backgroundReadiness.body?.privateProviderRequestCount).toBe(0);
+  expect(backgroundReadiness.body?.handoffState).not.toBe('INVALID');
+
   const integrationBefore = await appApi<any>(page, '/api/user-integrations');
   expect(integrationBefore.ok).toBe(true);
   expect(integrationBefore.body?.ok).toBe(true);
@@ -210,6 +226,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
 
   const originalPolicy = structuredClone(statusBefore.body.policy);
   const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
+  const memberAutoStrategyAllowlistReady = Array.isArray(originalPolicy?.enabledStrategies)
+    && originalPolicy.enabledStrategies.length > 0;
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
   const canarySignalId = `trading-core-qa:${expectedDeploySha.slice(0, 12)}:${Date.now()}`;
   const canaryStrategy = 'TRADING_CORE_QA_CANARY';
@@ -418,7 +436,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   expect(statusAfter.body?.actualOrderSubmittedByStatusRequest).toBe(false);
 
   writeEvidence({
-    schemaVersion: 'production-trading-core-qa-v4',
+    schemaVersion: 'production-trading-core-qa-v5',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -444,7 +462,13 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramTestDelivered: telegramDelivered,
     policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
     memberAutoPolicyPrepared,
+    backgroundWorkerSourceReady: backgroundReadiness.body?.ok === true,
+    backgroundWorkerReadinessBlockers: backgroundReadiness.body?.blockers ?? [],
+    backgroundHandoffState: backgroundReadiness.body?.handoffState ?? 'INVALID',
+    backgroundEligibleMembers: Number(backgroundReadiness.body?.eligibleMembers ?? 0),
+    backgroundPaperAccountsReady: Number(backgroundReadiness.body?.paperAccountsReady ?? 0),
     memberAutoPolicyReady: originalPolicyReadiness.ready,
+    memberAutoStrategyAllowlistReady,
     memberAutoPolicyBlockers: originalPolicyReadiness.blockers,
     memberAutoDomesticBroker: originalPolicyReadiness.domesticBroker,
     memberAutoBitgetLeverage: originalPolicyReadiness.bitgetLeverage,
