@@ -297,6 +297,15 @@ if(!mainRoute.includes("import { accountReadonlyRuntimeService } from '../featur
    "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
    "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
  );
+// PR #1682 adds one runtime-flagged, staging-only public rehearsal endpoint.
+// Normalize only these exact reviewed lines before comparing with current main;
+// every other main route byte remains protected.
+if(!mainRoute.includes("import autoRehearsalPreviewRouter from './auto-rehearsal-preview';"))current=current
+ .replace("\nimport autoRehearsalPreviewRouter from './auto-rehearsal-preview';",'')
+ .replace(
+   "\n// PR-only isolated rehearsal preview. This route is runtime-flagged and only\n// runs synthetic safety gates plus the local Paper engine; it never reads member,\n// credential, Telegram, or production data and is disabled outside staging.\nrouter.use('/', autoRehearsalPreviewRouter);\n",
+   '',
+ );
 if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 const protectedPathExceptions=new Map([
