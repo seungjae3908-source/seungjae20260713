@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { link, mkdir, open, readdir, realpath, unlink } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { createResearchWorkerQueue } from '../../packages/external-research/src/research-workspace-worker-v9.js';
 
@@ -50,7 +50,13 @@ export async function intakeApprovedResearchJobs({stateRoot=process.env.RESEARCH
   return Object.freeze({schemaVersion:'research-approved-job-intake-v1',status:'COMPLETE',queued,existing,
     executionAuthority:'NONE',automaticApproval:false,providerCalls:0});
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+function isDirectRun(){
+  try{
+    return Boolean(process.argv[1])
+      && realpathSync(resolve(process.argv[1]))===realpathSync(fileURLToPath(import.meta.url));
+  }catch{return false;}
+}
+if(isDirectRun()){
   intakeApprovedResearchJobs().then(x=>process.stdout.write(JSON.stringify(x)+'\n')).catch(e=>{
     process.stderr.write(JSON.stringify({status:'failed_closed',reason:String(e?.code??e?.message??'APPROVED_JOB_INTAKE_FAILED').slice(0,160),executionAuthority:'NONE'})+'\n');
     process.exitCode=1;
