@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { chmod, chown, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 export const PAPER_STATE_READONLY_TRANSPORT_VERSION =
   'research-production-paper-state-readonly-transport-v1';
@@ -148,8 +148,14 @@ export async function preparePaperStateReadonlyTransport({
   });
 }
 
-const invokedAsScript = Boolean(process.argv[1])
-  && import.meta.url === pathToFileURL(process.argv[1]).href;
+const invokedAsScript = (() => {
+  try {
+    return Boolean(process.argv[1])
+      && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 
 if (invokedAsScript) {
   const profileIndex = process.argv.indexOf('--profile');
