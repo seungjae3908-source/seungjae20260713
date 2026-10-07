@@ -229,7 +229,9 @@ requireText(autoTradingSettings, 'if (syncDraft) {', 'AUTO_SETTINGS_DRAFT_PRESER
 requireText(autoTradingSettings, 'newEntriesStopped', 'AUTO_SETTINGS_MEMBER_STOP_STATE_MISSING');
 requireText(autoTradingSettings, "confirmation: 'RESUME_MEMBER_TRADING'", 'AUTO_SETTINGS_MEMBER_RESUME_CONFIRMATION_MISSING');
 requireText(autoTradingSettings, 'data-testid="member-trading-resume"', 'AUTO_SETTINGS_MEMBER_RESUME_BUTTON_MISSING');
-requireText(autoTradingSettings, 'disabled={memberStopped}', 'AUTO_SETTINGS_STOP_BYPASS_UI_BLOCK_MISSING');
+requireText(autoTradingSettings, 'disabled={effectiveStopped}', 'AUTO_SETTINGS_STOP_BYPASS_UI_BLOCK_MISSING');
+requireText(autoTradingSettings, 'data-testid="global-trading-stop"', 'AUTO_SETTINGS_GLOBAL_STOP_UI_MISSING');
+requireText(autoTradingSettings, '서버 전체 비상정지 · 관리자 해제 필요', 'AUTO_SETTINGS_GLOBAL_STOP_LABEL_MISSING');
 forbid(autoTradingSettings, /window\.setInterval\(\(\) => \{ void load\(\); \}, 15_000\)/u, 'AUTO_SETTINGS_DESTRUCTIVE_REFRESH_FORBIDDEN');
 requireText(tradeAutomationRoute, 'enforceMemberTradingPolicy(candidate, current)', 'AUTO_ROUTE_MEMBER_POLICY_GUARD_MISSING');
 requireText(tradeAutomationRoute, 'MEMBER_TRADING_RESUME_REQUIRED', 'AUTO_ROUTE_MEMBER_STOP_BYPASS_BLOCK_MISSING');
@@ -294,6 +296,7 @@ console.log(JSON.stringify({
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
   stickyMemberStopRequiresConfirmedResume: true,
+  externalEmergencyStopReflectedInSettings: true,
   automaticExitClosedLoop: true,
   accountQaSchemaVersion: 'v3',
 }));
