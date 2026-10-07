@@ -1445,7 +1445,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   async listEligibleMembers() {
     const { data, error } = await this.client.from('trade_automation_profiles')
-      .select('user_id,payload').limit(MAX_MEMBERS_PER_TICK);
+      .select('user_id,payload')
+      .contains('payload', { mode: 'automatic', automaticEnabled: true })
+      .order('updated_at', { ascending: false })
+      .limit(MAX_MEMBERS_PER_TICK);
     if (error) throw new Error('BACKGROUND_POLICY_LIST_FAILED');
     const rows = (data ?? []).flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
