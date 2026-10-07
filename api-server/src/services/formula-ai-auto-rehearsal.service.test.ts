@@ -4,7 +4,10 @@ import {
   evidenceBackedAutoStrategyCatalog,
   RULE_PACK_PILOT_PROFILE,
 } from './evidence-backed-auto-strategy-catalog.service';
-import { evaluateFormulaAiAutoRehearsal } from './formula-ai-auto-rehearsal.service';
+import {
+  evaluateFormulaAiAutoRehearsal,
+  runFormulaAiPaperRehearsalProbe,
+} from './formula-ai-auto-rehearsal.service';
 
 const ready = {
   deterministicRuleReady: true,
@@ -127,4 +130,21 @@ test('AI veto, cash-market short, missing provider chain, and unknown strategy f
   });
   assert.equal(unknown.status, 'BLOCKED_REHEARSAL');
   assert.ok(unknown.blockers.includes('FORMULA_AI_STRATEGY_NOT_ALLOWLISTED'));
+});
+
+
+test('rehearsal executes the real Paper engine through fill and journal projection with zero live authority', () => {
+  const probe = runFormulaAiPaperRehearsalProbe(new Date('2026-10-07T01:00:00.000Z'));
+  assert.equal(probe.paperAutoReady, true);
+  assert.equal(probe.paperFillReady, true);
+  assert.equal(probe.journalReady, true);
+  assert.equal(probe.riskReady, true);
+  assert.equal(probe.orderState, 'filled');
+  assert.ok(probe.fillCount >= 1);
+  assert.ok(probe.journalEntryCount >= 1);
+  assert.equal(probe.executionAuthority, 'NONE');
+  assert.equal(probe.realOrderSubmitted, false);
+  assert.equal(probe.exchangeRequestSent, false);
+  assert.equal(probe.providerMutationRequests, 0);
+  assert.equal(probe.productionMutationAllowed, false);
 });
