@@ -2227,3 +2227,129 @@ test('automatic policy executes US-stock Paper without per-order approval or pri
     await close(server);
   }
 });
+
+
+test('formula+AI rehearsal HTTP route proves four-market readiness and never creates live authority or provider mutations', async () => {
+  const verifiedAt = '2026-10-07T01:00:00.000Z';
+  const credentialValues = {
+    toss: { clientId: 'rehearsal-toss-client', clientSecret: 'rehearsal-toss-secret' },
+    kiwoom: { appKey: 'rehearsal-kiwoom-key', secretKey: 'rehearsal-kiwoom-secret' },
+    upbit: { accessKey: 'rehearsal-upbit-key', secretKey: 'rehearsal-upbit-secret' },
+    bitget: { apiKey: 'rehearsal-bitget-key', secretKey: 'rehearsal-bitget-secret', passphrase: 'rehearsal-bitget-pass' },
+  } as const;
+  const encrypted = Object.fromEntries(
+    Object.entries(credentialValues).map(([provider, value]) => [provider, encryptTradingCredentials(value)]),
+  ) as Record<string, string>;
+  setTradeReadonlyCredentialRepositoryFactoryForTests(() => ({
+    async get(userId, provider) {
+      if (userId !== USER || !encrypted[provider]) return null;
+      return {
+        userId,
+        provider,
+        configured: true,
+        encryptedCredentials: encrypted[provider],
+        lastVerifiedAt: verifiedAt,
+        lastErrorCode: null,
+        updatedAt: verifiedAt,
+      };
+    },
+  }));
+
+  process.env.FUTURES_LIVE_MAX_LEVERAGE = '7';
+  process.env.FUTURES_LIVE_MARGIN_MODE = 'isolated';
+  for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+    await repository.saveConnection({
+      userId: USER,
+      exchange,
+      accountMode: 'paper',
+      configured: true,
+      encryptedCredentials: null,
+      lastVerifiedAt: verifiedAt,
+      lastErrorCode: null,
+      updatedAt: verifiedAt,
+    });
+  }
+
+  const { server, baseUrl } = await startServer();
+  const nativeFetch = globalThis.fetch;
+  let outboundRequests = 0;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return nativeFetch(input, init);
+      outboundRequests += 1;
+      throw new Error(`REHEARSAL_OUTBOUND_FORBIDDEN:${String(init?.method ?? 'GET')}:${url}`);
+    };
+
+    const missingConfirmation = await globalThis.fetch(`${baseUrl}/api/trade-automation/rehearsal/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ journalReadReady: true, telegramReady: true }),
+    });
+    assert.equal(missingConfirmation.status, 409);
+    const missingBody = await missingConfirmation.json() as Record<string, any>;
+    assert.equal(missingBody.executionAuthority, 'NONE');
+    assert.equal(missingBody.realOrderSubmitted, false);
+    assert.equal(missingBody.providerMutationRequests, 0);
+
+    const response = await globalThis.fetch(`${baseUrl}/api/trade-automation/rehearsal/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        journalReadReady: true,
+        telegramReady: true,
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    for (const secret of [
+      'rehearsal-toss-client',
+      'rehearsal-toss-secret',
+      'rehearsal-kiwoom-key',
+      'rehearsal-kiwoom-secret',
+      'rehearsal-upbit-key',
+      'rehearsal-upbit-secret',
+      'rehearsal-bitget-key',
+      'rehearsal-bitget-secret',
+      'rehearsal-bitget-pass',
+    ]) assert.doesNotMatch(text, new RegExp(secret));
+
+    const body = JSON.parse(text) as Record<string, any>;
+    assert.equal(body.ok, true);
+    assert.equal(body.mode, 'DRIFT_REHEARSAL');
+    assert.equal(body.exceptionPolicy, 'FORMULA_AI_LIVE_EXCEPTION_V1');
+    assert.equal(body.paper.paperAutoReady, true);
+    assert.equal(body.paper.paperFillReady, true);
+    assert.equal(body.paper.journalReady, true);
+    assert.equal(body.paper.orderState, 'filled');
+    assert.equal(body.journal.ready, true);
+    assert.equal(body.telegram.ready, true);
+    assert.equal(body.futures.marginMode, 'isolated');
+    assert.equal(body.futures.maxLeverage, 7);
+    assert.equal(body.ai.positiveDecision, 'PASS');
+    assert.equal(body.ai.vetoDecision, 'VETO');
+    assert.equal(body.ai.vetoBlocked, true);
+    assert.equal(body.markets.length, 5);
+    assert.ok(body.markets.every((row: any) => row.wouldActivateLiveAuto === true));
+    assert.equal(body.wouldActivateLiveAuto, true);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.realOrderSubmitted, false);
+    assert.equal(body.actualOrderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(body.providerMutationRequests, 0);
+    assert.equal(body.productionMutationAllowed, false);
+    assert.equal(body.liveTradingActivated, false);
+    assert.equal(body.automaticLiveExecutionActivated, false);
+    assert.equal(outboundRequests, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeReadonlyCredentialRepositoryFactoryForTests(null);
+    for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+      await repository.deleteConnection(USER, exchange);
+    }
+    delete process.env.FUTURES_LIVE_MAX_LEVERAGE;
+    delete process.env.FUTURES_LIVE_MARGIN_MODE;
+    await close(server);
+  }
+});
