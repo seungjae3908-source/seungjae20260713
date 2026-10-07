@@ -35,6 +35,11 @@ import {
 } from '../services/formula-ai-auto-rehearsal.service';
 import { FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION } from '../services/formula-ai-live-exception.service';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
+import { areBackgroundWorkersEnabled } from '../lib/api-bind-host';
+import {
+  getMemberAutoTradingBackgroundRuntimeStatus,
+  inspectMemberAutoTradingBackgroundReadiness,
+} from '../services/member-auto-trading-background-worker.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -1025,6 +1030,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     }
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
     const vaultStatus = credentialConfigurationStatus();
+    const backgroundAutomationRuntime = getMemberAutoTradingBackgroundRuntimeStatus();
+    const backgroundWorkersMasterEnabled = areBackgroundWorkersEnabled();
     const liveExecutionReadiness = Object.fromEntries(
       [...EXCHANGES].map((exchange) => {
         const connection = connections.find((row) => row.exchange === exchange) ?? null;
@@ -1065,6 +1072,14 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
         upbit: automaticLiveExecutionEnabled('upbit'),
         kiwoom: automaticLiveExecutionEnabled('kiwoom'),
         toss: automaticLiveExecutionEnabled('toss'),
+      },
+      backgroundAutomationRuntime: {
+        masterEnabled: backgroundWorkersMasterEnabled,
+        operational: backgroundWorkersMasterEnabled
+          && backgroundAutomationRuntime.started
+          && backgroundAutomationRuntime.workerFlagEnabled
+          && backgroundAutomationRuntime.serviceRoleConfigured,
+        ...backgroundAutomationRuntime,
       },
       spotLiveLimited: spotLiveRuntimeStatus(),
       futuresLiveLimited: futuresLiveRuntimeStatus(),
@@ -1164,6 +1179,41 @@ router.get('/plans/:id/approval-status', async (req: AuthenticatedRequest, res) 
       privateTradingRequestSent: false,
     });
   } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/background-readiness', async (req: AuthenticatedRequest, res) => {
+  if (!req.member || !hasCapability(req.member, 'canAccessAutoTrading')) {
+    return res.status(403).json({
+      ok: false,
+      error: 'CAPABILITY_REQUIRED',
+      capability: 'canAccessAutoTrading',
+      financialMutationCount: 0,
+      privateProviderRequestCount: 0,
+    });
+  }
+  try {
+    const readiness = await inspectMemberAutoTradingBackgroundReadiness(new Date());
+    return res.json({
+      ...readiness,
+      readOnlyProbe: true,
+    });
+  } catch (error) {
+    return res.status(200).json({
+      ok: false,
+      blockers: [error instanceof Error ? error.message.split(':')[0] : 'BACKGROUND_READINESS_FAILED'],
+      policyStorageReadable: false,
+      memberProfileSchemaReadable: false,
+      eligibleMembers: 0,
+      explicitStrategyMembers: 0,
+      paperAccountsReady: 0,
+      handoffState: 'INVALID',
+      handoffEntries: 0,
+      serviceRoleConfigured: false,
+      financialMutationCount: 0,
+      privateProviderRequestCount: 0,
+      readOnlyProbe: true,
+    });
+  }
 });
 
 router.put('/policy', async (req: AuthenticatedRequest, res) => {
