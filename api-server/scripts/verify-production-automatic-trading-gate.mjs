@@ -8,7 +8,10 @@ const manualFuturesGate = read('.github/workflows/production-futures-live-tradin
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
 const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
+const telegramWorker = read('api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
 const apiIndex = read('api-server/src/index.ts');
+const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
+const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
@@ -68,6 +71,13 @@ requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
+requireText(workflow, 'requireArmedEntries: true', 'AUTO_GATE_POST_ARM_SECOND_TICK_PROOF_MISSING');
+requireText(workflow, 'health?.liveEntriesArmed === true', 'AUTO_GATE_LIVE_ENTRIES_ARMED_HEALTH_PROOF_MISSING');
+requireText(workflow, 'Number(health?.liveOrderEligibleMembers ?? 0) > 0', 'AUTO_GATE_LIVE_ORDER_ELIGIBLE_MEMBER_PROOF_MISSING');
+requireText(workflow, 'Number(health?.livePolicyReadyMembers ?? 0) > 0', 'AUTO_GATE_LIVE_POLICY_READY_MEMBER_PROOF_MISSING');
+requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
+requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE', 'AUTO_GATE_TELEGRAM_PM2_FLAGS_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false', 'AUTO_GATE_FIRST_TICK_ENTRY_BLOCK_PROOF_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_ORDER_PROOF_MISSING');
 requireText(workflow, 'LIVE_ENTRY_ARM_WRITTEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_RECEIPT_MISSING');
@@ -76,6 +86,10 @@ requireText(workflow, "'worker_warmup_proven=true'", 'AUTO_GATE_WARMUP_HUB_RECEI
 requireText(workflow, "'first_warmup_tick_live_entries_armed=false'", 'AUTO_GATE_FIRST_TICK_ARM_HUB_RECEIPT_MISSING');
 requireText(workflow, "'first_warmup_tick_live_orders=0'", 'AUTO_GATE_FIRST_TICK_ORDER_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_entry_arm_written=true'", 'AUTO_GATE_ARM_HUB_RECEIPT_MISSING');
+requireText(workflow, "'live_entries_armed_proven=true'", 'AUTO_GATE_ARMED_HUB_RECEIPT_MISSING');
+requireText(workflow, "'live_order_eligible_member_count=>=1'", 'AUTO_GATE_MEMBER_READY_HUB_RECEIPT_MISSING');
+requireText(workflow, "'global_emergency_stop=false'", 'AUTO_GATE_GLOBAL_STOP_HUB_RECEIPT_MISSING');
+requireText(workflow, "'telegram_delivery_worker_post_restart=HEALTHY'", 'AUTO_GATE_TELEGRAM_POST_RESTART_HUB_RECEIPT_MISSING');
 requireText(workflow, "rmSync(liveEntryArmPath, { force: true });", 'AUTO_GATE_DISABLE_DISARM_MISSING');
 
 requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
@@ -147,6 +161,11 @@ for (const token of [
   'if (synced.missingReferences > 0)',
   'newEntriesFailClosed',
   'runtimeRefreshes',
+  'overlapSkipped',
+  'liveOrderEligibleMembers',
+  'livePolicyReadyMembers',
+  'globalEmergencyStopActive',
+  'automaticPolicyHasRunnableMarket',
   'const refreshRuntime = async () =>',
   'Always re-read canonical exposure at the entry boundary',
   'let entryProjectionHealthy = await syncExecutionProjection();',
@@ -158,10 +177,21 @@ for (const token of [
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
+requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
+requireText(telegramWorker, 'export function readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_READER_MISSING');
+requireText(telegramWorker, "tickOk: true", 'AUTO_GATE_TELEGRAM_WORKER_SUCCESS_HEALTH_MISSING');
 requireText(paperWorkerTest, 'zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', 'AUTO_GATE_ZERO_MUTATION_ACTIVATION_REHEARSAL_MISSING');
 requireText(paperWorkerTest, 'assert.equal(armed.liveEntriesArmed, true);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ARM_PROOF_MISSING');
 requireText(paperWorkerTest, 'assert.equal(armed.liveOrders, 0);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ZERO_ORDER_PROOF_MISSING');
 requireText(paperWorkerTest, 'assert.equal(armed.privateTradingRequests, 0);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ZERO_PROVIDER_MUTATION_PROOF_MISSING');
+requireText(paperWorkerTest, 'live activation warmup stays fail-closed when no member can place real orders', 'AUTO_GATE_NO_LIVE_MEMBER_FAIL_CLOSED_TEST_MISSING');
+requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);', 'AUTO_GATE_NO_LIVE_MEMBER_ASSERTION_MISSING');
+
+requireText(autoTradingPage, 'readyForAutomaticOrderEvaluation', 'AUTO_UI_RUNTIME_READINESS_MISSING');
+requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
+forbid(autoTradingPage, /value="서버 Gate 필요"/u, 'AUTO_UI_HARDCODED_SERVER_GATE_FORBIDDEN');
+requireText(autoTradingSettings, 'liveAutomaticExecutionServerEnabled', 'AUTO_SETTINGS_LIVE_AUTO_GATE_MISSING');
+requireText(autoTradingSettings, 'readyForAutomaticOrderEvaluation', 'AUTO_SETTINGS_RUNTIME_READINESS_MISSING');
 
 requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPER_AUTO_RESET_MISSING');
@@ -205,6 +235,11 @@ console.log(JSON.stringify({
   sameTickRiskRefreshRequired: true,
   executionProjectionFailClosed: true,
   zeroMutationActivationRehearsal: true,
+  postArmSecondTickProofRequired: true,
+  liveMemberAndPolicyReadinessRequired: true,
+  globalEmergencyStopMustBeClear: true,
+  telegramDeliveryHealthRequiredAfterRestart: true,
+  runtimeBackedUiGateStatus: true,
   automaticExitClosedLoop: true,
   accountQaSchemaVersion: 'v3',
 }));
