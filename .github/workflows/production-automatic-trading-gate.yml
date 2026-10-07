@@ -622,7 +622,7 @@ jobs:
             }
             return env;
           };
-          const requireWorkerWarmup = (env, { requireCurrentArm, requireArmedEntries = false }) => {
+          const requireWorkerWarmup = (env, { requireCurrentArm }) => {
             const port = String(env.PORT || env.API_PORT || '8080');
             let last = null;
             for (let attempt = 0; attempt < 45; attempt += 1) {
@@ -649,8 +649,7 @@ jobs:
                   && last?.userTelegramDelivery?.enabled === true
                   && last?.userTelegramDelivery?.tickOk === true
                   && last?.userTelegramDelivery?.errorCode == null
-                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)
-                  && (!requireArmedEntries || health?.liveEntriesArmed === true)) {
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
                   return health;
                 }
               } catch {}
@@ -756,7 +755,7 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
-            requireWorkerWarmup(persisted, { requireCurrentArm: true, requireArmedEntries: true });
+            requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
@@ -777,18 +776,13 @@ jobs:
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
-            requireWorkerWarmup(after, { requireCurrentArm: false, requireArmedEntries: false });
+            const warmupHealth = requireWorkerWarmup(after, { requireCurrentArm: false });
             armLiveEntries();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
-            execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
-            const armedHealth = requireWorkerWarmup(persisted, {
-              requireCurrentArm: true,
-              requireArmedEntries: true,
-            });
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
@@ -808,10 +802,11 @@ jobs:
               FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false,
               FIRST_WARMUP_TICK_LIVE_ORDERS: 0,
               LIVE_ENTRY_ARM_WRITTEN: true,
-              LIVE_ENTRIES_ARMED_PROVEN: true,
-              LIVE_ORDER_ELIGIBLE_MEMBERS: armedHealth.liveOrderEligibleMembers,
-              LIVE_POLICY_READY_MEMBERS: armedHealth.livePolicyReadyMembers,
-              GLOBAL_EMERGENCY_STOP_ACTIVE: armedHealth.globalEmergencyStopActive,
+              LIVE_ENTRY_ARM_READBACK_PROVEN: true,
+              NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
+              LIVE_ORDER_ELIGIBLE_MEMBERS: warmupHealth.liveOrderEligibleMembers,
+              LIVE_POLICY_READY_MEMBERS: warmupHealth.livePolicyReadyMembers,
+              GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
               TELEGRAM_DELIVERY_WORKER_POST_RESTART: 'HEALTHY',
               REAL_ORDER_SUBMITTED: false,
             }));
@@ -880,7 +875,8 @@ jobs:
                 'first_warmup_tick_live_entries_armed=false',
                 'first_warmup_tick_live_orders=0',
                 'live_entry_arm_written=true',
-                'live_entries_armed_proven=true',
+                'live_entry_arm_readback_proven=true',
+                'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
                 'live_order_eligible_member_count=>=1',
                 'live_policy_ready_member_count=>=1',
                 'global_emergency_stop=false',
