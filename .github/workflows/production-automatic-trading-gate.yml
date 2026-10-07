@@ -292,6 +292,7 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
           DEPLOYMENT_COMPLETED_AT: ${{ steps.gate.outputs.deployment_completed_at }}
+          REQUIRE_AUTOMATIC_ACTIVATION: 'true'
         run: |
           set -Eeuo pipefail
           root="${{ runner.temp }}/production-preactivation-evidence"
