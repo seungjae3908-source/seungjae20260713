@@ -12,6 +12,9 @@ const telegramWorker = read('api-server/src/features/user-broker-telegram/user-b
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
+const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
+const tradeAutomationPolicyGuard = read('api-server/src/services/trade-automation-policy-guard.service.ts');
+const tradeAutomationSmoke = read('api-server/src/routes/trade-automation.smoke.test.ts');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
@@ -223,7 +226,19 @@ requireText(autoTradingSettings, 'readyForAutomaticOrderEvaluation', 'AUTO_SETTI
 requireText(autoTradingSettings, "load({ syncDraft: false })", 'AUTO_SETTINGS_RUNTIME_REFRESH_MISSING');
 requireText(autoTradingSettings, 'refreshInFlight', 'AUTO_SETTINGS_REFRESH_DEDUP_MISSING');
 requireText(autoTradingSettings, 'if (syncDraft) {', 'AUTO_SETTINGS_DRAFT_PRESERVATION_MISSING');
+requireText(autoTradingSettings, 'newEntriesStopped', 'AUTO_SETTINGS_MEMBER_STOP_STATE_MISSING');
+requireText(autoTradingSettings, "confirmation: 'RESUME_MEMBER_TRADING'", 'AUTO_SETTINGS_MEMBER_RESUME_CONFIRMATION_MISSING');
+requireText(autoTradingSettings, 'data-testid="member-trading-resume"', 'AUTO_SETTINGS_MEMBER_RESUME_BUTTON_MISSING');
+requireText(autoTradingSettings, 'disabled={memberStopped}', 'AUTO_SETTINGS_STOP_BYPASS_UI_BLOCK_MISSING');
 forbid(autoTradingSettings, /window\.setInterval\(\(\) => \{ void load\(\); \}, 15_000\)/u, 'AUTO_SETTINGS_DESTRUCTIVE_REFRESH_FORBIDDEN');
+requireText(tradeAutomationRoute, 'enforceMemberTradingPolicy(candidate, current)', 'AUTO_ROUTE_MEMBER_POLICY_GUARD_MISSING');
+requireText(tradeAutomationRoute, 'MEMBER_TRADING_RESUME_REQUIRED', 'AUTO_ROUTE_MEMBER_STOP_BYPASS_BLOCK_MISSING');
+requireText(tradeAutomationRoute, "router.post('/resume'", 'AUTO_ROUTE_MEMBER_RESUME_ENDPOINT_MISSING');
+requireText(tradeAutomationRoute, "req.body?.confirmation !== 'RESUME_MEMBER_TRADING'", 'AUTO_ROUTE_MEMBER_RESUME_CONFIRMATION_MISSING');
+requireText(tradeAutomationRoute, 'resumeMemberTradingPolicy(current)', 'AUTO_ROUTE_MEMBER_RESUME_POLICY_MISSING');
+requireText(tradeAutomationPolicyGuard, 'Emergency/new-entry stops are sticky', 'AUTO_POLICY_STICKY_STOP_CONTRACT_MISSING');
+requireText(tradeAutomationPolicyGuard, 'newEntriesStopped: false', 'AUTO_POLICY_CONFIRMED_RESUME_CLEAR_MISSING');
+requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', 'AUTO_ROUTE_MEMBER_RESUME_SMOKE_MISSING');
 
 requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPER_AUTO_RESET_MISSING');
@@ -278,6 +293,7 @@ console.log(JSON.stringify({
   manualGatesPreservePersonalTelegramDelivery: true,
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
+  stickyMemberStopRequiresConfirmedResume: true,
   automaticExitClosedLoop: true,
   accountQaSchemaVersion: 'v3',
 }));
