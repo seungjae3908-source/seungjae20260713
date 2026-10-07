@@ -191,7 +191,12 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (fixture) return;
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [fixture]);
 
   function updateNumber(key: keyof UiPolicy, value: string) {
     setDraft((current) => ({ ...current, [key]: Number(value) }));
