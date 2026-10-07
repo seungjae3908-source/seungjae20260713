@@ -232,6 +232,7 @@ const telegramReleaseReviewed=[
 const formulaAiDriftReviewed=[
  'api-server/src/routes/trade-automation.smoke.test.ts',
  'api-server/src/routes/trade-automation.ts',
+ 'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
  'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
