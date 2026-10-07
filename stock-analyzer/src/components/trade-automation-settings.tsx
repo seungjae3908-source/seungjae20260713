@@ -52,6 +52,16 @@ type Status = {
     lastActivityAt: string | null;
   }>;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  liveAutomaticExecutionServerEnabled?: Record<Exchange, boolean>;
+  liveExecutionReadiness?: Partial<Record<Exchange, {
+    connectionConfigured: boolean;
+    providerVerified: boolean;
+    manualServerGateEnabled: boolean;
+    automaticServerGateEnabled: boolean;
+    readyForManualOrderEvaluation: boolean;
+    readyForAutomaticOrderEvaluation: boolean;
+    blockers: string[];
+  }>>;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
@@ -387,16 +397,21 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {visibleExchanges.map((exchange) => {
         const connection = connections[exchange];
+        const providerVerified = Boolean(
+          connection?.configured && connection.lastVerifiedAt && !connection.lastErrorCode,
+        );
+        const automaticGateEnabled = status?.liveAutomaticExecutionServerEnabled?.[exchange] === true;
+        const automaticReady = status?.liveExecutionReadiness?.[exchange]?.readyForAutomaticOrderEvaluation === true;
         return <div key={exchange} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`connection-${exchange}`}>
           <div className="flex items-center gap-2">
-            {connection?.configured
+            {automaticReady
               ? <CheckCircle2 className="h-4 w-4 text-positive" />
               : <AlertTriangle className="h-4 w-4 text-warning" />}
             <span className="text-xs font-extrabold">{EXCHANGE_LABELS[exchange]}</span>
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {connection?.configured
-              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : connection.accountMode === 'mock' ? '모의' : 'Paper'} · ${status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON' : '서버게이트 OFF'}`
+              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : connection.accountMode === 'mock' ? '모의' : 'Paper'} · ${providerVerified ? '검증됨' : '검증 필요'} · ${automaticReady ? '자동게이트 준비' : automaticGateEnabled ? '자동게이트 ON · 차단요인 확인' : '자동게이트 OFF'}`
               : '거래키 미연결 · 모의매매는 가능'}
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">API 키 값은 화면에 표시하지 않습니다.</p>
