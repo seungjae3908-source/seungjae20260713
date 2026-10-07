@@ -53,7 +53,11 @@ test('canonical integration remains fail-closed and does not add a second browse
   expect(crypto).toContain('enabled: false');
   expect(routeIndex).toContain('PRIVATE_EXCHANGE_API_DISABLED');
   expect(autoTrading).toContain('실거래 권한');
-  expect(autoTrading).toContain('서버 Gate 필요');
+  expect(autoTrading).toContain('readyForAutomaticOrderEvaluation');
+  expect(autoTrading).toContain('automaticServerGateEnabled');
+  expect(autoTrading).toContain('계정 주문 권한 없음');
+  expect(autoTrading).toContain('자동 실거래 준비됨');
+  expect(autoTrading).not.toContain('value="서버 Gate 필요"');
 });
 
 
