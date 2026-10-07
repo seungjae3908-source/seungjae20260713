@@ -495,6 +495,18 @@ jobs:
           echo "previous_sha=$previous_sha" >> "$GITHUB_OUTPUT"
           echo "PREVIOUS_PRODUCTION_SHA=$previous_sha" >> "$GITHUB_ENV"
 
+          # Database hardening is forward-only. A post-QA application rollback is
+          # safe only when the previous app understands the hardened member RPC
+          # signature that remains in Production after this deployment attempt.
+          git fetch --quiet --no-tags --depth 1 origin "$previous_sha"
+          previous_admin="$(git show "$previous_sha:api-server/src/routes/admin.ts" 2>/dev/null || true)"
+          rollback_schema_compatible=false
+          if [[ "$previous_admin" == *"p_membership_expires_at"*             && "$previous_admin" == *"membership_expires_at"*             && "$previous_admin" == *"apply_member_permission_change"* ]]; then
+            rollback_schema_compatible=true
+          fi
+          echo "schema_compatible=$rollback_schema_compatible" >> "$GITHUB_OUTPUT"
+          echo "PREVIOUS_PRODUCTION_SCHEMA_COMPATIBLE=$rollback_schema_compatible" >> "$GITHUB_ENV"
+
       - name: Deploy exact approved revision
         id: deploy_app
         env:
@@ -817,7 +829,7 @@ jobs:
           retention-days: 30
 
       - name: Roll back application SHA if post-deploy QA fails
-        if: ${{ failure() && steps.deploy_app.outcome == 'success' }}
+        if: ${{ failure() && steps.deploy_app.outcome == 'success' && steps.rollback_target.outputs.schema_compatible == 'true' }}
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -883,6 +895,64 @@ jobs:
           }
           NODE
           echo "Post-deploy QA failed; Production application SHA restored to $PREVIOUS_SHA."
+
+      - name: Preserve fail-closed target when previous app is schema-incompatible
+        if: ${{ failure() && steps.deploy_app.outcome == 'success' && steps.rollback_target.outputs.schema_compatible != 'true' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const target = String(process.env.TARGET_SHA || '');
+          const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
+          if (marker !== target) throw new Error('POSTDEPLOY_FAILCLOSED_TARGET_SHA_MISMATCH');
+          const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const matches = rows.filter((row) => row?.name === 'stock-app');
+          if (matches.length !== 1 || matches[0]?.pm2_env?.status !== 'online') {
+            throw new Error('POSTDEPLOY_FAILCLOSED_PM2_INVALID');
+          }
+          const env = matches[0].pm2_env;
+          const bool = (key) => env[key] === true || env[key] === 'true';
+          for (const key of [
+            'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED',
+            'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
+            'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
+            'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED','MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
+            'TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
+          ]) {
+            if (bool(key)) throw new Error('POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT:' + key);
+          }
+          process.stdout.write('POSTDEPLOY_FAILCLOSED_TARGET_PRESERVED_SCHEMA_BOUNDARY\n');
+          NODE
+          rm -f ~/.ssh/id_ed25519
+          health="$RUNNER_TEMP/postdeploy-failclosed-health.json"
+          curl --fail --silent --show-error --max-time 20 "https://lsj119.com/api/health" -o "$health"
+          node - "$health" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, expected] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (value?.deploySha !== expected || value?.identityMatch !== true) {
+            throw new Error('POSTDEPLOY_FAILCLOSED_HEALTH_IDENTITY_INVALID');
+          }
+          NODE
+          echo 'Previous Production revision is not compatible with the hardened member schema; target SHA was preserved with all trading authority OFF.'
 
       - name: Deployment and post-deploy QA summary
         if: success()
