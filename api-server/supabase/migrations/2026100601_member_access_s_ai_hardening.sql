@@ -159,8 +159,8 @@ $function$;
 
 revoke all on function public.current_membership_level() from public;
 revoke all on function public.is_approved_member() from public;
-grant execute on function public.current_membership_level() to anon, authenticated;
-grant execute on function public.is_approved_member() to anon, authenticated;
+grant execute on function public.current_membership_level() to authenticated;
+grant execute on function public.is_approved_member() to authenticated;
 
 
 create or replace function public.is_admin()
@@ -174,7 +174,27 @@ as $function$
 $function$;
 
 revoke all on function public.is_admin() from public;
-grant execute on function public.is_admin() to anon, authenticated;
+grant execute on function public.is_admin() to authenticated;
+
+-- Trigger/internal SECURITY DEFINER helpers must not be callable through the
+-- exposed Data API. Keep only the membership predicates needed by signed-in
+-- RLS callers above.
+do $member_legacy_definer_acl_hardening$
+begin
+  if to_regprocedure('public.handle_new_user()') is not null then
+    execute 'revoke all on function public.handle_new_user() from public, anon, authenticated';
+  end if;
+  if to_regprocedure('public.log_profile_change()') is not null then
+    execute 'revoke all on function public.log_profile_change() from public, anon, authenticated';
+  end if;
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    execute 'revoke all on function public.rls_auto_enable() from public, anon, authenticated';
+  end if;
+  if to_regprocedure('public.is_full_member()') is not null then
+    execute 'revoke all on function public.is_full_member() from public, anon';
+  end if;
+end
+$member_legacy_definer_acl_hardening$;
 
 drop policy if exists "member audit admins select" on public.member_permission_audit;
 create policy "member audit admins select"
