@@ -202,6 +202,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
+  const newEntriesStopped = policy?.newEntriesStopped === true;
+  const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
 
   const changeMode = (next: TradingMode) => {
     if (next === 'auto' && !canAuto) return;
@@ -244,15 +246,18 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </div>
           <span className={[
             'rounded-full px-2.5 py-1 text-xs font-bold',
-            marketEnabled && !emergencyStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
+            marketEnabled && !effectiveEntryStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
           ].join(' ')}>
-            {marketEnabled && !emergencyStopped ? '시장 ON' : '시장 OFF'}
+            {marketEnabled && !effectiveEntryStopped ? '시장 ON' : '시장 OFF'}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <StatusItem label="연결" value={providerVerified ? '검증됨' : providerConnection?.configured ? '설정만 됨' : '미설정'} />
           <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
-          <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
+          <StatusItem
+            label="비상정지"
+            value={emergencyStopped ? '작동 중' : newEntriesStopped ? '신규진입 차단' : '정상'}
+          />
           <StatusItem label="실거래 권한" value={liveAuthorityLabel} />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
