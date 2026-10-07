@@ -367,7 +367,7 @@ function mergeTemporalFeatures(base, structure) {
   });
 }
 
-async function processGroup({ client, config, previousGroupState, cycleTime, referenceEvidenceRoot }) {
+async function processGroup({ client, longShortClient, config, previousGroupState, cycleTime, referenceEvidenceRoot }) {
   const selection = await loadModelSelection(config.group);
   const canonicalContext = await loadCanonicalEvidenceContext(referenceEvidenceRoot, config.group, cycleTime);
   const previousCanonical = previousGroupState?.canonicalEvidence ?? null;
@@ -416,7 +416,7 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       endTime,
     });
     longShortBySymbol[symbol] = await collectLongShortRatioHistory({
-      client,
+      client: longShortClient,
       symbol,
       period: String(process.env.RESEARCH_TEMPORAL_LONG_SHORT_PERIOD ?? "1h").trim() || "1h",
     });
@@ -782,6 +782,7 @@ const referenceEvidenceRoot = process.argv[4] ? resolve(process.argv[4]) : null;
 const cycleTime = Date.now();
 const previous = await readJsonOptional(statePath, { schemaVersion: 3, createdAt: cycleTime, groups: {}, forwardStrategies: {} });
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 12_000 });
+const longShortClient = new BitgetPublicClient({ minIntervalMs: 1_100, maxRetries: 4, timeoutMs: 12_000 });
 const nextState = {
   schemaVersion: 3,
   createdAt: previous.createdAt ?? cycleTime,
@@ -810,6 +811,7 @@ for (const config of GROUPS) {
   try {
     const result = await processGroup({
       client,
+      longShortClient,
       config,
       previousGroupState: previous.groups?.[config.group],
       cycleTime,
@@ -818,7 +820,7 @@ for (const config of GROUPS) {
     nextState.groups[config.group] = result.state;
     nextSummary.groups[config.group] = { status: "pass", ...result.summary };
   } catch (error) {
-    nextState.groups[config.group] = previous.groups?.[config.group] ?? { records: [], openInterestSnapshots: [] };
+    nextState.groups[config.group] = previous.groups?.[config.group] ?? { records: [], openInterestSnapshots: [], longShortSnapshots: [] };
     if (error?.code === "SHADOW_INFERENCE_NOT_EVALUABLE") {
       const details = error.details ?? {};
       nextSummary.groups[config.group] = {
