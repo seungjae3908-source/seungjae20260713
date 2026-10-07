@@ -128,6 +128,10 @@ jobs:
             const release = await inspectProductionPreactivationPrerequisites({
               github, context, targetSha: target,
             });
+            if (release.qaScope !== 'trading_core') {
+              core.setFailed('AUTOMATIC_TRADING_TRADING_CORE_QA_REQUIRED:' + release.qaScope);
+              return;
+            }
             const ciRunId = release.requiredCiRunId;
             const production = { id: release.productionDeployRunId };
             const comprehensive = production;
@@ -675,6 +679,10 @@ jobs:
                 });
                 const health = response.ok ? await response.json() : null;
                 const worker = health?.memberAutoTradingBackground;
+                const tickStartedAt = Date.parse(String(worker?.lastTickStartedAt ?? ''));
+                const tickFresh = Number.isFinite(tickStartedAt)
+                  && tickStartedAt <= Date.now() + 5_000
+                  && Date.now() - tickStartedAt <= 60_000;
                 if (health?.ok === true
                   && health?.backgroundWorkersEnabled === true
                   && worker?.masterEnabled === true
@@ -682,7 +690,9 @@ jobs:
                   && worker?.serviceRoleConfigured === true
                   && worker?.started === true
                   && worker?.liveBackgroundEnabled === true
-                  && worker?.startBlockedReason == null) {
+                  && worker?.startBlockedReason == null
+                  && worker?.lastTickErrorCode == null
+                  && tickFresh) {
                   return;
                 }
               } catch {}
