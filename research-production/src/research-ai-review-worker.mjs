@@ -415,7 +415,10 @@ export async function runResearchAiReviewScan({
     }
     const attemptPath = join(aiRoot, 'attempts', `${projection.evidenceDigest}.json`);
     const priorAttempt = await readJsonOptional(attemptPath);
-    if (Number(priorAttempt?.retryAfterAt) > observedAt) {
+    const priorAttemptMatchesRuntime = priorAttempt?.researchSha === base.researchSha
+      && priorAttempt?.provider === policy.provider
+      && priorAttempt?.model === policy.model;
+    if (priorAttemptMatchesRuntime && Number(priorAttempt?.retryAfterAt) > observedAt) {
       deferredProfiles.push(Object.freeze({ profile, evidenceDigest: projection.evidenceDigest, retryAfterAt: priorAttempt.retryAfterAt, reason: priorAttempt.reason ?? 'RETRY_BACKOFF' }));
       continue;
     }
@@ -442,12 +445,18 @@ export async function runResearchAiReviewScan({
         safety: RESEARCH_AI_WORKER_SAFETY,
       });
       await atomicJson(successPath, artifact, env);
-      await atomicJson(attemptPath, { status: 'READY', observedAt, retryAfterAt: null }, env);
+      await atomicJson(attemptPath, {
+        status: 'READY', observedAt, retryAfterAt: null,
+        researchSha: base.researchSha, provider: policy.provider, model: policy.model,
+      }, env);
       reviews.push(Object.freeze({ profile, evidenceDigest: projection.evidenceDigest, status: 'READY', cacheHit: false, role: projection.role }));
     } catch (error) {
       const reason = safeError(error);
       const retryAfterAt = observedAt + RETRY_AFTER_MS;
-      await atomicJson(attemptPath, { status: 'AI_RESEARCH_UNAVAILABLE', observedAt, retryAfterAt, reason }, env);
+      await atomicJson(attemptPath, {
+        status: 'AI_RESEARCH_UNAVAILABLE', observedAt, retryAfterAt, reason,
+        researchSha: base.researchSha, provider: policy.provider, model: policy.model,
+      }, env);
       blockedProfiles.push(Object.freeze({ profile, evidenceDigest: projection.evidenceDigest, reason, retryAfterAt }));
     }
   }
