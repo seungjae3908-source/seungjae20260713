@@ -153,20 +153,25 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     }
     if (!canAuto) return;
     const controller = new AbortController();
-    setRuntimeLoading(true);
-    void authorizedFetch('/api/trade-automation/status', { signal: controller.signal })
-      .then(async (response) => {
+    const loadRuntimeStatus = async (initial: boolean) => {
+      if (initial) setRuntimeLoading(true);
+      try {
+        const response = await authorizedFetch('/api/trade-automation/status', { signal: controller.signal });
         const payload = await response.json() as TradeAutomationFixture & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? '자동매매 상태를 불러오지 못했습니다.');
         if (!controller.signal.aborted) setRuntimeStatus(payload);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setRuntimeStatus(null);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setRuntimeLoading(false);
-      });
-    return () => controller.abort();
+      } catch {
+        if (initial && !controller.signal.aborted) setRuntimeStatus(null);
+      } finally {
+        if (initial && !controller.signal.aborted) setRuntimeLoading(false);
+      }
+    };
+    void loadRuntimeStatus(true);
+    const timer = window.setInterval(() => { void loadRuntimeStatus(false); }, 15_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
   }, [canAuto, fixture]);
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
@@ -179,6 +184,17 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
   const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
+  const providerVerified = Boolean(
+    providerConnection?.configured && providerConnection.lastVerifiedAt && !providerConnection.lastErrorCode,
+  );
+  const liveReadiness = runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
+  const liveAuthorityLabel = runtimeLoading
+    ? '확인 중'
+    : liveReadiness?.readyForAutomaticOrderEvaluation
+      ? '자동 실거래 준비됨'
+      : liveReadiness?.automaticServerGateEnabled
+        ? '자동 Gate 차단'
+        : '자동 Gate OFF';
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
@@ -230,10 +246,10 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
+          <StatusItem label="연결" value={providerVerified ? '검증됨' : providerConnection?.configured ? '설정만 됨' : '미설정'} />
           <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
           <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
+          <StatusItem label="실거래 권한" value={liveAuthorityLabel} />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
           <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
