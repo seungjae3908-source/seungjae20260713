@@ -213,11 +213,23 @@ begin
   ) then raise exception 'MEMBER_LEGACY_DIRECT_ADMIN_UPDATE_POLICY_PRESENT'; end if;
 
   if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
-     or has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
+     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'SELECT')
+     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
      or has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')
      or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE') then
-    raise exception 'MEMBER_DIRECT_MUTATION_PRIVILEGE_PRESENT';
+    raise exception 'MEMBER_DIRECT_MUTATION_PRIVILEGE_INVALID';
   end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_policies
+    where schemaname = 'public'
+      and tablename = 'member_permission_audit'
+      and policyname = 'member audit admins insert'
+      and cmd = 'INSERT'
+      and with_check ilike '%current_membership_level%'
+      and with_check ilike '%auth.uid()%'
+      and with_check ilike '%actor_id%'
+  ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
 
   if (select count(*) from public.profiles) <> current_setting('app.member_profiles_before')::bigint then
     raise exception 'MEMBER_PROFILE_ROWS_CHANGED';
