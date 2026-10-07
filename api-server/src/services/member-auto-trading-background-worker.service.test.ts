@@ -6,6 +6,8 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
+  assertMemberAutoTradingBackgroundHandoffFreshness,
+  MEMBER_AUTO_TRADING_HANDOFF_MAX_AGE_MS,
   liveBackgroundEnabled,
   marketMapping,
   resolveMemberStockBroker,
@@ -304,6 +306,34 @@ async function withFetchMock<T>(run: () => Promise<T>) {
   globalThis.fetch = async () => sidecarPaperOnly();
   try { return await run(); } finally { globalThis.fetch = original; }
 }
+
+test('background handoff cycle freshness fails closed even when READY has no entries', () => {
+  const nowMs = Date.now();
+  const stale = {
+    schemaVersion: 'member-auto-trading-paper-handoff-v1',
+    status: 'READY',
+    cycleId: 'stale-empty-cycle',
+    evaluatedAtMs: nowMs - MEMBER_AUTO_TRADING_HANDOFF_MAX_AGE_MS - 1,
+    entryCount: 0,
+    blockers: [],
+    entries: [],
+    handoffDigest: '0'.repeat(64),
+    safety: {
+      executionAuthority: 'NONE',
+      publicDataOnly: true,
+      simulatedOnly: true,
+      liveTrading: false,
+      privateTradingApiAllowed: false,
+      orderSubmitted: false,
+    },
+  } as any;
+  assert.throws(
+    () => assertMemberAutoTradingBackgroundHandoffFreshness(stale, nowMs),
+    /BACKGROUND_HANDOFF_STALE/,
+  );
+  const fresh = { ...stale, evaluatedAtMs: nowMs - 1_000 };
+  assert.equal(assertMemberAutoTradingBackgroundHandoffFreshness(fresh, nowMs), fresh);
+});
 
 test('member stock broker routing is user-selectable for stocks and fixed away from crypto', () => {
   const selected = normalizeTradingPolicy({
