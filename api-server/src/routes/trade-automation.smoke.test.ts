@@ -15,7 +15,8 @@ import {
   marketIntelligenceSymbolForTradingPlan,
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from '../services/trade-market-intelligence.service';
-import type { TradingPlanInput } from '../services/trade-automation.types';
+import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../services/trade-automation.types';
+import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
