@@ -1493,12 +1493,19 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
+      liveAutomaticReadinessByMarket: Record<string, {
+        readyForAutomaticOrderEvaluation: boolean;
+        blockers: string[];
+      }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.equal(body.liveAutomaticReadinessByMarket.domestic_stock.readyForAutomaticOrderEvaluation, false);
+    assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('MEMBER_ORDER_CAPABILITY_REQUIRED'));
+    assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('AUTOMATIC_POLICY_OFF'));
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
