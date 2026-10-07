@@ -23,6 +23,7 @@ on:
       - research-production/src/research-ai-review-worker.mjs
       - research-production/src/research-video-discovery-worker.mjs
       - research-production/test/research-ai-activation-contract.test.mjs
+      - research-production/test/research-ai-diagnostic.test.mjs
       - research-production/test/research-ai-review-worker.test.mjs
       - research-production/test/research-ai-units-install-contract.test.mjs
       - research-production/test/research-provider-bootstrap.test.mjs
@@ -63,7 +64,7 @@ jobs:
           bash -n research-production/deploy/activate-ai-research.sh
           bash -n research-production/deploy/install-ai-research-units.sh
           systemd-analyze verify             research-production/deploy/research-production-ai-review.service             research-production/deploy/research-production-ai-review.timer             research-production/deploy/research-production-video-discovery.service             research-production/deploy/research-production-video-discovery.timer             research-production/deploy/research-production-approved-job-intake.service             research-production/deploy/research-production-approved-job-intake.timer             research-production/deploy/research-production-workspace-worker.service
-          node --test             research-production/test/research-ai-activation-contract.test.mjs             research-production/test/research-ai-review-worker.test.mjs             research-production/test/research-ai-units-install-contract.test.mjs             research-production/test/research-provider-bootstrap.test.mjs             research-production/test/research-video-approved-job.test.mjs
+          node --test             research-production/test/research-ai-activation-contract.test.mjs             research-production/test/research-ai-diagnostic.test.mjs             research-production/test/research-ai-review-worker.test.mjs             research-production/test/research-ai-units-install-contract.test.mjs             research-production/test/research-provider-bootstrap.test.mjs             research-production/test/research-video-approved-job.test.mjs
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-ai ')" .github/workflows/research-ai-production-activation.yml
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-ai-production-activation.yml
           ! grep -Eq "LIVE_TRADING:[[:space:]]+['\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\"]?true" .github/workflows/research-ai-production-activation.yml
