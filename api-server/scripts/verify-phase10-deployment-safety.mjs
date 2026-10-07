@@ -131,7 +131,7 @@ assert(verdictVerifier.includes('verdict.deployed_sha !== targetSha'), 'producti
 for (const requirement of [
   'anonymous: health, login boundary, and protected API denial',
   'pending: approval-waiting account',
-  'associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied',
+  'associate: stock, spot, scanner, paper/auto trading, portfolio, AI chart and safe AI review preview allowed; futures and privileged APIs denied',
   'regular: futures, scanner, paper trading',
   'admin: member management is allowed',
   'bottom navigation and popup menus',
