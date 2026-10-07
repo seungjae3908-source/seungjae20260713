@@ -914,7 +914,13 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       journalReady: true,
       telegramReady: true,
     });
-    const wouldActivateLiveAuto = markets.every((item) => item.wouldActivateLiveAuto);
+    const allProvidersReady = ([...EXCHANGES] as TradingExchange[])
+      .every((provider) => providerStatus[provider].ready);
+    const allCredentialReuseReady = ([...EXCHANGES] as TradingExchange[])
+      .every((provider) => credentials[provider].reusable);
+    const wouldActivateLiveAuto = markets.every((item) => item.wouldActivateLiveAuto)
+      && allProvidersReady
+      && allCredentialReuseReady;
 
     return res.status(200).json({
       ok: true,
@@ -962,6 +968,8 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
         leverageReady: Number.isInteger(futuresLeverage) && futuresLeverage >= 2 && futuresLeverage <= 7,
       },
       markets,
+      allProvidersReady,
+      allCredentialReuseReady,
       wouldActivateLiveAuto,
       ...safety,
     });
