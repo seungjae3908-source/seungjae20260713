@@ -4,6 +4,8 @@ import test from 'node:test';
 
 const scriptUrl = new URL('../deploy/activate-ai-research.sh', import.meta.url);
 const workflowUrl = new URL('../../.github/workflows/research-ai-production-activation.yml', import.meta.url);
+const aiCliUrl = new URL('../bin/research-ai-review.mjs', import.meta.url);
+const aiServiceUrl = new URL('../deploy/research-production-ai-review.service', import.meta.url);
 
 test('AI Research activation is fail-closed and exact-SHA bound', async () => {
   const script = await readFile(scriptUrl, 'utf8');
@@ -151,6 +153,20 @@ test('approved-job intake and workspace heartbeat are proven before activation c
   assert.match(script, /AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE/);
 });
 
+
+
+test('AI review business failures are visible to systemd instead of exiting success', async () => {
+  const [cli, service] = await Promise.all([
+    readFile(aiCliUrl, 'utf8'),
+    readFile(aiServiceUrl, 'utf8'),
+  ]);
+  assert.match(cli, /PARTIAL_AI_UNAVAILABLE/);
+  assert.match(cli, /WAITING_FOR_FREE_AI/);
+  assert.match(cli, /DEFERRED_RETRY/);
+  assert.match(cli, /process\.exitCode = 75/);
+  assert.match(service, /ExecStart=.*research-ai-review\.mjs run/);
+  assert.doesNotMatch(service, /SuccessExitStatus=.*75/);
+});
 
 test('activation workflow preserves sanitized diagnostics and failed-closed Hub receipt', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
