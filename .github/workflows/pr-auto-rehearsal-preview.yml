@@ -128,6 +128,7 @@ jobs:
           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
           STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PUBLISHER_DIGEST" \
+          VITE_PR_REHEARSAL_PREVIEW=true \
           RELEASE_ROOT="$RELEASE_ROOT" \
           BACKUP_ROOT="$BACKUP_ROOT" \
           LOCK_FILE="$LOCK_FILE" \
@@ -144,6 +145,7 @@ jobs:
           FUTURES_LIVE_TRADING_ENABLED=false
           EXECUTION_AUTHORITY=NONE
           BACKGROUND_WORKERS_ENABLED=false
+          PR_REHEARSAL_PREVIEW_ENABLED=true
           SAFETY
           chmod 600 "$PREVIEW_DIR/api-server/.env.staging"
           pm2 restart "$PREVIEW_PM2_NAME" --update-env >/dev/null
@@ -251,7 +253,7 @@ jobs:
           if (health.deploySha !== process.env.TARGET_SHA) throw new Error('preview SHA mismatch');
           if (health.backgroundWorkersEnabled !== false) throw new Error('preview background workers must remain disabled');
           NODE
-          REHEARSAL_URL="${PREVIEW_URL%/}/auto-trading?section=rehearsal"
+          REHEARSAL_URL="${PREVIEW_URL%/}/auto-rehearsal-preview"
           echo "base_url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
           echo "rehearsal_url=$REHEARSAL_URL" >> "$GITHUB_OUTPUT"
           {
@@ -276,7 +278,7 @@ jobs:
               '<!-- pr-1682-auto-rehearsal-preview -->',
               '## 자동매매 리허설 Preview 준비 완료',
               '',
-              `- [리허설 화면 바로 열기](${process.env.REHEARSAL_URL})`,
+              `- [로그인 없이 리허설 화면 바로 열기](${process.env.REHEARSAL_URL})`,
               `- Exact SHA: \`${process.env.TARGET_SHA}\``,
               '- 격리 Staging Preview',
               '- LIVE/AUTO/실주문 권한 OFF',
