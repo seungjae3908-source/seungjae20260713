@@ -75,7 +75,7 @@ jobs:
             research-production/test/research-ai-units-install-contract.test.mjs \
             research-production/test/research-provider-bootstrap.test.mjs \
             research-production/test/research-video-approved-job.test.mjs \
-            research-production/test/research-symlink-cli-entrypoints.test.mjs \
+            research-production/test/research-symlink-cli-entrypoints.test.mjs
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-ai ')" .github/workflows/research-ai-production-activation.yml
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-ai-production-activation.yml
           ! grep -Eq "LIVE_TRADING:[[:space:]]+['\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\"]?true" .github/workflows/research-ai-production-activation.yml
