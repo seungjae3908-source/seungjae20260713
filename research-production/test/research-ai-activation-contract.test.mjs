@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const scriptUrl = new URL('../deploy/activate-ai-research.sh', import.meta.url);
+const workflowUrl = new URL('../../.github/workflows/research-ai-production-activation.yml', import.meta.url);
 
 test('AI Research activation is fail-closed and exact-SHA bound', async () => {
   const script = await readFile(scriptUrl, 'utf8');
@@ -88,7 +89,7 @@ test('fresh one-shot provider evidence is required before recurring timers enabl
   const enable = script.indexOf('systemctl enable --now');
   assert.ok(ai >= 0 && video > ai && proof > video && enable > proof);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_NOT_COMPLETE/);
-  assert.match(script, /AI_RESEARCH_ONE_SHOT_NETWORK_PROOF_MISSING/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
   assert.match(script, /AI_RESEARCH_ONE_SHOT_STALE/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NOT_COMPLETE/);
   assert.match(script, /VIDEO_DISCOVERY_ONE_SHOT_NETWORK_PROOF_MISSING/);
@@ -117,4 +118,49 @@ test('existing provider credentials are normalized with fixed Research models wi
   assert.match(script, /EXISTING_RESEARCH_PROVIDER_ENV_MODELS_NORMALIZED/);
   assert.match(script, /install -o root -g investment-research -m 0640/);
   assert.doesNotMatch(script, /console\.log\([^\n]*API_KEY|echo [^\n]*API_KEY|printf [^\n]*API_KEY/);
+});
+
+
+test('activation requires current-sha forward evidence before provider one-shot', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const readiness = script.indexOf('require_current_sha_ai_evidence_ready');
+  const aiStart = script.indexOf('systemctl start research-production-ai-review.service');
+  assert.ok(readiness >= 0 && aiStart > readiness);
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_EVIDENCE_MISSING/);
+  assert.match(script, /research-ai-current-sha-readiness-v1/);
+});
+
+test('activation exposes leaf diagnostics and accepts current cache proof', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /research-ai-diagnostic\.mjs/);
+  assert.match(script, /PARTIAL_COVERAGE_COMPLETE/);
+  assert.match(script, /cacheHits/);
+  assert.match(script, /AI_RESEARCH_ONE_SHOT_PROVIDER_OR_CACHE_PROOF_MISSING/);
+  assert.match(script, /blockedProfiles/);
+  assert.match(script, /deferredProfiles/);
+});
+
+test('approved-job intake and workspace heartbeat are proven before activation completes', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const intake = script.indexOf('systemctl start research-production-approved-job-intake.service');
+  const enable = script.indexOf('systemctl enable --now');
+  const heartbeat = script.indexOf('verify_workspace_worker_health', enable);
+  assert.ok(intake >= 0 && intake < enable && heartbeat > enable);
+  assert.match(script, /research-worker-status-v9/);
+  assert.match(script, /workerState !== 'ACTIVE'/);
+  assert.match(script, /AI_RESEARCH_WORKSPACE_WORKER_HEARTBEAT_NOT_ACTIVE/);
+});
+
+
+test('activation workflow preserves sanitized diagnostics and failed-closed Hub receipt', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.match(workflow, /id: activate_ai/);
+  assert.match(workflow, /2>&1 \| tee "\$RUNNER_TEMP\/ai-research-activation\.txt"/);
+  assert.match(workflow, /AI_RESEARCH_ACTIVATION_PROOF_INVALID/);
+  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
+  assert.match(workflow, /status: failed_closed/);
+  assert.match(workflow, /failure_reason: ' \+ process\.env\.FAILURE_REASON/);
+  assert.match(workflow, /provider_secret_values_exposed: false/);
+  assert.match(workflow, /executionAuthority: NONE/);
 });
