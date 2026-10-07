@@ -1080,6 +1080,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
           && backgroundAutomationRuntime.workerFlagEnabled
           && backgroundAutomationRuntime.serviceRoleConfigured
           && backgroundAutomationRuntime.lastTickErrorCode == null
+          && backgroundAutomationRuntime.lastFailures === 0
+          && backgroundAutomationRuntime.lastExecutionSyncFailures === 0
           && backgroundAutomationRuntime.lastHandoffStatus === 'READY',
         handoffReady: backgroundAutomationRuntime.lastHandoffStatus === 'READY',
         ...backgroundAutomationRuntime,
