@@ -1486,6 +1486,9 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveEntryArmPresent: false,
       liveEntriesArmed: false,
       liveEntryWarmupComplete: false,
+      liveOrderEligibleMembers: 0,
+      livePolicyReadyMembers: 0,
+      globalEmergencyStopActive: false,
       errorCode: null,
     });
     console.log('[member-auto-trading-background] disabled; explicit enable flag is required');
@@ -1500,6 +1503,9 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       newEntriesFailClosed: true,
       liveEntriesArmed: false,
       liveEntryWarmupComplete: false,
+      liveOrderEligibleMembers: 0,
+      livePolicyReadyMembers: 0,
+      globalEmergencyStopActive: false,
       errorCode: 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED',
     });
     console.error('[member-auto-trading-background] blocked: service-role Supabase configuration is required');
@@ -1522,6 +1528,9 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     firstWarmupTickLiveOrders: null,
     executionSyncFailures: 0,
     executionSyncMissingReferences: 0,
+    liveOrderEligibleMembers: 0,
+    livePolicyReadyMembers: 0,
+    globalEmergencyStopActive: false,
     errorCode: null,
   });
   const worker = new MemberAutoTradingBackgroundWorker(new SupabaseMemberAutoTradingBackgroundSource());
