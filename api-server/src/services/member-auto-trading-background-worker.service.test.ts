@@ -714,7 +714,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
     for (const key of keys) process.env[key] = 'true';
     const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
     assert.equal(result.liveEntriesArmed, false);
-    assert.equal(result.liveEntriesSuppressedByWarmup, 1);
+    assert.equal(result.liveEntriesSuppressedByWarmupOrArm, 1);
     assert.equal(result.liveEntryWarmupComplete, true);
     assert.equal(result.liveOrders, 0);
     assert.equal(liveReads, 0);
