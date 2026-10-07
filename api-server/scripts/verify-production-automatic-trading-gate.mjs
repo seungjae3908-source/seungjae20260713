@@ -145,6 +145,7 @@ for (const token of [
   'newEntriesFailClosed',
   'runtimeRefreshes',
   'const refreshRuntime = async () =>',
+  'Always re-read canonical exposure at the entry boundary',
   'let entryProjectionHealthy = await syncExecutionProjection();',
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
