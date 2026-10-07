@@ -132,6 +132,28 @@ test('activation requires current-sha forward evidence before provider one-shot'
   assert.match(script, /research-ai-current-sha-readiness-v1/);
 });
 
+
+test('activation rejects current-sha forward cycles whose tasks are blocked_data', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  assert.match(script, /AI_RESEARCH_CURRENT_SHA_FORWARD_RUNTIME_BLOCKED/);
+  assert.match(script, /forward\.successCount !== forward\.taskCount/);
+  assert.match(script, /forward\.blockedDataCount !== 0/);
+  assert.match(script, /forward\.failedCount !== 0/);
+  assert.match(script, /task\?\.status !== 'success'/);
+  assert.match(script, /task\?\.exitCode !== 0/);
+});
+
+test('forward Paper Shadow runtime diagnostic runs before provider preflight', async () => {
+  const script = await readFile(scriptUrl, 'utf8');
+  const runtimeGate = script.indexOf('require_forward_runtime_ready');
+  const providerGate = script.indexOf('provider_preflight', script.indexOf('preflight()'));
+  assert.ok(runtimeGate >= 0);
+  assert.ok(providerGate > runtimeGate);
+  assert.match(script, /research-forward-runtime-diagnostic\.mjs/);
+  assert.match(script, /AI_RESEARCH_FORWARD_RUNTIME_NOT_READY/);
+  assert.match(script, /PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH/);
+});
+
 test('activation exposes leaf diagnostics and accepts current cache proof', async () => {
   const script = await readFile(scriptUrl, 'utf8');
   assert.match(script, /research-ai-diagnostic\.mjs/);
