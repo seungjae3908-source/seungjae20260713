@@ -214,6 +214,7 @@ function source(
     markPrice?: number;
     syncCalls?: { count: number };
     syncFailure?: boolean;
+    syncMissingReferences?: number;
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
@@ -260,7 +261,11 @@ function source(
       async syncExecutionEvents() {
         options.syncCalls!.count += 1;
         if (options.syncFailure) throw new Error('TEST_EXECUTION_SYNC_FAILED');
-        return { inserted: 1, deliveryQueued: 1, missingReferences: 0 };
+        return {
+          inserted: 1,
+          deliveryQueued: 1,
+          missingReferences: options.syncMissingReferences ?? 0,
+        };
       },
     } : {}),
   };
@@ -552,6 +557,27 @@ test('background worker automatically projects canonical execution events withou
   assert.equal(result.handoffReady, false);
   assert.equal(result.newEntriesFailClosed, true);
   assert.equal(result.privateTradingRequests, 0);
+});
+
+test('execution projection missing references fail-close new entries before canonical order mutation', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const syncCalls = { count: 0 };
+  const worker = new MemberAutoTradingBackgroundWorker(
+    source(repository, nowMs, { syncCalls, syncMissingReferences: 1 }),
+  );
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(syncCalls.count, 1);
+  assert.equal(result.executionSyncMissingReferences, 1);
+  assert.equal(result.executionSyncFailures, 0);
+  assert.equal(result.executionSyncBlocks, 1);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.blocked, 1);
+  assert.equal((await repository.listOrders(USER)).length, 0);
 });
 
 test('execution event fan-out failure fail-closes new entries before canonical order mutation', async () => {
