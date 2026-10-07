@@ -746,6 +746,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
     assert.equal(result.liveEntriesSuppressedByWarmupOrArm, 1);
     assert.equal(result.liveEntryWarmupComplete, true);
     assert.equal(result.liveOrders, 0);
+    assert.equal(result.liveExitOrders, 0);
     assert.equal(liveReads, 0);
     assert.ok(syncCalls.count >= 2);
   } finally {
@@ -781,6 +782,113 @@ test('live activation warmup stays fail-closed when no member can place real ord
     assert.equal(result.liveEntryWarmupComplete, false);
     assert.equal(result.newEntriesFailClosed, true);
     assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('first live warmup suppresses automatic exits for existing live positions before exact-SHA arm', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await repository.savePlan({
+    exchange: 'upbit',
+    accountMode: 'live',
+    strategyId: 'trend-breakout-v1',
+    signalId: 'live-signal-existing',
+    symbol: 'BTC',
+    market: 'UPBIT',
+    side: 'buy',
+    orderType: 'market',
+    quantity: 0.1,
+    quoteAmount: null,
+    limitPrice: null,
+    estimatedKrw: 100_000,
+    stopPrice: 95_000,
+    targetPrices: [110_000],
+    splitRatios: [1],
+    leverage: null,
+    marginMode: null,
+    reduceOnly: false,
+    signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: {
+      observedAt: new Date(nowMs - 1_000).toISOString(),
+      dataDelayMs: 1_000,
+      oneMinuteMovePercent: 0,
+      spreadPercent: 0.05,
+      orderbookGapPercent: 0,
+      halted: false,
+      availableBalance: 900_000,
+      accountValueKrw: 1_000_000,
+      dailyPnlPercent: 0,
+      openPositionCount: 1,
+      dailyOrderCount: 1,
+      consecutiveLosses: 0,
+      currentPrice: 100_000,
+      signalState: 'approved',
+    },
+    entryPrice: 100_000,
+    executionMode: 'automatic',
+    id: 'live-plan-existing',
+    userId: USER,
+    idempotencyKey: 'live-plan-existing-key',
+    state: 'FILLED',
+    version: 1,
+    approvalExpiresAt: null,
+    approvedAt: new Date(nowMs - 10_000).toISOString(),
+    createdAt: new Date(nowMs - 10_000).toISOString(),
+    updatedAt: new Date(nowMs - 5_000).toISOString(),
+  } as any);
+  await repository.saveOrder({
+    id: 'live-order-existing',
+    userId: USER,
+    planId: 'live-plan-existing',
+    exchange: 'upbit',
+    clientOrderId: 'live-order-existing-client',
+    exchangeOrderId: 'live-order-existing-provider',
+    state: 'FILLED',
+    version: 1,
+    requestedQuantity: 0.1,
+    remainingQuantity: 0,
+    filledQuantity: 0.1,
+    averageFillPrice: 100_000,
+    retryCount: 0,
+    lastErrorCode: null,
+    createdAt: new Date(nowMs - 10_000).toISOString(),
+    updatedAt: new Date(nowMs - 5_000).toISOString(),
+  } as any);
+
+  let liveReads = 0;
+  const base = source(repository, nowMs, { tier: 'admin', markPrice: 90_000 });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('WARMUP_LIVE_EXIT_PRIVATE_READ_FORBIDDEN');
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveEntriesArmed, false);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);
+    assert.equal(result.privateTradingRequests, 0);
+    assert.equal(liveReads, 0);
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -832,6 +940,7 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
     assert.equal(warmup.liveEntriesArmed, false);
     assert.equal(warmup.liveEntryWarmupComplete, true);
     assert.equal(warmup.liveOrders, 0);
+    assert.equal(warmup.liveExitOrders, 0);
     assert.equal(warmup.privateTradingRequests, 0);
     assert.equal(warmup.executionSyncFailures, 0);
     assert.equal(warmup.executionSyncMissingReferences, 0);
@@ -852,6 +961,7 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
     assert.equal(armed.liveEntriesArmed, true);
     assert.equal(armed.liveEntryWarmupComplete, true);
     assert.equal(armed.liveOrders, 0);
+    assert.equal(armed.liveExitOrders, 0);
     assert.equal(armed.privateTradingRequests, 0);
     assert.equal(armed.executionSyncFailures, 0);
     assert.equal(armed.executionSyncMissingReferences, 0);
