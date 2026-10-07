@@ -702,7 +702,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
       return [{
         userId: USER,
         policy: policy(),
-        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
       }];
     },
     async readLiveAccountSnapshot() {
