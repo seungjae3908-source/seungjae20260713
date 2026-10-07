@@ -110,6 +110,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveEntriesArmed: boolean;
   liveEntryWarmupComplete: boolean;
   liveEntriesSuppressedByWarmupOrArm: number;
+  liveExitsSuppressedByWarmupOrArm: number;
   runtimeRefreshes: number;
   executionSyncBlocks: number;
   overlapSkipped: boolean;
@@ -154,6 +155,8 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   startupWarmupObserved: boolean;
   firstWarmupTickLiveEntriesArmed: boolean | null;
   firstWarmupTickLiveOrders: number | null;
+  firstWarmupTickLiveExitOrders: number | null;
+  liveExitsSuppressedByWarmupOrArm: number;
   executionSyncFailures: number;
   executionSyncMissingReferences: number;
   liveOrderEligibleMembers: number;
@@ -176,6 +179,8 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   startupWarmupObserved: false,
   firstWarmupTickLiveEntriesArmed: null,
   firstWarmupTickLiveOrders: null,
+  firstWarmupTickLiveExitOrders: null,
+  liveExitsSuppressedByWarmupOrArm: 0,
   executionSyncFailures: 0,
   executionSyncMissingReferences: 0,
   liveOrderEligibleMembers: 0,
@@ -1038,6 +1043,7 @@ export class MemberAutoTradingBackgroundWorker {
       liveEntriesArmed: liveEntriesArmedThisTick,
       liveEntryWarmupComplete: this.liveEntryWarmupComplete,
       liveEntriesSuppressedByWarmupOrArm: 0,
+      liveExitsSuppressedByWarmupOrArm: 0,
       runtimeRefreshes: 0,
       executionSyncBlocks: 0,
       overlapSkipped: false,
@@ -1179,30 +1185,35 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         if (liveBackgroundEnabled()) {
-          for (const position of trackedAutomaticPositions(runtime, 'live')) {
-            try {
-              const exit = await processAutomaticExit({
-                source: this.source,
-                repository,
-                member,
-                position,
-                fxCache,
-                now,
-                live: true,
-              });
-              result.privateTradingRequests += exit.privateRequests;
-              if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
-                result.liveExitOrders += 1;
-                exitChanged = true;
-              } else if (exit.status.startsWith('BLOCKED')) {
-                result.exitBlocked += 1;
-              }
-            } catch (error) {
-              const code = errorCode(error);
-              if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
-                result.exitBlocked += 1;
-              } else {
-                result.failures += 1;
+          const livePositions = trackedAutomaticPositions(runtime, 'live');
+          if (!liveEntriesArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
+            result.liveExitsSuppressedByWarmupOrArm += livePositions.length;
+          } else {
+            for (const position of livePositions) {
+              try {
+                const exit = await processAutomaticExit({
+                  source: this.source,
+                  repository,
+                  member,
+                  position,
+                  fxCache,
+                  now,
+                  live: true,
+                });
+                result.privateTradingRequests += exit.privateRequests;
+                if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
+                  result.liveExitOrders += 1;
+                  exitChanged = true;
+                } else if (exit.status.startsWith('BLOCKED')) {
+                  result.exitBlocked += 1;
+                }
+              } catch (error) {
+                const code = errorCode(error);
+                if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
+                  result.exitBlocked += 1;
+                } else {
+                  result.failures += 1;
+                }
               }
             }
           }
@@ -1526,6 +1537,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     startupWarmupObserved: false,
     firstWarmupTickLiveEntriesArmed: null,
     firstWarmupTickLiveOrders: null,
+    firstWarmupTickLiveExitOrders: null,
+    liveExitsSuppressedByWarmupOrArm: 0,
     executionSyncFailures: 0,
     executionSyncMissingReferences: 0,
     liveOrderEligibleMembers: 0,
@@ -1558,6 +1571,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         firstWarmupTickLiveOrders: warmupObservedNow
           ? result.liveOrders
           : backgroundRuntimeHealth.firstWarmupTickLiveOrders,
+        firstWarmupTickLiveExitOrders: warmupObservedNow
+          ? result.liveExitOrders
+          : backgroundRuntimeHealth.firstWarmupTickLiveExitOrders,
+        liveExitsSuppressedByWarmupOrArm: result.liveExitsSuppressedByWarmupOrArm,
         executionSyncFailures: result.executionSyncFailures,
         executionSyncMissingReferences: result.executionSyncMissingReferences,
         liveOrderEligibleMembers: result.liveOrderEligibleMembers,
@@ -1568,7 +1585,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
         || result.paperExitOrders > 0 || result.liveExitOrders > 0
         || result.exitBlocked > 0 || result.executionSyncBlocks > 0
-        || result.liveEntriesSuppressedByWarmupOrArm > 0 || result.failures > 0) {
+        || result.liveEntriesSuppressedByWarmupOrArm > 0
+        || result.liveExitsSuppressedByWarmupOrArm > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
