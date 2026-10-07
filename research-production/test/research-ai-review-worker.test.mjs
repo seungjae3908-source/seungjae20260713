@@ -467,8 +467,8 @@ test('provider or model change invalidates an old retry backoff for the same evi
     assert.equal(recovered.status, 'PARTIAL_COVERAGE_COMPLETE');
     assert.equal(recovered.provider, 'gemini');
     assert.equal(recovered.providerNetworkCalls, 1);
-    assert.equal(recovered.deferredProfiles.length, 2);
-    assert.equal(recovered.deferredProfiles.every((row) => row.reason === 'STALE_RELEASE_EVIDENCE'), false);
+    assert.equal(recovered.deferredProfiles.length, 0);
+    assert.deepEqual(recovered.missingProfiles.sort(), ['fast-historical', 'long-history']);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
