@@ -1,9 +1,13 @@
 name: Post-Merge Release Provenance
 
+run-name: Post-Merge Release Provenance ${{ github.event.comment.body || github.sha }}
+
 on:
   push:
     branches:
       - main
+  issue_comment:
+    types: [created]
 
 permissions:
   actions: read
@@ -18,13 +22,26 @@ concurrency:
 jobs:
   verify:
     name: Verify merged tree equals pre-merge fully tested candidate
+    if: >-
+      github.event_name == 'push' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.action == 'created' &&
+        github.event.issue.number == 1555 &&
+        github.event.issue.pull_request == null &&
+        github.event.issue.state == 'open' &&
+        github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
+        startsWith(github.event.comment.body, '/run-post-merge-provenance ')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
-      - name: Checkout exact merged revision
+      - name: Checkout exact current-main verifier
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
           persist-credentials: false
 
       - name: Verify pre-merge CI and merged-tree identity
@@ -42,7 +59,15 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const targetSha = String(context.sha || '').toLowerCase();
+            const commandBody = String(context.payload.comment?.body ?? '').trim();
+            const commandMatch = /^\/run-post-merge-provenance ([0-9a-fA-F]{40})$/.exec(commandBody);
+            const commandMode = context.eventName === 'issue_comment';
+            if (commandMode && !commandMatch) {
+              core.setFailed('[POST_MERGE_COMMAND_INVALID]');
+              return;
+            }
+            const targetSha = String(commandMode ? commandMatch[1] : context.sha || '').toLowerCase();
+            core.setOutput('target_sha', targetSha);
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             const statusContext = 'post-merge-provenance/verified';
 
@@ -186,7 +211,7 @@ jobs:
         if: steps.provenance.outputs.stale != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: release-candidate-provenance-${{ github.sha }}
+          name: release-candidate-provenance-${{ steps.provenance.outputs.target_sha }}
           path: release-candidate-provenance.json
           if-no-files-found: error
           retention-days: 30
