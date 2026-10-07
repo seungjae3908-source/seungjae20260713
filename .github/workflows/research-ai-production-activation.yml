@@ -32,7 +32,6 @@ on:
       - research-production/test/research-video-approved-job.test.mjs
       - research-production/test/research-symlink-cli-entrypoints.test.mjs
       - research-production/test/paper-state-readonly-transport.test.mjs
-      - research-production/test/research-symlink-cli-entrypoints.test.mjs
       - scripts/agent_hub_rollover_v2.py
   issue_comment:
     types: [created]
