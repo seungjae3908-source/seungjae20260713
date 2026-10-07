@@ -222,9 +222,9 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && tradingCore?.telegramPersonalActivationRequired === false
     && Number(tradingCore?.telegramDeliveryQueued) >= 1
     && tradingCore?.telegramTestDelivered === true;
-  const memberAutoPolicyReady = tradingCore?.memberAutoPolicyReady === true
+  const memberAutoPolicyEvidenceValid = typeof tradingCore?.memberAutoPolicyReady === 'boolean'
     && Array.isArray(tradingCore?.memberAutoPolicyBlockers)
-    && tradingCore.memberAutoPolicyBlockers.length === 0
+    && tradingCore.memberAutoPolicyReady === (tradingCore.memberAutoPolicyBlockers.length === 0)
     && ['kiwoom', 'toss'].includes(tradingCore?.memberAutoDomesticBroker)
     && Number.isInteger(tradingCore?.memberAutoBitgetLeverage)
     && tradingCore.memberAutoBitgetLeverage >= 2
@@ -239,7 +239,7 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     || tradingCore?.journalVisible !== true
     || !(Number(tradingCore?.executionSyncInserted) >= 1)
     || (!telegramReady && !telegramVerified)
-    || !memberAutoPolicyReady
+    || !memberAutoPolicyEvidenceValid
     || tradingCore?.backgroundWorkerSourceReady !== true
     || !Array.isArray(tradingCore?.backgroundWorkerReadinessBlockers)
     || tradingCore.backgroundWorkerReadinessBlockers.length !== 0
@@ -400,6 +400,7 @@ function buildProductionPostdeployQaEvidence({
     // remains blocked until focused background-source proof and an explicit
     // strategy allowlist both exist.
     activationReady: qaScope === 'trading_core'
+      && tradingCore.memberAutoPolicyReady === true
       && tradingCore.backgroundWorkerSourceReady === true
       && tradingCore.memberAutoStrategyAllowlistReady === true,
   };
