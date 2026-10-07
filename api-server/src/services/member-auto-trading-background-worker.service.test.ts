@@ -6,6 +6,8 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
+  assertMemberAutoTradingBackgroundHandoffFreshness,
+  MEMBER_AUTO_TRADING_HANDOFF_MAX_AGE_MS,
   liveBackgroundEnabled,
   marketMapping,
   resolveMemberStockBroker,
@@ -27,6 +29,7 @@ function policy(): TradingPolicy {
       crypto_futures: false,
     },
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    enabledStrategies: ['trend-breakout-v1'],
     totalCapitalKrw: 1_000_000,
     maxOrderKrw: 100_000,
     maxInstrumentKrw: 300_000,
@@ -304,6 +307,34 @@ async function withFetchMock<T>(run: () => Promise<T>) {
   try { return await run(); } finally { globalThis.fetch = original; }
 }
 
+test('background handoff cycle freshness fails closed even when READY has no entries', () => {
+  const nowMs = Date.now();
+  const stale = {
+    schemaVersion: 'member-auto-trading-paper-handoff-v1',
+    status: 'READY',
+    cycleId: 'stale-empty-cycle',
+    evaluatedAtMs: nowMs - MEMBER_AUTO_TRADING_HANDOFF_MAX_AGE_MS - 1,
+    entryCount: 0,
+    blockers: [],
+    entries: [],
+    handoffDigest: '0'.repeat(64),
+    safety: {
+      executionAuthority: 'NONE',
+      publicDataOnly: true,
+      simulatedOnly: true,
+      liveTrading: false,
+      privateTradingApiAllowed: false,
+      orderSubmitted: false,
+    },
+  } as any;
+  assert.throws(
+    () => assertMemberAutoTradingBackgroundHandoffFreshness(stale, nowMs),
+    /BACKGROUND_HANDOFF_STALE/,
+  );
+  const fresh = { ...stale, evaluatedAtMs: nowMs - 1_000 };
+  assert.equal(assertMemberAutoTradingBackgroundHandoffFreshness(fresh, nowMs), fresh);
+});
+
 test('member stock broker routing is user-selectable for stocks and fixed away from crypto', () => {
   const selected = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
@@ -569,6 +600,34 @@ test('pending member cannot receive background automatic Paper work', async () =
   const result = await worker.runOnce(new Date(nowMs));
   assert.equal(result.evaluated, 0);
   assert.equal(result.skipped, 1);
+  assert.equal((await repository.listPlans(USER)).length, 0);
+});
+
+test('empty strategy allowlist blocks every background automatic entry', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const noStrategies = normalizeTradingPolicy({
+    ...policy(),
+    enabledStrategies: [],
+  });
+  await repository.savePolicy(USER, noStrategies);
+  const base = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: noStrategies,
+        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+      }];
+    },
+  });
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.evaluated, 0);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
   assert.equal((await repository.listPlans(USER)).length, 0);
 });
 

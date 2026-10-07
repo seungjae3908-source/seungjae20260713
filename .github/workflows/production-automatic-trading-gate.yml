@@ -128,6 +128,10 @@ jobs:
             const release = await inspectProductionPreactivationPrerequisites({
               github, context, targetSha: target,
             });
+            if (release.qaScope !== 'trading_core') {
+              core.setFailed('AUTOMATIC_TRADING_TRADING_CORE_QA_REQUIRED:' + release.qaScope);
+              return;
+            }
             const ciRunId = release.requiredCiRunId;
             const production = { id: release.productionDeployRunId };
             const comprehensive = production;
@@ -288,6 +292,7 @@ jobs:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
           PRODUCTION_RUN_ID: ${{ steps.gate.outputs.production_run_id }}
           DEPLOYMENT_COMPLETED_AT: ${{ steps.gate.outputs.deployment_completed_at }}
+          REQUIRE_AUTOMATIC_ACTIVATION: 'true'
         run: |
           set -Eeuo pipefail
           root="${{ runner.temp }}/production-preactivation-evidence"
@@ -335,64 +340,6 @@ jobs:
           test -n "$evidence"
           node ops/verify-production-paper-forward-readiness.mjs \
             --activation-artifact "$evidence" "$TARGET_SHA"
-
-      - name: Download exact-SHA four-provider Account QA evidence
-        if: ${{ false }}
-        uses: actions/download-artifact@v4
-        with:
-          name: production-account-readonly-live-${{ steps.command.outputs.sha }}
-          path: ${{ runner.temp }}/production-account-readonly-live-qa
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.gate.outputs.account_run_id }}
-
-      - name: Require all four providers connected, fresh, and reconciled
-        if: ${{ false }}
-        shell: bash
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-          ACCOUNT_QA_EVIDENCE: ${{ runner.temp }}/production-account-readonly-live-qa/production-account-readonly-live-qa.json
-        run: |
-          set -Eeuo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
-          const target = String(process.env.TARGET_SHA || '');
-          const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
-          const evidence = JSON.parse(fs.readFileSync(process.env.ACCOUNT_QA_EVIDENCE, 'utf8'));
-
-          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v3'
-            || evidence?.targetSha !== target
-            || evidence?.orderRequests !== 0
-            || evidence?.cancelRequests !== 0
-            || evidence?.amendRequests !== 0
-            || evidence?.transferRequests !== 0
-            || evidence?.withdrawalRequests !== 0
-            || evidence?.blockedMutationRequests !== 0
-            || evidence?.observedAppMutationRequests !== 0
-            || evidence?.liveTradingAuthorityGranted !== false
-            || evidence?.autoTradingAuthorityGranted !== false) {
-            throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_SAFETY_INVALID');
-          }
-          const testedProviders = Array.isArray(evidence?.testedProviders) ? evidence.testedProviders : [];
-          const rows = Array.isArray(evidence?.providers) ? evidence.providers : [];
-          for (const provider of requiredProviders) {
-            if (!testedProviders.includes(provider)) {
-              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_TESTED:' + provider);
-            }
-            const row = rows.find((candidate) => candidate?.provider === provider);
-            if (!row
-              || row.connected !== true
-              || row.status !== 'CONNECTED'
-              || row.stale !== false
-              || row.fresh !== true
-              || row.errorCode !== null
-              || row.checkedAtPresent !== true
-              || row.lastGoodAtPresent !== true
-              || row.reconciliation !== 'PASS'
-              || row.reconciliationPassed !== true) {
-              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_READY:' + provider);
-            }
-          }
-          NODE
 
       - name: Require no conflicting active Production trading gate
         uses: actions/github-script@v7
@@ -620,6 +567,14 @@ jobs:
           });
           const assertAllFourManual = (env, expectedAuto) => {
             const manual = manualState(env);
+            if (env.BACKGROUND_WORKERS_ENABLED === false || env.BACKGROUND_WORKERS_ENABLED === 'false') {
+              throw new Error('AUTOMATIC_TRADING_BACKGROUND_WORKERS_MASTER_OFF');
+            }
+            const supabaseUrl = String(env.SUPABASE_URL || '').trim();
+            const serviceRole = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+            if (!supabaseUrl || !serviceRole) {
+              throw new Error('AUTOMATIC_TRADING_SERVICE_ROLE_RUNTIME_MISSING');
+            }
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
             }
@@ -658,6 +613,37 @@ jobs:
               throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
             }
           };
+          const requireWorkerRuntime = async () => {
+            for (let attempt = 1; attempt <= 12; attempt += 1) {
+              try {
+                const response = await fetch('http://127.0.0.1:8080/api/health', {
+                  headers: { Accept: 'application/json' },
+                  signal: AbortSignal.timeout(3000),
+                });
+                const health = response.ok ? await response.json() : null;
+                const worker = health?.memberAutoTradingBackground;
+                const tickStartedAt = Date.parse(String(worker?.lastTickStartedAt ?? ''));
+                const tickFresh = Number.isFinite(tickStartedAt)
+                  && tickStartedAt <= Date.now() + 5_000
+                  && Date.now() - tickStartedAt <= 60_000;
+                if (health?.ok === true
+                  && health?.backgroundWorkersEnabled === true
+                  && worker?.masterEnabled === true
+                  && worker?.workerFlagEnabled === true
+                  && worker?.serviceRoleConfigured === true
+                  && worker?.started === true
+                  && worker?.liveBackgroundEnabled === true
+                  && worker?.startBlockedReason == null
+                  && worker?.lastTickErrorCode == null
+                  && tickFresh) {
+                  return;
+                }
+              } catch {}
+              if (attempt < 12) await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            throw new Error('AUTOMATIC_TRADING_BACKGROUND_WORKER_NOT_STARTED');
+          };
+
           const restartAutomatic = (enabled) => {
             execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
               stdio: 'inherit',
@@ -686,6 +672,7 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            await requireWorkerRuntime();
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
@@ -703,12 +690,14 @@ jobs:
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
+            await requireWorkerRuntime();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            await requireWorkerRuntime();
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_PERSISTENCE_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
@@ -755,6 +744,7 @@ jobs:
           SPOT_RECEIPT_ID: ${{ steps.gate.outputs.spot_receipt_comment_id }}
           FUTURES_RECEIPT_ID: ${{ steps.gate.outputs.futures_receipt_comment_id }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         with:
           script: |
             await github.rest.issues.createComment({

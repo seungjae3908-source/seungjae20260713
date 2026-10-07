@@ -188,15 +188,15 @@ jobs:
             && value?.telegramPersonalActivationRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
             && value?.telegramTestDelivered === true;
-          const memberAutoPolicyReady = value?.memberAutoPolicyReady === true
+          const memberAutoPolicyEvidenceValid = typeof value?.memberAutoPolicyReady === 'boolean'
             && Array.isArray(value?.memberAutoPolicyBlockers)
-            && value.memberAutoPolicyBlockers.length === 0
+            && value.memberAutoPolicyReady === (value.memberAutoPolicyBlockers.length === 0)
             && ['kiwoom', 'toss'].includes(value?.memberAutoDomesticBroker)
             && Number.isInteger(value?.memberAutoBitgetLeverage)
             && value.memberAutoBitgetLeverage >= 2
             && value.memberAutoBitgetLeverage <= 7
             && ['limited-50', 'validated'].includes(value?.memberAutoPilotStage);
-          if (value?.schemaVersion !== 'production-trading-core-qa-v4'
+          if (value?.schemaVersion !== 'production-trading-core-qa-v5'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
             || value?.officialProductionOrigin !== true
@@ -208,7 +208,14 @@ jobs:
             || value?.journalVisible !== true
             || !(Number(value?.executionSyncInserted) >= 1)
             || (!telegramReady && !telegramVerified)
-            || !memberAutoPolicyReady
+            || !memberAutoPolicyEvidenceValid
+            || value?.backgroundWorkerSourceReady !== true
+            || !Array.isArray(value?.backgroundWorkerReadinessBlockers)
+            || value.backgroundWorkerReadinessBlockers.length !== 0
+            || !['MISSING', 'READY', 'BLOCKED_DATA'].includes(value?.backgroundHandoffState)
+            || !(Number(value?.backgroundEligibleMembers) >= 1)
+            || !(Number(value?.backgroundPaperAccountsReady) >= 1)
+            || typeof value?.memberAutoStrategyAllowlistReady !== 'boolean'
             || value?.policyRestored !== true
             || value?.realOrderSubmitted !== false
             || value?.liveTradingAuthorityGranted !== false

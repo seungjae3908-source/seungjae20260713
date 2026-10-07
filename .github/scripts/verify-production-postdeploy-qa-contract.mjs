@@ -68,13 +68,30 @@ requireText(deploy, 'timeout-minutes: 150', 'PRODUCTION_INLINE_QA_TIMEOUT_NOT_EX
 requireText(deploy, 'postdeploy-evidence/production-postdeploy-context.json', 'PRODUCTION_INLINE_CONTEXT_MISSING');
 requireText(deploy, 'production-postdeploy-activation-ready-', 'PRODUCTION_ACTIVATION_READY_ARTIFACT_MISSING');
 
-const qaTail = deployJob.split('- name: Destroy deployment authority before read-only QA')[1] ?? '';
+const qaTailRaw = deployJob.split('- name: Destroy deployment authority before read-only QA')[1] ?? '';
+const qaTail = qaTailRaw.split('- name: Roll back application SHA if post-deploy QA fails')[0] ?? '';
 for (const value of ['PROD_SSH_', 'PROD_DATABASE_URL', 'AGENT_HUB_GITHUB_TOKEN']) {
   forbidText(qaTail, value, `INLINE_QA_DEPLOY_AUTHORITY_FORBIDDEN:${value}`);
 }
 for (const mode of ['comprehensive', 'account', 'credential', 'member']) {
   requireText(qaTail, `run-production-readonly-qa.sh ${mode}`, `INLINE_QA_SHARED_RUNNER_MISSING:${mode}`);
 }
+const rollbackTail = deployJob.split('- name: Roll back application SHA if post-deploy QA fails')[1] ?? '';
+requireText(rollbackTail, "failure() && steps.deploy_app.outcome == 'success'", 'POSTDEPLOY_ROLLBACK_FAILURE_ONLY_GUARD_MISSING');
+requireText(rollbackTail, "steps.rollback_target.outputs.schema_compatible == 'true'", 'POSTDEPLOY_ROLLBACK_SCHEMA_COMPATIBILITY_GUARD_MISSING');
+requireText(rollbackTail, 'PREVIOUS_SHA: ${{ steps.rollback_target.outputs.previous_sha }}', 'POSTDEPLOY_ROLLBACK_EXACT_TARGET_MISSING');
+requireText(rollbackTail, 'POSTDEPLOY_ROLLBACK_IDENTITY_MISMATCH', 'POSTDEPLOY_ROLLBACK_IDENTITY_VERIFY_MISSING');
+requireText(deploy, 'p_expected_permissions_updated_at', 'POSTDEPLOY_ROLLBACK_MEMBER_RPC_COMPATIBILITY_CHECK_MISSING');
+requireText(deploy, 'apply_member_permission_change', 'POSTDEPLOY_ROLLBACK_MEMBER_ATOMIC_RPC_CHECK_MISSING');
+requireText(deploy, 'Preserve fail-closed target when previous app is schema-incompatible', 'POSTDEPLOY_SCHEMA_BOUNDARY_FAILCLOSED_STEP_MISSING');
+requireText(deploy, 'POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT', 'POSTDEPLOY_SCHEMA_BOUNDARY_AUTHORITY_GUARD_MISSING');
+requireText(deploy, 'POSTDEPLOY_FAILCLOSED_HEALTH_IDENTITY_INVALID', 'POSTDEPLOY_SCHEMA_BOUNDARY_IDENTITY_GUARD_MISSING');
+requireText(rollbackTail, 'PROD_SSH_PRIVATE_KEY', 'POSTDEPLOY_ROLLBACK_SSH_AUTHORITY_MISSING');
+forbidText(rollbackTail, 'PROD_DATABASE_URL', 'POSTDEPLOY_ROLLBACK_DATABASE_AUTHORITY_FORBIDDEN');
+requireOrder(deploy, [
+  '- name: Upload immutable ACTIVATION_READY evidence',
+  '- name: Roll back application SHA if post-deploy QA fails',
+], 'POSTDEPLOY_ROLLBACK_ORDER_INVALID');
 
 const liveJobs = {
   comprehensive: comprehensive.split('\n  production-comprehensive-readonly:\n')[1] ?? '',

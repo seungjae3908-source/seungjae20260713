@@ -52,6 +52,24 @@ type Status = {
     lastActivityAt: string | null;
   }>;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  liveAutomaticExecutionServerEnabled?: Record<Exchange, boolean>;
+  backgroundAutomationRuntime?: {
+    masterEnabled: boolean;
+    operational: boolean;
+    handoffReady?: boolean;
+    workerFlagEnabled: boolean;
+    liveBackgroundEnabled: boolean;
+    serviceRoleConfigured: boolean;
+    started: boolean;
+    startedAt: string | null;
+    startBlockedReason: string | null;
+    lastTickStartedAt: string | null;
+    lastTickCompletedAt: string | null;
+    lastTickErrorCode: string | null;
+    lastFailures?: number;
+    lastExecutionSyncFailures?: number;
+    lastHandoffStatus: 'UNKNOWN' | 'MISSING' | 'BLOCKED_DATA' | 'READY';
+  };
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
@@ -247,8 +265,8 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       setDraft(normalized);
       setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
       setMessage(normalized.automaticEnabled
-        ? '자동매매가 켜졌습니다. 활성 시장의 새 신호는 주문별 승인 없이 위험검사를 통과하면 자동 처리됩니다.'
-        : '자동매매 설정을 저장했습니다. 현재 자동 실행은 꺼져 있습니다.');
+        ? '자동매매 정책을 저장했습니다. 실제 실행은 서버 AUTO 게이트·백그라운드 worker·허용 전략이 모두 준비돼야 시작됩니다.'
+        : '자동매매 설정을 저장했습니다. 현재 자동 실행 정책은 꺼져 있습니다.');
       setConfirming(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '저장하지 못했습니다.');
@@ -296,7 +314,16 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
   ) as Partial<Record<Exchange, Status['connections'][number]>>;
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
-  const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
+  const automaticServerAll4 = (Object.keys(EXCHANGE_LABELS) as Exchange[])
+    .every((exchange) => status?.liveAutomaticExecutionServerEnabled?.[exchange] === true);
+  const workerRuntime = status?.backgroundAutomationRuntime;
+  const strategyAllowlistReady = draft.enabledStrategies.length > 0;
+  const actualAutoOperational = draft.automaticEnabled
+    && automaticServerAll4
+    && workerRuntime?.operational === true
+    && strategyAllowlistReady;
+
+    const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
     ? ['bitget']
     : selectedMarket === 'crypto_spot'
       ? ['upbit']
@@ -327,11 +354,39 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       <span>
         <span className="block text-sm font-extrabold">자동매매</span>
         <span className="mt-1 block text-[11px] text-muted-foreground">
-          {draft.automaticEnabled ? '켜짐 · 활성 시장의 적격 신호를 자동 처리' : '꺼짐 · 신호를 주문으로 자동 전환하지 않음'}
+          {draft.automaticEnabled
+            ? (actualAutoOperational
+              ? '실행 중 · 정책/서버/worker/전략 준비 완료'
+              : '정책 ON · 실제 자동 실행은 아직 준비되지 않음')
+            : '정책 OFF · 신호를 주문으로 자동 전환하지 않음'}
         </span>
       </span>
       <Switch active={draft.automaticEnabled} />
     </button>
+
+    <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4" data-testid="auto-runtime-readiness">
+      <RuntimeState label="정책" ready={draft.automaticEnabled} detail={draft.automaticEnabled ? 'ON' : 'OFF'} />
+      <RuntimeState label="서버 AUTO" ready={automaticServerAll4} detail={automaticServerAll4 ? '4 Provider ON' : 'OFF/부분'} />
+      <RuntimeState
+        label="Worker"
+        ready={workerRuntime?.operational === true}
+        detail={workerRuntime?.operational
+          ? 'ACTIVE · HANDOFF READY'
+          : (workerRuntime?.lastTickErrorCode
+            ?? ((workerRuntime?.lastFailures ?? 0) > 0
+              ? `WORKER FAIL ${workerRuntime?.lastFailures}`
+              : (workerRuntime?.lastExecutionSyncFailures ?? 0) > 0
+                ? `SYNC FAIL ${workerRuntime?.lastExecutionSyncFailures}`
+                : (workerRuntime?.lastHandoffStatus && workerRuntime.lastHandoffStatus !== 'UNKNOWN'
+                  ? `HANDOFF ${workerRuntime.lastHandoffStatus}`
+                  : workerRuntime?.startBlockedReason ?? 'INACTIVE')))}
+      />
+      <RuntimeState
+        label="허용 전략"
+        ready={strategyAllowlistReady}
+        detail={strategyAllowlistReady ? `${draft.enabledStrategies.length}개` : '0개 · 자동진입 차단'}
+      />
+    </div>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" aria-label="시장별 자동매매">
       {visibleMarkets.map((market) => (
@@ -444,7 +499,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
           ...value,
           enabledStrategies: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
         }))}
-        placeholder="비우면 위험검사를 통과한 전략 전체 · 예: trend-breakout-v1"
+        placeholder="비우면 자동진입 차단 · 예: trend-breakout-v1"
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3 text-sm"
       />
     </label>
@@ -504,7 +559,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
           <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
-          <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '위험검사 통과 전략 전체'}</dd>
+          <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '없음 · 자동진입 차단'}</dd>
           <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
           <dt className="font-bold">코인현물</dt><dd>Upbit 고정</dd>
@@ -519,6 +574,13 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       </div>
     </div>}
   </section>;
+}
+
+function RuntimeState({ label, ready, detail }: { label: string; ready: boolean; detail: string }) {
+  return <div className="rounded-xl border border-card-border bg-background p-2" data-ready={ready ? 'true' : 'false'}>
+    <p className="text-xs font-extrabold">{label}</p>
+    <p className="mt-1 text-xs text-muted-foreground">{ready ? '정상' : '대기'} · {detail}</p>
+  </div>;
 }
 
 function Switch({ active }: { active: boolean }) {

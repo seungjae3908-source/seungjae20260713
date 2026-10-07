@@ -11,6 +11,7 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
 
   for (const required of [
     '/api/trade-automation/status',
+    '/api/trade-automation/background-readiness',
     '/api/trade-automation/policy',
     '/api/trade-automation/plans',
     '/api/user-integrations/execution/sync',
@@ -29,8 +30,16 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'telegramRuntimeReady',
     'telegramTestDelivered',
     'memberAutoPolicyReadiness',
+    'productionPolicyBeforeQa',
+    'productionPolicyReadiness',
     'preparedMemberAutoPolicy',
     'memberAutoPolicyPrepared',
+    'backgroundWorkerSourceReady',
+    'backgroundWorkerReadinessBlockers',
+    'backgroundHandoffState',
+    'backgroundEligibleMembers',
+    'backgroundPaperAccountsReady',
+    'memberAutoStrategyAllowlistReady',
     'Member policy preparation must not grant LIVE AUTO server authority',
     "pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50'",
     'memberAutoPolicyReady',
@@ -57,6 +66,16 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     '/transfer',
     '/withdraw',
   ]) assert.equal(spec.includes(forbidden), false, forbidden);
+
+  assert.ok(
+    spec.indexOf('const productionPolicyBeforeQa = structuredClone(statusBefore.body.policy)')
+      < spec.indexOf("preparedMemberAutoPolicy(productionPolicyBeforeQa, 'TRADING_CORE_QA_CANARY')"),
+    'Production policy must be snapshotted before temporary QA preparation',
+  );
+  assert.ok(
+    spec.includes('const originalPolicy = productionPolicyBeforeQa;'),
+    'Trading Core QA must restore the true pre-QA member policy',
+  );
 
   assert.equal(spec.includes('must change atomically'), false);
 

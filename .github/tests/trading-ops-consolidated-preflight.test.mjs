@@ -61,7 +61,7 @@ test('Toss existing-order history uses CLOSED read-only endpoint', () => {
   assert.ok(source.includes('REAL_ACCOUNT_HISTORY_NOT_PERSISTED'));
 });
 
-test('four-market automatic gate couples live auto and paper worker and consumes QA v3', () => {
+test('four-market automatic gate couples live auto, worker runtime and immutable QA evidence', () => {
   const handoff = read('market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js');
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
   const index = read('api-server/src/index.ts');
@@ -81,7 +81,11 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(execution.includes('PAPER_BROKER_FILLED'));
   assert.ok(gate.includes('/activate-production-auto-trading '));
   assert.ok(gate.includes('all4'));
-  assert.ok(gate.includes('production-account-readonly-live-qa-v3'));
+  assert.ok(gate.includes('REQUIRE_AUTOMATIC_ACTIVATION'));
+  assert.ok(gate.includes('AUTOMATIC_TRADING_TRADING_CORE_QA_REQUIRED'));
+  assert.ok(gate.includes('memberAutoTradingBackground'));
+  assert.ok(gate.includes('lastTickStartedAt'));
+  assert.ok(gate.includes('lastTickErrorCode'));
   assert.ok(gate.includes('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED'));
   assert.ok(gate.includes('paper-forward-no-deploy-'));
   assert.ok(gate.includes('validateMemberAutoTradingPaperHandoff'));
@@ -93,7 +97,8 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes("CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
-  assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING'));
+  assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_EVIDENCE_VERIFY_MISSING'));
+  assert.ok(verifier.includes('AUTO_GATE_AUTOMATIC_READY_VERIFY_MISSING'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false'));

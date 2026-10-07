@@ -182,6 +182,25 @@ begin
   if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,timestamptz,text,timestamptz)') is null then
     raise exception 'MEMBER_PERMISSION_CHANGE_SIGNATURE_MISSING';
   end if;
+  if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,text,timestamptz)') is null then
+    raise exception 'MEMBER_PERMISSION_CHANGE_LEGACY_BRIDGE_MISSING';
+  end if;
+
+  if has_function_privilege('anon', 'public.current_membership_level()', 'EXECUTE')
+     or has_function_privilege('anon', 'public.is_approved_member()', 'EXECUTE')
+     or has_function_privilege('anon', 'public.is_admin()', 'EXECUTE') then
+    raise exception 'MEMBER_ANON_SECURITY_DEFINER_EXECUTE_PRESENT';
+  end if;
+  if not has_function_privilege('authenticated', 'public.current_membership_level()', 'EXECUTE')
+     or not has_function_privilege('authenticated', 'public.is_approved_member()', 'EXECUTE')
+     or not has_function_privilege('authenticated', 'public.is_admin()', 'EXECUTE') then
+    raise exception 'MEMBER_AUTHENTICATED_RLS_HELPER_EXECUTE_MISSING';
+  end if;
+  if to_regprocedure('public.handle_new_user()') is not null
+     and (has_function_privilege('anon', 'public.handle_new_user()', 'EXECUTE')
+       or has_function_privilege('authenticated', 'public.handle_new_user()', 'EXECUTE')) then
+    raise exception 'MEMBER_TRIGGER_HELPER_EXECUTE_EXPOSED';
+  end if;
 
   select qual into policy_qual
   from pg_catalog.pg_policies

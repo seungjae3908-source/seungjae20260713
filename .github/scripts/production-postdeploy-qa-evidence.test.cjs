@@ -113,9 +113,10 @@ function fixture() {
   };
 }
 
-test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () => {
+test('full QA is manual-activation ready but not automatic-activation ready', () => {
   const evidence = buildProductionPostdeployQaEvidence(fixture());
   assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
   assert.equal(evidence.credentialReuse, '4/4 PASS');
   assert.equal(evidence.activeConflictingTradingGates, 0);
   assert.equal(evidence.realOrderSubmitted, false);
@@ -125,7 +126,7 @@ test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () =
   assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
 });
 
-test('builds ACTIVATION_READY inside the same approved in-progress Production Deploy job', () => {
+test('inline full QA is manual-ready but still not automatic-ready', () => {
   const input = fixture();
   Object.assign(input.context, {
     deploymentVerificationMode: 'inline-approved-job',
@@ -136,6 +137,7 @@ test('builds ACTIVATION_READY inside the same approved in-progress Production De
   });
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
   assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v4');
 });
 
@@ -144,7 +146,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   input.qaScope = 'trading_core';
   input.comprehensive = null;
   input.tradingCore = {
-    schemaVersion: 'production-trading-core-qa-v4',
+    schemaVersion: 'production-trading-core-qa-v5',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
@@ -168,6 +170,12 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 7,
     memberAutoPilotStage: 'validated',
+    backgroundWorkerSourceReady: true,
+    backgroundWorkerReadinessBlockers: [],
+    backgroundHandoffState: 'READY',
+    backgroundEligibleMembers: 1,
+    backgroundPaperAccountsReady: 1,
+    memberAutoStrategyAllowlistReady: true,
     policyRestored: true,
     realOrderSubmitted: false,
     secretValuesRecorded: false,
@@ -176,6 +184,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, true);
   assert.equal(evidence.qaScope, 'trading_core');
   assert.equal(evidence.tradingCoreQa, 'PASS');
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
@@ -189,7 +198,7 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
   input.qaScope = 'trading_core';
   input.comprehensive = null;
   input.tradingCore = {
-    schemaVersion: 'production-trading-core-qa-v4',
+    schemaVersion: 'production-trading-core-qa-v5',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
@@ -213,6 +222,12 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
     memberAutoDomesticBroker: 'toss',
     memberAutoBitgetLeverage: 2,
     memberAutoPilotStage: 'limited-50',
+    backgroundWorkerSourceReady: true,
+    backgroundWorkerReadinessBlockers: [],
+    backgroundHandoffState: 'READY',
+    backgroundEligibleMembers: 1,
+    backgroundPaperAccountsReady: 1,
+    memberAutoStrategyAllowlistReady: true,
     policyRestored: true,
     realOrderSubmitted: false,
     secretValuesRecorded: false,
@@ -221,6 +236,7 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, true);
   assert.equal(evidence.telegramActivationState, 'READY_FOR_ACTIVATION');
   assert.equal(evidence.telegramActivationReady, true);
   assert.equal(evidence.telegramActivationVerified, false);
@@ -237,12 +253,12 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
   assert.throws(() => buildProductionPostdeployQaEvidence(input), /TRADING_CORE_INVALID/);
 });
 
-test('rejects Trading Core evidence when the restored member policy is not activation-ready', () => {
+test('accepts safe Trading Core QA but keeps activation blocked when restored member policy is not ready', () => {
   const input = fixture();
   input.qaScope = 'trading_core';
   input.comprehensive = null;
   input.tradingCore = {
-    schemaVersion: 'production-trading-core-qa-v4',
+    schemaVersion: 'production-trading-core-qa-v5',
     targetSha: SHA,
     productionDeployRunId: 42,
     generatedAt: '2026-10-04T00:02:00.000Z',
@@ -267,12 +283,68 @@ test('rejects Trading Core evidence when the restored member policy is not activ
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 2,
     memberAutoPilotStage: 'validated',
+    backgroundWorkerSourceReady: true,
+    backgroundWorkerReadinessBlockers: [],
+    backgroundHandoffState: 'READY',
+    backgroundEligibleMembers: 1,
+    backgroundPaperAccountsReady: 1,
+    memberAutoStrategyAllowlistReady: true,
     realOrderSubmitted: false,
     secretValuesRecorded: false,
     accountValuesRecorded: false,
     ...ZERO,
   };
-  assert.throws(() => buildProductionPostdeployQaEvidence(input), /TRADING_CORE_INVALID/);
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
+  assert.equal(evidence.memberAutoPolicyReady, false);
+});
+
+test('keeps activation blocked when no explicit strategy allowlist exists', () => {
+  const input = fixture();
+  input.qaScope = 'trading_core';
+  input.comprehensive = null;
+  input.tradingCore = {
+    schemaVersion: 'production-trading-core-qa-v5',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    paperAutomaticTriggered: true,
+    paperFilled: true,
+    journalVisible: true,
+    executionSyncInserted: 1,
+    telegramActivationState: 'READY_FOR_ACTIVATION',
+    telegramActivationReady: true,
+    telegramUserConnectionRequired: true,
+    telegramPersonalActivationRequired: true,
+    telegramConnectedBefore: false,
+    telegramRuntimeReady: false,
+    telegramDeliveryQueued: 0,
+    telegramTestDelivered: false,
+    memberAutoPolicyReady: true,
+    memberAutoPolicyBlockers: [],
+    memberAutoDomesticBroker: 'kiwoom',
+    memberAutoBitgetLeverage: 2,
+    memberAutoPilotStage: 'limited-50',
+    backgroundWorkerSourceReady: true,
+    backgroundWorkerReadinessBlockers: [],
+    backgroundHandoffState: 'READY',
+    backgroundEligibleMembers: 1,
+    backgroundPaperAccountsReady: 1,
+    memberAutoStrategyAllowlistReady: false,
+    policyRestored: true,
+    realOrderSubmitted: false,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    ...ZERO,
+  };
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
+  assert.equal(evidence.memberAutoStrategyAllowlistReady, false);
 });
 
 test('rejects any nonzero financial mutation counter', () => {

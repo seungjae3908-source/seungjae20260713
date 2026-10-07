@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(path, 'utf8');
 const workflow = read('.github/workflows/production-automatic-trading-gate.yml');
 const preactivation = read('.github/scripts/production-preactivation-prerequisites.cjs');
+const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
 const manualSpotGate = read('.github/workflows/production-live-trading-gate.yml');
 const manualFuturesGate = read('.github/workflows/production-futures-live-trading-gate.yml');
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
@@ -47,8 +48,9 @@ requireText(preactivation, "event: 'workflow_dispatch'", 'AUTO_GATE_DEPLOY_EVENT
 requireText(preactivation, "run.event === 'workflow_dispatch'", 'AUTO_GATE_DEPLOY_EVENT_RECHECK_MISSING');
 requireText(preactivation, 'production-live-credential-reuse-', 'AUTO_GATE_CREDENTIAL_REUSE_ARTIFACT_MISSING');
 requireText(preactivation, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
-requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
-requireText(workflow, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
+requireText(preactivationEvidence, 'assertAccountReceipt(account, context);', 'AUTO_GATE_ACCOUNT_QA_EVIDENCE_VERIFY_MISSING');
+requireText(preactivationEvidence, 'assertCredentialReceipt(credential, context);', 'AUTO_GATE_CREDENTIAL_QA_EVIDENCE_VERIFY_MISSING');
+requireText(preactivationEvidence, 'PREACTIVATION_AUTOMATIC_ACTIVATION_READY_REQUIRED', 'AUTO_GATE_AUTOMATIC_READY_VERIFY_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED', 'AUTO_GATE_PAPER_RUNTIME_RECEIPT_MISSING');
 requireText(workflow, 'paper-forward-no-deploy-', 'AUTO_GATE_PAPER_RUNTIME_ARTIFACT_MISSING');
 requireText(workflow, '--activation-artifact', 'AUTO_GATE_PAPER_ACTIVATION_VERIFY_MISSING');
@@ -73,6 +75,15 @@ requireText(workflow, "MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'", 'AUTO_G
 requireText(workflow, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'", 'AUTO_GATE_LIVE_WORKER_DISABLE_MISSING');
 requireText(workflow, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'AUTO_GATE_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(workflow, 'AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK', 'AUTO_GATE_ROLLBACK_RECEIPT_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_BACKGROUND_WORKERS_MASTER_OFF', 'AUTO_GATE_BACKGROUND_MASTER_CHECK_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_SERVICE_ROLE_RUNTIME_MISSING', 'AUTO_GATE_SERVICE_ROLE_CHECK_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_BACKGROUND_WORKER_NOT_STARTED', 'AUTO_GATE_WORKER_START_CHECK_MISSING');
+requireText(workflow, 'memberAutoTradingBackground', 'AUTO_GATE_WORKER_HEALTH_CONTRACT_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_TRADING_CORE_QA_REQUIRED', 'AUTO_GATE_FOCUSED_QA_SCOPE_REQUIRED');
+requireText(workflow, "REQUIRE_AUTOMATIC_ACTIVATION: 'true'", 'AUTO_GATE_AUTOMATIC_READINESS_EVIDENCE_REQUIRED');
+requireText(workflow, 'lastTickStartedAt', 'AUTO_GATE_WORKER_TICK_PROOF_MISSING');
+requireText(workflow, 'lastTickErrorCode', 'AUTO_GATE_WORKER_TICK_ERROR_GUARD_MISSING');
+requireText(workflow, "QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}", 'AUTO_GATE_QA_SCOPE_RECEIPT_WIRING_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLED_ALL4_MANUAL_LIVE_PRESERVED', 'AUTO_GATE_DISABLE_RECEIPT_MISSING');
 requireText(workflow, 'REAL_ORDER_SUBMITTED=false', 'AUTO_GATE_NO_ORDER_RECEIPT_MISSING');
 
@@ -91,7 +102,8 @@ requireText(manualSpotGate, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'MANUAL_S
 requireText(manualSpotGate, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'", 'MANUAL_SPOT_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
 requireText(manualSpotGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_SPOT_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualSpotGate, "const allowed = new Set(['toss', 'kiwoom', 'upbit']);", 'MANUAL_SPOT_THREE_PROVIDER_SET_DRIFT');
-requireText(manualSpotGate, 'name.startsWith(`${workflowName} ${target} `)', 'MANUAL_SPOT_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(manualSpotGate, 'inspectProductionPreactivationPrerequisites', 'MANUAL_SPOT_PREACTIVATION_HELPER_MISSING');
+requireText(manualSpotGate, 'verify-production-preactivation-evidence.cjs', 'MANUAL_SPOT_PREACTIVATION_VERIFIER_MISSING');
 requireText(manualSpotGate, 'merge-multiple: true', 'MANUAL_SPOT_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 requireText(manualFuturesGate, "FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED'", 'MANUAL_FUTURES_AUTHORITY_MISSING');
@@ -101,7 +113,8 @@ requireText(manualFuturesGate, 'AUTO_TRADING=false', 'MANUAL_FUTURES_GATE_MUST_K
 requireText(manualFuturesGate, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_AUTO_FALSE');
 requireText(manualFuturesGate, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
 requireText(manualFuturesGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_FUTURES_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
-requireText(manualFuturesGate, 'run.name.startsWith(`${name} ${target} `)', 'MANUAL_FUTURES_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(manualFuturesGate, 'inspectProductionPreactivationPrerequisites', 'MANUAL_FUTURES_PREACTIVATION_HELPER_MISSING');
+requireText(manualFuturesGate, 'verify-production-preactivation-evidence.cjs', 'MANUAL_FUTURES_PREACTIVATION_VERIFIER_MISSING');
 requireText(manualFuturesGate, 'merge-multiple: true', 'MANUAL_FUTURES_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled[\s\S]*?\r?\n}\r?\n/);

@@ -222,15 +222,15 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && tradingCore?.telegramPersonalActivationRequired === false
     && Number(tradingCore?.telegramDeliveryQueued) >= 1
     && tradingCore?.telegramTestDelivered === true;
-  const memberAutoPolicyReady = tradingCore?.memberAutoPolicyReady === true
+  const memberAutoPolicyEvidenceValid = typeof tradingCore?.memberAutoPolicyReady === 'boolean'
     && Array.isArray(tradingCore?.memberAutoPolicyBlockers)
-    && tradingCore.memberAutoPolicyBlockers.length === 0
+    && tradingCore.memberAutoPolicyReady === (tradingCore.memberAutoPolicyBlockers.length === 0)
     && ['kiwoom', 'toss'].includes(tradingCore?.memberAutoDomesticBroker)
     && Number.isInteger(tradingCore?.memberAutoBitgetLeverage)
     && tradingCore.memberAutoBitgetLeverage >= 2
     && tradingCore.memberAutoBitgetLeverage <= 7
     && ['limited-50', 'validated'].includes(tradingCore?.memberAutoPilotStage);
-  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v4'
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v5'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
     || tradingCore?.authenticatedProductionSession !== true
@@ -239,7 +239,14 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     || tradingCore?.journalVisible !== true
     || !(Number(tradingCore?.executionSyncInserted) >= 1)
     || (!telegramReady && !telegramVerified)
-    || !memberAutoPolicyReady
+    || !memberAutoPolicyEvidenceValid
+    || tradingCore?.backgroundWorkerSourceReady !== true
+    || !Array.isArray(tradingCore?.backgroundWorkerReadinessBlockers)
+    || tradingCore.backgroundWorkerReadinessBlockers.length !== 0
+    || !['MISSING', 'READY', 'BLOCKED_DATA'].includes(tradingCore?.backgroundHandoffState)
+    || !(Number(tradingCore?.backgroundEligibleMembers) >= 1)
+    || !(Number(tradingCore?.backgroundPaperAccountsReady) >= 1)
+    || typeof tradingCore?.memberAutoStrategyAllowlistReady !== 'boolean'
     || tradingCore?.policyRestored !== true
     || tradingCore?.realOrderSubmitted !== false
     || tradingCore?.liveTradingAuthorityGranted !== false
@@ -355,6 +362,12 @@ function buildProductionPostdeployQaEvidence({
     memberAutoPolicyReady: qaScope === 'trading_core'
       ? tradingCore.memberAutoPolicyReady
       : false,
+    memberAutoStrategyAllowlistReady: qaScope === 'trading_core'
+      ? tradingCore.memberAutoStrategyAllowlistReady === true
+      : false,
+    backgroundWorkerSourceReady: qaScope === 'trading_core'
+      ? tradingCore.backgroundWorkerSourceReady === true
+      : false,
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
     orderRequests: 0,
@@ -382,7 +395,14 @@ function buildProductionPostdeployQaEvidence({
     duplicateWorkerExecutionCount: 0,
     pm2FlagDriftCount: 0,
     legacyCryptoAutoAuthorityGranted: false,
+    // Manual provider activation and automatic activation are separate
+    // readiness domains. Post-deploy QA can safely authorize the manual provider
+    // gates without implying that autonomous entries are allowed.
     activationReady: true,
+    automaticActivationReady: qaScope === 'trading_core'
+      && tradingCore.memberAutoPolicyReady === true
+      && tradingCore.backgroundWorkerSourceReady === true
+      && tradingCore.memberAutoStrategyAllowlistReady === true,
   };
 }
 
