@@ -188,7 +188,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const providerVerified = Boolean(
     providerConnection?.configured && providerConnection.lastVerifiedAt && !providerConnection.lastErrorCode,
   );
-  const liveReadiness = runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
+  const liveReadiness = runtimeStatus?.liveAutomaticReadinessByMarket?.[market]
+    ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
     : !canPlaceOrders
