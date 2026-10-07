@@ -59,7 +59,7 @@ switch (name) {
 }
 `;
 
-function activate(value, { mode = 'activate', legacy, supplemental, decision } = {}) {
+function activate(value, { mode = 'activate', legacy, supplemental, decision, existingEnvironment } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'server-risk-env-'));
   const shellRoot = shellPath(root);
   try {
@@ -102,6 +102,11 @@ function activate(value, { mode = 'activate', legacy, supplemental, decision } =
     else if (decision !== undefined) env[DECISION_KEY] = decision;
     if (supplemental !== undefined) env[COST_KEY] = supplemental;
     if (legacy !== undefined) env.GENERIC_RISK_POLICY_LIVE_RECORD_PATH = legacy;
+    if (existingEnvironment !== undefined) {
+      const existingEnvPath = join(root, 'etc/research/research-production.env');
+      mkdirSync(resolve(existingEnvPath, '..'), { recursive: true });
+      writeFileSync(existingEnvPath, existingEnvironment);
+    }
     const result = spawnSync(bash, ['-s', '--', mode], { env,
       input: 'export PATH="$HARNESS_ROOT/bin:$PATH"\n' + script, cwd: root, encoding: 'utf8', timeout: 30_000 });
     assert.ifError(result.error);
@@ -188,6 +193,28 @@ test('supplemental cost path survives server EnvironmentFile; missing stays abse
   // Paper-child scoping belongs to the separate #1227 owner; this server-owner regression stops at EnvironmentFile transport.
   assert.equal(result.sentinelPresent, false);
   assert.ok(result.events.every(event => !event.slice(1).includes(value)));
+});
+
+test('release rotation preserves an existing supplemental path unless an explicit replacement is supplied', () => {
+  const existing = 'PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="/owner/existing-cost.json"\nRESEARCH_TEMPORAL_LONG_SHORT_PERIOD=1h\n';
+  const preserved = activate(undefined, { existingEnvironment: existing });
+  assert.equal(preserved.status, 0, preserved.stderr);
+  assert.deepEqual(
+    preserved.environment.split('\n').filter(line => line.startsWith(`${COST_KEY}=`)),
+    ['PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="/owner/existing-cost.json"'],
+  );
+  assert.match(preserved.environment, /^RESEARCH_TEMPORAL_LONG_SHORT_PERIOD=1h$/m);
+
+  const replaced = activate(undefined, {
+    existingEnvironment: existing,
+    supplemental: '/owner/new-cost.json',
+  });
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.deepEqual(
+    replaced.environment.split('\n').filter(line => line.startsWith(`${COST_KEY}=`)),
+    ['PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH="/owner/new-cost.json"'],
+  );
+  assert.doesNotMatch(replaced.environment, /existing-cost[.]json/);
 });
 
 test('unsafe supplemental cost paths fail before server activation mutation', () => {
