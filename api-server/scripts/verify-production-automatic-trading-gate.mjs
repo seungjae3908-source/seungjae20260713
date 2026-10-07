@@ -69,7 +69,7 @@ requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'A
 requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
-requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
+requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false, requireArmedEntries: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
 requireText(workflow, 'requireArmedEntries: true', 'AUTO_GATE_POST_ARM_SECOND_TICK_PROOF_MISSING');
 requireText(workflow, 'health?.liveEntriesArmed === true', 'AUTO_GATE_LIVE_ENTRIES_ARMED_HEALTH_PROOF_MISSING');
