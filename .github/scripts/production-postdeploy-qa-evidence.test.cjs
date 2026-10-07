@@ -113,9 +113,10 @@ function fixture() {
   };
 }
 
-test('full QA remains deployment-safe but is not sufficient for automatic activation', () => {
+test('full QA is manual-activation ready but not automatic-activation ready', () => {
   const evidence = buildProductionPostdeployQaEvidence(fixture());
-  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
   assert.equal(evidence.credentialReuse, '4/4 PASS');
   assert.equal(evidence.activeConflictingTradingGates, 0);
   assert.equal(evidence.realOrderSubmitted, false);
@@ -125,7 +126,7 @@ test('full QA remains deployment-safe but is not sufficient for automatic activa
   assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
 });
 
-test('inline full QA remains non-activating even inside the approved Production Deploy job', () => {
+test('inline full QA is manual-ready but still not automatic-ready', () => {
   const input = fixture();
   Object.assign(input.context, {
     deploymentVerificationMode: 'inline-approved-job',
@@ -135,7 +136,8 @@ test('inline full QA remains non-activating even inside the approved Production 
     latestSuccessfulDeployRunId: null,
   });
   const evidence = buildProductionPostdeployQaEvidence(input);
-  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
   assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v4');
 });
 
@@ -182,6 +184,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, true);
   assert.equal(evidence.qaScope, 'trading_core');
   assert.equal(evidence.tradingCoreQa, 'PASS');
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
@@ -233,6 +236,7 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, true);
   assert.equal(evidence.telegramActivationState, 'READY_FOR_ACTIVATION');
   assert.equal(evidence.telegramActivationReady, true);
   assert.equal(evidence.telegramActivationVerified, false);
@@ -291,7 +295,8 @@ test('accepts safe Trading Core QA but keeps activation blocked when restored me
     ...ZERO,
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
-  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
   assert.equal(evidence.memberAutoPolicyReady, false);
 });
 
@@ -337,7 +342,8 @@ test('keeps activation blocked when no explicit strategy allowlist exists', () =
     ...ZERO,
   };
   const evidence = buildProductionPostdeployQaEvidence(input);
-  assert.equal(evidence.activationReady, false);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.automaticActivationReady, false);
   assert.equal(evidence.memberAutoStrategyAllowlistReady, false);
 });
 
