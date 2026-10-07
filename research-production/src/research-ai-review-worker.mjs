@@ -13,13 +13,15 @@ const ALLOWED_DISPOSITIONS = new Set(['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 
 const ALLOWED_TOP_LEVEL = new Set(['summary', 'findings', 'hypotheses', 'risks', 'disposition']);
 const ALLOWED_HYPOTHESIS = new Set(['hypothesisId', 'thesis', 'requiredEvidence', 'falsification', 'intendedRegime', 'independenceRationale']);
 
+// Provider-facing schema uses only the shared Gemini/Groq structured-output subset.
+// Semantic, length, and hypothesis-id limits remain enforced locally by parseAiAnswer.
 export const RESEARCH_AI_RESPONSE_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: ['summary', 'findings', 'hypotheses', 'risks', 'disposition'],
   properties: {
-    summary: { type: 'string', minLength: 1, maxLength: 800 },
-    findings: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 500 } },
+    summary: { type: 'string' },
+    findings: { type: 'array', maxItems: 8, items: { type: 'string' } },
     hypotheses: {
       type: 'array',
       maxItems: 4,
@@ -28,16 +30,16 @@ export const RESEARCH_AI_RESPONSE_SCHEMA = Object.freeze({
         additionalProperties: false,
         required: ['hypothesisId', 'thesis', 'requiredEvidence', 'falsification', 'intendedRegime', 'independenceRationale'],
         properties: {
-          hypothesisId: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,119}$' },
-          thesis: { type: 'string', minLength: 1, maxLength: 700 },
-          requiredEvidence: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 300 } },
-          falsification: { type: 'string', minLength: 1, maxLength: 500 },
-          intendedRegime: { type: 'string', minLength: 1, maxLength: 240 },
-          independenceRationale: { type: 'string', minLength: 1, maxLength: 500 },
+          hypothesisId: { type: 'string' },
+          thesis: { type: 'string' },
+          requiredEvidence: { type: 'array', maxItems: 8, items: { type: 'string' } },
+          falsification: { type: 'string' },
+          intendedRegime: { type: 'string' },
+          independenceRationale: { type: 'string' },
         },
       },
     },
-    risks: { type: 'array', maxItems: 8, items: { type: 'string', minLength: 1, maxLength: 500 } },
+    risks: { type: 'array', maxItems: 8, items: { type: 'string' } },
     disposition: { type: 'string', enum: ['RESEARCH_PROPOSAL_ONLY', 'NEEDS_REVIEW', 'BLOCKED_DATA'] },
   },
 });
@@ -58,7 +60,7 @@ export const RESEARCH_AI_WORKER_SAFETY = Object.freeze({
 
 const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|비밀번호|계좌번호)\s*[:=]\s*\S{8,})/i;
 const privateDataPattern = /(?:\b\d{6}-[1-4]\d{6}\b|주민등록번호|생년월일)/i;
-const performanceMetricPattern = /(?:\bPF\b|profit\s*factor|\bEV\b|expectancy|\bMDD\b|\bMAE\b|\bMFE\b|Sharpe|\bDSR\b|\bPBO\b|net\s*alpha|full\s*cost|position\s*size|leverage|champion|promotion|profitability|\\breturns?\\b|수익률|기대값|기대수익|승률|확률|최대낙폭|레버리지|챔피언|승격|수수료|probability|win\s*rate)/i;
+const performanceMetricPattern = /(?:\bPF\b|profit\s*factor|\bEV\b|expectancy|\bMDD\b|\bMAE\b|\bMFE\b|Sharpe|\bDSR\b|\bPBO\b|net\s*alpha|full\s*cost|position\s*size|leverage|champion|promotion|profitability|\breturns?\b|수익률|기대값|기대수익|승률|확률|최대낙폭|레버리지|챔피언|승격|수수료|probability|win\s*rate)/i;
 const cautiousMetricContextPattern = /(?:do\s+not|don't|cannot|can't|must\s+not|should\s+not|insufficient|not\s+enough|unknown|unavailable|avoid|forbid|금지|판단(?:하면)?\s*안|판단할\s*수\s*없|평가할\s*수\s*없|단정할\s*수\s*없|추정할\s*수\s*없|자료(?:가)?\s*부족|근거(?:가)?\s*부족|알\s*수\s*없)/i;
 const guaranteedPerformancePattern = /(?:guaranteed\s*(?:profit|return)|risk[- ]?free\s*(?:profit|return)|무조건\s*상승|확실한\s*수익|손실\s*없)/i;
 const unsafeAuthorityPattern = /(?:executionAuthority|orderAllowed|order\s*(?:submit|cancel|amend)|(?:BUY|SELL|LONG|SHORT)\s*(?:NOW|ENTRY|SIGNAL)|(?:매수|매도|롱|숏|진입).{0,16}(?:하세요|하십시오|권장|신호))/i;
