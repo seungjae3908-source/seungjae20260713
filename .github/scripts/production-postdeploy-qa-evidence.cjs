@@ -230,7 +230,7 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && tradingCore.memberAutoBitgetLeverage >= 2
     && tradingCore.memberAutoBitgetLeverage <= 7
     && ['limited-50', 'validated'].includes(tradingCore?.memberAutoPilotStage);
-  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v4'
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v5'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
     || tradingCore?.authenticatedProductionSession !== true
@@ -240,6 +240,13 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     || !(Number(tradingCore?.executionSyncInserted) >= 1)
     || (!telegramReady && !telegramVerified)
     || !memberAutoPolicyReady
+    || tradingCore?.backgroundWorkerSourceReady !== true
+    || !Array.isArray(tradingCore?.backgroundWorkerReadinessBlockers)
+    || tradingCore.backgroundWorkerReadinessBlockers.length !== 0
+    || !['MISSING', 'READY', 'BLOCKED_DATA'].includes(tradingCore?.backgroundHandoffState)
+    || !(Number(tradingCore?.backgroundEligibleMembers) >= 1)
+    || !(Number(tradingCore?.backgroundPaperAccountsReady) >= 1)
+    || typeof tradingCore?.memberAutoStrategyAllowlistReady !== 'boolean'
     || tradingCore?.policyRestored !== true
     || tradingCore?.realOrderSubmitted !== false
     || tradingCore?.liveTradingAuthorityGranted !== false
@@ -355,6 +362,12 @@ function buildProductionPostdeployQaEvidence({
     memberAutoPolicyReady: qaScope === 'trading_core'
       ? tradingCore.memberAutoPolicyReady
       : false,
+    memberAutoStrategyAllowlistReady: qaScope === 'trading_core'
+      ? tradingCore.memberAutoStrategyAllowlistReady === true
+      : false,
+    backgroundWorkerSourceReady: qaScope === 'trading_core'
+      ? tradingCore.backgroundWorkerSourceReady === true
+      : false,
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
     orderRequests: 0,
@@ -382,7 +395,13 @@ function buildProductionPostdeployQaEvidence({
     duplicateWorkerExecutionCount: 0,
     pm2FlagDriftCount: 0,
     legacyCryptoAutoAuthorityGranted: false,
-    activationReady: true,
+    // Automatic activation is intentionally stricter than deployment QA.
+    // Full-scope or Trading-Core infrastructure can deploy safely, but LIVE AUTO
+    // remains blocked until focused background-source proof and an explicit
+    // strategy allowlist both exist.
+    activationReady: qaScope === 'trading_core'
+      && tradingCore.backgroundWorkerSourceReady === true
+      && tradingCore.memberAutoStrategyAllowlistReady === true,
   };
 }
 
