@@ -36,6 +36,9 @@ try {
   } else if (command === 'run') {
     const result = await runResearchAiReviewScan(config);
     console.log(JSON.stringify(result, null, 2));
+    if (['PARTIAL_AI_UNAVAILABLE', 'WAITING_FOR_FREE_AI', 'DEFERRED_RETRY'].includes(result.status)) {
+      process.exitCode = 75;
+    }
   } else {
     throw new Error(`unsupported command: ${command}`);
   }
