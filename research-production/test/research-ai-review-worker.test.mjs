@@ -351,6 +351,32 @@ test('retry backoff preserves the leaf reason instead of degrading to no-new-evi
 });
 
 
+
+test('caution in one clause cannot mask an unsafe performance claim in another clause', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-ai-mixed-claim-'));
+  try {
+    await writeCycles(root, ['forward']);
+    const env = { RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: SECRET };
+    const answer = JSON.stringify({
+      summary: 'Current evidence cannot establish profitability; expected return is strong.',
+      findings: [],
+      hypotheses: [],
+      risks: [],
+      disposition: 'NEEDS_REVIEW',
+    });
+    const result = await runResearchAiReviewScan({
+      repoRoot: '/TEST_ONLY/repo', stateRoot: root, researchSha: SHA, env,
+      verifyGitHead: false, preflight: fakePreflight(root),
+      invoke: async ({ policy }) => ({ answer, model: policy.model, provider: policy.provider }),
+      now: () => Date.parse('2026-09-05T10:00:00Z'),
+    });
+    assert.equal(result.status, 'PARTIAL_AI_UNAVAILABLE');
+    assert.equal(result.blockedProfiles[0].reason, 'FORBIDDEN_AI_AUTHORITY');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('provider-facing schema stays within Gemini-supported structured-output subset', () => {
   const forbidden = new Set(['minLength', 'maxLength', 'pattern']);
   const seen = [];
