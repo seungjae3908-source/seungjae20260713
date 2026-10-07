@@ -125,6 +125,76 @@ export type MemberAutoTradingBackgroundRunResult = {
   executionSyncFailures: number;
 };
 
+export type MemberAutoTradingBackgroundRuntimeStatus = Readonly<{
+  workerFlagEnabled: boolean;
+  liveBackgroundEnabled: boolean;
+  serviceRoleConfigured: boolean;
+  started: boolean;
+  startedAt: string | null;
+  startBlockedReason: string | null;
+  lastTickStartedAt: string | null;
+  lastTickCompletedAt: string | null;
+  lastTickErrorCode: string | null;
+  lastHandoffStatus: 'UNKNOWN' | MemberAutoTradingBackgroundRunResult['handoffStatus'];
+  lastEvaluated: number;
+  lastLiveOrders: number;
+  lastPaperOrders: number;
+  lastExecutionEventsInserted: number;
+  lastNotificationDeliveriesQueued: number;
+}>;
+
+const backgroundRuntimeState: {
+  started: boolean;
+  startedAt: string | null;
+  startBlockedReason: string | null;
+  lastTickStartedAt: string | null;
+  lastTickCompletedAt: string | null;
+  lastTickErrorCode: string | null;
+  lastHandoffStatus: 'UNKNOWN' | MemberAutoTradingBackgroundRunResult['handoffStatus'];
+  lastEvaluated: number;
+  lastLiveOrders: number;
+  lastPaperOrders: number;
+  lastExecutionEventsInserted: number;
+  lastNotificationDeliveriesQueued: number;
+} = {
+  started: false,
+  startedAt: null,
+  startBlockedReason: null,
+  lastTickStartedAt: null,
+  lastTickCompletedAt: null,
+  lastTickErrorCode: null,
+  lastHandoffStatus: 'UNKNOWN',
+  lastEvaluated: 0,
+  lastLiveOrders: 0,
+  lastPaperOrders: 0,
+  lastExecutionEventsInserted: 0,
+  lastNotificationDeliveriesQueued: 0,
+};
+
+export function getMemberAutoTradingBackgroundRuntimeStatus(): MemberAutoTradingBackgroundRuntimeStatus {
+  return Object.freeze({
+    workerFlagEnabled: process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true',
+    liveBackgroundEnabled: liveBackgroundEnabled(),
+    serviceRoleConfigured: hasSupabaseServerKey(),
+    ...backgroundRuntimeState,
+  });
+}
+
+export type MemberAutoTradingBackgroundReadiness = Readonly<{
+  ok: boolean;
+  blockers: readonly string[];
+  policyStorageReadable: boolean;
+  memberProfileSchemaReadable: boolean;
+  eligibleMembers: number;
+  explicitStrategyMembers: number;
+  paperAccountsReady: number;
+  handoffState: 'MISSING' | 'READY' | 'BLOCKED_DATA' | 'INVALID';
+  handoffEntries: number;
+  serviceRoleConfigured: boolean;
+  financialMutationCount: 0;
+  privateProviderRequestCount: 0;
+}>;
+
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -254,7 +324,10 @@ function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaper
     : entry.identity.symbol.toUpperCase();
   const assets = policy.enabledAssets[mapping.exchange];
   if (assets.length > 0 && !assets.includes(symbol)) return false;
-  if (policy.enabledStrategies.length > 0 && !policy.enabledStrategies.includes(entry.identity.strategyId)) return false;
+  // Automatic background entry is fail-closed until at least one strategy is
+  // explicitly allowlisted. An empty list must never mean "all strategies".
+  if (policy.enabledStrategies.length === 0) return false;
+  if (!policy.enabledStrategies.includes(entry.identity.strategyId)) return false;
   return true;
 }
 
@@ -1188,7 +1261,10 @@ export class MemberAutoTradingBackgroundWorker {
 }
 
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
-  private readonly accountReaders = createVaultBackedAccountReaders();
+  // Production provider reads can legitimately exceed the generic UI timeout.
+  // Use the bounded runtime maximum so background auto does not fail early on a
+  // healthy but slower private provider snapshot.
+  private readonly accountReaders = createVaultBackedAccountReaders({ providerTimeoutMs: 30_000 });
 
   constructor(
     private readonly client: SupabaseClient = getSupabase(),
@@ -1278,26 +1354,133 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   }
 }
 
+export async function inspectMemberAutoTradingBackgroundReadiness(
+  now = new Date(),
+): Promise<MemberAutoTradingBackgroundReadiness> {
+  const blockers: string[] = [];
+  const serviceRoleConfigured = hasSupabaseServerKey();
+  if (!serviceRoleConfigured) {
+    return Object.freeze({
+      ok: false,
+      blockers: ['TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED'],
+      policyStorageReadable: false,
+      memberProfileSchemaReadable: false,
+      eligibleMembers: 0,
+      explicitStrategyMembers: 0,
+      paperAccountsReady: 0,
+      handoffState: 'MISSING',
+      handoffEntries: 0,
+      serviceRoleConfigured: false,
+      financialMutationCount: 0,
+      privateProviderRequestCount: 0,
+    });
+  }
+
+  const source = new SupabaseMemberAutoTradingBackgroundSource();
+  let members: readonly EligibleMember[] = [];
+  let policyStorageReadable = false;
+  let memberProfileSchemaReadable = false;
+  try {
+    members = await source.listEligibleMembers();
+    policyStorageReadable = true;
+    memberProfileSchemaReadable = true;
+  } catch (error) {
+    const code = errorCode(error);
+    blockers.push(code);
+    if (code !== 'BACKGROUND_POLICY_LIST_FAILED') policyStorageReadable = true;
+  }
+
+  const explicitStrategyMembers = members.filter((member) =>
+    Array.isArray(member.policy.enabledStrategies) && member.policy.enabledStrategies.length > 0).length;
+  if (members.length > 0 && explicitStrategyMembers !== members.length) {
+    blockers.push('BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED');
+  }
+
+  let paperAccountsReady = 0;
+  for (const member of members) {
+    try {
+      const snapshot = await source.paperJournalRepositoryFor(member.userId).listSnapshot(member.userId);
+      const accountRows = snapshot.filter((row) => row.kind === 'account' && row.deletedAt == null)
+        .map((row) => record(row.payload))
+        .filter((row): row is Record<string, unknown> => row != null);
+      if (accountRows.length === 1 && positive(Number(accountRows[0]?.equity))) {
+        paperAccountsReady += 1;
+      } else {
+        blockers.push('BACKGROUND_PAPER_ACCOUNT_REQUIRED');
+      }
+    } catch {
+      blockers.push('BACKGROUND_PAPER_ACCOUNT_REQUIRED');
+    }
+  }
+
+  let handoffState: MemberAutoTradingBackgroundReadiness['handoffState'] = 'MISSING';
+  let handoffEntries = 0;
+  try {
+    const handoff = await source.readHandoff(now.getTime());
+    if (handoff) {
+      handoffState = handoff.status;
+      handoffEntries = handoff.entries.length;
+    }
+  } catch {
+    handoffState = 'INVALID';
+    blockers.push('BACKGROUND_HANDOFF_INVALID');
+  }
+
+  return Object.freeze({
+    ok: blockers.length === 0,
+    blockers: Object.freeze([...new Set(blockers)]),
+    policyStorageReadable,
+    memberProfileSchemaReadable,
+    eligibleMembers: members.length,
+    explicitStrategyMembers,
+    paperAccountsReady,
+    handoffState,
+    handoffEntries,
+    serviceRoleConfigured,
+    financialMutationCount: 0,
+    privateProviderRequestCount: 0,
+  });
+}
+
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
   if (process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true') {
+    backgroundRuntimeState.started = false;
+    backgroundRuntimeState.startBlockedReason = 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED_OFF';
     console.log('[member-auto-trading-background] disabled; explicit enable flag is required');
     return null;
   }
   if (!hasSupabaseServerKey()) {
+    backgroundRuntimeState.started = false;
+    backgroundRuntimeState.startBlockedReason = 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED';
     console.error('[member-auto-trading-background] blocked: service-role Supabase configuration is required');
     return null;
   }
   const worker = new MemberAutoTradingBackgroundWorker(new SupabaseMemberAutoTradingBackgroundSource());
+  backgroundRuntimeState.started = true;
+  backgroundRuntimeState.startedAt = new Date().toISOString();
+  backgroundRuntimeState.startBlockedReason = null;
   const tick = async () => {
+    backgroundRuntimeState.lastTickStartedAt = new Date().toISOString();
+    backgroundRuntimeState.lastTickErrorCode = null;
     try {
       const result = await worker.runOnce(new Date());
+      backgroundRuntimeState.lastTickCompletedAt = new Date().toISOString();
+      backgroundRuntimeState.lastHandoffStatus = result.handoffStatus;
+      backgroundRuntimeState.lastEvaluated = result.evaluated;
+      backgroundRuntimeState.lastLiveOrders = result.liveOrders;
+      backgroundRuntimeState.lastPaperOrders = result.filledOrders;
+      backgroundRuntimeState.lastExecutionEventsInserted = result.executionEventsInserted;
+      backgroundRuntimeState.lastNotificationDeliveriesQueued = result.notificationDeliveriesQueued;
       if (result.evaluated > 0 || result.paperExitOrders > 0 || result.liveExitOrders > 0
         || result.exitBlocked > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
+      const code = errorCode(error);
+      backgroundRuntimeState.lastTickCompletedAt = new Date().toISOString();
+      backgroundRuntimeState.lastTickErrorCode = code;
       console.error('[member-auto-trading-background] tick failed', {
-        errorCode: errorCode(error),
+        errorCode: code,
       });
     }
   };
@@ -1307,5 +1490,11 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   console.log(liveBackgroundEnabled()
     ? '[member-auto-trading-background] started in Paper+Live guarded mode'
     : '[member-auto-trading-background] started in Paper-only mode');
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      clearInterval(timer);
+      backgroundRuntimeState.started = false;
+      backgroundRuntimeState.startBlockedReason = 'STOPPED';
+    },
+  };
 }
