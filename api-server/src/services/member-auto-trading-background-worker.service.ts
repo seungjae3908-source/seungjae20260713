@@ -133,6 +133,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveOrders: number;
   paperExitOrders: number;
   liveExitOrders: number;
+  liveTrackedPositions: number;
   exitBlocked: number;
   privateTradingRequests: number;
   executionEventsInserted: number;
@@ -157,6 +158,7 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   firstWarmupTickLiveEntriesArmed: boolean | null;
   firstWarmupTickLiveOrders: number | null;
   firstWarmupTickLiveExitOrders: number | null;
+  liveTrackedPositions: number;
   liveExitsSuppressedByWarmupOrArm: number;
   executionSyncFailures: number;
   executionSyncMissingReferences: number;
@@ -182,6 +184,7 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   firstWarmupTickLiveEntriesArmed: null,
   firstWarmupTickLiveOrders: null,
   firstWarmupTickLiveExitOrders: null,
+  liveTrackedPositions: 0,
   liveExitsSuppressedByWarmupOrArm: 0,
   executionSyncFailures: 0,
   executionSyncMissingReferences: 0,
@@ -1084,6 +1087,7 @@ export class MemberAutoTradingBackgroundWorker {
       liveOrders: 0,
       paperExitOrders: 0,
       liveExitOrders: 0,
+      liveTrackedPositions: 0,
       exitBlocked: 0,
       privateTradingRequests: 0,
       executionEventsInserted: 0,
@@ -1210,8 +1214,9 @@ export class MemberAutoTradingBackgroundWorker {
           }
         }
 
-        if (liveBackgroundEnabled()) {
+        if (liveModeRequested) {
           const livePositions = trackedAutomaticPositions(runtime, 'live');
+          result.liveTrackedPositions += livePositions.length;
           if (!liveEntriesArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
             result.liveExitsSuppressedByWarmupOrArm += livePositions.length;
           } else {
@@ -1605,6 +1610,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         firstWarmupTickLiveExitOrders: warmupObservedNow
           ? result.liveExitOrders
           : backgroundRuntimeHealth.firstWarmupTickLiveExitOrders,
+        liveTrackedPositions: result.liveTrackedPositions,
         liveExitsSuppressedByWarmupOrArm: result.liveExitsSuppressedByWarmupOrArm,
         executionSyncFailures: result.executionSyncFailures,
         executionSyncMissingReferences: result.executionSyncMissingReferences,
