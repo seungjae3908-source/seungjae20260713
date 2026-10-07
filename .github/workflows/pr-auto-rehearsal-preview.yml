@@ -147,9 +147,32 @@ jobs:
           SAFETY
           chmod 600 "$PREVIEW_DIR/api-server/.env.staging"
           pm2 restart "$PREVIEW_PM2_NAME" --update-env >/dev/null
-          sleep 2
-          curl --fail --silent --show-error --max-time 15 "http://127.0.0.1:$PREVIEW_PORT/api/health" | \
-            node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const v=JSON.parse(s);if(v.ok!==true||v.deploySha!==process.env.TARGET_SHA||v.backgroundWorkersEnabled!==false)process.exit(1);console.log(JSON.stringify(v));});"
+          PREVIEW_HEALTH_FILE="$(mktemp /tmp/seungja-pr-preview-health.XXXXXX)"
+          PREVIEW_HEALTH_OK=0
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 15 "http://127.0.0.1:$PREVIEW_PORT/api/health" > "$PREVIEW_HEALTH_FILE" 2>/dev/null \
+              && TARGET_SHA="$TARGET_SHA" node - "$PREVIEW_HEALTH_FILE" <<'NODE'
+          const fs = require('node:fs');
+          const health = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (health.ok !== true) process.exit(1);
+          if (health.deploySha !== process.env.TARGET_SHA) process.exit(1);
+          if (health.backgroundWorkersEnabled !== false) process.exit(1);
+          NODE
+            then
+              PREVIEW_HEALTH_OK=1
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$PREVIEW_HEALTH_OK" != 1 ]]; then
+            pm2 describe "$PREVIEW_PM2_NAME" >&2 || true
+            pm2 logs "$PREVIEW_PM2_NAME" --lines 120 --nostream >&2 || true
+            rm -f "$PREVIEW_HEALTH_FILE"
+            echo 'Preview runtime did not become healthy after safety reload.' >&2
+            exit 69
+          fi
+          cat "$PREVIEW_HEALTH_FILE"
+          rm -f "$PREVIEW_HEALTH_FILE"
 
           mkdir -p "$PREVIEW_DIR/.deploy"
           TUNNEL_BIN="$PREVIEW_DIR/.deploy/cloudflared"
