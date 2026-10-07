@@ -81,7 +81,8 @@ requireText(rollbackTail, "failure() && steps.deploy_app.outcome == 'success'", 
 requireText(rollbackTail, "steps.rollback_target.outputs.schema_compatible == 'true'", 'POSTDEPLOY_ROLLBACK_SCHEMA_COMPATIBILITY_GUARD_MISSING');
 requireText(rollbackTail, 'PREVIOUS_SHA: ${{ steps.rollback_target.outputs.previous_sha }}', 'POSTDEPLOY_ROLLBACK_EXACT_TARGET_MISSING');
 requireText(rollbackTail, 'POSTDEPLOY_ROLLBACK_IDENTITY_MISMATCH', 'POSTDEPLOY_ROLLBACK_IDENTITY_VERIFY_MISSING');
-requireText(deploy, 'p_membership_expires_at', 'POSTDEPLOY_ROLLBACK_MEMBER_RPC_COMPATIBILITY_CHECK_MISSING');
+requireText(deploy, 'p_expected_permissions_updated_at', 'POSTDEPLOY_ROLLBACK_MEMBER_RPC_COMPATIBILITY_CHECK_MISSING');
+requireText(deploy, 'apply_member_permission_change', 'POSTDEPLOY_ROLLBACK_MEMBER_ATOMIC_RPC_CHECK_MISSING');
 requireText(deploy, 'Preserve fail-closed target when previous app is schema-incompatible', 'POSTDEPLOY_SCHEMA_BOUNDARY_FAILCLOSED_STEP_MISSING');
 requireText(deploy, 'POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT', 'POSTDEPLOY_SCHEMA_BOUNDARY_AUTHORITY_GUARD_MISSING');
 requireText(deploy, 'POSTDEPLOY_FAILCLOSED_HEALTH_IDENTITY_INVALID', 'POSTDEPLOY_SCHEMA_BOUNDARY_IDENTITY_GUARD_MISSING');
