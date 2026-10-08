@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
-import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
+import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
   marketIntelligenceNotAvailable,
@@ -343,4 +343,13 @@ test('expired entry verification cannot prevent a risk-reducing exit with still-
   assert.equal(liveConnectionVerificationAllowsReducingExit(verified, now), true);
   assert.equal(liveConnectionVerificationAllowsReducingExit({ ...verified, lastErrorCode: 'REVOKED' }, now), false);
   assert.equal(liveConnectionVerificationAllowsReducingExit({ ...verified, lastVerifiedAt: null }, now), false);
+});
+
+
+test('stale verification exception cannot be used by a reduceOnly cash BUY', () => {
+  assert.equal(isRiskReducingExitPlan({ reduceOnly: true, exchange: 'upbit', side: 'buy' }), false);
+  assert.equal(isRiskReducingExitPlan({ reduceOnly: true, exchange: 'upbit', side: 'sell' }), true);
+  assert.equal(isRiskReducingExitPlan({ reduceOnly: true, exchange: 'kiwoom', side: 'sell' }), true);
+  assert.equal(isRiskReducingExitPlan({ reduceOnly: false, exchange: 'bitget', side: 'short' }), false);
+  assert.equal(isRiskReducingExitPlan({ reduceOnly: true, exchange: 'bitget', side: 'short' }), true);
 });
