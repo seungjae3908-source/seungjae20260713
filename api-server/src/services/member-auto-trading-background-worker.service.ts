@@ -1670,6 +1670,13 @@ export class MemberAutoTradingBackgroundWorker {
         // Maintain eligible Live exits above even when Paper storage is
         // absent. Do not create Paper or Live entries using placeholder equity.
         if (!runtime.paperAccountReady || !runtime.paperFinancialRiskReady) {
+          // A paper-ledger block and a simultaneous Telegram outage are two
+          // independent reasons not to admit Live entry. Surface both in
+          // health without letting either bypass the other.
+          if (liveModeRequested && !liveTelegramHealthyThisTick
+            && hasCapability(member.profile, 'canPlaceOrders')) {
+            result.liveEntriesSuppressedByTelegram += entries.length;
+          }
           result.newEntriesFailClosed = true;
           result.blocked += entries.length;
           continue;
