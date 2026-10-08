@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
+import { automaticLiveExecutionEnabled } from './trade-automation.service';
 import { DEFAULT_TRADING_POLICY, type ExchangeConnection, type TradingPlan, type TradingPolicy } from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
@@ -12,6 +13,7 @@ import type { PaperJournalRepository } from './paper-journal.types';
 import {
   MemberAutoTradingBackgroundWorker,
   liveBackgroundEnabled,
+  memberAutoTradingWorkerMode,
   marketMapping,
   resolveMemberStockBroker,
   readMemberAutoTradingBackgroundRuntimeHealth,
@@ -511,6 +513,139 @@ test('background worker is default OFF without explicit activation flag', () => 
   } finally {
     if (previous == null) delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
     else process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = previous;
+  }
+});
+
+test('dedicated Paper-only worker activation is default OFF, exact-flag-only, and independent of shared AUTO/LIVE switches', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) delete process.env[key];
+    assert.equal(memberAutoTradingWorkerMode(), 'DISABLED');
+    assert.equal(liveBackgroundEnabled(), false);
+
+    // The dedicated pilot does NOT require or implicitly turn on general AUTO.
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+
+    // A Paper-only pilot remains Paper-only even if stale Live flags all read true.
+    for (const key of keys) process.env[key] = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+
+    // Invalid Paper-only values must never fall through to previously armed
+    // shared automatic Live settings. Only unset/'false' permit shared mode.
+    for (const malformed of ['TRUE', '1', 'on', '']) {
+      process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = malformed;
+      assert.equal(memberAutoTradingWorkerMode(), 'DISABLED', malformed);
+      assert.equal(liveBackgroundEnabled(), false, malformed);
+    }
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'false';
+    assert.equal(memberAutoTradingWorkerMode(), 'SHARED_BACKGROUND');
+    assert.equal(liveBackgroundEnabled(), true);
+
+    // No permissive case folding, nonboolean coercion, or automatic fallback.
+    process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = 'false';
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'TRUE';
+    assert.equal(memberAutoTradingWorkerMode(), 'DISABLED');
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = '1';
+    assert.equal(memberAutoTradingWorkerMode(), 'DISABLED');
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+  } finally {
+    for (const key of keys) {
+      const value = prior[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only pilot also blocks the shared automatic Live service for every broker', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    for (const malformed of ['true', 'TRUE', '1', 'on', '']) {
+      process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = malformed;
+      for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+        assert.equal(automaticLiveExecutionEnabled(exchange), false, `${exchange}:${malformed}`);
+      }
+    }
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only override produces a canonical simulated fill and zero private/live calls even with all Live flags true', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let liveAccountReads = 0;
+  const original = source(repository, nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...original,
+    async readLiveAccountSnapshot() {
+      liveAccountReads += 1;
+      throw new Error('PAPER_ONLY_FORBIDS_PRIVATE_ACCOUNT_READ');
+    },
+  });
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.filledOrders, 1);
+    assert.equal(first.positionLifecycles, 1);
+    assert.equal(first.liveOrders, 0);
+    assert.equal(first.livePlans, 0);
+    assert.equal(first.privateTradingRequests, 0);
+    assert.equal(liveAccountReads, 0);
+    const order = (await repository.listOrders(USER))[0];
+    assert.ok(order);
+    assert.equal(order.state, 'FILLED');
+    const plan = await repository.getPlan(USER, order.planId);
+    assert.equal(plan?.accountMode, 'paper');
+    assert.equal(order.exchangeOrderId?.startsWith('paper-'), true);
+    const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(second.createdPlans, 0);
+    assert.equal((await repository.listOrders(USER)).length, 1);
+    assert.equal(liveAccountReads, 0);
+  } finally {
+    for (const key of keys) {
+      const value = prior[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 
