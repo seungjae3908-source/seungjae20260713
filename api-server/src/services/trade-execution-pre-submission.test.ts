@@ -372,3 +372,18 @@ test('automatic-origin live entry is rejected after AUTO policy is disabled even
   assert.equal(provider.counts().orderTestPosts, 0);
   assert.equal(provider.counts().openOrderReads, 0);
 });
+
+
+test('persisted invalid reduce-only cash BUY is rejected before private provider reads or order POST', async () => {
+  const { repository, approved, order } = await setup();
+  const unsafe = { ...approved, side: 'buy' as const, reduceOnly: true };
+  await repository.savePlan(unsafe);
+  const provider = installUpbitMock(100_000);
+  const result = await new TradeExecutionService(repository).execute(USER_ID, unsafe, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'REDUCE_ONLY_SIDE_INVALID');
+  assert.equal(result.submissionStartedAt ?? null, null);
+  assert.equal(provider.counts().openOrderReads, 0);
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().actualOrderPosts, 0);
+});

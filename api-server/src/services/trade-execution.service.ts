@@ -811,6 +811,14 @@ export class TradeExecutionService {
       return this.recovery.reconcile(userId, plan, order);
     }
 
+    // Never allow a previously persisted invalid reduce-only cash BUY to
+    // reach even a private provider preflight. Unknown submission intents
+    // above continue through read-only reconciliation instead.
+    if (plan.reduceOnly === true && !isRiskReducingExitPlan(plan)) {
+      return this.automation.transition(order, 'REJECTED', 'REDUCE_ONLY_SIDE_INVALID', {
+        errorCode: 'REDUCE_ONLY_SIDE_INVALID', orderSubmissionAttempted: false,
+      });
+    }
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (plan.accountMode !== 'paper') {
       if (!connection?.configured || !connection.encryptedCredentials) {
