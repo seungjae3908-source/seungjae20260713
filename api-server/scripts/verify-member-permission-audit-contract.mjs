@@ -13,6 +13,7 @@ const migrationPath = 'api-server/supabase/migrations/2026080502_member_permissi
 const downPath = 'api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql';
 const migration = await read(migrationPath);
 const down = await read(downPath);
+const memberSecurityHardening = await read('api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql');
 const build = await read('api-server/build.mjs');
 const runtimeEntry = await read('api-server/src/index.ts');
 const identityGuard = await read('api-server/src/middleware/paper-journal-query-identity.ts');
@@ -66,11 +67,12 @@ const passwordResetEnd = adminRoute.indexOf("router.get('/audit-logs'", password
 assert(passwordResetStart >= 0 && passwordResetEnd > passwordResetStart, 'password reset route must be explicitly bounded');
 const passwordResetRoute = adminRoute.slice(passwordResetStart, passwordResetEnd);
 assert(passwordResetRoute.includes('memberPasswordResetAvailable()'), 'password reset must fail closed through the bounded Auth-admin service');
-assert(passwordResetRoute.includes("adminDb(req).from('member_permission_audit').insert"), 'password reset audit must stay caller-scoped and RLS protected');
-assert(passwordResetRoute.includes("action: 'member.password.reset'"), 'password reset must write the dedicated audit action');
-assert(passwordResetRoute.includes("before_value: { password: 'REDACTED' }"), 'password reset audit must never store the previous password');
-assert(passwordResetRoute.includes('credentialStored: false'), 'password reset audit must state that credentials are not stored');
-assert(passwordResetRoute.indexOf("from('member_permission_audit').insert") < passwordResetRoute.indexOf('resetMemberPasswordCredential('), 'password reset audit must succeed before the Auth mutation');
+assert(passwordResetRoute.includes("record_member_password_reset_authorization"), 'password reset audit must use the narrow validated RPC');
+assert(passwordResetRoute.includes("action !== 'member.password.reset'"), 'password reset must verify the dedicated audit action returned by the RPC');
+assert(passwordResetRoute.includes('auditData.resetAuthorized !== true'), 'password reset must verify RPC authorization evidence');
+assert(passwordResetRoute.includes('auditData.credentialStored !== false'), 'password reset audit must verify that credentials are not stored');
+assert(passwordResetRoute.indexOf("record_member_password_reset_authorization") < passwordResetRoute.indexOf('resetMemberPasswordCredential('), 'password reset audit authorization must succeed before the Auth mutation');
+assert(!passwordResetRoute.includes("from('member_permission_audit').insert"), 'password reset route must not have direct audit-table INSERT authority');
 assert(passwordResetRoute.includes("res.setHeader('Cache-Control', 'no-store, max-age=0')"), 'password reset response must be non-cacheable');
 
 assert(memberAuthAdmin.includes("import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';"), 'bounded Auth-admin service must own the server-key dependency');
@@ -94,10 +96,11 @@ for (const marker of [
   "has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')",
   "has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')",
   "has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE')",
+  "has_table_privilege('authenticated', 'public.member_permission_audit', 'TRUNCATE')",
   'acl.grantee = 0',
   'relrowsecurity',
   "policyname = 'member audit admins select'",
-  "policyname = 'member audit admins insert'",
+  "record_member_password_reset_authorization",
   "schema_version = '20260805.1'",
 ]) {
   assert(postAssert.includes(marker), `staging audit assertion is missing ${marker}`);
@@ -120,5 +123,11 @@ assert(integrationSql.includes('set role authenticated'), 'integration fixture m
 assert(integrationSql.includes('regular member inserted administrator audit row'), 'integration fixture must prove regular insert denial');
 assert(integrationSql.includes('admin could not read the audit row allowed by RLS'), 'integration fixture must prove admin access');
 assert(integrationSql.trimEnd().endsWith('rollback;'), 'integration fixture must leave no persistent audit row');
+
+assert(memberSecurityHardening.includes('drop policy if exists "member audit admins insert"'), 'final member security hardening must remove direct audit INSERT policy');
+assert(memberSecurityHardening.includes('grant select on table public.member_permission_audit to authenticated'), 'final member security hardening must keep audit SELECT only');
+assert(memberSecurityHardening.includes('record_member_password_reset_authorization'), 'final member security hardening must provide password-reset audit RPC');
+assert(memberSecurityHardening.includes('MEMBER_AUDIT_TABLE_PRIVILEGE_INVALID'), 'final member security hardening must verify immutable audit ACLs');
+assert(memberSecurityHardening.includes('MEMBER_PASSWORD_RESET_AUDIT_RPC_PRIVILEGE_INVALID'), 'final member security hardening must verify reset audit RPC ACLs');
 
 console.log('[member-permission-audit-contract] deployed query identity rejection, user-scoped admin RLS, exact ACLs, bootstrap, live isolation, rollback and reapply verified');
