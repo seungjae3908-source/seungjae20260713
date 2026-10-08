@@ -137,7 +137,7 @@ test('owner holdings mirror requires canonical member permission and actually qu
       transport: null, safety: TELEGRAM_POLICY_SAFETY,
     },
     deliveryQueued: true, deliveryId: 'queue-1',
-  } as PersonalTelegramAlertDispatchResult;
+  } as Extract<PersonalTelegramAlertDispatchResult, { status: 'POLICY' }>;
   const profile = {
     status: 'approved', membership_level: 'associate', is_active: true,
     permissions_updated_at: '2026-08-01T00:00:00.000Z', membership_expires_at: null,

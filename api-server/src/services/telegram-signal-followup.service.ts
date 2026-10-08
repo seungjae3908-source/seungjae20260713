@@ -307,7 +307,6 @@ function publicStatusLabel(
   if (card.signalState === 'CLOSED') return '🏁 포지션 종료 · 진입 버튼 비활성';
   const reached = [...state.reachedTargets].sort((left, right) => left - right);
   if (reached.length) return `🎯 TP${reached.at(-1)! + 1} 도달`;
-  if (card.signalState === 'FILLED' || card.signalState === 'MANAGING') return '✅ 보유중';
   if (card.signalState === 'ENTRY_ZONE' || card.signalState === 'APPROVAL_PENDING' || card.signalState === 'READY_FOR_APPROVAL') {
     return '🚨 진입가능';
   }
