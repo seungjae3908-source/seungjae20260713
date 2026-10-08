@@ -69,7 +69,11 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain("'신규진입 차단'");
   expect(page).toContain("auth.can('canPlaceOrders')");
   expect(page).toContain('계정 주문 권한 없음');
-  expect(page).toContain('자동 실거래 준비됨');
+  expect(page).toContain('autoTradingBackground');
+  expect(page).toContain('userTelegramDelivery');
+  expect(page).toContain('liveEntriesArmed');
+  expect(page).toContain('안전대기 · Arm 준비 중');
+  expect(page).toContain('자동 실거래 작동 준비됨');
   expect(page).not.toContain('value="서버 Gate 필요"');
 
   const settings = source('src/components/trade-automation-settings.tsx');
