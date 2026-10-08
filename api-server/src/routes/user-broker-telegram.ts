@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { Router, type IRouter, type RequestHandler } from 'express';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
-import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import { TradeExecutionEventBridgeService, parseExecutionSyncOrderId } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
 import { createSupabaseTelegramAlertPolicyRepository } from '../features/user-broker-telegram/telegram-alert-policy.repository';
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import {
@@ -306,11 +306,12 @@ userBrokerTelegramRouter.patch('/telegram-policy', async (req, res) => {
 userBrokerTelegramRouter.post('/execution/sync', requireCapability('canAccessJournalSync'), async (req, res) => {
   try {
     const { userId, accessToken } = member(req as AuthenticatedRequest);
+    const orderId = parseExecutionSyncOrderId(req.body);
     const tradingRepository = createSupabaseTradingRepository(accessToken, userId);
     const journalRepository = createSupabasePaperJournalRepository(accessToken, userId);
     const integrationService = service(new CanonicalPortfolioSyncSink(journalRepository, userId));
     const result = await new TradeExecutionEventBridgeService(tradingRepository, integrationService)
-      .syncUser(userId, (req as AuthenticatedRequest).membershipLevel ?? 'pending');
+      .syncUser(userId, (req as AuthenticatedRequest).membershipLevel ?? 'pending', orderId ? { orderId } : {});
     res.json({ ok: true, ...result, runtimeSync: true });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error), privateApiRequests: 0, ordersSubmitted: 0, ordersCancelled: 0 });
