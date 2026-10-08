@@ -6,6 +6,7 @@ import {
   deriveRulePackPilotCapitalFromTrades,
   deriveRulePackPilotExecutionPolicy,
   verifiedRulePackKrwSettlement,
+  rulePackPilotLedgerHistoryComplete,
   evaluateRulePackPilotEntryGuard,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -281,4 +282,13 @@ test('realized capital admits KRW net after fees/tax, never estimated foreign FX
   assert.deepEqual(verifiedRulePackKrwSettlement({
     market: 'CRYPTO_SPOT', currency: 'KRW', grossPnl: 50_000, fees: -1, tax: 0,
   }), { ok: false, code: 'PILOT_CAPITAL_FEE_EVIDENCE_UNAVAILABLE' });
+});
+test('500 order / 200 plan repository page bounds are not proof of complete HWM settlement history', () => {
+  assert.equal(rulePackPilotLedgerHistoryComplete(0, 0), true);
+  assert.equal(rulePackPilotLedgerHistoryComplete(499, 199), true);
+  assert.equal(rulePackPilotLedgerHistoryComplete(500, 199), false);
+  assert.equal(rulePackPilotLedgerHistoryComplete(499, 200), false);
+  assert.equal(rulePackPilotLedgerHistoryComplete(600, 201), false);
+  assert.equal(rulePackPilotLedgerHistoryComplete(-1, 1), false);
+  assert.equal(rulePackPilotLedgerHistoryComplete(1.5, 1), false);
 });
