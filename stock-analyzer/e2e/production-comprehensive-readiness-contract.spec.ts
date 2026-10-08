@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import {
+  isDiagnosticFreeIncompleteLogin,
+  type LoginSurfaceState,
+} from './support/production-readonly-login';
 
 function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
@@ -189,18 +193,54 @@ test('Production read-only suites share the bounded cold login contract', () => 
   expect(loginSupport).toContain("page.getByLabel('아이디')");
   expect(loginSupport).toContain("page.getByLabel('비밀번호')");
   expect(loginSupport).toContain("page.getByTestId('page-fallback').isVisible");
-  expect(loginSupport).toContain("new URL(page.url()).pathname === '/login'");
+  expect(loginSupport).toContain("state.path === '/login'");
+  expect(loginSupport).toContain('!state.membershipVisible');
+  expect(loginSupport).toContain('!state.alertVisible');
+  expect(loginSupport).toContain('diagnosticCount === 0');
+  expect(loginSupport).not.toContain('&& state.fallbackVisible');
+  expect(loginSupport).toContain("PRODUCTION_LOGIN_DIAGNOSTIC_DIR");
+  expect(loginSupport).toContain("schemaVersion: 'production-login-readiness-failure-v1'");
+  expect(loginSupport).toContain('secretValuesRecorded: false');
+  expect(loginSupport).toContain('[PRODUCTION_QA_LOGIN_NOT_READY]');
   expect(loginSupport).toContain('attempt >= LOGIN_INTERACTIVE_COLD_RETRIES');
   expect(loginSupport).toContain("}).toBe('READY')");
   for (const consumer of consumers) {
     const qa = source(consumer);
     const wrapperStart = qa.indexOf('async function login(');
     const wrapper = qa.slice(wrapperStart, qa.indexOf('\n}', wrapperStart) + 2);
-    expect(qa).toContain("import { loginProductionReadOnly } from './support/production-readonly-login';");
+    expect(qa).toMatch(
+      /import\s*\{[^}]*\bloginProductionReadOnly\b[^}]*\}\s*from\s*['"]\.\/support\/production-readonly-login['"];/s,
+    );
     expect(wrapperStart).toBeGreaterThanOrEqual(0);
     expect(wrapper).toContain('await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });');
     expect(wrapper).not.toContain('page.goto');
   }
+});
+
+test('Production login cold recovery distinguishes incomplete hydration from terminal failure', () => {
+  const incomplete: LoginSurfaceState = {
+    path: '/login',
+    idVisible: false,
+    passwordVisible: false,
+    buttonVisible: false,
+    fallbackVisible: false,
+    membershipVisible: false,
+    alertVisible: false,
+    documentReadyState: 'complete',
+    rootChildCount: 0,
+  };
+  expect(isDiagnosticFreeIncompleteLogin(incomplete, 0)).toBe(true);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, fallbackVisible: true }, 0)).toBe(true);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, alertVisible: true }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, path: '/error' }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, membershipVisible: true }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin({
+    ...incomplete,
+    idVisible: true,
+    passwordVisible: true,
+    buttonVisible: true,
+  }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin(incomplete, 1)).toBe(false);
 });
 
 test('Production cold-route modules settle before primary market data prewarm without competing with direct AI Chart bootstrap', () => {

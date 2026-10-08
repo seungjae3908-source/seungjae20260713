@@ -238,15 +238,29 @@ test('AI review provider unavailable is a preflight failure', async () => {
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
-test('AI review permission rejection occurs before provider call', async () => {
+test('associate AI review is allowed and pending permission rejection occurs before provider call', async () => {
   let calls = 0;
   const counting: TradingReviewProvider = { async generateReview(input) { calls += 1; return reviewProvider.generateReview(input, AbortSignal.timeout(1000)); } };
-  const { server, baseUrl } = await startServer({ memberTier: 'associate', reviewProvider: counting });
+
+  const associate = await startServer({ memberTier: 'associate', reviewProvider: counting });
   try {
-    const response = await fetch(`${baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ consent: true, idempotencyKey: 'phase9:smoke:permission' }) });
+    const response = await fetch(`${associate.baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ consent: true, idempotencyKey: 'phase9:smoke:associate-allowed' }) });
+    assert.equal(response.status, 200);
+    assert.equal(calls, 1);
     const body = await safeJson(response);
-    assert.equal(response.status, 403); assert.equal(calls, 0); assert.equal(body.externalAiCalled, false); assert.deepEqual(body.providerCall, { attempted: false, completed: false, reused: false });
-  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+    assert.equal(body.externalAiCalled, true);
+    assert.deepEqual(body.providerCall, { attempted: true, completed: true, reused: false });
+  } finally { await new Promise<void>((resolve) => associate.server.close(() => resolve())); }
+
+  const pending = await startServer({ memberTier: 'pending', reviewProvider: counting });
+  try {
+    const response = await fetch(`${pending.baseUrl}/api/paper-journal/ai-review/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ consent: true, idempotencyKey: 'phase9:smoke:pending-denied' }) });
+    const body = await safeJson(response);
+    assert.equal(response.status, 403);
+    assert.equal(calls, 1);
+    assert.equal(body.externalAiCalled, false);
+    assert.deepEqual(body.providerCall, { attempted: false, completed: false, reused: false });
+  } finally { await new Promise<void>((resolve) => pending.server.close(() => resolve())); }
 });
 
 test('AI review generate rejects client-supplied identity and dataset', async () => {

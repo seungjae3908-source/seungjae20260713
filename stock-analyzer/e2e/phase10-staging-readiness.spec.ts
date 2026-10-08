@@ -143,6 +143,7 @@ const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const recentConfirmedRouteTransitions = new WeakMap<Page, RecentRouteTransitionObservation>();
 const verifierOwnedContextTeardowns = new WeakMap<Page, string>();
+const verifierOwnedTestTeardowns = new WeakMap<Page, string>();
 const activeCapabilityDenialObservations = new WeakMap<Page, CapabilityDenialObservation>();
 const activeResearchReloadObservations = new WeakMap<Page, ResearchReloadObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
@@ -401,6 +402,24 @@ function isExpectedVerifierContextTeardownCandleAbortIdentity(input: {
       && parsed.origin === input.origin
       && parsed.searchParams.size === 0
       && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isExpectedVerifierTestTeardownMarketSummaryAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  errorText: string | undefined;
+  origin: string;
+}) {
+  try {
+    const parsed = new URL(input.rawUrl);
+    return input.method === 'GET'
+      && input.errorText === 'net::ERR_ABORTED'
+      && parsed.origin === input.origin
+      && parsed.pathname === '/api/market/summary'
+      && parsed.searchParams.size === 0;
   } catch {
     return false;
   }
@@ -714,6 +733,19 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       diagnostics.expected_route_transition_aborts.push({
         ...diagnostic,
         detail: `verifier-owned context teardown: ${diagnostic.detail}`,
+      });
+      return;
+    }
+    const testTeardownOrigin = verifierOwnedTestTeardowns.get(page);
+    if (testTeardownOrigin && isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({
+      method: request.method(),
+      rawUrl: request.url(),
+      errorText: request.failure()?.errorText,
+      origin: testTeardownOrigin,
+    })) {
+      diagnostics.expected_route_transition_aborts.push({
+        ...diagnostic,
+        detail: `verifier-owned test teardown: ${diagnostic.detail}`,
       });
       return;
     }
@@ -1655,11 +1687,10 @@ async function runAuthenticatedAiChartCertification(
       if (verifierOwnedTeardownSafe) {
         verifierOwnedContextTeardowns.set(page, new URL(page.url()).origin);
       }
-      try {
-        await context.close();
-      } finally {
-        verifierOwnedContextTeardowns.delete(page);
-      }
+      await context.close();
+      // Chromium may deliver requestfailed after context.close() resolves. Keep
+      // the page-scoped teardown proof available for that late event; WeakMap
+      // ownership releases it automatically with the closed Page object.
     }
   }
 
@@ -2041,6 +2072,20 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   })).toBe(false);
 });
 
+test('verifier-owned final market summary abort classifier is exact and fail-closed', () => {
+  const input = {
+    method: 'GET',
+    rawUrl: 'https://staging.example/api/market/summary',
+    errorText: 'net::ERR_ABORTED',
+    origin: 'https://staging.example',
+  };
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity(input)).toBe(true);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, method: 'POST' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, rawUrl: 'https://staging.example/api/market/movers' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, rawUrl: 'https://other.example/api/market/summary' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, errorText: 'net::ERR_CONNECTION_RESET' })).toBe(false);
+});
+
 test.describe('real staging release readiness', () => {
   test.describe.configure({ mode: 'serial' });
   test.skip(!stagingMode, 'Requires isolated staging, exact SHA, and ephemeral staging-only accounts');
@@ -2319,7 +2364,7 @@ test.describe('real staging release readiness', () => {
     expect(response.status()).toBe(403);
   });
 
-  test('associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied', async ({ page }) => {
+  test('associate: stock, spot, scanner, paper/auto trading, portfolio, AI chart and safe AI review preview allowed; futures and privileged APIs denied', async ({ page }) => {
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
@@ -2328,6 +2373,7 @@ test.describe('real staging release readiness', () => {
     await expectHealthyRoute(page, '/paper-trading');
     await expectHealthyRoute(page, '/auto-trading');
     await expectHealthyRoute(page, '/portfolio');
+    await expectHealthyRoute(page, '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&timeframe=5m');
 
     await expectDeniedRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
     await expectScannerAfterFutures(page);
@@ -2337,7 +2383,16 @@ test.describe('real staging release readiness', () => {
       '/api/paper-journal/ai-review/preview',
       { method: 'POST', data: {} },
     );
-    expect(response.status()).toBe(403);
+    const previewDiagnostic = await collectSafeApiDiagnostic(response, {
+      testStep: 'associate-ai-preview',
+      requestPath: '/api/paper-journal/ai-review/preview',
+    });
+    diagnostics.api_diagnostics.push(previewDiagnostic);
+    expect(
+      response.ok(),
+      `safe associate AI preview diagnostic: ${JSON.stringify(previewDiagnostic)}`,
+    ).toBeTruthy();
+    expect(previewDiagnostic.externalAiCalled).toBe(false);
   });
 
   test('regular: futures, scanner, paper trading, and safe AI preview are available without real orders', async ({ page, browser }, testInfo) => {
@@ -2370,6 +2425,7 @@ test.describe('real staging release readiness', () => {
     await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
+    verifierOwnedTestTeardowns.set(page, new URL(page.url()).origin);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {

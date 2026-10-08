@@ -209,6 +209,7 @@ function source(
   options: {
     missingRecentMove?: boolean;
     tier?: 'pending' | 'associate';
+    expired?: boolean;
     handoffMissing?: boolean;
     markPrice?: number;
     syncCalls?: { count: number };
@@ -228,6 +229,7 @@ function source(
           role: 'user',
           status: options.tier === 'pending' ? 'pending' : 'approved',
           is_active: true,
+          membership_expires_at: options.expired ? new Date(nowMs - 1_000).toISOString() : null,
         },
       }];
     },
@@ -395,7 +397,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
       return [{
         userId: USER,
         policy: futuresPolicy,
-        profile: { membership_level: 'associate', role: 'user', status: 'approved', is_active: true },
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
       }];
     },
     async resolveFx() {
@@ -429,6 +431,20 @@ test('background worker is default OFF without explicit activation flag', () => 
     if (previous == null) delete process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED;
     else process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = previous;
   }
+});
+
+test('expired associate is excluded from automatic trading before any plan or order work', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const worker = new MemberAutoTradingBackgroundWorker(source(repository, nowMs, { expired: true }));
+
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.filledOrders, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+  assert.equal((await repository.listOrders(USER)).length, 0);
 });
 
 test('associate automatic policy creates exactly one Paper FILLED order through canonical services', async () => {
