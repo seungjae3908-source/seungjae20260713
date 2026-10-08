@@ -59,9 +59,11 @@ async function withFollowupEnv(run: () => Promise<void>) {
   const previousEnabled = process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED;
   const previousRoom = process.env.TELEGRAM_STOCK_CHAT_ID;
   const previousKrRoom = process.env.TELEGRAM_KR_STOCK_CHAT_ID;
+  const previousAppUrl = process.env.PUBLIC_APP_URL;
   process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED = 'true';
   process.env.TELEGRAM_STOCK_CHAT_ID = 'legacy-stock-room-test';
   process.env.TELEGRAM_KR_STOCK_CHAT_ID = 'kr-stock-room-test';
+  process.env.PUBLIC_APP_URL = 'https://ci.example.test';
   clearTelegramSignalFollowupState();
   try {
     await run();
@@ -72,6 +74,8 @@ async function withFollowupEnv(run: () => Promise<void>) {
     else process.env.TELEGRAM_STOCK_CHAT_ID = previousRoom;
     if (previousKrRoom == null) delete process.env.TELEGRAM_KR_STOCK_CHAT_ID;
     else process.env.TELEGRAM_KR_STOCK_CHAT_ID = previousKrRoom;
+    if (previousAppUrl == null) delete process.env.PUBLIC_APP_URL;
+    else process.env.PUBLIC_APP_URL = previousAppUrl;
     clearTelegramSignalFollowupState();
   }
 }
@@ -167,6 +171,78 @@ test('public signal lifecycle edits the original Telegram message instead of cre
     expect(stored.telegramMessageKind).toBe('TEXT');
     expect(stored.baseMessageText).toContain('진입가능');
     expect(stored.reachedTargets).toEqual([0]);
+  });
+});
+
+test('terminal and filled transitions edit away stale order buttons even without price moves', async () => {
+  await withFollowupEnv(async () => {
+    for (const signalState of ['APPROVED', 'EXECUTING', 'PARTIALLY_FILLED', 'FILLED', 'MANAGING', 'CLOSED', 'CANCELLED', 'REJECTED', 'INVALIDATED', 'EXPIRED'] as const) {
+      const signalId = 'terminal-' + signalState;
+      const repository = new InMemoryTelegramSignalFollowupRepository();
+      await markTelegramSignalAnnounced(announcedAlert(signalId), ANNOUNCED_AT, repository, {
+        messageId: 123,
+        messageKind: 'TEXT',
+        renderedText: '🟢 신호: 매수 · 5m\n🛒 주문하기를 누르면 앱에서 재검증합니다.',
+      });
+      clearTelegramSignalFollowupState();
+      const keyboards: string[] = [];
+      await deliverScannerTelegramFollowups(
+        [followupCard(signalId, { price: 101, signalState, targets: [150] })],
+        async () => { throw new Error('must edit existing Telegram message'); },
+        ANNOUNCED_AT + 1_000,
+        repository,
+        async (input) => {
+          keyboards.push(JSON.stringify(input.buttons));
+          expect(input.text).toContain('현재 상태');
+          return { ok: true, attempts: 1 };
+        },
+      );
+      expect(keyboards).toHaveLength(1);
+      expect(keyboards[0]).toContain('/ai-chart');
+      expect(keyboards[0]).not.toContain('/telegram-order');
+      const [stored] = await repository.list([signalId]);
+      expect(stored.lastState).toBe(signalState);
+    }
+  });
+});
+
+test('rearmed valid entry can retain review link but immediately loses it after price target', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-rearm-button-safety';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(announcedAlert(signalId), ANNOUNCED_AT, repository, {
+      messageId: 124, messageKind: 'TEXT', renderedText: '🟢 신호: 매수 · 5m',
+    });
+    const buttons: string[] = [];
+    const editor = async (input: { buttons?: unknown }) => {
+      buttons.push(JSON.stringify(input.buttons));
+      return { ok: true as const, attempts: 1 };
+    };
+    const arm = followupCard(signalId, { price: 101, signalState: 'ARMED', targets: [120] });
+    arm.dataState = 'complete';
+    arm.strongSignalEligible = true;
+    arm.expiresAt = EXPIRES_AT;
+    await deliverScannerTelegramFollowups([arm], async () => {
+      throw new Error('must edit existing Telegram message');
+    }, ANNOUNCED_AT + 1_000, repository, editor as typeof import('../../api-server/src/services/telegram-notification.service').editTelegramMessage);
+    const rearm = followupCard(signalId, { price: 101, signalState: 'ENTRY_ZONE', targets: [120] });
+    rearm.dataState = 'complete';
+    rearm.strongSignalEligible = true;
+    rearm.expiresAt = EXPIRES_AT;
+    await deliverScannerTelegramFollowups([rearm], async () => {
+      throw new Error('must edit existing Telegram message');
+    }, ANNOUNCED_AT + 2_000, repository, editor as typeof import('../../api-server/src/services/telegram-notification.service').editTelegramMessage);
+    const target = followupCard(signalId, { price: 121, signalState: 'ENTRY_ZONE', targets: [120] });
+    target.dataState = 'complete';
+    target.strongSignalEligible = true;
+    target.expiresAt = EXPIRES_AT;
+    await deliverScannerTelegramFollowups([target], async () => {
+      throw new Error('must edit existing Telegram message');
+    }, ANNOUNCED_AT + 3_000, repository, editor as typeof import('../../api-server/src/services/telegram-notification.service').editTelegramMessage);
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0]).not.toContain('/telegram-order');
+    expect(buttons[1]).toContain('/telegram-order');
+    expect(buttons[2]).not.toContain('/telegram-order');
   });
 });
 

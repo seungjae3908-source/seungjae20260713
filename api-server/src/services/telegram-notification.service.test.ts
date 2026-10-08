@@ -205,6 +205,25 @@ test('tracked Telegram delivery captures message id and lifecycle updates edit t
   assert.equal(endpoints.length, 2);
 });
 
+test('editing a Telegram signal explicitly clears a stale order keyboard', async () => {
+  setFakeConfig();
+  const calls: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return okResponse();
+  };
+  const result = await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77,
+    messageKind: 'TEXT',
+    text: '기존 신호 무효',
+    buttons: [],
+  });
+  assert.deepEqual(result, { ok: true, attempts: 1 });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].reply_markup, { inline_keyboard: [] });
+});
+
 test('suppresses exact duplicates and applies per-subject cooldown', async () => {
   setFakeConfig();
   let calls = 0;
