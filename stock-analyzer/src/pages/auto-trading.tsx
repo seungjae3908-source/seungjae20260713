@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { AlertTriangle, BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -59,16 +59,38 @@ function tradingRouteState(): { market: TradingMarket; section: TradingSection }
   };
 }
 
-function StatusItem({ label, value }: { label: string; value: string }) {
+function StatusItem({
+  label,
+  value,
+  tone = 'ok',
+}: {
+  label: string;
+  value: string;
+  tone?: 'ok' | 'warn' | 'neutral';
+}) {
+  const Icon = tone === 'warn' ? AlertTriangle : CheckCircle2;
+  const iconClass = tone === 'ok'
+    ? 'text-emerald-500'
+    : tone === 'warn'
+      ? 'text-amber-500'
+      : 'text-muted-foreground';
   return (
     <div className="min-w-0 rounded-xl border border-card-border bg-background p-2.5 text-center">
       <p className="truncate text-xs font-medium text-muted-foreground">{label}</p>
       <div className="mt-1 flex min-w-0 items-center justify-center gap-1.5 text-xs font-semibold">
-        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${iconClass}`} />
         <span className="truncate">{value}</span>
       </div>
     </div>
   );
+}
+
+function runtimeHealthFresh(value: string | null | undefined, nowMs = Date.now()) {
+  if (!value) return false;
+  const tickMs = Date.parse(value);
+  return Number.isFinite(tickMs)
+    && tickMs <= nowMs + 5_000
+    && nowMs - tickMs <= 360_000;
 }
 
 function kstActivityTime(value: string | null | undefined) {
@@ -122,12 +144,17 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
   const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
+  const canPlaceOrders = testFixtureAccess || auth.can('canPlaceOrders');
+  const canManagePilot = testFixtureAccess || auth.can('canManageMembers');
   const [mode, setMode] = useState<TradingMode>(initialMode);
   const initialRouteState = useMemo(tradingRouteState, []);
   const [market, setMarket] = useState<TradingMarket>(initialRouteState.market);
   const [section, setSection] = useState<TradingSection>(initialRouteState.section);
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
+  const [runtimeReadError, setRuntimeReadError] = useState(false);
+  const [runtimeClockMs, setRuntimeClockMs] = useState(() => Date.now());
+  const runtimeRefreshInFlight = useRef(false);
   const [paperRevision, setPaperRevision] = useState(0);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
@@ -149,24 +176,43 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     if (fixture) {
       setRuntimeStatus(fixture);
       setRuntimeLoading(false);
+      setRuntimeReadError(false);
       return;
     }
     if (!canAuto) return;
     const controller = new AbortController();
-    setRuntimeLoading(true);
-    void authorizedFetch('/api/trade-automation/status', { signal: controller.signal })
-      .then(async (response) => {
+    const loadRuntimeStatus = async (initial: boolean) => {
+      if (runtimeRefreshInFlight.current) return;
+      runtimeRefreshInFlight.current = true;
+      if (initial) setRuntimeLoading(true);
+      try {
+        const response = await authorizedFetch('/api/trade-automation/status', { signal: controller.signal });
         const payload = await response.json() as TradeAutomationFixture & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? '자동매매 상태를 불러오지 못했습니다.');
-        if (!controller.signal.aborted) setRuntimeStatus(payload);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setRuntimeStatus(null);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setRuntimeLoading(false);
-      });
-    return () => controller.abort();
+        if (!controller.signal.aborted) {
+          setRuntimeStatus(payload);
+          setRuntimeReadError(false);
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setRuntimeReadError(true);
+          if (initial) setRuntimeStatus(null);
+        }
+      } finally {
+        runtimeRefreshInFlight.current = false;
+        if (initial && !controller.signal.aborted) setRuntimeLoading(false);
+      }
+    };
+    void loadRuntimeStatus(true);
+    const timer = window.setInterval(() => {
+      setRuntimeClockMs(Date.now());
+      void loadRuntimeStatus(false);
+    }, 15_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+      runtimeRefreshInFlight.current = false;
+    };
   }, [canAuto, fixture]);
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
@@ -179,9 +225,63 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
   const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
+  const liveReadiness = runtimeStatus?.liveAutomaticReadinessByMarket?.[market]
+    ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
+  const providerVerified = liveReadiness?.providerVerified === true;
+  const autoWorker = runtimeStatus?.autoTradingBackground;
+  const telegramWorker = runtimeStatus?.userTelegramDelivery;
+  const runtimeNowMs = runtimeClockMs;
+  const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
+  const telegramWorkerFresh = runtimeHealthFresh(telegramWorker?.lastTickAt, runtimeNowMs);
+  const automaticRuntimeReady = autoWorker?.enabled === true
+    && autoWorker.liveModeRequested === true
+    && autoWorker.tickOk === true
+    && autoWorkerFresh
+    && autoWorker.handoffReady === true
+    && autoWorker.newEntriesFailClosed === false
+    && autoWorker.liveEntryWarmupComplete === true
+    && autoWorker.liveEntriesArmed === true
+    && autoWorker.globalEmergencyStopActive === false;
+  const telegramProofMs = Date.parse(telegramWorker?.lastConfirmedDeliveryAt ?? '');
+  const telegramProofFresh = Number.isFinite(telegramProofMs)
+    && telegramProofMs <= runtimeNowMs + 5_000
+    && runtimeNowMs - telegramProofMs <= 24 * 60 * 60_000;
+  const telegramRuntimeReady = telegramWorker?.enabled === true
+    && telegramWorker.tickOk === true
+    && telegramWorker.deliveryConfirmed === true
+    && telegramProofFresh
+    && telegramWorkerFresh
+    && telegramWorker.errorCode == null;
+  const liveAuthorityLabel = runtimeLoading
+    ? '확인 중'
+    : runtimeReadError
+      ? '상태 조회 실패'
+      : !canPlaceOrders
+      ? '계정 주문 권한 없음'
+      : !liveReadiness?.automaticServerGateEnabled
+        ? '자동 Gate OFF'
+        : !liveReadiness?.readyForAutomaticOrderEvaluation
+          ? '자동 Gate 차단'
+          : autoWorker?.enabled !== true || autoWorker.liveModeRequested !== true
+            ? '자동 워커 OFF'
+            : autoWorker.tickOk !== true || autoWorker.handoffReady !== true || autoWorker.newEntriesFailClosed === true
+              ? '자동 워커 차단'
+              : !autoWorkerFresh
+                ? '자동 워커 상태 지연'
+                : autoWorker.liveEntriesArmed !== true
+                  ? '안전대기 · Arm 준비 중'
+                  : !telegramWorkerFresh
+                    ? 'Telegram 상태 지연'
+                    : !telegramRuntimeReady
+                      ? 'Telegram 전달 점검 필요'
+                      : automaticRuntimeReady
+                        ? '자동 실거래 작동 준비됨'
+                        : '자동 워커 점검 필요';
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
+  const newEntriesStopped = policy?.newEntriesStopped === true;
+  const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
 
   const changeMode = (next: TradingMode) => {
     if (next === 'auto' && !canAuto) return;
@@ -224,16 +324,32 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </div>
           <span className={[
             'rounded-full px-2.5 py-1 text-xs font-bold',
-            marketEnabled && !emergencyStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
+            'bg-muted text-muted-foreground',
           ].join(' ')}>
-            {marketEnabled && !emergencyStopped ? '시장 ON' : '시장 OFF'}
+            {marketEnabled && !effectiveEntryStopped ? '시장 설정 ON' : '시장 설정 OFF'}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatusItem label="연결" value={providerConnection?.configured ? '설정됨' : '미설정'} />
-          <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
-          <StatusItem label="비상정지" value={emergencyStopped ? '작동 중' : '정상'} />
-          <StatusItem label="실거래 권한" value="서버 Gate 필요" />
+          <StatusItem
+            label="연결"
+            value={providerVerified ? '검증됨' : providerConnection?.configured ? '설정만 됨' : '미설정'}
+            tone={providerVerified ? 'ok' : 'warn'}
+          />
+          <StatusItem
+            label="최근 주문"
+            value={lastOrder?.state ?? '없음'}
+            tone={lastOrder && ['REJECTED', 'RECOVERY_REQUIRED'].includes(lastOrder.state) ? 'warn' : lastOrder ? 'ok' : 'neutral'}
+          />
+          <StatusItem
+            label="비상정지"
+            value={emergencyStopped ? '작동 중' : newEntriesStopped ? '신규진입 차단' : '정상'}
+            tone={effectiveEntryStopped ? 'warn' : 'ok'}
+          />
+          <StatusItem
+            label="실거래 권한"
+            value={liveAuthorityLabel}
+            tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
+          />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
           <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
@@ -331,7 +447,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <span aria-hidden className="text-muted-foreground">⌄</span>
         </summary>
         <div className="border-t border-card-border p-3 sm:p-4">
-          <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
+          <TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot} />
         </div>
       </details>
       <details className="rounded-2xl border border-card-border bg-card">

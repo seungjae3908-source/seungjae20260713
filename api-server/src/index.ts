@@ -5,10 +5,16 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import apiRouter from './routes';
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
-import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram/user-broker-telegram.worker';
+import {
+  readUserTelegramDeliveryWorkerHealth,
+  startUserTelegramDeliveryWorker,
+} from './features/user-broker-telegram/user-broker-telegram.worker';
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
-import { startMemberAutoTradingBackgroundWorker } from './services/member-auto-trading-background-worker.service';
+import {
+  readMemberAutoTradingBackgroundRuntimeHealth,
+  startMemberAutoTradingBackgroundWorker,
+} from './services/member-auto-trading-background-worker.service';
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
 import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
@@ -52,6 +58,8 @@ function healthPayload(route: '/health' | '/api/health') {
     identityStatus: identity.identityStatus,
     bindHost,
     backgroundWorkersEnabled,
+    autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth(),
+    userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
     time: new Date().toISOString(),
   };
 }

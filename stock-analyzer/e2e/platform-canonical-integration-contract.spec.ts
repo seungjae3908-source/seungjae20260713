@@ -53,7 +53,14 @@ test('canonical integration remains fail-closed and does not add a second browse
   expect(crypto).toContain('enabled: false');
   expect(routeIndex).toContain('PRIVATE_EXCHANGE_API_DISABLED');
   expect(autoTrading).toContain('실거래 권한');
-  expect(autoTrading).toContain('서버 Gate 필요');
+  expect(autoTrading).toContain('readyForAutomaticOrderEvaluation');
+  expect(autoTrading).toContain('automaticServerGateEnabled');
+  expect(autoTrading).toContain('계정 주문 권한 없음');
+  expect(autoTrading).toContain('autoTradingBackground');
+  expect(autoTrading).toContain('userTelegramDelivery');
+  expect(autoTrading).toContain('liveEntriesArmed');
+  expect(autoTrading).toContain('자동 실거래 작동 준비됨');
+  expect(autoTrading).not.toContain('value="서버 Gate 필요"');
 });
 
 
@@ -80,6 +87,17 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
 
 test('operational observability exposes market activity, delivery health and pre-trade snapshot identity without adding authority', () => {
   expect(tradeAutomationRoute).toContain('marketActivityByMarket');
+  expect(tradeAutomationRoute).toContain("const mayInspectLiveRuntime = Boolean(req.member && hasCapability(req.member, 'canPlaceOrders'))");
+  expect(tradeAutomationRoute).toContain('autoTradingBackground: mayInspectLiveRuntime ? sanitizedAutomaticRuntimeHealth() : null');
+  expect(tradeAutomationRoute).toContain('userTelegramDelivery: mayInspectLiveRuntime ? sanitizedTelegramDeliveryRuntimeHealth() : null');
+  const sanitizedRuntimeHealth = tradeAutomationRoute.match(
+    /function sanitizedAutomaticRuntimeHealth\(\) \{[\s\S]*?\n\}/,
+  )?.[0] ?? '';
+  expect(sanitizedRuntimeHealth).toContain('liveEntriesArmed: health.liveEntriesArmed');
+  expect(sanitizedRuntimeHealth).not.toContain('liveTrackedPositions');
+  expect(sanitizedRuntimeHealth).not.toContain('liveOrderEligibleMembers');
+  expect(sanitizedRuntimeHealth).not.toContain('livePolicyReadyMembers');
+  expect(sanitizedRuntimeHealth).not.toContain('privateTradingRequests');
   expect(autoTrading).toContain('data-testid="auto-trading-market-activity"');
   expect(autoTrading).toContain('미결 주문');
   expect(autoTrading).toContain('오늘 주문');

@@ -6,6 +6,7 @@ const FIXTURE: TradeAutomationStatus = {
     mode: 'automatic',
     automaticEnabled: false,
     emergencyStopped: false,
+    newEntriesStopped: false,
     marketEnabled: {
       domestic_stock: true,
       us_stock: true,
@@ -23,6 +24,7 @@ const FIXTURE: TradeAutomationStatus = {
     maxDailyOrders: 10,
     maxConsecutiveLosses: 3,
     bitgetLeverage: 2,
+    pilotStage: 'approval-20',
   },
   connections: [
     { exchange: 'bitget', accountMode: 'paper', configured: true, lastVerifiedAt: null, lastErrorCode: null, credentialsExposed: false },
