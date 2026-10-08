@@ -61,6 +61,10 @@ if (staticMode) {
   for (const marker of [
     'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT',
     'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT',
+    'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT',
+    'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID',
+    'revoke all privileges on table public.profiles from public, anon, authenticated',
+    'grant select on table public.profiles to authenticated',
     'revoke all on function %s from public, anon, authenticated',
   ]) requireText(securityMigration, marker, marker);
 
@@ -80,6 +84,7 @@ for (const [key, value] of Object.entries({
   atomic_transaction: true,
   migration_applied: 2,
   security_definer_privileges_locked: true,
+  profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
   associate_journal_read_only: true,
