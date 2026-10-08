@@ -68,6 +68,8 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
   const verifier = read('api-server/scripts/verify-production-automatic-trading-gate.mjs');
+  const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
+  const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
   const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
   const deploy = read('ops/deploy-production.sh');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
@@ -81,7 +83,14 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(execution.includes('PAPER_BROKER_FILLED'));
   assert.ok(gate.includes('/activate-production-auto-trading '));
   assert.ok(gate.includes('all4'));
-  assert.ok(gate.includes('production-account-readonly-live-qa-v3'));
+  // The activation workflow delegates to the canonical postdeploy verifier.
+  // Keep the 4-provider QA v3 contract enforced in that actual verifier,
+  // rather than demanding obsolete duplicate checks inside the workflow.
+  assert.ok(gate.includes('node .github/scripts/verify-production-preactivation-evidence.cjs'));
+  assert.ok(postdeployEvidence.includes('production-account-readonly-live-qa-v3'));
+  assert.ok(postdeployEvidence.includes('reconciliationPassed !== true'));
+  assert.ok(preactivationEvidence.includes('assertAccountReceipt(account, context);'));
+  assert.ok(preactivationEvidence.includes('assertCredentialReceipt(credential, context);'));
   assert.ok(gate.includes('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED'));
   assert.ok(gate.includes('paper-forward-no-deploy-'));
   assert.ok(gate.includes('validateMemberAutoTradingPaperHandoff'));
