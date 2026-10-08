@@ -140,6 +140,12 @@ requireText(workflow, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'AUTO_GAT
 requireText(workflow, 'AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK', 'AUTO_GATE_ROLLBACK_RECEIPT_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLED_ALL4_MANUAL_LIVE_PRESERVED', 'AUTO_GATE_DISABLE_RECEIPT_MISSING');
 requireText(workflow, 'REAL_ORDER_SUBMITTED=false', 'AUTO_GATE_NO_ORDER_RECEIPT_MISSING');
+requireText(workflow, 'const preservedManualRuntimeEnv = (env) => ({', 'AUTO_GATE_RESTART_PRESERVED_MANUAL_ENV_MISSING');
+requireText(workflow, '...preservedManualRuntimeEnv(baselineEnv)', 'AUTO_GATE_RESTART_PRESERVED_MANUAL_ENV_NOT_APPLIED');
+requireText(workflow, 'restartAutomatic(true, before);', 'AUTO_GATE_ENABLE_RESTART_BASELINE_MISSING');
+requireText(workflow, 'restartAutomatic(false, before);', 'AUTO_GATE_ROLLBACK_RESTART_BASELINE_MISSING');
+requireText(workflow, 'const preservedDisableRuntimeEnv = (env) => ({', 'AUTO_GATE_DISABLE_PRESERVED_MANUAL_ENV_MISSING');
+requireText(workflow, '...preservedDisableRuntimeEnv(before)', 'AUTO_GATE_DISABLE_PRESERVED_MANUAL_ENV_NOT_APPLIED');
 
 requireText(workflow, "manual.spotAuthority !== 'SPOT_LIVE_LIMITED'", 'AUTO_GATE_SPOT_AUTHORITY_RECHECK_MISSING');
 requireText(workflow, "manual.futuresAuthority !== 'FUTURES_LIVE_LIMITED'", 'AUTO_GATE_FUTURES_AUTHORITY_RECHECK_MISSING');
@@ -410,6 +416,8 @@ console.log(JSON.stringify({
   telegramDeliveryHealthRequiredAfterRestart: true,
   activationWorkerHealthFreshnessRequired: true,
   manualGatesPreservePersonalTelegramDelivery: true,
+  automaticRestartPreservesManualRuntime: true,
+  automaticDisablePreservesManualRuntime: true,
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
   stickyStopDashboardTruth: true,
