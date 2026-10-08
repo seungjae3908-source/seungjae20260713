@@ -74,6 +74,8 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain('liveEntriesArmed');
   expect(page).toContain('안전대기 · Arm 준비 중');
   expect(page).toContain('자동 실거래 작동 준비됨');
+  expect(page).toContain('실자동매매 전략 미등록');
+  expect(page).toContain('const liveStrategyConfigured = Array.isArray(policy?.enabledStrategies)');
   expect(page).toContain('runtimeHealthFresh');
   expect(page).toContain('360_000');
   expect(page).toContain('자동 워커 상태 지연');
