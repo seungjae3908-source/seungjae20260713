@@ -99,26 +99,29 @@ export function evaluateTradingOptimization(
   }
 
   const computedExpectedValueR = expectedValueR(economicsPlan);
+  const historicalEconomicsBypassed = plan.accountMode === 'live' && formulaAiException?.allowed === true;
   if (liveOrAutomatic) {
-    if (!economics) {
-      add(blockCodes, 'ECONOMICS_REQUIRED');
-    } else {
-      const calibratedAt = Date.parse(economics.calibratedAt);
-      if (!Number.isFinite(calibratedAt) || now - calibratedAt > policy.maxEconomicsAgeHours * 60 * 60_000) {
-        add(blockCodes, 'ECONOMICS_STALE');
+    if (!historicalEconomicsBypassed) {
+      if (!economics) {
+        add(blockCodes, 'ECONOMICS_REQUIRED');
+      } else {
+        const calibratedAt = Date.parse(economics.calibratedAt);
+        if (!Number.isFinite(calibratedAt) || now - calibratedAt > policy.maxEconomicsAgeHours * 60 * 60_000) {
+          add(blockCodes, 'ECONOMICS_STALE');
+        }
+        if (economics.sampleSize < policy.minStrategySampleSize) add(blockCodes, 'STRATEGY_SAMPLE_TOO_SMALL');
+        if (computedExpectedValueR == null) add(blockCodes, 'EXPECTED_VALUE_UNAVAILABLE');
+        else if (computedExpectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
+        if (!positive(economics.profitFactor)) add(blockCodes, 'PROFIT_FACTOR_REQUIRED');
+        else if (economics.profitFactor < policy.minProfitFactor) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
+        if (!finite(economics.maxDrawdownPercent) || economics.maxDrawdownPercent < 0) {
+          add(blockCodes, 'STRATEGY_DRAWDOWN_REQUIRED');
+        } else if (economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
+          add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
+        }
+        if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
+        else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
       }
-      if (economics.sampleSize < policy.minStrategySampleSize) add(blockCodes, 'STRATEGY_SAMPLE_TOO_SMALL');
-      if (computedExpectedValueR == null) add(blockCodes, 'EXPECTED_VALUE_UNAVAILABLE');
-      else if (computedExpectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
-      if (!positive(economics.profitFactor)) add(blockCodes, 'PROFIT_FACTOR_REQUIRED');
-      else if (economics.profitFactor < policy.minProfitFactor) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
-      if (!finite(economics.maxDrawdownPercent) || economics.maxDrawdownPercent < 0) {
-        add(blockCodes, 'STRATEGY_DRAWDOWN_REQUIRED');
-      } else if (economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
-        add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
-      }
-      if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
-      else if (economics.marketRegime === 'unknown') add(blockCodes, 'MARKET_REGIME_UNKNOWN');
     }
     if (!finite(plan.estimatedSlippagePercent)) add(blockCodes, 'SLIPPAGE_ESTIMATE_REQUIRED');
     else if (plan.estimatedSlippagePercent > policy.maxEstimatedSlippagePercent) add(blockCodes, 'SLIPPAGE_TOO_HIGH');
