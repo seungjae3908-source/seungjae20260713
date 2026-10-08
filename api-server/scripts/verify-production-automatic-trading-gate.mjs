@@ -11,6 +11,7 @@ const tradeService = read('api-server/src/services/trade-automation.service.ts')
 const tradeIntegrationTest = read('api-server/src/services/trade-automation-integration.test.ts');
 const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
 const paperJournalRoute = read('api-server/src/routes/paper-journal.ts');
+const paperJournalRepo = read('api-server/src/services/paper-journal-supabase.repository.ts');
 const paperJournalSmoke = read('api-server/src/routes/paper-journal.smoke.test.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
 const handoffContract = read('api-server/src/services/member-auto-trading-ai-review-evidence.service.ts');
@@ -71,6 +72,12 @@ for (const [input, token, code] of [
   [paperJournalSmoke, 'manual synced Paper history prevents automatic Paper wallet refilling', 'AUTO_PAPER_MANUAL_HISTORY_REGRESSION_MISSING'],
 ]) requireText(input, token, code);
 
+requireText(paperWorker, 'automaticPaperLegacyEpochIsolationReadiness(', 'AUTO_GATE_LEGACY_EPOCH_AUDIT_MISSING');
+requireText(paperWorker, 'automaticPaperOrderWithinWalletEpoch(', 'AUTO_GATE_ISOLATED_ORDER_SCOPE_MISSING');
+requireText(paperWorker, 'BACKGROUND_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH', 'AUTO_GATE_LEGACY_RETRY_FAIL_CLOSED_MISSING');
+requireText(paperJournalRoute, "legacyEpochConfirmation ===", 'AUTO_GATE_EXPLICIT_EPOCH_CONFIRMATION_MISSING');
+requireText(paperJournalRepo, "AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS", 'AUTO_GATE_WALLET_INSERT_ONCE_REQUIRED');
+
 requireText(tradeService, 'TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED', 'AUTO_GATE_FILLED_QTY_PRICE_EVIDENCE_REQUIRED');
 requireText(tradeIntegrationTest, 'FILLED state transition rejects missing execution evidence', 'AUTO_GATE_FALSE_FILLED_REGRESSION_MISSING');
 
@@ -78,7 +85,7 @@ requireText(tradeIntegrationTest, 'FILLED state transition rejects missing execu
 // manual journals. Missing costs and close-time FX block new exposure.
 for (const [scope, proof, code] of [
   [paperWorker, 'automaticPaperRiskEvidenceFromCanonicalLedger(', 'AUTO_GATE_PAPER_CANONICAL_RISK_MISSING'],
-  [paperWorker, 'tradeAutomationJournalPayloadsFromSnapshot(userId, automatic, plans)', 'AUTO_GATE_PAPER_CANONICAL_ORDER_LEDGER_MISSING'],
+  [paperWorker, 'tradeAutomationJournalPayloadsFromSnapshot(userId, automatic, scopedPlans)', 'AUTO_GATE_PAPER_CANONICAL_ORDER_LEDGER_MISSING'],
   [paperWorker, 'paperFinancialRiskReady: paperAccountReady && risk.ready', 'AUTO_GATE_PAPER_RISK_READINESS_MISSING'],
   [paperWorker, 'BACKGROUND_PAPER_SETTLEMENT_FULL_COST_REQUIRED', 'AUTO_GATE_PAPER_FULL_COST_FAIL_CLOSED_MISSING'],
   [paperWorker, 'BACKGROUND_PAPER_CLOSE_TIME_FX_REQUIRED', 'AUTO_GATE_PAPER_FX_FAIL_CLOSED_MISSING'],
