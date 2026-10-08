@@ -405,6 +405,15 @@ function exactSignedDiff(p, expectedRemoved, expectedAdded) {
   && JSON.stringify(added)===JSON.stringify([...expectedAdded].sort());
 }
 function isPersonalTelegramMembershipOnlyChange(p) {
+ // Existing Paper/Telegram tests are structurally unchanged. Only make
+ // their synthetic approved-member profiles satisfy the new canonical proof.
+ const fixture="membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
+ if(p==='api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts') {
+  return exactSignedDiff(p,[],[fixture,fixture]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts') {
+  return exactSignedDiff(p,[],[fixture]);
+ }
  if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts') {
   return exactSignedDiff(p,
    [".select('status,membership_level,is_active,role')"],
