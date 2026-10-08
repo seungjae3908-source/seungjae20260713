@@ -56,6 +56,7 @@ import type { TelegramTransport, UserTelegramConnection } from '../features/user
 import {
   evaluateRulePackPilotEntryGuard,
   deriveRulePackPilotExecutionPolicy,
+  issueRulePackPilotDynamicCapReceipt,
   readRulePackPilotCapitalState,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -1459,13 +1460,32 @@ export class MemberAutoTradingBackgroundWorker {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
               fxCache.set(entry.identity.market, fx);
             }
-            const paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
+            let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
+            let paperEntryPolicy = member.policy;
+            if (member.policy.pilotStage === 'formula-ai-exception'
+              && paperInput.estimatedKrw > member.policy.maxOrderKrw) {
+              // Compounding beyond the stored base cap requires an immutable
+              // signal-specific review and signed worker-only provenance.
+              formulaAiReviewReasonsForLive(entry, nowMs);
+              formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
+                repository, member.userId, now,
+              );
+              validateFormulaAiPilotEntry(
+                member, entry, runtime, formulaAiPilotCapital, paperInput.estimatedKrw, nowMs,
+              );
+              paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
+                member.policy, formulaAiPilotCapital,
+              );
+              paperInput = issueRulePackPilotDynamicCapReceipt(
+                member.userId, paperInput, nowMs,
+              );
+            }
             const persistentStop = await repository.getGlobalEmergencyStop();
             const paperRun = await executeAutomaticPlan({
               repository,
               userId: member.userId,
               planInput: paperInput,
-              policy: member.policy,
+              policy: paperEntryPolicy,
               emergencyStopped: member.policy.emergencyStopped
                 || persistentStop
                 || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -1558,7 +1578,7 @@ export class MemberAutoTradingBackgroundWorker {
                 { fxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency, now },
               );
               result.privateTradingRequests += livePreview.providerRequests;
-              const liveInput: TradingPlanInput = {
+              let liveInput: TradingPlanInput = {
                 ...liveSeed,
                 marketSnapshot: {
                   ...livePreview.snapshot,
@@ -1576,6 +1596,12 @@ export class MemberAutoTradingBackgroundWorker {
                 estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
                 averageSpreadPercent: livePreview.snapshot.spreadPercent,
               };
+              if (member.policy.pilotStage === 'formula-ai-exception'
+                && liveInput.estimatedKrw > member.policy.maxOrderKrw) {
+                liveInput = issueRulePackPilotDynamicCapReceipt(
+                  member.userId, liveInput, nowMs,
+                );
+              }
               // Recheck after private preflight: a Telegram outage during the tick
               // must never allow a new automatic live order.
               // Global delivery proof cannot prove that THIS member's channel
