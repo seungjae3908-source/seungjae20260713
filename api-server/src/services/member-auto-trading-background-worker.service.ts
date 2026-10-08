@@ -208,6 +208,68 @@ export function automaticExecutionProjectionOrderIds(
   return [...selected].sort();
 }
 
+
+/**
+ * Explicit NEW Paper campaign proof. Historic simulated QA fills are not
+ * rewritten, settled or counted as current trading collateral.
+ */
+export function automaticPaperLegacyEpochIsolationReadiness(
+  orders: readonly TradingOrder[],
+  plans: readonly TradingPlan[],
+  paperRecords: readonly StoredPaperJournalRecord[],
+  nowMs: number,
+) {
+  const blockers: string[] = [];
+  const fail = (reason: string) => { if (!blockers.includes(reason)) blockers.push(reason); };
+  const byId = new Map(plans.map((plan) => [plan.id, plan]));
+  const legacyFilledWithoutQuantity = orders.filter((order) =>
+    order.state === 'FILLED' && !(Number(order.filledQuantity) > 0)).length;
+  if (!Number.isFinite(nowMs)) fail('AUTOMATIC_PAPER_EPOCH_CLOCK_INVALID');
+  if (!plans.length || !orders.length) fail('AUTOMATIC_PAPER_EPOCH_HISTORY_REQUIRED');
+  if (plans.length >= 200 || orders.length >= 500 || paperRecords.length >= 500) {
+    fail('AUTOMATIC_PAPER_EPOCH_HISTORY_TRUNCATED');
+  }
+  if (plans.length !== orders.length || new Set(plans.map((plan) => plan.id)).size !== plans.length) {
+    fail('AUTOMATIC_PAPER_EPOCH_ORDER_PLAN_CARDINALITY_INVALID');
+  }
+  const seenPlanOrders = new Set<string>();
+  for (const plan of plans) {
+    const created = Date.parse(plan.createdAt);
+    if (plan.accountMode !== 'paper' || plan.executionMode !== 'automatic'
+      || plan.reduceOnly === true || !Number.isFinite(created)
+      || created > nowMs - 60_000) fail('AUTOMATIC_PAPER_EPOCH_NON_LEGACY_PLAN');
+  }
+  for (const order of orders) {
+    const plan = byId.get(order.planId);
+    const created = Date.parse(order.createdAt);
+    if (!plan || order.userId !== plan.userId || order.state !== 'FILLED'
+      || !Number.isFinite(created) || created > nowMs - 60_000) {
+      fail('AUTOMATIC_PAPER_EPOCH_UNRESOLVED_ORDER');
+    }
+    if (seenPlanOrders.has(order.planId)) fail('AUTOMATIC_PAPER_EPOCH_DUPLICATE_PLAN_ORDER');
+    seenPlanOrders.add(order.planId);
+  }
+  for (const row of paperRecords) {
+    const value = record(row.payload);
+    const created = Date.parse(row.createdAt);
+    if (row.kind !== 'journal' || row.deletedAt !== null
+      || value?.source !== 'APP_PAPER' || value?.status !== 'FILLED'
+      || !Number.isFinite(created) || created > nowMs - 60_000) {
+      fail('AUTOMATIC_PAPER_EPOCH_NON_LEGACY_JOURNAL');
+    }
+  }
+  return {
+    safeToIsolate: blockers.length === 0,
+    legacyPlanCount: plans.length,
+    legacyOrderCount: orders.length,
+    legacyJournalCount: paperRecords.length,
+    legacyFilledWithoutQuantity,
+    historicalPositionsClosed: false as const,
+    realOrderSubmitted: false as const,
+    blockers,
+  };
+}
+
 export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
 export const AUTOMATIC_PAPER_INITIAL_KRW = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
 const executionProjectionTransport: TelegramTransport = {
@@ -708,6 +770,7 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
   plans: readonly TradingPlan[],
   nowMs: number,
   equityKrw: number,
+  paperWalletOpenedAtMs: number | null = null,
 ): Readonly<{
   ready: boolean;
   blockers: readonly string[];
@@ -718,8 +781,23 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
 }> {
   const blockers: string[] = [];
   const add = (code: string) => { if (!blockers.includes(code)) blockers.push(code); };
-  const plansById = new Map(plans.map((plan) => [plan.id, plan]));
-  const automatic = orders.filter((order) => {
+  const allPlansById = new Map(plans.map((plan) => [plan.id, plan]));
+  // Only a server-created wallet epoch can separate immutable historical QA
+  // trades from the current campaign's Paper cash and cost ledger.
+  const epochValid = paperWalletOpenedAtMs !== null
+    && Number.isFinite(paperWalletOpenedAtMs)
+    && paperWalletOpenedAtMs >= 0 && paperWalletOpenedAtMs <= nowMs + 5_000;
+  const scopedPlans = epochValid ? plans.filter((plan) =>
+    plan.accountMode !== 'paper'
+    || (Number.isFinite(Date.parse(plan.createdAt))
+      && Date.parse(plan.createdAt) >= paperWalletOpenedAtMs!)) : plans;
+  const scopedOrders = epochValid ? orders.filter((order) => {
+    const plan = allPlansById.get(order.planId);
+    if (plan?.accountMode !== 'paper') return true;
+    return automaticPaperOrderWithinWalletEpoch(plan, order, paperWalletOpenedAtMs, nowMs);
+  }) : orders;
+  const plansById = new Map(scopedPlans.map((plan) => [plan.id, plan]));
+  const automatic = scopedOrders.filter((order) => {
     const plan = plansById.get(order.planId);
     return plan?.accountMode === 'paper' && plan.executionMode === 'automatic';
   });
@@ -734,12 +812,19 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
   if (orders.length >= 500 || plans.length >= 200) {
     add('BACKGROUND_PAPER_CANONICAL_HISTORY_TRUNCATED');
   }
-  if (orders.some((order) => !plansById.has(order.planId)
+  if (epochValid && orders.some((order) => {
+    const plan = allPlansById.get(order.planId);
+    return plan?.accountMode === 'paper'
+      && !automaticPaperOrderWithinWalletEpoch(plan, order, paperWalletOpenedAtMs, nowMs)
+      && Number.isFinite(Date.parse(order.createdAt))
+      && Date.parse(order.createdAt) >= paperWalletOpenedAtMs!;
+  })) add('BACKGROUND_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH');
+  if (scopedOrders.some((order) => !plansById.has(order.planId)
       && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
         || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0))) {
     add('BACKGROUND_PAPER_ORDER_PLAN_ORPHAN');
   }
-  const bootstrap = automaticPaperWalletBootstrapReadiness(orders, plans);
+  const bootstrap = automaticPaperWalletBootstrapReadiness(scopedOrders, scopedPlans);
   if (bootstrap.missingFilledQuantityEvidence > 0) {
     add('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED');
   }
@@ -756,7 +841,7 @@ export function automaticPaperRiskEvidenceFromCanonicalLedger(
     }
   }
   if (blockers.length) return failed();
-  const payloads = tradeAutomationJournalPayloadsFromSnapshot(userId, automatic, plans);
+  const payloads = tradeAutomationJournalPayloadsFromSnapshot(userId, automatic, scopedPlans);
   const journal = buildUnifiedTradeJournal(
     payloads, { source: 'APP_PAPER', range: 'ALL' }, new Date(nowMs),
   );
@@ -841,7 +926,7 @@ async function memberRuntimeState(
   let risk: ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>;
   try {
     risk = automaticPaperRiskEvidenceFromCanonicalLedger(
-      userId, orders, plans, nowMs, equity,
+      userId, orders, plans, nowMs, equity, paperWalletOpenedAtMs,
     );
   } catch {
     risk = {

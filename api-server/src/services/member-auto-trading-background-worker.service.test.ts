@@ -28,6 +28,7 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
+  automaticPaperLegacyEpochIsolationReadiness,
   automaticExecutionProjectionOrderIds,
   automaticPaperOrderWithinWalletEpoch,
   automaticPaperWalletServerEpochMs,
@@ -2489,4 +2490,56 @@ test('legacy Paper fill cannot trigger a new wallet automatic exit even when his
   assert.equal(result.paperExitOrders, 0);
   assert.equal(result.privateTradingRequests, 0);
   assert.equal(result.liveOrders, 0);
+});
+
+test('legacy Paper isolation is explicit, immutable, Paper-only and audit-preserving', () => {
+  const now = Date.parse('2026-10-09T09:00:00.000Z');
+  const old = new Date(now - 2 * 60 * 60_000).toISOString();
+  const plan = { id: 'old', userId: USER, accountMode: 'paper',
+    executionMode: 'automatic', reduceOnly: false, createdAt: old } as TradingPlan;
+  const order = { id: 'old-fill', userId: USER, planId: plan.id, state: 'FILLED',
+    filledQuantity: 0, feeAmount: null, createdAt: old } as import('./trade-automation.types').TradingOrder;
+  const journal = { kind: 'journal' as const, id: 'old-fill', version: 1,
+    createdAt: old, updatedAt: old, serverUpdatedAt: old, deletedAt: null,
+    payload: { source: 'APP_PAPER', status: 'FILLED', positionEffect: 'OPEN' } };
+  const result = automaticPaperLegacyEpochIsolationReadiness([order], [plan], [journal], now);
+  assert.equal(result.safeToIsolate, true);
+  assert.equal(result.legacyFilledWithoutQuantity, 1);
+  assert.equal(result.historicalPositionsClosed, false);
+  assert.equal(result.realOrderSubmitted, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([order], [{
+    ...plan, accountMode: 'live',
+  }], [journal], now).safeToIsolate, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([{
+    ...order, state: 'RECOVERY_REQUIRED',
+  }], [plan], [journal], now).safeToIsolate, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([order], [plan], [{
+    ...journal, payload: { ...journal.payload, status: 'OPEN' },
+  }], now).safeToIsolate, false);
+});
+
+test('new wallet calculates only scoped Paper risk, still blocking new invalid fills', () => {
+  const now = Date.parse('2026-10-09T09:00:00.000Z');
+  const old = new Date(now - 2 * 60 * 60_000).toISOString();
+  const epoch = now - 60_000;
+  const oldPlan = { id: 'old', userId: USER, accountMode: 'paper',
+    executionMode: 'automatic', exchange: 'upbit', createdAt: old } as TradingPlan;
+  const oldOrder = { id: 'bad', userId: USER, planId: oldPlan.id, state: 'FILLED',
+    filledQuantity: 0, feeAmount: null, createdAt: old } as import('./trade-automation.types').TradingOrder;
+  assert.equal(automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder], [oldPlan], now, 500_000,
+  ).ready, false);
+  const isolated = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder], [oldPlan], now, 500_000, epoch,
+  );
+  assert.equal(isolated.ready, true);
+  assert.equal(isolated.closedTrades, 0);
+  const newPlan = { ...oldPlan, id: 'new', createdAt: new Date(epoch + 1_000).toISOString() };
+  const newOrder = { ...oldOrder, id: 'new-bad', planId: newPlan.id,
+    createdAt: new Date(epoch + 2_000).toISOString() };
+  const blocked = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder, newOrder], [oldPlan, newPlan], now, 500_000, epoch,
+  );
+  assert.equal(blocked.ready, false);
+  assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
 });
