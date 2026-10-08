@@ -240,20 +240,20 @@ begin
   ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
 
   if exists (
-    select 1 from information_schema.role_table_grants
+    select 1 from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee in ('PUBLIC','anon')
   ) then raise exception 'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT'; end if;
 
   if exists (
-    select 1 from information_schema.role_table_grants
+    select 1 from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee = 'authenticated'
       and privilege_type <> 'SELECT'
   ) or not exists (
-    select 1 from information_schema.role_table_grants
+    select 1 from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee = 'authenticated'
