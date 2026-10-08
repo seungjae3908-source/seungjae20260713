@@ -85,6 +85,7 @@ export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
   memberBatchCycleCompleted?(): boolean;
+  revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
   resolveFx(
@@ -1064,6 +1065,7 @@ export class MemberAutoTradingBackgroundWorker {
   private liveCycleOrderEligibleSeen = false;
   private liveCyclePolicyReadySeen = false;
   private liveCycleAllFourPolicyReadySeen = false;
+  private liveCycleAllFourWitnessUserId: string | null = null;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
 
@@ -1171,6 +1173,7 @@ export class MemberAutoTradingBackgroundWorker {
           && !persistentGlobalStop
           && !environmentGlobalStop) {
           result.liveAllFourPolicyReadyMembers += 1;
+          this.liveCycleAllFourWitnessUserId ??= member.userId;
         }
 
         const refreshRuntime = async () => {
@@ -1430,6 +1433,20 @@ export class MemberAutoTradingBackgroundWorker {
         this.liveCycleOrderEligibleSeen ||= result.liveOrderEligibleMembers > 0;
         this.liveCyclePolicyReadySeen ||= result.livePolicyReadyMembers > 0;
         this.liveCycleAllFourPolicyReadySeen ||= result.liveAllFourPolicyReadyMembers > 0;
+        if (cycleComplete
+          && this.liveCycleAllFourPolicyReadySeen
+          && this.liveCycleAllFourWitnessUserId
+          && this.source.revalidateLiveAllFourReadiness) {
+          const witnessStillReady = await this.source.revalidateLiveAllFourReadiness(
+            this.liveCycleAllFourWitnessUserId,
+          );
+          if (!witnessStillReady) {
+            this.liveCycleOrderEligibleSeen = false;
+            this.liveCyclePolicyReadySeen = false;
+            this.liveCycleAllFourPolicyReadySeen = false;
+      this.liveCycleAllFourWitnessUserId = null;
+          }
+        }
         result.liveReadinessCycleComplete = cycleComplete;
         result.liveCycleOrderEligible = this.liveCycleOrderEligibleSeen;
         result.liveCyclePolicyReady = this.liveCyclePolicyReadySeen;
@@ -1445,6 +1462,7 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
+      this.liveCycleAllFourWitnessUserId = null;
         } else if (cycleComplete) {
           this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
             && this.liveCyclePolicyReadySeen;
@@ -1452,12 +1470,14 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
+      this.liveCycleAllFourWitnessUserId = null;
         }
       } else {
         this.liveEntryWarmupComplete = false;
         this.liveCycleOrderEligibleSeen = false;
         this.liveCyclePolicyReadySeen = false;
         this.liveCycleAllFourPolicyReadySeen = false;
+      this.liveCycleAllFourWitnessUserId = null;
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       return result;
@@ -1466,6 +1486,7 @@ export class MemberAutoTradingBackgroundWorker {
       this.liveCycleOrderEligibleSeen = false;
       this.liveCyclePolicyReadySeen = false;
       this.liveCycleAllFourPolicyReadySeen = false;
+      this.liveCycleAllFourWitnessUserId = null;
       throw error;
     } finally {
       this.running = false;
@@ -1533,6 +1554,33 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   memberBatchCycleCompleted() {
     return this.lastMemberBatchCompletedCycle;
+  }
+
+  async revalidateLiveAllFourReadiness(userId: string) {
+    const { data: policyRows, error: policyError } = await this.client.from('trade_automation_profiles')
+      .select('user_id,payload')
+      .eq('user_id', userId)
+      .limit(1);
+    if (policyError) throw new Error('BACKGROUND_LIVE_READINESS_REVALIDATION_FAILED');
+    const policyRow = policyRows?.[0];
+    if (!policyRow?.payload) return false;
+
+    const { data: profileRows, error: profileError } = await this.client.from('profiles')
+      .select('id,role,status,membership_level,is_active,membership_expires_at')
+      .eq('id', userId)
+      .limit(1);
+    if (profileError) throw new Error('BACKGROUND_LIVE_READINESS_REVALIDATION_FAILED');
+    const profile = profileRows?.[0] as (MemberAccessProfile & { id: string }) | undefined;
+    if (!profile) return false;
+
+    const policy = normalizeTradingPolicy(policyRow.payload as Partial<TradingPolicy>);
+    const persistentGlobalStop = await createServiceRoleTradingRepository(userId).getGlobalEmergencyStop();
+    return hasCapability(profile, 'canAccessAutoTrading')
+      && hasCapability(profile, 'canPlaceOrders')
+      && hasCapability(profile, 'canAccessFutures')
+      && automaticPolicyHasAllFourMarkets(policy)
+      && !persistentGlobalStop
+      && process.env.TRADING_EMERGENCY_STOP !== 'true';
   }
 
   tradingRepositoryFor(userId: string) {
