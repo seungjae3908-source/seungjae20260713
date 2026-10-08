@@ -12,6 +12,8 @@ export type UserTelegramDeliveryWorkerHealth = Readonly<{
   enabled: boolean;
   lastTickAt: string | null;
   tickOk: boolean | null;
+  deliveryConfirmed: boolean;
+  lastConfirmedDeliveryAt: string | null;
   errorCode: string | null;
 }>;
 
@@ -19,6 +21,8 @@ let telegramDeliveryWorkerHealth: UserTelegramDeliveryWorkerHealth = Object.free
   enabled: false,
   lastTickAt: null,
   tickOk: null,
+  deliveryConfirmed: false,
+  lastConfirmedDeliveryAt: null,
   errorCode: null,
 });
 
@@ -32,7 +36,12 @@ export function userTelegramDeliveryWorkerHealthy(
   nowMs = Date.now(),
 ) {
   const lastTickMs = Date.parse(health.lastTickAt ?? '');
+  const lastConfirmedMs = Date.parse(health.lastConfirmedDeliveryAt ?? '');
   return health.enabled === true
+    && health.deliveryConfirmed === true
+    && Number.isFinite(lastConfirmedMs)
+    && lastConfirmedMs <= nowMs + 5_000
+    && nowMs - lastConfirmedMs <= 24 * 60 * 60_000
     && health.tickOk === true
     && health.errorCode == null
     && Number.isFinite(nowMs)
@@ -146,6 +155,8 @@ export function startUserTelegramDeliveryWorker(
       enabled: false,
       lastTickAt: null,
       tickOk: null,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
       errorCode: null,
     });
     console.log('[user-telegram-worker] disabled; explicit worker and activation gates are required');
@@ -156,6 +167,8 @@ export function startUserTelegramDeliveryWorker(
       enabled: true,
       lastTickAt: null,
       tickOk: false,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
       errorCode: 'TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED',
     });
     console.error('[user-telegram-worker] blocked: service-role Supabase configuration is required');
@@ -167,6 +180,8 @@ export function startUserTelegramDeliveryWorker(
       enabled: true,
       lastTickAt: null,
       tickOk: false,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
       errorCode: 'TELEGRAM_BOT_TOKEN_REQUIRED',
     });
     console.error('[user-telegram-worker] blocked: Telegram bot token is not configured');
@@ -186,26 +201,37 @@ export function startUserTelegramDeliveryWorker(
     enabled: true,
     lastTickAt: null,
     tickOk: null,
+    deliveryConfirmed: false,
+    lastConfirmedDeliveryAt: null,
     errorCode: null,
   });
-  let deliveryConfirmed = true;
+  // An empty queue at startup does not prove that any Telegram message arrived.
+  let deliveryConfirmed = false;
+  let lastConfirmedDeliveryAt: string | null = null;
   const tick = () => void worker.runOnce().then((result) => {
     // An overlap is not a completed health probe; never overwrite the in-flight result.
     if (result.overlapSkipped) return;
     deliveryConfirmed = telegramDeliveryTickConfirmed(deliveryConfirmed, result);
+    if (!deliveryConfirmed) lastConfirmedDeliveryAt = null;
+    else if (result.sent > 0) lastConfirmedDeliveryAt = new Date().toISOString();
     telegramDeliveryWorkerHealth = Object.freeze({
       enabled: true,
       lastTickAt: new Date().toISOString(),
       tickOk: deliveryConfirmed,
+      deliveryConfirmed,
+      lastConfirmedDeliveryAt,
       errorCode: deliveryConfirmed ? null : 'TELEGRAM_DELIVERY_UNCONFIRMED',
     });
   }).catch((error) => {
     deliveryConfirmed = false;
+    lastConfirmedDeliveryAt = null;
     const code = error instanceof Error ? error.message.split(':')[0] : 'TELEGRAM_WORKER_FAILED';
     telegramDeliveryWorkerHealth = Object.freeze({
       enabled: true,
       lastTickAt: new Date().toISOString(),
       tickOk: false,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
       errorCode: /^[A-Z0-9_]+$/u.test(code) ? code : 'TELEGRAM_WORKER_FAILED',
     });
     console.error('[user-telegram-worker] delivery tick failed', { code });
