@@ -10,7 +10,9 @@ import {
   type MemberHoldingStockHolder,
 } from './member-holdings-telegram-producer.service';
 import { deliverScannerTelegramAlerts } from './scanner-telegram-delivery.service';
-import type { MemberHoldingTelegramEvidence } from './member-holdings-telegram-alert.service';
+import { ownerHoldingsMirrorAllowed, type MemberHoldingTelegramEvidence } from './member-holdings-telegram-alert.service';
+import { TELEGRAM_POLICY_SAFETY } from './telegram-alert-policy.service';
+import type { PersonalTelegramAlertDispatchResult } from './personal-telegram-alert.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
 
 function stockAlert(): ScannerAlertCandidate {
@@ -120,6 +122,44 @@ test('holdings Telegram requires canonical, active, unexpired member proof', () 
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
     ...canonical, status: 'rejected', membership_level: 'admin', role: 'admin', is_active: true,
   }), false);
+});
+
+test('owner holdings mirror requires canonical member permission and actually queued immediate policy', () => {
+  const personal = {
+    status: 'POLICY',
+    reason: null,
+    policy: {
+      decision: {
+        action: 'IMMEDIATE', reason: 'ALLOWED', userId: 'user-1',
+        prioritySemantics: 'DELIVERY_URGENCY_ONLY', digestKey: null, digestWindowMs: null,
+        safety: TELEGRAM_POLICY_SAFETY,
+      },
+      transport: null, safety: TELEGRAM_POLICY_SAFETY,
+    },
+    deliveryQueued: true, deliveryId: 'queue-1',
+  } as PersonalTelegramAlertDispatchResult;
+  const profile = {
+    status: 'approved', membership_level: 'associate', is_active: true,
+    permissions_updated_at: '2026-08-01T00:00:00.000Z', membership_expires_at: null,
+  };
+  assert.equal(ownerHoldingsMirrorAllowed(personal, profile), true);
+  assert.equal(ownerHoldingsMirrorAllowed(personal, {
+    ...profile, membership_expires_at: '2025-01-01T00:00:00.000Z',
+  }), false);
+  assert.equal(ownerHoldingsMirrorAllowed(personal, {
+    ...profile, permissions_updated_at: null,
+  }), false);
+  assert.equal(ownerHoldingsMirrorAllowed(personal, {
+    ...profile, is_active: false,
+  }), false);
+  assert.equal(ownerHoldingsMirrorAllowed({ ...personal, deliveryQueued: false }, profile), false);
+  assert.equal(ownerHoldingsMirrorAllowed({
+    ...personal,
+    policy: { ...personal.policy, decision: { ...personal.policy.decision, action: 'BATCHED' } },
+  }, profile), false);
+  assert.equal(ownerHoldingsMirrorAllowed({
+    status: 'SKIPPED', reason: 'TELEGRAM_DISCONNECTED', policy: null,
+  }, profile), false);
 });
 
 test('canonical stock holder fanout uses one public quote and never fabricates AI evidence', async () => {
