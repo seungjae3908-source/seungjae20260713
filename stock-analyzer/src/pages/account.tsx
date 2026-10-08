@@ -107,7 +107,7 @@ export default function AccountPage() {
       </section>}
       {!auth.configured && <Card><p className="text-center font-bold text-destructive">계정 저장소 설정이 필요합니다.</p><p className="mt-2 text-center text-sm text-muted-foreground">계정 저장소 연결 정보를 관리자 설정에 등록해 주세요.</p></Card>}
       {auth.loading && <Card><p className="text-center text-sm font-medium">계정 상태를 확인하고 있습니다.</p></Card>}
-      {!auth.loading && auth.user ? <Card>
+      {!auth.loading && auth.user && !auth.bootstrapError ? <Card>
         <div className="text-center">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><ShieldCheck className="h-6 w-6" /></span>
           <p className="mt-3 text-xs font-medium text-muted-foreground">로그인 중</p>
@@ -124,7 +124,7 @@ export default function AccountPage() {
           <button type="button" disabled={busy || newPassword.length < 8 || newPasswordConfirm.length < 8} onClick={() => void changePassword()} className="min-h-11 w-full rounded-xl border border-primary px-3 py-2 text-sm font-semibold text-primary disabled:opacity-40">비밀번호 변경</button>
         </div>
         <button type="button" onClick={() => void logout()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
-      </Card> : !auth.loading && auth.configured && <Card>
+      </Card> : !auth.loading && auth.configured && !auth.user && <Card>
         <div className="flex rounded-2xl bg-secondary p-1"><button type="button" aria-label="로그인 탭" aria-pressed={!register} onClick={() => setRegister(false)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${!register ? 'bg-card shadow' : ''}`}>로그인</button><button type="button" aria-label="회원가입 탭" aria-pressed={register} onClick={() => setRegister(true)} className={`min-h-11 flex-1 rounded-xl px-3 text-sm font-semibold ${register ? 'bg-card shadow' : ''}`}>회원가입</button></div>
         <form onSubmit={submit} className="mt-5 space-y-4">
           <Field label="아이디"><input value={name} onChange={(e) => setName(e.target.value)} minLength={2} maxLength={20} required autoComplete="username" className="input" placeholder="한글·영문·숫자 2~20자" /></Field>
