@@ -244,7 +244,7 @@ function removeStaleTelegramOrderButtons(buttons: TelegramAlertInput['buttons'])
   return buttons.map((row) => row.filter((button) => {
     try {
       const parsed = new URL(button.url);
-      return parsed.pathname.replace(/\\/+$/u, '') !== '/telegram-order';
+      return parsed.pathname.replace(/\/+$/u, '') !== '/telegram-order';
     } catch {
       return false;
     }
@@ -280,7 +280,7 @@ export function addTelegramSignalFreshness(
     && !alert.orderSubmitted && !alert.exchangeRequestSent;
   return {
     ...input,
-    details: lines.join('\\n'),
+    details: lines.join('\n'),
     buttons: actionable ? input.buttons : removeStaleTelegramOrderButtons(input.buttons),
   };
 }
