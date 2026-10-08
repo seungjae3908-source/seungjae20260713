@@ -19,6 +19,7 @@ import {
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
   assertCanonicalLiveProviderPositions,
+  liveProviderSnapshotReadyForAutomaticWarmup,
   memberTelegramProofMatchesCurrentBinding,
   liveAllFourConnectionVerificationReady,
   type MemberAutoTradingBackgroundSource,
@@ -1721,6 +1722,54 @@ test('read-only Live pre-entry exposure blocks untracked securities but excludes
   }, []), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
 });
 
+
+test('live warmup rechecks current provider exposure, open orders, and Bitget one-way isolated policy', () => {
+  const now = new Date().toISOString();
+  const snapshot = (provider: CanonicalAccountSnapshot['provider'], overrides: Partial<CanonicalAccountSnapshot> = {}): CanonicalAccountSnapshot => ({
+    provider,
+    readOnly: true,
+    connected: true,
+    status: 'CONNECTED',
+    accounts: [],
+    balances: [],
+    positions: [],
+    openOrders: [],
+    checkedAt: now,
+    lastGoodAt: now,
+    stale: false,
+    errorCode: null,
+    orderRequests: 0,
+    cancelRequests: 0,
+    amendRequests: 0,
+    transferRequests: 0,
+    withdrawalRequests: 0,
+    credentialsReturned: false,
+    liveTradingEnabled: false,
+    autoTradingEnabled: false,
+    ...(provider === 'bitget' ? { positionMode: 'one_way_mode' as const } : {}),
+    ...overrides,
+  });
+  const bitgetPlan = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss'), []), true);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
+    openOrders: [{ id: 'manual-open', market: 'KR', symbol: '005930', side: 'buy', price: 1, quantity: 1, remainingQuantity: 1, status: 'OPEN' }],
+  }), []), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('toss', {
+    positions: [{ market: 'KR', symbol: '005930', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: null, liquidationPrice: null, marginMode: null, side: null }],
+  }), []), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positionMode: 'hedge_mode',
+  }), []), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 7, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
+  }), [bitgetPlan]), true);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 8, liquidationPrice: null, marginMode: 'isolated', side: 'long' }],
+  }), [bitgetPlan]), false);
+  assert.equal(liveProviderSnapshotReadyForAutomaticWarmup(snapshot('bitget', {
+    positions: [{ market: 'USDT', symbol: 'BTCUSDT', quantity: 1, availableQuantity: 1, averageEntryPrice: 1, currentPrice: 1, marketValue: 1, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: 3, liquidationPrice: null, marginMode: 'cross', side: 'long' }],
+  }), [bitgetPlan]), false);
+});
 
 test('member Telegram live admission requires a SENT receipt after this chat binding, never from a former chat', () => {
   const now = Date.parse('2026-10-08T05:30:00.000Z');
