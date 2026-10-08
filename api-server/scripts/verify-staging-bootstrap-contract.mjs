@@ -39,6 +39,7 @@ assert(runner.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'atom
 assert(manifest.includes('2026082704_member_watchlist_items.sql'), 'manifest must include authenticated member watchlist storage');
 assert(runner.includes('2026082704_member_watchlist_items.sql'), 'atomic runner must include authenticated member watchlist storage');
 assert(manifest.includes('2026100601_member_access_s_ai_hardening.sql'), 'manifest must include member S/AI hardening');
+assert(manifest.includes('2026100801_member_security_definer_lockdown.sql'), 'manifest must include member SECURITY DEFINER lockdown');
 assert(runner.includes('2026100601_member_access_s_ai_hardening.sql'), 'atomic runner must include member S/AI hardening');
 assert(runner.includes('2026100801_member_security_definer_lockdown.sql'), 'atomic runner must include member SECURITY DEFINER lockdown');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'member security lockdown must verify trigger-only direct EXECUTE removal');
