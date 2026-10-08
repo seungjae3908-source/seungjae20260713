@@ -315,8 +315,9 @@ requireText(autoTradingSettings, 'data-testid="global-trading-stop"', 'AUTO_SETT
 requireText(autoTradingSettings, '서버 전체 비상정지 · 관리자 해제 필요', 'AUTO_SETTINGS_GLOBAL_STOP_LABEL_MISSING');
 forbid(autoTradingSettings, /window\.setInterval\(\(\) => \{ void load\(\); \}, 15_000\)/u, 'AUTO_SETTINGS_DESTRUCTIVE_REFRESH_FORBIDDEN');
 requireText(tradeAutomationRoute, 'function sanitizedAutomaticRuntimeHealth()', 'AUTO_ROUTE_WORKER_HEALTH_SANITIZER_MISSING');
-requireText(tradeAutomationRoute, 'autoTradingBackground: sanitizedAutomaticRuntimeHealth()', 'AUTO_ROUTE_WORKER_HEALTH_STATUS_MISSING');
-requireText(tradeAutomationRoute, 'userTelegramDelivery: sanitizedTelegramDeliveryRuntimeHealth()', 'AUTO_ROUTE_TELEGRAM_HEALTH_STATUS_MISSING');
+requireText(tradeAutomationRoute, "const mayInspectLiveRuntime = Boolean(req.member && hasCapability(req.member, 'canPlaceOrders'))", 'AUTO_ROUTE_RUNTIME_HEALTH_CAPABILITY_GATE_MISSING');
+requireText(tradeAutomationRoute, 'autoTradingBackground: mayInspectLiveRuntime ? sanitizedAutomaticRuntimeHealth() : null', 'AUTO_ROUTE_WORKER_HEALTH_STATUS_MISSING');
+requireText(tradeAutomationRoute, 'userTelegramDelivery: mayInspectLiveRuntime ? sanitizedTelegramDeliveryRuntimeHealth() : null', 'AUTO_ROUTE_TELEGRAM_HEALTH_STATUS_MISSING');
 forbid(tradeAutomationRoute, /autoTradingBackground:\s*readMemberAutoTradingBackgroundRuntimeHealth\(\)/u, 'AUTO_ROUTE_RAW_GLOBAL_WORKER_HEALTH_FORBIDDEN');
 requireText(tradeAutomationRoute, 'enforceMemberTradingPolicy(candidate, current)', 'AUTO_ROUTE_MEMBER_POLICY_GUARD_MISSING');
 requireText(tradeAutomationRoute, 'MEMBER_TRADING_RESUME_REQUIRED', 'AUTO_ROUTE_MEMBER_STOP_BYPASS_BLOCK_MISSING');
@@ -441,6 +442,7 @@ console.log(JSON.stringify({
   truthfulRuntimeStatusTones: true,
   uiRuntimeHealthFreshnessRequired: true,
   memberStatusSanitizesGlobalWorkerCounters: true,
+  memberRuntimeHealthCapabilityGated: true,
   stickyStopDashboardTruth: true,
   marketScopedAutomaticReadiness: true,
   stickyMemberStopRequiresConfirmedResume: true,
