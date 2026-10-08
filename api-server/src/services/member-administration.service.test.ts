@@ -55,6 +55,12 @@ test('maps atomic last active admin protection to HTTP 409', () => {
   assert.equal(error.statusCode, 409);
 });
 
+test('maps expired active membership mutation to HTTP 400', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'P0001: MEMBER_EXPIRY_INVALID' });
+  assert.equal(error.code, 'MEMBER_EXPIRY_INVALID');
+  assert.equal(error.statusCode, 400);
+});
+
 test('maps atomic database authority denial to HTTP 403', () => {
   const error = classifyAtomicMemberChangeFailure({ message: 'MEMBER_ADMIN_REQUIRED' });
   assert.equal(error.code, 'MEMBER_ADMIN_REQUIRED');
@@ -182,6 +188,41 @@ test('pending state does not create approved timestamp or contradictory active s
   assert.equal(plan.changes.is_active, false);
   assert.equal(plan.changes.membership_expires_at, null);
   assert.equal(plan.changes.approved_at, null);
+});
+
+test('active associate cannot be assigned an already-expired membership date', () => {
+  assert.throws(
+    () => planMemberChange(
+      profile({ membership_level: 'associate', role: 'associate', status: 'approved', is_active: true }),
+      { membershipExpiresAt: '2026-08-01T00:00:00.000Z', reason: '잘못된 과거 만료일' },
+      ADMIN,
+      1,
+      NOW,
+    ),
+    (cause: unknown) => cause instanceof MemberAdministrationError
+      && cause.code === 'MEMBER_EXPIRY_INVALID'
+      && cause.statusCode === 400,
+  );
+});
+
+test('expired suspended member requires expiry extension or removal before reactivation', () => {
+  assert.throws(
+    () => planMemberChange(
+      profile({
+        membership_level: 'regular',
+        role: 'full',
+        status: 'suspended',
+        is_active: false,
+        membership_expires_at: '2026-08-01T00:00:00.000Z',
+      }),
+      { isActive: true, reason: '만료 회원 재활성화 시도' },
+      ADMIN,
+      1,
+      NOW,
+    ),
+    (cause: unknown) => cause instanceof MemberAdministrationError
+      && cause.code === 'MEMBER_EXPIRY_INVALID',
+  );
 });
 
 test('associate expiry changes preserve original approval provenance', () => {
