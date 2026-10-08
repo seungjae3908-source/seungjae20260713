@@ -2,9 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DEFAULT_TRADING_POLICY } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { InMemoryTradingRepository } from './trade-automation.repository';
+import { TradeAutomationService } from './trade-automation.service';
+import type { TradingPlanInput } from './trade-automation.types';
 import {
   deriveRulePackPilotCapitalFromTrades,
   deriveRulePackPilotExecutionPolicy,
+  issueRulePackPilotDynamicCapReceipt,
+  verifyRulePackPilotDynamicCapReceipt,
+  resolveRulePackPilotDynamicCapPolicy,
   verifiedRulePackKrwSettlement,
   rulePackPilotLedgerHistoryComplete,
   evaluateRulePackPilotEntryGuard,
@@ -320,4 +326,140 @@ test('loss exceeding remaining operating equity blocks further pilot allocation 
   assert.ok(result.blockers.includes('PILOT_CAPITAL_NEGATIVE_EQUITY_UNSUPPORTED'));
   assert.ok(decision(result, { estimatedKrw: 20_000 })
     .blockers.includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'));
+});
+function pilotReceiptInput(estimatedKrw = 525_000): TradingPlanInput {
+  return {
+    exchange: 'upbit', accountMode: 'live', strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+    signalId: 'receipt-signal', symbol: 'BTC', market: 'KRW', side: 'buy',
+    orderType: 'market', quantity: 0.005, quoteAmount: estimatedKrw,
+    estimatedKrw, stopPrice: 90_000, targetPrices: [120_000],
+    splitRatios: [100], reduceOnly: false, leverage: null, marginMode: null,
+    signalReasons: [
+      'CANONICAL_PAPER_HANDOFF', 'CANONICAL_LIVE_AUTO_HANDOFF',
+      'HANDOFF_ID:paper-auto-handoff:sha256:' + 'a'.repeat(64),
+      'STRATEGY_RULE_PACK:CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+      'AI_REVIEW_DECISION:PASS',
+    ],
+    marketSnapshot: { openPositionCount: 0 },
+  } as unknown as TradingPlanInput;
+}
+
+async function withPilotDynamicCapEnvironment<T>(run: () => Promise<T>) {
+  const variables = ['RULE_PACK_PILOT_DYNAMIC_CAP_ENABLED', 'RULE_PACK_PILOT_CAP_ATTESTATION_KEY'] as const;
+  const old = variables.map((name) => process.env[name]);
+  try {
+    process.env.RULE_PACK_PILOT_DYNAMIC_CAP_ENABLED = 'true';
+    process.env.RULE_PACK_PILOT_CAP_ATTESTATION_KEY = 'test-only-unpredictable-server-key-'.repeat(3);
+    return await run();
+  } finally {
+    variables.forEach((name, index) => {
+      if (old[index] == null) delete process.env[name];
+      else process.env[name] = old[index];
+    });
+  }
+}
+
+test('only a fresh server-HMAC bound to exact user, plan, and signal can authorize a 500k compound receipt', async () => {
+  await withPilotDynamicCapEnvironment(async () => {
+    const user = '11111111-1111-1111-1111-111111111111';
+    const plan = pilotReceiptInput();
+    const signed = issueRulePackPilotDynamicCapReceipt(user, plan, NOW);
+    assert.equal(plan.signalReasons.some(x => x.startsWith('PILOT_DYNAMIC_CAP_V1:')), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, signed, NOW), true);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, signed, NOW + 90_000), true);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, signed, NOW + 90_001), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, signed, NOW - 5_001), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt('22222222-2222-2222-2222-222222222222', signed, NOW), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, { ...signed, estimatedKrw: 600_000 }, NOW), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, { ...signed, symbol: 'ETH' }, NOW), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, { ...signed, side: 'sell' }, NOW), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, {
+      ...signed, signalReasons: [...signed.signalReasons, ...signed.signalReasons.filter(x => x.startsWith('PILOT_DYNAMIC_CAP_V1:'))],
+    }, NOW), false);
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, {
+      ...signed, signalReasons: signed.signalReasons.filter(x => !x.startsWith('HANDOFF_ID:')),
+    }, NOW), false);
+    process.env.RULE_PACK_PILOT_DYNAMIC_CAP_ENABLED = 'false';
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, signed, NOW), false);
+    process.env.RULE_PACK_PILOT_DYNAMIC_CAP_ENABLED = 'true';
+    delete process.env.RULE_PACK_PILOT_CAP_ATTESTATION_KEY;
+    assert.equal(verifyRulePackPilotDynamicCapReceipt(user, signed, NOW), false);
+    assert.throws(() => issueRulePackPilotDynamicCapReceipt(user, plan, NOW),
+      /BACKGROUND_PILOT_DYNAMIC_CAP_SIGNING_KEY_REQUIRED/);
+  });
+});
+
+test('dynamic policy recheck fails closed on unsigned, too-large or revoked auto plan', async () => {
+  await withPilotDynamicCapEnvironment(async () => {
+    const user = '11111111-1111-1111-1111-111111111111';
+    const repository = new InMemoryTradingRepository();
+    const policy = normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'automatic', automaticEnabled: true, emergencyStopped: false,
+      totalCapitalKrw: 500_000, maxOrderKrw: 500_000,
+      pilotStage: 'formula-ai-exception',
+    });
+    const makePlan = (input: TradingPlanInput) => ({
+      ...input,
+      id: 'pilot-signed-plan', userId: user, idempotencyKey: 'pilot-signed-key',
+      executionMode: 'automatic' as const,
+      state: 'APPROVAL_PENDING' as const,
+      version: 0, approvalExpiresAt: new Date(NOW + 120_000).toISOString(),
+      approvedAt: null, createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(),
+    });
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, makePlan(pilotReceiptInput()), policy, new Date(NOW)),
+      /BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED/,
+    );
+    const signed500 = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(500_000), NOW));
+    const rechecked = await resolveRulePackPilotDynamicCapPolicy(
+      repository, user, signed500, policy, new Date(NOW), 0,
+    );
+    assert.equal(rechecked.maxOrderKrw, 500_000);
+    const signed525 = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_000), NOW));
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed525, policy, new Date(NOW), 0),
+      /BACKGROUND_PILOT_ENTRY_LIMIT/,
+    );
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed500, {
+        ...policy, mode: 'approval', automaticEnabled: false,
+      }, new Date(NOW), 0),
+      /BACKGROUND_PILOT_DYNAMIC_CAP_POLICY_REVOKED/,
+    );
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed500, {
+        ...policy, totalCapitalKrw: 100_000, maxOrderKrw: 30_000,
+      }, new Date(NOW), 0),
+      /BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED/,
+    );
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed500, policy, new Date(NOW + 90_001), 0),
+      /BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED/,
+    );
+  });
+});
+
+test('manual /plans approval cannot forge the dedicated signed automatic policy origin', async () => {
+  await withPilotDynamicCapEnvironment(async () => {
+    const user = '11111111-1111-1111-1111-111111111111';
+    const repo = new InMemoryTradingRepository();
+    const policy = normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      totalCapitalKrw: 500_000, maxOrderKrw: 500_000, pilotStage: 'formula-ai-exception',
+    });
+    await repo.savePolicy(user, policy);
+    const current = pilotReceiptInput();
+    await repo.savePlan({
+      ...current, id: 'unsigned-over-cap', userId: user, idempotencyKey: 'unsigned-over-cap',
+      state: 'APPROVAL_PENDING', version: 0, executionMode: 'automatic',
+      approvedAt: null, approvalExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+    await assert.rejects(
+      new TradeAutomationService(repo).beginAutomaticPlan(user, 'unsigned-over-cap'),
+      /BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED/,
+    );
+    assert.equal((await repo.listOrders(user)).length, 0);
+  });
 });
