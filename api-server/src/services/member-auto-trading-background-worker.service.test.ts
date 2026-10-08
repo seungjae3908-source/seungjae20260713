@@ -836,6 +836,123 @@ test('execution projection failure is isolated from canonical trading state', as
   assert.equal(result.privateTradingRequests, 0);
 });
 
+test('Paper-only isolates a legacy history lineage conflict but requires fresh scoped fill projection', async () => {
+  const previous = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const projected = new Set<string>();
+  const scopedOrders: string[] = [];
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...source(repository, nowMs),
+    async syncExecutionEvents({ orderId }) {
+      if (!orderId) throw new Error('EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT');
+      const ownedOrder = await repository.getOrder(USER, orderId);
+      assert.equal(ownedOrder?.state, 'FILLED');
+      scopedOrders.push(orderId);
+      const inserted = !projected.has(orderId);
+      projected.add(orderId);
+      return { inserted: inserted ? 1 : 0, deliveryQueued: inserted ? 1 : 0, missingReferences: 0 };
+    },
+  });
+  try {
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.createdPlans, 1);
+    assert.equal(first.filledOrders, 1);
+    assert.equal(first.positionLifecycles, 1);
+    assert.equal(first.executionEventsInserted, 1);
+    assert.equal(first.notificationDeliveriesQueued, 1);
+    assert.equal(first.executionSyncFailures, 1); // Historic mismatch remains visible, never rewritten.
+    assert.equal(first.newEntriesFailClosed, true); // Never a Live-ready signal.
+    assert.equal(first.liveOrders, 0);
+    assert.equal(first.privateTradingRequests, 0);
+    assert.equal((await repository.listOrders(USER)).length, 1);
+    assert.equal(scopedOrders[0], (await repository.listOrders(USER))[0]?.id);
+
+    const replay = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(replay.createdPlans, 0);
+    assert.equal(replay.executionEventsInserted, 0);
+    assert.equal(replay.notificationDeliveriesQueued, 0);
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    if (previous == null) delete process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+    else process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = previous;
+  }
+});
+
+test('Paper-only does not quarantine unknown projection errors or conflicts on the exact fresh order', async () => {
+  const previous = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  const nowMs = Date.now();
+  try {
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    const strictRepository = new InMemoryTradingRepository();
+    await strictRepository.savePolicy(USER, policy());
+    const strict = new MemberAutoTradingBackgroundWorker({
+      ...source(strictRepository, nowMs),
+      async syncExecutionEvents() { throw new Error('EXECUTION_EVENT_PROJECTION_UNAVAILABLE'); },
+    });
+    const blocked = await withFetchMock(() => strict.runOnce(new Date(nowMs)));
+    assert.equal(blocked.createdPlans, 0);
+    assert.equal(blocked.executionSyncFailures, 1);
+    assert.equal((await strictRepository.listOrders(USER)).length, 0);
+
+    const scopedRepository = new InMemoryTradingRepository();
+    await scopedRepository.savePolicy(USER, policy());
+    const scoped = new MemberAutoTradingBackgroundWorker({
+      ...source(scopedRepository, nowMs),
+      async syncExecutionEvents({ orderId }) {
+        if (orderId) throw new Error('EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT');
+        return { inserted: 0, deliveryQueued: 0, missingReferences: 0 };
+      },
+    });
+    const result = await withFetchMock(() => scoped.runOnce(new Date(nowMs)));
+    assert.equal(result.filledOrders, 1); // Canonical simulated fill is immutable.
+    assert.equal(result.executionSyncFailures, 1);
+    assert.equal(result.notificationDeliveriesQueued, 0);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.privateTradingRequests, 0);
+  } finally {
+    if (previous == null) delete process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+    else process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = previous;
+  }
+});
+
+test('Paper-only scoped projection includes the exact newly created exit, not old user history', async () => {
+  const previous = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const projected: string[] = [];
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...source(repository, nowMs, { markPrice: 110_000 }),
+    async syncExecutionEvents({ orderId }) {
+      if (!orderId) throw new Error('EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT');
+      projected.push(orderId);
+      return { inserted: 1, deliveryQueued: 0, missingReferences: 0 };
+    },
+  });
+  try {
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'true';
+    const opened = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(opened.filledOrders, 1);
+    const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(second.privateTradingRequests, 0);
+    assert.equal(second.liveExitOrders, 0);
+    if (second.paperExitOrders > 0) {
+      const orders = await repository.listOrders(USER);
+      const exitOrder = orders.find((order) => order.id !== projected[0]);
+      assert.ok(exitOrder);
+      assert.equal(projected.includes(exitOrder.id), true);
+    }
+    assert.ok(projected.length >= 1);
+  } finally {
+    if (previous == null) delete process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+    else process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = previous;
+  }
+});
+
 test('missing <=60s reference move evidence blocks before plan creation', async () => {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
