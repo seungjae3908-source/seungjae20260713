@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
-import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
+import { DEFAULT_TRADING_POLICY, type TradingPlan, type TradingPolicy } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
@@ -17,6 +17,7 @@ import {
   startMemberAutoTradingBackgroundWorker,
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
+  assertCanonicalLiveProviderPositions,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -1598,4 +1599,26 @@ test('an old empty READY Paper handoff cannot certify current live warmup or aut
   assert.equal(result.createdPlans, 0);
   assert.equal(result.liveOrders, 0);
   assert.equal(result.failures, 1);
+});
+
+
+test('read-only Live pre-entry exposure blocks any unmanaged broker position, not only the candidate ticker', () => {
+  const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
+  const position = (symbol: string, quantity: number | null, side: string | null = 'long') =>
+    ({ symbol, quantity, side }) as NonNullable<Parameters<typeof assertCanonicalLiveProviderPositions>[0]>[number];
+  assert.doesNotThrow(() => assertCanonicalLiveProviderPositions(
+    [position('BTCUSDT', 1)], [tracked],
+  ));
+  assert.throws(() => assertCanonicalLiveProviderPositions(
+    [position('ETHUSDT', 1)], [tracked],
+  ), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+  assert.throws(() => assertCanonicalLiveProviderPositions(
+    [position('BTCUSDT', 1, 'short')], [tracked],
+  ), /BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH/);
+  assert.throws(() => assertCanonicalLiveProviderPositions(null, [tracked]),
+    /BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE/);
+  assert.throws(() => assertCanonicalLiveProviderPositions(
+    [position('BTCUSDT', null)], [tracked],
+  ), /BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE/);
+  assert.doesNotThrow(() => assertCanonicalLiveProviderPositions([], []));
 });
