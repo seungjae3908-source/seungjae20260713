@@ -1002,22 +1002,26 @@ export class TradeExecutionService {
     };
   }
 
-  private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
-    if (risk.plan.accountMode === 'live' && risk.plan.executionMode === 'automatic'
-      && !isRiskReducingExitPlan(risk.plan)) {
-      // Re-check authority after awaited provider preflight but before storing
-      // the submission intent. Never silently downgrade AUTO to manual.
-      const policy = await this.repository.getPolicy(order.userId);
-      if (policy.mode !== 'automatic' || !policy.automaticEnabled
-        || policy.emergencyStopped || policy.newEntriesStopped
-        || process.env.TRADING_EMERGENCY_STOP === 'true'
-        || await this.repository.getGlobalEmergencyStop()) {
-        throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
-      }
-      if (!await liveEntryArmPresent()) {
-        throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
-      }
+  private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
+    if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
+      || isRiskReducingExitPlan(plan)) return;
+    // A provider-side margin/leverage mutation is still a financial mutation,
+    // even if no order POST follows. Enforce this before EACH mutable call,
+    // and recheck after preflight at the actual order intent boundary.
+    const policy = await this.repository.getPolicy(userId);
+    if (policy.mode !== 'automatic' || !policy.automaticEnabled
+      || policy.emergencyStopped || policy.newEntriesStopped
+      || process.env.TRADING_EMERGENCY_STOP === 'true'
+      || await this.repository.getGlobalEmergencyStop()) {
+      throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
     }
+    if (!await liveEntryArmPresent()) {
+      throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+    }
+  }
+
+  private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
+    await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
     order.submissionAttemptId = submissionAttemptId;
@@ -1082,12 +1086,14 @@ export class TradeExecutionService {
       serverLiveEnabled: liveExecutionEnabled('bitget'),
     });
     if (!plan.reduceOnly && canChangeMarginMode) {
+      await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated'), PREFLIGHT_TIMEOUT_MS));
     }
     if (!plan.reduceOnly) {
       const leverage = Number(plan.leverage);
       if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) throw new Error('BITGET_LEVERAGE_LIMIT');
+      await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetLeverage(credentials, plan.symbol, leverage as 2 | 3 | 4 | 5 | 6 | 7), PREFLIGHT_TIMEOUT_MS));
     }
