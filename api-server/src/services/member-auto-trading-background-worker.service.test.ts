@@ -1052,6 +1052,50 @@ test('live activation warmup stays fail-closed when no member can place real ord
   }
 });
 
+test('new-entry-stopped member is not reported live-order eligible', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const stoppedPolicy = normalizeTradingPolicy({ ...allFourPolicy(), newEntriesStopped: true });
+  await repository.savePolicy(USER, stoppedPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: stoppedPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveOrderEligibleMembers, 0);
+    assert.equal(result.livePolicyReadyMembers, 0);
+    assert.equal(result.liveAllFourPolicyReadyMembers, 0);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('partial-market automatic policy cannot complete live warmup even with order capability', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
