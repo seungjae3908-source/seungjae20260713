@@ -84,30 +84,41 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   });
 });
 
-test('holdings Telegram eligibility reuses the canonical #804 member capability contract', () => {
+test('holdings Telegram requires canonical, active, unexpired member proof', () => {
+  const canonical = {
+    permissions_updated_at: '2026-08-01T00:00:00.000Z',
+    membership_expires_at: null,
+  };
+  for (const membership_level of ['associate', 'regular', 'admin']) {
+    assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+      ...canonical, status: 'approved', membership_level, is_active: true,
+    }), true);
+  }
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    ...canonical, status: 'approved', membership_level: 'associate', is_active: true,
+    membership_expires_at: '2025-01-01T00:00:00.000Z',
+  }), false, 'expired associate cannot receive a personal holdings notification');
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    ...canonical, status: 'approved', membership_level: 'regular', is_active: true,
+    membership_expires_at: 'invalid',
+  }), false, 'invalid expiration is denied');
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
     status: 'approved', membership_level: 'associate', is_active: true,
-  }), true);
+  }), false, 'missing canonical audit proof is denied');
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'approved', membership_level: 'regular', is_active: true,
-  }), true);
+    ...canonical, status: 'approved', membership_level: null, role: 'full', is_active: true,
+  }), false, 'legacy role fallback cannot bypass missing canonical tier');
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'approved', membership_level: 'admin', is_active: true,
-  }), true);
-  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'approved', membership_level: null, role: 'full', is_active: true,
-  }), true);
-  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'approved', membership_level: 'pending', role: 'admin', is_active: true,
+    ...canonical, status: 'approved', membership_level: 'pending', role: 'admin', is_active: true,
   }), false);
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'approved', membership_level: 'regular', is_active: false,
+    ...canonical, status: 'approved', membership_level: 'regular', is_active: false,
   }), false);
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'suspended', membership_level: 'regular', is_active: true,
+    ...canonical, status: 'suspended', membership_level: 'regular', is_active: true,
   }), false);
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'rejected', membership_level: 'admin', role: 'admin', is_active: true,
+    ...canonical, status: 'rejected', membership_level: 'admin', role: 'admin', is_active: true,
   }), false);
 });
 
