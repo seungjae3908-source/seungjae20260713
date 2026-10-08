@@ -52,6 +52,7 @@ import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/use
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
 import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
 import {
+  evaluateRulePackPilotEntryGuard,
   readRulePackPilotCapitalState,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -417,42 +418,17 @@ function validateFormulaAiPilotEntry(
   nowMs: number,
 ) {
   if (member.policy.pilotStage !== 'formula-ai-exception') return;
-  if (!isEvidenceBackedAutoStrategyId(entry.identity.strategyId)) {
-    throw new Error('BACKGROUND_FORMULA_AI_PILOT_STRATEGY_REQUIRED');
-  }
-  if (!pilot.settlementReady || pilot.blockers.length > 0) {
-    throw new Error('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
-  }
-  if (!(pilot.operatingCapitalKrw > 0) || !(pilot.maxEntryKrw > 0)) {
-    throw new Error('BACKGROUND_PILOT_CAPITAL_UNAVAILABLE');
-  }
-  const maxEntryKrw = Math.min(member.policy.maxOrderKrw, pilot.maxEntryKrw);
-  if (!(estimatedKrw > 0) || estimatedKrw > maxEntryKrw) {
-    throw new Error('BACKGROUND_PILOT_ENTRY_LIMIT');
-  }
-  if (pilot.dailyLosingTrades >= RULE_PACK_PILOT_PROFILE.maxDailyLosingTrades) {
-    throw new Error('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT');
-  }
-  if (pilot.dailyRealizedPnlKrw <= -RULE_PACK_PILOT_PROFILE.dailyLossStopKrw) {
-    throw new Error('BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT');
-  }
-  if (pilot.consecutiveLosses >= RULE_PACK_PILOT_PROFILE.maxConsecutiveLosses) {
-    throw new Error('BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT');
-  }
-  if (openAutomaticPlans(runtime, 'live').length >= RULE_PACK_PILOT_PROFILE.maxConcurrentLivePositions) {
-    throw new Error('BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT');
-  }
-  const lastLoss = pilot.latestLossBySymbol[normalizedSymbol(entry.identity.symbol)];
-  if (lastLoss) {
-    if (lastLoss.signalId === entry.identity.signalId) {
-      throw new Error('BACKGROUND_PILOT_FRESH_SIGNAL_REQUIRED');
-    }
-    const closedAt = Date.parse(lastLoss.closedAt);
-    if (!Number.isFinite(closedAt)
-      || nowMs - closedAt < RULE_PACK_PILOT_PROFILE.lossCooldownMinutes * 60_000) {
-      throw new Error('BACKGROUND_PILOT_LOSS_COOLDOWN_ACTIVE');
-    }
-  }
+  const decision = evaluateRulePackPilotEntryGuard({
+    pilot,
+    strategyId: entry.identity.strategyId,
+    symbol: entry.identity.symbol,
+    signalId: entry.identity.signalId,
+    estimatedKrw,
+    policyMaxOrderKrw: member.policy.maxOrderKrw,
+    openLivePositions: openAutomaticPlans(runtime, 'live').length,
+    nowMs,
+  });
+  if (!decision.allowed) throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_ENTRY_BLOCKED');
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
