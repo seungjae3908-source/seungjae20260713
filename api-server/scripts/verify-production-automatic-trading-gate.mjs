@@ -224,7 +224,8 @@ for (const token of [
   'liveEntryArmPresent',
   'liveExitsSuppressedByWarmupOrArm',
   "if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders'))",
-  "const liveEntriesArmedThisTick = liveExitsArmedThisTick && liveTelegramHealthyThisTick;",
+  "const liveEntriesArmedThisTick = liveExitsArmedThisTick",
+  "&& liveTelegramHealthyThisTick && !this.liveCycleHardWarmupBlocked;",
   "this.source.telegramDeliveryHealthy?.(Date.now()) !== true",
   "result.liveEntriesSuppressedByTelegram += 1;",
   "telegramDeliveryHealthy(nowMs: number)",
@@ -248,7 +249,12 @@ for (const token of [
   'globalEmergencyStopActive',
   'automaticPolicyHasRunnableMarket',
   'automaticPolicyHasAllFourMarkets',
-  "const memberAutoExecutionEnabled = member.policy.mode === 'automatic'",
+  "const memberCanRunAutomation = hasCapability(member.profile, 'canAccessAutoTrading');",
+  "const memberAutoExecutionEnabled = memberCanRunAutomation",
+  "this.liveCycleHardWarmupBlocked ||= hardWarmupBlock;",
+  "if (this.liveCycleHardWarmupBlocked) {",
+  "if (cycleComplete) this.liveCycleHardWarmupBlocked = false;",
+  "throw new Error('BACKGROUND_MEMBER_ACCESS_PROFILE_MISSING');",
   "if (!memberAutoExecutionEnabled) {",
   "result.liveExitsSuppressedByPolicy += livePositions.length;",
   "return [{ userId, policy }];",
@@ -264,6 +270,8 @@ for (const token of [
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
   'if (liveEntriesArmedThisTick && hasCapability',
+  'expired automatic member retains read-only Live fill visibility and has zero order authority',
+  'blocked member evidence survives paginated warmup and cannot be erased by a ready later batch',
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
