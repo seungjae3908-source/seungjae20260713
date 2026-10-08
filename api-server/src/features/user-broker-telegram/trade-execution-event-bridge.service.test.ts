@@ -18,6 +18,10 @@ class FakeTransport implements TelegramTransport {
 class CapturingPortfolioSink implements PortfolioSyncSink {
   readonly events: UserExecutionEvent[] = [];
   async accept(event: UserExecutionEvent) {
+    // The production CanonicalPortfolioSyncSink persists by sourceEventId:
+    // retries after an interrupted outbox stage must not duplicate journal rows.
+    if (this.events.some((row) =>
+      row.userId === event.userId && row.sourceEventId === event.sourceEventId)) return;
     this.events.push(structuredClone(event));
   }
 }
