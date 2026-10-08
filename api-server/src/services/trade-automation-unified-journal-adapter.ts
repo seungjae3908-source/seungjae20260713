@@ -48,6 +48,7 @@ function feeForOrder(order: TradingOrder) {
 }
 
 export function tradeAutomationJournalPayloadsFromSnapshot(
+  userId: string,
   orders: readonly TradingOrder[],
   plans: readonly TradingPlan[],
 ): Record<string, unknown>[] {
@@ -148,5 +149,5 @@ export async function readTradeAutomationJournalPayloads(
   userId: string,
 ): Promise<Record<string, unknown>[]> {
   const [orders, plans] = await Promise.all([repository.listOrders(userId), repository.listPlans(userId)]);
-  return tradeAutomationJournalPayloadsFromSnapshot(orders, plans);
+  return tradeAutomationJournalPayloadsFromSnapshot(userId, orders, plans);
 }
