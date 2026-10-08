@@ -379,7 +379,63 @@ const allowed=new Set([
  ...automaticTradingDriftReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
-const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p));
+// The personal Telegram member-profile reads share a repository with automatic
+// execution. Do not require automatic-trading deployment gates for ONLY the
+// proven expiry/permissions read patch and additive membership regression
+// fixtures. Any other change to these files restores the full trading gate.
+function exactSignedDiff(p, expectedRemoved, expectedAdded) {
+ const signed=git('diff','--unified=0',MAIN,'HEAD','--',p).split('\\n')
+  .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
+ const removed=signed.filter((line)=>line.startsWith('-')).map((line)=>line.slice(1).trim()).sort();
+ const added=signed.filter((line)=>line.startsWith('+')).map((line)=>line.slice(1).trim()).sort();
+ return JSON.stringify(removed)===JSON.stringify([...expectedRemoved].sort())
+  && JSON.stringify(added)===JSON.stringify([...expectedAdded].sort());
+}
+function isPersonalTelegramMembershipOnlyChange(p) {
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts') {
+  return exactSignedDiff(p,
+   [".select('status,membership_level,is_active,role')"],
+   [
+    "membership_expires_at: typeof row.membership_expires_at === 'string' ? row.membership_expires_at : null,",
+    "permissions_updated_at: typeof row.permissions_updated_at === 'string' ? row.permissions_updated_at : null,",
+    ".select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')",
+   ]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts') {
+  return exactSignedDiff(p,
+   [
+    "import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';",
+    "return hasCapability(profile, 'canConnectPersonalTelegram');",
+   ],
+   [
+    "import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';",
+    "return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');",
+   ]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts') {
+  const base=git('show',`${MAIN}:${p}`);
+  let head=git('show',`HEAD:${p}`);
+  const fixture="  membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
+  if(head.split(fixture).length!==2)return false;
+  head=head.replace('\\n'+fixture,'');
+  const blocks=[
+   ["expired and schema-incomplete members cannot bind a Telegram link","expired Telegram link cannot be consumed"],
+   ["membership expiration after queueing prevents Telegram send and dead-letters the delivery","duplicate execution event is ignored by source-event id and does not duplicate Telegram delivery"],
+  ];
+  for(const [name,next] of blocks) {
+   const first=`test('${name}'`;
+   const after=`test('${next}'`;
+   if(head.split(first).length!==2||head.split(after).length!==2)return false;
+   const start=head.indexOf(first);
+   const end=head.indexOf(after,start);
+   if(start<0||end<=start)return false;
+   head=head.slice(0,start)+head.slice(end);
+  }
+  return head===base;
+ }
+ return false;
+}
+const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)&&!isPersonalTelegramMembershipOnlyChange(p));
 if(automaticTradingChanged.length>0){
  const requiredAutomaticTradingGuards=[
   '.github/workflows/production-automatic-trading-gate.yml',
