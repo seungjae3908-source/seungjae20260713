@@ -325,6 +325,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
   const policy = runtimeStatus?.policy;
+  const walletAudit = runtimeStatus?.automaticPaperWalletBootstrap;
   const marketEnabled = Boolean(policy?.marketEnabled?.[market]);
   const selectedProvider = market === 'crypto_spot'
     ? 'upbit'
@@ -482,6 +483,21 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           기존 수동 모의거래 기록이 있으면 자동으로 덮어쓰지 않습니다.
         </p>
         {autoPaperMessage ? <p role="status" className="mt-2 break-keep text-xs">{autoPaperMessage}</p> : null}
+        {autoPaperStatus === 'blocked' && walletAudit?.safeToInitialize === false ? (
+          <p className="mt-2 break-keep text-xs leading-5 text-amber-700" data-testid="automatic-paper-history-audit">
+            과거 자동모의 계획 {walletAudit.automaticPaperPlanCount}건 · 체결 이력 {walletAudit.executedAutomaticPaperOrderCount}건
+            {walletAudit.missingFilledQuantityEvidence > 0 ? ` · 수량 증거 누락 ${walletAudit.missingFilledQuantityEvidence}건` : ''}
+            {walletAudit.missingFeeEvidence > 0 ? ` · 비용 증거 누락 ${walletAudit.missingFeeEvidence}건` : ''}
+            . 과거 기록은 보존되며 50만원 가상계좌 재설정은 차단됩니다.
+          </p>
+        ) : null}
+        {autoPaperStatus === 'blocked' && policy ? (
+          <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground" data-testid="automatic-current-risk-policy">
+            현재 저장된 자동매매 정책: 총 운용 {policy.totalCapitalKrw.toLocaleString('ko-KR')}원,
+            1회 주문 상한 {policy.maxOrderKrw.toLocaleString('ko-KR')}원,
+            코인선물 레버리지 {policy.bitgetLeverage}배. 이 화면에서 운용 한도를 변경하지 않습니다.
+          </p>
+        ) : null}
         {autoPaperStatus === 'missing' ? (
           <button
             type="button"

@@ -163,7 +163,9 @@ export function automaticPaperWalletServerEpochMs(
   const updatedAtMs = Date.parse(wallets[0]!.serverUpdatedAt);
   if (!Number.isFinite(createdAtMs) || !Number.isFinite(updatedAtMs)
     || createdAtMs < 0 || createdAtMs > nowMs + 5_000
-    || updatedAtMs < createdAtMs || updatedAtMs > nowMs + 5_000) return null;
+    // Application-server updated_at and DB-created created_at may differ by a
+    // few seconds even for the same insert. Both must still be server-owned.
+    || updatedAtMs + 5_000 < createdAtMs || updatedAtMs > nowMs + 5_000) return null;
   return createdAtMs;
 }
 
