@@ -20,6 +20,8 @@ import {
 } from '../services/member-administration.service';
 import { bindCanonicalStrategyHealth } from '../services/strategy-health-research-adapter.service';
 import { sanitizeResearchCenterOverview } from '../services/research-center-readonly-contract.service';
+import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
+import { buildOperationsHealthSnapshot } from '../services/production-operations-health.service';
 
 const router = Router();
 router.use(requireAuthenticated, requireAdmin);
@@ -186,6 +188,34 @@ async function applyMemberChange(
     return sendAdminError(res, cause, 'MEMBER_UPDATE_FAILED');
   }
 }
+
+router.get('/operations-health', async (req: AuthenticatedRequest, res) => {
+  const userId = req.member?.id ?? '';
+  const accessToken = req.accessToken ?? '';
+  if (!userId || !accessToken) {
+    return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
+  }
+
+  const db = adminDb(req);
+  const trading = createSupabaseTradingRepository(accessToken, userId);
+  const snapshot = await buildOperationsHealthSnapshot({
+    env: process.env,
+    checkDatabase: async () => {
+      const { error } = await db.from('profiles').select('id').eq('id', userId).limit(1);
+      if (error) throw new Error('DATABASE_READ_FAILED');
+    },
+    checkTradeStorage: async () => {
+      await trading.getPolicy(userId);
+      await trading.listOrders(userId);
+    },
+  });
+
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.status(200).json({
+    ok: snapshot.state !== 'BLOCKED',
+    ...snapshot,
+  });
+});
 
 router.get('/members', async (req: AuthenticatedRequest, res) => {
   const search = sanitizeMemberSearch(req.query.search);
