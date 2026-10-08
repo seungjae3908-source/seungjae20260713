@@ -1059,6 +1059,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       if (!activity.lastActivityAt || order.updatedAt > activity.lastActivityAt) activity.lastActivityAt = order.updatedAt;
     }
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+    const mayInspectLiveRuntime = Boolean(req.member && hasCapability(req.member, 'canPlaceOrders'));
     const vaultStatus = credentialConfigurationStatus();
     const liveExecutionReadiness = Object.fromEntries(
       [...EXCHANGES].map((exchange) => {
@@ -1154,8 +1155,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       liveAutomaticReadinessByMarket,
-      autoTradingBackground: sanitizedAutomaticRuntimeHealth(),
-      userTelegramDelivery: sanitizedTelegramDeliveryRuntimeHealth(),
+      autoTradingBackground: mayInspectLiveRuntime ? sanitizedAutomaticRuntimeHealth() : null,
+      userTelegramDelivery: mayInspectLiveRuntime ? sanitizedTelegramDeliveryRuntimeHealth() : null,
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
