@@ -2,6 +2,31 @@
 
 begin;
 
+-- Trigger-only SECURITY DEFINER functions must remain usable by their triggers
+-- after direct Data API EXECUTE privileges are revoked.
+insert into auth.users (id, email, raw_user_meta_data)
+values (
+  '55555555-5555-4555-8555-555555555555',
+  'member-lockdown-trigger@accounts.invalid',
+  '{"login_name":"lockdown-trigger","display_name":"트리거 검증"}'::jsonb
+)
+on conflict (id) do nothing;
+
+do $member_trigger_survives_lockdown$
+begin
+  if not exists (
+    select 1
+    from public.profiles
+    where id = '55555555-5555-4555-8555-555555555555'
+      and status::text = 'pending'
+      and membership_level = 'pending'
+      and is_active is false
+  ) then
+    raise exception 'member signup trigger failed after SECURITY DEFINER lockdown';
+  end if;
+end
+$member_trigger_survives_lockdown$;
+
 -- Seed evidence as the database owner. The associate must be able to read only
 -- the self-owned journal row after the hardening policy is applied.
 insert into public.paper_journal_entries (user_id, id, payload, version)
