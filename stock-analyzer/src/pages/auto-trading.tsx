@@ -244,6 +244,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     && autoWorker.globalEmergencyStopActive === false;
   const telegramRuntimeReady = telegramWorker?.enabled === true
     && telegramWorker.tickOk === true
+    && telegramWorker.deliveryConfirmed === true
     && telegramWorkerFresh
     && telegramWorker.errorCode == null;
   const liveAuthorityLabel = runtimeLoading

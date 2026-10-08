@@ -245,6 +245,8 @@ function sanitizedTelegramDeliveryRuntimeHealth() {
     enabled: health.enabled,
     lastTickAt: health.lastTickAt,
     tickOk: health.tickOk,
+    deliveryConfirmed: health.deliveryConfirmed,
+    lastConfirmedDeliveryAt: health.lastConfirmedDeliveryAt,
     errorCode: health.errorCode,
   };
 }

@@ -103,6 +103,8 @@ requireText(workflow, 'health?.liveCycleAllFourPolicyReady === true', 'AUTO_GATE
 requireText(workflow, 'attempt < 360', 'AUTO_GATE_ROTATING_MEMBER_POLL_WINDOW_MISSING');
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
 requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
+requireText(workflow, 'last?.userTelegramDelivery?.deliveryConfirmed === true', 'AUTO_GATE_TELEGRAM_DELIVERY_PROOF_MISSING');
+requireText(paperWorker, "memberTelegramConnected?.(member.userId)", 'AUTO_GATE_MEMBER_TELEGRAM_BINDING_CHECK_MISSING');
 requireText(workflow, "const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''))", 'AUTO_GATE_AUTO_HEALTH_TIMESTAMP_MISSING');
 requireText(workflow, "const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''))", 'AUTO_GATE_TELEGRAM_HEALTH_TIMESTAMP_MISSING');
 requireText(workflow, 'nowMs - autoLastTickMs <= 360_000', 'AUTO_GATE_AUTO_HEALTH_FRESHNESS_MISSING');
