@@ -16,6 +16,8 @@ const paths = {
   runner: 'api-server/scripts/apply-staging-supabase-bootstrap.mjs',
   assertion: 'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
   dbRunner: 'api-server/scripts/verify-phase8-db.sh',
+  productionGate: 'ops/apply-production-paper-journal-privileges.mjs',
+  productionVerifier: 'ops/verify-production-paper-journal-privileges.mjs',
   ownership: 'api-server/supabase/test/phase8_rls_integration.sql',
   tiers: 'api-server/supabase/test/phase8_tier_rls_integration.sql',
   before: 'api-server/supabase/test/paper_journal_privileges_before_migration.sql',
@@ -78,8 +80,19 @@ assert(!broadGrant.test(source.ownership), 'ownership RLS test still masks migra
 assert(!broadGrant.test(source.tiers), 'membership-tier RLS test still masks migration grants');
 assert(source.dbRunner.includes(paths.down), 'disposable DB verification does not reproduce the pre-fix privilege state');
 assert(source.dbRunner.includes(paths.before), 'disposable DB verification does not assert the pre-fix failure');
-assert((source.dbRunner.match(new RegExp(migrationName.replaceAll('.', '\\.'), 'g')) ?? []).length >= 3, 'DB verification must double-apply and reapply the migration');
+assert(source.dbRunner.includes(`node "\${ROOT_DIR}/${paths.productionGate}"`), 'disposable DB verification does not exercise the protected Production gate');
+assert(source.dbRunner.includes(`node "\${ROOT_DIR}/${paths.productionVerifier}"`), 'disposable DB verification does not verify protected Production evidence');
+assert(source.dbRunner.includes('run_production_paper_gate "existing-schema-noop" 6'), 'DB verification does not prove an existing complete schema is unchanged');
+assert(source.dbRunner.includes('assert_production_paper_partial_schema_fails'), 'DB verification does not fail closed on a partial paper schema');
+assert(source.dbRunner.includes('run_production_paper_gate "missing-schema-bootstrap" 0'), 'DB verification does not prove missing-schema bootstrap');
+assert(source.dbRunner.includes('run_production_paper_gate "post-bootstrap-noop" 6'), 'DB verification does not prove the Production bootstrap is immediately idempotent');
+assert(source.productionGate.includes(paths.migration), 'protected Production gate does not apply the final paper privilege migration');
+assert(source.productionGate.includes('2026080201_journal_sync_analytics_phase7.sql'), 'protected Production gate does not own missing paper table creation');
+assert(source.productionGate.includes('2026080203_phase8_paper_capability_rls.sql'), 'protected Production gate does not own paper RLS policy repair');
+assert(source.productionGate.includes("process.env.CI === 'true'"), 'disposable Production-gate override is not restricted to CI');
+assert(source.productionGate.includes("['127.0.0.1', 'localhost'].includes(hostname)"), 'disposable Production-gate override is not restricted to localhost');
+assert(source.productionVerifier.includes('database_changed'), 'protected Production evidence verifier does not check mutation classification');
 assert(source.dbRunner.includes(paths.after), 'DB verification does not assert the post-migration contract');
-assert(!/(?:production|prod)[_-]?(?:database|supabase)[_-]?url/i.test(source.dbRunner), 'disposable DB verifier references a production database variable');
+assert(source.dbRunner.includes('PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true'), 'disposable Production-gate test lacks its explicit CI-only opt-in');
 
-console.log('[paper-journal-privilege-contract] six paper tables, authenticated CRUD, anon/PUBLIC denial, RLS preservation, pre-fix reproduction, two-pass bootstrap, rollback and reapply verified');
+console.log('[paper-journal-privilege-contract] six paper tables, authenticated CRUD, anon/PUBLIC denial, RLS preservation, pre-fix reproduction, Production bootstrap/no-op/partial-schema/idempotency, rollback and reapply verified');
