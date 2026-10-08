@@ -222,7 +222,7 @@ export function readMemberAutoTradingBackgroundRuntimeHealth() {
   return backgroundRuntimeHealth;
 }
 
-async function liveEntryArmPresent() {
+async function liveEntryArmPresent(nowMs = Date.now()) {
   if (!liveBackgroundEnabled()) return false;
   const targetSha = String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase();
   if (!/^[a-f0-9]{40}$/u.test(targetSha)) return false;
@@ -237,9 +237,15 @@ async function liveEntryArmPresent() {
       || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
       || (stat.mode & 0o077)) return false;
     const value = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
+    const armedAtMs = Date.parse(String(value.armedAt ?? ''));
+    const activateNotBeforeMs = Date.parse(String(value.activateNotBeforeAt ?? ''));
     return value.schemaVersion === 'member-auto-trading-live-entry-arm-v1'
       && value.armed === true
-      && String(value.targetSha ?? '').toLowerCase() === targetSha;
+      && String(value.targetSha ?? '').toLowerCase() === targetSha
+      && Number.isFinite(armedAtMs)
+      && Number.isFinite(activateNotBeforeMs)
+      && activateNotBeforeMs >= armedAtMs
+      && nowMs >= activateNotBeforeMs;
   } catch {
     return false;
   } finally {
@@ -1120,7 +1126,7 @@ export class MemberAutoTradingBackgroundWorker {
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
-    const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent() : false;
+    const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent(now.getTime()) : false;
     const liveEntriesArmedThisTick = liveModeRequested
       && this.liveEntryWarmupComplete
       && liveEntryArmPresentThisTick;
