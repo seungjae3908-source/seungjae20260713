@@ -48,6 +48,7 @@ on:
       - ops/apply-production-member-access-hardening.mjs
       - ops/verify-production-member-access-hardening.mjs
       - api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
+      - api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql
       - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
       - api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
       - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
