@@ -414,7 +414,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
           과거 데이터 기반 백테스트이며 미래 수익을 보장하지 않습니다.
         </p>
 
-        
+
 
         <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" aria-busy={loading} data-testid="backtest-form">
           <h2 className="mb-4 text-center text-base font-black">기본 설정</h2>
@@ -596,7 +596,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
             </div>
             <section className="rounded-2xl border border-border bg-card p-4" data-testid="backtest-paper-handoff">
               <h3 className="text-sm font-black">모의매매 후보</h3>
-              
+
               {result.paperHandoffs?.length ? <div className="mt-3 flex flex-wrap gap-2">
                 {result.paperHandoffs.map((handoff) => <Link key={handoff.side} href={backtestPaperHandoffPath(handoff, result.paperHandoffRunId)} className="inline-flex min-h-11 max-w-full items-center break-words rounded-xl border border-border px-3 text-xs font-bold">
                   {handoff.symbol} · {handoff.side === 'BUY' ? '매수' : handoff.side === 'LONG' ? '롱' : '숏'} · {handoff.candidateId ? '후보 보기' : '자료 없음'}
