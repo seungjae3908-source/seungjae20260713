@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic intake of explicitly approved Research video jobs
+
+[Timer]
+OnCalendar=*-*-* *:03,13,23,33,43,53:00 UTC
+Persistent=true
+RandomizedDelaySec=20
+Unit=research-production-approved-job-intake.service
+
+[Install]
+WantedBy=timers.target

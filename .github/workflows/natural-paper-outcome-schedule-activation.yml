@@ -44,12 +44,12 @@ jobs:
           grep -Fq 'github.event.issue.number == 1555' "$workflow"
           grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
           grep -Fq "startsWith(github.event.comment.body, '/activate-natural-paper-outcome-schedule ')" "$workflow"
-          ! grep -Eq 'github\.event\.issue\.number == 23\b|issue_number:[[:space:]]*23\b' "$workflow"
+          ! grep -Eq 'github\\.event\\.issue\\.number == 23\\b|issue_number:[[:space:]]*23\\b' "$workflow"
           bash -n ops/install-natural-paper-outcome-schedule.sh
           bash -n ops/verify-natural-paper-outcome-cycle.sh
           bash -n ops/disable-paper-forward-schedule.sh
           (cd market-prediction-lab && node --test tests/natural-paper-outcome-activation-contract-v1.test.js)
-          ! grep -Eq "LIVE_TRADING:[[:space:]]+['\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\"]?true" "$workflow"
+          ! grep -Eiq "LIVE_TRADING:[[:space:]]+['\\\"]?true|REAL_ORDER_ENABLED:[[:space:]]+['\\\"]?true" "$workflow"
 
   gate:
     name: Validate exact owner approval and immutable release evidence

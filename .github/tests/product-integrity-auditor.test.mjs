@@ -148,11 +148,22 @@ test('13 journeys include research stage readback, portfolio AI and scanner memb
   assert.equal(new Set(PRODUCT_EDGES.map(item => item.id)).size, PRODUCT_EDGES.length);
 });
 
+test('Research Center AI helper recognizes the current localized mounted tab', () => {
+  const files = new Map([
+    ['stock-analyzer/src/pages/research-center-workspace.tsx', "ResearchCopilotPanel value: 'copilot' label: 'AI 도우미'"],
+    ['stock-analyzer/src/components/research-copilot-panel.tsx', 'AI Research Copilot'],
+  ]);
+  const edge = PRODUCT_EDGES.find(item => item.id === 'PI001');
+  assert.equal(evaluateEdge(files, edge).status, 'PROVEN');
+  files.set('stock-analyzer/src/pages/research-center-workspace.tsx', "value: 'copilot' label: 'AI 도우미'");
+  assert.equal(evaluateEdge(files, edge).status, 'PARTIAL');
+});
+
 test('holdings Telegram recognizes the concrete personal-dispatch delegate, not a fictional direct call', () => {
   const files = new Map([
     ['api-server/src/services/member-watchlist-telegram-producer.service.ts', 'deliverPersonalTelegramAlert userId'],
     ['api-server/src/services/member-holdings-telegram-producer.service.ts', "deliverMemberHoldingTelegramAlert hasCapability(profile, 'canConnectPersonalTelegram')"],
-    ['api-server/src/services/member-holdings-telegram-alert.service.ts', 'deliverMemberHoldingTelegramAlert return deliverPersonalTelegramAlert({'],
+    ['api-server/src/services/member-holdings-telegram-alert.service.ts', 'deliverMemberHoldingTelegramAlert const personal = await deliverPersonalTelegramAlert({ return personal;'],
     ['api-server/src/services/signal-intelligence-telegram-subscriber.service.ts', 'deliverMemberWatchlistTelegramForSignal'],
   ]);
   const edge = PRODUCT_EDGES.find(item => item.id === 'PI014');
