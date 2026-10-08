@@ -5,11 +5,6 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
       - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
-      - '.github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml'
-      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs'
-      - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
-      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs'
-      - 'market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs'
       - '.github/workflows/market-intelligence-sidecar-validation.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
@@ -148,41 +143,10 @@ jobs:
           reliability_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
           cohort_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
           multi_lane_policy='market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
-          server_activation_workflow='.github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml'
-          server_runtime='market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs'
-          server_cutover='market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
-          server_activation_test='market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs'
-          server_cutover_test='market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs'
           git diff --check "$base" "$head"
           changed="$(git diff --name-only "$base" "$head")"
 
-          if [[ "$(printf '%s\n' "$changed" | grep -v -F \
-              -e "$validation_workflow" \
-              -e "$runtime_workflow" \
-              -e "$server_activation_workflow" \
-              -e "$server_runtime" \
-              -e "$server_cutover" \
-              -e "$server_activation_test" \
-              -e "$server_cutover_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
-            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
-            && printf '%s\n' "$changed" | grep -Fqx "$runtime_workflow" \
-            && printf '%s\n' "$changed" | grep -Fqx "$server_activation_workflow" \
-            && printf '%s\n' "$changed" | grep -Fqx "$server_runtime" \
-            && printf '%s\n' "$changed" | grep -Fqx "$server_cutover" \
-            && printf '%s\n' "$changed" | grep -Fqx "$server_activation_test" \
-            && printf '%s\n' "$changed" | grep -Fqx "$server_cutover_test"; then
-            cat > /tmp/allowed-files <<'EOF'
-          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
-          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
-          .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
-          market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
-          market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
-          market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs
-          market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-cutover-readiness-v1.test.mjs
-          EOF
-            expected_count=7
-            scope_name='V3 Release-Control rollover runtime routing'
-          elif printf '%s\n' "$changed" | grep -Fqx "$activation"; then
+          if printf '%s\n' "$changed" | grep -Fqx "$activation"; then
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
           market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
@@ -320,7 +284,10 @@ jobs:
           test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
           ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
           ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
-          test "$(grep -Fc '  issues: read' "$workflow")" -eq 1
+          grep -Fq 'issue_number: 1555' "$workflow"
+          grep -Fq "release.title !== 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+          ! grep -Eq 'issue_number:[[:space:]]*23\b' "$workflow"
+                    test "$(grep -Fc '  issues: read' "$workflow")" -eq 1
           test "$(grep -Fc '  statuses: read' "$workflow")" -eq 1
           ! grep -Fq '  issues: write' "$workflow"
           ! grep -Fq '  statuses: write' "$workflow"

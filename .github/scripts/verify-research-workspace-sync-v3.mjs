@@ -8,6 +8,14 @@ const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trimEnd();
 const isAncestor=(ancestor,descendant)=>{try{git('merge-base','--is-ancestor',ancestor,descendant);return true}catch{return false}};
 const added=[
  'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.js',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-executor-v18.js',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-runtime-v18.test.js',
+ 'packages/external-research/scripts/run-canonical-evaluation-v18.mjs',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-runtime-v18.js',
+ 'packages/external-research/scripts/run-research-one-shot-v12.mjs',
+ 'packages/external-research/test/research-workspace-one-shot-runtime-v12.test.js',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-executor-v18.test.js',
+ '.github/workflows/research-workspace-canonical-evaluation-execution-v18.yml',
  'packages/external-research/src/research-workspace-canonical-evaluation-one-shot-v18.d.ts',
  'packages/external-research/test/research-workspace-canonical-evaluation-one-shot-v18.test.js',
  'packages/external-research/docs/research-workspace-phase18.md',
@@ -172,7 +180,145 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
-const allowed=new Set([...original,...added,...supplemental,...portfolioReviewed,...researchCenterIntegrationReviewed]);
+const researchProductionClosureReviewed=[
+ '.github/workflows/research-ai-production-activation.yml',
+ '.github/workflows/research-production-activation.yml',
+ 'market-prediction-lab/src/video-research-canonical-handoff-v1.js',
+ 'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
+ 'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
+ 'market-prediction-lab/tests/video-research-canonical-handoff-v1.test.js',
+ 'packages/external-research/src/research-workspace-canonical-evaluation-readiness-v17.js',
+ 'packages/external-research/src/research-workspace-runtime-binding-v11.js',
+ 'packages/external-research/src/video-intelligence-phase2.js',
+ 'packages/external-research/src/video-intelligence-phase3-runtime.js',
+ 'packages/external-research/src/video-intelligence-phase3-snapshot-caller.js',
+ 'packages/external-research/test/research-workspace-canonical-evaluation-readiness-v17.test.js',
+ 'research-production/bin/research-approved-job-intake.mjs',
+ 'research-production/bin/research-maintenance.mjs',
+ 'research-production/deploy/activate-ai-research.sh',
+ 'research-production/deploy/activate-server.sh',
+ 'research-production/deploy/install-ai-research-units.sh',
+ 'research-production/deploy/research-production-ai-review.timer',
+ 'research-production/deploy/research-production-approved-job-intake.service',
+ 'research-production/deploy/research-production-approved-job-intake.timer',
+ 'research-production/deploy/research-production-factory-status.timer',
+ 'research-production/deploy/research-production-fast-historical.timer',
+ 'research-production/deploy/research-production-forward.timer',
+ 'research-production/deploy/research-production-long-history.timer',
+ 'research-production/deploy/research-production-maintenance.service',
+ 'research-production/deploy/research-production-maintenance.timer',
+ 'research-production/deploy/research-production-temporal-evidence.timer',
+ 'research-production/deploy/research-production-video-discovery.timer',
+ 'research-production/deploy/research-production-workspace-worker.service',
+ 'research-production/deploy/research-video.env.example',
+ 'research-production/src/research-ai-review-worker.mjs',
+ 'research-production/src/research-video-discovery-worker.mjs',
+ 'research-production/test/research-ai-activation-contract.test.mjs',
+ 'research-production/test/research-ai-review-worker.test.mjs',
+ 'research-production/test/research-ai-units-install-contract.test.mjs',
+ 'research-production/test/research-approved-job-intake.test.mjs',
+ 'research-production/test/research-maintenance.test.mjs',
+ 'research-production/test/research-engine.test.mjs', 'research-production/test/server-risk-policy-env-transport.test.mjs',
+];
+const memberAccessReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/production-deploy.yml',
+ '.github/workflows/production-postdeploy-qa.yml',
+ '.github/workflows/research-center-predeploy-validation.yml',
+ '.github/scripts/run-production-readonly-qa.sh',
+ '.github/scripts/production-postdeploy-qa-evidence.cjs',
+ '.github/scripts/verify-production-qa-receipt.cjs',
+ '.github/scripts/verify-production-postdeploy-qa-contract.mjs',
+ 'api-server/scripts/apply-staging-supabase-bootstrap.mjs',
+ 'api-server/scripts/verify-member-permission-audit-contract.mjs',
+ 'api-server/scripts/verify-phase8-db.sh',
+ 'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ 'api-server/scripts/verify-staging-bootstrap-contract.mjs',
+ 'api-server/src/middleware/auth.ts',
+ 'api-server/src/routes/admin.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/paper-journal.smoke.test.ts',
+ 'api-server/src/routes/paper-journal.ts',
+ 'api-server/src/routes/signal-scanner-auth.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'api-server/src/services/member-access-phase8.test.ts',
+ 'api-server/src/services/member-administration.service.test.ts',
+ 'api-server/src/services/member-administration.service.ts',
+ 'api-server/src/services/member-auth-admin.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.ts',
+ 'api-server/src/services/scanner-access-control.service.test.ts',
+ 'api-server/src/services/scanner-access-control.service.ts',
+ 'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
+ 'api-server/supabase/bootstrap/staging-bootstrap.sql',
+ 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
+ 'api-server/supabase/test/member_access_s_ai_hardening_integration.sql',
+ 'ops/apply-production-member-access-hardening.mjs',
+ 'ops/verify-production-member-access-hardening.mjs',
+ 'packages/member-access/src/index.d.ts',
+ 'packages/member-access/src/index.js',
+ 'stock-analyzer/e2e/scanner-member-access.spec.ts',
+ 'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
+ 'stock-analyzer/e2e/account-touch-korean-ui.spec.ts',
+ 'stock-analyzer/e2e/account-connection-credentials.spec.ts',
+ 'stock-analyzer/e2e/production-member-readonly-qa.spec.ts',
+ 'stock-analyzer/playwright.production-member.config.ts',
+ 'stock-analyzer/src/App.tsx',
+ 'stock-analyzer/src/components/capability-gate.tsx',
+ 'stock-analyzer/src/components/unified-trade-journal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/src/lib/auth-initial-bootstrap.ts',
+ 'stock-analyzer/src/lib/auth.tsx',
+ 'stock-analyzer/src/pages/account.tsx',
+ 'stock-analyzer/src/pages/admin.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/src/pages/portfolio.tsx',
+ 'stock-analyzer/src/pages/technical-workspace.tsx',
+];
+const tradingQaReviewed=[
+ 'api-server/src/services/trade-execution.service.ts',
+ 'api-server/src/services/trade-execution-toss-verification.test.ts',
+ 'stock-analyzer/e2e/production-live-credential-reuse-qa.spec.ts',
+];
+const telegramReleaseReviewed=[
+ '.github/workflows/telegram-production-release.yml',
+ 'api-server/scripts/verify-telegram-production-release-contract.mjs',
+];
+const formulaAiDriftReviewed=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/pr-auto-rehearsal-preview.yml',
+ 'api-server/src/routes/auto-rehearsal-preview.ts',
+ 'api-server/src/routes/index.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'stock-analyzer/e2e/phase12-trade-automation.spec.ts',
+ 'stock-analyzer/src/App.tsx',
+ 'stock-analyzer/src/components/formula-ai-auto-rehearsal-panel.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/src/pages/auto-rehearsal-preview.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.test.ts',
+ 'api-server/src/services/formula-ai-auto-rehearsal.service.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.test.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.ts',
+ 'api-server/src/services/trade-automation-optimization.service.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
+ 'api-server/test.mjs',
+];
+const allowed=new Set([
+ ...original,
+ ...added,
+ ...supplemental,
+ ...portfolioReviewed,
+ ...researchCenterIntegrationReviewed,
+ ...researchProductionClosureReviewed,
+ ...memberAccessReviewed,
+ ...tradingQaReviewed,
+ ...telegramReleaseReviewed,
+ ...formulaAiDriftReviewed,
+]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
 if(researchCenterChanged.length>0){
@@ -192,6 +338,46 @@ if(!isAncestor(OWNER,MAIN))for(const p of git('diff','--diff-filter=A','--name-o
 const mount="\n\n// Read pre-existing sanitized research only; the nested workspace requires admin access.\nrouter.use('/research/video/evidence', requireCapability('canAccessBasicInfo'), videoResearchEvidenceRouter);";
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
+const memberAccessContractChanged=changed.some((p)=>(
+ memberAccessReviewed.includes(p) && !formulaAiDriftReviewed.includes(p)
+));
+if(memberAccessContractChanged){
+ const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
+  const aiChartPublicRead = req.method === 'GET'
+    && (
+      req.path === '/tickers'
+      || req.path === '/candles'
+      || /^\\/[^/]+\\/(?:snapshot|flow)$/u.test(req.path)
+    );
+  return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
+});`;
+ const canonicalFuturesGate="router.use('/crypto/futures', requireCapability('canAccessFutures'));";
+ const journalSplitGate=`router.use('/paper-journal', (req, res, next) => {
+  const subpath = req.path;
+  if (
+    subpath === '/analytics'
+    || subpath === '/unified-ledger'
+    || subpath === '/unified-ledger/status'
+  ) {
+    return requireCapability('canAccessTradingAnalytics')(req, res, next);
+  }
+  if (
+    subpath === '/review-dataset'
+    || subpath.startsWith('/ai-review/')
+    || subpath.startsWith('/portfolio-advisor/')
+  ) {
+    return requireCapability('canAccessAiTradingReview')(req, res, next);
+  }
+  return requireCapability('canAccessJournalSync')(req, res, next);
+});`;
+ const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
+ if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
+ if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
+ current=current
+  .replace(aiChartFuturesGate,canonicalFuturesGate)
+  .replace(journalSplitGate,canonicalJournalGate)
+  .replace("    membership_expires_at: profile.membership_expires_at ?? null,\n",'');
+}
 // Older owner history may not be an ancestor after squash/integration merges. Only
 // normalize away the legacy video mount when the exact current main itself does
 // not contain that reviewed mount. Never delete content that main now owns.
@@ -210,6 +396,15 @@ if(!mainRoute.includes("import { accountReadonlyRuntimeService } from '../featur
    "  createAccountReadonlyRouter(accountReadonlyRuntimeService),",
    "  createAccountReadonlyRouter(new AccountReadonlyService(\n    createVaultBackedAccountReaders(),\n    accountReadFlags(),\n    () => new Date(),\n    accountReadonlyCredentialConfigured,\n  )),",
  );
+// PR #1682 adds one runtime-flagged, staging-only public rehearsal endpoint.
+// Normalize only these exact reviewed lines before comparing with current main;
+// every other main route byte remains protected.
+if(!mainRoute.includes("import autoRehearsalPreviewRouter from './auto-rehearsal-preview';"))current=current
+ .replace("\nimport autoRehearsalPreviewRouter from './auto-rehearsal-preview';",'')
+ .replace(
+   "\n// PR-only isolated rehearsal preview. This route is runtime-flagged and only\n// runs synthetic safety gates plus the local Paper engine; it never reads member,\n// credential, Telegram, or production data and is disabled outside staging.\nrouter.use('/', autoRehearsalPreviewRouter);\n",
+   '',
+ );
 if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 const protectedPathExceptions=new Map([
@@ -217,6 +412,39 @@ const protectedPathExceptions=new Map([
   'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js',
   'market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js',
   'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',
+  'market-prediction-lab/src/video-research-canonical-handoff-v1.js',
+  'market-prediction-lab/src/evidence-backed-formula-entry-evaluator-v1.js',
+  'market-prediction-lab/tests/evidence-backed-formula-entry-evaluator-v1.test.js',
+  'market-prediction-lab/tests/video-research-canonical-handoff-v1.test.js',
+ ])],
+ ['research-production',new Set([
+  'research-production/bin/research-approved-job-intake.mjs',
+  'research-production/bin/research-maintenance.mjs',
+  'research-production/deploy/activate-ai-research.sh',
+  'research-production/deploy/activate-server.sh',
+  'research-production/deploy/install-ai-research-units.sh',
+  'research-production/deploy/research-production-ai-review.timer',
+  'research-production/deploy/research-production-approved-job-intake.service',
+  'research-production/deploy/research-production-approved-job-intake.timer',
+  'research-production/deploy/research-production-factory-status.timer',
+  'research-production/deploy/research-production-fast-historical.timer',
+  'research-production/deploy/research-production-forward.timer',
+  'research-production/deploy/research-production-long-history.timer',
+  'research-production/deploy/research-production-maintenance.service',
+  'research-production/deploy/research-production-maintenance.timer',
+  'research-production/deploy/research-production-temporal-evidence.timer',
+  'research-production/deploy/research-production-video-discovery.timer',
+  'research-production/deploy/research-production-workspace-worker.service',
+  'research-production/deploy/research-video.env.example',
+  'research-production/src/research-ai-review-worker.mjs',
+  'research-production/src/research-video-discovery-worker.mjs',
+  'research-production/test/research-ai-activation-contract.test.mjs',
+  'research-production/test/research-ai-review-worker.test.mjs',
+  'research-production/test/research-ai-units-install-contract.test.mjs',
+  'research-production/test/research-approved-job-intake.test.mjs',
+  'research-production/test/research-maintenance.test.mjs',
+  'research-production/test/research-engine.test.mjs',
+  'research-production/test/server-risk-policy-env-transport.test.mjs',
  ])],
  ['research-dashboard',new Set([
   'research-dashboard/server.py',
@@ -225,6 +453,12 @@ const protectedPathExceptions=new Map([
  ['stock-analyzer/src/pages/research-center.tsx',new Set([
   'stock-analyzer/src/pages/research-center.tsx',
  ])],
+ ['api-server/src/middleware/auth.ts',memberAccessContractChanged
+   ? new Set(['api-server/src/middleware/auth.ts'])
+   : new Set()],
+ ['packages/member-access',memberAccessContractChanged
+   ? new Set(['packages/member-access/src/index.js','packages/member-access/src/index.d.ts'])
+   : new Set()],
 ]);
 for(const p of protectedPaths){
  const exceptions=protectedPathExceptions.get(p);

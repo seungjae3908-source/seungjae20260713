@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml'
       - 'ops/activate-public-forward-liquidity-server-canonical-v1.sh'
+      - 'ops/check-public-forward-liquidity-server-component-equivalence-v1.sh'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-server-component-paths-v1.txt'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-activation-v1.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs'
@@ -56,6 +58,10 @@ jobs:
           node --check market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-activation-v1.mjs
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
           bash -n ops/activate-public-forward-liquidity-server-canonical-v1.sh
+          bash -n ops/check-public-forward-liquidity-server-component-equivalence-v1.sh
+          same_sha="$(git rev-parse HEAD)"
+          component_json="$(SOURCE_DIR="$PWD" BASE_SHA="$same_sha" HEAD_SHA="$same_sha" bash ops/check-public-forward-liquidity-server-component-equivalence-v1.sh)"
+          node -e 'const v=JSON.parse(process.argv[1]); if(v.componentEquivalentCurrentMain!==true||v.evidenceSha!==v.currentMainSha) process.exit(1);' "$component_json"
           node --test \
             market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-activation-v1.test.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-server-canonical-runtime-v1.test.mjs
@@ -93,13 +99,15 @@ jobs:
           grep -Fq 'prepare-activation' "$installer"
           grep -Fq 'chmod 0644 "$ACTIVATION_PATH"' "$installer"
           grep -Fq 'verifyProtectedAuthorityComments' "$runner"
+          grep -Fq 'issueNumberFromComment' "$runner"
+          grep -Fq 'componentEquivalentCurrentMain' "$runner"
+          grep -Fq 'check-public-forward-liquidity-server-component-equivalence-v1.sh' "$installer"
+          grep -Fq 'issueNumber: authorityEvidence.issueNumber' "$runner"
+          ! grep -Fq '/issues/23/comments' "$runner"
+          ! grep -Fq 'issueNumber: 23' "$runner"
           grep -Fq 'matchingCanonicalReceipts' "$runner"
           grep -Fq 'SERVER_CANONICAL_HISTORICAL_SHADOW_ZERO_CREDIT_UNPROVEN' "$runner"
           grep -Fq 'canonicalEconomicCredit: 0' "$runner"
-          grep -Fq 'github.event.issue.number == 1555' "$workflow"
-          grep -Fq "context.payload.issue?.title !== 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
-          grep -Fq 'issue_number: 1555' "$workflow"
-          ! grep -Eq 'github\.event\.issue\.number == 23\b|issue_number:[[:space:]]*23\b' "$workflow"
           ! grep -Eq 'LIVE_TRADING=true|AUTO_TRADING=true|REAL_ORDER_ENABLED=true|PRIVATE_TRADING_API_ALLOWED=true' "$workflow" "$installer" "$service" "$runner"
           ! grep -Eq 'contents:[[:space:]]+write|actions:[[:space:]]+write|issues:[[:space:]]+write|pull-requests:[[:space:]]+write|deployments:[[:space:]]+write|id-token:[[:space:]]+write' "$workflow"
 
@@ -107,8 +115,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 1555 &&
       !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/activate-public-forward-liquidity-server-canonical-v1 ')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -118,6 +128,8 @@ jobs:
       binding_digest: ${{ steps.command.outputs.binding_digest }}
       authority_comment_id: ${{ steps.command.outputs.authority_comment_id }}
       authorized_at_ms: ${{ steps.command.outputs.authorized_at_ms }}
+      receipt_target_sha: ${{ steps.receipt.outputs.receipt_target_sha }}
+      component_digest: ${{ steps.component.outputs.component_digest }}
     steps:
       - name: Parse exact OWNER canonical activation authority
         id: command
@@ -136,8 +148,10 @@ jobs:
               core.setFailed('SERVER_CANONICAL_ACTIVATION_OWNER_REQUIRED');
               return;
             }
-            if (context.payload.issue?.state !== 'open'
-                || context.payload.issue?.title !== 'Staging Readiness Control — Rollover 2026-10-02') {
+            const releaseControlTitle = String(context.payload.issue?.title ?? '');
+            const validReleaseControl = releaseControlTitle === 'Staging Readiness Control'
+              || releaseControlTitle.startsWith('Staging Readiness Control — Rollover ');
+            if (context.payload.issue?.state !== 'open' || !validReleaseControl) {
               core.setFailed('SERVER_CANONICAL_RELEASE_CONTROL_INVALID');
               return;
             }
@@ -167,7 +181,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.command.outputs.target_sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Require exact current main
@@ -219,36 +233,68 @@ jobs:
             }
             core.info('SERVER_CANONICAL_REQUIRED_CI_6_OF_6 run=' + verified.runId);
 
-      - name: Verify exact current-main V3 OWNER receipt remains latest
+      - name: Resolve latest authoritative V3 receipt target
+        id: receipt
         uses: actions/github-script@v7
         env:
-          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
           RECEIPT_COMMENT_ID: ${{ steps.command.outputs.receipt_comment_id }}
           BINDING_DIGEST: ${{ steps.command.outputs.binding_digest }}
         with:
           script: |
-            const targetSha = process.env.TARGET_SHA;
             const bindingDigest = process.env.BINDING_DIGEST;
             const receiptId = Number(process.env.RECEIPT_COMMENT_ID);
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
             const revoke = '/revoke-public-only-partial-fill-v3-schedule-activation';
+            const receipt = (await github.rest.issues.getComment({
+              owner: context.repo.owner, repo: context.repo.repo, comment_id: receiptId,
+            })).data;
+            const issueNumber = Number(String(receipt.issue_url ?? '').split('/').pop());
+            const parts = String(receipt.body ?? '').trim().split(/\s+/u);
+            if (receipt.user?.login !== context.repo.owner
+                || receipt.author_association !== 'OWNER'
+                || issueNumber !== Number(context.payload.issue.number)
+                || parts.length !== 3
+                || parts[0] !== authorize
+                || !/^[a-f0-9]{40}$/u.test(parts[1])
+                || parts[2] !== bindingDigest) {
+              core.setFailed('SERVER_CANONICAL_V3_RECEIPT_INVALID');
+              return;
+            }
+            const receiptTargetSha = parts[1];
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.payload.issue.number, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             let latest = null;
             for (const comment of comments) {
               if (comment.user?.login !== context.repo.owner
                   || comment.author_association !== 'OWNER') continue;
-              const parts = String(comment.body ?? '').trim().split(/\s+/u);
-              if (parts.length !== 3 || (parts[0] !== authorize && parts[0] !== revoke)) continue;
-              if (parts[1] !== targetSha || parts[2] !== bindingDigest) continue;
-              latest = { id: Number(comment.id), action: parts[0] === authorize ? 'AUTHORIZE' : 'REVOKE' };
+              const candidate = String(comment.body ?? '').trim().split(/\s+/u);
+              if (candidate.length !== 3 || (candidate[0] !== authorize && candidate[0] !== revoke)) continue;
+              if (candidate[1] !== receiptTargetSha || candidate[2] !== bindingDigest) continue;
+              latest = { id: Number(comment.id), action: candidate[0] === authorize ? 'AUTHORIZE' : 'REVOKE' };
             }
             if (!latest || latest.action !== 'AUTHORIZE' || latest.id !== receiptId) {
               core.setFailed('SERVER_CANONICAL_V3_RECEIPT_NOT_LATEST_AUTHORITATIVE');
               return;
             }
+            core.setOutput('receipt_target_sha', receiptTargetSha);
+
+      - name: Require component-equivalent Shadow receipt target
+        id: component
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          RECEIPT_TARGET_SHA: ${{ steps.receipt.outputs.receipt_target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$RECEIPT_TARGET_SHA"
+          json="$(SOURCE_DIR="$PWD" BASE_SHA="$RECEIPT_TARGET_SHA" HEAD_SHA="$TARGET_SHA" bash ops/check-public-forward-liquidity-server-component-equivalence-v1.sh)"
+          echo "$json"
+          digest="$(node -e 'const v=JSON.parse(process.argv[1]); if(v.componentEquivalentCurrentMain!==true) process.exit(1); process.stdout.write(v.currentComponentDigest);' "$json")"
+          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+          echo "component_digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Verify immutable activation binding and default-off runtime
         env:
@@ -288,6 +334,8 @@ jobs:
       BINDING_DIGEST: ${{ needs.activation-gate.outputs.binding_digest }}
       AUTHORITY_COMMENT_ID: ${{ needs.activation-gate.outputs.authority_comment_id }}
       AUTHORIZED_AT_MS: ${{ needs.activation-gate.outputs.authorized_at_ms }}
+      RECEIPT_TARGET_SHA: ${{ needs.activation-gate.outputs.receipt_target_sha }}
+      COMPONENT_DIGEST: ${{ needs.activation-gate.outputs.component_digest }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
       - name: Revalidate exact main and receipt after Production approval
@@ -296,6 +344,7 @@ jobs:
           TARGET_SHA: ${{ env.TARGET_SHA }}
           RECEIPT_COMMENT_ID: ${{ env.RECEIPT_COMMENT_ID }}
           BINDING_DIGEST: ${{ env.BINDING_DIGEST }}
+          RECEIPT_TARGET_SHA: ${{ env.RECEIPT_TARGET_SHA }}
         with:
           script: |
             const main = (await github.rest.repos.getBranch({
@@ -306,7 +355,7 @@ jobs:
               return;
             }
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo, issue_number: 1555, per_page: 100,
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.payload.issue.number, per_page: 100,
             });
             comments.sort((a, b) => Number(a.id) - Number(b.id));
             const authorize = '/authorize-public-only-partial-fill-v3-schedule-activation';
@@ -316,7 +365,7 @@ jobs:
               if (comment.user?.login !== context.repo.owner || comment.author_association !== 'OWNER') continue;
               const parts = String(comment.body ?? '').trim().split(/\s+/u);
               if (parts.length !== 3 || (parts[0] !== authorize && parts[0] !== revoke)) continue;
-              if (parts[1] !== process.env.TARGET_SHA || parts[2] !== process.env.BINDING_DIGEST) continue;
+              if (parts[1] !== process.env.RECEIPT_TARGET_SHA || parts[2] !== process.env.BINDING_DIGEST) continue;
               latest = { id: Number(comment.id), action: parts[0] === authorize ? 'AUTHORIZE' : 'REVOKE' };
             }
             if (!latest || latest.action !== 'AUTHORIZE'
@@ -333,6 +382,8 @@ jobs:
           [[ "$BINDING_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           [[ "$AUTHORITY_COMMENT_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$AUTHORIZED_AT_MS" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RECEIPT_TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMPONENT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
           [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
 
       - name: Configure Production SSH
@@ -351,8 +402,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q ACTIVATION_RECEIPT_COMMENT_ID=%q ACTIVATION_BINDING_DIGEST=%q CANONICAL_AUTHORITY_COMMENT_ID=%q CANONICAL_AUTHORIZED_AT_MS=%q REPOSITORY_URL=%q' \
-            "$TARGET_SHA" "$RECEIPT_COMMENT_ID" "$BINDING_DIGEST" "$AUTHORITY_COMMENT_ID" "$AUTHORIZED_AT_MS" "$REPOSITORY_URL")"
+          remote_env="$(printf 'TARGET_SHA=%q ACTIVATION_RECEIPT_COMMENT_ID=%q ACTIVATION_BINDING_DIGEST=%q CANONICAL_AUTHORITY_COMMENT_ID=%q CANONICAL_AUTHORIZED_AT_MS=%q ACTIVATION_RECEIPT_MAIN_SHA=%q EXPECTED_COMPONENT_DIGEST=%q REPOSITORY_URL=%q' \
+            "$TARGET_SHA" "$RECEIPT_COMMENT_ID" "$BINDING_DIGEST" "$AUTHORITY_COMMENT_ID" "$AUTHORIZED_AT_MS" "$RECEIPT_TARGET_SHA" "$COMPONENT_DIGEST" "$REPOSITORY_URL")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
@@ -377,6 +428,8 @@ jobs:
             ACTIVATION_BINDING_DIGEST="$ACTIVATION_BINDING_DIGEST" \
             CANONICAL_AUTHORITY_COMMENT_ID="$CANONICAL_AUTHORITY_COMMENT_ID" \
             CANONICAL_AUTHORIZED_AT_MS="$CANONICAL_AUTHORIZED_AT_MS" \
+            ACTIVATION_RECEIPT_MAIN_SHA="$ACTIVATION_RECEIPT_MAIN_SHA" \
+            EXPECTED_COMPONENT_DIGEST="$EXPECTED_COMPONENT_DIGEST" \
             SOURCE_DIR="$SOURCE_DIR" \
             bash "$INSTALLER"
           privileged systemctl list-timers public-forward-liquidity-server-canonical-worker-v1.timer --all --no-pager
@@ -387,6 +440,8 @@ jobs:
           {
             echo '## Server Canonical V1 protected activation'
             echo "- target SHA: $TARGET_SHA"
+            echo "- Shadow evidence SHA: $RECEIPT_TARGET_SHA"
+            echo "- component digest: $COMPONENT_DIGEST"
             echo "- V3 activation receipt: $RECEIPT_COMMENT_ID"
             echo "- canonical authority comment: $AUTHORITY_COMMENT_ID"
             echo '- prior SHADOW timer disabled only after readiness record succeeds'

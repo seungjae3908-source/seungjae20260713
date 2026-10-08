@@ -89,9 +89,6 @@ jobs:
           test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
           ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
           ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
-          grep -Fq 'issue_number: 1555' "$workflow"
-          grep -Fq "release.title !== 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
-          ! grep -Eq 'issue_number:[[:space:]]*23\b' "$workflow"
 
       - name: Syntax check existing seam, runner, V3 reliability, and Phase 2 policy contracts
         run: |
