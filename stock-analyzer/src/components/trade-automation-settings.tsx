@@ -98,6 +98,8 @@ type Status = {
     enabled: boolean;
     lastTickAt: string | null;
     tickOk: boolean | null;
+    deliveryConfirmed?: boolean;
+    lastConfirmedDeliveryAt?: string | null;
     errorCode: string | null;
   } | null;
 };

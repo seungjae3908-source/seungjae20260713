@@ -709,6 +709,8 @@ jobs:
                   && health?.globalEmergencyStopActive === false
                   && last?.userTelegramDelivery?.enabled === true
                   && last?.userTelegramDelivery?.tickOk === true
+                  && last?.userTelegramDelivery?.deliveryConfirmed === true
+                  && last?.userTelegramDelivery?.lastConfirmedDeliveryAt
                   && last?.userTelegramDelivery?.errorCode == null
                   && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
                   return health;
