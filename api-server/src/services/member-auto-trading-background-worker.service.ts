@@ -52,7 +52,7 @@ import { createSupabaseUserBrokerTelegramRepository } from '../features/user-bro
 import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
 import { readUserTelegramDeliveryWorkerHealth, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from '../features/user-broker-telegram/user-broker-telegram.worker';
-import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
+import type { TelegramTransport, UserTelegramConnection } from '../features/user-broker-telegram/user-broker-telegram.types';
 import {
   evaluateRulePackPilotEntryGuard,
   readRulePackPilotCapitalState,
@@ -130,6 +130,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveEntriesSuppressedByWarmupOrArm: number;
   liveEntriesSuppressedByTelegram: number;
   liveExitsSuppressedByWarmupOrArm: number;
+  liveExitsSuppressedByPolicy: number;
   runtimeRefreshes: number;
   executionSyncBlocks: number;
   overlapSkipped: boolean;
@@ -183,6 +184,7 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   firstWarmupTickLiveExitOrders: number | null;
   liveTrackedPositions: number;
   liveExitsSuppressedByWarmupOrArm: number;
+  liveExitsSuppressedByPolicy: number;
   executionSyncFailures: number;
   executionSyncMissingReferences: number;
   liveOrderEligibleMembers: number;
@@ -213,6 +215,7 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   firstWarmupTickLiveExitOrders: null,
   liveTrackedPositions: 0,
   liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
   executionSyncFailures: 0,
   executionSyncMissingReferences: 0,
   liveOrderEligibleMembers: 0,
@@ -1181,6 +1184,7 @@ export class MemberAutoTradingBackgroundWorker {
       liveEntriesSuppressedByWarmupOrArm: 0,
       liveEntriesSuppressedByTelegram: 0,
       liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
       runtimeRefreshes: 0,
       executionSyncBlocks: 0,
       overlapSkipped: false,
@@ -1248,7 +1252,10 @@ export class MemberAutoTradingBackgroundWorker {
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
       result.liveOrderEligibleMembers = members.filter((member) =>
-        hasCapability(member.profile, 'canPlaceOrders')).length;
+        hasCapability(member.profile, 'canPlaceOrders')
+        && member.policy.mode === 'automatic'
+        && member.policy.automaticEnabled
+        && !member.policy.emergencyStopped).length;
       const batch = selectRotatingHandoffEntries(
         result.handoffReady ? handoff!.entries : [],
         this.handoffEntryOffset,
@@ -1261,6 +1268,8 @@ export class MemberAutoTradingBackgroundWorker {
       let paperAccountMissingThisTick = false;
 
       for (const member of members) {
+        const memberAutoExecutionEnabled = member.policy.mode === 'automatic'
+          && member.policy.automaticEnabled && !member.policy.emergencyStopped;
         if (!hasCapability(member.profile, 'canAccessAutoTrading')) {
           result.skipped += entries.length;
           continue;
@@ -1279,7 +1288,7 @@ export class MemberAutoTradingBackgroundWorker {
           result.newEntriesFailClosed = true;
           continue;
         }
-        if (!runtime.paperAccountReady) {
+        if (!runtime.paperAccountReady && memberAutoExecutionEnabled) {
           paperAccountMissingThisTick = true;
           result.newEntriesFailClosed = true;
           result.failures += 1;
@@ -1336,7 +1345,7 @@ export class MemberAutoTradingBackgroundWorker {
         let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
         let entryProjectionHealthy = await syncExecutionProjection();
         let exitChanged = false;
-        for (const position of runtime.paperAccountReady
+        for (const position of memberAutoExecutionEnabled && runtime.paperAccountReady
           ? trackedAutomaticPositions(runtime, 'paper') : []) {
           try {
             const exit = await processAutomaticExit({
@@ -1367,7 +1376,12 @@ export class MemberAutoTradingBackgroundWorker {
         if (liveModeRequested) {
           const livePositions = trackedAutomaticPositions(runtime, 'live');
           result.liveTrackedPositions += livePositions.length;
-          if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
+          if (!memberAutoExecutionEnabled) {
+            // Emergency-stop / AUTO OFF must not erase existing Live positions
+            // from observation, nor silently run them under manual authority.
+            result.liveExitsSuppressedByPolicy += livePositions.length;
+            if (livePositions.length) result.newEntriesFailClosed = true;
+          } else if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
             result.liveExitsSuppressedByWarmupOrArm += livePositions.length;
           } else {
             for (const position of livePositions) {
@@ -1416,6 +1430,12 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
 
+        // AUTO OFF members remain visible for read-only Live position
+        // monitoring. No Paper or Live auto entries/exits are submitted.
+        if (!memberAutoExecutionEnabled) {
+          result.skipped += entries.length;
+          continue;
+        }
         // Maintain eligible Live exits above even when Paper storage is
         // absent. Do not create Paper or Live entries using placeholder equity.
         if (!runtime.paperAccountReady) {
@@ -1639,6 +1659,7 @@ export class MemberAutoTradingBackgroundWorker {
         result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
 
         const hardWarmupBlock = !result.handoffReady
+          || result.liveExitsSuppressedByPolicy > 0
           || paperAccountMissingThisTick
           || result.executionSyncFailures > 0
           || result.executionSyncMissingReferences > 0
@@ -1682,6 +1703,18 @@ export class MemberAutoTradingBackgroundWorker {
   }
 }
 
+export function memberTelegramProofMatchesCurrentBinding(
+  connection: Pick<UserTelegramConnection, 'status' | 'telegramChatId' | 'connectedAt'> | null | undefined,
+  receipt: { state?: string | null; updated_at?: string | null } | null | undefined,
+  nowMs = Date.now(),
+) {
+  if (connection?.status !== 'ACTIVE' || !connection.telegramChatId?.trim()) return false;
+  const boundMs = Date.parse(connection.connectedAt ?? '');
+  if (!Number.isFinite(boundMs) || boundMs > nowMs + 5_000) return false;
+  const confirmedAt = verifiedRecentTelegramDeliveryReceipt(receipt, nowMs);
+  return confirmedAt != null && Date.parse(confirmedAt) >= boundMs;
+}
+
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
   private memberBatchCursor: string | null = null;
@@ -1709,7 +1742,8 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   async listEligibleMembers() {
     let query = this.client.from('trade_automation_profiles')
       .select('user_id,payload')
-      .contains('payload', { mode: 'automatic', automaticEnabled: true })
+      // Include previously automatic members after their policy is switched
+      // off, so outstanding Live positions remain visible to the supervisor.
       .order('user_id', { ascending: true })
       .limit(MAX_MEMBERS_PER_TICK + 1);
     if (this.memberBatchCursor) query = query.gt('user_id', this.memberBatchCursor);
@@ -1725,7 +1759,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       const userId = String(row.user_id ?? '').trim();
       if (!userId) return [];
       const policy = normalizeTradingPolicy((row.payload ?? {}) as Partial<TradingPolicy>);
-      return policy.mode === 'automatic' && policy.automaticEnabled ? [{ userId, policy }] : [];
+      return [{ userId, policy }];
     });
     if (rows.length === 0) return [];
     const { data: profiles, error: profileError } = await this.client.from('profiles')
@@ -1752,19 +1786,21 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const connection = await createSupabaseUserBrokerTelegramRepository()
       .getTelegramConnection(userId);
     if (connection?.status !== 'ACTIVE' || !connection.telegramChatId) return false;
-    // Global worker SENT can belong to another user. Only a genuine, recent
-    // execution delivery to this SAME member can prove their chat works.
+    // The member may have revoked and rebound to a different chat. A SENT
+    // proof for the old binding must never arm a new Live entry.
     const nowMs = Date.now();
+    const bindingMs = Date.parse(connection.connectedAt);
+    if (!Number.isFinite(bindingMs) || bindingMs > nowMs + 5_000) return false;
     const { data, error } = await this.client.from('notification_deliveries')
       .select('state,updated_at')
       .eq('user_id', userId)
       .eq('delivery_kind', 'EXECUTION_EVENT')
       .in('state', ['SENT', 'RETRY_SCHEDULED', 'DEAD_LETTER', 'FAILED'])
-      .gte('updated_at', new Date(nowMs - 24 * 60 * 60_000).toISOString())
+      .gte('updated_at', new Date(Math.max(bindingMs, nowMs - 24 * 60 * 60_000)).toISOString())
       .order('updated_at', { ascending: false })
       .limit(1);
     if (error) throw new Error('BACKGROUND_MEMBER_TELEGRAM_SENT_RECEIPT_REQUIRED');
-    return verifiedRecentTelegramDeliveryReceipt(data?.[0] ?? null, nowMs) !== null;
+    return memberTelegramProofMatchesCurrentBinding(connection, data?.[0] ?? null, nowMs);
   }
 
   async revalidateLiveAllFourReadiness(userId: string) {
@@ -1863,6 +1899,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       firstWarmupTickLiveExitOrders: null,
       liveTrackedPositions: 0,
       liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
       executionSyncFailures: 0,
       executionSyncMissingReferences: 0,
       liveOrderEligibleMembers: 0,
@@ -1897,6 +1934,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       firstWarmupTickLiveExitOrders: null,
       liveTrackedPositions: 0,
       liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
       executionSyncFailures: 0,
       executionSyncMissingReferences: 0,
       liveOrderEligibleMembers: 0,
@@ -1930,6 +1968,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     firstWarmupTickLiveExitOrders: null,
     liveTrackedPositions: 0,
     liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
     executionSyncFailures: 0,
     executionSyncMissingReferences: 0,
     liveOrderEligibleMembers: 0,
@@ -1973,6 +2012,7 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
           : backgroundRuntimeHealth.firstWarmupTickLiveExitOrders,
         liveTrackedPositions: result.liveTrackedPositions,
         liveExitsSuppressedByWarmupOrArm: result.liveExitsSuppressedByWarmupOrArm,
+        liveExitsSuppressedByPolicy: result.liveExitsSuppressedByPolicy,
         executionSyncFailures: result.executionSyncFailures,
         executionSyncMissingReferences: result.executionSyncMissingReferences,
         liveOrderEligibleMembers: result.liveOrderEligibleMembers,
@@ -1992,7 +2032,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         || result.exitBlocked > 0 || result.executionSyncBlocks > 0
         || result.liveEntriesSuppressedByWarmupOrArm > 0
         || result.liveEntriesSuppressedByTelegram > 0
-        || result.liveExitsSuppressedByWarmupOrArm > 0 || result.failures > 0) {
+        || result.liveExitsSuppressedByWarmupOrArm > 0
+        || result.liveExitsSuppressedByPolicy > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
