@@ -371,6 +371,7 @@ function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
   if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) {
     return false;
   }
+  if (policy.pilotStage === 'approval-20') return false;
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
   return policy.marketEnabled.domestic_stock
     && policy.marketEnabled.us_stock
