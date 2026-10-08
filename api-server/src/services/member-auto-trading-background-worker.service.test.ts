@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
+import { automaticLiveExecutionEnabled } from './trade-automation.service';
 import { DEFAULT_TRADING_POLICY, type TradingPolicy } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
@@ -472,6 +473,27 @@ test('dedicated Paper-only worker activation is default OFF, exact-flag-only, an
   } finally {
     for (const key of keys) {
       const value = prior[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only pilot also blocks the shared automatic Live service for every broker', () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+      assert.equal(automaticLiveExecutionEnabled(exchange), false, exchange);
+    }
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
       if (value == null) delete process.env[key];
       else process.env[key] = value;
     }
