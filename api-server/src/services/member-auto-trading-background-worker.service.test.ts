@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { automaticLiveExecutionEnabled } from './trade-automation.service';
+import { InMemoryUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
+import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
+import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import type { UserExecutionEvent } from '../features/user-broker-telegram/user-broker-telegram.types';
 import { DEFAULT_TRADING_POLICY, type ExchangeConnection, type TradingPlan, type TradingPolicy } from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
@@ -643,6 +647,121 @@ test('Paper-only override produces a canonical simulated fill and zero private/l
   } finally {
     for (const key of keys) {
       const value = prior[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Paper-only closed loop maps FILLED orders to canonical journal and fake Telegram SENT without private IO', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+    'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const trading = new InMemoryTradingRepository();
+  await trading.savePolicy(USER, policy());
+
+  const notificationRepository = new InMemoryUserBrokerTelegramRepository();
+  notificationRepository.setMemberProfile(USER, {
+    status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+  });
+  const sent: Array<{ chatId: string; text: string }> = [];
+  const journalEvents: UserExecutionEvent[] = [];
+  const notificationService = new UserBrokerTelegramService(
+    notificationRepository,
+    {
+      async send(chatId: string, text: string) {
+        sent.push({ chatId, text });
+        return { ok: true };
+      },
+    },
+    {
+      async accept(event: UserExecutionEvent) {
+        if (!journalEvents.some((row) => row.userId === event.userId && row.sourceEventId === event.sourceEventId)) {
+          journalEvents.push(structuredClone(event));
+        }
+      },
+    },
+    'paper_auto_ci_bot',
+  );
+  // Bind first so newly created fill events (not old history) are eligible.
+  const boundAt = new Date(nowMs - 5_000);
+  const link = await notificationService.createTelegramLink(USER, boundAt);
+  const token = new URL(link.deepLink!).searchParams.get('start');
+  assert.ok(token);
+  await notificationService.bindTelegramStart({
+    token, telegramChatId: 'paper-ci-chat', telegramUserId: 'paper-ci-user', now: boundAt,
+  });
+
+  let privateAccountReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...source(trading, nowMs),
+    async readLiveAccountSnapshot() {
+      privateAccountReads += 1;
+      throw new Error('PAPER_CLOSED_LOOP_PRIVATE_ACCOUNT_READ_FORBIDDEN');
+    },
+    async syncExecutionEvents({ userId, repository }) {
+      const synced = await new TradeExecutionEventBridgeService(repository, notificationService)
+        .syncUser(userId, 'associate');
+      assert.equal(synced.privateApiRequests, 0);
+      assert.equal(synced.ordersSubmitted, 0);
+      assert.equal(synced.ordersCancelled, 0);
+      return {
+        inserted: synced.inserted,
+        deliveryQueued: synced.deliveryQueued,
+        missingReferences: synced.missingReferences,
+      };
+    },
+  });
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
+    assert.equal(liveBackgroundEnabled(), false);
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.filledOrders, 1);
+    assert.equal(first.positionLifecycles, 1);
+    assert.equal(first.livePlans, 0);
+    assert.equal(first.liveOrders, 0);
+    assert.equal(first.privateTradingRequests, 0);
+    assert.equal(privateAccountReads, 0);
+    assert.equal(first.executionSyncFailures, 0);
+    assert.equal(first.executionSyncMissingReferences, 0);
+    assert.ok(first.executionEventsInserted > 0);
+    assert.ok(first.notificationDeliveriesQueued > 0);
+    assert.ok(journalEvents.some((event) =>
+      event.type === 'ORDER_FILLED'
+      && event.executionMethod === 'AUTO_POLICY'
+      && event.userId === USER));
+    const firstDeliveries = await notificationRepository.listDeliveries(USER);
+    assert.ok(firstDeliveries.length > 0);
+    assert.equal(sent.length, 0); // Worker queues; only the delivery worker sends.
+    for (const delivery of firstDeliveries) {
+      const delivered = await notificationService.processDelivery(USER, delivery.id);
+      assert.equal(delivered.state, 'SENT');
+    }
+    assert.equal(sent.length, firstDeliveries.length);
+    assert.ok(sent.every((message) => message.chatId === 'paper-ci-chat'));
+
+    const repeated = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(repeated.filledOrders, 0);
+    assert.equal(repeated.executionEventsInserted, 0);
+    assert.equal(repeated.notificationDeliveriesQueued, 0);
+    assert.equal(repeated.liveOrders, 0);
+    assert.equal(repeated.privateTradingRequests, 0);
+    assert.equal((await trading.listOrders(USER)).length, 1);
+    assert.equal((await notificationRepository.listDeliveries(USER)).length, firstDeliveries.length);
+    assert.equal(privateAccountReads, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
       if (value == null) delete process.env[key];
       else process.env[key] = value;
     }
