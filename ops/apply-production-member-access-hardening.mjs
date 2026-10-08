@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const SCHEMA_VERSION = 'production-member-access-hardening-v1';
+const SCHEMA_VERSION = 'production-member-access-hardening-v2';
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
@@ -319,7 +319,7 @@ const sql = [
   'begin;',
   "set local lock_timeout = '5s';",
   "set local statement_timeout = '60s';",
-  "select pg_advisory_xact_lock(hashtextextended('production-member-access-hardening-v1', 0));",
+  "select pg_advisory_xact_lock(hashtextextended('production-member-access-hardening-v2', 0));",
   "select set_config('app.approved_target_sha', '" + approvedTargetSha + "', true);",
   preflightSql,
   migrationBody,
