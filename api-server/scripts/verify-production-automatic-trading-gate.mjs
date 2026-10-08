@@ -82,6 +82,9 @@ requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSI
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
 requireText(workflow, 'armLiveEntries();', 'AUTO_GATE_POST_WARMUP_ARM_MISSING');
 requireText(workflow, 'LIVE_ENTRY_ARM_READBACK_PROVEN: true', 'AUTO_GATE_LIVE_ENTRY_ARM_READBACK_PROOF_MISSING');
+requireText(workflow, 'liveEntryArmActivationDelayMs = 120_000', 'AUTO_GATE_ARM_DELAY_MISSING');
+requireText(workflow, 'activateNotBeforeAt', 'AUTO_GATE_ARM_NOT_BEFORE_MISSING');
+requireText(workflow, 'LIVE_ENTRY_ARM_ACTIVATION_DELAY_MS: liveEntryArmActivationDelayMs', 'AUTO_GATE_ARM_DELAY_RECEIPT_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READABILITY_INVALID', 'AUTO_GATE_ARM_WORKER_READABILITY_CHECK_MISSING');
 requireText(workflow, "statSync('/proc/' + Number(matches[0].pid)).uid", 'AUTO_GATE_ARM_WORKER_UID_CHECK_MISSING');
 requireText(workflow, "(stat.mode & 0o077) !== 0", 'AUTO_GATE_ARM_FILE_PERMISSION_CHECK_MISSING');
@@ -107,6 +110,7 @@ requireText(workflow, "'first_warmup_tick_live_orders=0'", 'AUTO_GATE_FIRST_TICK
 requireText(workflow, "'first_warmup_tick_live_exit_orders=0'", 'AUTO_GATE_FIRST_TICK_EXIT_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_entry_arm_written=true'", 'AUTO_GATE_ARM_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_entry_arm_readback_proven=true'", 'AUTO_GATE_ARM_READBACK_HUB_RECEIPT_MISSING');
+requireText(workflow, "'live_entry_arm_activation_delay_ms=120000'", 'AUTO_GATE_ARM_DELAY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true'", 'AUTO_GATE_NEXT_TICK_REHEARSAL_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_readiness_cycle_complete=true'", 'AUTO_GATE_CYCLE_COMPLETE_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_cycle_order_eligible=true'", 'AUTO_GATE_CYCLE_ORDER_ELIGIBLE_HUB_RECEIPT_MISSING');
@@ -232,12 +236,16 @@ for (const token of [
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
+requireText(paperWorker, 'activateNotBeforeMs >= armedAtMs', 'AUTO_GATE_WORKER_ARM_TIMESTAMP_ORDER_MISSING');
+requireText(paperWorker, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_NOT_BEFORE_ENFORCEMENT_MISSING');
 requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(telegramWorker, 'export function readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_READER_MISSING');
 requireText(telegramWorker, "tickOk: true", 'AUTO_GATE_TELEGRAM_WORKER_SUCCESS_HEALTH_MISSING');
 requireText(paperWorkerTest, 'zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', 'AUTO_GATE_ZERO_MUTATION_ACTIVATION_REHEARSAL_MISSING');
+requireText(paperWorkerTest, 'activateNotBeforeAt: new Date(nowMs + 1_500).toISOString()', 'AUTO_GATE_DELAYED_ARM_REHEARSAL_MISSING');
+requireText(paperWorkerTest, 'assert.equal(quarantined.liveEntriesArmed, false);', 'AUTO_GATE_PRE_NOT_BEFORE_BLOCK_PROOF_MISSING');
 requireText(paperWorkerTest, 'assert.equal(armed.liveEntriesArmed, true);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ARM_PROOF_MISSING');
 requireText(paperWorkerTest, 'assert.equal(armed.liveOrders, 0);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ZERO_ORDER_PROOF_MISSING');
 requireText(paperWorkerTest, 'assert.equal(armed.privateTradingRequests, 0);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ZERO_PROVIDER_MUTATION_PROOF_MISSING');
@@ -374,6 +382,7 @@ console.log(JSON.stringify({
   zeroMutationActivationRehearsal: true,
   postArmExactShaReadbackRequired: true,
   productionActivationStaysZeroOrder: true,
+  delayedLiveArmActivation: true,
   controlledDisableRequiresZeroLivePositions: true,
   liveExitOrdersArmGuarded: true,
   liveMemberAndPolicyReadinessRequired: true,
