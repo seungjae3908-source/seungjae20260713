@@ -68,6 +68,13 @@ requireText(preactivation, "event: 'workflow_dispatch'", 'AUTO_GATE_DEPLOY_EVENT
 requireText(preactivation, "run.event === 'workflow_dispatch'", 'AUTO_GATE_DEPLOY_EVENT_RECHECK_MISSING');
 requireText(preactivation, 'production-live-credential-reuse-', 'AUTO_GATE_CREDENTIAL_REUSE_ARTIFACT_MISSING');
 requireText(preactivation, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
+requireText(workflow, "workflow_id: 'production-account-readonly-live-qa.yml'", 'AUTO_GATE_ACCOUNT_QA_WORKFLOW_LOOKUP_MISSING');
+requireText(workflow, 'const accountArtifactName = `production-account-readonly-live-${target}`;', 'AUTO_GATE_ACCOUNT_QA_ARTIFACT_LOOKUP_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED:', 'AUTO_GATE_EXACT_ACCOUNT_QA_REQUIRED_MISSING');
+requireText(workflow, 'run.path === '.github/workflows/production-account-readonly-live-qa.yml'', 'AUTO_GATE_ACCOUNT_QA_WORKFLOW_IDENTITY_MISSING');
+requireText(workflow, "run.event === 'workflow_dispatch'", 'AUTO_GATE_ACCOUNT_QA_EVENT_RECHECK_MISSING');
+requireText(workflow, 'Date.parse(run.updated_at || run.created_at || '') >= productionCompletedAt', 'AUTO_GATE_ACCOUNT_QA_POST_DEPLOY_FRESHNESS_MISSING');
+requireText(workflow, 'run_id: candidate.id', 'AUTO_GATE_ACCOUNT_QA_ARTIFACT_PROVENANCE_MISSING');
 requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
 requireText(workflow, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED', 'AUTO_GATE_PAPER_RUNTIME_RECEIPT_MISSING');
@@ -169,6 +176,7 @@ requireText(workflow, "['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)
 forbid(paperWorker, /signalReasons\.filter\(\(reason\) => reason !== 'CANONICAL_PAPER_HANDOFF'\)/u, 'AUTO_GATE_PAPER_LINEAGE_REMOVAL_FORBIDDEN');
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
 forbid(workflow, /if\s*\(false\)/u, 'AUTO_GATE_DEAD_VALIDATION_BLOCK_FORBIDDEN');
+forbid(workflow, /if:\s*\$\{\{\s*false\s*\}\}/u, 'AUTO_GATE_YAML_DEAD_VALIDATION_BLOCK_FORBIDDEN');
 forbid(workflow, /WITHDRAW[^\n]*true/i, 'AUTO_GATE_WITHDRAW_ENABLE_FORBIDDEN');
 forbid(workflow, /TRANSFER[^\n]*true/i, 'AUTO_GATE_TRANSFER_ENABLE_FORBIDDEN');
 
@@ -229,6 +237,10 @@ for (const token of [
   "this.source.telegramDeliveryHealthy?.(Date.now()) !== true",
   "result.liveEntriesSuppressedByTelegram += 1;",
   "telegramDeliveryHealthy(nowMs: number)",
+  'liveAllFourConnectionVerificationReady',
+  "const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];",
+  'liveAllFourConnectionVerificationReady(policy, connections, nowMs)',
+  'runtime.paperAccountReady',
   'executionSyncBlocks',
   'executionSyncMissingReferences',
   'if (synced.missingReferences > 0)',
