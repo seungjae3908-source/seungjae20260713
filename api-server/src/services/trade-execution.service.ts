@@ -8,6 +8,7 @@ import {
 } from './trade-automation.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
@@ -1014,6 +1015,21 @@ export class TradeExecutionService {
       || process.env.TRADING_EMERGENCY_STOP === 'true'
       || await this.repository.getGlobalEmergencyStop()) {
       throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    }
+    // Recheck the CURRENT member financial ceiling at every provider mutation
+    // boundary, not only at the earlier broker preflight. This prevents a
+    // 525k signed plan surviving an intervening cap tightening or revoked
+    // settlement proof before Bitget margin/leverage or any order POST.
+    const effectivePolicy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, userId, plan, policy,
+    );
+    if (!Number.isFinite(plan.estimatedKrw)
+      || plan.estimatedKrw > Math.min(
+        effectivePolicy.totalCapitalKrw,
+        effectivePolicy.maxOrderKrw,
+        effectivePolicy.maxInstrumentKrw,
+      )) {
+      throw new Error('AUTOMATIC_ENTRY_POLICY_CAP_REVOKED');
     }
     if (!await liveEntryArmPresent()) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');

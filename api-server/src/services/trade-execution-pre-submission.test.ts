@@ -491,3 +491,45 @@ test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage be
     }
   }
 });
+test('member cap tightening after preflight is enforced again before provider mutation', async () => {
+  const repo = new InMemoryTradingRepository();
+  const now = new Date();
+  const entry = {
+    ...planInput(now), accountMode: 'live' as const,
+    executionMode: 'automatic' as const,
+    id: 'cap-recheck-live-plan', userId: USER_ID, idempotencyKey: 'cap-recheck',
+    state: 'SUBMITTED' as const, version: 1,
+    approvedAt: now.toISOString(),
+    approvalExpiresAt: new Date(now.getTime() + 60_000).toISOString(),
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  };
+  const execute = new TradeExecutionService(repo) as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: typeof entry): Promise<void>;
+  };
+  const previousStop = process.env.TRADING_EMERGENCY_STOP;
+  try {
+    process.env.TRADING_EMERGENCY_STOP = 'false';
+    await repo.savePolicy(USER_ID, {
+      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      totalCapitalKrw: 500_000, maxOrderKrw: 10_000,
+    });
+    await assert.rejects(
+      execute.assertAutomaticLiveEntryAuthorized(USER_ID, entry),
+      /BACKGROUND_PILOT_DYNAMIC_CAP_POLICY_REVOKED/,
+      'a stale 20k plan cannot survive a new 10k member cap',
+    );
+    await repo.savePolicy(USER_ID, {
+      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      totalCapitalKrw: 500_000, maxOrderKrw: 500_000, maxInstrumentKrw: 10_000,
+    });
+    await assert.rejects(
+      execute.assertAutomaticLiveEntryAuthorized(USER_ID, entry),
+      /AUTOMATIC_ENTRY_POLICY_CAP_REVOKED/,
+      'a tightened per-instrument cap must block before the Arm/provider mutation',
+    );
+    assert.equal((await repo.listOrders(USER_ID)).length, 0);
+  } finally {
+    if (previousStop == null) delete process.env.TRADING_EMERGENCY_STOP;
+    else process.env.TRADING_EMERGENCY_STOP = previousStop;
+  }
+});
