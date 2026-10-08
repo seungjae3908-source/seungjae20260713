@@ -477,6 +477,33 @@ export async function resolveRulePackPilotDynamicCapPolicy(
   return deriveRulePackPilotExecutionPolicy(policy, pilot);
 }
 
+// A numeric fee is not a KRW/quote-currency cost unless the broker recorded
+// the same fee denomination on the order and every available fill. Otherwise
+// journal display totals can accidentally treat a base-asset fee as KRW.
+function pilotCostEvidenceMatchesCycleCurrency(
+  order: TradingOrder | undefined,
+  currency: string,
+): boolean {
+  if (!order) return false;
+  const sameCurrency = (value: string | null | undefined) =>
+    typeof value === 'string' && value.trim().toUpperCase() === currency;
+  const aggregateFee = order.feeAmount;
+  const aggregateKnown = finite(aggregateFee) && aggregateFee >= 0;
+  if (aggregateKnown && !sameCurrency(order.feeCurrency)) return false;
+  const fills = Array.isArray(order.fills) ? order.fills : [];
+  if (fills.some((fill) => !finite(fill.feeAmount) || fill.feeAmount < 0
+    || !sameCurrency(fill.feeCurrency))) return false;
+  if (!aggregateKnown && fills.length === 0) return false;
+  if (aggregateKnown && fills.length) {
+    const fillTotal = fills.reduce((sum, fill) => sum + Number(fill.feeAmount), 0);
+    if (!finite(fillTotal)
+      || Math.abs(fillTotal - Number(aggregateFee)) > Math.max(0.01, Number(aggregateFee) * 1e-6)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function planForBrokerOrder(
   brokerOrderId: string,
   ordersByKey: Map<string, TradingOrder>,
@@ -511,8 +538,21 @@ export async function readRulePackPilotCapitalState(
   // An unjoined fill is not "no profit"; its missing plan may hide a loss.
   // Protect shared 500k HWM accounting from incomplete ledger projections.
   for (const order of orders) {
-    if (order.filledQuantity > 0 && !plansById.has(order.planId)) {
+    const plan = plansById.get(order.planId);
+    const apparentlyFilled = order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
+      || (finite(order.filledQuantity) && order.filledQuantity > 0);
+    if (!plan && apparentlyFilled) {
       blockers.push('PILOT_CAPITAL_ORDER_PLAN_LINEAGE_MISSING');
+      continue;
+    }
+    // The journal adapter omits records without positive average price / fill
+    // quantity. A LIVE automatic fill must never disappear from the 500k
+    // high-water ledger simply because that execution evidence is incomplete.
+    if (plan?.accountMode === 'live' && plan.executionMode === 'automatic'
+      && apparentlyFilled
+      && (!finite(order.filledQuantity) || order.filledQuantity <= 0
+        || !finite(order.averageFillPrice) || order.averageFillPrice <= 0)) {
+      blockers.push('PILOT_CAPITAL_AUTO_LIVE_FILL_EVIDENCE_INCOMPLETE');
     }
   }
 
@@ -536,6 +576,24 @@ export async function readRulePackPilotCapitalState(
     const entryNotionalNative = trade.entryPrice * trade.initialEntry.quantity;
     if (!(entryNotionalNative > 0) || !(entryPlan.estimatedKrw > 0)) {
       blockers.push('PILOT_CAPITAL_ENTRY_FX_BASIS_UNAVAILABLE');
+      continue;
+    }
+    // Upbit BTC/USDT-quoted spot pairs cannot be labeled KRW merely because
+    // the generic journal adapter assumes KRW for every Upbit trade.
+    if (trade.market === 'CRYPTO_SPOT'
+      && (entryPlan.exchange !== 'upbit' || String(entryPlan.market).trim().toUpperCase() !== 'KRW')) {
+      blockers.push('PILOT_CAPITAL_SPOT_KRW_QUOTE_EVIDENCE_REQUIRED');
+      continue;
+    }
+    if (!trade.finalExit) {
+      blockers.push('PILOT_CAPITAL_EXIT_LINEAGE_UNAVAILABLE');
+      continue;
+    }
+    const legs = [trade.initialEntry, ...trade.additions, ...trade.partialExits, trade.finalExit];
+    if (legs.some((leg) => !pilotCostEvidenceMatchesCycleCurrency(
+      ordersByKey.get(leg.orderId), trade.currency,
+    ))) {
+      blockers.push('PILOT_CAPITAL_FEE_CURRENCY_EVIDENCE_REQUIRED');
       continue;
     }
     const settlement = verifiedRulePackKrwSettlement(trade);
