@@ -379,7 +379,7 @@ test('canonical trading order event maps to user execution event with owner chec
 
 test('Telegram runtime health rejects failed, stale and future worker ticks', () => {
   const now = Date.parse('2026-10-08T12:00:00.000Z');
-  const ready = { enabled: true, lastTickAt: new Date(now - 30_000).toISOString(), tickOk: true, errorCode: null };
+  const ready = { enabled: true, lastTickAt: new Date(now - 30_000).toISOString(), tickOk: true, deliveryConfirmed: true, lastConfirmedDeliveryAt: new Date(now - 45_000).toISOString(), errorCode: null };
   assert.equal(userTelegramDeliveryWorkerHealthy(ready, now), true);
   assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now - 400_000).toISOString() }, now), false);
   assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now + 10_000).toISOString() }, now), false);
@@ -413,4 +413,15 @@ test('overlapping Telegram delivery tick cannot overwrite the in-flight health',
   const done = await first;
   assert.equal(done.overlapSkipped, false);
   assert.equal(done.sent, 1);
+});
+
+
+test('idle initial Telegram tick is not actual member delivery proof', () => {
+  const idle = { sent: 0, retryScheduled: 0, deadLetter: 0 };
+  assert.equal(telegramDeliveryTickConfirmed(false, idle), false);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  assert.equal(userTelegramDeliveryWorkerHealthy({
+    enabled: true, tickOk: true, lastTickAt: new Date(now).toISOString(),
+    deliveryConfirmed: false, lastConfirmedDeliveryAt: null, errorCode: null,
+  }, now), false);
 });
