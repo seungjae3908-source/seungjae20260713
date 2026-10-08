@@ -415,7 +415,14 @@ function isCanonicalMemberFixtureOnlyChange(p){
  const diff=git('diff','--unified=0',MAIN,'HEAD','--',p)
   .split('\n')
   .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
- return diff.length>0&&diff.every((line)=>line.includes('permissions_updated_at'));
+ if(diff.length===0||!diff.some((line)=>line.startsWith('+')&&line.includes('permissions_updated_at')))return false;
+ const normalize=(line)=>line.slice(1)
+  .replace(/,?permissions_updated_at:'[^']*'/gu,'')
+  .replace(/,?permissions_updated_at:"[^"]*"/gu,'')
+  .trim();
+ const removed=diff.filter((line)=>line.startsWith('-')).map(normalize).sort();
+ const added=diff.filter((line)=>line.startsWith('+')).map(normalize).sort();
+ return removed.length===added.length&&JSON.stringify(removed)===JSON.stringify(added);
 }
 const researchCenterChanged=changed.filter((p)=>
  researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
