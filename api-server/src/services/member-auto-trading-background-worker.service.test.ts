@@ -1720,3 +1720,147 @@ test('stopped automatic member with a stored Live fill remains visible without r
     }
   }
 });
+async function seedRetainedLiveAutoFill(repository: InMemoryTradingRepository, nowMs: number) {
+  const timestamp = new Date(nowMs).toISOString();
+  await repository.savePlan({
+    id: 'retained-live-plan', userId: USER, idempotencyKey: 'retained-live-entry',
+    state: 'FILLED', version: 1, accountMode: 'live', executionMode: 'automatic',
+    exchange: 'upbit', strategyId: 'trend-breakout-v1',
+    signalId: 'retained-live-signal', symbol: 'BTC', market: 'UPBIT',
+    side: 'buy', orderType: 'market', quantity: 0.1, quoteAmount: null,
+    limitPrice: null, estimatedKrw: 100_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null,
+    marginMode: null, reduceOnly: false, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: timestamp },
+    approvedAt: timestamp, approvalExpiresAt: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as any);
+  await repository.saveOrder({
+    id: 'retained-live-order', userId: USER, planId: 'retained-live-plan',
+    exchange: 'upbit', clientOrderId: 'retained-live-oid',
+    exchangeOrderId: 'retained-live-exchange-order', state: 'FILLED',
+    requestedQuantity: 0.1, filledQuantity: 0.1,
+    averageFillPrice: 100_000, retryCount: 0, lastErrorCode: null,
+    createdAt: timestamp, updatedAt: timestamp,
+  } as any);
+}
+
+test('expired automatic member retains read-only Live fill visibility and has zero order authority', async () => {
+  const flags = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs, { expired: true, tier: 'associate' });
+  let providerReads = 0;
+  let projectionCalls = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readLiveAccountSnapshot() {
+      providerReads += 1;
+      throw new Error('REVOKED_MEMBER_PROVIDER_IO_FORBIDDEN');
+    },
+    async syncExecutionEvents() {
+      projectionCalls += 1;
+      throw new Error('REVOKED_MEMBER_PROJECTION_IO_FORBIDDEN');
+    },
+  });
+  try {
+    for (const flag of flags) process.env[flag] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveTrackedPositions, 1);
+    assert.equal(result.liveExitsSuppressedByPolicy, 1);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(result.createdPlans, 0);
+    assert.equal(providerReads, 0);
+    assert.equal(projectionCalls, 0);
+    assert.equal((await repository.listOrders(USER)).length, 1);
+  } finally {
+    for (const flag of flags) {
+      const value = previous[flag];
+      if (value == null) delete process.env[flag];
+      else process.env[flag] = value;
+    }
+  }
+});
+
+test('blocked member evidence survives paginated warmup and cannot be erased by a ready later batch', async () => {
+  const flags = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyUser = '22222222-2222-2222-2222-222222222222';
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, policy());
+  await repository.savePolicy(readyUser, readyPolicy);
+  await seedRetainedLiveAutoFill(repository, nowMs);
+  const base = source(repository, nowMs);
+  let batch = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      batch += 1;
+      if (batch === 1) return [{
+        userId: USER,
+        policy: policy(),
+        profile: {
+          role: 'user', membership_level: 'associate', status: 'approved',
+          is_active: false,
+        },
+      }] as never;
+      return [{
+        userId: readyUser,
+        policy: readyPolicy,
+        profile: {
+          role: 'admin', membership_level: 'admin', status: 'approved',
+          is_active: true,
+        },
+      }] as never;
+    },
+    memberBatchCycleCompleted() { return batch > 1; },
+    async readLiveAccountSnapshot() {
+      throw new Error('UNARMED_LIVE_IO_FORBIDDEN');
+    },
+  });
+  try {
+    for (const flag of flags) process.env[flag] = 'true';
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.liveReadinessCycleComplete, false);
+    assert.equal(first.liveTrackedPositions, 1);
+    assert.equal(first.liveExitsSuppressedByPolicy, 1);
+    assert.equal(first.liveEntryWarmupComplete, false);
+
+    const completed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 15_000)));
+    assert.equal(completed.liveReadinessCycleComplete, true);
+    assert.equal(completed.liveAllFourPolicyReadyMembers, 1);
+    assert.equal(completed.liveCycleAllFourPolicyReady, false);
+    assert.equal(completed.liveEntryWarmupComplete, false);
+    assert.equal(completed.newEntriesFailClosed, true);
+    assert.equal(completed.liveOrders, 0);
+
+    // A wholly new clean rotation may re-establish readiness. A blocked
+    // completed cycle must never count as its own clean recovery proof.
+    const recovered = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(recovered.liveEntryWarmupComplete, true);
+    assert.equal(recovered.liveEntriesArmed, false);
+    assert.equal(recovered.liveOrders, 0);
+  } finally {
+    for (const flag of flags) {
+      const value = previous[flag];
+      if (value == null) delete process.env[flag];
+      else process.env[flag] = value;
+    }
+  }
+});
