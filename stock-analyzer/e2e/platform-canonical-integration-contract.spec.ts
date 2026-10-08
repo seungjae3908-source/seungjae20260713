@@ -56,7 +56,10 @@ test('canonical integration remains fail-closed and does not add a second browse
   expect(autoTrading).toContain('readyForAutomaticOrderEvaluation');
   expect(autoTrading).toContain('automaticServerGateEnabled');
   expect(autoTrading).toContain('계정 주문 권한 없음');
-  expect(autoTrading).toContain('자동 실거래 준비됨');
+  expect(autoTrading).toContain('autoTradingBackground');
+  expect(autoTrading).toContain('userTelegramDelivery');
+  expect(autoTrading).toContain('liveEntriesArmed');
+  expect(autoTrading).toContain('자동 실거래 작동 준비됨');
   expect(autoTrading).not.toContain('value="서버 Gate 필요"');
 });
 
@@ -84,6 +87,8 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
 
 test('operational observability exposes market activity, delivery health and pre-trade snapshot identity without adding authority', () => {
   expect(tradeAutomationRoute).toContain('marketActivityByMarket');
+  expect(tradeAutomationRoute).toContain('autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()');
+  expect(tradeAutomationRoute).toContain('userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()');
   expect(autoTrading).toContain('data-testid="auto-trading-market-activity"');
   expect(autoTrading).toContain('미결 주문');
   expect(autoTrading).toContain('오늘 주문');
