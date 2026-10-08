@@ -1158,6 +1158,9 @@ export function selectRotatingHandoffEntries<T>(
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
   private liveEntryWarmupComplete = false;
+  // Preserve stop/error evidence across paginated member batches. A later
+  // eligible member must never erase a blocked member from the same rotation.
+  private liveCycleHardWarmupBlocked = false;
   private liveCycleOrderEligibleSeen = false;
   private liveCyclePolicyReadySeen = false;
   private liveCycleAllFourPolicyReadySeen = false;
@@ -1174,7 +1177,8 @@ export class MemberAutoTradingBackgroundWorker {
       && liveEntryArmPresentThisTick;
     const liveTelegramHealthyThisTick = !liveModeRequested
       || this.source.telegramDeliveryHealthy?.(now.getTime()) === true;
-    const liveEntriesArmedThisTick = liveExitsArmedThisTick && liveTelegramHealthyThisTick;
+    const liveEntriesArmedThisTick = liveExitsArmedThisTick
+      && liveTelegramHealthyThisTick && !this.liveCycleHardWarmupBlocked;
     const result: MemberAutoTradingBackgroundRunResult = {
       handoffStatus: 'MISSING',
       handoffReady: false,
@@ -1266,14 +1270,15 @@ export class MemberAutoTradingBackgroundWorker {
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
       let paperAccountMissingThisTick = false;
+      let memberAuditFailedThisTick = false;
 
       for (const member of members) {
-        const memberAutoExecutionEnabled = member.policy.mode === 'automatic'
+        // Losing membership must revoke ALL execution while preserving
+        // read-only visibility of previously filled automatic Live positions.
+        const memberCanRunAutomation = hasCapability(member.profile, 'canAccessAutoTrading');
+        const memberAutoExecutionEnabled = memberCanRunAutomation
+          && member.policy.mode === 'automatic'
           && member.policy.automaticEnabled && !member.policy.emergencyStopped;
-        if (!hasCapability(member.profile, 'canAccessAutoTrading')) {
-          result.skipped += entries.length;
-          continue;
-        }
         const repository = this.source.tradingRepositoryFor(member.userId);
         const paper = this.source.paperJournalRepositoryFor(member.userId);
         let runtime: MemberRuntimeState;
@@ -1284,6 +1289,7 @@ export class MemberAutoTradingBackgroundWorker {
             repository.getGlobalEmergencyStop(),
           ]);
         } catch {
+          memberAuditFailedThisTick = true;
           result.blocked += entries.length;
           result.newEntriesFailClosed = true;
           continue;
@@ -1295,6 +1301,16 @@ export class MemberAutoTradingBackgroundWorker {
         }
         const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
         if (persistentGlobalStop || environmentGlobalStop) result.globalEmergencyStopActive = true;
+        if (!memberCanRunAutomation) {
+          if (liveModeRequested) {
+            const protectedPositions = trackedAutomaticPositions(runtime, 'live');
+            result.liveTrackedPositions += protectedPositions.length;
+            result.liveExitsSuppressedByPolicy += protectedPositions.length;
+            if (protectedPositions.length) result.newEntriesFailClosed = true;
+          }
+          result.skipped += entries.length;
+          continue;
+        }
         if (hasCapability(member.profile, 'canPlaceOrders')
           && automaticPolicyHasRunnableMarket(member.policy)
           && !persistentGlobalStop
@@ -1663,14 +1679,19 @@ export class MemberAutoTradingBackgroundWorker {
           || paperAccountMissingThisTick
           || result.executionSyncFailures > 0
           || result.executionSyncMissingReferences > 0
-          || result.globalEmergencyStopActive;
-        if (hardWarmupBlock) {
+          || result.globalEmergencyStopActive
+          || memberAuditFailedThisTick;
+        this.liveCycleHardWarmupBlocked ||= hardWarmupBlock;
+        if (this.liveCycleHardWarmupBlocked) {
           this.liveEntryWarmupComplete = false;
           result.newEntriesFailClosed = true;
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
           this.liveCycleAllFourWitnessUserId = null;
+          // A completed blocked rotation is never ready. The NEXT complete
+          // rotation can retry after the offending condition is remedied.
+          if (cycleComplete) this.liveCycleHardWarmupBlocked = false;
         } else if (cycleComplete) {
           this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
             && this.liveCyclePolicyReadySeen
@@ -1683,6 +1704,7 @@ export class MemberAutoTradingBackgroundWorker {
         }
       } else {
         this.liveEntryWarmupComplete = false;
+        this.liveCycleHardWarmupBlocked = false;
         this.liveCycleOrderEligibleSeen = false;
         this.liveCyclePolicyReadySeen = false;
         this.liveCycleAllFourPolicyReadySeen = false;
@@ -1692,6 +1714,7 @@ export class MemberAutoTradingBackgroundWorker {
       return result;
     } catch (error) {
       this.liveEntryWarmupComplete = false;
+      this.liveCycleHardWarmupBlocked = false;
       this.liveCycleOrderEligibleSeen = false;
       this.liveCyclePolicyReadySeen = false;
       this.liveCycleAllFourPolicyReadySeen = false;
@@ -1766,12 +1789,16 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       .select('id,role,status,membership_level,is_active,membership_expires_at').in('id', rows.map((row) => row.userId));
     if (profileError) throw new Error('BACKGROUND_MEMBER_LIST_FAILED');
     const byId = new Map((profiles ?? []).map((profile) => [String(profile.id), profile as MemberAccessProfile & { id: string }]));
-    return rows.flatMap((row) => {
-      const profile = byId.get(row.userId);
-      return profile && hasCapability(profile, 'canAccessAutoTrading')
-        ? [Object.freeze({ userId: row.userId, policy: row.policy, profile })]
-        : [];
-    });
+    // Never silently drop an automation profile: an absent membership row
+    // could hide stored Live fills from the safety supervisor.
+    if (rows.some((row) => !byId.has(row.userId))) {
+      throw new Error('BACKGROUND_MEMBER_ACCESS_PROFILE_MISSING');
+    }
+    return rows.map((row) => Object.freeze({
+      userId: row.userId,
+      policy: row.policy,
+      profile: byId.get(row.userId)!,
+    }));
   }
 
   memberBatchCycleCompleted() {
