@@ -840,6 +840,69 @@ test('live warmup survives an empty intermediate member batch and drops only aft
   }
 });
 
+test('worker failure clears partial rotation readiness before the recovery cycle', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const readyMember = {
+    userId: USER,
+    policy: policy(),
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  } as const;
+  let members: readonly any[] = [readyMember];
+  let cycleComplete = false;
+  let failHandoff = false;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() {
+      if (failHandoff) throw new Error('ROTATION_TEST_HANDOFF_FAILURE');
+      return base.readHandoff(nowMs);
+    },
+    async listEligibleMembers() { return members as never; },
+    memberBatchCycleCompleted() { return cycleComplete; },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+
+    const partial = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(partial.liveReadinessCycleComplete, false);
+    assert.equal(partial.liveCycleOrderEligible, true);
+    assert.equal(partial.liveEntryWarmupComplete, false);
+
+    failHandoff = true;
+    await assert.rejects(
+      () => withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000))),
+      /ROTATION_TEST_HANDOFF_FAILURE/,
+    );
+
+    failHandoff = false;
+    members = [];
+    cycleComplete = true;
+    const recovered = await withFetchMock(() => worker.runOnce(new Date(nowMs + 60_000)));
+    assert.equal(recovered.liveReadinessCycleComplete, true);
+    assert.equal(recovered.liveCycleOrderEligible, false);
+    assert.equal(recovered.liveCyclePolicyReady, false);
+    assert.equal(recovered.liveEntryWarmupComplete, false);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('live activation warmup stays fail-closed when no member can place real orders', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
