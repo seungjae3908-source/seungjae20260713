@@ -462,6 +462,17 @@ test('dedicated Paper-only worker activation is default OFF, exact-flag-only, an
     assert.equal(memberAutoTradingWorkerMode(), 'PAPER_ONLY');
     assert.equal(liveBackgroundEnabled(), false);
 
+    // Invalid Paper-only values must never fall through to previously armed
+    // shared automatic Live settings. Only unset/'false' permit shared mode.
+    for (const malformed of ['TRUE', '1', 'on', '']) {
+      process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = malformed;
+      assert.equal(memberAutoTradingWorkerMode(), 'DISABLED', malformed);
+      assert.equal(liveBackgroundEnabled(), false, malformed);
+    }
+    process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'false';
+    assert.equal(memberAutoTradingWorkerMode(), 'SHARED_BACKGROUND');
+    assert.equal(liveBackgroundEnabled(), true);
+
     // No permissive case folding, nonboolean coercion, or automatic fallback.
     process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED = 'false';
     process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = 'TRUE';
@@ -488,8 +499,11 @@ test('Paper-only pilot also blocks the shared automatic Live service for every b
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) process.env[key] = 'true';
-    for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
-      assert.equal(automaticLiveExecutionEnabled(exchange), false, exchange);
+    for (const malformed of ['true', 'TRUE', '1', 'on', '']) {
+      process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED = malformed;
+      for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+        assert.equal(automaticLiveExecutionEnabled(exchange), false, `${exchange}:${malformed}`);
+      }
     }
   } finally {
     for (const key of keys) {
