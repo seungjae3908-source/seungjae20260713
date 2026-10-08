@@ -384,7 +384,7 @@ const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 // proven expiry/permissions read patch and additive membership regression
 // fixtures. Any other change to these files restores the full trading gate.
 function exactSignedDiff(p, expectedRemoved, expectedAdded) {
- const signed=git('diff','--unified=0',MAIN,'HEAD','--',p).split('\\n')
+ const signed=git('diff','--unified=0',MAIN,'HEAD','--',p).split('\n')
   .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
  const removed=signed.filter((line)=>line.startsWith('-')).map((line)=>line.slice(1).trim()).sort();
  const added=signed.filter((line)=>line.startsWith('+')).map((line)=>line.slice(1).trim()).sort();
@@ -417,7 +417,7 @@ function isPersonalTelegramMembershipOnlyChange(p) {
   let head=git('show',`HEAD:${p}`);
   const fixture="  membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
   if(head.split(fixture).length!==2)return false;
-  head=head.replace('\\n'+fixture,'');
+  head=head.replace('\n'+fixture,'');
   const blocks=[
    ["expired and schema-incomplete members cannot bind a Telegram link","expired Telegram link cannot be consumed"],
    ["membership expiration after queueing prevents Telegram send and dead-letters the delivery","duplicate execution event is ignored by source-event id and does not duplicate Telegram delivery"],
