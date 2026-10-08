@@ -355,6 +355,7 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/src/components/trade-automation-settings.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
+ 'ops/deploy-production.sh',
 ];
 const allowed=new Set([
  ...original,
@@ -377,6 +378,25 @@ if(automaticTradingChanged.length>0){
   'api-server/scripts/verify-production-automatic-trading-gate.mjs',
  ];
  for(const p of requiredAutomaticTradingGuards)if(!changed.includes(p))throw new Error('AUTOMATIC_TRADING_SCOPE_GUARD_MISSING:'+p);
+ // Production deployment is inside this Trading Core Paper-only change only
+ // when its existing strict OFF and readback checks are preserved.
+ if(changed.includes('ops/deploy-production.sh')){
+  const deploy=git('show','HEAD:ops/deploy-production.sh');
+  const requiredPaperOnlyDeployProof=[
+   '"MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED",',
+   'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false',
+   'bool("MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED")',
+   'member_paper_only',
+   '[[ "$member_background" == false && "$member_live_background" == false && "$member_paper_only" == false ]] || return 1',
+  ];
+  for(const token of requiredPaperOnlyDeployProof)if(!deploy.includes(token))
+   throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_GUARD_MISSING:'+token);
+  if(!deploy.includes('assert_live_trading_inactive_before_deploy()') || !deploy.includes('application_runtime_ready()'))
+   throw new Error('AUTOMATIC_TRADING_DEPLOY_PREPOSTCHECK_MISSING');
+  const deployDiff=git('diff','--unified=0',MAIN,'HEAD','--','ops/deploy-production.sh');
+  if(/^\+[^+].*MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=(?:true|TRUE|1)\b/m.test(deployDiff))
+   throw new Error('AUTOMATIC_TRADING_PAPER_ONLY_DEPLOY_ACTIVATION_FORBIDDEN');
+ }
  const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
  for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
