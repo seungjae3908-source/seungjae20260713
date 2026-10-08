@@ -977,7 +977,7 @@ export class TradeExecutionService {
 
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
     if (risk.plan.accountMode === 'live' && risk.plan.executionMode === 'automatic'
-      && risk.plan.reduceOnly !== true && !await liveEntryArmPresent()) {
+      && !isRiskReducingExitPlan(risk.plan) && !await liveEntryArmPresent()) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
     const submissionAttemptId = randomUUID();

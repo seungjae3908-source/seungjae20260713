@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
@@ -155,7 +156,10 @@ export class TradeAutomationService {
   }
 
   private async marketIntelligenceDecision(input: TradingPlanInput) {
-    if (input.reduceOnly === true) {
+    if (input.reduceOnly === true && !isRiskReducingExitPlan(input)) {
+      return { allowed: false, blockCode: 'REDUCE_ONLY_SIDE_INVALID', warnings: [] };
+    }
+    if (isRiskReducingExitPlan(input)) {
       return {
         allowed: true,
         blockCode: null,
