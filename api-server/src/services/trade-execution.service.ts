@@ -837,7 +837,23 @@ export class TradeExecutionService {
         });
       }
       const currentPolicy = await this.repository.getPolicy(userId);
-      const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
+      // An automatic-origin order must not inherit manual order authority
+      // when a member turns AUTO OFF mid-flight. Explicit risk-reducing exits
+      // remain independently guarded by the provider position preflight.
+      const automaticEntry = plan.executionMode === 'automatic' && !isRiskReducingExitPlan(plan);
+      if (automaticEntry
+        && (currentPolicy.mode !== 'automatic'
+          || !currentPolicy.automaticEnabled
+          || currentPolicy.emergencyStopped
+          || currentPolicy.newEntriesStopped
+          || process.env.TRADING_EMERGENCY_STOP === 'true'
+          || await this.repository.getGlobalEmergencyStop())) {
+        return this.automation.transition(order, 'REJECTED', 'AUTOMATIC_ENTRY_POLICY_REVOKED', {
+          errorCode: 'AUTOMATIC_ENTRY_POLICY_REVOKED',
+          orderSubmissionAttempted: false,
+        });
+      }
+      const automaticLive = automaticEntry;
       const capabilityDecision = livePlanCapabilityDecision(plan, 'ORDER_CREATE');
       const currentLiveAuthority = automaticLive
         ? automaticLiveExecutionEnabled(plan.exchange)
@@ -977,8 +993,19 @@ export class TradeExecutionService {
 
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
     if (risk.plan.accountMode === 'live' && risk.plan.executionMode === 'automatic'
-      && !isRiskReducingExitPlan(risk.plan) && !await liveEntryArmPresent()) {
-      throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+      && !isRiskReducingExitPlan(risk.plan)) {
+      // Re-check authority after awaited provider preflight but before storing
+      // the submission intent. Never silently downgrade AUTO to manual.
+      const policy = await this.repository.getPolicy(order.userId);
+      if (policy.mode !== 'automatic' || !policy.automaticEnabled
+        || policy.emergencyStopped || policy.newEntriesStopped
+        || process.env.TRADING_EMERGENCY_STOP === 'true'
+        || await this.repository.getGlobalEmergencyStop()) {
+        throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+      }
+      if (!await liveEntryArmPresent()) {
+        throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+      }
     }
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
