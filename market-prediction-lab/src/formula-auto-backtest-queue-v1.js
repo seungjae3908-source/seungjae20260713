@@ -113,12 +113,13 @@ function validateBacktestInput(item, queuedAtMs) {
   const period = dataset.period;
   if (!period || !Number.isSafeInteger(period.startTime) || !Number.isSafeInteger(period.endTime)
     || period.startTime >= period.endTime || period.includeFinalHoldout !== false
-    || period.endTime > queuedAtMs) {
+    || period.endTime > queuedAtMs || period.endTime > Date.now()) {
     throw new Error('FORMULA_QUEUE_PERIOD_INVALID_OR_FUTURE');
   }
   let previous = -1;
   for (const candle of backtestInput.candles) {
-    if (!candle || !Number.isSafeInteger(candle.timestamp) || candle.timestamp <= previous || candle.timestamp > queuedAtMs) {
+    if (!candle || !Number.isSafeInteger(candle.timestamp) || candle.timestamp <= previous
+      || candle.timestamp > queuedAtMs || candle.timestamp > Date.now()) {
       throw new Error('FORMULA_QUEUE_CANDLE_TIME_INVALID_OR_FUTURE');
     }
     for (const key of ['open', 'high', 'low', 'close', 'volume']) {
