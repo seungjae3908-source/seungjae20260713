@@ -30,6 +30,7 @@ const sensitiveNames = [
   ...destructiveValidationRequired,
   'STAGING_AI_API_KEY',
   'STAGING_SSH_KNOWN_HOSTS',
+  'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256',
 ];
 
 const value = (name) => String(env[name] ?? '').trim();
@@ -212,6 +213,10 @@ const repositoryUrl = value('REPOSITORY_URL');
 if (!/^https:\/\/github\.com\/seungjae3908-source\/seungjae20260713\.git$/.test(repositoryUrl)) {
   fail('REPOSITORY_URL is missing or unexpected');
 }
+const publisherBinding = value('STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256');
+if (!/^[0-9a-f]{64}$/.test(publisherBinding)) {
+  fail('STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 must be an exact lowercase SHA-256 digest');
+}
 
 const port = value('STAGING_SSH_PORT') || '22';
 const remote = `${value('STAGING_SSH_USER')}@${value('STAGING_SSH_HOST')}`;
@@ -244,6 +249,7 @@ const encodedSecrets = {
   supabaseAnonKey: encode(value('STAGING_SUPABASE_ANON_KEY')),
   supabaseSecretKey: encode(value('STAGING_SUPABASE_SECRET_KEY')),
   ai: encode(value('STAGING_AI_API_KEY')),
+  publisherBinding: encode(publisherBinding),
 };
 
 const result = runRemote(`
@@ -273,12 +279,14 @@ STAGING_SUPABASE_URL="$(decode '${encodedSecrets.supabaseUrl}')"
 STAGING_SUPABASE_ANON_KEY="$(decode '${encodedSecrets.supabaseAnonKey}')"
 STAGING_SUPABASE_SECRET_KEY="$(decode '${encodedSecrets.supabaseSecretKey}')"
 STAGING_AI_API_KEY="$(decode '${encodedSecrets.ai}')"
+STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$(decode '${encodedSecrets.publisherBinding}')"
 SENSITIVE_VALUES=(
   "$STAGING_DATABASE_URL"
   "$STAGING_SUPABASE_URL"
   "$STAGING_SUPABASE_ANON_KEY"
   "$STAGING_SUPABASE_SECRET_KEY"
   "$STAGING_AI_API_KEY"
+  "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
 )
 
 write_runtime_env() {
@@ -295,6 +303,9 @@ write_runtime_env() {
     [[ -n "$STAGING_SUPABASE_URL" ]] && printf 'SUPABASE_URL=%s\n' "$STAGING_SUPABASE_URL"
     [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] && printf 'SUPABASE_ANON_KEY=%s\n' "$STAGING_SUPABASE_ANON_KEY"
     [[ -n "$STAGING_SUPABASE_SECRET_KEY" ]] && printf 'SUPABASE_SECRET_KEY=%s\n' "$STAGING_SUPABASE_SECRET_KEY"
+    printf 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%s\n' "$STATE_DIR/paper-forward/paper-state-v2.json"
+    printf 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%s\n' "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
+    printf 'PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=3900000\n'
   } > "$temp_env"
   chmod 600 "$temp_env"
   mv -f "$temp_env" "$STAGING_DIR/api-server/.env.staging"
@@ -383,6 +394,7 @@ deploy_target() {
   STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL" \
   STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
   STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
+  STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
   STAGING_FAILPOINT="$failpoint" \
   "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
 }

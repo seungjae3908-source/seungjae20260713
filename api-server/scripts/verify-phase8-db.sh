@@ -48,6 +48,52 @@ run_sql() {
   "${PSQL[@]}" --file "${ROOT_DIR}/${path}"
 }
 
+run_production_paper_gate() {
+  local label="$1"
+  local expected_tables_before="$2"
+  local artifact="$BOOTSTRAP_ARTIFACT_DIR/production-paper-journal-${label}.json"
+  echo "[phase8-db] verify protected Production paper gate: ${label}"
+  CI=true \
+  PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true \
+  APPROVED_TARGET_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  PROD_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" \
+  node "${ROOT_DIR}/ops/apply-production-paper-journal-privileges.mjs" > "$artifact"
+  CI=true \
+  PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true \
+  node "${ROOT_DIR}/ops/verify-production-paper-journal-privileges.mjs" --artifact "$artifact"
+  node - "$artifact" "$expected_tables_before" <<'NODE'
+const fs = require('node:fs');
+const [file, expectedRaw] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+const expected = Number(expectedRaw);
+if (value.tables_before !== expected) throw new Error(`tables_before ${value.tables_before} != ${expected}`);
+if (value.tables_created !== 6 - expected) throw new Error('tables_created mismatch');
+if (value.database_changed !== (expected === 0)) throw new Error('database_changed mismatch');
+if (value.journal_rows_mutated !== false) throw new Error('journal rows were mutated');
+if (value.policy_contract_verified !== true || value.table_contract_verified !== true) {
+  throw new Error('Production paper contract verification missing');
+}
+NODE
+}
+
+assert_production_paper_partial_schema_fails() {
+  local stdout_file="$BOOTSTRAP_ARTIFACT_DIR/production-paper-journal-partial.stdout"
+  local stderr_file="$BOOTSTRAP_ARTIFACT_DIR/production-paper-journal-partial.stderr"
+  echo "[phase8-db] verify protected Production paper gate rejects partial schema"
+  "${PSQL[@]}" --command 'create table public.paper_accounts (id text primary key);'
+  if CI=true \
+    PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true \
+    APPROVED_TARGET_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    PROD_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" \
+    node "${ROOT_DIR}/ops/apply-production-paper-journal-privileges.mjs" \
+      > "$stdout_file" 2> "$stderr_file"; then
+    echo '[phase8-db] partial Production paper schema unexpectedly passed' >&2
+    exit 1
+  fi
+  grep -Fx '[production-paper-journal-privileges] paper_journal_partial_schema' "$stderr_file"
+  "${PSQL[@]}" --command 'drop table public.paper_accounts;'
+}
+
 run_sql "create empty Supabase auth bootstrap harness" "api-server/supabase/test/staging_bootstrap_auth_harness.sql"
 
 echo "[phase8-db] apply atomic two-pass isolated staging bootstrap"
@@ -70,6 +116,8 @@ if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.st
   throw new Error('staging bootstrap copied forbidden data');
 }
 NODE
+
+run_production_paper_gate "existing-schema-noop" 6
 
 run_sql "verify legacy personal Telegram policy cleanup" "api-server/supabase/test/personal_telegram_policy_cleanup_integration.sql"
 
@@ -143,15 +191,15 @@ run_sql "rollback Phase 8 paper capability RLS" "api-server/supabase/migrations/
 run_sql "rollback Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.down.sql"
 run_sql "rollback Phase 7 migration" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.down.sql"
 run_sql "assert rollback cleanup" "api-server/supabase/test/phase8_rollback_assert.sql"
-run_sql "reapply Phase 7 migration" "api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql"
 run_sql "reapply Phase 8 permission migration" "api-server/supabase/migrations/2026080202_release_candidate_permissions_phase8.sql"
-run_sql "reapply Phase 8 paper capability RLS" "api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql"
+assert_production_paper_partial_schema_fails
+run_production_paper_gate "missing-schema-bootstrap" 0
+run_production_paper_gate "post-bootstrap-noop" 6
 run_sql "reapply trade automation migration" "api-server/supabase/migrations/2026080301_trade_automation_integration.sql"
 run_sql "reapply trade automation safety hardening" "api-server/supabase/migrations/2026080502_trade_automation_safety_hardening.sql"
 run_sql "reapply recovery worker lease fencing" "api-server/supabase/migrations/2026080503_trade_recovery_worker_leases.sql"
 run_sql "reapply provider submission intent fence" "api-server/supabase/migrations/2026080504_trade_pre_submission_fence.sql"
 run_sql "reapply split child order storage and sequencing" "api-server/supabase/migrations/2026080505_trade_split_child_orders.sql"
-run_sql "reapply authenticated paper privileges" "api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql"
 run_sql "reapply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "reapply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
@@ -165,5 +213,9 @@ run_sql "recheck canonical member investment storage and RLS after reapply" "api
 echo "[phase8-db] recheck concurrent fast-move split cancellation race after reapply"
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"
+
+run_sql "apply member S/AI access hardening" "api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql"
+run_sql "reapply member S/AI access hardening idempotently" "api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql"
+run_sql "verify associate analytics RLS and membership expiry" "api-server/supabase/test/member_access_s_ai_hardening_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"

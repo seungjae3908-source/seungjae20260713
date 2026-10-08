@@ -28,6 +28,13 @@ import {
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
+import {
+  evaluateFormulaAiAutoRehearsal,
+  FORMULA_AI_REHEARSAL_POLICY_VERSION,
+  runFormulaAiPaperRehearsalProbe,
+} from '../services/formula-ai-auto-rehearsal.service';
+import { FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION } from '../services/formula-ai-live-exception.service';
+import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import type {
@@ -120,6 +127,19 @@ function emptyMarketActivity(): Record<TradingAssetClass, MarketActivitySummary>
     crypto_spot: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
     crypto_futures: { pendingOrders: 0, recoveryRequiredOrders: 0, todayOrders: 0, todayFilledOrders: 0, lastActivityAt: null },
   };
+}
+
+function requireLiveOrderCapability(req: AuthenticatedRequest, res: Response): boolean {
+  if (req.member && hasCapability(req.member, 'canPlaceOrders')) return true;
+  res.status(403).json({
+    ok: false,
+    error: 'CAPABILITY_REQUIRED',
+    capability: 'canPlaceOrders',
+    orderSubmitted: false,
+    orderCanceled: false,
+    orderAmended: false,
+  });
+  return false;
 }
 
 function context(req: AuthenticatedRequest) {
@@ -719,6 +739,262 @@ function approvalQueueItem(plan: TradingPlan, order: TradingOrder | null, now = 
   };
 }
 
+type RehearsalCredentialStatus = Readonly<{
+  provider: TradingExchange;
+  configured: boolean;
+  reusable: boolean;
+  readOnlyVerified: boolean;
+  errorCode: string | null;
+}>;
+
+async function rehearsalCredentialStatus(
+  userId: string,
+  provider: TradingExchange,
+): Promise<RehearsalCredentialStatus> {
+  try {
+    const row = await readonlyCredentialRepository(userId).get(
+      userId,
+      provider as ReadonlyCredentialProvider,
+    );
+    if (!row?.configured || !row.encryptedCredentials) {
+      return {
+        provider,
+        configured: row?.configured === true,
+        reusable: false,
+        readOnlyVerified: false,
+        errorCode: row?.lastErrorCode ?? 'READONLY_CREDENTIAL_NOT_CONFIGURED',
+      };
+    }
+    const raw = decryptTradingCredentials(row.encryptedCredentials);
+    normalizeReadonlyCredentialsForLiveExecution(provider, raw);
+    return {
+      provider,
+      configured: true,
+      reusable: true,
+      readOnlyVerified: Boolean(row.lastVerifiedAt) && !row.lastErrorCode,
+      errorCode: row.lastErrorCode,
+    };
+  } catch (error) {
+    return {
+      provider,
+      configured: false,
+      reusable: false,
+      readOnlyVerified: false,
+      errorCode: error instanceof Error ? error.message.split(':')[0] : 'READONLY_CREDENTIAL_REHEARSAL_FAILED',
+    };
+  }
+}
+
+router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
+  const safety = {
+    executionAuthority: 'NONE' as const,
+    realOrderSubmitted: false as const,
+    actualOrderSubmitted: false as const,
+    exchangeRequestSent: false as const,
+    providerMutationRequests: 0 as const,
+    productionMutationAllowed: false as const,
+    liveTradingActivated: false as const,
+    automaticLiveExecutionActivated: false as const,
+  };
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  if (req.body?.confirmed !== true) {
+    return res.status(409).json({
+      ok: false,
+      error: 'AUTO_REHEARSAL_CONFIRMATION_REQUIRED',
+      ...safety,
+    });
+  }
+
+  try {
+    const { userId, repository } = context(req);
+    const [connections, credentialRows] = await Promise.all([
+      repository.getConnections(userId),
+      Promise.all([...EXCHANGES].map((provider) => rehearsalCredentialStatus(userId, provider))),
+    ]);
+    const credentials = Object.fromEntries(
+      credentialRows.map((row) => [row.provider, row]),
+    ) as Record<TradingExchange, RehearsalCredentialStatus>;
+    const providerStatus = Object.fromEntries(
+      [...EXCHANGES].map((provider) => {
+        const connection = connections.find((row) => row.exchange === provider) ?? null;
+        const credential = credentials[provider];
+        const liveConnectionVerified = Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode;
+        return [provider, {
+          configured: connection?.configured === true,
+          accountMode: connection?.accountMode ?? null,
+          liveConnectionVerified,
+          reusableReadonlyCredential: credential.reusable,
+          readOnlyVerified: credential.readOnlyVerified,
+          ready: !connection?.lastErrorCode && (liveConnectionVerified || credential.readOnlyVerified),
+          lastErrorCode: connection?.lastErrorCode ?? credential.errorCode,
+          credentialsExposed: false,
+        }];
+      }),
+    ) as Record<TradingExchange, {
+      configured: boolean;
+      accountMode: string | null;
+      liveConnectionVerified: boolean;
+      reusableReadonlyCredential: boolean;
+      readOnlyVerified: boolean;
+      ready: boolean;
+      lastErrorCode: string | null;
+      credentialsExposed: false;
+    }>;
+
+    const paper = runFormulaAiPaperRehearsalProbe();
+    const journalReadReady = req.body?.journalReadReady === true;
+    const telegramReady = req.body?.telegramReady === true;
+    const futures = futuresLiveRuntimeStatus();
+    const futuresMarginMode = futures.marginMode === 'isolated'
+      ? 'isolated' as const
+      : futures.marginMode === 'crossed'
+        ? 'crossed' as const
+        : null;
+    const futuresLeverage = Number(futures.maxLeverage);
+
+    const cases = [
+      {
+        market: 'KR_STOCK' as const,
+        direction: 'BUY' as const,
+        strategyId: 'KR_PRESSURE_BREAKOUT_V1',
+        providers: ['toss', 'kiwoom'] as const,
+      },
+      {
+        market: 'US_STOCK' as const,
+        direction: 'BUY' as const,
+        strategyId: 'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+        providers: ['kiwoom'] as const,
+      },
+      {
+        market: 'CRYPTO_SPOT' as const,
+        direction: 'BUY' as const,
+        strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+        providers: ['upbit'] as const,
+      },
+      {
+        market: 'CRYPTO_FUTURES' as const,
+        direction: 'LONG' as const,
+        strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+        providers: ['bitget'] as const,
+      },
+      {
+        market: 'CRYPTO_FUTURES' as const,
+        direction: 'SHORT' as const,
+        strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+        providers: ['bitget'] as const,
+      },
+    ];
+
+    const markets = cases.map((item) => {
+      const providerReady = item.providers.some((provider) => providerStatus[provider].ready);
+      const credentialReuseReady = item.providers.some((provider) => providerStatus[provider].reusableReadonlyCredential);
+      const evaluation = evaluateFormulaAiAutoRehearsal({
+        strategyId: item.strategyId,
+        market: item.market,
+        direction: item.direction,
+        deterministicRuleReady: true,
+        aiDecision: 'PASS',
+        providersReady: providerReady,
+        credentialReuseReady,
+        paperAutoReady: paper.paperAutoReady,
+        paperFillReady: paper.paperFillReady,
+        journalReady: paper.journalReady && journalReadReady,
+        telegramReady,
+        ...(item.market === 'CRYPTO_FUTURES'
+          ? { futuresMarginMode, futuresLeverage }
+          : {}),
+      });
+      return {
+        market: item.market,
+        direction: item.direction,
+        providers: item.providers,
+        aiDecision: 'PASS' as const,
+        ...evaluation,
+      };
+    });
+
+    const vetoControl = evaluateFormulaAiAutoRehearsal({
+      strategyId: 'KR_PRESSURE_BREAKOUT_V1',
+      market: 'KR_STOCK',
+      direction: 'BUY',
+      deterministicRuleReady: true,
+      aiDecision: 'VETO',
+      providersReady: true,
+      credentialReuseReady: true,
+      paperAutoReady: true,
+      paperFillReady: true,
+      journalReady: true,
+      telegramReady: true,
+    });
+    const allProvidersReady = ([...EXCHANGES] as TradingExchange[])
+      .every((provider) => providerStatus[provider].ready);
+    const allCredentialReuseReady = ([...EXCHANGES] as TradingExchange[])
+      .every((provider) => credentials[provider].reusable);
+    const wouldActivateLiveAuto = markets.every((item) => item.wouldActivateLiveAuto)
+      && allProvidersReady
+      && allCredentialReuseReady;
+
+    return res.status(200).json({
+      ok: true,
+      schemaVersion: 'formula-ai-auto-rehearsal-runtime-v1',
+      mode: 'DRIFT_REHEARSAL',
+      rehearsalPolicyVersion: FORMULA_AI_REHEARSAL_POLICY_VERSION,
+      exceptionPolicy: FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION,
+      signal: {
+        source: 'SYNTHETIC_REHEARSAL_SIGNAL',
+        deterministicRuleReady: true,
+        productionSignalCreated: false,
+      },
+      ai: {
+        positiveDecision: 'PASS',
+        vetoDecision: 'VETO',
+        vetoBlocked: vetoControl.status === 'BLOCKED_REHEARSAL',
+        vetoBlockers: vetoControl.blockers,
+        liveAiProviderInvokedByThisEndpoint: false,
+      },
+      providers: providerStatus,
+      credentialReuse: Object.fromEntries(
+        credentialRows.map((row) => [row.provider, {
+          configured: row.configured,
+          reusable: row.reusable,
+          readOnlyVerified: row.readOnlyVerified,
+          errorCode: row.errorCode,
+          credentialsExposed: false,
+        }]),
+      ),
+      paper,
+      journal: {
+        paperJournalProjectionReady: paper.journalReady,
+        journalEndpointReadReady: journalReadReady,
+        ready: paper.journalReady && journalReadReady,
+        persistentMutationPerformedByThisEndpoint: false,
+      },
+      telegram: {
+        ready: telegramReady,
+        testMessageRequestedByThisEndpoint: false,
+      },
+      futures: {
+        marginMode: futures.marginMode || null,
+        maxLeverage: futures.maxLeverage,
+        isolatedReady: futures.marginMode === 'isolated',
+        leverageReady: Number.isInteger(futuresLeverage) && futuresLeverage >= 2 && futuresLeverage <= 7,
+      },
+      markets,
+      allProvidersReady,
+      allCredentialReuseReady,
+      wouldActivateLiveAuto,
+      ...safety,
+    });
+  } catch (error) {
+    return res.status(503).json({
+      ok: false,
+      error: error instanceof Error ? error.message.split(':')[0] : 'AUTO_REHEARSAL_FAILED',
+      wouldActivateLiveAuto: false,
+      ...safety,
+    });
+  }
+});
+
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
@@ -894,6 +1170,11 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const policy = normalizeTradingPolicy(req.body);
+    if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
+      policy.marketEnabled.crypto_futures = false;
+      policy.exchangeEnabled.bitget = false;
+      policy.enabledAssets.bitget = [];
+    }
     const enablingAutomatic = policy.mode === 'automatic'
       && (policy.automaticEnabled
         || Object.values(policy.marketEnabled).some(Boolean)
@@ -914,6 +1195,7 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
 
 router.post('/connections/:exchange/reuse-readonly', async (req: AuthenticatedRequest, res) => {
   try {
+    if (!requireLiveOrderCapability(req, res)) return;
     const { userId, repository, execution } = context(req);
     const exchange = exchangeValue(req.params.exchange);
     if (req.body?.confirmed !== true) {
@@ -1030,6 +1312,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
       Object.entries(safeCredentials).filter(([, value]) => Boolean(value)),
     );
     const accountMode = req.body?.accountMode === 'live' ? 'live' : req.body?.accountMode === 'mock' ? 'mock' : 'paper';
+    if (accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     if (accountMode === 'live') {
       const purpose = String(req.body?.purpose ?? '').trim().toLowerCase();
       const permissionSet = new Set(permissions);
@@ -1062,6 +1345,7 @@ router.put('/connections/:exchange', async (req: AuthenticatedRequest, res) => {
 
 router.post('/connections/:exchange/verify', async (req: AuthenticatedRequest, res) => {
   try {
+    if (!requireLiveOrderCapability(req, res)) return;
     const { userId, execution } = context(req);
     const exchange = exchangeValue(req.params.exchange);
     if (req.body?.confirmed !== true) {
@@ -1102,6 +1386,7 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
     const { userId, repository, automation, execution, splitExecution } = context(req);
     const input = req.body as TradingPlanInput;
     exchangeValue(input.exchange);
+    if (input.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const [policy, existingOrders, persistentGlobalStop] = await Promise.all([
       repository.getPolicy(userId), repository.listOrders(userId), repository.getGlobalEmergencyStop(),
     ]);
@@ -1135,8 +1420,11 @@ router.post('/plans', async (req: AuthenticatedRequest, res) => {
 
 router.post('/plans/:id/approve', async (req: AuthenticatedRequest, res) => {
   try {
-    const { userId, automation, execution, splitExecution } = context(req);
+    const { userId, repository, automation, execution, splitExecution } = context(req);
     if (req.body?.approved !== true) return res.status(409).json({ ok: false, error: 'EXPLICIT_APPROVAL_REQUIRED' });
+    const currentPlan = await repository.getPlan(userId, String(req.params.id));
+    if (!currentPlan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    if (currentPlan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const plan = await automation.approvePlan(userId, String(req.params.id));
     const result = await executeSubmittedPlan(userId, plan, automation, execution, splitExecution);
     return res.json({ ok: true, plan, ...result });
@@ -2988,6 +3276,7 @@ router.post('/orders/:id/amend', async (req: AuthenticatedRequest, res) => {
     if (!order) throw new Error('TRADE_ORDER_NOT_FOUND');
     const plan = await repository.getPlan(userId, order.planId);
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    if (plan.accountMode === 'live' && !requireLiveOrderCapability(req, res)) return;
     const result = await amendment.amend(userId, order, plan, {
       requestId: String(req.body?.requestId ?? ''),
       price: Number(req.body?.price),

@@ -9,7 +9,12 @@ import {
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
-import { tradingProviderHttpErrorCode, tradingProviderNetworkErrorCode, tradingProviderTimeoutCode } from './trade-provider-http-error.service';
+import {
+  isTransientTradingProviderError,
+  tradingProviderHttpErrorCode,
+  tradingProviderNetworkErrorCode,
+  tradingProviderTimeoutCode,
+} from './trade-provider-http-error.service';
 import {
   prepareBitgetAccount,
   prepareBitgetContractConfig,
@@ -95,6 +100,9 @@ const BASE_URLS = {
 
 const PREFLIGHT_TIMEOUT_MS = 4_000;
 const ORDER_TIMEOUT_MS = 12_000;
+const VERIFICATION_TRANSIENT_RETRIES = 2;
+const VERIFICATION_RETRY_BASE_DELAY_MS = 1_000;
+const VERIFICATION_RETRY_MAX_DELAY_MS = 3_000;
 const BITGET_RECOGNIZED_STATES = new Set([
   'live', 'new', 'init', 'pending', 'accepted',
   'partially_filled', 'partial_fill', 'partial-filled',
@@ -423,13 +431,43 @@ function decisionFrom(result: PreSubmissionRiskResult): TradingRiskDecision {
   return { allowed: result.allowed, blockCodes: result.blockCodes, warnings: result.warnings };
 }
 
+function positiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function paperFill(plan: TradingPlan, snapshot: TradingMarketSnapshot) {
+  const requestedQuantity = positiveNumber(plan.quantity);
+  const quoteAmount = positiveNumber(plan.quoteAmount);
+  const plannedQuotePrice = quoteAmount != null && requestedQuantity != null
+    ? quoteAmount / requestedQuantity
+    : null;
+  const averageFillPrice = [
+    plan.limitPrice,
+    plannedQuotePrice,
+    snapshot.currentPrice,
+    snapshot.plannedPrice,
+    plan.entryPrice,
+  ].map(positiveNumber).find((value): value is number => value != null) ?? null;
+  const filledQuantity = requestedQuantity
+    ?? (quoteAmount != null && averageFillPrice != null ? quoteAmount / averageFillPrice : null);
+  if (averageFillPrice == null || filledQuantity == null || !Number.isFinite(filledQuantity) || filledQuantity <= 0) {
+    throw new Error('PAPER_EXECUTION_FILL_UNAVAILABLE');
+  }
+  return { averageFillPrice, filledQuantity };
+}
+
 export class TradeExecutionService {
   private automation: TradeAutomationService;
   private recovery: TradeOrderRecoveryService;
   private cancelService: TradeCancelReconciliationService;
   private riskService: TradePreSubmissionRiskService;
 
-  constructor(private repository: TradingRepository) {
+  constructor(
+    private repository: TradingRepository,
+    private verificationSleep: (delayMs: number) => Promise<void> = (delayMs) => new Promise(
+      (resolve) => setTimeout(resolve, delayMs),
+    ),
+  ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
     this.cancelService = new TradeCancelReconciliationService(repository);
@@ -619,8 +657,24 @@ export class TradeExecutionService {
     let verifiedCredentials: Record<string, string> = credentials;
     let providerRequests = 0;
     const request = async <T>(operation: () => Promise<T>) => {
-      providerRequests += 1;
-      return operation();
+      for (let attempt = 0; ; attempt += 1) {
+        providerRequests += 1;
+        try {
+          return await operation();
+        } catch (error) {
+          const code = error instanceof Error
+            ? error.message.split(':')[0]
+            : 'LIVE_EXECUTION_VERIFICATION_FAILED';
+          if (attempt >= VERIFICATION_TRANSIENT_RETRIES || !isTransientTradingProviderError(code)) {
+            throw error;
+          }
+          const delayMs = Math.min(
+            VERIFICATION_RETRY_MAX_DELAY_MS,
+            VERIFICATION_RETRY_BASE_DELAY_MS * (2 ** attempt),
+          );
+          await this.verificationSleep(delayMs);
+        }
+      }
     };
 
     try {
@@ -813,9 +867,8 @@ export class TradeExecutionService {
           serverLiveEnabled: true,
         });
         const metadata = this.riskMetadata(risk, false);
+        const { filledQuantity, averageFillPrice } = paperFill(plan, risk.snapshot);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
-        const filledQuantity = plan.quantity ?? 0;
-        const averageFillPrice = plan.limitPrice ?? (plan.quoteAmount && plan.quantity ? plan.quoteAmount / plan.quantity : null);
         const feePercent = Number(risk.snapshot.estimatedFeePercent);
         const feeAmount = Number.isFinite(averageFillPrice) && Number.isFinite(filledQuantity)
           && averageFillPrice! > 0 && filledQuantity > 0 && Number.isFinite(feePercent) && feePercent >= 0

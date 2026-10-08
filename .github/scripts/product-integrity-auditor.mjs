@@ -37,7 +37,7 @@ export const PRODUCT_EDGES = [
       {
         id: 'research-workspace-copilot-mount',
         paths: ['stock-analyzer/src/pages/research-center-workspace.tsx'],
-        allOf: ['ResearchCopilotPanel', "value: 'copilot'", 'AI Research Copilot'],
+        allOf: ['ResearchCopilotPanel', "value: 'copilot'", "label: 'AI 도우미'"],
       },
       {
         id: 'research-copilot-component',
@@ -193,7 +193,7 @@ PRODUCT_EDGES.push(
   { id: 'PI014', from: 'Member Watchlist / Holdings', to: 'Personal Telegram alerts', severity: 'P2', lane: 'notifications', required: [
     { id: 'watchlist-alert-producer', paths: ['api-server/src/services/member-watchlist-telegram-producer.service.ts'], allOf: ['deliverPersonalTelegramAlert', 'userId'] },
     { id: 'holdings-member-eligibility', paths: ['api-server/src/services/member-holdings-telegram-producer.service.ts'], allOf: ['deliverMemberHoldingTelegramAlert', "hasCapability(profile, 'canConnectPersonalTelegram')"] },
-    { id: 'holdings-personal-dispatch-delegate', paths: ['api-server/src/services/member-holdings-telegram-alert.service.ts'], allOf: ['deliverMemberHoldingTelegramAlert', 'return deliverPersonalTelegramAlert({'] },
+    { id: 'holdings-personal-dispatch-delegate', paths: ['api-server/src/services/member-holdings-telegram-alert.service.ts'], allOf: ['deliverMemberHoldingTelegramAlert', 'const personal = await deliverPersonalTelegramAlert({', 'return personal;'] },
     { id: 'watchlist-subscriber-call', paths: ['api-server/src/services/signal-intelligence-telegram-subscriber.service.ts'], allOf: ['deliverMemberWatchlistTelegramForSignal'] },
   ] },
 );
