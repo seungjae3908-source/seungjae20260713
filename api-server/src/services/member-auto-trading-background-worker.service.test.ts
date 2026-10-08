@@ -1695,6 +1695,11 @@ test('read-only Live pre-entry exposure blocks untracked securities but excludes
   const bitget = (positions: CanonicalAccountSnapshot['positions']) =>
     assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [tracked]);
   assert.doesNotThrow(() => bitget([position('BTCUSDT', 1)]));
+  const crossProviderPlan = { symbol: '005930', side: 'buy', exchange: 'kiwoom' } as TradingPlan;
+  assert.throws(() => assertCanonicalLiveProviderPositions({
+    provider: 'toss', positions: [position('005930', 1, null)],
+  }, [crossProviderPlan]), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/,
+  'same symbol on a different broker must not reconcile external exposure');
   assert.throws(() => bitget([position('ETHUSDT', 1)]),
     /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
   assert.throws(() => bitget([position('BTCUSDT', 1, 'short')]),
