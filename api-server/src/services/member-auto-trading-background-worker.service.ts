@@ -1545,6 +1545,12 @@ export class MemberAutoTradingBackgroundWorker {
             }
           } catch (error) {
             const code = errorCode(error);
+            // Missing signal-specific AI proof is not a normal completed Live
+            // readiness state. Preserve the paper journal, but expose this
+            // failure to the UI and the protected activation warmup as blocked.
+            if (code === 'BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED') {
+              result.newEntriesFailClosed = true;
+            }
             if (code.startsWith('BACKGROUND_')
               || code.includes('RISK')
               || code.includes('LIMIT')
