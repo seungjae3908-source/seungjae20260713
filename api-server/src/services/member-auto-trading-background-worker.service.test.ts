@@ -1870,3 +1870,66 @@ test('blocked member evidence survives paginated warmup and cannot be erased by 
     }
   }
 });
+test('armed Live worker cannot bypass an unfilled Paper mirror to call a private provider', async () => {
+  const flags = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+    'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previous = Object.fromEntries(flags.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const rule = normalizeTradingPolicy({ ...allFourPolicy(), maxOrderKrw: 5_000 });
+  await repository.savePolicy(USER, rule);
+  const root = await mkdtemp(join(tmpdir(), 'auto-paper-paired-admission-'));
+  const armPath = join(root, 'arm.json');
+  const targetSha = 'f'.repeat(40);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER, policy: rule,
+        profile: { role: 'admin', membership_level: 'admin', status: 'approved', is_active: true },
+      }] as never;
+    },
+    async readLiveAccountSnapshot() {
+      providerReads++;
+      throw new Error('LIVE_PROVIDER_READ_NOT_ALLOWED_WITHOUT_FILLED_PAPER');
+    },
+  });
+  try {
+    for (const flag of flags.slice(0, 6)) process.env[flag] = 'true';
+    process.env.DEPLOY_SHA = targetSha;
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    const first = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(first.liveEntryWarmupComplete, true);
+    assert.equal(first.liveOrders, 0);
+    assert.equal(first.filledOrders, 0);
+
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true,
+      targetSha,
+      armedAt: new Date(nowMs + 100).toISOString(),
+      activateNotBeforeAt: new Date(nowMs + 200).toISOString(),
+    }) + '\n', { mode: 0o600, flag: 'wx' });
+
+    const blocked = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
+    assert.equal(blocked.liveEntriesArmed, true);
+    assert.equal(blocked.filledOrders, 0);
+    assert.equal(blocked.liveOrders, 0);
+    assert.equal(blocked.newEntriesFailClosed, true);
+    assert.equal(providerReads, 0);
+    assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const flag of flags) {
+      const old = previous[flag];
+      if (old == null) delete process.env[flag];
+      else process.env[flag] = old;
+    }
+  }
+});
