@@ -853,7 +853,10 @@ export class TradeExecutionService {
           orderSubmissionAttempted: false,
         });
       }
-      const automaticLive = automaticEntry;
+      // Once AUTO mode is enabled, every new order still requires the stronger
+      // AUTO authority gate (even if the plan predates the mode transition).
+      // An AUTO-origin entry with a disabled policy was rejected above.
+      const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
       const capabilityDecision = livePlanCapabilityDecision(plan, 'ORDER_CREATE');
       const currentLiveAuthority = automaticLive
         ? automaticLiveExecutionEnabled(plan.exchange)
