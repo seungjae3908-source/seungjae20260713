@@ -70,10 +70,18 @@ try {
   fail('production_database_project_mismatch');
 }
 
-const migrationPath = 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql';
+const migrationPaths = [
+  'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
+  'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql',
+];
 let migrationBody;
 try {
-  migrationBody = stripOuterTransaction(readFileSync(path.join(root, migrationPath), 'utf8'), migrationPath);
+  migrationBody = migrationPaths
+    .map((migrationPath) => stripOuterTransaction(
+      readFileSync(path.join(root, migrationPath), 'utf8'),
+      migrationPath,
+    ))
+    .join('\n');
 } catch {
   fail('migration_source_invalid');
 }
@@ -231,6 +239,22 @@ begin
       and with_check ilike '%actor_id%'
   ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
 
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable')
+      and grantee in ('PUBLIC','anon','authenticated')
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'; end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('current_membership_level','is_approved_member','is_admin','is_full_member')
+      and grantee = 'PUBLIC'
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'; end if;
+
   if (select count(*) from public.profiles) <> current_setting('app.member_profiles_before')::bigint then
     raise exception 'MEMBER_PROFILE_ROWS_CHANGED';
   end if;
@@ -316,7 +340,8 @@ const artifact = {
   production_project_match: true,
   database_endpoint_type: database.endpointType,
   atomic_transaction: true,
-  migration_applied: 1,
+  migration_applied: 2,
+  security_definer_privileges_locked: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
   associate_journal_read_only: true,
