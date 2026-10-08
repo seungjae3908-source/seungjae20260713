@@ -93,13 +93,13 @@ type Status = {
     liveCycleAllFourPolicyReady: boolean;
     globalEmergencyStopActive: boolean;
     errorCode: string | null;
-  };
+  } | null;
   userTelegramDelivery?: {
     enabled: boolean;
     lastTickAt: string | null;
     tickOk: boolean | null;
     errorCode: string | null;
-  };
+  } | null;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
