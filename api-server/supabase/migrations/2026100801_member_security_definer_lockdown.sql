@@ -5,6 +5,12 @@
 
 begin;
 
+-- Profiles are read directly by authenticated clients under RLS, but every
+-- mutation is server/admin mediated. Remove legacy broad Data API table grants,
+-- including TRUNCATE (which RLS does not constrain), and keep SELECT only.
+revoke all privileges on table public.profiles from public, anon, authenticated;
+grant select on table public.profiles to authenticated;
+
 do $member_security_definer_lockdown$
 declare
   helper text;
@@ -47,6 +53,34 @@ $member_security_definer_lockdown$;
 
 do $member_security_definer_lockdown_verify$
 begin
+  if exists (
+    select 1
+    from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee in ('PUBLIC', 'anon')
+  ) then
+    raise exception 'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type <> 'SELECT'
+  ) or not exists (
+    select 1
+    from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type = 'SELECT'
+  ) then
+    raise exception 'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID';
+  end if;
+
   if exists (
     select 1
     from information_schema.routine_privileges
