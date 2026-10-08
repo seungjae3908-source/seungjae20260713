@@ -132,7 +132,8 @@ export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchan
     : liveExecutionAuthority() === 'SPOT_LIVE_LIMITED';
   return authorityEnabled
     // A dedicated Paper-only rehearsal must not inherit stale automatic Live authority.
-    && process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'
+    && (process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined
+      || process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false')
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
