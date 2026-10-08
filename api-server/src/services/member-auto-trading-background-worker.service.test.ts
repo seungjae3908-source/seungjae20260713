@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
-import { DEFAULT_TRADING_POLICY, type TradingPlan, type TradingPolicy } from './trade-automation.types';
+import { DEFAULT_TRADING_POLICY, type ExchangeConnection, type TradingPlan, type TradingPolicy } from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
@@ -20,6 +20,7 @@ import {
   formulaAiReviewReasonsForLive,
   assertCanonicalLiveProviderPositions,
   memberTelegramProofMatchesCurrentBinding,
+  liveAllFourConnectionVerificationReady,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -65,6 +66,45 @@ function allFourPolicy(): TradingPolicy {
     exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: false },
   });
 }
+
+test('all-four live readiness requires fresh verified Toss, Kiwoom, Upbit, and Bitget connections', () => {
+  const nowMs = Date.now();
+  const readyPolicy = normalizeTradingPolicy({
+    ...allFourPolicy(),
+    exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+  });
+  const connection = (exchange: ExchangeConnection['exchange'], overrides: Partial<ExchangeConnection> = {}): ExchangeConnection => ({
+    userId: USER,
+    exchange,
+    accountMode: 'live',
+    configured: true,
+    encryptedCredentials: 'encrypted',
+    lastVerifiedAt: new Date(nowMs - 60_000).toISOString(),
+    lastErrorCode: null,
+    updatedAt: new Date(nowMs - 60_000).toISOString(),
+    ...overrides,
+  });
+  const all = [
+    connection('toss'),
+    connection('kiwoom'),
+    connection('upbit'),
+    connection('bitget'),
+  ];
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, all, nowMs), true);
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, all.filter((row) => row.exchange !== 'toss'), nowMs), false);
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, [
+    connection('toss'),
+    connection('kiwoom'),
+    connection('upbit'),
+    connection('bitget', { lastVerifiedAt: new Date(nowMs - 31 * 24 * 60 * 60_000).toISOString() }),
+  ], nowMs), false);
+  assert.equal(liveAllFourConnectionVerificationReady(readyPolicy, [
+    connection('toss'),
+    connection('kiwoom'),
+    connection('upbit'),
+    connection('bitget', { lastErrorCode: 'AUTH_REVOKED' }),
+  ], nowMs), false);
+});
 
 function handoff(nowMs: number, missingRecentMove = false) {
   const dataTimestamp = new Date(nowMs - (missingRecentMove ? 120_000 : 20_000)).toISOString();
