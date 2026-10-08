@@ -481,11 +481,8 @@ jobs:
             market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
             research-production/deploy/prepare-paper-state-readonly-transport.mjs
             research-production/deploy/research-production@.service
-            research-production/src/engine.mjs
             research-production/src/natural-cycle-verdict-trace.mjs
             research-production/test/paper-state-readonly-transport.test.mjs
-            research-production/test/research-engine.test.mjs
-            research-production/test/paper-risk-policy-transport.test.mjs
             .github/workflows/prediction-lab-pr-head-unit.yml
             research-production/test/natural-cycle-verdict-trace.test.mjs
             market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
