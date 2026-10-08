@@ -275,7 +275,7 @@ drop function if exists public.raise_exception(text);
 do $staging_member_security_definer_assert$
 begin
   if exists (
-    select 1 from information_schema.role_table_grants
+    select 1 from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee in ('PUBLIC','anon')
@@ -284,13 +284,13 @@ begin
   end if;
 
   if exists (
-    select 1 from information_schema.role_table_grants
+    select 1 from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee = 'authenticated'
       and privilege_type <> 'SELECT'
   ) or not exists (
-    select 1 from information_schema.role_table_grants
+    select 1 from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee = 'authenticated'
