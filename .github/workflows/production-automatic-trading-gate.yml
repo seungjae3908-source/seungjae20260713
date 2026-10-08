@@ -592,6 +592,7 @@ jobs:
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
           const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
+          const liveEntryArmActivationDelayMs = 120_000;
           const disarmLiveEntries = () => rmSync(liveEntryArmPath, { force: true });
           const productionWorkerUid = () => {
             const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
@@ -610,8 +611,13 @@ jobs:
               throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READABILITY_INVALID');
             }
             const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            const armedAtMs = Date.parse(String(value?.armedAt ?? ''));
+            const activateNotBeforeMs = Date.parse(String(value?.activateNotBeforeAt ?? ''));
             if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
-              || value?.armed !== true || value?.targetSha !== target) {
+              || value?.armed !== true || value?.targetSha !== target
+              || !Number.isFinite(armedAtMs)
+              || !Number.isFinite(activateNotBeforeMs)
+              || activateNotBeforeMs - armedAtMs !== liveEntryArmActivationDelayMs) {
               throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READBACK_FAILED');
             }
             return true;
@@ -620,11 +626,16 @@ jobs:
             mkdirSync(dirname(liveEntryArmPath), { recursive: true });
             const temp = liveEntryArmPath + '.tmp-' + process.pid;
             rmSync(temp, { force: true });
+            const armedAt = new Date();
+            const activateNotBeforeAt = new Date(
+              armedAt.getTime() + liveEntryArmActivationDelayMs,
+            ).toISOString();
             writeFileSync(temp, JSON.stringify({
               schemaVersion: 'member-auto-trading-live-entry-arm-v1',
               targetSha: target,
               armed: true,
-              armedAt: new Date().toISOString(),
+              armedAt: armedAt.toISOString(),
+              activateNotBeforeAt,
             }) + '\n', { mode: 0o600, flag: 'wx' });
             renameSync(temp, liveEntryArmPath);
             const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
@@ -633,6 +644,7 @@ jobs:
               throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WRITE_FAILED');
             }
             verifyLiveEntryArmReadable();
+            return activateNotBeforeAt;
           };
           if (!['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
@@ -813,7 +825,7 @@ jobs:
             const after = snapshot();
             assertAllFourManual(after, true);
             const warmupHealth = requireWorkerWarmup(after, { requireCurrentArm: false });
-            armLiveEntries();
+            const activateNotBeforeAt = armLiveEntries();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
@@ -840,6 +852,8 @@ jobs:
               FIRST_WARMUP_TICK_LIVE_EXIT_ORDERS: 0,
               LIVE_ENTRY_ARM_WRITTEN: true,
               LIVE_ENTRY_ARM_READBACK_PROVEN: true,
+              LIVE_ENTRY_ARM_ACTIVATE_NOT_BEFORE: activateNotBeforeAt,
+              LIVE_ENTRY_ARM_ACTIVATION_DELAY_MS: liveEntryArmActivationDelayMs,
               NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
               LIVE_READINESS_CYCLE_COMPLETE: warmupHealth.liveReadinessCycleComplete,
               LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
@@ -916,6 +930,7 @@ jobs:
                 'first_warmup_tick_live_exit_orders=0',
                 'live_entry_arm_written=true',
                 'live_entry_arm_readback_proven=true',
+                'live_entry_arm_activation_delay_ms=120000',
                 'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
                 'live_readiness_cycle_complete=true',
                 'live_cycle_order_eligible=true',
