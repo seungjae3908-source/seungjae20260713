@@ -306,8 +306,10 @@ requireText(autoTradingSettings, 'disabled={effectiveStopped}', 'AUTO_SETTINGS_S
 requireText(autoTradingSettings, 'data-testid="global-trading-stop"', 'AUTO_SETTINGS_GLOBAL_STOP_UI_MISSING');
 requireText(autoTradingSettings, '서버 전체 비상정지 · 관리자 해제 필요', 'AUTO_SETTINGS_GLOBAL_STOP_LABEL_MISSING');
 forbid(autoTradingSettings, /window\.setInterval\(\(\) => \{ void load\(\); \}, 15_000\)/u, 'AUTO_SETTINGS_DESTRUCTIVE_REFRESH_FORBIDDEN');
-requireText(tradeAutomationRoute, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_ROUTE_WORKER_HEALTH_STATUS_MISSING');
-requireText(tradeAutomationRoute, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_ROUTE_TELEGRAM_HEALTH_STATUS_MISSING');
+requireText(tradeAutomationRoute, 'function sanitizedAutomaticRuntimeHealth()', 'AUTO_ROUTE_WORKER_HEALTH_SANITIZER_MISSING');
+requireText(tradeAutomationRoute, 'autoTradingBackground: sanitizedAutomaticRuntimeHealth()', 'AUTO_ROUTE_WORKER_HEALTH_STATUS_MISSING');
+requireText(tradeAutomationRoute, 'userTelegramDelivery: sanitizedTelegramDeliveryRuntimeHealth()', 'AUTO_ROUTE_TELEGRAM_HEALTH_STATUS_MISSING');
+forbid(tradeAutomationRoute, /autoTradingBackground:\s*readMemberAutoTradingBackgroundRuntimeHealth\(\)/u, 'AUTO_ROUTE_RAW_GLOBAL_WORKER_HEALTH_FORBIDDEN');
 requireText(tradeAutomationRoute, 'enforceMemberTradingPolicy(candidate, current)', 'AUTO_ROUTE_MEMBER_POLICY_GUARD_MISSING');
 requireText(tradeAutomationRoute, 'MEMBER_TRADING_RESUME_REQUIRED', 'AUTO_ROUTE_MEMBER_STOP_BYPASS_BLOCK_MISSING');
 requireText(tradeAutomationRoute, "router.post('/resume'", 'AUTO_ROUTE_MEMBER_RESUME_ENDPOINT_MISSING');
@@ -428,6 +430,7 @@ console.log(JSON.stringify({
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
   workerBackedUiLiveTruth: true,
+  memberStatusSanitizesGlobalWorkerCounters: true,
   stickyStopDashboardTruth: true,
   marketScopedAutomaticReadiness: true,
   stickyMemberStopRequiresConfirmedResume: true,
