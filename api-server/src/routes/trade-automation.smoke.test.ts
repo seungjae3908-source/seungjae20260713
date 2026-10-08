@@ -316,7 +316,7 @@ async function unavailableMarketIntelligence(
   );
 }
 
-async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
+async function startServer(authenticated = true, role: 'associate' | 'regular' | 'admin' = 'regular') {
   const app = express();
   app.use(express.json());
   if (authenticated) app.use((req, _res, next) => {
@@ -1405,6 +1405,77 @@ test('exit preview follows Toss fractional and Kiwoom integer US-stock quantity 
   }
 });
 
+test('associate automatic policy cannot enable crypto futures without futures capability', async () => {
+  const associate = await startServer(true, 'associate');
+  try {
+    const response = await fetch(`${associate.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        marketEnabled: {
+          domestic_stock: true,
+          us_stock: true,
+          crypto_spot: true,
+          crypto_futures: true,
+        },
+        exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
+        enabledAssets: { bitget: ['BTCUSDT'], upbit: [], kiwoom: [], toss: [] },
+        enabledStrategies: [],
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      policy: {
+        marketEnabled: { crypto_futures: boolean };
+        exchangeEnabled: { bitget: boolean };
+        enabledAssets: { bitget: string[] };
+      };
+    };
+    assert.equal(body.policy.marketEnabled.crypto_futures, false);
+    assert.equal(body.policy.exchangeEnabled.bitget, false);
+    assert.deepEqual(body.policy.enabledAssets.bitget, []);
+  } finally {
+    await fetch(`${associate.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'approval' }),
+    }).catch(() => undefined);
+    await close(associate.server);
+  }
+});
+
+test('regular members keep Paper automation but cannot create live execution capability', async () => {
+  const regular = await startServer(true, 'regular');
+  try {
+    const connection = await fetch(`${regular.baseUrl}/api/trade-automation/connections/upbit/reuse-readonly`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmed: true }),
+    });
+    assert.equal(connection.status, 403);
+    const connectionBody = await connection.json() as { error: string; capability: string; orderSubmitted: boolean };
+    assert.equal(connectionBody.error, 'CAPABILITY_REQUIRED');
+    assert.equal(connectionBody.capability, 'canPlaceOrders');
+    assert.equal(connectionBody.orderSubmitted, false);
+
+    const livePlan = await fetch(`${regular.baseUrl}/api/trade-automation/plans`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ exchange: 'upbit', accountMode: 'live' }),
+    });
+    assert.equal(livePlan.status, 403);
+    const planBody = await livePlan.json() as { error: string; capability: string; orderSubmitted: boolean };
+    assert.equal(planBody.error, 'CAPABILITY_REQUIRED');
+    assert.equal(planBody.capability, 'canPlaceOrders');
+    assert.equal(planBody.orderSubmitted, false);
+  } finally {
+    await close(regular.server);
+  }
+});
+
 test('status is authenticated, automatic execution defaults off, and never returns credential values', async () => {
   const unauthenticated = await startServer(false);
   try {
@@ -1663,7 +1734,7 @@ test('saved read-only Toss credentials without accountSeq auto-select the broker
   }));
 
   await repository.deleteConnection(USER, 'toss');
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   const nativeFetch = globalThis.fetch;
   let financialMutationRequests = 0;
   let buyingPowerAccountHeader: string | null = null;
@@ -1797,7 +1868,7 @@ test('saved read-only Upbit credentials can be reused and verified without secre
   }));
 
   await repository.deleteConnection(USER, 'upbit');
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   const nativeFetch = globalThis.fetch;
   let providerMutationRequests = 0;
   try {
@@ -1877,7 +1948,7 @@ test('saved read-only Upbit credentials can be reused and verified without secre
 });
 
 test('Toss live connection save keeps accountSeq optional', async () => {
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   try {
     const response = await fetch(`${baseUrl}/api/trade-automation/connections/toss`, {
       method: 'PUT',
@@ -1902,7 +1973,7 @@ test('Toss live connection save keeps accountSeq optional', async () => {
 });
 
 test('connection registration rejects withdrawal permission and does not echo secrets', async () => {
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   try {
     const rejected = await fetch(`${baseUrl}/api/trade-automation/connections/upbit`, {
       method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -1943,7 +2014,7 @@ test('live trading connection requires explicit purpose plus read+orders and nev
   process.env.executionAuthority = 'SPOT_LIVE_LIMITED';
   process.env.SPOT_LIVE_CAPABILITY_ALLOWLIST = 'BALANCE_READ,POSITION_READ';
   process.env.SPOT_LIVE_MARKET_ALLOWLIST = 'CRYPTO_SPOT';
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   try {
     const credentials = { accessKey: 'live-access-secret', secretKey: 'live-signing-secret' };
 
@@ -2224,6 +2295,132 @@ test('automatic policy executes US-stock Paper without per-order approval or pri
     assert.equal((await redundantApproval.json() as { error: string }).error, 'TRADE_PLAN_NOT_APPROVAL_PENDING');
   } finally {
     globalThis.fetch = nativeFetch;
+    await close(server);
+  }
+});
+
+
+test('formula+AI rehearsal HTTP route proves four-market readiness and never creates live authority or provider mutations', async () => {
+  const verifiedAt = '2026-10-07T01:00:00.000Z';
+  const credentialValues = {
+    toss: { clientId: 'rehearsal-toss-client', clientSecret: 'rehearsal-toss-secret' },
+    kiwoom: { appKey: 'rehearsal-kiwoom-key', secretKey: 'rehearsal-kiwoom-secret' },
+    upbit: { accessKey: 'rehearsal-upbit-key', secretKey: 'rehearsal-upbit-secret' },
+    bitget: { apiKey: 'rehearsal-bitget-key', secretKey: 'rehearsal-bitget-secret', passphrase: 'rehearsal-bitget-pass' },
+  } as const;
+  const encrypted = Object.fromEntries(
+    Object.entries(credentialValues).map(([provider, value]) => [provider, encryptTradingCredentials(value)]),
+  ) as Record<string, string>;
+  setTradeReadonlyCredentialRepositoryFactoryForTests(() => ({
+    async get(userId, provider) {
+      if (userId !== USER || !encrypted[provider]) return null;
+      return {
+        userId,
+        provider,
+        configured: true,
+        encryptedCredentials: encrypted[provider],
+        lastVerifiedAt: verifiedAt,
+        lastErrorCode: null,
+        updatedAt: verifiedAt,
+      };
+    },
+  }));
+
+  process.env.FUTURES_LIVE_MAX_LEVERAGE = '7';
+  process.env.FUTURES_LIVE_MARGIN_MODE = 'isolated';
+  for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+    await repository.saveConnection({
+      userId: USER,
+      exchange,
+      accountMode: 'paper',
+      configured: true,
+      encryptedCredentials: null,
+      lastVerifiedAt: verifiedAt,
+      lastErrorCode: null,
+      updatedAt: verifiedAt,
+    });
+  }
+
+  const { server, baseUrl } = await startServer();
+  const nativeFetch = globalThis.fetch;
+  let outboundRequests = 0;
+  try {
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.startsWith(baseUrl)) return nativeFetch(input, init);
+      outboundRequests += 1;
+      throw new Error(`REHEARSAL_OUTBOUND_FORBIDDEN:${String(init?.method ?? 'GET')}:${url}`);
+    };
+
+    const missingConfirmation = await globalThis.fetch(`${baseUrl}/api/trade-automation/rehearsal/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ journalReadReady: true, telegramReady: true }),
+    });
+    assert.equal(missingConfirmation.status, 409);
+    const missingBody = await missingConfirmation.json() as Record<string, any>;
+    assert.equal(missingBody.executionAuthority, 'NONE');
+    assert.equal(missingBody.realOrderSubmitted, false);
+    assert.equal(missingBody.providerMutationRequests, 0);
+
+    const response = await globalThis.fetch(`${baseUrl}/api/trade-automation/rehearsal/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        confirmed: true,
+        journalReadReady: true,
+        telegramReady: true,
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    for (const secret of [
+      'rehearsal-toss-client',
+      'rehearsal-toss-secret',
+      'rehearsal-kiwoom-key',
+      'rehearsal-kiwoom-secret',
+      'rehearsal-upbit-key',
+      'rehearsal-upbit-secret',
+      'rehearsal-bitget-key',
+      'rehearsal-bitget-secret',
+      'rehearsal-bitget-pass',
+    ]) assert.doesNotMatch(text, new RegExp(secret));
+
+    const body = JSON.parse(text) as Record<string, any>;
+    assert.equal(body.ok, true);
+    assert.equal(body.mode, 'DRIFT_REHEARSAL');
+    assert.equal(body.exceptionPolicy, 'FORMULA_AI_LIVE_EXCEPTION_V1');
+    assert.equal(body.paper.paperAutoReady, true);
+    assert.equal(body.paper.paperFillReady, true);
+    assert.equal(body.paper.journalReady, true);
+    assert.equal(body.paper.orderState, 'filled');
+    assert.equal(body.journal.ready, true);
+    assert.equal(body.telegram.ready, true);
+    assert.equal(body.futures.marginMode, 'isolated');
+    assert.equal(body.futures.maxLeverage, 7);
+    assert.equal(body.ai.positiveDecision, 'PASS');
+    assert.equal(body.ai.vetoDecision, 'VETO');
+    assert.equal(body.ai.vetoBlocked, true);
+    assert.equal(body.markets.length, 5);
+    assert.ok(body.markets.every((row: any) => row.wouldActivateLiveAuto === true));
+    assert.equal(body.wouldActivateLiveAuto, true);
+    assert.equal(body.executionAuthority, 'NONE');
+    assert.equal(body.realOrderSubmitted, false);
+    assert.equal(body.actualOrderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(body.providerMutationRequests, 0);
+    assert.equal(body.productionMutationAllowed, false);
+    assert.equal(body.liveTradingActivated, false);
+    assert.equal(body.automaticLiveExecutionActivated, false);
+    assert.equal(outboundRequests, 0);
+  } finally {
+    globalThis.fetch = nativeFetch;
+    setTradeReadonlyCredentialRepositoryFactoryForTests(null);
+    for (const exchange of ['toss', 'kiwoom', 'upbit', 'bitget'] as const) {
+      await repository.deleteConnection(USER, exchange);
+    }
+    delete process.env.FUTURES_LIVE_MAX_LEVERAGE;
+    delete process.env.FUTURES_LIVE_MARGIN_MODE;
     await close(server);
   }
 });

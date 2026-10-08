@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The bridge accepts one owner-only command on issue `#23` (`Staging Readiness Control`) and dispatches `.github/workflows/staging-readiness.yml` from `main`.
+The bridge accepts owner-only commands on the canonical rollover issue `#1555` (`Staging Readiness Control — Rollover 2026-10-02`) and retains legacy compatibility with issue `#23` (`Staging Readiness Control`). Issue #23 is saturated and cannot accept new comments, so all new staging commands must use #1555. The bridge dispatches `.github/workflows/staging-readiness.yml` from `main`.
 
 It never reads staging secrets and never targets production. API acceptance is not deployment evidence: the bridge reports success only after GitHub returns and independently verifies the actual workflow Run ID for the requested revision.
 
