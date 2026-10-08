@@ -246,6 +246,48 @@ test('rearmed valid entry can retain review link but immediately loses it after 
   });
 });
 
+test('original signal expiry revokes review link even if Scanner remains approval-pending', async () => {
+  await withFollowupEnv(async () => {
+    const signalId = 'signal-time-expired-without-state-update';
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(announcedAlert(signalId), ANNOUNCED_AT, repository, {
+      messageId: 144, messageKind: 'TEXT', renderedText: '🟢 신호: 매수 · 5m',
+    });
+    const card = followupCard(signalId, {
+      price: 101, signalState: 'APPROVAL_PENDING', targets: [150], stopLoss: 1,
+    });
+    // Even a newer card expiry cannot resurrect the original announced entry.
+    card.expiresAt = '2026-09-10T00:00:00.000Z';
+    card.dataState = 'complete';
+    card.strongSignalEligible = true;
+    const edited: Array<{ text: string; buttons?: unknown }> = [];
+    const edit = async (input: { text: string; buttons?: unknown }) => {
+      edited.push({ text: input.text, buttons: input.buttons });
+      return { ok: true as const, attempts: 1 };
+    };
+    const sender = async () => {
+      throw new Error('expired lifecycle must edit original message');
+    };
+    const expiredNow = Date.parse(EXPIRES_AT) + 1_000;
+    await deliverScannerTelegramFollowups(
+      [card], sender, expiredNow, repository,
+      edit as typeof import('../../api-server/src/services/telegram-notification.service').editTelegramMessage,
+    );
+    expect(edited).toHaveLength(1);
+    expect(edited[0].text).toContain('신호 종료');
+    expect(JSON.stringify(edited[0].buttons)).not.toContain('/telegram-order');
+    const [stored] = await repository.list([signalId]);
+    expect(stored.lastState).toBe('EXPIRED');
+
+    clearTelegramSignalFollowupState();
+    await deliverScannerTelegramFollowups(
+      [card], sender, expiredNow + 1_000, repository,
+      edit as typeof import('../../api-server/src/services/telegram-notification.service').editTelegramMessage,
+    );
+    expect(edited).toHaveLength(1);
+  });
+});
+
 test('canonical duplicate followup result is checkpointed and is not resent after restart', async () => {
   await withFollowupEnv(async () => {
     const repository = new InMemoryTelegramSignalFollowupRepository();
