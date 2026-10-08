@@ -973,7 +973,7 @@ async function buildLivePlanInput(input: {
     ...input.paperInput,
     accountMode: 'live',
     signalReasons: [
-      ...input.paperInput.signalReasons.filter((reason) => reason !== 'CANONICAL_PAPER_HANDOFF'),
+      ...input.paperInput.signalReasons,
       'CANONICAL_LIVE_AUTO_HANDOFF',
       'ACCOUNT_READONLY_PRECHECK',
     ],
