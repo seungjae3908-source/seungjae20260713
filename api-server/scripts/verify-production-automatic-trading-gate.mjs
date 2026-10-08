@@ -283,6 +283,10 @@ requireText(autoTradingPage, 'runtimeStatus?.userTelegramDelivery', 'AUTO_UI_TEL
 requireText(autoTradingPage, 'autoWorker.liveEntriesArmed === true', 'AUTO_UI_ARMED_STATE_MISSING');
 requireText(autoTradingPage, '안전대기 · Arm 준비 중', 'AUTO_UI_ARM_WAIT_LABEL_MISSING');
 requireText(autoTradingPage, '자동 실거래 작동 준비됨', 'AUTO_UI_RUNTIME_READY_LABEL_MISSING');
+requireText(autoTradingPage, 'runtimeHealthFresh', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_HELPER_MISSING');
+requireText(autoTradingPage, 'nowMs - tickMs <= 360_000', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_BOUND_MISSING');
+requireText(autoTradingPage, '자동 워커 상태 지연', 'AUTO_UI_STALE_WORKER_LABEL_MISSING');
+requireText(autoTradingPage, 'Telegram 상태 지연', 'AUTO_UI_STALE_TELEGRAM_LABEL_MISSING');
 requireText(autoTradingPage, "tone={providerVerified ? 'ok' : 'warn'}", 'AUTO_UI_PROVIDER_STATUS_TONE_MISSING');
 requireText(autoTradingPage, "tone={effectiveEntryStopped ? 'warn' : 'ok'}", 'AUTO_UI_STOP_STATUS_TONE_MISSING');
 requireText(autoTradingPage, "tone={automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
@@ -435,6 +439,7 @@ console.log(JSON.stringify({
   runtimeBackedUiGateStatus: true,
   workerBackedUiLiveTruth: true,
   truthfulRuntimeStatusTones: true,
+  uiRuntimeHealthFreshnessRequired: true,
   memberStatusSanitizesGlobalWorkerCounters: true,
   stickyStopDashboardTruth: true,
   marketScopedAutomaticReadiness: true,
