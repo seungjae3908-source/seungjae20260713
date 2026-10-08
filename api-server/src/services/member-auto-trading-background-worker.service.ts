@@ -825,10 +825,6 @@ function normalizedSymbol(value: unknown) {
   return String(value ?? '').trim().toUpperCase().replace(/^KRW-/u, '');
 }
 
-function activeLivePlans(runtime: MemberRuntimeState) {
-  return openAutomaticPlans(runtime, 'live');
-}
-
 function expectedBalanceCurrency(market: MemberAutoTradingPaperHandoffEntry['identity']['market']) {
   if (market === 'KR_STOCK' || market === 'CRYPTO_SPOT') return 'KRW';
   if (market === 'US_STOCK') return 'USD';
@@ -921,7 +917,10 @@ async function liveJournalRiskState(
     }
     return total;
   };
-  const livePlans = activeLivePlans(runtime);
+  // A pending order is NOT proof of an owned broker position. Bind provider
+  // holdings only to canonically filled/partially-filled entry quantities,
+  // and fail closed until ambiguous fills are reconciled.
+  const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
   assertCanonicalLiveProviderPositions(snapshot, livePlans);
   const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
