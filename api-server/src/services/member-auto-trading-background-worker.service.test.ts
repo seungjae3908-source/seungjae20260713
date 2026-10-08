@@ -514,7 +514,8 @@ test('Paper-only override produces a canonical simulated fill and zero private/l
     assert.equal(first.privateTradingRequests, 0);
     assert.equal(liveAccountReads, 0);
     const order = (await repository.listOrders(USER))[0];
-    assert.equal(order?.state, 'FILLED');
+    assert.ok(order);
+    assert.equal(order.state, 'FILLED');
     const plan = await repository.getPlan(USER, order.planId);
     assert.equal(plan?.accountMode, 'paper');
     assert.equal(order.exchangeOrderId?.startsWith('paper-'), true);
