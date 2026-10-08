@@ -266,8 +266,11 @@ test('Bitget Classic fallback is selected when official UTA error 25245 reports 
       if (request.path === '/api/v3/account/settings') {
         return { code: '25245', msg: 'The account is not the unified account mode', data: null };
       }
+      if (request.path === '/api/v2/mix/account/account') {
+        return { code: '00000', data: { marginCoin: 'USDT', posMode: 'one_way_mode' } };
+      }
       if (request.path === '/api/v2/mix/account/accounts') {
-        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20', posMode: 'one_way_mode' }] };
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
       }
       if (request.path === '/api/v2/mix/position/all-position') {
         return { code: '00000', data: [] };
@@ -281,6 +284,7 @@ test('Bitget Classic fallback is selected when official UTA error 25245 reports 
 
   assert.deepEqual(new Set(seen), new Set([
     '/api/v3/account/settings',
+    '/api/v2/mix/account/account',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -301,12 +305,41 @@ test('Bitget wrapper probes UTA mode then preserves Classic signed GET reads and
   const seen: any[] = []; const result = await readBitgetSnapshot({ apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' }, async (request) => {
     seen.push(request);
     if (request.path === '/api/v3/account/settings') return { code: '25245', msg: 'The account is not the unified account mode', data: null };
+    if (request.path === '/api/v2/mix/account/account') return { code: '00000', data: { marginCoin: 'USDT', posMode: 'one_way_mode' } };
     if (request.path.includes('position')) return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '1', openPriceAvg: '60000', markPrice: '61000', leverage: '3', liquidationPrice: '' }] };
     if (request.path.includes('orders-pending')) return { code: '00000', data: { entrustedList: [] } };
-    return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', posMode: 'one_way_mode' }] };
+    return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80' }] };
   });
   assert.equal(seen[0]?.path, '/api/v3/account/settings');
+  const classicSettings = seen.find((request) => request.path === '/api/v2/mix/account/account');
+  assert.equal(classicSettings?.query, 'symbol=BTCUSDT&productType=USDT-FUTURES&marginCoin=USDT');
+  assert.equal(classicSettings?.bitgetReadonlyDiagnostic?.endpointFamily, 'CLASSIC');
+  assert.equal(classicSettings?.bitgetReadonlyDiagnostic?.probe, 'ACCOUNT_SETTINGS');
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
+});
+
+test('Bitget Classic position mode fails closed when the authoritative single-account response omits posMode', async () => {
+  await assert.rejects(
+    readBitgetSnapshot(
+      { apiKey: 'BITGET_KEY_TEST_ONLY', secretKey: 'BITGET_SECRET_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_TEST_ONLY' },
+      async (request) => {
+        if (request.path === '/api/v3/account/settings') return { code: '25245', data: null };
+        if (request.path === '/api/v2/mix/account/account') return { code: '00000', data: { marginCoin: 'USDT' } };
+        if (request.path === '/api/v2/mix/account/accounts') {
+          return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '100' }] };
+        }
+        if (request.path === '/api/v2/mix/position/all-position') return { code: '00000', data: [] };
+        if (request.path === '/api/v2/mix/order/orders-pending') return { code: '00000', data: { entrustedList: [] } };
+        throw new Error('UNEXPECTED_BITGET_CLASSIC_POSITION_MODE_PATH');
+      },
+    ),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_UNAVAILABLE'
+      && error.bitgetDiagnostic?.requestPath === '/api/v2/mix/account/account'
+      && error.bitgetDiagnostic.endpointFamily === 'CLASSIC'
+      && error.bitgetDiagnostic.probe === 'ACCOUNT_SETTINGS'
+      && error.bitgetDiagnostic.sanitizedClassification === 'BITGET_RESPONSE_SHAPE_INVALID',
+  );
 });
 
 test('Bitget account-mode transition fails closed as retryable instead of guessing Classic or UTA', async () => {
@@ -332,8 +365,11 @@ test('Bitget settings permission denial uses account-info mode fallback without 
       seen.push(request);
       if (request.path === '/api/v3/account/settings') return { code: '40025', data: null };
       if (request.path === '/api/v3/account/info') return { code: '00000', data: { permissions: [] } };
+      if (request.path === '/api/v2/mix/account/account') {
+        return { code: '00000', data: { marginCoin: 'USDT', posMode: 'one_way_mode' } };
+      }
       if (request.path === '/api/v2/mix/account/accounts') {
-        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90', posMode: 'one_way_mode' }] };
+        return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
       }
       if (request.path === '/api/v2/mix/position/all-position') {
         return { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] };
@@ -349,6 +385,7 @@ test('Bitget settings permission denial uses account-info mode fallback without 
   assert.deepEqual(new Set(seen.map((row) => row.path)), new Set([
     '/api/v3/account/settings',
     '/api/v3/account/info',
+    '/api/v2/mix/account/account',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -449,6 +486,9 @@ test('Bitget Classic fallback is selected when UTA returns 40084 for Classic Acc
       if (request.path === '/api/v3/account/settings') {
         return { code: '40084', msg: 'Classic Account mode does not support Unified Account API', data: null };
       }
+      if (request.path === '/api/v2/mix/account/account') {
+        return { code: '00000', data: { marginCoin: 'USDT', posMode: 'one_way_mode' } };
+      }
       if (request.path === '/api/v2/mix/account/accounts') {
         return { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '80', locked: '20' }] };
       }
@@ -464,12 +504,14 @@ test('Bitget Classic fallback is selected when UTA returns 40084 for Classic Acc
 
   assert.deepEqual(new Set(seen), new Set([
     '/api/v3/account/settings',
+    '/api/v2/mix/account/account',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
   ]));
   assert.equal(result.connected, true);
   assert.equal(result.status, 'CONNECTED');
+  assert.equal(result.positionMode, 'one_way_mode');
   assert.equal(result.orderRequests, 0);
   assert.equal(result.cancelRequests, 0);
   assert.equal(result.amendRequests, 0);

@@ -171,9 +171,66 @@ function assertCredentialReceipt(credential, { targetSha, productionDeployRunId 
 }
 
 
+function assertMemberReceipt(member, { targetSha, productionDeployRunId }) {
+  const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
+  if (member?.schemaVersion !== 'production-member-readonly-qa-v1'
+    || member?.complete !== true
+    || member?.productionDeployRunId !== deployRunId
+    || member?.officialProductionOrigin !== true
+    || member?.authenticatedProductionSession !== true
+    || !['associate', 'regular', 'admin'].includes(member?.membershipLevel)
+    || member?.profileStatus !== 'approved'
+    || member?.memberActive !== true
+    || member?.membershipExpiryValid !== true
+    || member?.sGradeAccessAllowed !== true
+    || member?.aiChartAccessible !== true
+    || member?.tradingAnalyticsAccessible !== true
+    || member?.aiTradingReviewAccessible !== true
+    || member?.adminSurfaceMatchedTier !== true
+    || member?.liveOrderSurfaceMatchedTier !== true
+    || member?.mobileAccountLayoutSafe !== true
+    || member?.blockedMutationRequests !== 0
+    || member?.realOrderSubmitted !== false
+    || member?.secretValuesRecorded !== false
+    || member?.accountValuesRecorded !== false) {
+    throw new Error('POSTDEPLOY_QA_MEMBER_INVALID');
+  }
+  requireExactSha(member.targetSha, sha, 'POSTDEPLOY_QA_MEMBER_SHA_MISMATCH');
+  requireZeroAuthority(member, 'POSTDEPLOY_QA_MEMBER');
+  assertNoForbiddenEvidenceKeys(member);
+}
+
 function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunId }) {
   const { sha, deployRunId } = normalizeReceiptContext(targetSha, productionDeployRunId);
-  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v1'
+  const telegramState = tradingCore?.telegramActivationState;
+  const telegramConnected = tradingCore?.telegramConnectedBefore;
+  const telegramRuntimeReady = tradingCore?.telegramRuntimeReady;
+  const telegramReady = telegramState === 'READY_FOR_ACTIVATION'
+    && tradingCore?.telegramActivationReady === true
+    && typeof telegramConnected === 'boolean'
+    && typeof telegramRuntimeReady === 'boolean'
+    && !(telegramConnected && telegramRuntimeReady)
+    && tradingCore?.telegramUserConnectionRequired === !telegramConnected
+    && tradingCore?.telegramPersonalActivationRequired === true
+    && tradingCore?.telegramDeliveryQueued === 0
+    && tradingCore?.telegramTestDelivered === false;
+  const telegramVerified = telegramState === 'ACTIVE_VERIFIED'
+    && tradingCore?.telegramActivationReady === true
+    && telegramConnected === true
+    && telegramRuntimeReady === true
+    && tradingCore?.telegramUserConnectionRequired === false
+    && tradingCore?.telegramPersonalActivationRequired === false
+    && Number(tradingCore?.telegramDeliveryQueued) >= 1
+    && tradingCore?.telegramTestDelivered === true;
+  const memberAutoPolicyReady = tradingCore?.memberAutoPolicyReady === true
+    && Array.isArray(tradingCore?.memberAutoPolicyBlockers)
+    && tradingCore.memberAutoPolicyBlockers.length === 0
+    && ['kiwoom', 'toss'].includes(tradingCore?.memberAutoDomesticBroker)
+    && Number.isInteger(tradingCore?.memberAutoBitgetLeverage)
+    && tradingCore.memberAutoBitgetLeverage >= 2
+    && tradingCore.memberAutoBitgetLeverage <= 7
+    && ['limited-50', 'validated'].includes(tradingCore?.memberAutoPilotStage);
+  if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v4'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
     || tradingCore?.authenticatedProductionSession !== true
@@ -181,8 +238,8 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     || tradingCore?.paperFilled !== true
     || tradingCore?.journalVisible !== true
     || !(Number(tradingCore?.executionSyncInserted) >= 1)
-    || !(Number(tradingCore?.telegramDeliveryQueued) >= 1)
-    || tradingCore?.telegramTestDelivered !== true
+    || (!telegramReady && !telegramVerified)
+    || !memberAutoPolicyReady
     || tradingCore?.policyRestored !== true
     || tradingCore?.realOrderSubmitted !== false
     || tradingCore?.liveTradingAuthorityGranted !== false
@@ -286,6 +343,18 @@ function buildProductionPostdeployQaEvidence({
     identityMatch: true,
     comprehensiveQa: qaScope === 'full' ? 'PASS' : 'NOT_RUN',
     tradingCoreQa: qaScope === 'trading_core' ? 'PASS' : 'NOT_RUN',
+    telegramActivationState: qaScope === 'trading_core'
+      ? tradingCore.telegramActivationState
+      : 'NOT_EVALUATED',
+    telegramActivationReady: qaScope === 'trading_core'
+      ? tradingCore.telegramActivationReady
+      : false,
+    telegramActivationVerified: qaScope === 'trading_core'
+      ? tradingCore.telegramActivationState === 'ACTIVE_VERIFIED'
+      : false,
+    memberAutoPolicyReady: qaScope === 'trading_core'
+      ? tradingCore.memberAutoPolicyReady
+      : false,
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
     orderRequests: 0,
@@ -325,6 +394,7 @@ module.exports = {
   assertAccountReceipt,
   assertComprehensiveReceipt,
   assertCredentialReceipt,
+  assertMemberReceipt,
   assertTradingCoreReceipt,
   buildProductionPostdeployQaEvidence,
 };

@@ -8,6 +8,7 @@ import {
 export const EVIDENCE_BACKED_FORMULA_ENTRY_EVALUATOR_VERSION = 1;
 
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
+const SUPPORTED_MARKETS = new Set([...CASH_MARKETS, "CRYPTO_FUTURES"]);
 const SUPPORTED_INDICATORS = new Set(["EMA", "ADX", "ROC", "RVOL", "BREAKOUT", "RSI"]);
 const SUPPORTED_OPERATORS = new Set(["GT", "LT", "CROSSOVER"]);
 const REQUIRED_EXIT_TYPES = Object.freeze(["ATR_STOP", "TARGET", "TIME_EXIT"]);
@@ -89,11 +90,20 @@ function validateSelectedParameters(formulaCandidate, generatedCandidate) {
 
 function validateFormulaScope(formulaCandidate) {
   assertFormulaCandidateV1(formulaCandidate);
-  if (!CASH_MARKETS.has(formulaCandidate.market)) {
-    fail("DERIVATIVES_FORMULA_EVALUATOR_NOT_ENABLED", { market: formulaCandidate.market });
+  if (!SUPPORTED_MARKETS.has(formulaCandidate.market)) {
+    fail("FORMULA_MARKET_NOT_SUPPORTED_BY_EVIDENCE_BACKED_EVALUATOR", { market: formulaCandidate.market });
   }
-  if (formulaCandidate.direction !== "LONG" || formulaCandidate.entryDsl?.action !== "LONG") {
-    fail("READY_CASH_FORMULA_MUST_BE_LONG_ONLY", { direction: formulaCandidate.direction });
+  const allowedDirections = formulaCandidate.market === "CRYPTO_FUTURES"
+    ? new Set(["LONG", "SHORT"])
+    : new Set(["LONG"]);
+  if (!allowedDirections.has(formulaCandidate.direction) || formulaCandidate.entryDsl?.action !== formulaCandidate.direction) {
+    fail(formulaCandidate.market === "CRYPTO_FUTURES"
+      ? "FUTURES_FORMULA_DIRECTION_INVALID"
+      : "READY_CASH_FORMULA_MUST_BE_LONG_ONLY", {
+      market: formulaCandidate.market,
+      direction: formulaCandidate.direction,
+      action: formulaCandidate.entryDsl?.action ?? null,
+    });
   }
   if (formulaCandidate.safety?.executionAuthority !== "NONE") fail("FORMULA_EXECUTION_AUTHORITY_INVALID");
   return formulaCandidate;
@@ -262,7 +272,7 @@ function extendSeries(state, candles, targetIndex) {
 }
 
 function createEntryRuntime({ entryDsl, selectedParameters }) {
-  if (!entryDsl || entryDsl.action !== "LONG" || !Array.isArray(entryDsl.rules) || entryDsl.rules.length === 0) {
+  if (!entryDsl || !["LONG", "SHORT"].includes(entryDsl.action) || !Array.isArray(entryDsl.rules) || entryDsl.rules.length === 0) {
     fail("ENTRY_DSL_NOT_SUPPORTED");
   }
   let candleReference = null;
@@ -350,10 +360,10 @@ export function createEvidenceBackedFormulaEvaluatorContractV1({ formulaCandidat
     closedCandleSignalOnly: true,
     entryUsesNextCandleOpen: true,
     indicatorLagBarsFromExecution: 1,
-    supportedMarkets: [...CASH_MARKETS].sort(),
+    supportedMarkets: [...SUPPORTED_MARKETS].sort(),
     supportedIndicators: [...SUPPORTED_INDICATORS].sort(),
     supportedOperators: [...SUPPORTED_OPERATORS].sort(),
-    derivativesEnabled: false,
+    derivativesEnabled: true,
     profitabilityClaimAllowed: false,
     executionAuthority: "NONE",
   });
@@ -392,9 +402,10 @@ export function createEvidenceBackedFormulaSignalEvaluatorV1({ formulaCandidate,
   const selected = validateSelectedParameters(formulaCandidate, generatedCandidate);
   const runtime = createEntryRuntime({ entryDsl: formulaCandidate.entryDsl, selectedParameters: selected });
   const contract = createEvidenceBackedFormulaEvaluatorContractV1({ formulaCandidate });
+  const expectedSide = formulaCandidate.direction === "SHORT" ? "short" : "long";
   const signalEvaluator = ({ market, side, timeframe, candles, index } = {}) => {
-    if (market !== formulaCandidate.market || timeframe !== formulaCandidate.timeframe || side !== "long") {
-      fail("BACKTEST_CONTEXT_FORMULA_MISMATCH", { market, side, timeframe });
+    if (market !== formulaCandidate.market || timeframe !== formulaCandidate.timeframe || side !== expectedSide) {
+      fail("BACKTEST_CONTEXT_FORMULA_MISMATCH", { market, side, timeframe, expectedSide });
     }
     const result = runtime.evaluate({ candles, index });
     if (result.status !== "EVALUATED" || result.signal !== true) return null;

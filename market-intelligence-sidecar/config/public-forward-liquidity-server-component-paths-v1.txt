@@ -1,0 +1,25 @@
+# Public Forward Liquidity server component identity v1.
+# A main SHA may change without invalidating Shadow evidence only when every
+# pathspec below has identical Git tree content and the evidence SHA remains
+# an ancestor of the current main.
+.github/workflows/public-forward-liquidity-server-shadow-activation.yml
+.github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
+ops/install-public-forward-liquidity-server-shadow-worker-v1.sh
+ops/activate-public-forward-liquidity-server-canonical-v1.sh
+ops/check-public-forward-liquidity-server-component-equivalence-v1.sh
+market-intelligence-sidecar/config/public-forward-liquidity-server-component-paths-v1.txt
+market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
+market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs
+market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
+market-intelligence-sidecar/src/public-forward-liquidity-server-shadow-worker-v1.mjs
+market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-shadow-worker-v1.mjs
+market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.service
+market-intelligence-sidecar/deploy/public-forward-liquidity-server-shadow-worker-v1.timer
+market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-activation-v1.mjs
+market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-runtime-v1.mjs
+market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
+market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
+market-intelligence-sidecar/deploy/public-forward-liquidity-server-canonical-worker-v1.service
+market-intelligence-sidecar/deploy/public-forward-liquidity-server-canonical-worker-v1.timer
+api-server/scripts/production-ci-provenance.cjs

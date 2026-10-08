@@ -22,7 +22,9 @@ concurrency:
   group: >-
     partial-fill-release-binding-${{
       github.event_name == 'issue_comment'
-      && github.event.issue.number == 23
+      && !github.event.issue.pull_request
+      && (github.event.issue.title == 'Staging Readiness Control'
+          || startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover '))
       && startsWith(github.event.comment.body, '/publish-partial-fill-release-binding ')
       && github.event.comment.id
       || github.run_id
@@ -106,11 +108,12 @@ jobs:
           fi
 
   publish:
-    name: Publish immutable #23-authorized release binding only
+    name: Publish immutable Release-Control-authorized binding only
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      !github.event.issue.pull_request &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
       startsWith(github.event.comment.body, '/publish-partial-fill-release-binding ')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -271,6 +274,7 @@ jobs:
               'APPROVAL_REFERENCE',
               'APPROVED_BY',
               'APPROVED_AT',
+              'RELEASE_CONTROL_ISSUE_NUMBER',
             ];
             for (const name of required) {
               if (!process.env[name]?.trim()) throw new Error(`MISSING_PUBLICATION_INPUT:${name}`);
@@ -285,7 +289,7 @@ jobs:
               publicationProvenance: {
                 repository: process.env.REPOSITORY!,
                 exactMainSha: process.env.TARGET_SHA!,
-                issueNumber: 23,
+                issueNumber: Number(process.env.RELEASE_CONTROL_ISSUE_NUMBER),
                 approvalReference: process.env.APPROVAL_REFERENCE!,
                 approvedBy: process.env.APPROVED_BY!,
               },
@@ -347,12 +351,13 @@ jobs:
           COMMENT_URL: ${{ github.event.comment.html_url }}
           COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          RELEASE_CONTROL_ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -Eeuo pipefail
           [[ -n "$SSH_USER" ]]
           STATE_ROOT='/var/lib/investment-research-production'
           RESEARCH_REPO_ROOT='/opt/investment-research/current'
-          RELEASE_CONTROL_REFERENCE="https://github.com/${GITHUB_REPOSITORY}/issues/23"
+          RELEASE_CONTROL_REFERENCE="https://github.com/${GITHUB_REPOSITORY}/issues/${RELEASE_CONTROL_ISSUE_NUMBER}"
           RELEASE_BINDING_IDENTITY="partial-fill-release:${TARGET_SHA}:${POINTER_DIGEST}:${COMMENT_ID}"
 
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
@@ -360,9 +365,9 @@ jobs:
             "test -d '$STATE_ROOT' && test -d '$RESEARCH_REPO_ROOT' && id investment-research >/dev/null"
 
           REMOTE_ENV="$(printf \
-            'STATE_ROOT=%q RESEARCH_REPO_ROOT=%q POINTER_REF=%q POINTER_DIGEST=%q RELEASE_BINDING_IDENTITY=%q RELEASE_CONTROL_REFERENCE=%q REPOSITORY=%q TARGET_SHA=%q APPROVAL_REFERENCE=%q APPROVED_BY=%q APPROVED_AT=%q' \
+            'STATE_ROOT=%q RESEARCH_REPO_ROOT=%q POINTER_REF=%q POINTER_DIGEST=%q RELEASE_BINDING_IDENTITY=%q RELEASE_CONTROL_REFERENCE=%q REPOSITORY=%q TARGET_SHA=%q APPROVAL_REFERENCE=%q APPROVED_BY=%q APPROVED_AT=%q RELEASE_CONTROL_ISSUE_NUMBER=%q' \
             "$STATE_ROOT" "$RESEARCH_REPO_ROOT" "$POINTER_REF" "$POINTER_DIGEST" "$RELEASE_BINDING_IDENTITY" \
-            "$RELEASE_CONTROL_REFERENCE" "$GITHUB_REPOSITORY" "$TARGET_SHA" "$COMMENT_URL" "$COMMENT_AUTHOR" "$COMMENT_CREATED_AT")"
+            "$RELEASE_CONTROL_REFERENCE" "$GITHUB_REPOSITORY" "$TARGET_SHA" "$COMMENT_URL" "$COMMENT_AUTHOR" "$COMMENT_CREATED_AT" "$RELEASE_CONTROL_ISSUE_NUMBER")"
 
           REMOTE_UID="$(
             ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
@@ -422,7 +427,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: context.issue.number,
               body: [
                 '[PARTIAL_FILL_RELEASE_BINDING_PUBLICATION]',
                 '',

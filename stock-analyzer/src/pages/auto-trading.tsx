@@ -5,6 +5,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
 import { PaperTradingPanel } from '@/components/paper-trading-panel';
+import { FormulaAiAutoRehearsalPanel } from '@/components/formula-ai-auto-rehearsal-panel';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
@@ -18,7 +19,7 @@ type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fi
 
 type TradingMode = 'auto' | 'paper';
 type TradingMarket = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
-type TradingSection = 'dashboard' | 'orders' | 'journal' | 'settings';
+type TradingSection = 'dashboard' | 'orders' | 'journal' | 'rehearsal' | 'settings';
 
 type AutoTradingPageProps = {
   fixture?: TradeAutomationFixture;
@@ -43,6 +44,7 @@ const SECTIONS: Array<{ value: TradingSection; label: string }> = [
   { value: 'dashboard', label: '대시보드' },
   { value: 'orders', label: '포지션·주문' },
   { value: 'journal', label: '매매일지' },
+  { value: 'rehearsal', label: '리허설' },
   { value: 'settings', label: '설정' },
 ];
 
@@ -139,9 +141,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   useEffect(() => {
     const next = tradingRouteState();
-    setMarket(next.market);
+    setMarket(next.market === 'crypto_futures' && !canFutures ? 'domestic_stock' : next.market);
     setSection(next.section);
-  }, [location]);
+  }, [canFutures, location]);
 
   useEffect(() => {
     if (fixture) {
@@ -388,7 +390,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? orders
       : section === 'journal'
         ? journal
-        : settings;
+        : section === 'rehearsal'
+          ? <FormulaAiAutoRehearsalPanel />
+          : settings;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground" data-testid={initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'}>
@@ -405,13 +409,19 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 시장 선택" data-testid="trading-market-tabs">
             {MARKETS.map((item) => (
-              <SegmentedButton key={item.value} active={market === item.value} onClick={() => setMarket(item.value)} testId={'trading-market-' + item.value}>
+              <SegmentedButton
+                key={item.value}
+                active={market === item.value}
+                disabled={item.value === 'crypto_futures' && !canFutures}
+                onClick={() => setMarket(item.value)}
+                testId={'trading-market-' + item.value}
+              >
                 {item.label}
               </SegmentedButton>
             ))}
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
             {SECTIONS.map((item) => (
               <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)} testId={'trading-section-' + item.value}>
                 {item.label}

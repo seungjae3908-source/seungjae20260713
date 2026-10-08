@@ -3,7 +3,7 @@ Description=Hourly isolated free AI review scan for new Research Production evid
 
 [Timer]
 OnCalendar=*-*-* *:29:00 UTC
-Persistent=false
+Persistent=true
 RandomizedDelaySec=60
 Unit=research-production-ai-review.service
 

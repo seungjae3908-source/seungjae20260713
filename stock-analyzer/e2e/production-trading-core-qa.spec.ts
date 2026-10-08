@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { loginProductionReadOnly } from './support/production-readonly-login';
+import {
+  loginProductionReadOnly,
+  productionReadOnlyAccessToken,
+} from './support/production-readonly-login';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -13,6 +16,7 @@ const artifactDir = path.resolve(
   process.env.PRODUCTION_TRADING_CORE_ARTIFACT_DIR ?? 'production-trading-core-artifacts',
 );
 const enabled = process.env.PRODUCTION_TRADING_CORE_QA === 'true';
+const prepareMemberAutoPolicy = process.env.PRODUCTION_TRADING_CORE_PREPARE_POLICY === 'true';
 
 test.skip(!enabled, 'Production Trading Core QA runs only in the dedicated protected workflow.');
 
@@ -33,21 +37,23 @@ async function appApi<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' = 'GET',
   body?: unknown,
 ): Promise<ApiResult<T>> {
-  return page.evaluate(async ({ pathname, method, body }) => {
+  const accessToken = await productionReadOnlyAccessToken(page);
+  if (!accessToken) throw new Error('PRODUCTION_TRADING_CORE_AUTH_TOKEN_MISSING');
+  return page.evaluate(async ({ pathname, method, body, token }) => {
     const response = await fetch(pathname, {
       method,
       credentials: 'same-origin',
       cache: 'no-store',
       headers: body === undefined
-        ? { Accept: 'application/json' }
-        : { Accept: 'application/json', 'Content-Type': 'application/json' },
+        ? { Accept: 'application/json', Authorization: `Bearer ${token}` }
+        : { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();
     let payload: unknown = null;
     try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text.slice(0, 200) }; }
     return { ok: response.ok, status: response.status, body: payload };
-  }, { pathname, method, body }) as Promise<ApiResult<T>>;
+  }, { pathname, method, body, token: accessToken }) as Promise<ApiResult<T>>;
 }
 
 function writeEvidence(value: unknown) {
@@ -63,10 +69,95 @@ function providerState(connections: any[], provider: string) {
   return connections.find((row) => String(row?.exchange ?? row?.provider ?? '').toLowerCase() === provider) ?? null;
 }
 
+function memberAutoPolicyReadiness(policy: any) {
+  const blockers: string[] = [];
+  const requireTrue = (value: unknown, code: string) => {
+    if (value !== true) blockers.push(code);
+  };
+  const requirePositive = (value: unknown, code: string) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) blockers.push(code);
+  };
+
+  if (policy?.mode !== 'automatic') blockers.push('MODE_NOT_AUTOMATIC');
+  requireTrue(policy?.automaticEnabled, 'MEMBER_AUTOMATIC_DISABLED');
+  if (policy?.emergencyStopped !== false) blockers.push('EMERGENCY_STOPPED');
+  if (policy?.newEntriesStopped !== false) blockers.push('NEW_ENTRIES_STOPPED');
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    requireTrue(policy?.marketEnabled?.[market], `MARKET_DISABLED:${market}`);
+  }
+
+  const domesticBroker = policy?.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  for (const provider of ['kiwoom', 'upbit', 'bitget', domesticBroker]) {
+    requireTrue(policy?.exchangeEnabled?.[provider], `PROVIDER_DISABLED:${provider}`);
+  }
+  if (policy?.stockBrokerByMarket?.us_stock !== 'kiwoom') blockers.push('US_STOCK_BROKER_NOT_KIWOOM');
+
+  const leverage = Number(policy?.bitgetLeverage);
+  if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) blockers.push('BITGET_LEVERAGE_OUT_OF_POLICY');
+  requireTrue(policy?.riskOptimizationEnabled, 'RISK_OPTIMIZATION_DISABLED');
+  if (!['limited-50', 'validated'].includes(String(policy?.pilotStage ?? ''))) {
+    blockers.push('PILOT_LIVE_DISABLED');
+  }
+  for (const key of ['totalCapitalKrw', 'maxOrderKrw', 'maxInstrumentKrw', 'maxOpenPositions', 'maxDailyOrders']) {
+    requirePositive(policy?.[key], `INVALID_LIMIT:${key}`);
+  }
+  for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
+    requirePositive(policy?.maxAssetClassKrw?.[market], `INVALID_MARKET_LIMIT:${market}`);
+  }
+
+  return {
+    ready: blockers.length === 0,
+    blockers,
+    domesticBroker,
+    bitgetLeverage: leverage,
+    pilotStage: String(policy?.pilotStage ?? ''),
+  };
+}
+
+function preparedMemberAutoPolicy(policy: any) {
+  const domesticBroker = policy?.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  const requestedLeverage = Number(policy?.bitgetLeverage);
+  const bitgetLeverage = Number.isInteger(requestedLeverage)
+    && requestedLeverage >= 2
+    && requestedLeverage <= 7
+    ? requestedLeverage
+    : 2;
+  return {
+    ...policy,
+    mode: 'automatic',
+    automaticEnabled: true,
+    emergencyStopped: false,
+    newEntriesStopped: false,
+    marketEnabled: {
+      ...(policy?.marketEnabled ?? {}),
+      domestic_stock: true,
+      us_stock: true,
+      crypto_spot: true,
+      crypto_futures: true,
+    },
+    stockBrokerByMarket: {
+      ...(policy?.stockBrokerByMarket ?? {}),
+      domestic_stock: domesticBroker,
+      us_stock: 'kiwoom',
+    },
+    exchangeEnabled: {
+      ...(policy?.exchangeEnabled ?? {}),
+      bitget: true,
+      upbit: true,
+      kiwoom: true,
+      toss: true,
+    },
+    bitgetLeverage,
+    riskOptimizationEnabled: true,
+    pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50',
+    confirmation: { acknowledged: true },
+  };
+}
+
 test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with zero real order authority', async ({ page }) => {
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
-  const statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+  let statusBefore = await appApi<any>(page, '/api/trade-automation/status');
   expect(statusBefore.ok).toBe(true);
   expect(statusBefore.body?.ok).toBe(true);
 
@@ -80,16 +171,45 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(connection?.lastErrorCode ?? null, `${provider} must have no verification error`).toBeNull();
   }
 
+  let memberAutoPolicyPrepared = false;
+  if (prepareMemberAutoPolicy) {
+    const prepared = await appApi<any>(
+      page,
+      '/api/trade-automation/policy',
+      'PUT',
+      preparedMemberAutoPolicy(statusBefore.body.policy),
+    );
+    expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
+    expect(prepared.body?.ok).toBe(true);
+    expect(memberAutoPolicyReadiness(prepared.body?.policy).ready).toBe(true);
+
+    statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+    expect(statusBefore.ok).toBe(true);
+    expect(statusBefore.body?.ok).toBe(true);
+    expect(memberAutoPolicyReadiness(statusBefore.body?.policy).ready).toBe(true);
+    for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+      expect(
+        statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
+        `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
+      ).toBe(false);
+    }
+    memberAutoPolicyPrepared = true;
+  }
+
   const integrationBefore = await appApi<any>(page, '/api/user-integrations');
   expect(integrationBefore.ok).toBe(true);
   expect(integrationBefore.body?.ok).toBe(true);
   expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
-  expect(integrationBefore.body?.telegram?.connected).toBe(true);
-  expect(integrationBefore.body?.telegramRuntime?.deliveryReady).toBe(true);
-  expect(integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled).toBe(true);
-  expect(integrationBefore.body?.telegramRuntime?.personalWorkerEnabled).toBe(true);
+  const telegramConnectedBefore = integrationBefore.body?.telegram?.connected === true;
+  const telegramRuntimeReady = integrationBefore.body?.telegramRuntime?.deliveryReady === true
+    && integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled === true
+    && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true;
+  const telegramActivationState = telegramConnectedBefore && telegramRuntimeReady
+    ? 'ACTIVE_VERIFIED' as const
+    : 'READY_FOR_ACTIVATION' as const;
 
   const originalPolicy = structuredClone(statusBefore.body.policy);
+  const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
   const canarySignalId = `trading-core-qa:${expectedDeploySha.slice(0, 12)}:${Date.now()}`;
   const canaryStrategy = 'TRADING_CORE_QA_CANARY';
@@ -251,7 +371,11 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     syncInserted = Number(synced.body?.inserted ?? 0);
     deliveryQueued = Number(synced.body?.deliveryQueued ?? 0);
     expect(syncInserted).toBeGreaterThanOrEqual(1);
-    expect(deliveryQueued).toBeGreaterThanOrEqual(1);
+    if (telegramActivationState === 'ACTIVE_VERIFIED') {
+      expect(deliveryQueued).toBeGreaterThanOrEqual(1);
+    } else {
+      expect(deliveryQueued).toBe(0);
+    }
 
     const journal = await appApi<any>(
       page,
@@ -263,13 +387,15 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(journalText).toContain(canarySignalId);
     journalVisible = true;
 
-    const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
-    expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
-    expect(telegram.body?.status).toBe('DELIVERED');
-    expect(telegram.body?.testOnly).toBe(true);
-    expect(telegram.body?.investmentSignal).toBe(false);
-    expect(telegram.body?.ordersSubmitted).toBe(0);
-    telegramDelivered = true;
+    if (telegramActivationState === 'ACTIVE_VERIFIED') {
+      const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
+      expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
+      expect(telegram.body?.status).toBe('DELIVERED');
+      expect(telegram.body?.testOnly).toBe(true);
+      expect(telegram.body?.investmentSignal).toBe(false);
+      expect(telegram.body?.ordersSubmitted).toBe(0);
+      telegramDelivered = true;
+    }
   } finally {
     const restorePreferences = await appApi<any>(
       page,
@@ -292,7 +418,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   expect(statusAfter.body?.actualOrderSubmittedByStatusRequest).toBe(false);
 
   writeEvidence({
-    schemaVersion: 'production-trading-core-qa-v1',
+    schemaVersion: 'production-trading-core-qa-v4',
     targetSha: expectedDeploySha,
     productionDeployRunId,
     generatedAt: new Date().toISOString(),
@@ -308,9 +434,21 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     paperFilled,
     journalVisible,
     executionSyncInserted: syncInserted,
+    telegramActivationState,
+    telegramActivationReady: true,
+    telegramUserConnectionRequired: !telegramConnectedBefore,
+    telegramPersonalActivationRequired: !telegramConnectedBefore || !telegramRuntimeReady,
+    telegramConnectedBefore,
+    telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
     policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
+    memberAutoPolicyPrepared,
+    memberAutoPolicyReady: originalPolicyReadiness.ready,
+    memberAutoPolicyBlockers: originalPolicyReadiness.blockers,
+    memberAutoDomesticBroker: originalPolicyReadiness.domesticBroker,
+    memberAutoBitgetLeverage: originalPolicyReadiness.bitgetLeverage,
+    memberAutoPilotStage: originalPolicyReadiness.pilotStage,
     realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,

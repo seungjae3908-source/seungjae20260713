@@ -9,6 +9,7 @@ const tradeService = read('api-server/src/services/trade-automation.service.ts')
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
+const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
 
 const requireText = (source, token, code) => {
   if (!source.includes(token)) throw new Error(code + ':' + token);
@@ -22,6 +23,7 @@ requireText(workflow, '/activate-production-auto-trading ', 'AUTO_GATE_ACTIVATE_
 requireText(workflow, '/disable-production-auto-trading ', 'AUTO_GATE_DISABLE_COMMAND_MISSING');
 requireText(workflow, 'all4', 'AUTO_GATE_ALL4_SCOPE_MISSING');
 requireText(workflow, 'environment: production', 'AUTO_GATE_PROTECTED_ENV_MISSING');
+requireText(workflow, 'merge-multiple: true', 'AUTO_GATE_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
   requireText(workflow, provider, 'AUTO_GATE_PROVIDER_MISSING');
@@ -47,6 +49,19 @@ requireText(preactivation, 'production-live-credential-reuse-', 'AUTO_GATE_CREDE
 requireText(preactivation, 'production-account-readonly-live-', 'AUTO_GATE_ACCOUNT_ARTIFACT_MISSING');
 requireText(workflow, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
 requireText(workflow, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED', 'AUTO_GATE_PAPER_RUNTIME_RECEIPT_MISSING');
+requireText(workflow, 'paper-forward-no-deploy-', 'AUTO_GATE_PAPER_RUNTIME_ARTIFACT_MISSING');
+requireText(workflow, '--activation-artifact', 'AUTO_GATE_PAPER_ACTIVATION_VERIFY_MISSING');
+requireText(workflow, '--runtime-artifact', 'AUTO_GATE_PAPER_RUNTIME_VERIFY_MISSING');
+requireText(workflow, 'validateMemberAutoTradingPaperHandoff', 'AUTO_GATE_CANONICAL_HANDOFF_VALIDATION_MISSING');
+requireText(workflow, 'PAPER_FORWARD_LAST_INVOCATION_STALE', 'AUTO_GATE_PAPER_RUNTIME_FRESHNESS_MISSING');
+requireText(workflow, "validated.status !== 'READY'", 'AUTO_GATE_PAPER_HANDOFF_READY_MISSING');
+requireText(paperReadiness, 'production-paper-forward-runtime-readiness-v1', 'AUTO_GATE_PAPER_READINESS_SCHEMA_MISSING');
+requireText(paperReadiness, 'RUNTIME_HANDOFF_CANONICAL_VALIDATION_MISSING', 'AUTO_GATE_PAPER_CANONICAL_EVIDENCE_MISSING');
+requireText(workflow, 'AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED', 'AUTO_GATE_TELEGRAM_RELEASE_RECEIPT_MISSING');
+requireText(workflow, 'telegram-production-runtime-verification-', 'AUTO_GATE_TELEGRAM_RUNTIME_ARTIFACT_MISSING');
+requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'AUTO_GATE_TELEGRAM_RUNTIME_VERIFIER_MISSING');
+requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
 
 requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUTO_TRUE_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
@@ -77,6 +92,7 @@ requireText(manualSpotGate, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false
 requireText(manualSpotGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_SPOT_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualSpotGate, "const allowed = new Set(['toss', 'kiwoom', 'upbit']);", 'MANUAL_SPOT_THREE_PROVIDER_SET_DRIFT');
 requireText(manualSpotGate, 'name.startsWith(`${workflowName} ${target} `)', 'MANUAL_SPOT_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(manualSpotGate, 'merge-multiple: true', 'MANUAL_SPOT_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 requireText(manualFuturesGate, "FUTURES_LIVE_EXECUTION_AUTHORITY: 'FUTURES_LIVE_LIMITED'", 'MANUAL_FUTURES_AUTHORITY_MISSING');
 requireText(manualFuturesGate, "FUTURES_LIVE_MARKET_ALLOWLIST: 'CRYPTO_FUTURES'", 'MANUAL_FUTURES_MARKET_MISSING');
@@ -86,6 +102,7 @@ requireText(manualFuturesGate, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'MANUAL_F
 requireText(manualFuturesGate, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'MANUAL_FUTURES_GATE_MUST_KEEP_LIVE_WORKER_FALSE');
 requireText(manualFuturesGate, "CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'", 'MANUAL_FUTURES_LEGACY_CRYPTO_ROUTE_NOT_DISABLED');
 requireText(manualFuturesGate, 'run.name.startsWith(`${name} ${target} `)', 'MANUAL_FUTURES_DYNAMIC_ACCOUNT_QA_RUN_NAME_SUPPORT_MISSING');
+requireText(manualFuturesGate, 'merge-multiple: true', 'MANUAL_FUTURES_PREACTIVATION_ARTIFACTS_NOT_MERGED');
 
 const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled[\s\S]*?\r?\n}\r?\n/);
 if (!autoFn) throw new Error('AUTOMATIC_LIVE_EXECUTION_FUNCTION_MISSING');

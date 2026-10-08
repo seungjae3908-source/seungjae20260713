@@ -24,6 +24,7 @@ import paperJournalRouter from './paper-journal';
 import backupRouter from './backup';
 import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
+import autoRehearsalPreviewRouter from './auto-rehearsal-preview';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
 import strategyPromotionRouter from './strategy-promotion';
@@ -54,6 +55,11 @@ router.get('/', (_req, res) => {
 // Health/config probes remain public. Every data or analysis route below this
 // point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
+
+// PR-only isolated rehearsal preview. This route is runtime-flagged and only
+// runs synthetic safety gates plus the local Paper engine; it never reads member,
+// credential, Telegram, or production data and is disabled outside staging.
+router.use('/', autoRehearsalPreviewRouter);
 
 // Telegram webhook is the only unauthenticated integration endpoint. It accepts
 // only Telegram-secret-authenticated /start updates containing a short-lived,
@@ -96,6 +102,7 @@ router.get('/auth/profile', requireAuthenticatedProfileBootstrap, (req: Authenti
     status: profile.status,
     membership_level: profile.membership_level ?? null,
     is_active: profile.is_active ?? null,
+    membership_expires_at: profile.membership_expires_at ?? null,
     permissions_updated_at: profile.permissions_updated_at ?? null,
     updated_at: profile.updated_at ?? null,
   });
@@ -170,7 +177,15 @@ router.use('/stocks/:ticker/orderbook', requireCapability('canAccessBasicInfo'))
 router.use('/', stockOrderbookRouter);
 
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
-router.use('/crypto/futures', requireCapability('canAccessFutures'));
+router.use('/crypto/futures', (req, res, next) => {
+  const aiChartPublicRead = req.method === 'GET'
+    && (
+      req.path === '/tickers'
+      || req.path === '/candles'
+      || /^\/[^/]+\/(?:snapshot|flow)$/u.test(req.path)
+    );
+  return requireCapability(aiChartPublicRead ? 'canAccessAiChart' : 'canAccessFutures')(req, res, next);
+});
 router.use('/crypto', requireCapability('canAccessBasicInfo'));
 router.use('/', cryptoRouter);
 
@@ -184,7 +199,24 @@ router.use('/backtests', requireCapability('canAccessBacktests'));
 router.use('/', backtestsRouter);
 router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
-router.use('/paper-journal', requireCapability('canAccessJournalSync'));
+router.use('/paper-journal', (req, res, next) => {
+  const subpath = req.path;
+  if (
+    subpath === '/analytics'
+    || subpath === '/unified-ledger'
+    || subpath === '/unified-ledger/status'
+  ) {
+    return requireCapability('canAccessTradingAnalytics')(req, res, next);
+  }
+  if (
+    subpath === '/review-dataset'
+    || subpath.startsWith('/ai-review/')
+    || subpath.startsWith('/portfolio-advisor/')
+  ) {
+    return requireCapability('canAccessAiTradingReview')(req, res, next);
+  }
+  return requireCapability('canAccessJournalSync')(req, res, next);
+});
 router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canAccessAutoTrading'));
