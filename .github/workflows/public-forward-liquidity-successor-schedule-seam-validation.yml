@@ -137,6 +137,7 @@ jobs:
           activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
           runtime_workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
           validation_workflow='.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+          delivery_control_workflow='.github/workflows/public-forward-liquidity-schedule-delivery-control.yml'
           ingest_workflow='.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
           runner='market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
           reliability='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
@@ -198,6 +199,19 @@ jobs:
           EOF
             expected_count=2
             scope_name='successor prospective-cohort test-only maintenance'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" -e "$delivery_control_workflow" -e "$reliability_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+            && printf '%s\n' "$changed" | grep -Fqx "$runtime_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$delivery_control_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$reliability_test"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-schedule-delivery-control.yml
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+          EOF
+            expected_count=4
+            scope_name='V3 cron registration maintenance'
           elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" -e "$reliability_test" -e "stock-analyzer/e2e/market-information-search-p0.spec.ts" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
             && printf '%s\n' "$changed" | grep -Fqx "$runtime_workflow" \
             && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
@@ -272,9 +286,8 @@ jobs:
         run: |
           set -euo pipefail
           workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17,27,37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq "^[[:space:]]{4}- cron: '(17|27|37) \\* \\* \\* \\*'[[:space:]]*$" "$workflow"
           test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
           test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
           ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"

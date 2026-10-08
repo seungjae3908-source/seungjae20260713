@@ -97,9 +97,8 @@ jobs:
           git fetch --no-tags --depth=1 origin main
           test "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"
           target='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
-          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17,27,37 \\* \\* \\* \\*'[[:space:]]*$" "$target")" -eq 1
+          ! grep -Eq "^[[:space:]]{4}- cron: '(17|27|37) \\* \\* \\* \\*'[[:space:]]*$" "$target"
 
       - name: Read GitHub workflow state and recent schedule delivery
         uses: actions/github-script@v7

@@ -569,9 +569,8 @@ test('merged V3 binding stays inert until an explicit exact-main OWNER activatio
     ),
     'utf8',
   );
-  assert.match(workflow, /cron: '17 \* \* \* \*'/u);
-  assert.match(workflow, /cron: '27 \* \* \* \*'/u);
-  assert.match(workflow, /cron: '37 \* \* \* \*'/u);
+  assert.match(workflow, /cron: '17,27,37 \* \* \* \*'/u);
+  assert.doesNotMatch(workflow, /cron: '(?:17|27|37) \* \* \* \*'/u);
   assert.match(workflow, /^\s{2}queue:\s+max\s*$/mu);
   assert.match(workflow, /^\s{2}cancel-in-progress:\s+false\s*$/mu);
   assert.doesNotMatch(workflow, /^\s{2}workflow_dispatch:\s*$/mu);
