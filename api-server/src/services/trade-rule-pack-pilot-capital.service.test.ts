@@ -526,6 +526,61 @@ test('manual /plans approval cannot forge the dedicated signed automatic policy 
     assert.equal((await repo.listOrders(user)).length, 0);
   });
 });
+
+test('broker order references are provider-scoped and ambiguous same-provider aliases block pilot gains', async () => {
+  const user = '11111111-1111-1111-1111-111111111111';
+  const repo = new InMemoryTradingRepository();
+  const entryAt = new Date(NOW - 10 * 60_000).toISOString();
+  const exitAt = new Date(NOW - 5 * 60_000).toISOString();
+  const plan = (
+    id: string, exchange: 'upbit' | 'toss', side: 'buy' | 'sell',
+    at: string, executionMode: 'automatic' | 'manual',
+  ) => ({
+    ...pilotReceiptInput(1_000_000), id, userId: user, idempotencyKey: id,
+    exchange, accountMode: 'live' as const, executionMode,
+    side, reduceOnly: side === 'sell', symbol: 'BTC',
+    market: exchange === 'upbit' ? 'KRW' : 'KR',
+    quantity: 1, quoteAmount: null, estimatedKrw: 1_000_000,
+    strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
+    state: 'SUBMITTED' as const, version: 1,
+    approvedAt: at, approvalExpiresAt: new Date(NOW + 30 * 60_000).toISOString(),
+    createdAt: at, updatedAt: at,
+  });
+  const order = (
+    id: string, planId: string, exchange: 'upbit' | 'toss',
+    brokerId: string, price: number, at: string, filled: boolean,
+  ) => ({
+    id, userId: user, planId, exchange, clientOrderId: 'client-' + id,
+    exchangeOrderId: brokerId,
+    state: filled ? 'FILLED' as const : 'SUBMITTED' as const,
+    version: 1, requestedQuantity: 1, filledQuantity: filled ? 1 : 0,
+    averageFillPrice: filled ? price : null,
+    fills: filled ? [{ id: 'fill-' + id, price, quantity: 1,
+      feeAmount: 500, feeCurrency: 'KRW', filledAt: at }] : [],
+    feeAmount: filled ? 500 : null, feeCurrency: filled ? 'KRW' : null,
+    retryCount: 0, lastErrorCode: null, createdAt: at, updatedAt: at,
+  });
+  await repo.savePlan(plan('pilot-entry', 'upbit', 'buy', entryAt, 'automatic') as never);
+  await repo.savePlan(plan('pilot-exit', 'upbit', 'sell', exitAt, 'automatic') as never);
+  await repo.savePlan(plan('toss-unfilled', 'toss', 'buy', exitAt, 'manual') as never);
+  await repo.saveOrder(order('pilot-entry-order', 'pilot-entry', 'upbit', 'shared-broker-id', 1_000_000, entryAt, true) as never);
+  await repo.saveOrder(order('pilot-exit-order', 'pilot-exit', 'upbit', 'unique-exit-id', 1_051_000, exitAt, true) as never);
+  await repo.saveOrder(order('toss-order', 'toss-unfilled', 'toss', 'shared-broker-id', 1_000_000, exitAt, false) as never);
+  const separateBrokers = await readRulePackPilotCapitalState(repo, user, new Date(NOW));
+  assert.equal(separateBrokers.settlementReady, true);
+  assert.deepEqual(separateBrokers.blockers, []);
+  assert.equal(separateBrokers.operatingCapitalKrw, 525_000);
+  assert.equal(separateBrokers.reserveKrw, 25_000);
+
+  await repo.savePlan(plan('upbit-unfilled', 'upbit', 'buy', exitAt, 'automatic') as never);
+  await repo.saveOrder(order('upbit-collision', 'upbit-unfilled', 'upbit', 'shared-broker-id', 1_000_000, exitAt, false) as never);
+  const ambiguousBroker = await readRulePackPilotCapitalState(repo, user, new Date(NOW));
+  assert.equal(ambiguousBroker.settlementReady, false);
+  assert.ok(ambiguousBroker.blockers.includes('PILOT_CAPITAL_BROKER_ORDER_ID_COLLISION'));
+  assert.ok(decision(ambiguousBroker, { estimatedKrw: 20_000 }).blockers
+    .includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'));
+});
+
 test('pilot ledger constructs one order/plan snapshot rather than mixing repeated reads', async () => {
   const repo = new InMemoryTradingRepository();
   const readOrders = repo.listOrders.bind(repo);

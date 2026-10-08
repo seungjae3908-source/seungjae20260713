@@ -506,10 +506,11 @@ function pilotCostEvidenceMatchesCycleCurrency(
 
 function planForBrokerOrder(
   brokerOrderId: string,
+  broker: string,
   ordersByKey: Map<string, TradingOrder>,
   plansById: Map<string, TradingPlan>,
 ) {
-  const order = ordersByKey.get(brokerOrderId) ?? null;
+  const order = ordersByKey.get(`${broker.toLowerCase()}:${brokerOrderId}`) ?? null;
   return order ? plansById.get(order.planId) ?? null : null;
 }
 
@@ -530,14 +531,27 @@ export async function readRulePackPilotCapitalState(
     payloads.filter((payload) => payload.source === 'APP_AUTO'),
     { range: 'ALL' }, now,
   );
+  // Broker order identifiers are not globally unique across providers.
+  // Preserve each provider namespace; ambiguous aliases within one provider
+  // invalidate pilot-capital promotion instead of overwriting lineage.
   const ordersByKey = new Map<string, TradingOrder>();
+  let ambiguousBrokerOrderId = false;
   for (const order of orders) {
-    ordersByKey.set(order.id, order);
-    if (order.exchangeOrderId) ordersByKey.set(order.exchangeOrderId, order);
+    for (const alias of [order.id, order.exchangeOrderId]) {
+      if (!alias) continue;
+      const key = `${order.exchange.toLowerCase()}:${alias}`;
+      const existing = ordersByKey.get(key);
+      if (existing && existing.id !== order.id) {
+        ambiguousBrokerOrderId = true;
+        continue;
+      }
+      ordersByKey.set(key, order);
+    }
   }
   const plansById = new Map(plans.map((plan) => [plan.id, plan]));
   const trades: RulePackPilotRealizedTrade[] = [];
   const blockers: string[] = [];
+  if (ambiguousBrokerOrderId) blockers.push('PILOT_CAPITAL_BROKER_ORDER_ID_COLLISION');
   // A malformed LIVE automatic event may be dropped by journal normalization.
   // Never silently omit its loss and still permit higher risk capital.
   if (journal.integrityIssues.length > 0) {
@@ -582,7 +596,7 @@ export async function readRulePackPilotCapitalState(
       blockers.push('PILOT_CAPITAL_UNSUPPORTED_AUTO_LIVE_STRATEGY');
       continue;
     }
-    const entryPlan = planForBrokerOrder(trade.initialEntry.orderId, ordersByKey, plansById);
+    const entryPlan = planForBrokerOrder(trade.initialEntry.orderId, trade.broker, ordersByKey, plansById);
     if (!entryPlan || entryPlan.accountMode !== 'live'
       || entryPlan.executionMode !== 'automatic'
       || !isEvidenceBackedAutoStrategyId(entryPlan.strategyId)) {
@@ -608,7 +622,7 @@ export async function readRulePackPilotCapitalState(
     }
     const legs = [trade.initialEntry, ...trade.additions, ...trade.partialExits, trade.finalExit];
     if (legs.some((leg) => !pilotCostEvidenceMatchesCycleCurrency(
-      ordersByKey.get(leg.orderId), trade.currency,
+      ordersByKey.get(`${trade.broker.toLowerCase()}:${leg.orderId}`), trade.currency,
     ))) {
       blockers.push('PILOT_CAPITAL_FEE_CURRENCY_EVIDENCE_REQUIRED');
       continue;
