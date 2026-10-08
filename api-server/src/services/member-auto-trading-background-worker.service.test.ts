@@ -1263,9 +1263,18 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
       targetSha,
       armed: true,
       armedAt: new Date(nowMs + 500).toISOString(),
+      activateNotBeforeAt: new Date(nowMs + 1_500).toISOString(),
     }) + '\n', { mode: 0o600, flag: 'wx' });
 
-    const armed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    const quarantined = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
+    assert.equal(quarantined.handoffReady, true);
+    assert.equal(quarantined.liveEntryArmPresent, false);
+    assert.equal(quarantined.liveEntriesArmed, false);
+    assert.equal(quarantined.liveOrders, 0);
+    assert.equal(quarantined.liveExitOrders, 0);
+    assert.equal(quarantined.privateTradingRequests, 0);
+
+    const armed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
     assert.equal(armed.handoffReady, true);
     assert.equal(armed.liveEntryArmPresent, true);
     assert.equal(armed.liveEntriesArmed, true);
