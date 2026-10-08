@@ -308,6 +308,8 @@ const formulaAiDriftReviewed=[
  'api-server/test.mjs',
 ];
 const automaticTradingDriftReviewed=[
+ // Only the exact default-OFF Paper-only deployment reset is admitted below.
+ 'ops/deploy-production.sh',
  '.github/scripts/production-postdeploy-qa-evidence.cjs',
  '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
  '.github/tests/production-telegram-active-readiness.test.mjs',
@@ -370,6 +372,22 @@ const allowed=new Set([
  ...automaticTradingDriftReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+// Paper-only integration needs the existing deploy script to explicitly reset the
+// new worker override OFF. Do NOT permit arbitrary deployment edits through this
+// mixed research/workspace scope: compare the entire file to the exact approved
+// no-Live/no-Paper default-OFF delta from the immutable main.
+if(changed.includes('ops/deploy-production.sh')){
+ const previous=git('show',`${MAIN}:ops/deploy-production.sh`);
+ const deployed=git('show','HEAD:ops/deploy-production.sh');
+ const listMarker='  "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED",';
+ const resetMarker='MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false';
+ if(previous.split(listMarker).length!==2 || previous.split(resetMarker).length!==3)
+  throw new Error('AUTOMATIC_PAPER_DEPLOY_BASE_DRIFT');
+ const expected=previous
+  .replace(listMarker,listMarker+'\n  "MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED",')
+  .replaceAll(resetMarker,resetMarker+' MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false');
+ if(deployed!==expected)throw new Error('AUTOMATIC_PAPER_DEPLOY_DIFF_UNREVIEWED');
+}
 const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p));
 if(automaticTradingChanged.length>0){
  const requiredAutomaticTradingGuards=[
