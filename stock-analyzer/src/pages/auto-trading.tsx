@@ -85,6 +85,14 @@ function StatusItem({
   );
 }
 
+function runtimeHealthFresh(value: string | null | undefined, nowMs = Date.now()) {
+  if (!value) return false;
+  const tickMs = Date.parse(value);
+  return Number.isFinite(tickMs)
+    && tickMs <= nowMs + 5_000
+    && nowMs - tickMs <= 360_000;
+}
+
 function kstActivityTime(value: string | null | undefined) {
   if (!value) return '없음';
   const time = Date.parse(value);
@@ -207,9 +215,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
   const autoWorker = runtimeStatus?.autoTradingBackground;
   const telegramWorker = runtimeStatus?.userTelegramDelivery;
+  const runtimeNowMs = Date.now();
+  const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
+  const telegramWorkerFresh = runtimeHealthFresh(telegramWorker?.lastTickAt, runtimeNowMs);
   const automaticRuntimeReady = autoWorker?.enabled === true
     && autoWorker.liveModeRequested === true
     && autoWorker.tickOk === true
+    && autoWorkerFresh
     && autoWorker.handoffReady === true
     && autoWorker.newEntriesFailClosed === false
     && autoWorker.liveEntryWarmupComplete === true
@@ -217,6 +229,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     && autoWorker.globalEmergencyStopActive === false;
   const telegramRuntimeReady = telegramWorker?.enabled === true
     && telegramWorker.tickOk === true
+    && telegramWorkerFresh
     && telegramWorker.errorCode == null;
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
@@ -230,13 +243,17 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             ? '자동 워커 OFF'
             : autoWorker.tickOk !== true || autoWorker.handoffReady !== true || autoWorker.newEntriesFailClosed === true
               ? '자동 워커 차단'
-              : autoWorker.liveEntriesArmed !== true
-                ? '안전대기 · Arm 준비 중'
-                : !telegramRuntimeReady
-                  ? 'Telegram 전달 점검 필요'
-                  : automaticRuntimeReady
-                    ? '자동 실거래 작동 준비됨'
-                    : '자동 워커 점검 필요';
+              : !autoWorkerFresh
+                ? '자동 워커 상태 지연'
+                : autoWorker.liveEntriesArmed !== true
+                  ? '안전대기 · Arm 준비 중'
+                  : !telegramWorkerFresh
+                    ? 'Telegram 상태 지연'
+                    : !telegramRuntimeReady
+                      ? 'Telegram 전달 점검 필요'
+                      : automaticRuntimeReady
+                        ? '자동 실거래 작동 준비됨'
+                        : '자동 워커 점검 필요';
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
