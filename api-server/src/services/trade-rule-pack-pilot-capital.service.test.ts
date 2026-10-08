@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { DEFAULT_TRADING_POLICY } from './trade-automation.types';
+import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import {
   deriveRulePackPilotCapitalFromTrades,
+  deriveRulePackPilotExecutionPolicy,
   evaluateRulePackPilotEntryGuard,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -37,6 +40,7 @@ function decision(pilot: RulePackPilotCapitalState, overrides: Record<string, un
     signalId: 'signal-new',
     estimatedKrw: 500_000,
     policyMaxOrderKrw: 500_000,
+    policyTotalCapitalKrw: 500_000,
     openLivePositions: 0,
     nowMs: NOW,
     ...overrides,
@@ -119,4 +123,138 @@ test('pilot entry guard fails closed on settlement blockers or a non-rule-pack s
 
   const unknown = decision(state(), { strategyId: 'UNKNOWN_STRATEGY' });
   assert.ok(unknown.blockers.includes('BACKGROUND_FORMULA_AI_PILOT_STRATEGY_REQUIRED'));
+});
+function closed(
+  id: string, symbol: string, netPnlKrw: number,
+  closedAt = '2026-10-07T23:00:00.000Z',
+) {
+  return Object.freeze({ id, symbol, signalId: id, netPnlKrw, closedAt });
+}
+
+test('confirmed 500k + 10% net profit yields 525k operating / 25k reserve; next entry cap compounds', () => {
+  const snapshot = deriveRulePackPilotCapitalFromTrades([
+    closed('KR-profit', '005930', 50_000),
+  ], new Date(NOW));
+  assert.equal(snapshot.initialOperatingCapitalKrw, 500_000);
+  assert.equal(snapshot.operatingCapitalKrw, 525_000);
+  assert.equal(snapshot.reserveKrw, 25_000);
+  assert.equal(snapshot.highWaterMarkKrw, 550_000);
+  assert.equal(snapshot.maxEntryKrw, 525_000);
+  const eligible = decision(snapshot, { estimatedKrw: 525_000 });
+  assert.equal(eligible.allowed, true);
+  assert.equal(eligible.effectiveMaxEntryKrw, 525_000);
+  const larger = decision(snapshot, { estimatedKrw: 525_000.01 });
+  assert.ok(larger.blockers.includes('BACKGROUND_PILOT_ENTRY_LIMIT'));
+});
+
+test('four-market settlements share a single 500k ledger and compound only new highs after loss recovery', () => {
+  const steps = [
+    closed('kr', '005930', 50_000, '2026-10-07T17:00:00.000Z'),
+    closed('us', 'AAPL', -20_000, '2026-10-07T18:00:00.000Z'),
+    closed('spot', 'KRW-BTC', 20_000, '2026-10-07T19:00:00.000Z'),
+    closed('futures', 'BTCUSDT', 30_000, '2026-10-07T20:00:00.000Z'),
+  ];
+  const first = deriveRulePackPilotCapitalFromTrades(steps.slice(0, 1), new Date(NOW));
+  assert.equal(first.operatingCapitalKrw, 525_000);
+  assert.equal(first.reserveKrw, 25_000);
+  const afterLoss = deriveRulePackPilotCapitalFromTrades(steps.slice(0, 2), new Date(NOW));
+  assert.equal(afterLoss.operatingCapitalKrw, 505_000);
+  assert.equal(afterLoss.reserveKrw, 25_000);
+  const afterRecovery = deriveRulePackPilotCapitalFromTrades(steps.slice(0, 3), new Date(NOW));
+  assert.equal(afterRecovery.operatingCapitalKrw, 525_000);
+  assert.equal(afterRecovery.reserveKrw, 25_000);
+  const final = deriveRulePackPilotCapitalFromTrades(steps, new Date(NOW));
+  assert.equal(final.operatingCapitalKrw, 540_000);
+  assert.equal(final.reserveKrw, 40_000);
+  assert.equal(final.highWaterMarkKrw, 580_000);
+  assert.equal(final.settledTradeCount, 4);
+});
+
+test('reserve never auto-replenishes the 500k floor after drawdown and new entries fail closed', () => {
+  const lost = deriveRulePackPilotCapitalFromTrades([
+    closed('win', 'AAPL', 50_000, '2026-10-07T20:00:00.000Z'),
+    closed('loss', 'ETHUSDT', -100_000, '2026-10-07T21:00:00.000Z'),
+  ], new Date(NOW));
+  assert.equal(lost.operatingCapitalKrw, 425_000);
+  assert.equal(lost.reserveKrw, 25_000);
+  assert.equal(lost.maxEntryKrw, 425_000);
+  assert.equal(lost.reserveWithdrawalAutomatic, false);
+  const blocked = decision(lost, { estimatedKrw: 20_000 });
+  assert.ok(blocked.blockers.includes('BACKGROUND_PILOT_BASE_CAPITAL_UNDERFUNDED'));
+  assert.ok(decision(state(), {
+    policyTotalCapitalKrw: 100_000, policyMaxOrderKrw: 30_000,
+    estimatedKrw: 20_000,
+  }).blockers.includes('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED'));
+});
+
+test('stricter member order cap stays stricter and is not silently promoted to 500k', () => {
+  const gained = deriveRulePackPilotCapitalFromTrades([closed('gain', 'BTC', 50_000)], new Date(NOW));
+  const small = decision(gained, { policyMaxOrderKrw: 30_000, estimatedKrw: 30_001 });
+  assert.equal(small.effectiveMaxEntryKrw, 30_000);
+  assert.ok(small.blockers.includes('BACKGROUND_PILOT_ENTRY_LIMIT'));
+  const exact = decision(gained, { policyMaxOrderKrw: 30_000, estimatedKrw: 30_000 });
+  assert.equal(exact.allowed, true);
+});
+
+test('dynamic capital policy expands only verified earned capital, never lower instrument/class caps', () => {
+  const gained = deriveRulePackPilotCapitalFromTrades([closed('profit', '005930', 50_000)], new Date(NOW));
+  const base = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: true,
+    pilotStage: 'formula-ai-exception',
+    totalCapitalKrw: 500_000,
+    maxOrderKrw: 500_000,
+    maxInstrumentKrw: 500_000,
+    maxAssetClassKrw: {
+      domestic_stock: 500_000, us_stock: 500_000,
+      crypto_spot: 500_000, crypto_futures: 300_000,
+    },
+  });
+  const projected = deriveRulePackPilotExecutionPolicy(base, gained);
+  assert.equal(projected.totalCapitalKrw, 525_000);
+  assert.equal(projected.maxOrderKrw, 525_000);
+  assert.equal(projected.maxInstrumentKrw, 525_000);
+  assert.equal(projected.maxAssetClassKrw.domestic_stock, 525_000);
+  assert.equal(projected.maxAssetClassKrw.crypto_futures, 300_000);
+  assert.equal(projected.pilotStage, 'formula-ai-exception');
+  assert.equal(projected.automaticEnabled, true);
+  assert.equal(base.maxOrderKrw, 500_000, 'must not mutate source policy');
+  assert.throws(() => deriveRulePackPilotExecutionPolicy({
+    ...base, totalCapitalKrw: 100_000, maxOrderKrw: 30_000,
+  }, gained), /BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED/);
+  assert.throws(() => deriveRulePackPilotExecutionPolicy(base, {
+    ...gained, settlementReady: false,
+  }), /BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED/);
+});
+
+test('invalid, duplicate or future settlement evidence blocks capital promotion without double-credit', () => {
+  const sample = closed('same', 'AAPL', 50_000);
+  const invalid = deriveRulePackPilotCapitalFromTrades([
+    sample,
+    { ...sample },
+    closed('future', 'BTCUSDT', 200_000, '2026-10-09T00:00:00.000Z'),
+    closed('nan', '005930', Number.NaN),
+  ], new Date(NOW));
+  assert.equal(invalid.operatingCapitalKrw, 525_000);
+  assert.equal(invalid.reserveKrw, 25_000);
+  assert.equal(invalid.settledTradeCount, 1);
+  assert.equal(invalid.settlementReady, false);
+  assert.ok(invalid.blockers.includes('PILOT_CAPITAL_DUPLICATE_SETTLEMENT'));
+  assert.ok(invalid.blockers.includes('PILOT_CAPITAL_TRADE_EVIDENCE_INVALID'));
+  assert.ok(decision(invalid, { estimatedKrw: 20_000 })
+    .blockers.includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'));
+});
+
+test('five losing trades in Asia/Seoul day halt entries; previous-KST-day loss does not count', () => {
+  const now = new Date('2026-10-08T00:00:00.000Z');
+  const day = [
+    closed('prev', 'KRW-BTC', -200, '2026-10-07T14:59:59.000Z'),
+    ...Array.from({ length: 5 }, (_, i) =>
+      closed('loss-' + i, 'KRW-BTC', -100, '2026-10-07T15:01:00.000Z')),
+  ];
+  const result = deriveRulePackPilotCapitalFromTrades(day, now);
+  assert.equal(result.dailyLosingTrades, 5);
+  assert.ok(decision(result, { estimatedKrw: 20_000, nowMs: now.getTime() })
+    .blockers.includes('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT'));
 });
