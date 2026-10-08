@@ -2433,6 +2433,7 @@ test('automatic Paper epoch uses immutable server row time, never forged wallet 
   );
   assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: 'malformed' }], currentMs), null);
   assert.equal(automaticPaperWalletServerEpochMs([{ ...row, deletedAt: row.createdAt }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:58.000Z' }], currentMs), trustedMs);
   assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:00.000Z' }], currentMs), null);
   assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: '2030-01-01T00:00:00.000Z' }], currentMs), null);
   assert.equal(automaticPaperWalletServerEpochMs([row, row], currentMs), null);
