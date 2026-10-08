@@ -25,6 +25,8 @@ export type MemberAccessProfile = {
   isActive?: boolean | null;
   membership_expires_at?: string | null;
   membershipExpiresAt?: string | null;
+  permissions_updated_at?: string | null;
+  permissionsUpdatedAt?: string | null;
 };
 
 export const MEMBER_TIERS: readonly MemberTier[];
@@ -32,6 +34,7 @@ export const MEMBER_TIER_LABELS: Readonly<Record<MemberTier, string>>;
 export const MEMBER_CAPABILITIES: readonly MemberCapability[];
 export const MEMBER_PERMISSION_MATRIX: Readonly<Record<MemberTier, Readonly<Record<MemberCapability, boolean>>>>;
 
+export function hasCanonicalMemberAccessState(profile: MemberAccessProfile | null | undefined): boolean;
 export function deriveMemberTier(profile: MemberAccessProfile | null | undefined): MemberTier;
 export function permissionsFor(profileOrTier: MemberAccessProfile | MemberTier | null | undefined): Readonly<Record<MemberCapability, boolean>>;
 export function hasCapability(profileOrTier: MemberAccessProfile | MemberTier | null | undefined, capability: MemberCapability): boolean;
