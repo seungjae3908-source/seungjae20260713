@@ -1444,7 +1444,7 @@ export class MemberAutoTradingBackgroundWorker {
             this.liveCycleOrderEligibleSeen = false;
             this.liveCyclePolicyReadySeen = false;
             this.liveCycleAllFourPolicyReadySeen = false;
-      this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleAllFourWitnessUserId = null;
           }
         }
         result.liveReadinessCycleComplete = cycleComplete;
@@ -1462,7 +1462,7 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
-      this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleAllFourWitnessUserId = null;
         } else if (cycleComplete) {
           this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
             && this.liveCyclePolicyReadySeen;
@@ -1470,14 +1470,14 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
-      this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleAllFourWitnessUserId = null;
         }
       } else {
         this.liveEntryWarmupComplete = false;
         this.liveCycleOrderEligibleSeen = false;
         this.liveCyclePolicyReadySeen = false;
         this.liveCycleAllFourPolicyReadySeen = false;
-      this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleAllFourWitnessUserId = null;
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       return result;
@@ -1486,7 +1486,7 @@ export class MemberAutoTradingBackgroundWorker {
       this.liveCycleOrderEligibleSeen = false;
       this.liveCyclePolicyReadySeen = false;
       this.liveCycleAllFourPolicyReadySeen = false;
-      this.liveCycleAllFourWitnessUserId = null;
+          this.liveCycleAllFourWitnessUserId = null;
       throw error;
     } finally {
       this.running = false;
