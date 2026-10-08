@@ -276,23 +276,28 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     return () => controller.abort();
   }, [userId, canAuto, fixture]);
 
-  async function prepareAutomaticPaperAccount() {
-    if (autoPaperBusy || !userId || !canAuto || fixture || autoPaperStatus !== 'missing') return;
+  async function prepareAutomaticPaperAccount(isolateLegacy = false) {
+    const expectedStatus = isolateLegacy ? 'blocked' : 'missing';
+    if (autoPaperBusy || !userId || !canAuto || fixture || autoPaperStatus !== expectedStatus) return;
+    if (isolateLegacy && !window.confirm(
+      '과거 자동모의 거래와 미청산 연구용 포지션은 그대로 보존합니다. 새 50만원 계좌와는 분리하며 과거 손익을 0원이나 청산 완료로 변경하지 않습니다. 계속할까요?',
+    )) return;
     setAutoPaperBusy(true);
     setAutoPaperMessage('');
     try {
-      // Never overwrite a previously synced local simulator account or
-      // silently replenish a member with existing Paper execution history.
       const before = await inspectAutomaticPaperAccount();
-      if (before !== 'missing') {
+      if (before !== expectedStatus) {
         setAutoPaperStatus(before);
-        setAutoPaperMessage('기존 모의기록이 확인되어 새 가상계좌를 덮어쓰지 않았습니다.');
+        setAutoPaperMessage('계좌 상태가 변경되어 다시 확인이 필요합니다.');
         return;
       }
       const at = new Date().toISOString();
       const result = await syncJournalRecords({
         idempotencyKey: `automatic-paper-start-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         clientTime: at,
+        ...(isolateLegacy ? {
+          legacyEpochConfirmation: 'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY',
+        } : {}),
         records: [{
           kind: 'account', id: AUTO_PAPER_ACCOUNT_ID, version: 1,
           updatedAt: at, deletedAt: null,
@@ -497,6 +502,18 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             1회 주문 상한 {policy.maxOrderKrw.toLocaleString('ko-KR')}원,
             코인선물 레버리지 {policy.bitgetLeverage}배. 이 화면에서 운용 한도를 변경하지 않습니다.
           </p>
+        ) : null}
+        {autoPaperStatus === 'blocked'
+          && (walletAudit?.automaticPaperPlanCount ?? 0) > 0 ? (
+          <button
+            type="button"
+            className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
+            disabled={autoPaperBusy || !canAuto || Boolean(fixture)}
+            onClick={() => void prepareAutomaticPaperAccount(true)}
+            data-testid="prepare-isolated-automatic-paper-epoch"
+          >
+            과거 기록 보존 후 신규 50만원 모의계좌 준비
+          </button>
         ) : null}
         {autoPaperStatus === 'missing' ? (
           <button
