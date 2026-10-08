@@ -83,10 +83,46 @@ export function deriveRulePackPilotCapitalFromTrades(
     return time !== 0 ? time : left.id.localeCompare(right.id);
   });
 
+  // Multiple fills can share the same recorded millisecond. Crediting a
+  // winning row before a simultaneous loss would manufacture HWM earnings
+  // according to arbitrary order IDs. Settle an equal-time batch at net PnL.
+  let batchTimestamp: number | null = null;
+  let batchPnlKrw = 0;
+  let batchLosses = 0;
+  let batchWins = 0;
+  const settleBatch = () => {
+    if (batchTimestamp == null) return;
+    if (!finite(batchPnlKrw)) {
+      blockers.push('PILOT_CAPITAL_SETTLEMENT_OVERFLOW');
+    } else if (batchPnlKrw < 0) {
+      if (operatingCapitalKrw + batchPnlKrw < 0) {
+        blockers.push('PILOT_CAPITAL_NEGATIVE_EQUITY_UNSUPPORTED');
+      }
+      operatingCapitalKrw = Math.max(0, operatingCapitalKrw + batchPnlKrw);
+    } else if (batchPnlKrw > 0) {
+      const totalBefore = operatingCapitalKrw + reserveKrw;
+      const totalAfter = totalBefore + batchPnlKrw;
+      const newHighProfit = Math.max(0, totalAfter - highWaterMarkKrw);
+      const recoveryProfit = Math.max(0, batchPnlKrw - newHighProfit);
+      const compound = newHighProfit * RULE_PACK_PILOT_PROFILE.profitCompoundShare;
+      const reserve = newHighProfit - compound;
+      operatingCapitalKrw += recoveryProfit + compound;
+      reserveKrw += reserve;
+      compoundedProfitKrw += compound;
+      highWaterMarkKrw += newHighProfit;
+    }
+    // An indistinguishably simultaneous win does not cancel evidence of a
+    // loss streak; this is intentionally conservative without fill sequence.
+    if (batchLosses > 0) consecutiveLosses += batchLosses;
+    else if (batchWins > 0) consecutiveLosses = 0;
+    batchTimestamp = null;
+    batchPnlKrw = 0;
+    batchLosses = 0;
+    batchWins = 0;
+  };
+
   for (const trade of sorted) {
     const closedAtMs = Date.parse(trade.closedAt);
-    // Never silently treat invalid/duplicate/future trade evidence as a
-    // successful settlement, or credit the same close twice on replay.
     if (!trade.id?.trim() || !trade.symbol?.trim() || !trade.signalId?.trim()
       || !finite(trade.netPnlKrw) || !Number.isFinite(closedAtMs)
       || !Number.isFinite(nowMs) || closedAtMs > nowMs + 5_000) {
@@ -97,35 +133,29 @@ export function deriveRulePackPilotCapitalFromTrades(
       blockers.push('PILOT_CAPITAL_DUPLICATE_SETTLEMENT');
       continue;
     }
+    if (batchTimestamp != null && batchTimestamp !== closedAtMs) settleBatch();
+    if (batchTimestamp == null) batchTimestamp = closedAtMs;
+
     seenTradeIds.add(trade.id);
     settledTradeCount += 1;
     const pnl = trade.netPnlKrw;
     realizedNetPnlKrw += pnl;
+    batchPnlKrw += pnl;
+    if (pnl < 0) {
+      batchLosses += 1;
+      latestLossBySymbol[normalizedSymbol(trade.symbol)] = Object.freeze({
+        closedAt: trade.closedAt, signalId: trade.signalId,
+      });
+    } else if (pnl > 0) batchWins += 1;
     if (kstDay(trade.closedAt) === today) {
       dailyRealizedPnlKrw += pnl;
       if (pnl < 0) dailyLosingTrades += 1;
     }
-
-    if (pnl < 0) {
-      operatingCapitalKrw = Math.max(0, operatingCapitalKrw + pnl);
-      consecutiveLosses += 1;
-      latestLossBySymbol[normalizedSymbol(trade.symbol)] = Object.freeze({
-        closedAt: trade.closedAt, signalId: trade.signalId,
-      });
-      continue;
-    }
-
-    if (pnl > 0) consecutiveLosses = 0;
-    const totalBefore = operatingCapitalKrw + reserveKrw;
-    const totalAfter = totalBefore + pnl;
-    const newHighProfit = Math.max(0, totalAfter - highWaterMarkKrw);
-    const recoveryProfit = Math.max(0, pnl - newHighProfit);
-    const compound = newHighProfit * RULE_PACK_PILOT_PROFILE.profitCompoundShare;
-    const reserve = newHighProfit - compound;
-    operatingCapitalKrw += recoveryProfit + compound;
-    reserveKrw += reserve;
-    compoundedProfitKrw += compound;
-    highWaterMarkKrw += newHighProfit;
+  }
+  settleBatch();
+  if (![operatingCapitalKrw, reserveKrw, highWaterMarkKrw,
+    realizedNetPnlKrw, compoundedProfitKrw, dailyRealizedPnlKrw].every(finite)) {
+    blockers.push('PILOT_CAPITAL_SETTLEMENT_OVERFLOW');
   }
 
   return Object.freeze({
