@@ -59,6 +59,32 @@ function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+
+export function hasCanonicalMemberAccessState(profile) {
+  const value = asRecord(profile);
+  const status = typeof value.status === 'string' ? value.status : null;
+  if (status !== 'approved' && status !== 'suspended') return true;
+  const explicit = typeof value.membership_level === 'string'
+    ? value.membership_level
+    : typeof value.membershipLevel === 'string'
+      ? value.membershipLevel
+      : null;
+  const activePresent = typeof value.is_active === 'boolean'
+    || typeof value.isActive === 'boolean';
+  const permissionsUpdatedAt = typeof value.permissions_updated_at === 'string'
+    ? value.permissions_updated_at
+    : typeof value.permissionsUpdatedAt === 'string'
+      ? value.permissionsUpdatedAt
+      : null;
+  return Boolean(
+    explicit
+    && MEMBER_TIERS.includes(explicit)
+    && activePresent
+    && permissionsUpdatedAt
+    && Number.isFinite(Date.parse(permissionsUpdatedAt)),
+  );
+}
+
 export function deriveMemberTier(profile) {
   const value = asRecord(profile);
   const explicit = typeof value.membership_level === 'string'
