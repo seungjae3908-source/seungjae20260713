@@ -1810,6 +1810,12 @@ test('blocked member evidence survives paginated warmup and cannot be erased by 
   let batch = 0;
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
+    // Isolate the pagination/warmup regression from unrelated Paper risk
+    // evaluations, which can legitimately trip the persistent kill switch.
+    async readHandoff() {
+      const ready = await base.readHandoff(nowMs);
+      return ready ? { ...ready, entries: [], entryCount: 0 } as never : null;
+    },
     async listEligibleMembers() {
       batch += 1;
       if (batch === 1) return [{
