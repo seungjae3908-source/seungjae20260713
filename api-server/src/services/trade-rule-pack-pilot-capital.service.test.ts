@@ -292,3 +292,32 @@ test('500 order / 200 plan repository page bounds are not proof of complete HWM 
   assert.equal(rulePackPilotLedgerHistoryComplete(-1, 1), false);
   assert.equal(rulePackPilotLedgerHistoryComplete(1.5, 1), false);
 });
+test('simultaneous closes credit only NET profit rather than arbitrary win-before-loss HWM', () => {
+  const instant = '2026-10-07T23:00:00.000Z';
+  const a = closed('a-win', 'BTC', 50_000, instant);
+  const z = closed('z-loss', '005930', -40_000, instant);
+  const result = deriveRulePackPilotCapitalFromTrades([a, z], new Date(NOW));
+  const reversed = deriveRulePackPilotCapitalFromTrades([z, a], new Date(NOW));
+  assert.equal(result.settlementReady, true);
+  assert.equal(result.operatingCapitalKrw, 505_000);
+  assert.equal(result.reserveKrw, 5_000);
+  assert.equal(result.highWaterMarkKrw, 510_000);
+  assert.equal(result.dailyLosingTrades, 1);
+  assert.equal(result.consecutiveLosses, 1, 'simultaneous win must not erase a losing trade');
+  assert.deepEqual(
+    [result.operatingCapitalKrw, result.reserveKrw, result.highWaterMarkKrw],
+    [reversed.operatingCapitalKrw, reversed.reserveKrw, reversed.highWaterMarkKrw],
+  );
+});
+
+test('loss exceeding remaining operating equity blocks further pilot allocation rather than fabricating a refill', () => {
+  const result = deriveRulePackPilotCapitalFromTrades([
+    closed('loss-more-than-wallet', 'BTCUSDT', -510_000),
+  ], new Date(NOW));
+  assert.equal(result.operatingCapitalKrw, 0);
+  assert.equal(result.reserveKrw, 0);
+  assert.equal(result.settlementReady, false);
+  assert.ok(result.blockers.includes('PILOT_CAPITAL_NEGATIVE_EQUITY_UNSUPPORTED'));
+  assert.ok(decision(result, { estimatedKrw: 20_000 })
+    .blockers.includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'));
+});
