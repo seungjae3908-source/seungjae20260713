@@ -11,6 +11,7 @@ import {
   issueRulePackPilotDynamicCapReceipt,
   verifyRulePackPilotDynamicCapReceipt,
   resolveRulePackPilotDynamicCapPolicy,
+  readRulePackPilotCapitalState,
   verifiedRulePackKrwSettlement,
   rulePackPilotLedgerHistoryComplete,
   evaluateRulePackPilotEntryGuard,
@@ -461,5 +462,74 @@ test('manual /plans approval cannot forge the dedicated signed automatic policy 
       /BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED/,
     );
     assert.equal((await repo.listOrders(user)).length, 0);
+  });
+});
+test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, not 550k', async () => {
+  await withPilotDynamicCapEnvironment(async () => {
+    const user = '11111111-1111-1111-1111-111111111111';
+    const repository = new InMemoryTradingRepository();
+    const base = normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+      totalCapitalKrw: 500_000, maxOrderKrw: 500_000,
+      maxInstrumentKrw: 500_000, pilotStage: 'formula-ai-exception',
+    });
+    const openedAt = new Date(NOW - 10 * 60_000).toISOString();
+    const closedAt = new Date(NOW - 5 * 60_000).toISOString();
+    const strategyId = 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1';
+    const planFor = (id: string, side: 'buy' | 'sell', reduceOnly: boolean, at: string) => ({
+      ...pilotReceiptInput(1_000_000), id, userId: user, idempotencyKey: 'history-' + id,
+      executionMode: 'automatic' as const, state: 'SUBMITTED' as const, version: 1,
+      accountMode: 'live' as const, exchange: 'upbit' as const, market: 'KRW',
+      symbol: 'BTC', side, reduceOnly,
+      strategyId, signalId: 'historical-signal',
+      quantity: 1, quoteAmount: null, estimatedKrw: 1_000_000,
+      signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+      approvedAt: at, approvalExpiresAt: new Date(NOW + 10 * 60_000).toISOString(),
+      createdAt: at, updatedAt: at,
+    });
+    const orderFor = (id: string, planId: string, at: string, price: number) => ({
+      id, userId: user, planId, exchange: 'upbit' as const,
+      clientOrderId: 'client-' + id, exchangeOrderId: 'exchange-' + id,
+      state: 'FILLED' as const, version: 3,
+      requestedQuantity: 1, filledQuantity: 1, averageFillPrice: price,
+      feeAmount: 500, feeCurrency: 'KRW',
+      fills: [{ id: 'fill-' + id, price, quantity: 1, feeAmount: 500,
+        feeCurrency: 'KRW', filledAt: at }],
+      retryCount: 0, lastErrorCode: null, createdAt: at, updatedAt: at,
+    });
+    await repository.savePlan(planFor('history-entry', 'buy', false, openedAt) as never);
+    await repository.savePlan(planFor('history-exit', 'sell', true, closedAt) as never);
+    await repository.saveOrder(orderFor('history-entry-order', 'history-entry', openedAt, 1_000_000) as never);
+    await repository.saveOrder(orderFor('history-exit-order', 'history-exit', closedAt, 1_051_000) as never);
+    const pilot = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.deepEqual(pilot.blockers, []);
+    assert.equal(pilot.settledTradeCount, 1);
+    assert.equal(pilot.realizedNetPnlKrw, 50_000);
+    assert.equal(pilot.operatingCapitalKrw, 525_000);
+    assert.equal(pilot.reserveKrw, 25_000);
+    const signed = issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_000), NOW);
+    const proposed = {
+      ...signed, id: 'signed-after-close', userId: user,
+      idempotencyKey: 'new-after-close', state: 'APPROVAL_PENDING' as const,
+      version: 0, executionMode: 'automatic' as const, approvedAt: null,
+      approvalExpiresAt: new Date(NOW + 60_000).toISOString(),
+      createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(),
+    };
+    const projected = await resolveRulePackPilotDynamicCapPolicy(
+      repository, user, proposed, base, new Date(NOW), 0,
+    );
+    assert.equal(projected.totalCapitalKrw, 525_000);
+    assert.equal(projected.maxOrderKrw, 525_000);
+    assert.equal(projected.maxInstrumentKrw, 525_000);
+    assert.equal(base.maxOrderKrw, 500_000);
+    const tooLarge = {
+      ...proposed,
+      ...issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_001), NOW),
+    };
+    await assert.rejects(
+      resolveRulePackPilotDynamicCapPolicy(repository, user, tooLarge, base, new Date(NOW), 0),
+      /BACKGROUND_PILOT_ENTRY_LIMIT/,
+    );
+    assert.equal((await repository.listOrders(user)).length, 2, 'cannot place a broker order');
   });
 });
