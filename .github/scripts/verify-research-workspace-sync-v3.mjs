@@ -255,6 +255,7 @@ const memberAccessReviewed=[
  'api-server/src/services/scanner-access-control.service.test.ts',
  'api-server/src/services/scanner-access-control.service.ts',
  'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
+ 'api-server/supabase/bootstrap/staging-audit-privilege-assert.sql',
  'api-server/supabase/bootstrap/staging-bootstrap.sql',
  'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
  'api-server/supabase/test/member_access_s_ai_hardening_integration.sql',
