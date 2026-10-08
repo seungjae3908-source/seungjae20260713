@@ -405,7 +405,20 @@ if(automaticTradingChanged.length>0){
  const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
  for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
-const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
+const canonicalMemberFixtureOnlyPaths=new Set([
+ 'stock-analyzer/e2e/research-video-intelligence.spec.ts',
+ 'stock-analyzer/e2e/research-workspace-v2.spec.ts',
+]);
+function isCanonicalMemberFixtureOnlyChange(p){
+ if(!canonicalMemberFixtureOnlyPaths.has(p))return false;
+ const diff=git('diff','--unified=0',MAIN,'HEAD','--',p)
+  .split('\n')
+  .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
+ return diff.length>0&&diff.every((line)=>line.includes('permissions_updated_at'));
+}
+const researchCenterChanged=changed.filter((p)=>
+ researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
+);
 if(researchCenterChanged.length>0){
  const requiredIntegrationGuards=[
   '.github/workflows/research-center-predeploy-validation.yml',
