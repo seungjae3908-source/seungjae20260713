@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/telegram-production-release.yml
       - api-server/scripts/verify-telegram-production-release-contract.mjs
+      - api-server/scripts/telegram-database-evidence.cjs
       - api-server/scripts/verify-production-telegram-preservation.mjs
       - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
       - api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts
@@ -22,6 +23,15 @@ on:
       - api-server/supabase/migrations/2026092503_telegram_signal_message_edit_state.sql
       - ops/apply-production-personal-telegram-storage.mjs
       - ops/verify-production-personal-telegram-storage.mjs
+      - ops/verify-production-telegram-active-readiness.mjs
+      - ops/verify-production-telegram-runtime-readiness.mjs
+      - .github/tests/production-telegram-runtime-readiness.test.mjs
+      - .github/tests/telegram-database-evidence.test.mjs
+      - .github/scripts/production-postdeploy-qa-evidence.cjs
+      - .github/tests/production-telegram-active-readiness.test.mjs
+      - stock-analyzer/e2e/production-trading-core-qa.spec.ts
+      - stock-analyzer/e2e/support/production-readonly-login.ts
+      - stock-analyzer/playwright.production-trading-core.config.ts
 
 permissions:
   contents: read
@@ -29,7 +39,7 @@ permissions:
 concurrency:
   group: >-
     ${{ github.event_name == 'issue_comment'
-        && github.event.issue.number == 23
+        && github.event.issue.number == 1555
         && github.event.comment.user.login == 'seungjae3908-source'
         && github.event.comment.author_association == 'OWNER'
         && startsWith(github.event.comment.body, '/run-telegram-production ')
@@ -51,6 +61,7 @@ jobs:
       - run: |
           node api-server/scripts/verify-telegram-production-release-contract.mjs
           node ops/verify-production-personal-telegram-storage.mjs --static
+          node --test .github/tests/production-telegram-active-readiness.test.mjs
 
   release:
     name: Owner-approved Telegram production release and delivery verification
@@ -62,10 +73,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      github.event.issue.number == 1555 &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-telegram-production ')
@@ -192,7 +203,7 @@ jobs:
             core.setOutput('run_id', String(verified.runId));
             core.info(`Exact-main Required CI 6/6 accepted from Application CI Run ID ${verified.runId}.`);
 
-      - name: Require successful exact-SHA PostgreSQL authentication artifact
+      - name: Require successful exact-SHA database safety evidence
         id: postgres
         uses: actions/github-script@v7
         env:
@@ -200,7 +211,7 @@ jobs:
         with:
           script: |
             const targetSha = process.env.TARGET_SHA;
-            const artifactName = `staging-postgres-auth-${targetSha}`;
+            const stagingArtifactName = `staging-postgres-auth-${targetSha}`;
             const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -229,7 +240,7 @@ jobs:
                 per_page: 100,
               });
               const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
-                candidate.name === artifactName
+                candidate.name === stagingArtifactName
                 && candidate.expired !== true
                 && candidate.workflow_run?.head_sha === targetSha);
               if (artifact) {
@@ -238,14 +249,55 @@ jobs:
               }
             }
             if (!accepted) {
-              core.setFailed(`No successful unexpired exact-SHA PostgreSQL authentication evidence exists for ${targetSha}.`);
+              const productionArtifactName = `production-paper-journal-privileges-${targetSha}`;
+              const productionRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: targetSha,
+                branch: 'main',
+                event: 'workflow_dispatch',
+                status: 'completed',
+                per_page: 100,
+              });
+              const productionCandidates = productionRuns
+                .filter((run) =>
+                  run.name === 'Production Deploy'
+                  && run.path === '.github/workflows/production-deploy.yml'
+                  && run.head_sha === targetSha
+                  && run.head_branch === 'main'
+                  && run.event === 'workflow_dispatch'
+                  && run.status === 'completed'
+                  && run.conclusion === 'success')
+                .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+              for (const run of productionCandidates) {
+                const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                });
+                const artifact = (artifactResponse.data.artifacts ?? []).find((candidate) =>
+                  candidate.name === productionArtifactName
+                  && candidate.expired !== true
+                  && candidate.workflow_run?.head_sha === targetSha);
+                if (artifact) {
+                  accepted = { run, artifact, sourceType: 'production_database' };
+                  break;
+                }
+              }
+            }
+            if (!accepted) {
+              core.setFailed(`No successful unexpired exact-SHA staging authentication or Production database safety evidence exists for ${targetSha}.`);
               return;
             }
+            accepted.sourceType ??= 'staging_auth';
             core.setOutput('run_id', String(accepted.run.id));
             core.setOutput('artifact_id', String(accepted.artifact.id));
-            core.info(`PostgreSQL authentication evidence accepted from Run ID ${accepted.run.id}.`);
+            core.setOutput('source_type', accepted.sourceType);
+            core.info(`Database safety evidence accepted from Run ID ${accepted.run.id} (${accepted.sourceType}).`);
 
-      - name: Download exact PostgreSQL authentication artifact
+      - name: Download exact staging PostgreSQL authentication artifact
+        if: steps.postgres.outputs.source_type == 'staging_auth'
         uses: actions/download-artifact@v4
         with:
           name: staging-postgres-auth-${{ steps.command.outputs.sha }}
@@ -254,22 +306,51 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.postgres.outputs.run_id }}
 
-      - name: Verify PostgreSQL authentication artifact is read-only and passed
+      - name: Download exact Production database safety artifact
+        if: steps.postgres.outputs.source_type == 'production_database'
+        uses: actions/download-artifact@v4
+        with:
+          name: production-paper-journal-privileges-${{ steps.command.outputs.sha }}
+          path: production-database-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.postgres.outputs.run_id }}
+
+      - name: Verify database safety evidence is exact-SHA, mutation-free, and passed
+        env:
+          DATABASE_EVIDENCE_SOURCE: ${{ steps.postgres.outputs.source_type }}
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
-          const value = JSON.parse(fs.readFileSync(
-            'staging-postgres-auth/staging-postgres-auth-verification.json',
-            'utf8',
-          ));
-          const valid = value?.status === 'passed'
-            && value?.classification === 'authenticated'
-            && value?.project_match === true
-            && value?.read_only_probe === true
-            && value?.database_changed === false
-            && value?.credentials_recorded === false;
-          if (!valid) {
-            console.error('Exact-SHA PostgreSQL authentication artifact failed the read-only contract.');
+          const path = require('node:path');
+          const {
+            validateProductionDatabaseEvidence,
+            validateStagingPostgresEvidence,
+          } = require('./api-server/scripts/telegram-database-evidence.cjs');
+          const source = process.env.DATABASE_EVIDENCE_SOURCE;
+          let artifactPath;
+          let result;
+          if (source === 'staging_auth') {
+            artifactPath = 'staging-postgres-auth/staging-postgres-auth-verification.json';
+            result = validateStagingPostgresEvidence(
+              JSON.parse(fs.readFileSync(artifactPath, 'utf8')),
+              process.env.TARGET_SHA,
+            );
+          } else if (source === 'production_database') {
+            const directory = 'production-database-evidence';
+            const filename = fs.readdirSync(directory).find((entry) => entry.endsWith('.json'));
+            if (!filename) throw new Error('Production database safety artifact JSON is missing.');
+            artifactPath = path.join(directory, filename);
+            result = validateProductionDatabaseEvidence(
+              JSON.parse(fs.readFileSync(artifactPath, 'utf8')),
+              process.env.TARGET_SHA,
+            );
+          } else {
+            throw new Error(`Unsupported database evidence source: ${source || 'missing'}`);
+          }
+          if (!result.ok) {
+            console.error(`Exact-SHA database safety artifact failed closed: ${result.reason}.`);
             process.exit(1);
           }
           NODE
@@ -425,6 +506,7 @@ jobs:
               'TELEGRAM_CHAT_ID',
               'TELEGRAM_STOCK_CHAT_ID',
               'TELEGRAM_CRYPTO_CHAT_ID',
+              'TELEGRAM_AUTO_TRADING_CHAT_ID',
               'TELEGRAM_BOT_USERNAME',
               'TELEGRAM_WEBHOOK_SECRET',
             ];
@@ -585,7 +667,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Owner-approved Telegram-only Production release gate accepted.',
                 '',
@@ -666,17 +748,16 @@ jobs:
         id: smoke
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.run_id }}
           PRE_ACTIVE_SHA: ${{ steps.before.outputs.active_sha }}
           PRE_PM_UPTIME: ${{ steps.before.outputs.pm_uptime }}
           PRE_LOG_SIZE: ${{ steps.before.outputs.log_size }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           set -Eeuo pipefail
-          smoke_file="$(mktemp)"
-          cleanup() { rm -f "$smoke_file"; }
-          trap cleanup EXIT
-          remote_env="$(printf 'TARGET_SHA=%q PRE_ACTIVE_SHA=%q PRE_PM_UPTIME=%q PRE_LOG_SIZE=%q SOURCE_COMMENT_ID=%q PUBLIC_BASE_URL=%q NODE_OPTIONS=%q' \
-            "$TARGET_SHA" "$PRE_ACTIVE_SHA" "$PRE_PM_UPTIME" "$PRE_LOG_SIZE" "$SOURCE_COMMENT_ID" "$PUBLIC_BASE_URL" "$TELEGRAM_REMOTE_NODE_OPTIONS")"
+          smoke_file="$RUNNER_TEMP/production-telegram-runtime-proof.json"
+          remote_env="$(printf 'TARGET_SHA=%q PRODUCTION_DEPLOY_RUN_ID=%q PRE_ACTIVE_SHA=%q PRE_PM_UPTIME=%q PRE_LOG_SIZE=%q SOURCE_COMMENT_ID=%q PUBLIC_BASE_URL=%q NODE_OPTIONS=%q' \
+            "$TARGET_SHA" "$PRODUCTION_DEPLOY_RUN_ID" "$PRE_ACTIVE_SHA" "$PRE_PM_UPTIME" "$PRE_LOG_SIZE" "$SOURCE_COMMENT_ID" "$PUBLIC_BASE_URL" "$TELEGRAM_REMOTE_NODE_OPTIONS")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node -" > "$smoke_file" <<'NODE'
           const fs = require('node:fs');
@@ -684,12 +765,15 @@ jobs:
 
           (async () => {
             const targetSha = String(process.env.TARGET_SHA ?? '');
+            const productionDeployRunId = Number(process.env.PRODUCTION_DEPLOY_RUN_ID ?? 0);
             const preActiveSha = String(process.env.PRE_ACTIVE_SHA ?? '');
             const prePmUptime = Number(process.env.PRE_PM_UPTIME ?? 0);
             const preLogSize = Number(process.env.PRE_LOG_SIZE ?? 0);
             const sourceCommentId = String(process.env.SOURCE_COMMENT_ID ?? '');
             const publicBaseUrl = String(process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
-            if (!/^[0-9a-f]{40}$/.test(targetSha)) process.exit(2);
+            if (!/^[0-9a-f]{40}$/.test(targetSha)
+              || !Number.isSafeInteger(productionDeployRunId)
+              || productionDeployRunId <= 0) process.exit(2);
 
             const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
             const selectedProcesses = Array.isArray(processes) ? processes.filter((item) => item?.name === 'stock-app') : [];
@@ -725,16 +809,16 @@ jobs:
             function activateApprovedTelegram(runtime, approvedSha, marker, commentId) {
               if (!/^[0-9a-f]{40}$/.test(approvedSha) || !/^[1-9][0-9]*$/.test(commentId)
                 || marker !== approvedSha || runtime?.DEPLOY_SHA !== approvedSha || runtime.status !== 'online') {
-                throw new Error('Telegram activation requires exact approved runtime identity');
+                throw new Error('TELEGRAM_ACTIVATION_IDENTITY_INVALID');
               }
               const flag = value => {
                 if (value === undefined || value === false || value === 'false') return false;
                 if (value === true || value === 'true') return true;
-                throw new Error('Malformed Telegram activation state');
+                throw new Error('TELEGRAM_ACTIVATION_STATE_MALFORMED');
               };
               const approved = flag(runtime.LIVE_TELEGRAM_ACTIVATION_APPROVED);
               const worker = flag(runtime.TELEGRAM_INTELLIGENCE_WORKER_ENABLED);
-              if (approved !== worker) throw new Error('Mixed Telegram activation state');
+              if (approved !== worker) throw new Error('TELEGRAM_ACTIVATION_STATE_MIXED');
               const telegramFeatureFlags = [
                 'PERSONAL_TELEGRAM_WORKER_ENABLED',
                 'TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED',
@@ -745,27 +829,25 @@ jobs:
                 'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
                 'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
               ];
-              const requiredConfigKeys = [
+              // Market-specific rooms and the optional owner mapping enhance routing,
+              // but the canonical legacy stock/crypto rooms remain the documented
+              // fallback. Keep the activation gate aligned with the read-only
+              // preflight contract instead of rejecting a valid fallback setup.
+              const coreTelegramConfigKeys = [
                 'TELEGRAM_BOT_TOKEN',
                 'TELEGRAM_CHAT_ID',
                 'TELEGRAM_STOCK_CHAT_ID',
                 'TELEGRAM_CRYPTO_CHAT_ID',
-                'TELEGRAM_KR_STOCK_CHAT_ID',
-                'TELEGRAM_US_STOCK_CHAT_ID',
-                'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
-                'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
-                'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
                 'TELEGRAM_AUTO_TRADING_CHAT_ID',
-                'TELEGRAM_OWNER_MEMBER_ID',
                 'TELEGRAM_BOT_USERNAME',
                 'TELEGRAM_WEBHOOK_SECRET',
               ];
-              const missingConfigKeys = requiredConfigKeys.filter((key) => !String(runtime[key] ?? '').trim());
+              const missingConfigKeys = coreTelegramConfigKeys.filter((key) => !String(runtime[key] ?? '').trim());
               if (missingConfigKeys.length) {
-                throw new Error(`Telegram runtime configuration missing: ${missingConfigKeys.join(', ')}`);
+                throw new Error('TELEGRAM_CORE_RUNTIME_CONFIG_MISSING');
               }
               if (String(runtime.BACKGROUND_WORKERS_ENABLED ?? 'true') === 'false') {
-                throw new Error('Telegram background workers are disabled by BACKGROUND_WORKERS_ENABLED=false');
+                throw new Error('TELEGRAM_BACKGROUND_WORKERS_DISABLED');
               }
               const allTelegramFeaturesEnabled = telegramFeatureFlags.every((key) => flag(runtime[key]));
               if (approved && worker && allTelegramFeaturesEnabled) return false;
@@ -773,23 +855,31 @@ jobs:
                 .filter(([key, value]) => /^[A-Z_][A-Z0-9_]*$/.test(key)
                   && value !== undefined && value !== null && typeof value !== 'object')
                 .map(([key, value]) => [key, String(value)]));
-              execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
-                env: { ...process.env, ...preservedRuntimeEnv, DEPLOY_SHA: approvedSha,
-                  LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
-                  TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
-                  PERSONAL_TELEGRAM_WORKER_ENABLED: 'true',
-                  TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED: 'true',
-                  TELEGRAM_SIGNAL_AI_ENABLED: 'true',
-                  TELEGRAM_DAILY_BRIEF_RICH_ENABLED: 'true',
-                  TELEGRAM_SIGNAL_FOLLOWUP_ENABLED: 'true',
-                  MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED: 'true',
-                  MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED: 'true',
-                  MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true',
-                  LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
-                  PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE' },
-                stdio: ['ignore', 'ignore', 'pipe'],
-              });
-              execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+              try {
+                execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+                  env: { ...process.env, ...preservedRuntimeEnv, DEPLOY_SHA: approvedSha,
+                    LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true',
+                    TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
+                    PERSONAL_TELEGRAM_WORKER_ENABLED: 'true',
+                    TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED: 'true',
+                    TELEGRAM_SIGNAL_AI_ENABLED: 'true',
+                    TELEGRAM_DAILY_BRIEF_RICH_ENABLED: 'true',
+                    TELEGRAM_SIGNAL_FOLLOWUP_ENABLED: 'true',
+                    MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED: 'true',
+                    MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED: 'true',
+                    MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true',
+                    LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
+                    PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE' },
+                  stdio: ['ignore', 'ignore', 'pipe'],
+                });
+              } catch {
+                throw new Error('TELEGRAM_PM2_RESTART_FAILED');
+              }
+              try {
+                execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+              } catch {
+                throw new Error('TELEGRAM_PM2_SAVE_FAILED');
+              }
               return true;
             }
             const requiredTelegramConfigKeys = [
@@ -797,6 +887,7 @@ jobs:
               'TELEGRAM_CHAT_ID',
               'TELEGRAM_STOCK_CHAT_ID',
               'TELEGRAM_CRYPTO_CHAT_ID',
+              'TELEGRAM_AUTO_TRADING_CHAT_ID',
               'TELEGRAM_BOT_USERNAME',
               'TELEGRAM_WEBHOOK_SECRET',
             ];
@@ -870,7 +961,7 @@ jobs:
               const matches = current.filter(item => item?.name === 'stock-app');
               env = matches.length === 1 ? matches[0].pm2_env : null;
               if (!env || env.status !== 'online' || env.DEPLOY_SHA !== targetSha) {
-                throw new Error('Telegram activation changed application identity');
+                throw new Error('TELEGRAM_POST_RESTART_IDENTITY_MISMATCH');
               }
             }
 
@@ -1157,8 +1248,11 @@ jobs:
             }
 
             process.stdout.write(JSON.stringify({
+              schemaVersion: 'production-telegram-runtime-readiness-v1',
+              status: 'ACTIVE_VERIFIED',
               ok: true,
-              exactSha: targetSha,
+              targetSha,
+              productionDeployRunId,
               identityMatch: true,
               workerStarted: true,
               personalWorkerStarted: true,
@@ -1168,18 +1262,30 @@ jobs:
               telegramRoomsVerified: true,
               telegramWebhookVerified: true,
               telegramRoomDeliveryVerified: true,
+              autoTradingRoomVerified: true,
+              memberLinkRequiredForRuntimeActivation: false,
               telegramAccepted: true,
               telegramEditInPlaceAccepted: true,
               messageId,
               verifiedAt,
               orderSubmitted: false,
+              orderRequests: 0,
+              cancelRequests: 0,
+              amendRequests: 0,
+              transferRequests: 0,
+              withdrawalRequests: 0,
+              financialMutationCount: 0,
               privateTradingApiCount: 0,
-              liveTradingAuthority: false,
-              secretsRecorded: false,
+              liveTradingAuthorityGranted: false,
+              autoTradingAuthorityGranted: false,
+              secretValuesRecorded: false,
             }));
-          })().catch(() => {
-            console.error('Telegram Production verification failed safely.');
-            process.exit(20);
+          })().catch((error) => {
+            const code = error instanceof Error && /^TELEGRAM_[A-Z0-9_]+$/.test(error.message)
+              ? error.message
+              : 'TELEGRAM_RUNTIME_UNEXPECTED_FAILURE';
+            console.error(`Telegram Production verification failed safely: ${code}`);
+            process.exit(26);
           });
           NODE
 
@@ -1187,6 +1293,10 @@ jobs:
           const fs = require('node:fs');
           const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const valid = value?.ok === true
+            && value?.schemaVersion === 'production-telegram-runtime-readiness-v1'
+            && value?.status === 'ACTIVE_VERIFIED'
+            && value?.targetSha === process.env.TARGET_SHA
+            && Number(value?.productionDeployRunId) === Number(process.env.PRODUCTION_DEPLOY_RUN_ID)
             && value?.identityMatch === true
             && value?.workerStarted === true
             && value?.personalWorkerStarted === true
@@ -1196,14 +1306,23 @@ jobs:
             && value?.telegramRoomsVerified === true
             && value?.telegramWebhookVerified === true
             && value?.telegramRoomDeliveryVerified === true
+            && value?.autoTradingRoomVerified === true
+            && value?.memberLinkRequiredForRuntimeActivation === false
             && value?.telegramAccepted === true
             && value?.telegramEditInPlaceAccepted === true
             && Number.isSafeInteger(value?.messageId)
             && value?.messageId > 0
             && value?.orderSubmitted === false
+            && value?.orderRequests === 0
+            && value?.cancelRequests === 0
+            && value?.amendRequests === 0
+            && value?.transferRequests === 0
+            && value?.withdrawalRequests === 0
+            && value?.financialMutationCount === 0
             && value?.privateTradingApiCount === 0
-            && value?.liveTradingAuthority === false
-            && value?.secretsRecorded === false;
+            && value?.liveTradingAuthorityGranted === false
+            && value?.autoTradingAuthorityGranted === false
+            && value?.secretValuesRecorded === false;
           if (!valid) {
             console.error('Sanitized Telegram Production proof failed validation.');
             process.exit(1);
@@ -1211,10 +1330,55 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, [
             `message_id=${value.messageId}`,
             `verified_at=${value.verifiedAt}`,
+            `artifact=${process.argv[2]}`,
             '',
           ].join('\n'));
           console.log(JSON.stringify(value));
           NODE
+
+      - name: Upload exact-SHA Telegram runtime ACTIVE_VERIFIED evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-production-runtime-verification-${{ steps.command.outputs.sha }}
+          path: ${{ steps.smoke.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install exact locked QA dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install isolated Chromium for authenticated Telegram verification
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install chromium
+
+      - name: Observe member Telegram link and restored four-market AUTO policy
+        id: member-telegram-qa
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_TRADING_CORE_QA: 'true'
+          PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/telegram-active
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-trading-core.config.ts
+
+      - name: Upload exact-SHA member Telegram observation
+        if: ${{ always() && steps.member-telegram-qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-production-member-observation-${{ steps.command.outputs.sha }}
+          path: |
+            stock-analyzer/production-trading-core-artifacts
+            stock-analyzer/production-login-diagnostics/telegram-active
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Record sanitized Production completion evidence
         if: success()
@@ -1230,7 +1394,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Telegram-only Production release completed and verified.',
                 '',
@@ -1239,6 +1403,8 @@ jobs:
                 '- Public and loopback health identity: `MATCH`',
                 '- Telegram worker startup: `VERIFIED`',
                 '- Telegram runtime configuration: `VERIFIED`',
+                '- Automatic-trading notification room: `VERIFIED`',
+                '- Personal member link: `OBSERVED_SEPARATELY`',
                 '- Telegram API accepted verification message: `true`',
                 '- Telegram same-message edit verification: `true`',
                 `- Telegram message ID: \`${process.env.TELEGRAM_MESSAGE_ID}\``,
@@ -1263,7 +1429,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 23,
+              issue_number: 1555,
               body: [
                 'Telegram-only Production release failed safely.',
                 '',

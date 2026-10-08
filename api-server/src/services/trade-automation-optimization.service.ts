@@ -1,4 +1,5 @@
 import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
+import { evaluateFormulaAiLiveException } from './formula-ai-live-exception.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -64,14 +65,25 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
-  const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
-    now,
-    maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
-  });
+  const formulaAiException = plan.accountMode === 'live'
+    ? evaluateFormulaAiLiveException(plan, now)
+    : null;
+  const profitabilityAttestation = formulaAiException?.allowed
+    ? null
+    : attestLiveTradingProfitability(plan, undefined, {
+      now,
+      maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
+    });
   const economics = plan.accountMode === 'live'
-    ? profitabilityAttestation.serverEconomics
+    ? formulaAiException?.allowed
+      ? plan.economics
+      : profitabilityAttestation?.serverEconomics ?? null
     : plan.economics;
   const economicsPlan = economics === plan.economics ? plan : { ...plan, economics };
+
+  if (formulaAiException?.allowed) {
+    warnings.push('FORMULA_AI_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+  }
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
     add(blockCodes, 'ENTRY_ZONE_INVALID');
@@ -81,7 +93,7 @@ export function evaluateTradingOptimization(
     add(blockCodes, 'ENTRY_PRICE_OUTSIDE_ZONE');
   }
 
-  if (plan.accountMode === 'live' && !profitabilityAttestation.allowed) {
+  if (plan.accountMode === 'live' && profitabilityAttestation && !profitabilityAttestation.allowed) {
     add(blockCodes, 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED');
     for (const code of profitabilityAttestation.blockCodes) add(blockCodes, code);
   }
