@@ -109,7 +109,8 @@ const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled
 if (!autoFn) throw new Error('AUTOMATIC_LIVE_EXECUTION_FUNCTION_MISSING');
 for (const token of [
   "process.env.AUTO_TRADING === 'true'",
-  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'",
+  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined",
+  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false'",
   "process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'",
   'liveExecutionEnabled(exchange)',
   "'SPOT_LIVE_LIMITED'",
@@ -122,9 +123,10 @@ for (const token of [
   "accountMode: 'paper'",
   'persistMemberAutoTradingPaperPositionBridge',
   'export function memberAutoTradingWorkerMode(',
-  "env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'true'",
+  "if (paperOnly === 'true') return 'PAPER_ONLY'",
   "env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'",
-  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'",
+  "if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';",
+  "return (paperOnly === undefined || paperOnly === 'false')",
   "process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'",
   "const mode = memberAutoTradingWorkerMode();",
   "if (mode === 'DISABLED')",
