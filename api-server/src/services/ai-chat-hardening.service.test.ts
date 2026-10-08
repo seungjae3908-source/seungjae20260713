@@ -223,11 +223,18 @@ test('AI Chat refusals echo exact KR/US/Spot/Futures identity without execution 
 
 test('AI Chat real public-context consumer and provider payload retain timeframe/action without inventing OHLCV', async () => {
   const previous = snapshotEnvironment(); clearEnvironment(); process.env.GEMINI_API_KEY = 'test-gemini-key';
-  const methods = [MarketDataService.getQuote, MarketDataService.getCompanyProfile, NewsService.getNews, FinancialService.getFinancials] as const;
+  const methods = [
+    MarketDataService.getQuote,
+    MarketDataService.getCompanyProfile,
+    NewsService.getNews,
+    FinancialService.getFinancials,
+    MarketDataService.getCandlesMeta,
+  ] as const;
   const symbols: string[] = [];
   const unavailable = async (symbol: string): Promise<never> => { symbols.push(symbol); throw new Error('test provider data missing'); };
   MarketDataService.getQuote = unavailable; MarketDataService.getCompanyProfile = unavailable;
   NewsService.getNews = unavailable; FinancialService.getFinancials = unavailable;
+  MarketDataService.getCandlesMeta = unavailable as typeof MarketDataService.getCandlesMeta;
   const payloads: Array<Record<string, any>> = [];
   try {
     for (const timeframe of ['15m', '4H']) {
@@ -242,9 +249,15 @@ test('AI Chat real public-context consumer and provider payload retain timeframe
       assert.equal(payloads.at(-1)?.publicContext.selection.action, 'BUY');
       assert.equal(payloads.at(-1)?.publicContext.quote, undefined);
     }
-    assert.equal(payloads.length, 2); assert.deepEqual(symbols, Array(8).fill('005930'));
+    assert.equal(payloads.length, 2); assert.deepEqual(symbols, Array(10).fill('005930'));
   } finally {
-    [MarketDataService.getQuote, MarketDataService.getCompanyProfile, NewsService.getNews, FinancialService.getFinancials] = methods;
+    [
+      MarketDataService.getQuote,
+      MarketDataService.getCompanyProfile,
+      NewsService.getNews,
+      FinancialService.getFinancials,
+      MarketDataService.getCandlesMeta,
+    ] = methods;
     restoreEnvironment(previous);
   }
 });
