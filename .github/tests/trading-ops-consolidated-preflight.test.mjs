@@ -68,6 +68,7 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
   const verifier = read('api-server/scripts/verify-production-automatic-trading-gate.mjs');
+  const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
   const deploy = read('ops/deploy-production.sh');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
     assert.ok(handoff.includes(market), market);
@@ -81,6 +82,11 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes('/activate-production-auto-trading '));
   assert.ok(gate.includes('all4'));
   assert.ok(gate.includes('production-account-readonly-live-qa-v3'));
+  assert.ok(gate.includes('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED'));
+  assert.ok(gate.includes('paper-forward-no-deploy-'));
+  assert.ok(gate.includes('validateMemberAutoTradingPaperHandoff'));
+  assert.ok(gate.includes('PAPER_FORWARD_LAST_INVOCATION_STALE'));
+  assert.ok(paperReadiness.includes('production-paper-forward-runtime-readiness-v1'));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));

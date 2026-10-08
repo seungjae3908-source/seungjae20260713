@@ -20,6 +20,8 @@ on:
       - '.github/scripts/build-production-postdeploy-evidence.cjs'
       - '.github/scripts/production-postdeploy-qa-evidence.cjs'
       - '.github/scripts/production-postdeploy-qa-evidence.test.cjs'
+      - '.github/scripts/production-release-orchestrator.cjs'
+      - '.github/scripts/production-release-orchestrator.test.cjs'
       - '.github/scripts/verify-production-postdeploy-qa-contract.mjs'
       - 'api-server/scripts/build-production-comprehensive-readonly-receipt.mjs'
       - 'api-server/scripts/build-production-comprehensive-readonly-receipt.test.mjs'
@@ -31,7 +33,7 @@ permissions:
 
 concurrency:
   group: production-postdeploy-command-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   static-contract:
@@ -50,6 +52,7 @@ jobs:
       - run: node api-server/scripts/build-production-comprehensive-readonly-receipt.test.mjs
       - run: node --test .github/scripts/production-deploy-provenance.test.cjs
       - run: node --test .github/scripts/production-postdeploy-qa-evidence.test.cjs
+      - run: node --test .github/scripts/production-release-orchestrator.test.cjs
       - run: >-
           node --experimental-strip-types --test
           api-server/src/services/recommendation-deadline.service.test.ts
@@ -132,7 +135,7 @@ jobs:
             });
 
   dispatch-approved-production-chain:
-    name: Dispatch the single protected Production deploy + inline QA chain
+    name: Orchestrate exact-main Staging then the single protected Production deploy + inline QA chain
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
@@ -143,72 +146,212 @@ jobs:
       github.event.comment.user.login == github.repository_owner &&
       github.event.comment.author_association == 'OWNER' &&
       (startsWith(github.event.comment.body, '/run-production-postdeploy-qa ')
-       || startsWith(github.event.comment.body, '/run-production-trading-core-release '))
+       || startsWith(github.event.comment.body, '/run-production-trading-core-release ')
+       || startsWith(github.event.comment.body, '/run-production-member-release '))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 135
     steps:
-      - name: Validate owner command and dispatch exact-main Production chain
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate owner command, await exact-main Staging, and dispatch Production chain
         uses: actions/github-script@v7
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
         with:
           script: |
+            const {
+              activeRuns,
+              retryGithubRead,
+              selectReusableExactStagingRun,
+              stagingArtifactAccepted,
+            } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/production-release-orchestrator.cjs`);
             const body = String(process.env.COMMENT_BODY ?? '').trim();
             const full = /^\/run-production-postdeploy-qa ([0-9a-fA-F]{40})$/.exec(body);
             const tradingCore = /^\/run-production-trading-core-release ([0-9a-fA-F]{40})$/.exec(body);
-            const match = full || tradingCore;
+            const member = /^\/run-production-member-release ([0-9a-fA-F]{40})$/.exec(body);
+            const match = full || tradingCore || member;
             if (!match) {
-              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha> OR /run-production-trading-core-release <40-char-sha>');
+              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha> OR /run-production-trading-core-release <40-char-sha> OR /run-production-member-release <40-char-sha>');
               return;
             }
             const target = match[1].toLowerCase();
-            const qaScope = tradingCore ? 'trading_core' : 'full';
-            const main = await github.rest.repos.getBranch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              branch: 'main',
-            });
+            const qaScope = member ? 'member' : tradingCore ? 'trading_core' : 'full';
+            const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+            const readOptions = (label) => ({ label, attempts: 3, baseDelayMs: 1_000, sleep });
+            const main = await retryGithubRead(
+              () => github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: 'main',
+              }),
+              readOptions('current-main-initial'),
+            );
             if (String(main.data.commit.sha).toLowerCase() !== target) {
               core.setFailed(`POSTDEPLOY_COMMAND_REQUIRES_EXACT_CURRENT_MAIN: target=${target} main=${main.data.commit.sha}`);
               return;
             }
-            const active = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'production-deploy.yml',
-              event: 'workflow_dispatch',
-              per_page: 100,
-            });
-            const conflicts = active.filter((run) => run.status !== 'completed');
-            if (conflicts.length > 0) {
-              core.setFailed(`POSTDEPLOY_COMMAND_ACTIVE_PRODUCTION_DEPLOY_CONFLICT:${conflicts.map((run) => run.id).join(',')}`);
-              return;
+
+            const requireCurrentMain = async () => {
+              const branch = await retryGithubRead(
+                () => github.rest.repos.getBranch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  branch: 'main',
+                }),
+                readOptions('current-main-recheck'),
+              );
+              const current = String(branch.data.commit.sha).toLowerCase();
+              if (current !== target) throw new Error(`RELEASE_MAIN_ADVANCED: target=${target} main=${current}`);
+            };
+            const listStagingRuns = () => retryGithubRead(
+              () => github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'staging-readiness.yml',
+                event: 'workflow_dispatch',
+                branch: 'main',
+                per_page: 100,
+              }),
+              readOptions('list-staging-runs'),
+            );
+            const requireStagingArtifact = async (run) => {
+              const artifacts = await retryGithubRead(
+                () => github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: run.id,
+                  per_page: 100,
+                }),
+                readOptions('list-staging-artifacts'),
+              );
+              if (!stagingArtifactAccepted(artifacts, { targetSha: target, runId: run.id })) {
+                throw new Error(`STAGING_RELEASE_ARTIFACT_MISSING:${run.id}:staging-verdict-${target}`);
+              }
+            };
+            const waitForRun = async (runId, label, maximumPolls = 480) => {
+              for (let poll = 0; poll < maximumPolls; poll += 1) {
+                const response = await retryGithubRead(
+                  () => github.rest.actions.getWorkflowRun({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: runId,
+                  }),
+                  readOptions('get-workflow-run'),
+                );
+                const run = response.data;
+                if (run.status === 'completed') return run;
+                if (poll % 8 === 0) core.info(`${label} Run ${runId} status=${run.status}`);
+                await sleep(15_000);
+              }
+              throw new Error(`${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_WAIT_TIMEOUT:${runId}`);
+            };
+            const listProductionRuns = () => retryGithubRead(
+              () => github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'production-deploy.yml',
+                event: 'workflow_dispatch',
+                per_page: 100,
+              }),
+              readOptions('list-production-runs'),
+            );
+            const requireNoProductionConflict = async () => {
+              const conflicts = activeRuns(await listProductionRuns());
+              if (conflicts.length > 0) {
+                throw new Error(`POSTDEPLOY_COMMAND_ACTIVE_PRODUCTION_DEPLOY_CONFLICT:${conflicts.map((run) => run.id).join(',')}`);
+              }
+            };
+
+            try {
+              await requireNoProductionConflict();
+              let stagingRuns = await listStagingRuns();
+              let stagingRun = selectReusableExactStagingRun(stagingRuns, target);
+
+              if (!stagingRun) {
+                const currentStaging = activeRuns(stagingRuns)[0] ?? null;
+                if (currentStaging) {
+                  core.info(`Waiting for existing Staging Run ${currentStaging.id} before exact-target dispatch.`);
+                  const completed = await waitForRun(currentStaging.id, 'staging-conflict');
+                  if (String(completed.head_sha).toLowerCase() === target && completed.conclusion !== 'success') {
+                    throw new Error(`STAGING_RELEASE_FAILED:${completed.id}:${completed.conclusion ?? 'unknown'}`);
+                  }
+                  await requireCurrentMain();
+                  stagingRuns = await listStagingRuns();
+                  stagingRun = selectReusableExactStagingRun(stagingRuns, target);
+                }
+              }
+
+              if (!stagingRun) {
+                const beforeIds = new Set(stagingRuns.map((run) => Number(run.id)));
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: 'staging-readiness.yml',
+                  ref: 'main',
+                  inputs: {
+                    sha: target,
+                    action: 'deploy',
+                    run_full_validation: 'true',
+                    run_destructive_recovery_drill: 'false',
+                  },
+                });
+                core.info(`Dispatched exact-main Staging release for ${target}.`);
+                for (let poll = 0; poll < 40 && !stagingRun; poll += 1) {
+                  await sleep(5_000);
+                  stagingRuns = await listStagingRuns();
+                  stagingRun = stagingRuns.find((run) =>
+                    !beforeIds.has(Number(run.id))
+                    && String(run.head_sha).toLowerCase() === target) ?? null;
+                }
+                if (!stagingRun) throw new Error('STAGING_RELEASE_DISPATCH_NOT_OBSERVED');
+              }
+
+              if (stagingRun.status !== 'completed') {
+                stagingRun = await waitForRun(stagingRun.id, 'staging-release');
+              }
+              if (stagingRun.conclusion !== 'success') {
+                throw new Error(`STAGING_RELEASE_FAILED:${stagingRun.id}:${stagingRun.conclusion ?? 'unknown'}`);
+              }
+              await requireStagingArtifact(stagingRun);
+              await requireCurrentMain();
+              await requireNoProductionConflict();
+
+              // MUTATING_GITHUB_CALLS_ARE_NEVER_RETRIED: duplicate Staging or
+              // Production dispatches are more dangerous than a visible failure.
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'production-deploy.yml',
+                ref: 'main',
+                inputs: {
+                  sha: target,
+                  data_probe_path: '/api/healthz/data-plane',
+                  force_rebuild: 'false',
+                  qa_scope: qaScope,
+                },
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: 1555,
+                body: [
+                  'One-command Staging → Production release chain dispatched.',
+                  '',
+                  `- Exact main SHA: \`${target}\``,
+                  `- Staging Run: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${stagingRun.id}`,
+                  '- Staging verdict: `release_ready=true` with exact-SHA artifact',
+                  '- QA scope: `' + qaScope + '`',
+                  '- One approval only: `Review deployments → production → Approve and deploy`',
+                  qaScope === 'member'
+                    ? '- Member-only QA runs inside the approved job; Account/Credential/Trading/Comprehensive QA are not run.'
+                    : qaScope === 'trading_core'
+                      ? '- Trading Core → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.'
+                      : '- Comprehensive → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.',
+                  `- Production runs: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/production-deploy.yml`,
+                ].join('\n'),
+              });
+            } catch (error) {
+              core.setFailed(String(error?.message ?? error));
             }
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'production-deploy.yml',
-              ref: 'main',
-              inputs: {
-                sha: target,
-                data_probe_path: '/api/healthz/data-plane',
-                force_rebuild: 'false',
-                qa_scope: qaScope,
-              },
-            });
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: 1555,
-              body: [
-                'Production deploy + inline post-deploy QA chain dispatched.',
-                '',
-                `- Exact main SHA: \`${target}\``,
-                '- QA scope: `' + qaScope + '`',
-                '- One approval only: `Review deployments → production → Approve and deploy`',
-                qaScope === 'trading_core'
-                  ? '- Trading Core → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.'
-                  : '- Comprehensive → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.',
-                `- Runs: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/production-deploy.yml`,
-              ].join('\n'),
-            });

@@ -7,12 +7,17 @@ import {
 
 const cwd = process.cwd();
 const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
-const deployScript = await readFile(path.join(root, 'ops/deploy-staging.sh'), 'utf8');
-const stagingWorkflow = await readFile(path.join(root, '.github/workflows/staging-readiness.yml'), 'utf8');
-const adminAuthPreflight = await readFile(
+const normalizeLineEndings = (source) => source.replace(/\r\n/gu, '\n');
+const deployScript = normalizeLineEndings(await readFile(path.join(root, 'ops/deploy-staging.sh'), 'utf8'));
+const stagingWorkflow = normalizeLineEndings(await readFile(path.join(root, '.github/workflows/staging-readiness.yml'), 'utf8'));
+const stagingVerifier = normalizeLineEndings(await readFile(
+  path.join(root, 'api-server/scripts/verify-phase10-staging-readiness.mjs'),
+  'utf8',
+));
+const adminAuthPreflight = normalizeLineEndings(await readFile(
   path.join(root, 'api-server/scripts/verify-staging-admin-auth-preflight.mjs'),
   'utf8',
-);
+));
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-deploy-contract] ${message}`);
@@ -113,6 +118,21 @@ for (const marker of [
   'Paper schedule remains inactive',
 ]) {
   assert(stagingWorkflow.includes(marker), `staging workflow snapshot-v2 contract is missing marker: ${marker}`);
+}
+const recoveryStepStart = stagingWorkflow.indexOf('- name: Assess and run required staging database and recovery validation');
+const recoveryStepEnd = stagingWorkflow.indexOf('- name: Build final staging release verdict', recoveryStepStart);
+const recoveryStep = stagingWorkflow.slice(recoveryStepStart, recoveryStepEnd);
+assert(recoveryStepStart >= 0 && recoveryStepEnd > recoveryStepStart, 'staging recovery validation step must remain present');
+assert(
+  recoveryStep.includes('STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ steps.paper_publisher.outputs.publisher_sha256 }}'),
+  'staging recovery validation must receive the exact masked publisher digest resolved for the deployment',
+);
+for (const marker of [
+  "publisherBinding: encode(publisherBinding)",
+  "STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=\"$(decode '${encodedSecrets.publisherBinding}')\"",
+  'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"',
+]) {
+  assert(stagingVerifier.includes(marker), `staging recovery verifier is missing publisher binding marker: ${marker}`);
 }
 assert(
   stagingWorkflow.indexOf('Verify staging admin password authentication before deployment path')

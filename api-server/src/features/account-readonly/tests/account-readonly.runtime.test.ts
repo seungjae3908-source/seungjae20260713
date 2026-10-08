@@ -76,6 +76,9 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
       if (url.pathname === '/api/v3/account/settings') {
         return new Response(JSON.stringify({ code: '25245', msg: 'The account is not the unified account mode', data: null }), { status: 400, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.pathname === '/api/v2/mix/account/account') {
+        return new Response(JSON.stringify({ code: '00000', data: { marginCoin: 'USDT', posMode: 'one_way_mode' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       const body = url.pathname.includes('/position/')
         ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] }
         : url.pathname.includes('/orders-pending')
@@ -87,11 +90,13 @@ test('vault-backed Bitget Classic reader probes v3 safely then emits only allowl
   const result = await readers.bitget!(SCOPE);
   assert.deepEqual(new Set(paths), new Set([
     '/api/v3/account/settings',
+    '/api/v2/mix/account/account',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
   ]));
   assert.ok(methods.every((method) => method === 'GET')); assert.equal(result.connected, true); assert.equal(result.openOrders?.[0]?.id, 'BG-OPEN-1'); assert.ok(Math.abs((result.openOrders?.[0]?.remainingQuantity ?? 0) - 0.06) < 1e-12); assert.equal(result.orderRequests, 0); assert.equal(result.withdrawalRequests, 0);
+  assert.equal(result.positionMode, 'one_way_mode');
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
@@ -124,6 +129,12 @@ test('vault-backed Bitget Classic normalizes null-ish empty pending-order payloa
           return new Response(JSON.stringify({
             code: '00000',
             data: [{ marginCoin: 'USDT', accountEquity: '100', available: '100' }],
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.pathname === '/api/v2/mix/account/account') {
+          return new Response(JSON.stringify({
+            code: '00000',
+            data: { marginCoin: 'USDT', posMode: 'one_way_mode' },
           }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (url.pathname === '/api/v2/mix/position/all-position') {
@@ -175,6 +186,12 @@ test('vault-backed Bitget Classic still rejects non-empty malformed pending-orde
         return new Response(JSON.stringify({
           code: '00000',
           data: [{ marginCoin: 'USDT', accountEquity: '100', available: '100' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/account/account') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { marginCoin: 'USDT', posMode: 'one_way_mode' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v2/mix/position/all-position') {
@@ -289,6 +306,12 @@ test('vault-backed Bitget uses permissionless account info when settings mode pr
           data: { permissions: [] },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.pathname === '/api/v2/mix/account/account') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { marginCoin: 'USDT', posMode: 'one_way_mode' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.pathname === '/api/v2/mix/position/all-position') {
         return new Response(JSON.stringify({
           code: '00000',
@@ -313,6 +336,7 @@ test('vault-backed Bitget uses permissionless account info when settings mode pr
   assert.deepEqual(new Set(paths), new Set([
     '/api/v3/account/settings',
     '/api/v3/account/info',
+    '/api/v2/mix/account/account',
     '/api/v2/mix/account/accounts',
     '/api/v2/mix/position/all-position',
     '/api/v2/mix/order/orders-pending',
@@ -343,6 +367,12 @@ test('vault-backed Bitget falls back from malformed successful settings response
           code: '00000',
           msg: 'success',
           data: { permissions: [] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/v2/mix/account/account') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { marginCoin: 'USDT', posMode: 'one_way_mode' },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v2/mix/position/all-position') {
@@ -462,6 +492,12 @@ test('vault-backed Bitget treats non-UTA account-info permissions as unknown and
           data: { permType: 'read-and-write', permissions: [] },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
+      if (url.pathname === '/api/v2/mix/account/account') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { marginCoin: 'USDT', posMode: 'one_way_mode' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
       if (url.pathname === '/api/v2/mix/account/accounts') {
         return new Response(JSON.stringify({
           code: '00000',
@@ -528,6 +564,12 @@ test('vault-backed Bitget retains sanitized parser stage when explicit Classic r
           status: 400,
           headers: { 'Content-Type': 'application/json' },
         });
+      }
+      if (url.pathname === '/api/v2/mix/account/account') {
+        return new Response(JSON.stringify({
+          code: '00000',
+          data: { marginCoin: 'USDT', posMode: 'one_way_mode' },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.pathname === '/api/v2/mix/account/accounts') {
         return new Response(JSON.stringify({ code: '00000', data: { unexpected: true } }), {

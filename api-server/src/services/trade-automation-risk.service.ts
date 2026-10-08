@@ -69,7 +69,12 @@ function plannedOpenRiskKrw(plan: TradingPlanInput) {
 
 export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
   const input = value ?? {};
-  const leverage = Number(input.bitgetLeverage);
+  const leverage = input.bitgetLeverage == null
+    ? DEFAULT_TRADING_POLICY.bitgetLeverage
+    : Number(input.bitgetLeverage);
+  if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
+    throw new Error('BITGET_LEVERAGE_POLICY_INVALID');
+  }
   const pilotStage = input.pilotStage === 'limited-50' || input.pilotStage === 'validated'
     ? input.pilotStage : 'approval-20';
   const totalCapitalKrw = clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw);
@@ -125,7 +130,7 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     maxOpenPositions: Math.round(clampNumber(input.maxOpenPositions, 1, 50, DEFAULT_TRADING_POLICY.maxOpenPositions)),
     maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
     maxConsecutiveLosses: Math.round(clampNumber(input.maxConsecutiveLosses, 1, 20, DEFAULT_TRADING_POLICY.maxConsecutiveLosses)),
-    bitgetLeverage: (Number.isInteger(leverage) && leverage >= 2 && leverage <= 7 ? leverage : 2) as 2 | 3 | 4 | 5 | 6 | 7,
+    bitgetLeverage: leverage as 2 | 3 | 4 | 5 | 6 | 7,
     riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
     pilotStage,
     riskPerTradePercent: {
