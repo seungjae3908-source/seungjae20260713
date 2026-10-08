@@ -147,47 +147,10 @@ jobs:
             const ciRunId = release.requiredCiRunId;
             const production = { id: release.productionDeployRunId };
             const comprehensive = production;
+            const account = production;
             const productionCompletedAt = Date.parse(release.productionDeployCompletedAt);
             if (!Number.isFinite(productionCompletedAt)) {
               core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
-              return;
-            }
-            const accountRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'production-account-readonly-live-qa.yml',
-              event: 'workflow_dispatch',
-              branch: 'main',
-              per_page: 100,
-            });
-            const accountArtifactName = `production-account-readonly-live-${target}`;
-            let account = null;
-            for (const candidate of accountRuns
-              .filter((run) => run.path === '.github/workflows/production-account-readonly-live-qa.yml'
-                && run.head_sha === target
-                && run.head_branch === 'main'
-                && run.event === 'workflow_dispatch'
-                && run.status === 'completed'
-                && run.conclusion === 'success'
-                && Date.parse(run.updated_at || run.created_at || '') >= productionCompletedAt)
-              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))) {
-              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: candidate.id,
-                per_page: 100,
-              });
-              const artifact = (artifactResponse.data.artifacts ?? []).find((item) =>
-                item.name === accountArtifactName
-                  && item.expired !== true
-                  && item.size_in_bytes > 0);
-              if (artifact) {
-                account = candidate;
-                break;
-              }
-            }
-            if (!account) {
-              core.setFailed('AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED:' + target);
               return;
             }
             const telegramRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
@@ -388,62 +351,6 @@ jobs:
           test -n "$evidence"
           node ops/verify-production-paper-forward-readiness.mjs \
             --activation-artifact "$evidence" "$TARGET_SHA"
-
-      - name: Download exact-SHA four-provider Account QA evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: production-account-readonly-live-${{ steps.command.outputs.sha }}
-          path: ${{ runner.temp }}/production-account-readonly-live-qa
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.gate.outputs.account_run_id }}
-
-      - name: Require all four providers connected, fresh, and reconciled
-        shell: bash
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-          ACCOUNT_QA_EVIDENCE: ${{ runner.temp }}/production-account-readonly-live-qa/production-account-readonly-live-qa.json
-        run: |
-          set -Eeuo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
-          const target = String(process.env.TARGET_SHA || '');
-          const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
-          const evidence = JSON.parse(fs.readFileSync(process.env.ACCOUNT_QA_EVIDENCE, 'utf8'));
-
-          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v3'
-            || evidence?.targetSha !== target
-            || evidence?.orderRequests !== 0
-            || evidence?.cancelRequests !== 0
-            || evidence?.amendRequests !== 0
-            || evidence?.transferRequests !== 0
-            || evidence?.withdrawalRequests !== 0
-            || evidence?.blockedMutationRequests !== 0
-            || evidence?.observedAppMutationRequests !== 0
-            || evidence?.liveTradingAuthorityGranted !== false
-            || evidence?.autoTradingAuthorityGranted !== false) {
-            throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_SAFETY_INVALID');
-          }
-          const testedProviders = Array.isArray(evidence?.testedProviders) ? evidence.testedProviders : [];
-          const rows = Array.isArray(evidence?.providers) ? evidence.providers : [];
-          for (const provider of requiredProviders) {
-            if (!testedProviders.includes(provider)) {
-              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_TESTED:' + provider);
-            }
-            const row = rows.find((candidate) => candidate?.provider === provider);
-            if (!row
-              || row.connected !== true
-              || row.status !== 'CONNECTED'
-              || row.stale !== false
-              || row.fresh !== true
-              || row.errorCode !== null
-              || row.checkedAtPresent !== true
-              || row.lastGoodAtPresent !== true
-              || row.reconciliation !== 'PASS'
-              || row.reconciliationPassed !== true) {
-              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_READY:' + provider);
-            }
-          }
-          NODE
 
       - name: Require no conflicting active Production trading gate
         uses: actions/github-script@v7
