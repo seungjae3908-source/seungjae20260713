@@ -222,22 +222,37 @@ begin
 
   if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
      or not has_table_privilege('authenticated', 'public.member_permission_audit', 'SELECT')
-     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
      or has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')
-     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE') then
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'TRUNCATE') then
     raise exception 'MEMBER_DIRECT_MUTATION_PRIVILEGE_INVALID';
   end if;
 
-  if not exists (
+  if exists (
     select 1 from pg_catalog.pg_policies
     where schemaname = 'public'
       and tablename = 'member_permission_audit'
-      and policyname = 'member audit admins insert'
       and cmd = 'INSERT'
-      and with_check ilike '%current_membership_level%'
-      and with_check ilike '%auth.uid()%'
-      and with_check ilike '%actor_id%'
-  ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
+  ) then raise exception 'MEMBER_AUDIT_DIRECT_INSERT_POLICY_PRESENT'; end if;
+
+  if to_regprocedure('public.record_member_password_reset_authorization(uuid,text)') is null then
+    raise exception 'MEMBER_PASSWORD_RESET_AUDIT_RPC_MISSING';
+  end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'record_member_password_reset_authorization'
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) or not exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'record_member_password_reset_authorization'
+      and grantee = 'authenticated'
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_PASSWORD_RESET_AUDIT_RPC_PRIVILEGE_INVALID'; end if;
 
   if exists (
     select 1 from information_schema.table_privileges
@@ -392,6 +407,7 @@ const artifact = {
   migration_applied: 2,
   security_definer_privileges_locked: true,
   permission_rpc_least_access: true,
+  audit_insert_rpc_only: true,
   profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
