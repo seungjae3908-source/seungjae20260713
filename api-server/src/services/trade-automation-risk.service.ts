@@ -1,4 +1,5 @@
 import { evaluateTradingOptimization } from './trade-automation-optimization.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingAssetClass,
@@ -184,7 +185,8 @@ export function evaluateTradingPlan(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const snapshot = plan.marketSnapshot as ExtendedRiskSnapshot;
-  const riskReducing = plan.reduceOnly === true;
+  const riskReducing = isRiskReducingExitPlan(plan);
+  if (plan.reduceOnly === true && !riskReducing) add(blockCodes, 'REDUCE_ONLY_SIDE_INVALID');
 
   if (options.emergencyStopped && !riskReducing) add(blockCodes, 'EMERGENCY_STOP_ACTIVE');
   if (policy.newEntriesStopped && !riskReducing) add(blockCodes, 'NEW_ENTRIES_STOPPED');
@@ -276,7 +278,7 @@ export function evaluateTradingPlan(
     if (!Number.isInteger(plan.leverage) || (plan.leverage ?? 0) < 2 || (plan.leverage ?? 0) > 7) add(blockCodes, 'BITGET_LEVERAGE_LIMIT');
     if (Number.isInteger(plan.leverage) && (plan.leverage ?? 0) > policy.bitgetLeverage) add(blockCodes, 'BITGET_LEVERAGE_POLICY_LIMIT');
     if (plan.marginMode !== 'isolated') add(blockCodes, 'BITGET_ISOLATED_MARGIN_REQUIRED');
-    if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !plan.reduceOnly) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
+    if (snapshot.existingPositionSide && snapshot.existingPositionSide !== plan.side && !riskReducing) add(blockCodes, 'BITGET_OPPOSITE_POSITION_DUPLICATE');
     const requiredMargin = plan.estimatedKrw / Math.max(1, plan.leverage ?? 1);
     if (!riskReducing && snapshot.availableBalance < requiredMargin) add(blockCodes, 'INSUFFICIENT_MARGIN');
     if (!riskReducing && finitePositive(snapshot.liquidationDistancePercent) && snapshot.liquidationDistancePercent <= MIN_LIQUIDATION_DISTANCE_PERCENT) add(blockCodes, 'BITGET_LIQUIDATION_RISK');

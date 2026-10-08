@@ -1,5 +1,6 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
 import type {
@@ -136,7 +137,8 @@ export class TradePreSubmissionRiskService {
     else if (input.order.approvedPlanVersion !== planVersion(currentPlan)) blockCodes.push('APPROVAL_VERSION_CHANGED');
 
     const policy = await this.repository.getPolicy(input.userId);
-    const riskReducing = currentPlan.reduceOnly === true;
+    const riskReducing = isRiskReducingExitPlan(currentPlan);
+    if (currentPlan.reduceOnly === true && !riskReducing) blockCodes.push('REDUCE_ONLY_SIDE_INVALID');
     if (!currentPlan.approvedAt) blockCodes.push('APPROVAL_MISSING');
     const approvedAt = Date.parse(currentPlan.approvedAt ?? '');
     const expiresAt = Date.parse(currentPlan.approvalExpiresAt ?? '');

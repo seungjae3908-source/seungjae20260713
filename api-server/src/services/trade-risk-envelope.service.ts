@@ -1,3 +1,4 @@
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import type {
   TradingMarketSnapshot,
   TradingPlan,
@@ -83,14 +84,16 @@ export function buildRiskEnvelope(plan: TradingPlan, policy: TradingPolicy, appr
   const reference = referencePrice(plan);
   if (reference == null) throw new Error('RISK_ENVELOPE_REFERENCE_PRICE_REQUIRED');
   const slippageBudget = plan.estimatedKrw * policy.maxEstimatedSlippagePercent / 100;
-  const stopLossKrw = plan.reduceOnly === true ? 0 : expectedStopLossKrw(plan, reference);
+  const riskReducing = isRiskReducingExitPlan(plan);
+  if (plan.reduceOnly === true && !riskReducing) throw new Error('REDUCE_ONLY_SIDE_INVALID');
+  const stopLossKrw = riskReducing ? 0 : expectedStopLossKrw(plan, reference);
   if (stopLossKrw == null) throw new Error('RISK_ENVELOPE_STOP_REQUIRED');
 
-  const worstApprovedLoss = plan.reduceOnly === true
+  const worstApprovedLoss = riskReducing
     ? Math.max(slippageBudget, 0.01)
     : stopLossKrw + slippageBudget;
   const hardDailyLossBudget = policy.totalCapitalKrw * policy.dailyLossLimitPercent / 100;
-  if (plan.reduceOnly !== true
+  if (!riskReducing
     && (!(hardDailyLossBudget > 0) || worstApprovedLoss > hardDailyLossBudget + 1e-9)) {
     throw new Error('RISK_ENVELOPE_MAX_LOSS_EXCEEDED');
   }
@@ -132,7 +135,9 @@ export function evaluateRiskEnvelope(input: {
   if (input.plan.splitRatios.length > envelope.maxSplitCount) blockCodes.push('RISK_ENVELOPE_SPLIT_COUNT_EXCEEDED');
 
   const slippage = input.snapshot.estimatedSlippagePercent;
-  if (input.plan.reduceOnly !== true) {
+  const riskReducing = isRiskReducingExitPlan(input.plan);
+  if (input.plan.reduceOnly === true && !riskReducing) blockCodes.push('REDUCE_ONLY_SIDE_INVALID');
+  if (!riskReducing) {
     if (!finiteNonNegative(slippage)) {
       if (input.plan.accountMode !== 'paper' && input.plan.accountMode !== 'mock') {
         blockCodes.push('RISK_ENVELOPE_SLIPPAGE_UNKNOWN');
@@ -147,7 +152,7 @@ export function evaluateRiskEnvelope(input: {
     : referencePrice(input.plan);
   if (currentReference == null) {
     blockCodes.push('RISK_ENVELOPE_REFERENCE_PRICE_UNAVAILABLE');
-  } else if (input.plan.reduceOnly === true) {
+  } else if (riskReducing) {
     // Keep the approved notional/quantity envelope, but do not block a risk-reducing
     // exit solely because fast-market slippage exceeded entry-time assumptions.
   } else {
