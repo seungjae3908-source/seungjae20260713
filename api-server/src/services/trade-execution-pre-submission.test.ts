@@ -387,3 +387,107 @@ test('persisted invalid reduce-only cash BUY is rejected before private provider
   assert.equal(provider.counts().orderTestPosts, 0);
   assert.equal(provider.counts().actualOrderPosts, 0);
 });
+
+
+test('Bitget automatic entry with a missing Arm cannot mutate margin/leverage before order intent', async () => {
+  const previousFetch = globalThis.fetch;
+  const envNames = [
+    'TRADING_EMERGENCY_STOP', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING', 'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+    'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previousEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER_ID, {
+    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+  });
+  const now = new Date();
+  const futuresPlan = {
+    ...planInput(now),
+    exchange: 'bitget' as const,
+    symbol: 'BTCUSDT', market: 'USDT-FUTURES', side: 'long' as const,
+    quantity: 1, quoteAmount: null, leverage: 2, marginMode: 'isolated' as const,
+    reduceOnly: false, executionMode: 'automatic' as const,
+    id: 'bitget-pre-arm-plan', userId: USER_ID, idempotencyKey: 'bitget-pre-arm-plan-key',
+    state: 'SUBMITTED' as const, version: 1, approvedAt: now.toISOString(),
+    approvalExpiresAt: new Date(now.getTime() + 600_000).toISOString(),
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  };
+  const futuresOrder = {
+    id: 'bitget-pre-arm-order', userId: USER_ID,
+    clientOrderId: 'bitget-pre-arm-order-oid', exchange: 'bitget' as const,
+    planId: futuresPlan.id, state: 'SUBMITTED' as const,
+  };
+  let reads = 0;
+  let mutations = 0;
+  let riskEvaluated = false;
+  const executor = new TradeExecutionService(repository);
+  Object.assign(executor, {
+    riskService: {
+      async evaluate(input: { snapshot: TradingMarketSnapshot }) {
+        riskEvaluated = true;
+        return { plan: futuresPlan, snapshot: input.snapshot,
+          checkedAt: now.toISOString(), priceDriftPercent: 0,
+          allowed: true, blockCodes: [], warnings: [] };
+      },
+    },
+  });
+  const privateBitget = executor as unknown as {
+    executeBitget(userId: string, plan: unknown, order: unknown, credentials: unknown): Promise<unknown>;
+  };
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    const method = String(init?.method ?? 'GET').toUpperCase();
+    if (method !== 'GET') {
+      mutations += 1;
+      throw new Error('MUTATING_BITGET_CALL_MUST_NOT_HAPPEN');
+    }
+    reads += 1;
+    const data = url.pathname.endsWith('/account/accounts')
+      ? [{ marginCoin: 'USDT', available: '1000', accountEquity: '1000', posMode: 'one_way_mode' }]
+      : url.pathname.endsWith('/position/all-position') ? []
+      : url.pathname.endsWith('/order/orders-pending') ? { entrustedList: [] }
+      : url.pathname.endsWith('/market/contracts')
+        ? [{ symbol: 'BTCUSDT', minTradeNum: '0.001', sizeMultiplier: '0.001', symbolStatus: 'normal', minTradeUSDT: '5' }]
+        : url.pathname.endsWith('/market/ticker')
+          ? [{ symbol: 'BTCUSDT', markPrice: '100', ts: Date.now(), lastPr: '100' }]
+          : url.pathname.endsWith('/market/merge-depth')
+            ? [{ bids: [['99', '100']], asks: [['101', '100']], ts: Date.now() }]
+            : null;
+    if (data === null) throw new Error('UNEXPECTED_BITGET_READ:' + url.pathname);
+    return new Response(JSON.stringify({ code: '00000', data }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    process.env.TRADING_EMERGENCY_STOP = 'false';
+    for (const key of envNames.slice(1, 7)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'a'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = '/nonexistent-arm-boundary/auto-entry-arm.json';
+    const credentials = { apiKey: 'ci-key', secretKey: 'ci-secret', passphrase: 'ci-pass' };
+    await assert.rejects(
+      () => privateBitget.executeBitget(USER_ID, futuresPlan, futuresOrder, credentials),
+      /AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY/,
+    );
+    assert.equal(riskEvaluated, true, 'preflight reached post-risk provider mutation boundary');
+    assert.equal(reads, 6, 'only six read-only Bitget preflight requests');
+    assert.equal(mutations, 0, 'neither margin mode nor leverage nor order is mutated');
+
+    await repository.savePolicy(USER_ID, {
+      ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false,
+    });
+    await assert.rejects(
+      () => privateBitget.executeBitget(USER_ID, futuresPlan, futuresOrder, credentials),
+      /AUTOMATIC_ENTRY_POLICY_REVOKED/,
+    );
+    assert.equal(mutations, 0, 'AUTO OFF cannot mutate provider margin or leverage');
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const name of envNames) {
+      const prior = previousEnv[name];
+      if (prior === undefined) delete process.env[name];
+      else process.env[name] = prior;
+    }
+  }
+});

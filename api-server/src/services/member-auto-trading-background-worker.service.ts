@@ -70,6 +70,9 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+// A READY handoff without entries otherwise has no per-entry freshness clock.
+// Keep a bounded publisher heartbeat even during quiet market periods.
+const MAX_READY_HANDOFF_AGE_MS = 30 * 60_000;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
@@ -1203,8 +1206,15 @@ export class MemberAutoTradingBackgroundWorker {
       let handoff: MemberAutoTradingPaperHandoff | null = null;
       try {
         handoff = await this.source.readHandoff(nowMs);
+        if (handoff?.status === 'READY'
+          && (!Number.isFinite(handoff.evaluatedAtMs)
+            || nowMs < handoff.evaluatedAtMs
+            || nowMs - handoff.evaluatedAtMs > MAX_READY_HANDOFF_AGE_MS)) {
+          throw new Error('BACKGROUND_PAPER_HANDOFF_STALE');
+        }
         if (handoff) result.handoffStatus = handoff.status;
       } catch {
+        handoff = null;
         result.handoffStatus = 'BLOCKED_DATA';
         result.failures += 1;
       }
