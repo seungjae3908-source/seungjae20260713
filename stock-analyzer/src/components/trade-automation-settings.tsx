@@ -28,6 +28,7 @@ type Policy = {
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
   bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
+  pilotStage: 'approval-20' | 'limited-50' | 'validated' | 'formula-ai-exception';
 };
 
 type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
@@ -131,6 +132,7 @@ const DEFAULT_POLICY: UiPolicy = {
   maxDailyOrders: 10,
   maxConsecutiveLosses: 3,
   bitgetLeverage: 2,
+  pilotStage: 'approval-20',
 };
 
 function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
@@ -179,7 +181,15 @@ function exchangesForMarkets(
   };
 }
 
-export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?: Status; selectedMarket?: Market }) {
+export function TradeAutomationSettings({
+  fixture,
+  selectedMarket,
+  canManagePilot = false,
+}: {
+  fixture?: Status;
+  selectedMarket?: Market;
+  canManagePilot?: boolean;
+}) {
   const [status, setStatus] = useState<Status | null>(fixture ?? null);
   const [draft, setDraft] = useState<UiPolicy>(() => normalizeUiPolicy(fixture?.policy));
   const [loading, setLoading] = useState(!fixture);
@@ -333,6 +343,39 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         : '재개 준비 완료: 자동매매는 OFF입니다. 설정을 다시 확인하고 저장해야 켜집니다.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '자동매매 재개 준비에 실패했습니다.');
+    }
+  }
+
+  async function enableFormulaAiPilot() {
+    if (!canManagePilot) return;
+    if (fixture) {
+      setDraft((current) => ({ ...current, pilotStage: 'formula-ai-exception', automaticEnabled: false }));
+      setStatus((current) => current ? {
+        ...current,
+        policy: { ...current.policy, pilotStage: 'formula-ai-exception', automaticEnabled: false },
+      } : current);
+      setMessage('수식+AI 자동 실거래 Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
+      return;
+    }
+    try {
+      const response = await authorizedFetch('/api/trade-automation/admin/pilot-stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stage: 'formula-ai-exception',
+          confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+        }),
+      });
+      const payload = await response.json() as { policy?: Policy; error?: string };
+      if (!response.ok || !payload.policy) {
+        throw new Error(payload.error ?? '수식+AI Pilot 준비에 실패했습니다.');
+      }
+      const normalized = normalizeUiPolicy(payload.policy);
+      setDraft(normalized);
+      setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
+      setMessage('수식+AI 자동 실거래 Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '수식+AI Pilot 준비에 실패했습니다.');
     }
   }
 
@@ -580,6 +623,34 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         <option value="7">7배 (최대)</option>
       </select>
     </label> : null}
+
+    {canManagePilot ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="formula-ai-pilot-control">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-extrabold">수식+AI 자동 실거래 Pilot</p>
+          <p className="mt-1 text-muted-foreground">
+            현재 단계 · {draft.pilotStage === 'formula-ai-exception' ? '수식+AI 예외' : draft.pilotStage}
+          </p>
+        </div>
+        {draft.pilotStage !== 'formula-ai-exception' && draft.pilotStage !== 'validated'
+          ? <button
+              type="button"
+              onClick={() => void enableFormulaAiPilot()}
+              disabled={draft.automaticEnabled}
+              data-testid="formula-ai-pilot-enable"
+              className={cn(
+                'rounded-xl border border-card-border bg-secondary px-3 py-2 font-extrabold',
+                draft.automaticEnabled && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              Pilot 준비
+            </button>
+          : <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 font-extrabold text-emerald-700">준비됨</span>}
+      </div>
+      <p className="mt-2 leading-5 text-muted-foreground">
+        이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 수식+AI 예외 신호만 별도 운영 위험검사를 통과할 수 있습니다.
+      </p>
+    </div> : null}
 
     <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs">
       <p className="font-extrabold">마지막 주문 · 체결 · 오류</p>
