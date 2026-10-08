@@ -358,6 +358,12 @@ function buildProductionPostdeployQaEvidence({
     memberAutoPolicyReady: qaScope === 'trading_core'
       ? tradingCore.memberAutoPolicyReady
       : false,
+    memberAutoLivePilotReady: qaScope === 'trading_core'
+      ? tradingCore.memberAutoLivePilotReady === true
+      : false,
+    memberAutoPilotStage: qaScope === 'trading_core'
+      ? String(tradingCore.memberAutoPilotStage ?? '')
+      : 'NOT_EVALUATED',
     providers: Object.fromEntries(REQUIRED_PROVIDERS.map((provider) => [provider, 'PASS'])),
     credentialReuse: '4/4 PASS',
     orderRequests: 0,
