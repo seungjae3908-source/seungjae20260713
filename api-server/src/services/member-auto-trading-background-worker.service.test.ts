@@ -19,6 +19,7 @@ import {
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
   assertCanonicalLiveProviderPositions,
+  memberTelegramProofMatchesCurrentBinding,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -1629,4 +1630,93 @@ test('read-only Live pre-entry exposure blocks untracked securities but excludes
       position('KRW', 500_000, null), position('ETH', 0.4, null),
     ],
   }, []), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+});
+
+
+test('member Telegram live admission requires a SENT receipt after this chat binding, never from a former chat', () => {
+  const now = Date.parse('2026-10-08T05:30:00.000Z');
+  const connection = {
+    status: 'ACTIVE' as const,
+    telegramChatId: 'telegram-chat-new',
+    connectedAt: new Date(now - 60_000).toISOString(),
+  };
+  const accepted = { state: 'SENT', updated_at: new Date(now - 5_000).toISOString() };
+  assert.equal(memberTelegramProofMatchesCurrentBinding(connection, accepted, now), true);
+  assert.equal(memberTelegramProofMatchesCurrentBinding(
+    connection, { ...accepted, updated_at: new Date(now - 90_000).toISOString() }, now,
+  ), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding(connection, { ...accepted, state: 'RETRY_SCHEDULED' }, now), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding({ ...connection, status: 'REVOKED' }, accepted, now), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding({ ...connection, connectedAt: 'unparseable' }, accepted, now), false);
+  assert.equal(memberTelegramProofMatchesCurrentBinding(null, accepted, now), false);
+});
+
+test('stopped automatic member with a stored Live fill remains visible without reactivating exits or new entries', async () => {
+  const env = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING',
+    'REAL_ORDER_ENABLED', 'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(env.map((key) => [key, process.env[key]]));
+  const now = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const stopped = normalizeTradingPolicy({
+    ...policy(), mode: 'approval', automaticEnabled: false,
+    emergencyStopped: true,
+  });
+  await repository.savePolicy(USER, stopped);
+  await repository.savePlan({
+    id: 'live-stopped-plan', userId: USER, idempotencyKey: 'live-stopped-entry',
+    state: 'FILLED', version: 1, accountMode: 'live', executionMode: 'automatic',
+    exchange: 'upbit', strategyId: 'trend-breakout-v1',
+    signalId: 'stopped-signal', symbol: 'BTC', market: 'UPBIT',
+    side: 'buy', orderType: 'market', quantity: 0.1, quoteAmount: null,
+    limitPrice: null, estimatedKrw: 100_000, stopPrice: 95_000,
+    targetPrices: [110_000], splitRatios: [100], leverage: null,
+    marginMode: null, reduceOnly: false, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'],
+    marketSnapshot: { observedAt: new Date(now).toISOString() },
+    approvedAt: new Date(now).toISOString(), approvalExpiresAt: null,
+    createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+  } as any);
+  await repository.saveOrder({
+    id: 'live-stopped-order', userId: USER, planId: 'live-stopped-plan',
+    exchange: 'upbit', clientOrderId: 'live-stopped-oid',
+    exchangeOrderId: 'live-stopped-exchange-order', state: 'FILLED',
+    requestedQuantity: 0.1, filledQuantity: 0.1,
+    averageFillPrice: 100_000, retryCount: 0, lastErrorCode: null,
+    createdAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString(),
+  } as any);
+  const base = source(repository, now, { tier: 'admin', markPrice: 90_000 });
+  let providerReads = 0;
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER, policy: stopped,
+        profile: { role: 'admin', membership_level: 'admin', status: 'approved', is_active: true },
+      }] as never;
+    },
+    async readLiveAccountSnapshot() {
+      providerReads++;
+      throw new Error('NO_PROVIDER_REQUEST_AFTER_AUTO_STOP');
+    },
+  });
+  try {
+    for (const key of env) process.env[key] = 'true';
+    const result = await worker.runOnce(new Date(now));
+    assert.equal(result.liveTrackedPositions, 1);
+    assert.equal(result.liveExitsSuppressedByPolicy, 1);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.createdPlans, 0);
+    assert.equal(result.liveOrders, 0);
+    assert.equal(result.liveExitOrders, 0);
+    assert.equal(providerReads, 0);
+  } finally {
+    for (const key of env) {
+      const oldValue = previous[key];
+      if (oldValue == null) delete process.env[key];
+      else process.env[key] = oldValue;
+    }
+  }
 });
