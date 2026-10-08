@@ -1,5 +1,6 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
-import type { TradingOrder, TradingPlan, TradingPolicy } from './trade-automation.types';
+import type { TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy } from './trade-automation.types';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
@@ -327,6 +328,153 @@ export function verifiedRulePackKrwSettlement(input: Readonly<{
   const netPnlKrw = input.grossPnl - input.fees - tax;
   if (!finite(netPnlKrw)) return blocked('PILOT_CAPITAL_REALIZED_NET_PNL_INVALID');
   return Object.freeze({ ok: true as const, netPnlKrw });
+}
+
+
+const PILOT_DYNAMIC_CAP_RECEIPT_PREFIX = 'PILOT_DYNAMIC_CAP_V1:';
+const PILOT_DYNAMIC_CAP_RECEIPT_MAX_AGE_MS = 90_000;
+const PILOT_DYNAMIC_CAP_CLOCK_SKEW_MS = 5_000;
+
+function pilotCapSigningKey(): string | null {
+  const key = process.env.RULE_PACK_PILOT_CAP_ATTESTATION_KEY ?? '';
+  // A dedicated independent secret is mandatory. Never reuse broker keys,
+  // app encryption keys, deploy SHAs or public Paper handoff digests.
+  return Buffer.byteLength(key, 'utf8') >= 32 ? key : null;
+}
+
+function pilotCapReasons(plan: Pick<TradingPlanInput, 'signalReasons'>) {
+  return plan.signalReasons.filter((value) => typeof value === 'string'
+    && !value.startsWith(PILOT_DYNAMIC_CAP_RECEIPT_PREFIX));
+}
+
+function pilotCapIdentity(
+  plan: TradingPlanInput,
+  userId: string,
+  issuedAtMs: number,
+) {
+  return JSON.stringify([
+    'PILOT_DYNAMIC_CAP_V1', userId, issuedAtMs,
+    plan.accountMode, plan.exchange, plan.stockBroker ?? null,
+    plan.stockExchange ?? null, plan.market, plan.symbol.toUpperCase(),
+    plan.side, plan.orderType, plan.quantity ?? null, plan.quoteAmount ?? null,
+    plan.estimatedKrw, plan.stopPrice, plan.targetPrices,
+    plan.splitRatios, plan.leverage ?? null, plan.marginMode ?? null,
+    plan.reduceOnly === true, plan.strategyId, plan.signalId,
+    pilotCapReasons(plan).slice().sort(),
+  ]);
+}
+
+function authenticPilotCapHandoff(plan: TradingPlanInput): boolean {
+  return plan.signalReasons.includes('CANONICAL_PAPER_HANDOFF')
+    && plan.signalReasons.some((value) =>
+      /^HANDOFF_ID:paper-auto-handoff:sha256:[0-9a-f]{64}$/u.test(value))
+    && (plan.accountMode !== 'live'
+      || plan.signalReasons.includes('CANONICAL_LIVE_AUTO_HANDOFF'));
+}
+
+/**
+ * Issue only inside the server's validated Paper -> Live worker. The public
+ * /plans route must never call this function with user-provided plan data.
+ * This receipt grants NO Live authority by itself: current policy, profit
+ * ledger, risk envelope, arm, broker position, and execution gates still run.
+ */
+export function issueRulePackPilotDynamicCapReceipt(
+  userId: string,
+  plan: TradingPlanInput,
+  nowMs = Date.now(),
+): TradingPlanInput {
+  if (process.env.RULE_PACK_PILOT_DYNAMIC_CAP_ENABLED !== 'true') {
+    throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_DISABLED');
+  }
+  const key = pilotCapSigningKey();
+  if (!key) throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_SIGNING_KEY_REQUIRED');
+  if (!authenticPilotCapHandoff(plan) || !Number.isSafeInteger(nowMs) || nowMs < 0
+    || !Number.isFinite(plan.estimatedKrw) || plan.estimatedKrw <= 0) {
+    throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_HANDOFF_INVALID');
+  }
+  const reasons = pilotCapReasons(plan);
+  const unsigned = { ...plan, signalReasons: reasons };
+  const signature = createHmac('sha256', key)
+    .update(pilotCapIdentity(unsigned, userId, nowMs)).digest('hex');
+  return {
+    ...unsigned,
+    signalReasons: [...reasons, PILOT_DYNAMIC_CAP_RECEIPT_PREFIX + nowMs + ':' + signature],
+  };
+}
+
+/**
+ * A member can supply arbitrary signalReasons, so a string/digest without
+ * a server-held HMAC must NEVER expand a stored financial limit.
+ */
+export function verifyRulePackPilotDynamicCapReceipt(
+  userId: string,
+  plan: TradingPlanInput,
+  nowMs = Date.now(),
+): boolean {
+  if (process.env.RULE_PACK_PILOT_DYNAMIC_CAP_ENABLED !== 'true'
+    || !authenticPilotCapHandoff(plan)) return false;
+  const key = pilotCapSigningKey();
+  if (!key || !Number.isFinite(nowMs)) return false;
+  const receipts = plan.signalReasons.filter((value) =>
+    typeof value === 'string' && value.startsWith(PILOT_DYNAMIC_CAP_RECEIPT_PREFIX));
+  if (receipts.length !== 1) return false;
+  const m = /^PILOT_DYNAMIC_CAP_V1:(\d{13}):([0-9a-f]{64})$/u.exec(receipts[0]!);
+  if (!m) return false;
+  const issuedAtMs = Number(m[1]);
+  if (!Number.isSafeInteger(issuedAtMs)
+    || issuedAtMs - nowMs > PILOT_DYNAMIC_CAP_CLOCK_SKEW_MS
+    || nowMs - issuedAtMs > PILOT_DYNAMIC_CAP_RECEIPT_MAX_AGE_MS) return false;
+  const expected = createHmac('sha256', key)
+    .update(pilotCapIdentity(plan, userId, issuedAtMs)).digest();
+  return timingSafeEqual(expected, Buffer.from(m[2], 'hex'));
+}
+
+/**
+ * Re-evaluate the immutable worker receipt against CURRENT stored policy and
+ * CURRENT settled profit on both approval and provider pre-submission paths.
+ * A missing/expired/forged token never falls back to manual order authority.
+ */
+export async function resolveRulePackPilotDynamicCapPolicy(
+  repository: TradingRepository,
+  userId: string,
+  plan: TradingPlan,
+  policy: TradingPolicy,
+  now = new Date(),
+  openLivePositions = plan.marketSnapshot.openPositionCount,
+): Promise<TradingPolicy> {
+  if (plan.reduceOnly === true || (plan.accountMode !== 'paper' && plan.accountMode !== 'live')) {
+    return policy;
+  }
+  const hasReceipt = plan.signalReasons.some((reason) =>
+    typeof reason === 'string' && reason.startsWith(PILOT_DYNAMIC_CAP_RECEIPT_PREFIX));
+  const requiresExtension = plan.estimatedKrw > policy.maxOrderKrw;
+  if (!hasReceipt && !requiresExtension) return policy;
+  if (plan.executionMode !== 'automatic' || policy.mode !== 'automatic'
+    || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped
+    || policy.pilotStage !== 'formula-ai-exception'
+    || !isEvidenceBackedAutoStrategyId(plan.strategyId)) {
+    throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_POLICY_REVOKED');
+  }
+  if (!verifyRulePackPilotDynamicCapReceipt(userId, plan, now.getTime())) {
+    throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED');
+  }
+  const pilot = await readRulePackPilotCapitalState(repository, userId, now);
+  const decision = evaluateRulePackPilotEntryGuard({
+    pilot,
+    strategyId: plan.strategyId,
+    symbol: plan.symbol,
+    signalId: plan.signalId,
+    estimatedKrw: plan.estimatedKrw,
+    policyMaxOrderKrw: policy.maxOrderKrw,
+    policyTotalCapitalKrw: policy.totalCapitalKrw,
+    openLivePositions: Number.isSafeInteger(openLivePositions) && openLivePositions >= 0
+      ? openLivePositions : Number.POSITIVE_INFINITY,
+    nowMs: now.getTime(),
+  });
+  if (!decision.allowed) {
+    throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_DYNAMIC_CAP_RISK_BLOCKED');
+  }
+  return deriveRulePackPilotExecutionPolicy(policy, pilot);
 }
 
 function planForBrokerOrder(
