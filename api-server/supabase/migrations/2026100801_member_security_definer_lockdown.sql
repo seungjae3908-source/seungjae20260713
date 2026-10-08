@@ -257,7 +257,7 @@ begin
         )
       )
   ) then
-    raise exception 'MEMBER_RLS_HELPER_REQUIRED_EXECUTE_MISSING';
+    raise exception 'MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING';
   end if;
 end
 $member_security_definer_lockdown_verify$;
