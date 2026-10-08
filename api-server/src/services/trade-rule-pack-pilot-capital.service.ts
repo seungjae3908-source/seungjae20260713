@@ -51,6 +51,14 @@ function normalizedSymbol(value: string) {
   return value.trim().toUpperCase().replace(/^KRW-/u, '');
 }
 
+// Canonical TradingRepository.listOrders/listPlans are presently bounded to
+// 500/200 newest rows. A truncated history must never reset the high-water
+// mark and re-credit old profits as new compoundable gains.
+export function rulePackPilotLedgerHistoryComplete(orderCount: number, planCount: number): boolean {
+  return Number.isSafeInteger(orderCount) && Number.isSafeInteger(planCount)
+    && orderCount >= 0 && planCount >= 0 && orderCount < 500 && planCount < 200;
+}
+
 export function deriveRulePackPilotCapitalFromTrades(
   trades: readonly RulePackPilotRealizedTrade[],
   now = new Date(),
@@ -319,6 +327,9 @@ export async function readRulePackPilotCapitalState(
   const plansById = new Map(plans.map((plan) => [plan.id, plan]));
   const trades: RulePackPilotRealizedTrade[] = [];
   const blockers: string[] = [];
+  if (!rulePackPilotLedgerHistoryComplete(orders.length, plans.length)) {
+    blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
+  }
 
   for (const trade of journal.trades) {
     if (trade.status !== 'CLOSED' || !trade.closedAt || !trade.strategy
