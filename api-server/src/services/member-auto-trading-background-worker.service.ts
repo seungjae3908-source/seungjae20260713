@@ -1461,6 +1461,12 @@ export class MemberAutoTradingBackgroundWorker {
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       return result;
+    } catch (error) {
+      this.liveEntryWarmupComplete = false;
+      this.liveCycleOrderEligibleSeen = false;
+      this.liveCyclePolicyReadySeen = false;
+      this.liveCycleAllFourPolicyReadySeen = false;
+      throw error;
     } finally {
       this.running = false;
     }
@@ -1665,6 +1671,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
     liveOrderEligibleMembers: 0,
     livePolicyReadyMembers: 0,
     liveAllFourPolicyReadyMembers: 0,
+    liveReadinessCycleComplete: true,
+    liveCycleOrderEligible: false,
+    liveCyclePolicyReady: false,
+    liveCycleAllFourPolicyReady: false,
     globalEmergencyStopActive: false,
     errorCode: null,
   });
@@ -1727,6 +1737,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         newEntriesFailClosed: true,
         liveEntriesArmed: false,
         liveEntryWarmupComplete: false,
+        liveReadinessCycleComplete: true,
+        liveCycleOrderEligible: false,
+        liveCyclePolicyReady: false,
+        liveCycleAllFourPolicyReady: false,
         errorCode: errorCode(error),
       });
       console.error('[member-auto-trading-background] tick failed', {
