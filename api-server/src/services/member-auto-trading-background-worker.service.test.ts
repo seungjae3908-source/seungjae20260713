@@ -28,6 +28,7 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
+  automaticLiveStrategyAllowlisted,
   automaticPaperLegacyEpochIsolationReadiness,
   automaticExecutionProjectionOrderIds,
   automaticPaperOrderWithinWalletEpoch,
@@ -2542,4 +2543,20 @@ test('new wallet calculates only scoped Paper risk, still blocking new invalid f
   );
   assert.equal(blocked.ready, false);
   assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+});
+
+test('blank live strategy allowlist is never wildcard authorization for a real order', () => {
+  const unset = normalizeTradingPolicy({
+    ...allFourPolicy(), enabledStrategies: [],
+  });
+  assert.equal(automaticLiveStrategyAllowlisted(unset, 'safe-canonical-setup'), false);
+  const approved = normalizeTradingPolicy({
+    ...allFourPolicy(), enabledStrategies: ['safe-canonical-setup'],
+  });
+  assert.equal(automaticLiveStrategyAllowlisted(approved, 'safe-canonical-setup'), true);
+  assert.equal(automaticLiveStrategyAllowlisted(approved, 'unapproved-setup'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(approved, ''), false);
+  assert.equal(automaticLiveStrategyAllowlisted({
+    enabledStrategies: undefined as never,
+  }, 'safe-canonical-setup'), false);
 });
