@@ -115,3 +115,29 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(settings).not.toContain('window.setInterval(() => { void load(); }, 15_000)');
   expect(settings).not.toContain("status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON'");
 });
+
+test('automatic Paper wallet requires explicit simulated-only setup and never triggers a provider order', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
+  expect(page).toContain('data-testid="automatic-paper-wallet-readiness"');
+  expect(page).toContain('data-testid="prepare-automatic-paper-account"');
+  expect(page).toContain('AUTO_PAPER_INITIAL_KRW = 500_000');
+  expect(page).toContain('await syncJournalRecords({');
+  expect(page).toContain('await inspectAutomaticPaperAccount()');
+  expect(page).toContain('result.orderSubmitted !== false || result.exchangeRequestSent !== false');
+  expect(page).not.toContain('createLiveOrderForPaperSetup');
+  expect(worker).toContain("AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'");
+  expect(worker).toContain('selectAutomaticPaperAccountEquity(paperResult.records)');
+});
+
+test('Paper wallet initialization is blocked by the current server-owned historical automatic fills', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const route = source('../api-server/src/routes/trade-automation.ts');
+  const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
+  expect(page).toContain("authorizedFetch('/api/trade-automation/status', { signal })");
+  expect(page).toContain('body.automaticPaperWalletBootstrap?.safeToInitialize === true');
+  expect(page).toContain("return anyRows || !historySafe ? 'blocked' : 'missing';");
+  expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED');
+  expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
+  expect(route).toContain('automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans)');
+});

@@ -156,6 +156,35 @@ test('canonical background automatic plans retain AUTO_POLICY classification thr
 });
 
 
+
+test('targeted Paper sync blocks zero-quantity FILLED evidence without broadening to other orders', async () => {
+  const trading = new InMemoryTradingRepository();
+  const plan = { ...planFixture(), executionMode: 'automatic' as const };
+  const order = {
+    ...orderFixture(plan), filledQuantity: 0, state: 'FILLED' as const,
+  };
+  await trading.savePlan(plan);
+  await trading.saveOrder(order);
+  await trading.appendEvent(eventFixture(order, 'unknown-paper-fill', 'ACCEPTED', 'FILLED', '2026-08-12T00:00:02.000Z'));
+  const { portfolio, integrationRepository, service } = await linkedService();
+  const priorOrder = await trading.getOrder('user-a', order.id);
+  const full = await new TradeExecutionEventBridgeService(trading, service)
+    .syncUser('user-a', 'associate');
+  assert.deepEqual(full, {
+    scanned: 1, mapped: 0, inserted: 0, deliveryQueued: 0,
+    missingReferences: 1, privateApiRequests: 0,
+    ordersSubmitted: 0, ordersCancelled: 0,
+  });
+  const scoped = await new TradeExecutionEventBridgeService(trading, service)
+    .syncUser('user-a', 'associate', { orderId: order.id });
+  assert.equal(scoped.scopedToOrder, true);
+  assert.equal(scoped.missingReferences, 1);
+  assert.equal(scoped.inserted, 0);
+  assert.equal(portfolio.events.length, 0);
+  assert.equal((await integrationRepository.listDeliveries('user-a')).length, 0);
+  assert.deepEqual(await trading.getOrder('user-a', order.id), priorOrder);
+});
+
 test('execution scope accepts one canonical UUID and rejects broad or ambiguous selectors', () => {
   const id = 'A00AA000-B000-4000-8000-000000000001';
   assert.equal(parseExecutionSyncOrderId({}), null);
