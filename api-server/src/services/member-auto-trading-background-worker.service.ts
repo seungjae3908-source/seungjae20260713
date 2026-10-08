@@ -891,6 +891,29 @@ export function assertCanonicalLiveProviderPositions(
     }
   }
 }
+export function liveProviderSnapshotReadyForAutomaticWarmup(
+  snapshot: CanonicalAccountSnapshot,
+  plans: readonly TradingPlan[],
+) {
+  try {
+    if (!snapshot.connected || snapshot.status !== 'CONNECTED' || snapshot.stale || snapshot.errorCode != null) return false;
+    if (!Array.isArray(snapshot.positions) || !Array.isArray(snapshot.openOrders) || snapshot.openOrders.length > 0) return false;
+    assertCanonicalLiveProviderPositions(snapshot, plans);
+    if (snapshot.provider === 'bitget') {
+      if (snapshot.positionMode !== 'one_way_mode') return false;
+      for (const position of snapshot.positions) {
+        if (!finite(position.quantity) || Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
+        if (String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated') return false;
+        const leverage = Number(position.leverage);
+        if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 async function liveJournalRiskState(
   source: MemberAutoTradingBackgroundSource,
@@ -1908,11 +1931,19 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       repository.getConnections(userId),
       memberRuntimeState(userId, repository, paperRepository, nowMs),
     ]);
+    const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
+    const liveSnapshots = await Promise.all(
+      (['toss', 'kiwoom', 'upbit', 'bitget'] as const)
+        .map((provider) => this.readLiveAccountSnapshot(userId, provider)),
+    );
+    const liveSnapshotsReady = liveSnapshots.every((snapshot) =>
+      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, livePlans));
     return hasCapability(profile, 'canAccessAutoTrading')
       && hasCapability(profile, 'canPlaceOrders')
       && hasCapability(profile, 'canAccessFutures')
       && automaticPolicyHasAllFourMarkets(policy)
       && liveAllFourConnectionVerificationReady(policy, connections, nowMs)
+      && liveSnapshotsReady
       && runtime.paperAccountReady
       && !persistentGlobalStop
       && process.env.TRADING_EMERGENCY_STOP !== 'true'
