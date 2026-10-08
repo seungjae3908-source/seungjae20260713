@@ -840,6 +840,70 @@ test('live warmup survives an empty intermediate member batch and drops only aft
   }
 });
 
+test('completed rotation revalidates the all-four readiness witness before live warmup can pass', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const readyMember = {
+    userId: USER,
+    policy: readyPolicy,
+    profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+  } as const;
+  let members: readonly any[] = [readyMember];
+  let cycleComplete = false;
+  let witnessReady = true;
+  let revalidationCalls = 0;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() { return members as never; },
+    memberBatchCycleCompleted() { return cycleComplete; },
+    async revalidateLiveAllFourReadiness(userId) {
+      revalidationCalls += 1;
+      assert.equal(userId, USER);
+      return witnessReady;
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+
+    const partial = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(partial.liveReadinessCycleComplete, false);
+    assert.equal(partial.liveCycleAllFourPolicyReady, true);
+    assert.equal(partial.liveEntryWarmupComplete, false);
+    assert.equal(revalidationCalls, 0);
+
+    members = [];
+    cycleComplete = true;
+    witnessReady = false;
+    const completed = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(revalidationCalls, 1);
+    assert.equal(completed.liveReadinessCycleComplete, true);
+    assert.equal(completed.liveCycleOrderEligible, false);
+    assert.equal(completed.liveCyclePolicyReady, false);
+    assert.equal(completed.liveCycleAllFourPolicyReady, false);
+    assert.equal(completed.liveEntryWarmupComplete, false);
+    assert.equal(completed.newEntriesFailClosed, true);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('worker failure clears partial rotation readiness before the recovery cycle', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
