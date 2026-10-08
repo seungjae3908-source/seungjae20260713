@@ -95,6 +95,15 @@ async function linked(service: UserBrokerTelegramService, chatId = 'chat-a') {
 }
 
 test('paper approval -> execution bridge -> canonical journal -> Telegram A is isolated and idempotent', async () => {
+  // Real-time delivery is eligible only for orders occurring after the member
+  // connected Telegram; pre-link history must not be replayed as fresh alerts.
+  const journal = new JournalRepository();
+  const integrationRepo = telegramRepository();
+  const transport = new FakeTransport();
+  const service = new UserBrokerTelegramService(
+    integrationRepo, transport, new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot',
+  );
+  await linked(service);
   const trading = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(trading);
   const created = await automation.createPlan(USER_A, input(), normalizeTradingPolicy(DEFAULT_TRADING_POLICY), false);
@@ -109,11 +118,6 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   const executed = await new TradeExecutionService(trading).execute(USER_A, approved, pending.order);
   assert.equal(executed.state, 'FILLED');
 
-  const journal = new JournalRepository();
-  const integrationRepo = telegramRepository();
-  const transport = new FakeTransport();
-  const service = new UserBrokerTelegramService(integrationRepo, transport, new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
-  await linked(service);
   const bridge = new TradeExecutionEventBridgeService(trading, service);
   const first = await bridge.syncUser(USER_A, 'associate');
   assert.ok(first.inserted >= 2);
