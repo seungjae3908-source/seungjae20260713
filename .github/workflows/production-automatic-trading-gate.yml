@@ -849,7 +849,7 @@ jobs:
               persistenceReadback: 'PASS',
               WORKER_WARMUP_PROVEN: true,
               LIVE_ENTRY_ARM_PRESENT: true,
-              REAL_ORDER_SUBMITTED: false,
+              REAL_ORDER_SUBMITTED_BY_GATE: false,
             }));
             process.exit(0);
           }
