@@ -55,7 +55,7 @@ do $member_security_definer_lockdown_verify$
 begin
   if exists (
     select 1
-    from information_schema.role_table_grants
+    from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee in ('PUBLIC', 'anon')
@@ -65,14 +65,14 @@ begin
 
   if exists (
     select 1
-    from information_schema.role_table_grants
+    from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee = 'authenticated'
       and privilege_type <> 'SELECT'
   ) or not exists (
     select 1
-    from information_schema.role_table_grants
+    from information_schema.table_privileges
     where table_schema = 'public'
       and table_name = 'profiles'
       and grantee = 'authenticated'
