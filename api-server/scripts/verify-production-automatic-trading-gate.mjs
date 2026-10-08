@@ -10,6 +10,9 @@ const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
 const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
 const telegramWorker = read('api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
+const telegramWorkerTest = read('api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts');
+const liveConnectionVerification = read('api-server/src/services/live-connection-verification.service.ts');
+const liveExecution = read('api-server/src/services/trade-execution.service.ts');
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
@@ -213,7 +216,11 @@ for (const token of [
   'liveEntryWarmupComplete',
   'liveEntryArmPresent',
   'liveExitsSuppressedByWarmupOrArm',
-  "if (!liveEntriesArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders'))",
+  "if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders'))",
+  "const liveEntriesArmedThisTick = liveExitsArmedThisTick && liveTelegramHealthyThisTick;",
+  "this.source.telegramDeliveryHealthy?.(Date.now()) !== true",
+  "result.liveEntriesSuppressedByTelegram += 1;",
+  "telegramDeliveryHealthy(nowMs: number)",
   'executionSyncBlocks',
   'executionSyncMissingReferences',
   'if (synced.missingReferences > 0)',
@@ -257,7 +264,15 @@ requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(telegramWorker, 'export function readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_READER_MISSING');
-requireText(telegramWorker, "tickOk: true", 'AUTO_GATE_TELEGRAM_WORKER_SUCCESS_HEALTH_MISSING');
+requireText(telegramWorker, "tickOk: deliveryConfirmed", 'AUTO_GATE_TELEGRAM_CONFIRMED_HEALTH_MISSING');
+requireText(telegramWorker, "telegramDeliveryTickConfirmed(deliveryConfirmed, result)", 'AUTO_GATE_TELEGRAM_DELIVERY_FAILURE_INTEGRATION_MISSING');
+requireText(telegramWorker, "if (result.overlapSkipped) return;", 'AUTO_GATE_TELEGRAM_OVERLAP_HEALTH_GUARD_MISSING');
+requireText(telegramWorker, "export function userTelegramDeliveryWorkerHealthy(", 'AUTO_GATE_TELEGRAM_FRESH_HEALTH_HELPER_MISSING');
+requireText(telegramWorkerTest, "Telegram delivery failure stays unhealthy through idle ticks until confirmed success", 'AUTO_GATE_TELEGRAM_FAILURE_REGRESSION_TEST_MISSING');
+requireText(paperWorkerTest, "Telegram outage blocks armed live entry while preserving independent exit warmup", 'AUTO_GATE_TELEGRAM_LIVE_ENTRY_REGRESSION_TEST_MISSING');
+requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
+requireText(liveExecution, "if (!liveConnectionVerificationFresh(connection))", 'AUTO_GATE_ORDER_TIME_CREDENTIAL_RECHECK_MISSING');
+requireText(tradeAutomationRoute, "providerVerified: liveConnectionVerificationFresh(connection)", 'AUTO_GATE_PROVIDER_FRESHNESS_STATUS_MISSING');
 requireText(paperWorkerTest, 'zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', 'AUTO_GATE_ZERO_MUTATION_ACTIVATION_REHEARSAL_MISSING');
 requireText(paperWorkerTest, 'activateNotBeforeAt: new Date(nowMs + 1_500).toISOString()', 'AUTO_GATE_DELAYED_ARM_REHEARSAL_MISSING');
 requireText(paperWorkerTest, 'assert.equal(quarantined.liveEntriesArmed, false);', 'AUTO_GATE_PRE_NOT_BEFORE_BLOCK_PROOF_MISSING');
@@ -297,7 +312,7 @@ requireText(autoTradingPage, 'setRuntimeReadError(true)', 'AUTO_UI_STATUS_READ_F
 requireText(autoTradingPage, '상태 조회 실패', 'AUTO_UI_STATUS_READ_FAILURE_LABEL_MISSING');
 requireText(autoTradingPage, "tone={providerVerified ? 'ok' : 'warn'}", 'AUTO_UI_PROVIDER_STATUS_TONE_MISSING');
 requireText(autoTradingPage, "tone={effectiveEntryStopped ? 'warn' : 'ok'}", 'AUTO_UI_STOP_STATUS_TONE_MISSING');
-requireText(autoTradingPage, "tone={!runtimeReadError && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
+requireText(autoTradingPage, "tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
 requireText(autoTradingPage, 'AlertTriangle', 'AUTO_UI_WARNING_ICON_MISSING');
 requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
