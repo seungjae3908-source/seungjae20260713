@@ -14,10 +14,52 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
 import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
+import { getJournalSnapshot, syncJournalRecords } from '@/lib/paper-journal-sync';
 
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
 type TradingMode = 'auto' | 'paper';
+type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' | 'failed' | 'fixture';
+const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
+const AUTO_PAPER_INITIAL_KRW = 500_000;
+
+async function automaticPaperHistoryAllowsNewWallet(signal?: AbortSignal): Promise<boolean> {
+  const response = await authorizedFetch('/api/trade-automation/status', { signal });
+  const body = await response.json().catch(() => null) as {
+    ok?: boolean;
+    automaticPaperWalletBootstrap?: { safeToInitialize?: boolean };
+  } | null;
+  // Missing or stale backend preflight is not permission to reset Paper capital.
+  return response.ok && body?.ok === true
+    && body.automaticPaperWalletBootstrap?.safeToInitialize === true;
+}
+
+async function inspectAutomaticPaperAccount(signal?: AbortSignal): Promise<AutomaticPaperAccountStatus> {
+  let cursor: string | null = null;
+  let anyRows = false;
+  for (let page = 0; page < 50; page += 1) {
+    const snapshot = await getJournalSnapshot(cursor, 100, signal);
+    anyRows ||= snapshot.records.length > 0;
+    const wallet = snapshot.records.find((row) =>
+      row.kind === 'account' && row.id === AUTO_PAPER_ACCOUNT_ID);
+    if (wallet) {
+      const payload = wallet.payload;
+      return wallet.deletedAt == null
+        && payload.id === AUTO_PAPER_ACCOUNT_ID
+        && Number(payload.initialBalance) === AUTO_PAPER_INITIAL_KRW
+        && Number.isFinite(Number(payload.equity)) && Number(payload.equity) > 0
+        && Number.isFinite(Number(payload.cashBalance)) && Number(payload.cashBalance) >= 0
+        ? 'ready' : 'blocked';
+    }
+    if (!snapshot.nextCursor) {
+      const historySafe = await automaticPaperHistoryAllowsNewWallet(signal);
+      return anyRows || !historySafe ? 'blocked' : 'missing';
+    }
+    cursor = snapshot.nextCursor;
+  }
+  return 'blocked';
+}
+
 type TradingMarket = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 type TradingSection = 'dashboard' | 'orders' | 'journal' | 'rehearsal' | 'settings';
 
@@ -156,6 +198,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const [runtimeClockMs, setRuntimeClockMs] = useState(() => Date.now());
   const runtimeRefreshInFlight = useRef(false);
   const [paperRevision, setPaperRevision] = useState(0);
+  const [autoPaperStatus, setAutoPaperStatus] = useState<AutomaticPaperAccountStatus>(
+    fixture ? 'fixture' : 'checking',
+  );
+  const [autoPaperMessage, setAutoPaperMessage] = useState('');
+  const [autoPaperBusy, setAutoPaperBusy] = useState(false);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
@@ -214,6 +261,66 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       runtimeRefreshInFlight.current = false;
     };
   }, [canAuto, fixture]);
+
+  useEffect(() => {
+    if (fixture) {
+      setAutoPaperStatus('fixture');
+      return;
+    }
+    if (!userId || !canAuto) return;
+    const controller = new AbortController();
+    setAutoPaperStatus('checking');
+    void inspectAutomaticPaperAccount(controller.signal)
+      .then((status) => { if (!controller.signal.aborted) setAutoPaperStatus(status); })
+      .catch(() => { if (!controller.signal.aborted) setAutoPaperStatus('failed'); });
+    return () => controller.abort();
+  }, [userId, canAuto, fixture]);
+
+  async function prepareAutomaticPaperAccount() {
+    if (autoPaperBusy || !userId || !canAuto || fixture || autoPaperStatus !== 'missing') return;
+    setAutoPaperBusy(true);
+    setAutoPaperMessage('');
+    try {
+      // Never overwrite a previously synced local simulator account or
+      // silently replenish a member with existing Paper execution history.
+      const before = await inspectAutomaticPaperAccount();
+      if (before !== 'missing') {
+        setAutoPaperStatus(before);
+        setAutoPaperMessage('기존 모의기록이 확인되어 새 가상계좌를 덮어쓰지 않았습니다.');
+        return;
+      }
+      const at = new Date().toISOString();
+      const result = await syncJournalRecords({
+        idempotencyKey: `automatic-paper-start-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        clientTime: at,
+        records: [{
+          kind: 'account', id: AUTO_PAPER_ACCOUNT_ID, version: 1,
+          updatedAt: at, deletedAt: null,
+          payload: {
+            id: AUTO_PAPER_ACCOUNT_ID,
+            initialBalance: AUTO_PAPER_INITIAL_KRW,
+            cashBalance: AUTO_PAPER_INITIAL_KRW,
+            realizedPnl: 0, unrealizedPnl: 0, equity: AUTO_PAPER_INITIAL_KRW,
+            usedMargin: 0, availableMargin: AUTO_PAPER_INITIAL_KRW,
+            createdAt: at, updatedAt: at,
+          },
+        }],
+      });
+      if (result.orderSubmitted !== false || result.exchangeRequestSent !== false
+        || result.failed.length > 0 || result.conflicts.length > 0) {
+        throw new Error('모의계좌 동기화 결과가 안전하게 확인되지 않았습니다.');
+      }
+      const after = await inspectAutomaticPaperAccount();
+      setAutoPaperStatus(after);
+      if (after !== 'ready') throw new Error('서버 모의계좌 저장·조회 검증이 완료되지 않았습니다.');
+      setAutoPaperMessage('50만원 가상계좌 저장·조회를 확인했습니다. 실제 주문은 활성화되지 않습니다.');
+    } catch (error) {
+      setAutoPaperStatus('failed');
+      setAutoPaperMessage(error instanceof Error ? error.message : '모의계좌 준비에 실패했습니다.');
+    } finally {
+      setAutoPaperBusy(false);
+    }
+  }
 
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
@@ -357,6 +464,35 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
           <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건 · ${kstActivityTime(marketActivity?.lastActivityAt)}`} />
         </div>
+      </section>
+
+      <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-wallet-readiness">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold">자동모의매매 가상계좌</h2>
+          <span className="text-xs font-semibold">
+            {autoPaperStatus === 'ready' ? '서버 계좌 확인됨'
+              : autoPaperStatus === 'missing' ? '계좌 준비 필요'
+                : autoPaperStatus === 'blocked' ? '기존 기록 확인 필요'
+                  : autoPaperStatus === 'failed' ? '계좌 점검 실패'
+                    : autoPaperStatus === 'fixture' ? '테스트 화면' : '확인 중'}
+          </span>
+        </div>
+        <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+          자동모의매매 전용 50만원 가상자본입니다. 실계좌의 입금·출금이나 LIVE 주문 권한을 변경하지 않습니다.
+          기존 수동 모의거래 기록이 있으면 자동으로 덮어쓰지 않습니다.
+        </p>
+        {autoPaperMessage ? <p role="status" className="mt-2 break-keep text-xs">{autoPaperMessage}</p> : null}
+        {autoPaperStatus === 'missing' ? (
+          <button
+            type="button"
+            className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
+            disabled={autoPaperBusy || !canAuto || Boolean(fixture)}
+            onClick={() => void prepareAutomaticPaperAccount()}
+            data-testid="prepare-automatic-paper-account"
+          >
+            {autoPaperBusy ? '가상계좌 검증 중' : '50만원 모의계좌 준비'}
+          </button>
+        ) : null}
       </section>
     </div>
   ) : (

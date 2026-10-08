@@ -47,7 +47,7 @@ const reviewProvider: TradingReviewProvider = { async generateReview(input) {
   } };
 } };
 
-async function startServer(options: { authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean; reviewProvider?: TradingReviewProvider | null; memberTier?: string } = {}) {
+async function startServer(options: { authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean; reviewProvider?: TradingReviewProvider | null; memberTier?: string; automaticPaperHistory?: { orders: any[]; plans: any[] } } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   if (options.authenticated !== false) app.use('/api', (req: any, _res, next) => { req.member = { id: USER, membership_level: options.memberTier ?? 'regular', status: 'approved', is_active: true }; req.accessToken = 'test-token'; next(); });
@@ -60,6 +60,7 @@ async function startServer(options: { authenticated?: boolean; repository?: Pape
     },
     now: () => NOW,
     reviewProvider: options.reviewProvider === undefined ? reviewProvider : options.reviewProvider,
+    automaticPaperHistoryReader: async () => options.automaticPaperHistory ?? { orders: [], plans: [] },
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -87,6 +88,99 @@ test('sync endpoint returns journal-sync-only safety contract', async () => {
     const body = await safeJson(response);
     assert.equal(body.ok, true); assert.equal(body.mode, 'journal-sync-only');
     assert.equal(body.orderSubmitted, false); assert.equal(body.exchangeRequestSent, false);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+
+function automaticPaperWalletSetup() {
+  return {
+    idempotencyKey: 'paper-wallet-500k-once-001',
+    clientTime: NOW.toISOString(),
+    records: [{
+      kind: 'account', id: 'automatic-paper-account-v1', version: 1,
+      updatedAt: NOW.toISOString(), deletedAt: null,
+      payload: {
+        id: 'automatic-paper-account-v1', initialBalance: 500_000,
+        cashBalance: 500_000, equity: 500_000,
+        realizedPnl: 0, unrealizedPnl: 0, usedMargin: 0,
+        availableMargin: 500_000, createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
+      },
+    }],
+  };
+}
+
+test('server permits only a fresh exact 500k Paper wallet and refuses tampered reset', async () => {
+  const { server, baseUrl, repository } = await startServer();
+  try {
+    const valid = automaticPaperWalletSetup();
+    const created = await fetch(`${baseUrl}/api/paper-journal/sync`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(valid),
+    });
+    assert.equal(created.status, 200);
+    const result = await safeJson(created);
+    assert.equal(result.orderSubmitted, false);
+    assert.equal(result.exchangeRequestSent, false);
+    assert.equal(result.uploaded.length, 1);
+    const record = await repository.getRecord(USER, 'account', 'automatic-paper-account-v1');
+    assert.equal(record.payload.initialBalance, 500_000);
+
+    const invalid = {
+      ...valid, idempotencyKey: 'paper-wallet-reset-blocked-001',
+      records: [{ ...valid.records[0], version: 2, payload: {
+        ...valid.records[0].payload, equity: 1_000_000,
+      } }],
+    };
+    const reset = await fetch(`${baseUrl}/api/paper-journal/sync`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(invalid),
+    });
+    assert.equal(reset.status, 409);
+    const refused = await safeJson(reset);
+    assert.equal(refused.code, 'AUTOMATIC_PAPER_WALLET_BASELINE_INVALID');
+    assert.equal(refused.orderSubmitted, false);
+    assert.equal((await repository.getRecord(USER, 'account', 'automatic-paper-account-v1')).payload.equity, 500_000);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('historical FILLED automatic Paper orders cannot be overwritten by fresh baseline sync', async () => {
+  const canonical = {
+    plans: [{ id: 'existing-paper-plan', accountMode: 'paper', executionMode: 'automatic' }],
+    orders: [{ id: 'existing-paper-fill', planId: 'existing-paper-plan', state: 'FILLED', filledQuantity: 1 }],
+  };
+  const { server, baseUrl, repository } = await startServer({ automaticPaperHistory: canonical });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/sync`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(automaticPaperWalletSetup()),
+    });
+    assert.equal(response.status, 409);
+    const body = await safeJson(response);
+    assert.equal(body.code, 'AUTOMATIC_PAPER_WALLET_HISTORY_RECONCILIATION_REQUIRED');
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal((await repository.listSnapshot(USER)).length, 0);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('manual synced Paper history prevents automatic Paper wallet refilling', async () => {
+  const repository = createRepository();
+  await repository.upsertRecord(USER, {
+    kind: 'journal', id: 'manual-position', version: 1,
+    updatedAt: NOW.toISOString(), deletedAt: null,
+    payload: { id: 'manual-position', source: 'APP_PAPER', status: 'OPEN' },
+  }, NOW.toISOString());
+  const { server, baseUrl } = await startServer({ repository });
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/sync`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(automaticPaperWalletSetup()),
+    });
+    assert.equal(response.status, 409);
+    const body = await safeJson(response);
+    assert.equal(body.code, 'AUTOMATIC_PAPER_WALLET_HISTORY_RECONCILIATION_REQUIRED');
+    assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 

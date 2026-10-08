@@ -21,7 +21,7 @@ import { TradeExecutionService } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
-import type { PaperJournalRepository } from './paper-journal.types';
+import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal.types';
 import type {
   ExchangeConnection,
   TradingAssetClass,
@@ -39,7 +39,10 @@ import {
 import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-trading-paper-position-bridge.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
-import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
+import {
+  readTradeAutomationJournalPayloads,
+  tradeAutomationJournalPayloadsFromSnapshot,
+} from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
   automaticExitReason,
@@ -77,6 +80,69 @@ const MAX_ENTRIES_PER_TICK = 40;
 // A READY handoff without entries otherwise has no per-entry freshness clock.
 // Keep a bounded publisher heartbeat even during quiet market periods.
 const MAX_READY_HANDOFF_AGE_MS = 30 * 60_000;
+// Only a completely fresh Paper automatic ledger may receive a new baseline
+// virtual wallet. Historical FILLED automatic entries need reconciliation,
+// never a silent 500k reset. The status endpoint is read-only.
+export function automaticPaperWalletBootstrapReadiness(
+  orders: readonly TradingOrder[],
+  plans: readonly TradingPlan[],
+) {
+  const blockers: string[] = [];
+  const byPlanId = new Map(plans.map((p) => [p.id, p] as const));
+  const automaticPaperPlans = plans.filter((plan) =>
+    plan.accountMode === 'paper' && plan.executionMode === 'automatic');
+  const executedAutomaticPaperOrders = orders.filter((order) => {
+    const plan = byPlanId.get(order.planId);
+    return plan?.accountMode === 'paper' && plan.executionMode === 'automatic'
+      && (order.filledQuantity > 0
+        || ['FILLED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(order.state));
+  }).length;
+  const filledAutomaticPaper = orders.filter((order) => {
+    const plan = byPlanId.get(order.planId);
+    return plan?.accountMode === 'paper' && plan.executionMode === 'automatic'
+      && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
+        || (typeof order.filledQuantity === 'number' && order.filledQuantity > 0));
+  });
+  // A historical row stamped FILLED can still have zero actual quantity.
+  // Such a row is neither a settled entry nor a valid basis for a new wallet.
+  // Never infer executed quantity from signal/notional/requested size.
+  const missingFilledQuantityEvidence = filledAutomaticPaper.filter((order) =>
+    typeof order.filledQuantity !== 'number'
+    || !Number.isFinite(order.filledQuantity) || order.filledQuantity <= 0
+    || typeof order.averageFillPrice !== 'number'
+    || !Number.isFinite(order.averageFillPrice) || order.averageFillPrice <= 0).length;
+  const missingFeeEvidence = filledAutomaticPaper.filter((order) =>
+    !(typeof order.feeAmount === 'number' && Number.isFinite(order.feeAmount)
+      && order.feeAmount >= 0)
+    && !(Array.isArray(order.fills) && order.fills.length > 0
+      && order.fills.every((fill) => typeof fill.feeAmount === 'number'
+        && Number.isFinite(fill.feeAmount) && fill.feeAmount >= 0))).length;
+  if (automaticPaperPlans.length > 0) blockers.push('AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED');
+  if (missingFilledQuantityEvidence > 0) blockers.push('AUTOMATIC_PAPER_FILLED_QUANTITY_EVIDENCE_MISSING');
+  if (missingFeeEvidence > 0) blockers.push('AUTOMATIC_PAPER_FEE_EVIDENCE_MISSING');
+  if (orders.some((order) => !byPlanId.has(order.planId)
+    && (order.filledQuantity > 0
+      || ['FILLED', 'PARTIALLY_FILLED', 'RECOVERY_REQUIRED'].includes(order.state)))) {
+    blockers.push('AUTOMATIC_PAPER_ORPHAN_ORDER_HISTORY');
+  }
+  // The repository paginates at these hard bounds, so a full page does not
+  // prove that older automatic Paper positions never existed.
+  if (orders.length >= 500 || plans.length >= 200) blockers.push('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
+  return {
+    safeToInitialize: blockers.length === 0,
+    automaticPaperPlanCount: automaticPaperPlans.length,
+    executedAutomaticPaperOrderCount: executedAutomaticPaperOrders,
+    missingFilledQuantityEvidence,
+    missingFeeEvidence,
+    blockers,
+    privateTradingRequests: 0 as const,
+    orderSubmitted: false as const,
+    exchangeRequestSent: false as const,
+  };
+}
+
+export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
+export const AUTOMATIC_PAPER_INITIAL_KRW = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
@@ -91,6 +157,7 @@ type EligibleMember = Readonly<{
 type MemberRuntimeState = Readonly<{
   // Never use missing Paper equity as a zero-PnL proof to authorize entries.
   paperAccountReady: boolean;
+  paperFinancialRiskReady: boolean;
   accountEquity: number;
   dailyPnlPercent: number;
   weeklyPnlPercent: number;
@@ -547,29 +614,123 @@ function providerPositionQuantity(snapshot: CanonicalAccountSnapshot, position: 
   return quantity;
 }
 
-function currentConsecutiveLosses(journal: readonly Record<string, unknown>[]) {
-  const closed = journal
-    .filter((row) => typeof row.closedAt === 'string' && finite(Number(row.netPnl)))
-    .sort((a, b) => Date.parse(String(b.closedAt)) - Date.parse(String(a.closedAt)));
-  let count = 0;
-  for (const row of closed) {
-    if (Number(row.netPnl) < 0) count += 1;
+
+/**
+ * Use ONLY server-owned canonical automatic Paper orders for the entry-risk
+ * ledger. Client-synced manual journals (including fake closed PnL) have no
+ * authority to affect daily-loss limits or reset consecutive losses.
+ * A missing cost, mismatched fee denomination, truncated history, or
+ * unreconciled filled event is not a zero-profit trading day.
+ */
+export function automaticPaperRiskEvidenceFromCanonicalLedger(
+  userId: string,
+  orders: readonly TradingOrder[],
+  plans: readonly TradingPlan[],
+  nowMs: number,
+  equityKrw: number,
+): Readonly<{
+  ready: boolean;
+  blockers: readonly string[];
+  dailyPnlPercent: number;
+  weeklyPnlPercent: number;
+  consecutiveLosses: number;
+  closedTrades: number;
+}> {
+  const blockers: string[] = [];
+  const add = (code: string) => { if (!blockers.includes(code)) blockers.push(code); };
+  const plansById = new Map(plans.map((plan) => [plan.id, plan]));
+  const automatic = orders.filter((order) => {
+    const plan = plansById.get(order.planId);
+    return plan?.accountMode === 'paper' && plan.executionMode === 'automatic';
+  });
+  const failed = () => ({
+    ready: false as const, blockers: Object.freeze([...blockers].sort()),
+    dailyPnlPercent: 0, weeklyPnlPercent: 0,
+    consecutiveLosses: 0, closedTrades: 0,
+  });
+  if (!positive(equityKrw) || !Number.isFinite(nowMs)) {
+    add('BACKGROUND_PAPER_EQUITY_UNVERIFIED');
+  }
+  if (orders.length >= 500 || plans.length >= 200) {
+    add('BACKGROUND_PAPER_CANONICAL_HISTORY_TRUNCATED');
+  }
+  if (orders.some((order) => !plansById.has(order.planId)
+      && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
+        || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0))) {
+    add('BACKGROUND_PAPER_ORDER_PLAN_ORPHAN');
+  }
+  const bootstrap = automaticPaperWalletBootstrapReadiness(orders, plans);
+  if (bootstrap.missingFilledQuantityEvidence > 0) {
+    add('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED');
+  }
+  if (bootstrap.missingFeeEvidence > 0) {
+    add('BACKGROUND_PAPER_FEE_EVIDENCE_REQUIRED');
+  }
+  for (const order of automatic) {
+    const plan = plansById.get(order.planId)!;
+    const expected = plan.exchange === 'bitget' ? 'USDT'
+      : plan.exchange === 'upbit' || plan.market === 'KR' ? 'KRW' : 'USD';
+    if (order.feeAmount != null && order.feeAmount > 0
+      && order.feeCurrency?.toUpperCase() !== expected) {
+      add('BACKGROUND_PAPER_FEE_CURRENCY_UNVERIFIED');
+    }
+  }
+  if (blockers.length) return failed();
+  const payloads = tradeAutomationJournalPayloadsFromSnapshot(userId, automatic, plans);
+  const journal = buildUnifiedTradeJournal(
+    payloads, { source: 'APP_PAPER', range: 'ALL' }, new Date(nowMs),
+  );
+  if (journal.integrityIssues.length) add('BACKGROUND_PAPER_JOURNAL_INTEGRITY_REQUIRED');
+  const closed = journal.trades.filter((trade) =>
+    trade.source === 'APP_PAPER' && trade.status === 'CLOSED');
+  for (const trade of closed) {
+    if (trade.netPnl == null || !finite(trade.netPnl)
+      || trade.costEvidence.status !== 'READY'
+      || trade.fees == null || !finite(trade.fees)
+      || trade.tax == null || !finite(trade.tax)) {
+      add('BACKGROUND_PAPER_SETTLEMENT_FULL_COST_REQUIRED');
+    }
+    // Do not convert USD/USDT to KRW with a current, stale or made-up FX
+    // quote. Cross-currency settlement needs actual close-time FX evidence.
+    if (trade.currency !== 'KRW') add('BACKGROUND_PAPER_CLOSE_TIME_FX_REQUIRED');
+  }
+  if (blockers.length) return failed();
+  const sorted = [...closed].sort((a, b) =>
+    Date.parse(b.closedAt ?? '') - Date.parse(a.closedAt ?? '')
+      || a.id.localeCompare(b.id));
+  const pnlSince = (cutoff: number) => sorted.reduce((sum, row) =>
+    Date.parse(row.closedAt ?? '') >= cutoff ? sum + row.netPnl! : sum, 0);
+  let consecutiveLosses = 0;
+  for (const trade of sorted) {
+    if (trade.netPnl! < 0) consecutiveLosses += 1;
     else break;
   }
-  return count;
+  return {
+    ready: true, blockers: [], closedTrades: sorted.length,
+    dailyPnlPercent: pnlSince(nowMs - 24 * 60 * 60_000) / equityKrw * 100,
+    weeklyPnlPercent: pnlSince(nowMs - 7 * 24 * 60 * 60_000) / equityKrw * 100,
+    consecutiveLosses,
+  };
 }
 
-function pnlPercentSince(
-  journal: readonly Record<string, unknown>[],
-  equity: number,
-  cutoffMs: number,
-) {
-  const pnl = journal.reduce((sum, row) => {
-    const closedAt = isoMs(row.closedAt);
-    const net = Number(row.netPnl);
-    return closedAt != null && closedAt >= cutoffMs && finite(net) ? sum + net : sum;
-  }, 0);
-  return pnl / equity * 100;
+/** A member's manual local Paper account is not automatic-trading collateral.
+ * The dedicated account is required and never silently replenished. */
+export function selectAutomaticPaperAccountEquity(
+  rows: readonly StoredPaperJournalRecord[],
+): number | null {
+  const accounts = rows.filter((row) =>
+    row.kind === 'account' && row.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+  if (accounts.length !== 1 || accounts[0]!.deletedAt != null) return null;
+  const wallet = record(accounts[0]!.payload);
+  if (!wallet || wallet.id !== AUTOMATIC_PAPER_ACCOUNT_ID
+    || Number(wallet.initialBalance) !== AUTOMATIC_PAPER_INITIAL_KRW) return null;
+  const equity = Number(wallet.equity);
+  const cash = Number(wallet.cashBalance);
+  const margin = Number(wallet.usedMargin);
+  const available = Number(wallet.availableMargin);
+  if (!positive(equity) || !finite(cash) || cash < 0
+    || !finite(margin) || margin < 0 || !finite(available) || available < 0) return null;
+  return equity;
 }
 
 async function memberRuntimeState(
@@ -587,23 +748,22 @@ async function memberRuntimeState(
     repository.listPlans(userId),
     repository.listOrders(userId),
   ]);
-  const accounts = paperResult.records.filter((row) => row.kind === 'account' && row.deletedAt == null)
-    .map((row) => record(row.payload))
-    .filter((row): row is Record<string, unknown> => row != null);
-  const paperAccountReady = paperResult.validRead
-    && accounts.length === 1 && positive(Number(accounts[0]?.equity));
-  const equity = paperAccountReady ? Number(accounts[0]!.equity) : 0;
-  const journal = paperResult.records.filter((row) => row.kind === 'journal' && row.deletedAt == null)
-    .map((row) => record(row.payload))
-    .filter((row): row is Record<string, unknown> => row != null);
+  const automaticEquity = paperResult.validRead
+    ? selectAutomaticPaperAccountEquity(paperResult.records) : null;
+  const paperAccountReady = automaticEquity != null;
+  const equity = automaticEquity ?? 0;
+  const risk = automaticPaperRiskEvidenceFromCanonicalLedger(
+    userId, orders, plans, nowMs, equity,
+  );
   return Object.freeze({
     paperAccountReady,
+    paperFinancialRiskReady: paperAccountReady && risk.ready,
     accountEquity: equity,
-    // These placeholders are not evidence: caller forbids all fresh entries
-    // while paperAccountReady is false.
-    dailyPnlPercent: paperAccountReady ? pnlPercentSince(journal, equity, nowMs - 24 * 60 * 60_000) : 0,
-    weeklyPnlPercent: paperAccountReady ? pnlPercentSince(journal, equity, nowMs - 7 * 24 * 60 * 60_000) : 0,
-    consecutiveLosses: paperAccountReady ? currentConsecutiveLosses(journal) : 0,
+    // Only canonical automatic Paper close evidence can affect risk limits.
+    // User-imported journals and missing settlement components earn no credit.
+    dailyPnlPercent: risk.dailyPnlPercent,
+    weeklyPnlPercent: risk.weeklyPnlPercent,
+    consecutiveLosses: risk.consecutiveLosses,
     plans,
     orders,
   });
@@ -1496,7 +1656,8 @@ export class MemberAutoTradingBackgroundWorker {
         }
         // Maintain eligible Live exits above even when Paper storage is
         // absent. Do not create Paper or Live entries using placeholder equity.
-        if (!runtime.paperAccountReady) {
+        if (!runtime.paperAccountReady || !runtime.paperFinancialRiskReady) {
+          result.newEntriesFailClosed = true;
           result.blocked += entries.length;
           continue;
         }
@@ -1511,6 +1672,11 @@ export class MemberAutoTradingBackgroundWorker {
             // covers a prior entry that mutated an order and then failed during
             // lifecycle/projection post-processing before its normal refresh.
             await refreshRuntime();
+            if (!runtime.paperAccountReady || !runtime.paperFinancialRiskReady) {
+              result.newEntriesFailClosed = true;
+              result.blocked += 1;
+              continue;
+            }
             let fx = fxCache.get(entry.identity.market);
             if (!fx) {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
