@@ -1719,7 +1719,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       && hasCapability(profile, 'canAccessFutures')
       && automaticPolicyHasAllFourMarkets(policy)
       && !persistentGlobalStop
-      && process.env.TRADING_EMERGENCY_STOP !== 'true';
+      && process.env.TRADING_EMERGENCY_STOP !== 'true'
+      // A globally healthy Telegram worker cannot attest a specific user's
+      // channel. Reject full-cycle warmup when the witness has no ACTIVE binding.
+      && await this.memberTelegramConnected(userId);
   }
 
   tradingRepositoryFor(userId: string) {
