@@ -24,6 +24,7 @@ const FIXTURE: TradeAutomationStatus = {
     maxDailyOrders: 10,
     maxConsecutiveLosses: 3,
     bitgetLeverage: 2,
+    pilotStage: 'approval-20',
   },
   connections: [
     { exchange: 'bitget', accountMode: 'paper', configured: true, lastVerifiedAt: null, lastErrorCode: null, credentialsExposed: false },
