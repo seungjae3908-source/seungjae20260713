@@ -287,9 +287,13 @@ requireText(autoTradingPage, 'runtimeHealthFresh', 'AUTO_UI_RUNTIME_HEALTH_FRESH
 requireText(autoTradingPage, 'nowMs - tickMs <= 360_000', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_BOUND_MISSING');
 requireText(autoTradingPage, '자동 워커 상태 지연', 'AUTO_UI_STALE_WORKER_LABEL_MISSING');
 requireText(autoTradingPage, 'Telegram 상태 지연', 'AUTO_UI_STALE_TELEGRAM_LABEL_MISSING');
+requireText(autoTradingPage, 'runtimeRefreshInFlight', 'AUTO_UI_STATUS_POLLING_DEDUP_MISSING');
+requireText(autoTradingPage, 'setRuntimeClockMs(Date.now())', 'AUTO_UI_STATUS_FRESHNESS_CLOCK_MISSING');
+requireText(autoTradingPage, 'setRuntimeReadError(true)', 'AUTO_UI_STATUS_READ_FAILURE_STATE_MISSING');
+requireText(autoTradingPage, '상태 조회 실패', 'AUTO_UI_STATUS_READ_FAILURE_LABEL_MISSING');
 requireText(autoTradingPage, "tone={providerVerified ? 'ok' : 'warn'}", 'AUTO_UI_PROVIDER_STATUS_TONE_MISSING');
 requireText(autoTradingPage, "tone={effectiveEntryStopped ? 'warn' : 'ok'}", 'AUTO_UI_STOP_STATUS_TONE_MISSING');
-requireText(autoTradingPage, "tone={automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
+requireText(autoTradingPage, "tone={!runtimeReadError && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
 requireText(autoTradingPage, 'AlertTriangle', 'AUTO_UI_WARNING_ICON_MISSING');
 requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
@@ -441,6 +445,7 @@ console.log(JSON.stringify({
   workerBackedUiLiveTruth: true,
   truthfulRuntimeStatusTones: true,
   uiRuntimeHealthFreshnessRequired: true,
+  uiRuntimePollingFailsClosed: true,
   memberStatusSanitizesGlobalWorkerCounters: true,
   memberRuntimeHealthCapabilityGated: true,
   stickyStopDashboardTruth: true,
