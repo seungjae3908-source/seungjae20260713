@@ -8,6 +8,7 @@ const manualFuturesGate = read('.github/workflows/production-futures-live-tradin
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
 const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+const liveEntryArm = read('api-server/src/services/member-auto-trading-live-arm.service.ts');
 const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
 const telegramWorker = read('api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
 const telegramWorkerTest = read('api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts');
@@ -254,12 +255,16 @@ for (const token of [
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
   'if (liveEntriesArmedThisTick && hasCapability',
-  "member-auto-trading-live-entry-arm-v1",
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
-requireText(paperWorker, 'activateNotBeforeMs >= armedAtMs', 'AUTO_GATE_WORKER_ARM_TIMESTAMP_ORDER_MISSING');
-requireText(paperWorker, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_NOT_BEFORE_ENFORCEMENT_MISSING');
+requireText(liveEntryArm, 'activateNotBeforeMs >= armedAtMs', 'AUTO_GATE_WORKER_ARM_TIMESTAMP_ORDER_MISSING');
+requireText(liveEntryArm, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_NOT_BEFORE_ENFORCEMENT_MISSING');
+requireText(liveEntryArm, 'member-auto-trading-live-entry-arm-v1', 'AUTO_GATE_WORKER_ARM_SCHEMA_MISSING');
+requireText(paperWorker, 'if (!await liveEntryArmPresent())', 'AUTO_GATE_WORKER_REARM_MISSING');
+requireText(liveExecution, "throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY')", 'AUTO_GATE_PROVIDER_ARM_MISSING');
+requireText(paperWorker, "result.handoffStatus = 'BLOCKED_DATA';", 'AUTO_GATE_BAD_HANDOFF_QUARANTINE_MISSING');
+requireText(paperWorker, 'selectRotatingHandoffEntries(', 'AUTO_GATE_FAIR_ENTRY_PAGING_MISSING');
 requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
