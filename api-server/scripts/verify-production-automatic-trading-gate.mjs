@@ -232,6 +232,7 @@ for (const token of [
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
+requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
 requireText(telegramWorker, 'export function readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_READER_MISSING');
@@ -249,6 +250,8 @@ requireText(paperWorkerTest, 'assert.equal(end.liveEntryWarmupComplete, false);'
 requireText(paperWorker, 'liveReadinessCycleComplete: true', 'AUTO_GATE_ROTATION_HEALTH_RESET_MISSING');
 requireText(paperWorkerTest, 'first live warmup suppresses automatic exits for existing live positions before exact-SHA arm', 'AUTO_GATE_LIVE_EXIT_WARMUP_TEST_MISSING');
 requireText(paperWorkerTest, 'all-four activation readiness requires one order-capable futures member with all four markets enabled', 'AUTO_GATE_ALL4_POLICY_READINESS_TEST_MISSING');
+requireText(paperWorkerTest, 'partial-market automatic policy cannot complete live warmup even with order capability', 'AUTO_GATE_PARTIAL_MARKET_WARMUP_BLOCK_TEST_MISSING');
+requireText(paperWorkerTest, 'assert.equal(result.liveAllFourPolicyReadyMembers, 0);', 'AUTO_GATE_PARTIAL_MARKET_WARMUP_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveAllFourPolicyReadyMembers, 1);', 'AUTO_GATE_ALL4_POLICY_READINESS_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);', 'AUTO_GATE_LIVE_EXIT_WARMUP_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(health.liveTrackedPositions, 0);', 'AUTO_GATE_DISABLED_HEALTH_TRACKED_POSITION_RESET_MISSING');
