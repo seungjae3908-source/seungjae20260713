@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { AlertTriangle, BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
@@ -152,6 +152,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const [section, setSection] = useState<TradingSection>(initialRouteState.section);
   const [runtimeStatus, setRuntimeStatus] = useState<TradeAutomationFixture | null>(fixture ?? null);
   const [runtimeLoading, setRuntimeLoading] = useState(!fixture);
+  const [runtimeReadError, setRuntimeReadError] = useState(false);
+  const [runtimeClockMs, setRuntimeClockMs] = useState(() => Date.now());
+  const runtimeRefreshInFlight = useRef(false);
   const [paperRevision, setPaperRevision] = useState(0);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
@@ -173,28 +176,42 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     if (fixture) {
       setRuntimeStatus(fixture);
       setRuntimeLoading(false);
+      setRuntimeReadError(false);
       return;
     }
     if (!canAuto) return;
     const controller = new AbortController();
     const loadRuntimeStatus = async (initial: boolean) => {
+      if (runtimeRefreshInFlight.current) return;
+      runtimeRefreshInFlight.current = true;
       if (initial) setRuntimeLoading(true);
       try {
         const response = await authorizedFetch('/api/trade-automation/status', { signal: controller.signal });
         const payload = await response.json() as TradeAutomationFixture & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? '자동매매 상태를 불러오지 못했습니다.');
-        if (!controller.signal.aborted) setRuntimeStatus(payload);
+        if (!controller.signal.aborted) {
+          setRuntimeStatus(payload);
+          setRuntimeReadError(false);
+        }
       } catch {
-        if (initial && !controller.signal.aborted) setRuntimeStatus(null);
+        if (!controller.signal.aborted) {
+          setRuntimeReadError(true);
+          if (initial) setRuntimeStatus(null);
+        }
       } finally {
+        runtimeRefreshInFlight.current = false;
         if (initial && !controller.signal.aborted) setRuntimeLoading(false);
       }
     };
     void loadRuntimeStatus(true);
-    const timer = window.setInterval(() => { void loadRuntimeStatus(false); }, 15_000);
+    const timer = window.setInterval(() => {
+      setRuntimeClockMs(Date.now());
+      void loadRuntimeStatus(false);
+    }, 15_000);
     return () => {
       window.clearInterval(timer);
       controller.abort();
+      runtimeRefreshInFlight.current = false;
     };
   }, [canAuto, fixture]);
 
@@ -215,7 +232,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
   const autoWorker = runtimeStatus?.autoTradingBackground;
   const telegramWorker = runtimeStatus?.userTelegramDelivery;
-  const runtimeNowMs = Date.now();
+  const runtimeNowMs = runtimeClockMs;
   const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
   const telegramWorkerFresh = runtimeHealthFresh(telegramWorker?.lastTickAt, runtimeNowMs);
   const automaticRuntimeReady = autoWorker?.enabled === true
@@ -233,7 +250,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     && telegramWorker.errorCode == null;
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
-    : !canPlaceOrders
+    : runtimeReadError
+      ? '상태 조회 실패'
+      : !canPlaceOrders
       ? '계정 주문 권한 없음'
       : !liveReadiness?.automaticServerGateEnabled
         ? '자동 Gate OFF'
@@ -325,7 +344,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem
             label="실거래 권한"
             value={liveAuthorityLabel}
-            tone={automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
+            tone={!runtimeReadError && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
           />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
