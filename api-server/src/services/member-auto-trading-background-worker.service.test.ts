@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { DEFAULT_TRADING_POLICY, type TradingPlan, type TradingPolicy } from './trade-automation.types';
+import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
 import {
@@ -1602,23 +1603,30 @@ test('an old empty READY Paper handoff cannot certify current live warmup or aut
 });
 
 
-test('read-only Live pre-entry exposure blocks any unmanaged broker position, not only the candidate ticker', () => {
+test('read-only Live pre-entry exposure blocks untracked securities but excludes Upbit KRW settlement cash', () => {
   const tracked = { symbol: 'BTCUSDT', side: 'long', exchange: 'bitget' } as TradingPlan;
   const position = (symbol: string, quantity: number | null, side: string | null = 'long') =>
-    ({ symbol, quantity, side }) as NonNullable<Parameters<typeof assertCanonicalLiveProviderPositions>[0]>[number];
-  assert.doesNotThrow(() => assertCanonicalLiveProviderPositions(
-    [position('BTCUSDT', 1)], [tracked],
-  ));
-  assert.throws(() => assertCanonicalLiveProviderPositions(
-    [position('ETHUSDT', 1)], [tracked],
-  ), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
-  assert.throws(() => assertCanonicalLiveProviderPositions(
-    [position('BTCUSDT', 1, 'short')], [tracked],
-  ), /BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH/);
-  assert.throws(() => assertCanonicalLiveProviderPositions(null, [tracked]),
-    /BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE/);
-  assert.throws(() => assertCanonicalLiveProviderPositions(
-    [position('BTCUSDT', null)], [tracked],
-  ), /BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE/);
-  assert.doesNotThrow(() => assertCanonicalLiveProviderPositions([], []));
+    ({ symbol, quantity, side }) as NonNullable<CanonicalAccountSnapshot['positions']>[number];
+  const bitget = (positions: CanonicalAccountSnapshot['positions']) =>
+    assertCanonicalLiveProviderPositions({ provider: 'bitget', positions }, [tracked]);
+  assert.doesNotThrow(() => bitget([position('BTCUSDT', 1)]));
+  assert.throws(() => bitget([position('ETHUSDT', 1)]),
+    /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
+  assert.throws(() => bitget([position('BTCUSDT', 1, 'short')]),
+    /BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH/);
+  assert.throws(() => bitget(null), /BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE/);
+  assert.throws(() => bitget([position('BTCUSDT', null)]),
+    /BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE/);
+  assert.doesNotThrow(() => bitget([]));
+
+  // Upbit includes its KRW cash wallet in positions; that is NOT an open
+  // market exposure, but a separately held ETH coin must still block entry.
+  assert.doesNotThrow(() => assertCanonicalLiveProviderPositions({
+    provider: 'upbit', positions: [position('KRW', 500_000, null)],
+  }, []));
+  assert.throws(() => assertCanonicalLiveProviderPositions({
+    provider: 'upbit', positions: [
+      position('KRW', 500_000, null), position('ETH', 0.4, null),
+    ],
+  }, []), /BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED/);
 });
