@@ -15,6 +15,7 @@ export type MemberProfile = {
   status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'revoked' | 'withdrawn' | 'disabled' | 'inactive';
   membership_level?: MemberTier | null;
   is_active?: boolean | null;
+  membership_expires_at?: string | null;
   permissions_updated_at?: string | null;
   updated_at?: string | null;
 };
@@ -116,8 +117,26 @@ async function authenticate(
     return false;
   }
 
-  const supabase = dependencies.getSupabase();
-  const { data: auth, error: authError } = await supabase.auth.getUser(token);
+  const authPromise = dependencies.getSupabase().auth.getUser(token);
+  const subjectCandidate = unverifiedJwtSubject(token);
+  const readOwnProfile = (userId: string, concurrent = false) => {
+    const query = dependencies.getUserSupabase(token)
+      .from('profiles')
+      .select('*')
+      .eq('id', userId);
+    return concurrent ? query.maybeSingle() : query.single();
+  };
+
+  // The profile lookup is independent I/O, so overlap it with the remote JWT
+  // verification when the token carries a bounded subject. The subject is only
+  // a query-narrowing hint: access is still denied unless getUser() verifies the
+  // token and the returned profile has the exact same ID. This avoids adding two
+  // Supabase round trips on every authenticated API request without caching
+  // revocation-sensitive authorization state.
+  const concurrentProfilePromise = subjectCandidate
+    ? Promise.resolve(readOwnProfile(subjectCandidate, true)).catch((error: unknown) => ({ data: null, error }))
+    : null;
+  const { data: auth, error: authError } = await authPromise;
   if (authError || !auth.user) {
     res.status(401).json({ error: 'INVALID_SESSION' });
     return false;
@@ -125,11 +144,9 @@ async function authenticate(
 
   // Always resolve authorization from the current database profile. Client role
   // claims and request bodies are never authoritative.
-  const { data: profile, error } = await dependencies.getUserSupabase(token)
-    .from('profiles')
-    .select('*')
-    .eq('id', auth.user.id)
-    .single();
+  const { data: profile, error } = concurrentProfilePromise
+    ? await concurrentProfilePromise
+    : await readOwnProfile(auth.user.id);
   return applyAuthenticatedProfile(req, res, token, auth.user.id, profile, error);
 }
 

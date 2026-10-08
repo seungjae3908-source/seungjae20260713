@@ -70,7 +70,14 @@ test('auth bootstrap self-profile read is same-origin, exact-identity, and devic
   expect(runtimeRouteBody).not.toContain('req.params');
   expect(runtimeRouteBody).toContain("'Cache-Control', 'no-store, max-age=0'");
 
-  expect(authSource).toContain(".eq('id', auth.user.id)");
+  expect(authSource).toContain('const subjectCandidate = unverifiedJwtSubject(token);');
+  expect(authSource).toContain(".eq('id', userId)");
+  expect(authSource).toContain('const concurrentProfilePromise = subjectCandidate');
+  expect(authSource).toContain('readOwnProfile(subjectCandidate, true)');
+  expect(authSource).toContain('const { data: auth, error: authError } = await authPromise;');
+  expect(authSource).toContain('(profile as MemberProfile).id !== authenticatedUserId');
+  expect(authSource).toContain('applyAuthenticatedProfile(req, res, token, auth.user.id, profile, error)');
+  expect(authSource).not.toContain('authenticatedProfileCache');
   expect(authSource).toContain("res.status(401).json({ error: 'INVALID_SESSION' })");
   expect(authSource).toContain("res.status(403).json({ error: 'PROFILE_NOT_FOUND' })");
 
