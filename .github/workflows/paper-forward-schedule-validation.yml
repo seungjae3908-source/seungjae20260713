@@ -48,6 +48,22 @@ on:
       - market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
       - market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
+      - api-server/src/routes/backtests.ts
+      - api-server/src/services/backtest-data.service.ts
+      - api-server/src/services/backtest-engine.service.test.ts
+      - api-server/src/services/backtest-engine.service.ts
+      - api-server/src/services/backtest-paper-handoff.service.test.ts
+      - api-server/src/services/backtest-paper-handoff.service.ts
+      - api-server/src/services/futures-market-data.service.ts
+      - api-server/src/services/paper-trading.types.ts
+      - packages/strategy-hypothesis/src/backtest-paper-handoff.js
+      - packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
+      - stock-analyzer/src/components/backtest-research-panel.tsx
+      - stock-analyzer/src/lib/backtest.ts
+      - stock-analyzer/e2e/phase5-backtest.spec.ts
+      - stock-analyzer/src/pages/phase5-backtest-e2e.tsx
+      - stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
+      - stock-analyzer/src/lib/excel-export.ts
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
@@ -283,7 +299,7 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
 
-      - name: Require bounded non-UI diff
+      - name: Require bounded Paper and four-market backtester diff
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -508,6 +524,22 @@ jobs:
             research-production/src/research-dataset-snapshot-store.mjs
             research-production/test/research-canonical-dataset-component.test.mjs
             research-production/test/research-dataset-snapshot-store.test.mjs
+            api-server/src/routes/backtests.ts
+            api-server/src/services/backtest-data.service.ts
+            api-server/src/services/backtest-engine.service.test.ts
+            api-server/src/services/backtest-engine.service.ts
+            api-server/src/services/backtest-paper-handoff.service.test.ts
+            api-server/src/services/backtest-paper-handoff.service.ts
+            api-server/src/services/futures-market-data.service.ts
+            api-server/src/services/paper-trading.types.ts
+            packages/strategy-hypothesis/src/backtest-paper-handoff.js
+            packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
+            stock-analyzer/src/components/backtest-research-panel.tsx
+            stock-analyzer/src/lib/backtest.ts
+            stock-analyzer/e2e/phase5-backtest.spec.ts
+            stock-analyzer/src/pages/phase5-backtest-e2e.tsx
+            stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
+            stock-analyzer/src/lib/excel-export.ts
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
@@ -516,7 +548,15 @@ jobs:
               echo "unexpected path: $path" >&2
               exit 1
             }
-            [[ "$path" != stock-analyzer/* ]]
+            if [[ "$path" == stock-analyzer/* ]]; then
+              case "$path" in
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts) ;;
+                *)
+                  echo "Unexpected Paper-facing UI change: $path" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
           done
 
       - name: Validate JavaScript and shell syntax
