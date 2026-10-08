@@ -28,6 +28,7 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
+  automaticExecutionProjectionOrderIds,
   automaticPaperRiskEvidenceFromCanonicalLedger,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
@@ -328,6 +329,7 @@ function paperRepository(nowMs: number): PaperJournalRepository {
           cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
           usedMargin: 0,
           availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+          createdAt: new Date(nowMs).toISOString(),
         },
       }];
     },
@@ -2355,4 +2357,29 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
       else process.env[flag] = old;
     }
   }
+});
+
+test('automatic outbox selects post-wallet Paper orders and all automatic Live orders, never legacy QA fills', () => {
+  const epoch = Date.parse('2026-10-09T00:00:00.000Z');
+  const plans = [
+    { id: 'historic-paper', accountMode: 'paper', executionMode: 'automatic' },
+    { id: 'fresh-paper', accountMode: 'paper', executionMode: 'automatic' },
+    { id: 'live-existing', accountMode: 'live', executionMode: 'automatic' },
+    { id: 'manual-paper', accountMode: 'paper', executionMode: 'manual' },
+  ] as TradingPlan[];
+  const orders = [
+    { id: 'historic-order', planId: 'historic-paper', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'fresh-order', planId: 'fresh-paper', createdAt: '2026-10-09T00:00:02.000Z' },
+    { id: 'live-old-order', planId: 'live-existing', createdAt: '2026-09-01T00:00:00.000Z' },
+    { id: 'manual-order', planId: 'manual-paper', createdAt: '2026-10-09T00:00:02.000Z' },
+    { id: 'future-order', planId: 'fresh-paper', createdAt: '2026-10-10T00:00:00.000Z' },
+  ] as import('./trade-automation.types').TradingOrder[];
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plans, orders, epoch, epoch + 10_000),
+    ['fresh-order', 'live-old-order'],
+  );
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plans, orders, null, epoch + 10_000),
+    ['live-old-order'],
+  );
 });

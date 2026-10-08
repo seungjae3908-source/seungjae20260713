@@ -280,3 +280,45 @@ test('targeted sync denies live order even when owned and otherwise valid', asyn
   );
   assert.equal(await integrationRepository.getExecutionEventBySource('user-a', 'live-event'), null);
 });
+
+test('worker-only automatic Live event scope preserves strict public Paper route and member ownership', async () => {
+  const trading = new InMemoryTradingRepository();
+  const plan = { ...planFixture(), id: 'plan-live-auto', accountMode: 'live' as const, executionMode: 'automatic' as const };
+  const order = { ...orderFixture(plan), id: 'order-live-auto', planId: plan.id };
+  await trading.savePlan(plan);
+  await trading.saveOrder(order);
+  await trading.appendEvent(eventFixture(order, 'event-live-auto', 'ACCEPTED', 'FILLED', '2026-08-12T00:00:02.000Z'));
+  const { service, integrationRepository } = await linkedService();
+  const bridge = new TradeExecutionEventBridgeService(trading, service);
+  await assert.rejects(
+    () => bridge.syncUser('user-a', 'associate', { orderId: order.id }),
+    /EXECUTION_SYNC_TARGET_LIVE_FORBIDDEN/,
+  );
+  await assert.rejects(
+    () => bridge.syncAutomaticOrder('user-b', 'associate', order.id),
+    /EXECUTION_SYNC_TARGET_NOT_FOUND/,
+  );
+  const scoped = await bridge.syncAutomaticOrder('user-a', 'associate', order.id);
+  assert.equal(scoped.scopedToOrder, true);
+  assert.equal(scoped.inserted, 1);
+  assert.equal(scoped.privateApiRequests, 0);
+  assert.equal(scoped.ordersSubmitted, 0);
+  assert.equal((await integrationRepository.getExecutionEventBySource('user-a', 'event-live-auto'))?.executionMethod, 'AUTO_POLICY');
+  assert.equal((await bridge.syncAutomaticOrder('user-a', 'associate', order.id)).inserted, 0);
+});
+
+test('scoped Paper replay uses per-order repository query, not unbounded historic sweep', async () => {
+  const trading = new InMemoryTradingRepository();
+  const plan = { ...planFixture(), executionMode: 'automatic' as const };
+  const order = orderFixture(plan);
+  await trading.savePlan(plan);
+  await trading.saveOrder(order);
+  await trading.appendEvent(eventFixture(order, 'exact-paper-event', 'ACCEPTED', 'FILLED', '2026-08-12T00:00:02.000Z'));
+  trading.listEvents = async () => { throw new Error('UNSCOPED_HISTORY_SWEEP_FORBIDDEN'); };
+  const { service } = await linkedService();
+  const result = await new TradeExecutionEventBridgeService(trading, service)
+    .syncAutomaticOrder('user-a', 'associate', order.id);
+  assert.equal(result.inserted, 1);
+  assert.equal(result.scanned, 1);
+  assert.equal(result.scopedToOrder, true);
+});

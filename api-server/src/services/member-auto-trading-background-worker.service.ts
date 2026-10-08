@@ -141,6 +141,35 @@ export function automaticPaperWalletBootstrapReadiness(
   };
 }
 
+/**
+ * An automatic wallet has its own durable execution epoch. Older Paper QA
+ * orders stay auditable but cannot be replayed into the current wallet's
+ * Telegram/journal outbox. Existing Live auto positions are always included
+ * so a restart never hides their canonical execution events.
+ */
+export function automaticExecutionProjectionOrderIds(
+  plans: readonly TradingPlan[],
+  orders: readonly TradingOrder[],
+  paperWalletOpenedAtMs: number | null,
+  nowMs: number,
+): string[] {
+  const byPlanId = new Map(plans.map((plan) => [plan.id, plan]));
+  const selected = new Set<string>();
+  for (const order of orders) {
+    const plan = byPlanId.get(order.planId);
+    if (plan?.executionMode !== 'automatic') continue;
+    if (plan.accountMode === 'live') {
+      selected.add(order.id);
+      continue;
+    }
+    if (plan.accountMode !== 'paper' || paperWalletOpenedAtMs === null) continue;
+    const createdMs = Date.parse(order.createdAt);
+    if (Number.isFinite(createdMs) && createdMs >= paperWalletOpenedAtMs
+      && createdMs <= nowMs + 5_000) selected.add(order.id);
+  }
+  return [...selected].sort();
+}
+
 export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
 export const AUTOMATIC_PAPER_INITIAL_KRW = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
 const executionProjectionTransport: TelegramTransport = {
@@ -157,6 +186,7 @@ type EligibleMember = Readonly<{
 type MemberRuntimeState = Readonly<{
   // Never use missing Paper equity as a zero-PnL proof to authorize entries.
   paperAccountReady: boolean;
+  paperWalletOpenedAtMs: number | null;
   paperFinancialRiskReady: boolean;
   accountEquity: number;
   dailyPnlPercent: number;
@@ -189,6 +219,8 @@ export interface MemberAutoTradingBackgroundSource {
     profile: MemberAccessProfile;
     repository: TradingRepository;
     paperJournalRepository: PaperJournalRepository;
+    /** Exact worker-owned order IDs; never replay all historical user events. */
+    orderIds: readonly string[];
   }): Promise<{ inserted: number; deliveryQueued: number; missingReferences: number }>;
 }
 
@@ -750,7 +782,14 @@ async function memberRuntimeState(
   ]);
   const automaticEquity = paperResult.validRead
     ? selectAutomaticPaperAccountEquity(paperResult.records) : null;
-  const paperAccountReady = automaticEquity != null;
+  const walletRecord = paperResult.validRead ? paperResult.records.find((row) =>
+    row.kind === 'account' && row.id === AUTOMATIC_PAPER_ACCOUNT_ID && row.deletedAt == null) : null;
+  const wallet = walletRecord ? record(walletRecord.payload) : null;
+  const openedAtMs = Date.parse(String(wallet?.createdAt ?? ''));
+  const paperWalletOpenedAtMs = Number.isFinite(openedAtMs)
+    && openedAtMs >= 0 && openedAtMs <= nowMs + 5_000 ? openedAtMs : null;
+  // No epoch means new orders cannot safely be distinguished from old QA fills.
+  const paperAccountReady = automaticEquity != null && paperWalletOpenedAtMs !== null;
   const equity = automaticEquity ?? 0;
   // Invalid historical Paper order dates, incompatible partial fills, or
   // malformed canonical projections must quarantine NEW exposure without
@@ -770,6 +809,7 @@ async function memberRuntimeState(
   }
   return Object.freeze({
     paperAccountReady,
+    paperWalletOpenedAtMs,
     paperFinancialRiskReady: paperAccountReady && risk.ready,
     accountEquity: equity,
     // Only canonical automatic Paper close evidence can affect risk limits.
@@ -1547,12 +1587,24 @@ export class MemberAutoTradingBackgroundWorker {
         };
         const syncExecutionProjection = async () => {
           if (!this.source.syncExecutionEvents) return true;
+          const orderIds = automaticExecutionProjectionOrderIds(
+            runtime.plans, runtime.orders, runtime.paperWalletOpenedAtMs, nowMs,
+          );
+          if (runtime.orders.length >= 500 || runtime.plans.length >= 200
+            || orderIds.length > 100) {
+            // Never silently truncate either Live replay or new Paper outbox.
+            result.executionSyncMissingReferences += 1;
+            result.executionSyncBlocks += 1;
+            result.newEntriesFailClosed = true;
+            return false;
+          }
           try {
             const synced = await this.source.syncExecutionEvents({
               userId: member.userId,
               profile: member.profile,
               repository,
               paperJournalRepository: paper,
+              orderIds,
             });
             result.executionEventsInserted += synced.inserted;
             result.notificationDeliveriesQueued += synced.deliveryQueued;
@@ -1588,9 +1640,9 @@ export class MemberAutoTradingBackgroundWorker {
               now,
               live: false,
             });
+            if (exit.orderCreated) exitChanged = true;
             if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
               result.paperExitOrders += 1;
-              exitChanged = true;
             } else if (exit.status.startsWith('BLOCKED')) {
               result.exitBlocked += 1;
             }
@@ -1627,9 +1679,9 @@ export class MemberAutoTradingBackgroundWorker {
                   live: true,
                 });
                 result.privateTradingRequests += exit.privateRequests;
+                if (exit.orderCreated) exitChanged = true;
                 if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
                   result.liveExitOrders += 1;
-                  exitChanged = true;
                 } else if (exit.status.startsWith('BLOCKED')) {
                   result.exitBlocked += 1;
                 }
@@ -1646,14 +1698,15 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         if (exitChanged) {
-          entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
           try {
+            // Fetch the new exit order before selecting exact outbox IDs.
             await refreshRuntime();
           } catch {
             result.exitBlocked += 1;
             result.newEntriesFailClosed = true;
             continue;
           }
+          entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
         }
 
         if (!entryProjectionHealthy) {
@@ -2164,19 +2217,33 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     profile: MemberAccessProfile;
     repository: TradingRepository;
     paperJournalRepository: PaperJournalRepository;
+    orderIds: readonly string[];
   }) {
+    if (!Array.isArray(input.orderIds) || input.orderIds.length > 100
+      || input.orderIds.some((id) => typeof id !== 'string' || !id)) {
+      throw new Error('BACKGROUND_EXECUTION_PROJECTION_SCOPE_INVALID');
+    }
+    if (!input.orderIds.length) {
+      return { inserted: 0, deliveryQueued: 0, missingReferences: 0 };
+    }
     const integration = new UserBrokerTelegramService(
       createSupabaseUserBrokerTelegramRepository(),
       executionProjectionTransport,
       new CanonicalPortfolioSyncSink(input.paperJournalRepository, input.userId),
     );
-    const result = await new TradeExecutionEventBridgeService(input.repository, integration)
-      .syncUser(input.userId, deriveMemberTier(input.profile));
-    return {
-      inserted: result.inserted,
-      deliveryQueued: result.deliveryQueued,
-      missingReferences: result.missingReferences,
-    };
+    const bridge = new TradeExecutionEventBridgeService(input.repository, integration);
+    let inserted = 0;
+    let deliveryQueued = 0;
+    let missingReferences = 0;
+    for (const orderId of new Set(input.orderIds)) {
+      const result = await bridge.syncAutomaticOrder(
+        input.userId, deriveMemberTier(input.profile), orderId,
+      );
+      inserted += result.inserted;
+      deliveryQueued += result.deliveryQueued;
+      missingReferences += result.missingReferences;
+    }
+    return { inserted, deliveryQueued, missingReferences };
   }
 
   resolveFx(market: MemberAutoTradingPaperHandoffEntry['identity']['market'], nowMs: number) {
