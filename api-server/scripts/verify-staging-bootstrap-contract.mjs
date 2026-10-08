@@ -47,6 +47,10 @@ assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_
 assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING'), 'member security lockdown must preserve authenticated RLS helper execution');
 assert(memberSecurityDefinerLockdown.includes("grant execute on function %s to authenticated"), 'member security lockdown must not regrant helper execution to anon');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'), 'member security lockdown must reject PUBLIC/anon permission RPC execution');
+assert(memberSecurityDefinerLockdown.includes('record_member_password_reset_authorization'), 'member security lockdown must provide narrow password-reset audit RPC');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_AUDIT_TABLE_PRIVILEGE_INVALID'), 'member security lockdown must make audit table read-only to authenticated clients');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_AUDIT_DIRECT_INSERT_POLICY_PRESENT'), 'member security lockdown must reject direct audit INSERT policies');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_PASSWORD_RESET_AUDIT_RPC_PRIVILEGE_INVALID'), 'member security lockdown must verify password-reset audit RPC privileges');
 assert(memberSecurityDefinerLockdown.includes("'public.is_full_member()'"), 'member security lockdown must revoke the obsolete legacy full-member helper');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT'), 'member security lockdown must remove public/anon profile table grants');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID'), 'member security lockdown must keep only authenticated SELECT on profiles');
