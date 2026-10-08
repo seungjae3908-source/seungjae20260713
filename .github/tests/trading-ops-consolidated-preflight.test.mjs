@@ -75,7 +75,8 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   }
   assert.ok(worker.includes("accountMode: 'paper'"));
   assert.ok(worker.includes('persistMemberAutoTradingPaperPositionBridge'));
-  assert.ok(worker.includes("env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'true'"));
+  assert.ok(worker.includes('const paperOnly = env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;'));
+  assert.ok(worker.includes("if (paperOnly === 'true') return 'PAPER_ONLY';"));
   assert.ok(worker.includes("env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'"));
   assert.ok(worker.includes("if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';"));
   assert.ok(worker.includes("return (paperOnly === undefined || paperOnly === 'false')"));
