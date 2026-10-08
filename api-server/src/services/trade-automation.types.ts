@@ -6,7 +6,7 @@ export type TradingAccountMode = 'paper' | 'mock' | 'live';
 export type TradingSide = 'buy' | 'sell' | 'long' | 'short';
 export type TradingOrderType = 'market' | 'limit';
 export type TradingMarketRegime = 'bull' | 'bear' | 'sideways' | 'stress' | 'unknown';
-export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated';
+export type TradingPilotStage = 'approval-20' | 'limited-50' | 'validated' | 'formula-ai-exception';
 export type TradingAssetClass = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
 
 export type TradingOrderState =

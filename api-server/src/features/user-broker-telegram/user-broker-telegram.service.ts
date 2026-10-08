@@ -341,24 +341,54 @@ export class UserBrokerTelegramService {
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
   async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
-    const inserted = await this.repository.insertExecutionEvent(event);
-    if (!inserted) return { inserted: false, deliveryQueued: false };
-    if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
+    // Capture whether delivery was authorized AT FIRST PERSISTENCE. A crash
+    // may be replayed, but a user connecting Telegram or enabling preferences
+    // later must not receive a flood of historical orders retroactively.
     const preferences = await this.repository.getPreferences(event.userId);
-    if (!preferences[event.type]) return { inserted: true, deliveryQueued: false };
-    if (!personalTelegramEventAllowed(membership, event)) {
-      return { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
-    }
     const connection = await this.repository.getTelegramConnection(event.userId);
-    if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
+    const eligible = personalTelegramEventAllowed(membership, event);
+    const eventAtMs = Date.parse(event.occurredAt);
+    const connectionAtMs = Date.parse(connection?.connectedAt ?? '');
+    const deliveryIntended = Boolean(preferences[event.type] && eligible
+      && connection?.status === 'ACTIVE'
+      && Number.isFinite(eventAtMs) && Number.isFinite(connectionAtMs)
+      && eventAtMs >= connectionAtMs);
+    const proposed: UserExecutionEvent = {
+      ...event,
+      metadata: { ...event.metadata, telegramDeliveryIntendedAtInsert: deliveryIntended },
+    };
+    const inserted = await this.repository.insertExecutionEvent(proposed);
+    // Replay the persisted source identity after a crash; never turn an
+    // earlier USER_APPROVED event into AUTO_POLICY under the same source ID.
+    const canonical = inserted
+      ? proposed
+      : await this.repository.getExecutionEventBySource(event.userId, event.sourceEventId);
+    if (!canonical || canonical.userId !== event.userId || canonical.sourceEventId !== event.sourceEventId) {
+      throw new Error('EXECUTION_SOURCE_EVENT_RECOVERY_REQUIRED');
+    }
+    if (canonical.type !== event.type || canonical.source !== event.source
+      || canonical.executionMethod !== event.executionMethod
+      || canonical.orderPlanId !== event.orderPlanId
+      || canonical.executionId !== event.executionId
+      || canonical.symbol !== event.symbol || canonical.market !== event.market
+      || canonical.side !== event.side) {
+      throw new Error('EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT');
+    }
+    if (canonical.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(canonical);
+    if (!preferences[canonical.type]) return { inserted, deliveryQueued: false };
+    if (!eligible) return { inserted, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
+    if (!connection || connection.status !== 'ACTIVE') return { inserted, deliveryQueued: false };
+    if (canonical.metadata.telegramDeliveryIntendedAtInsert !== true) {
+      return { inserted, deliveryQueued: false };
+    }
     const timestamp = now.toISOString();
     const delivery: NotificationDelivery = {
-      id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
+      id: randomUUID(), userId: canonical.userId, eventId: canonical.id, dedupeKey: `${canonical.id}:${canonical.type}`,
       state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp,
       kind: 'EXECUTION_EVENT', payload: null,
     };
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
-    return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
+    return { inserted, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);

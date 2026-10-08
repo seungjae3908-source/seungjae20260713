@@ -18,8 +18,24 @@ on:
       - ops/verify-production-paper-forward-readiness.mjs
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-automation-policy-guard.service.ts
+      - api-server/src/services/trade-automation-policy-guard.service.test.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/routes/trade-automation.smoke.test.ts
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/services/trade-automation.types.ts
+      - api-server/src/services/trade-automation-risk.service.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
+      - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
+      - api-server/src/index.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
+      - stock-analyzer/src/pages/auto-trading.tsx
+      - stock-analyzer/src/components/trade-automation-settings.tsx
+      - stock-analyzer/e2e/auto-trading-professional-ui.spec.ts
       - api-server/src/services/futures-live-limited-capability.service.ts
       - .github/workflows/production-live-trading-gate.yml
       - .github/workflows/production-futures-live-trading-gate.yml
@@ -336,64 +352,6 @@ jobs:
           node ops/verify-production-paper-forward-readiness.mjs \
             --activation-artifact "$evidence" "$TARGET_SHA"
 
-      - name: Download exact-SHA four-provider Account QA evidence
-        if: ${{ false }}
-        uses: actions/download-artifact@v4
-        with:
-          name: production-account-readonly-live-${{ steps.command.outputs.sha }}
-          path: ${{ runner.temp }}/production-account-readonly-live-qa
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.gate.outputs.account_run_id }}
-
-      - name: Require all four providers connected, fresh, and reconciled
-        if: ${{ false }}
-        shell: bash
-        env:
-          TARGET_SHA: ${{ steps.command.outputs.sha }}
-          ACCOUNT_QA_EVIDENCE: ${{ runner.temp }}/production-account-readonly-live-qa/production-account-readonly-live-qa.json
-        run: |
-          set -Eeuo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
-          const target = String(process.env.TARGET_SHA || '');
-          const requiredProviders = ['toss', 'kiwoom', 'upbit', 'bitget'];
-          const evidence = JSON.parse(fs.readFileSync(process.env.ACCOUNT_QA_EVIDENCE, 'utf8'));
-
-          if (evidence?.schemaVersion !== 'production-account-readonly-live-qa-v3'
-            || evidence?.targetSha !== target
-            || evidence?.orderRequests !== 0
-            || evidence?.cancelRequests !== 0
-            || evidence?.amendRequests !== 0
-            || evidence?.transferRequests !== 0
-            || evidence?.withdrawalRequests !== 0
-            || evidence?.blockedMutationRequests !== 0
-            || evidence?.observedAppMutationRequests !== 0
-            || evidence?.liveTradingAuthorityGranted !== false
-            || evidence?.autoTradingAuthorityGranted !== false) {
-            throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_SAFETY_INVALID');
-          }
-          const testedProviders = Array.isArray(evidence?.testedProviders) ? evidence.testedProviders : [];
-          const rows = Array.isArray(evidence?.providers) ? evidence.providers : [];
-          for (const provider of requiredProviders) {
-            if (!testedProviders.includes(provider)) {
-              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_TESTED:' + provider);
-            }
-            const row = rows.find((candidate) => candidate?.provider === provider);
-            if (!row
-              || row.connected !== true
-              || row.status !== 'CONNECTED'
-              || row.stale !== false
-              || row.fresh !== true
-              || row.errorCode !== null
-              || row.checkedAtPresent !== true
-              || row.lastGoodAtPresent !== true
-              || row.reconciliation !== 'PASS'
-              || row.reconciliationPassed !== true) {
-              throw new Error('AUTOMATIC_TRADING_ACCOUNT_QA_PROVIDER_NOT_READY:' + provider);
-            }
-          }
-          NODE
-
       - name: Require no conflicting active Production trading gate
         uses: actions/github-script@v7
         with:
@@ -571,11 +529,67 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
           import { execFileSync } from 'node:child_process';
-          import { readFileSync } from 'node:fs';
+          import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
 
           const target = String(process.env.TARGET_SHA || '');
           const expectedLeverage = String(process.env.FUTURES_MAX_LEVERAGE || '');
           const pm2Name = 'stock-app';
+          const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
+          const liveEntryArmActivationDelayMs = 120_000;
+          const disarmLiveEntries = () => rmSync(liveEntryArmPath, { force: true });
+          const productionWorkerUid = () => {
+            const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+            const matches = rows.filter((row) => row?.name === pm2Name);
+            if (matches.length !== 1 || !Number.isInteger(Number(matches[0]?.pid)) || Number(matches[0].pid) <= 1) {
+              throw new Error('AUTOMATIC_TRADING_PM2_PID_INVALID');
+            }
+            return statSync('/proc/' + Number(matches[0].pid)).uid;
+          };
+          const verifyLiveEntryArmReadable = () => {
+            const stat = lstatSync(liveEntryArmPath);
+            if (!stat.isFile() || stat.isSymbolicLink()
+              || stat.size <= 0 || stat.size > 16 * 1024
+              || (stat.mode & 0o077) !== 0
+              || stat.uid !== productionWorkerUid()) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READABILITY_INVALID');
+            }
+            const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            const armedAtMs = Date.parse(String(value?.armedAt ?? ''));
+            const activateNotBeforeMs = Date.parse(String(value?.activateNotBeforeAt ?? ''));
+            if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
+              || value?.armed !== true || value?.targetSha !== target
+              || !Number.isFinite(armedAtMs)
+              || !Number.isFinite(activateNotBeforeMs)
+              || activateNotBeforeMs - armedAtMs !== liveEntryArmActivationDelayMs) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WORKER_READBACK_FAILED');
+            }
+            return true;
+          };
+          const armLiveEntries = () => {
+            mkdirSync(dirname(liveEntryArmPath), { recursive: true });
+            const temp = liveEntryArmPath + '.tmp-' + process.pid;
+            rmSync(temp, { force: true });
+            const armedAt = new Date();
+            const activateNotBeforeAt = new Date(
+              armedAt.getTime() + liveEntryArmActivationDelayMs,
+            ).toISOString();
+            writeFileSync(temp, JSON.stringify({
+              schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+              targetSha: target,
+              armed: true,
+              armedAt: armedAt.toISOString(),
+              activateNotBeforeAt,
+            }) + '\n', { mode: 0o600, flag: 'wx' });
+            renameSync(temp, liveEntryArmPath);
+            const value = JSON.parse(readFileSync(liveEntryArmPath, 'utf8'));
+            if (value?.schemaVersion !== 'member-auto-trading-live-entry-arm-v1'
+              || value?.armed !== true || value?.targetSha !== target) {
+              throw new Error('AUTOMATIC_TRADING_LIVE_ENTRY_ARM_WRITE_FAILED');
+            }
+            verifyLiveEntryArmReadable();
+            return activateNotBeforeAt;
+          };
           if (!['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)) throw new Error('AUTOMATIC_TRADING_FUTURES_LEVERAGE_INVALID');
           const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
           if (marker !== target) throw new Error('AUTOMATIC_TRADING_DEPLOY_SHA_MISMATCH');
@@ -597,6 +611,65 @@ jobs:
             }
             return env;
           };
+          const requireWorkerWarmup = (env, { requireCurrentArm }) => {
+            const port = String(env.PORT || env.API_PORT || '8080');
+            let last = null;
+            for (let attempt = 0; attempt < 360; attempt += 1) {
+              try {
+                last = JSON.parse(execFileSync('curl', [
+                  '--fail', '--silent', '--show-error', '--max-time', '3',
+                  'http://127.0.0.1:' + port + '/api/health',
+                ], { encoding: 'utf8' }));
+                const health = last?.autoTradingBackground;
+                const nowMs = Date.now();
+                const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''));
+                const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''));
+                const telegramProofAtMs = Date.parse(String(last?.userTelegramDelivery?.lastConfirmedDeliveryAt || ''));
+                const autoHealthFresh = Number.isFinite(autoLastTickMs)
+                  && autoLastTickMs <= nowMs
+                  && nowMs - autoLastTickMs <= 360_000;
+                const telegramHealthFresh = Number.isFinite(telegramLastTickMs)
+                  && telegramLastTickMs <= nowMs
+                  && nowMs - telegramLastTickMs <= 360_000;
+                const telegramProofFresh = Number.isFinite(telegramProofAtMs)
+                  && telegramProofAtMs <= nowMs + 5_000
+                  && nowMs - telegramProofAtMs <= 24 * 60 * 60_000;
+                if (health?.enabled === true
+                  && health?.liveModeRequested === true
+                  && autoHealthFresh
+                  && telegramHealthFresh
+                  && telegramProofFresh
+                  && health?.tickOk === true
+                  && health?.handoffReady === true
+                  && health?.newEntriesFailClosed === false
+                  && health?.liveEntryWarmupComplete === true
+                  && health?.startupWarmupObserved === true
+                  && health?.firstWarmupTickLiveEntriesArmed === false
+                  && health?.firstWarmupTickLiveOrders === 0
+                  && health?.firstWarmupTickLiveExitOrders === 0
+                  && health?.executionSyncFailures === 0
+                  && health?.executionSyncMissingReferences === 0
+                  && health?.liveReadinessCycleComplete === true
+                  && health?.liveCycleOrderEligible === true
+                  && health?.liveCyclePolicyReady === true
+                  && health?.liveCycleAllFourPolicyReady === true
+                  && health?.globalEmergencyStopActive === false
+                  && last?.userTelegramDelivery?.enabled === true
+                  && last?.userTelegramDelivery?.tickOk === true
+                  && last?.userTelegramDelivery?.deliveryConfirmed === true
+                  && last?.userTelegramDelivery?.lastConfirmedDeliveryAt
+                  && last?.userTelegramDelivery?.errorCode == null
+                  && (!requireCurrentArm || health?.liveEntryArmPresent === true)) {
+                  return health;
+                }
+              } catch {}
+              execFileSync('sleep', ['1']);
+            }
+            throw new Error('AUTOMATIC_TRADING_WORKER_WARMUP_NOT_PROVEN:' + JSON.stringify({
+              autoTradingBackground: last?.autoTradingBackground ?? null,
+              userTelegramDelivery: last?.userTelegramDelivery ?? null,
+            }));
+          };
           const manualState = (env) => ({
             live: bool(env, 'LIVE_TRADING'),
             real: bool(env, 'REAL_ORDER_ENABLED'),
@@ -617,11 +690,17 @@ jobs:
             futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
             futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
             futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || '').toLowerCase(),
+            telegramApproved: bool(env, 'LIVE_TELEGRAM_ACTIVATION_APPROVED'),
+            telegramIntelligenceWorker: bool(env, 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+            telegramDeliveryWorker: bool(env, 'PERSONAL_TELEGRAM_WORKER_ENABLED'),
           });
           const assertAllFourManual = (env, expectedAuto) => {
             const manual = manualState(env);
             if (!manual.live || !manual.real || !manual.privateApi || !manual.orderExecution || !manual.liveApproved) {
               throw new Error('AUTOMATIC_TRADING_GLOBAL_LIVE_GATE_NOT_READY');
+            }
+            if (!manual.telegramApproved || !manual.telegramIntelligenceWorker || !manual.telegramDeliveryWorker) {
+              throw new Error('AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE');
             }
             if (!manual.spotApproved || !manual.toss || !manual.kiwoom || !manual.upbit
               || manual.spotAuthority !== 'SPOT_LIVE_LIMITED') {
@@ -652,21 +731,48 @@ jobs:
               || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto
               || bool(env, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED') !== expectedAuto
               || bool(env, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED') !== false
               || bool(env, 'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED') !== false
               || bool(env, 'CRYPTO_AUTO_TRADE_ENABLED') !== false
               || bool(env, 'BITGET_AUTO_TRADE_ENABLED') !== false) {
               throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
             }
           };
-          const restartAutomatic = (enabled) => {
+          const preservedManualRuntimeEnv = (env) => ({
+            LIVE_TRADING: String(env.LIVE_TRADING ?? 'false'),
+            REAL_ORDER_ENABLED: String(env.REAL_ORDER_ENABLED ?? 'false'),
+            PRIVATE_TRADING_API_ALLOWED: String(env.PRIVATE_TRADING_API_ALLOWED ?? 'false'),
+            ORDER_EXECUTION_ENABLED: String(env.ORDER_EXECUTION_ENABLED ?? 'false'),
+            LIVE_TRADING_ACTIVATION_APPROVED: String(env.LIVE_TRADING_ACTIVATION_APPROVED ?? 'false'),
+            SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            TOSS_LIVE_ORDER_ENABLED: String(env.TOSS_LIVE_ORDER_ENABLED ?? 'false'),
+            KIWOOM_LIVE_ORDER_ENABLED: String(env.KIWOOM_LIVE_ORDER_ENABLED ?? 'false'),
+            UPBIT_LIVE_ORDER_ENABLED: String(env.UPBIT_LIVE_ORDER_ENABLED ?? 'false'),
+            executionAuthority: String(env.executionAuthority ?? 'NONE'),
+            SPOT_LIVE_CAPABILITY_ALLOWLIST: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            SPOT_LIVE_MARKET_ALLOWLIST: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            BITGET_FUTURES_LIVE_ORDER_ENABLED: String(env.BITGET_FUTURES_LIVE_ORDER_ENABLED ?? 'false'),
+            FUTURES_LIVE_EXECUTION_AUTHORITY: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE'),
+            FUTURES_LIVE_CAPABILITY_ALLOWLIST: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MARKET_ALLOWLIST: String(env.FUTURES_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MAX_LEVERAGE: String(env.FUTURES_LIVE_MAX_LEVERAGE ?? ''),
+            FUTURES_LIVE_MARGIN_MODE: String(env.FUTURES_LIVE_MARGIN_MODE ?? ''),
+            LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
+            TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
+            PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
+          });
+          const restartAutomatic = (enabled, baselineEnv) => {
             execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
               stdio: 'inherit',
               env: {
                 ...process.env,
+                ...preservedManualRuntimeEnv(baselineEnv),
                 AUTO_TRADING: enabled ? 'true' : 'false',
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
                 CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
                 CRYPTO_AUTO_TRADE_ENABLED: 'false',
                 BITGET_AUTO_TRADE_ENABLED: 'false',
@@ -686,12 +792,15 @@ jobs:
             execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
+            requireWorkerWarmup(persisted, { requireCurrentArm: true });
             console.log(JSON.stringify({
               status: 'ALREADY_ACTIVATED_ALL4',
               targetSha: target,
               idempotent: true,
               persistenceReadback: 'PASS',
-              REAL_ORDER_SUBMITTED: false,
+              WORKER_WARMUP_PROVEN: true,
+              LIVE_ENTRY_ARM_PRESENT: true,
+              REAL_ORDER_SUBMITTED_BY_GATE: false,
             }));
             process.exit(0);
           }
@@ -699,14 +808,16 @@ jobs:
           const preserved = manualState(before);
           let mutated = false;
           try {
-            restartAutomatic(true);
+            disarmLiveEntries();
+            restartAutomatic(true, before);
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
+            const warmupHealth = requireWorkerWarmup(after, { requireCurrentArm: false });
+            const activateNotBeforeAt = armLiveEntries();
             if (JSON.stringify(manualState(after)) !== JSON.stringify(preserved)) {
               throw new Error('AUTOMATIC_TRADING_CHANGED_MANUAL_MARKET_AUTHORITY');
             }
-            execFileSync('sleep', ['2']);
             const persisted = snapshot();
             assertAllFourManual(persisted, true);
             if (JSON.stringify(manualState(persisted)) !== JSON.stringify(preserved)) {
@@ -724,12 +835,28 @@ jobs:
               PAPER_AUTOMATIC_EXECUTION: true,
               LIVE_AUTOMATIC_BACKGROUND_EXECUTION: true,
               persistenceReadback: 'PASS',
+              WORKER_WARMUP_PROVEN: true,
+              FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false,
+              FIRST_WARMUP_TICK_LIVE_ORDERS: 0,
+              FIRST_WARMUP_TICK_LIVE_EXIT_ORDERS: 0,
+              LIVE_ENTRY_ARM_WRITTEN: true,
+              LIVE_ENTRY_ARM_READBACK_PROVEN: true,
+              LIVE_ENTRY_ARM_ACTIVATE_NOT_BEFORE: activateNotBeforeAt,
+              LIVE_ENTRY_ARM_ACTIVATION_DELAY_MS: liveEntryArmActivationDelayMs,
+              NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
+              LIVE_READINESS_CYCLE_COMPLETE: warmupHealth.liveReadinessCycleComplete,
+              LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
+              LIVE_CYCLE_POLICY_READY: warmupHealth.liveCyclePolicyReady,
+              LIVE_CYCLE_ALL_FOUR_POLICY_READY: warmupHealth.liveCycleAllFourPolicyReady,
+              GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
+              TELEGRAM_DELIVERY_WORKER_POST_RESTART: 'HEALTHY',
               REAL_ORDER_SUBMITTED: false,
             }));
           } catch (cause) {
             if (mutated) {
               try {
-                restartAutomatic(false);
+                disarmLiveEntries();
+                restartAutomatic(false, before);
                 const rolledBack = snapshot();
                 assertAllFourManual(rolledBack, false);
                 if (JSON.stringify(manualState(rolledBack)) !== JSON.stringify(preserved)) {
@@ -755,6 +882,7 @@ jobs:
           SPOT_RECEIPT_ID: ${{ steps.gate.outputs.spot_receipt_comment_id }}
           FUTURES_RECEIPT_ID: ${{ steps.gate.outputs.futures_receipt_comment_id }}
           FUTURES_MAX_LEVERAGE: ${{ steps.gate.outputs.futures_max_leverage }}
+          QA_SCOPE: ${{ steps.gate.outputs.qa_scope }}
         with:
           script: |
             await github.rest.issues.createComment({
@@ -785,6 +913,20 @@ jobs:
                 'paper_automatic_execution=true',
                 'live_automatic_background_execution=true',
                 'persistence_readback=PASS',
+                'worker_warmup_proven=true',
+                'first_warmup_tick_live_entries_armed=false',
+                'first_warmup_tick_live_orders=0',
+                'first_warmup_tick_live_exit_orders=0',
+                'live_entry_arm_written=true',
+                'live_entry_arm_readback_proven=true',
+                'live_entry_arm_activation_delay_ms=120000',
+                'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
+                'live_readiness_cycle_complete=true',
+                'live_cycle_order_eligible=true',
+                'live_cycle_policy_ready=true',
+                'live_cycle_all_four_policy_ready=true',
+                'global_emergency_stop=false',
+                'telegram_delivery_worker_post_restart=HEALTHY',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
                 'futures_executionAuthority=FUTURES_LIVE_LIMITED',
                 'transfer_withdrawal_authority=false',
@@ -859,10 +1001,12 @@ jobs:
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
           import { execFileSync } from 'node:child_process';
-          import { readFileSync } from 'node:fs';
+          import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
 
           const target = String(process.env.TARGET_SHA || '');
           const pm2Name = 'stock-app';
+          const liveEntryArmPath = '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
           if (readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim() !== target) {
             throw new Error('AUTOMATIC_TRADING_DISABLE_DEPLOY_SHA_MISMATCH');
           }
@@ -901,18 +1045,82 @@ jobs:
             futuresMarkets: String(env.FUTURES_LIVE_MARKET_ALLOWLIST || ''),
             futuresMaxLeverage: String(env.FUTURES_LIVE_MAX_LEVERAGE || ''),
             futuresMarginMode: String(env.FUTURES_LIVE_MARGIN_MODE || ''),
+            telegramApproved: bool(env, 'LIVE_TELEGRAM_ACTIVATION_APPROVED'),
+            telegramIntelligenceWorker: bool(env, 'TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+            telegramDeliveryWorker: bool(env, 'PERSONAL_TELEGRAM_WORKER_ENABLED'),
+          });
+          const preservedDisableRuntimeEnv = (env) => ({
+            LIVE_TRADING: String(env.LIVE_TRADING ?? 'false'),
+            REAL_ORDER_ENABLED: String(env.REAL_ORDER_ENABLED ?? 'false'),
+            PRIVATE_TRADING_API_ALLOWED: String(env.PRIVATE_TRADING_API_ALLOWED ?? 'false'),
+            ORDER_EXECUTION_ENABLED: String(env.ORDER_EXECUTION_ENABLED ?? 'false'),
+            LIVE_TRADING_ACTIVATION_APPROVED: String(env.LIVE_TRADING_ACTIVATION_APPROVED ?? 'false'),
+            SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            TOSS_LIVE_ORDER_ENABLED: String(env.TOSS_LIVE_ORDER_ENABLED ?? 'false'),
+            KIWOOM_LIVE_ORDER_ENABLED: String(env.KIWOOM_LIVE_ORDER_ENABLED ?? 'false'),
+            UPBIT_LIVE_ORDER_ENABLED: String(env.UPBIT_LIVE_ORDER_ENABLED ?? 'false'),
+            executionAuthority: String(env.executionAuthority ?? 'NONE'),
+            SPOT_LIVE_CAPABILITY_ALLOWLIST: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            SPOT_LIVE_MARKET_ALLOWLIST: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            BITGET_FUTURES_LIVE_ORDER_ENABLED: String(env.BITGET_FUTURES_LIVE_ORDER_ENABLED ?? 'false'),
+            FUTURES_LIVE_EXECUTION_AUTHORITY: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE'),
+            FUTURES_LIVE_CAPABILITY_ALLOWLIST: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MARKET_ALLOWLIST: String(env.FUTURES_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MAX_LEVERAGE: String(env.FUTURES_LIVE_MAX_LEVERAGE ?? ''),
+            FUTURES_LIVE_MARGIN_MODE: String(env.FUTURES_LIVE_MARGIN_MODE ?? ''),
+            LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
+            TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
+            PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
           });
 
           const before = readEnv();
           const preserved = manual(before);
+          const automaticWasEnabled = bool(before, 'AUTO_TRADING')
+            || bool(before, 'LIVE_AUTOMATIC_TRADING_ENABLED')
+            || bool(before, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
+            || bool(before, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED');
+          if (automaticWasEnabled) {
+            const port = String(before.PORT || before.API_PORT || '8080');
+            let health;
+            try {
+              health = JSON.parse(execFileSync('curl', [
+                '--fail', '--silent', '--show-error', '--max-time', '3',
+                'http://127.0.0.1:' + port + '/api/health',
+              ], { encoding: 'utf8' }));
+            } catch {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_HEALTH_UNAVAILABLE');
+            }
+            const autoHealth = health?.autoTradingBackground;
+            const lastTickMs = Date.parse(String(autoHealth?.lastTickAt || ''));
+            const nowMs = Date.now();
+            if (autoHealth?.enabled !== true
+              || autoHealth?.liveModeRequested !== true
+              || autoHealth?.tickOk !== true
+              || !Number.isFinite(lastTickMs)
+              || lastTickMs > nowMs
+              || nowMs - lastTickMs > 360_000) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_HEALTH_STALE_OR_INVALID');
+            }
+            const openLivePositions = Number(autoHealth?.liveTrackedPositions);
+            if (!Number.isInteger(openLivePositions) || openLivePositions < 0) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_LIVE_POSITION_COUNT_INVALID');
+            }
+            if (openLivePositions > 0) {
+              throw new Error('AUTOMATIC_TRADING_DISABLE_OPEN_LIVE_POSITIONS:' + openLivePositions);
+            }
+          }
+          rmSync(liveEntryArmPath, { force: true });
           execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
             stdio: 'inherit',
             env: {
               ...process.env,
+              ...preservedDisableRuntimeEnv(before),
               AUTO_TRADING: 'false',
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
               MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
               CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
               CRYPTO_AUTO_TRADE_ENABLED: 'false',
               BITGET_AUTO_TRADE_ENABLED: 'false',
@@ -925,7 +1133,8 @@ jobs:
           if (bool(after, 'AUTO_TRADING')
             || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')
             || bool(after, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
-            || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')) {
+            || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED')) {
             throw new Error('AUTOMATIC_TRADING_DISABLE_POSTCHECK_FAILED');
           }
           if (JSON.stringify(manual(after)) !== JSON.stringify(preserved)) {

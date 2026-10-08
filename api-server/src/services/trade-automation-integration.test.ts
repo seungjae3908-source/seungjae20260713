@@ -1082,3 +1082,31 @@ test('signal invalidation cancels only the unfilled remainder and preserves part
     assert.equal(outbound, 0);
   } finally { globalThis.fetch = nativeFetch; }
 });
+
+
+test('malformed reduceOnly cash BUY fails closed before bypassing stop, new-entry or amount gates', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: true,
+    newEntriesStopped: true,
+    exchangeEnabled: { bitget: false, upbit: true, kiwoom: true, toss: true },
+  });
+  for (const [exchange, market, symbol] of [
+    ['upbit', 'KRW', 'BTC'],
+    ['kiwoom', 'KR', '005930'],
+    ['toss', 'KR', '005930'],
+  ] as const) {
+    const decision = evaluateTradingPlan(plan({
+      exchange, market, symbol, side: 'buy', reduceOnly: true,
+      stockBroker: exchange === 'upbit' ? null : exchange,
+      quantity: exchange === 'upbit' ? 0.01 : 1,
+      quoteAmount: null, estimatedKrw: 150_000,
+      targetPrices: [], stopPrice: 0,
+    }), policy, { emergencyStopped: true, serverLiveEnabled: true });
+    assert.ok(decision.blockCodes.includes('REDUCE_ONLY_SIDE_INVALID'), exchange);
+    assert.ok(decision.blockCodes.includes('EMERGENCY_STOP_ACTIVE'), exchange);
+    assert.ok(decision.blockCodes.includes('NEW_ENTRIES_STOPPED'), exchange);
+    assert.equal(decision.allowed, false);
+  }
+});

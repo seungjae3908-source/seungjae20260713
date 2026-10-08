@@ -31,9 +31,14 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'memberAutoPolicyReadiness',
     'preparedMemberAutoPolicy',
     'memberAutoPolicyPrepared',
+    'memberAutoResumePrepared',
+    "/api/trade-automation/resume",
+    "confirmation: 'RESUME_MEMBER_TRADING'",
+    'const originalPolicy = structuredClone(statusBefore.body.policy)',
     'Member policy preparation must not grant LIVE AUTO server authority',
-    "pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50'",
     'memberAutoPolicyReady',
+    'memberAutoLivePilotReady',
+    'memberAutoOriginalPilotStage',
     'memberAutoPolicyBlockers',
     'memberAutoBitgetLeverage',
     'policyRestored',
@@ -56,6 +61,8 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     '/amend',
     '/transfer',
     '/withdraw',
+    "pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50'",
+    "pilotStage: 'validated'",
   ]) assert.equal(spec.includes(forbidden), false, forbidden);
 
   assert.equal(spec.includes('must change atomically'), false);

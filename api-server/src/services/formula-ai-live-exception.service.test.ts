@@ -207,6 +207,54 @@ test('formula+AI exception bypasses research promotion but preserves operational
   }
 });
 
+test('dedicated formula-ai pilot stage allows only a valid formula+AI live exception', () => {
+  const exceptionPolicy = normalizeTradingPolicy({
+    ...policy(),
+    pilotStage: 'formula-ai-exception',
+  });
+  const allowed = evaluateTradingPlan(spotPlan(), exceptionPolicy, {
+    emergencyStopped: false,
+    serverLiveEnabled: true,
+  });
+  assert.equal(allowed.blockCodes.includes('PILOT_LIVE_DISABLED'), false);
+  assert.equal(allowed.blockCodes.includes('PILOT_FORMULA_AI_EXCEPTION_REQUIRED'), false);
+  assert.equal(allowed.allowed, true, allowed.blockCodes.join(','));
+
+  const missingAi = spotPlan();
+  missingAi.signalReasons = missingAi.signalReasons.filter((reason) => reason !== 'AI_REVIEW_DECISION:PASS');
+  const blocked = evaluateTradingPlan(missingAi, exceptionPolicy, {
+    emergencyStopped: false,
+    serverLiveEnabled: true,
+  });
+  assert.ok(blocked.blockCodes.includes('PILOT_FORMULA_AI_EXCEPTION_REQUIRED'));
+});
+
+test('formula+AI exception bypasses historical economics while operational risk remains required', () => {
+  const currentPolicy = normalizeTradingPolicy({
+    ...policy(),
+    pilotStage: 'formula-ai-exception',
+  });
+  const plan = spotPlan();
+  plan.economics = null;
+  const allowed = evaluateTradingPlan(plan, currentPolicy, {
+    emergencyStopped: false,
+    serverLiveEnabled: true,
+  });
+  assert.equal(allowed.blockCodes.includes('ECONOMICS_REQUIRED'), false);
+  assert.equal(allowed.blockCodes.includes('PROFIT_FACTOR_REQUIRED'), false);
+  assert.equal(allowed.blockCodes.includes('STRATEGY_DRAWDOWN_REQUIRED'), false);
+  assert.equal(allowed.allowed, true, allowed.blockCodes.join(','));
+
+  const noSpread = spotPlan();
+  noSpread.economics = null;
+  noSpread.averageSpreadPercent = null;
+  const blocked = evaluateTradingPlan(noSpread, currentPolicy, {
+    emergencyStopped: false,
+    serverLiveEnabled: true,
+  });
+  assert.ok(blocked.blockCodes.includes('AVERAGE_SPREAD_REQUIRED'));
+});
+
 test('exception fails closed when AI PASS identity is missing', () => {
   const plan = spotPlan();
   plan.signalReasons = plan.signalReasons.filter((reason) => reason !== 'AI_REVIEW_DECISION:PASS');

@@ -18,9 +18,10 @@ import { normalizeTradingPolicy } from '../../services/trade-automation-risk.ser
 import { InMemoryUserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import { TradeExecutionEventBridgeService } from './trade-execution-event-bridge.service';
 import { queueManualPortfolioNotifications, CanonicalPortfolioSyncSink } from './user-broker-telegram.runtime';
+import { buildUnifiedTradeJournal } from '../../services/unified-trade-journal.service';
 import { UserBrokerTelegramService } from './user-broker-telegram.service';
 import { TelegramDeliveryWorker, type TelegramDeliveryWorkerSource } from './user-broker-telegram.worker';
-import type { TelegramTransport } from './user-broker-telegram.types';
+import type { TelegramTransport, UserExecutionEvent } from './user-broker-telegram.types';
 
 const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
@@ -95,6 +96,15 @@ async function linked(service: UserBrokerTelegramService, chatId = 'chat-a') {
 }
 
 test('paper approval -> execution bridge -> canonical journal -> Telegram A is isolated and idempotent', async () => {
+  // Real-time delivery is eligible only for orders occurring after the member
+  // connected Telegram; pre-link history must not be replayed as fresh alerts.
+  const journal = new JournalRepository();
+  const integrationRepo = telegramRepository();
+  const transport = new FakeTransport();
+  const service = new UserBrokerTelegramService(
+    integrationRepo, transport, new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot',
+  );
+  await linked(service);
   const trading = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(trading);
   const created = await automation.createPlan(USER_A, input(), normalizeTradingPolicy(DEFAULT_TRADING_POLICY), false);
@@ -109,11 +119,6 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   const executed = await new TradeExecutionService(trading).execute(USER_A, approved, pending.order);
   assert.equal(executed.state, 'FILLED');
 
-  const journal = new JournalRepository();
-  const integrationRepo = telegramRepository();
-  const transport = new FakeTransport();
-  const service = new UserBrokerTelegramService(integrationRepo, transport, new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
-  await linked(service);
   const bridge = new TradeExecutionEventBridgeService(trading, service);
   const first = await bridge.syncUser(USER_A, 'associate');
   assert.ok(first.inserted >= 2);
@@ -131,6 +136,105 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   assert.equal(result.privateBrokerRequests, 0);
   assert.ok(transport.sent.length >= 2);
   assert.ok(transport.sent.every((item) => item.chatId === 'chat-a'));
+});
+
+
+test('four-market Paper execution projection preserves US stock currency and both futures position directions', async () => {
+  const journal = new JournalRepository();
+  const sink = new CanonicalPortfolioSyncSink(journal, USER_A);
+  const base: UserExecutionEvent = {
+    id: 'ledger-event-base', sourceEventId: 'ledger-event-base', userId: USER_A,
+    brokerConnectionRef: 'upbit', orderPlanId: 'paper-plan', executionId: 'paper-order',
+    type: 'ORDER_FILLED', source: 'PAPER_EXECUTION', executionMethod: 'AUTO_POLICY',
+    symbol: 'BTC', market: 'KRW', side: 'buy', quantity: 1, price: 100,
+    maskedAccount: null, strategy: 'rule-pack-paper', remainingQuantity: 0,
+    realizedPnl: null, averageEntryPrice: null, averageExitPrice: null,
+    occurredAt: '2026-10-08T00:00:00.000Z', metadata: { reduceOnly: false, feeAmount: 0 },
+  };
+  const row = async (id: string, changes: Partial<UserExecutionEvent>) => {
+    await sink.accept({ ...base, ...changes, sourceEventId: id, id, executionId: id });
+    const payloads = await journal.listJournalPayloads(USER_A);
+    const entry = payloads.find((item) => item.clientOrderId === id);
+    assert.ok(entry, 'canonical Paper journal record must exist for ' + id);
+    return entry;
+  };
+
+  const kr = await row('kr', {
+    brokerConnectionRef: 'toss', market: 'KR', symbol: '005930', side: 'buy',
+  });
+  assert.deepEqual([kr.broker, kr.market, kr.currency, kr.side, kr.positionSide, kr.positionEffect],
+    ['TOSS', 'KR_STOCK', 'KRW', 'BUY', 'LONG', 'OPEN']);
+
+  const us = await row('us', {
+    brokerConnectionRef: 'kiwoom', market: 'US', symbol: 'AAPL', side: 'buy',
+  });
+  assert.deepEqual([us.broker, us.market, us.currency, us.side, us.positionSide, us.positionEffect],
+    ['KIWOOM', 'US_STOCK', 'USD', 'BUY', 'LONG', 'OPEN']);
+
+  const spot = await row('spot', {
+    brokerConnectionRef: 'upbit', market: 'KRW', symbol: 'KRW-BTC', side: 'buy',
+  });
+  assert.deepEqual([spot.market, spot.currency, spot.side, spot.positionEffect],
+    ['CRYPTO_SPOT', 'KRW', 'BUY', 'OPEN']);
+
+  const shortEntry = await row('short-entry', {
+    brokerConnectionRef: 'bitget', market: 'USDT-FUTURES', symbol: 'ETHUSDT',
+    side: 'short', price: 100, occurredAt: '2026-10-08T00:01:00.000Z',
+  });
+  assert.deepEqual([shortEntry.market, shortEntry.currency, shortEntry.side,
+    shortEntry.positionSide, shortEntry.positionEffect],
+  ['CRYPTO_FUTURES', 'USDT', 'SELL', 'SHORT', 'OPEN']);
+  const shortExit = await row('short-exit', {
+    brokerConnectionRef: 'bitget', market: 'USDT-FUTURES', symbol: 'ETHUSDT',
+    side: 'long', price: 90, occurredAt: '2026-10-08T00:02:00.000Z',
+    metadata: { reduceOnly: true, feeAmount: 0 },
+  });
+  assert.deepEqual([shortExit.side, shortExit.positionSide, shortExit.positionEffect],
+    ['BUY', 'SHORT', 'CLOSE']);
+
+  await row('long-entry', {
+    brokerConnectionRef: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+    side: 'long', price: 100, occurredAt: '2026-10-08T00:03:00.000Z',
+  });
+  const longExit = await row('long-exit', {
+    brokerConnectionRef: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+    side: 'short', price: 110, occurredAt: '2026-10-08T00:04:00.000Z',
+    metadata: { reduceOnly: true, feeAmount: 0 },
+  });
+  assert.deepEqual([longExit.side, longExit.positionSide, longExit.positionEffect],
+    ['SELL', 'LONG', 'CLOSE']);
+
+  const futures = (await journal.listJournalPayloads(USER_A))
+    .filter((item) => item.market === 'CRYPTO_FUTURES');
+  const cycles = buildUnifiedTradeJournal(futures, { range: 'ALL' }, new Date('2026-10-08T01:00:00.000Z'));
+  assert.deepEqual(cycles.integrityIssues, []);
+  assert.equal(cycles.trades.filter((item) => item.status === 'CLOSED').length, 2);
+  assert.equal(cycles.trades.find((item) => item.symbol === 'ETHUSDT')?.grossPnl, 10);
+  assert.equal(cycles.trades.find((item) => item.symbol === 'BTCUSDT')?.grossPnl, 10);
+  assert.equal(journal.mutations, 7);
+});
+
+test('unverified quote scope and cash short never enter the canonical Paper journal', async () => {
+  const journal = new JournalRepository();
+  const sink = new CanonicalPortfolioSyncSink(journal, USER_A);
+  const base: UserExecutionEvent = {
+    id: 'invalid-scope', sourceEventId: 'invalid-scope', userId: USER_A,
+    brokerConnectionRef: 'upbit', orderPlanId: 'p', executionId: 'o',
+    type: 'ORDER_FILLED', source: 'PAPER_EXECUTION', executionMethod: 'AUTO_POLICY',
+    symbol: 'BTC', market: 'BTC', side: 'buy', quantity: 1, price: 100,
+    maskedAccount: null, strategy: 'paper', remainingQuantity: 0,
+    realizedPnl: null, averageEntryPrice: null, averageExitPrice: null,
+    occurredAt: '2026-10-08T00:00:00.000Z', metadata: { reduceOnly: false },
+  };
+  await assert.rejects(sink.accept(base), /PORTFOLIO_PAPER_SPOT_QUOTE_CURRENCY_UNVERIFIED/);
+  await assert.rejects(sink.accept({ ...base, brokerConnectionRef: 'kiwoom',
+    market: 'UNKNOWN', symbol: 'AAPL' }), /PORTFOLIO_PAPER_STOCK_MARKET_UNVERIFIED/);
+  await assert.rejects(sink.accept({ ...base, brokerConnectionRef: 'toss',
+    market: 'KR', side: 'short' }), /PORTFOLIO_PAPER_CASH_SHORT_FORBIDDEN/);
+  await assert.rejects(sink.accept({ ...base, brokerConnectionRef: 'bitget',
+    market: 'USDT-FUTURES', side: 'short', type: 'STOP_FILLED' }),
+    /PORTFOLIO_PAPER_FUTURES_EXIT_REDUCE_ONLY_REQUIRED/);
+  assert.equal(journal.mutations, 0);
 });
 
 test('risk reject creates no broker order and no portfolio mutation', async () => {

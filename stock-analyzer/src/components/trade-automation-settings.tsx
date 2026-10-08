@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Power, RefreshCw, ShieldAlert } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ type Policy = {
   mode: 'approval' | 'automatic';
   automaticEnabled: boolean;
   emergencyStopped: boolean;
+  newEntriesStopped: boolean;
   marketEnabled?: MarketSwitches;
   stockBrokerByMarket?: StockBrokerByMarket;
   exchangeEnabled: Record<Exchange, boolean>;
@@ -27,6 +28,7 @@ type Policy = {
   maxDailyOrders: number;
   maxConsecutiveLosses: number;
   bitgetLeverage: 2 | 3 | 4 | 5 | 6 | 7;
+  pilotStage: 'approval-20' | 'limited-50' | 'validated' | 'formula-ai-exception';
 };
 
 type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
@@ -52,6 +54,54 @@ type Status = {
     lastActivityAt: string | null;
   }>;
   liveExecutionServerEnabled?: Record<Exchange, boolean>;
+  liveAutomaticExecutionServerEnabled?: Record<Exchange, boolean>;
+  liveExecutionReadiness?: Partial<Record<Exchange, {
+    connectionConfigured: boolean;
+    providerVerified: boolean;
+    manualServerGateEnabled: boolean;
+    automaticServerGateEnabled: boolean;
+    readyForManualOrderEvaluation: boolean;
+    readyForAutomaticOrderEvaluation: boolean;
+    blockers: string[];
+  }>>;
+  liveAutomaticReadinessByMarket?: Partial<Record<Market, {
+    exchange: Exchange;
+    connectionConfigured: boolean;
+    providerVerified: boolean;
+    manualServerGateEnabled: boolean;
+    automaticServerGateEnabled: boolean;
+    automaticPolicyEnabled: boolean;
+    marketAutomaticEnabled: boolean;
+    exchangeAutomaticEnabled: boolean;
+    memberOrderCapability: boolean;
+    memberStopped: boolean;
+    globalStopped: boolean;
+    readyForAutomaticOrderEvaluation: boolean;
+    blockers: string[];
+  }>>;
+  autoTradingBackground?: {
+    enabled: boolean;
+    liveModeRequested: boolean;
+    lastTickAt: string | null;
+    tickOk: boolean | null;
+    handoffReady: boolean;
+    newEntriesFailClosed: boolean;
+    liveEntryArmPresent: boolean;
+    liveEntriesArmed: boolean;
+    liveEntryWarmupComplete: boolean;
+    liveReadinessCycleComplete: boolean;
+    liveCycleAllFourPolicyReady: boolean;
+    globalEmergencyStopActive: boolean;
+    errorCode: string | null;
+  } | null;
+  userTelegramDelivery?: {
+    enabled: boolean;
+    lastTickAt: string | null;
+    tickOk: boolean | null;
+    deliveryConfirmed?: boolean;
+    lastConfirmedDeliveryAt?: string | null;
+    errorCode: string | null;
+  } | null;
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
@@ -91,6 +141,7 @@ const DEFAULT_POLICY: UiPolicy = {
   mode: 'automatic',
   automaticEnabled: false,
   emergencyStopped: false,
+  newEntriesStopped: false,
   marketEnabled: DEFAULT_MARKETS,
   stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
   exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: false },
@@ -104,6 +155,7 @@ const DEFAULT_POLICY: UiPolicy = {
   maxDailyOrders: 10,
   maxConsecutiveLosses: 3,
   bitgetLeverage: 2,
+  pilotStage: 'approval-20',
 };
 
 function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
@@ -152,16 +204,26 @@ function exchangesForMarkets(
   };
 }
 
-export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?: Status; selectedMarket?: Market }) {
+export function TradeAutomationSettings({
+  fixture,
+  selectedMarket,
+  canManagePilot = false,
+}: {
+  fixture?: Status;
+  selectedMarket?: Market;
+  canManagePilot?: boolean;
+}) {
   const [status, setStatus] = useState<Status | null>(fixture ?? null);
   const [draft, setDraft] = useState<UiPolicy>(() => normalizeUiPolicy(fixture?.policy));
   const [loading, setLoading] = useState(!fixture);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const refreshInFlight = useRef(false);
 
-  async function load() {
-    if (fixture) return;
-    setLoading(true);
+  async function load({ syncDraft = true }: { syncDraft?: boolean } = {}) {
+    if (fixture || refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    if (syncDraft) setLoading(true);
     try {
       const response = await authorizedFetch('/api/trade-automation/status');
       const payload = await response.json() as Status & { ok?: boolean; status?: string; error?: string };
@@ -172,28 +234,38 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         throw new Error(message);
       }
       setStatus(payload);
-      setDraft(normalizeUiPolicy(payload.policy));
-      setMessage('');
+      if (syncDraft) {
+        setDraft(normalizeUiPolicy(payload.policy));
+        setMessage('');
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.');
+      if (syncDraft) setMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.');
     } finally {
-      setLoading(false);
+      refreshInFlight.current = false;
+      if (syncDraft) setLoading(false);
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (fixture) return;
+    void load();
+    const timer = window.setInterval(() => { void load({ syncDraft: false }); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [fixture]);
 
   function updateNumber(key: keyof UiPolicy, value: string) {
     setDraft((current) => ({ ...current, [key]: Number(value) }));
   }
 
   function toggleAutomatic() {
-    setDraft((current) => ({
-      ...current,
-      mode: 'automatic',
-      automaticEnabled: !current.automaticEnabled,
-      emergencyStopped: false,
-    }));
+    setDraft((current) => {
+      if (current.emergencyStopped || current.newEntriesStopped) return current;
+      return {
+        ...current,
+        mode: 'automatic',
+        automaticEnabled: !current.automaticEnabled,
+      };
+    });
   }
 
   function toggleMarket(market: Market) {
@@ -255,6 +327,81 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     }
   }
 
+  async function resumeTrading() {
+    if (fixture) {
+      setDraft((current) => ({
+        ...current,
+        mode: 'automatic',
+        automaticEnabled: false,
+        emergencyStopped: false,
+        newEntriesStopped: false,
+        exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+      }));
+      setMessage('재개 준비 완료: 자동매매는 OFF입니다. 설정을 다시 확인하고 저장해야 켜집니다.');
+      return;
+    }
+    try {
+      const response = await authorizedFetch('/api/trade-automation/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: 'RESUME_MEMBER_TRADING' }),
+      });
+      const payload = await response.json() as {
+        policy?: Policy;
+        error?: string;
+        effectiveGlobalEmergencyStopped?: boolean;
+      };
+      if (!response.ok || !payload.policy) {
+        throw new Error(payload.error ?? '자동매매 재개 준비에 실패했습니다.');
+      }
+      const normalized = normalizeUiPolicy(payload.policy);
+      setDraft(normalized);
+      setStatus((current) => current ? {
+        ...current,
+        policy: payload.policy!,
+        emergencyStopped: payload.effectiveGlobalEmergencyStopped === true,
+      } : current);
+      setMessage(payload.effectiveGlobalEmergencyStopped
+        ? '회원 비상정지는 해제됐지만 서버 전체 비상정지가 남아 있습니다. 자동매매는 OFF 상태입니다.'
+        : '재개 준비 완료: 자동매매는 OFF입니다. 설정을 다시 확인하고 저장해야 켜집니다.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '자동매매 재개 준비에 실패했습니다.');
+    }
+  }
+
+  async function enableFormulaAiPilot() {
+    if (!canManagePilot) return;
+    if (fixture) {
+      setDraft((current) => ({ ...current, pilotStage: 'formula-ai-exception', automaticEnabled: false }));
+      setStatus((current) => current ? {
+        ...current,
+        policy: { ...current.policy, pilotStage: 'formula-ai-exception', automaticEnabled: false },
+      } : current);
+      setMessage('수식+AI 자동 실거래 Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
+      return;
+    }
+    try {
+      const response = await authorizedFetch('/api/trade-automation/admin/pilot-stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stage: 'formula-ai-exception',
+          confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+        }),
+      });
+      const payload = await response.json() as { policy?: Policy; error?: string };
+      if (!response.ok || !payload.policy) {
+        throw new Error(payload.error ?? '수식+AI Pilot 준비에 실패했습니다.');
+      }
+      const normalized = normalizeUiPolicy(payload.policy);
+      setDraft(normalized);
+      setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
+      setMessage('수식+AI 자동 실거래 Pilot 준비 완료: 자동매매는 아직 OFF입니다.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '수식+AI Pilot 준비에 실패했습니다.');
+    }
+  }
+
   async function emergencyStop() {
     const stoppedMarkets: MarketSwitches = {
       domestic_stock: false,
@@ -268,6 +415,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
         mode: 'automatic',
         automaticEnabled: false,
         emergencyStopped: true,
+        newEntriesStopped: false,
         marketEnabled: stoppedMarkets,
         exchangeEnabled: exchangesForMarkets(stoppedMarkets, current.stockBrokerByMarket),
       }));
@@ -285,6 +433,7 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       mode: 'automatic',
       automaticEnabled: false,
       emergencyStopped: true,
+      newEntriesStopped: false,
       marketEnabled: stoppedMarkets,
       exchangeEnabled: exchangesForMarkets(stoppedMarkets, current.stockBrokerByMarket),
     }));
@@ -294,6 +443,12 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
   const connections = Object.fromEntries(
     (status?.connections ?? []).map((item) => [item.exchange, item]),
   ) as Partial<Record<Exchange, Status['connections'][number]>>;
+  const memberStopped = draft.emergencyStopped
+    || draft.newEntriesStopped
+    || status?.policy.emergencyStopped === true
+    || status?.policy.newEntriesStopped === true;
+  const effectiveStopped = memberStopped || status?.emergencyStopped === true;
+  const globalOnlyStopped = !memberStopped && status?.emergencyStopped === true;
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -320,14 +475,24 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     <button
       type="button"
       onClick={toggleAutomatic}
-      className="mt-4 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background p-4"
+      disabled={effectiveStopped}
+      className={cn(
+        'mt-4 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background p-4',
+        effectiveStopped && 'cursor-not-allowed opacity-60',
+      )}
       data-testid="automatic-trading-master-toggle"
       aria-pressed={draft.automaticEnabled}
     >
       <span>
         <span className="block text-sm font-extrabold">자동매매</span>
         <span className="mt-1 block text-[11px] text-muted-foreground">
-          {draft.automaticEnabled ? '켜짐 · 활성 시장의 적격 신호를 자동 처리' : '꺼짐 · 신호를 주문으로 자동 전환하지 않음'}
+          {globalOnlyStopped
+            ? '서버 전체 비상정지 상태 · 관리자 해제 필요'
+            : memberStopped
+              ? '회원 비상정지 상태 · 재개 준비 후 다시 설정 저장 필요'
+              : draft.automaticEnabled
+                ? '켜짐 · 활성 시장의 적격 신호를 자동 처리'
+                : '꺼짐 · 신호를 주문으로 자동 전환하지 않음'}
         </span>
       </span>
       <Switch active={draft.automaticEnabled} />
@@ -387,16 +552,29 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {visibleExchanges.map((exchange) => {
         const connection = connections[exchange];
+        const marketReadiness = selectedMarket
+          ? status?.liveAutomaticReadinessByMarket?.[selectedMarket]
+          : null;
+        const providerVerified = marketReadiness?.exchange === exchange
+          ? marketReadiness.providerVerified === true
+          : status?.liveExecutionReadiness?.[exchange]?.providerVerified === true;
+        const marketReadinessOwnsExchange = marketReadiness?.exchange === exchange;
+        const automaticGateEnabled = marketReadinessOwnsExchange
+          ? marketReadiness?.automaticServerGateEnabled === true
+          : status?.liveAutomaticExecutionServerEnabled?.[exchange] === true;
+        const automaticReady = marketReadinessOwnsExchange
+          ? marketReadiness?.readyForAutomaticOrderEvaluation === true
+          : status?.liveExecutionReadiness?.[exchange]?.readyForAutomaticOrderEvaluation === true;
         return <div key={exchange} className="rounded-2xl border border-card-border bg-background p-3" data-testid={`connection-${exchange}`}>
           <div className="flex items-center gap-2">
-            {connection?.configured
+            {automaticReady
               ? <CheckCircle2 className="h-4 w-4 text-positive" />
               : <AlertTriangle className="h-4 w-4 text-warning" />}
             <span className="text-xs font-extrabold">{EXCHANGE_LABELS[exchange]}</span>
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {connection?.configured
-              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : connection.accountMode === 'mock' ? '모의' : 'Paper'} · ${status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON' : '서버게이트 OFF'}`
+              ? `${connection.accountMode === 'live' ? '실전 거래키 저장됨' : connection.accountMode === 'mock' ? '모의' : 'Paper'} · ${providerVerified ? '검증됨' : '검증 필요'} · ${automaticReady ? '자동게이트 준비' : automaticGateEnabled ? '자동게이트 ON · 차단요인 확인' : '자동게이트 OFF'}`
               : '거래키 미연결 · 모의매매는 가능'}
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">API 키 값은 화면에 표시하지 않습니다.</p>
@@ -469,6 +647,34 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       </select>
     </label> : null}
 
+    {canManagePilot ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="formula-ai-pilot-control">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-extrabold">수식+AI 자동 실거래 Pilot</p>
+          <p className="mt-1 text-muted-foreground">
+            현재 단계 · {draft.pilotStage === 'formula-ai-exception' ? '수식+AI 예외' : draft.pilotStage}
+          </p>
+        </div>
+        {draft.pilotStage !== 'formula-ai-exception' && draft.pilotStage !== 'validated'
+          ? <button
+              type="button"
+              onClick={() => void enableFormulaAiPilot()}
+              disabled={draft.automaticEnabled}
+              data-testid="formula-ai-pilot-enable"
+              className={cn(
+                'rounded-xl border border-card-border bg-secondary px-3 py-2 font-extrabold',
+                draft.automaticEnabled && 'cursor-not-allowed opacity-50',
+              )}
+            >
+              Pilot 준비
+            </button>
+          : <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 font-extrabold text-emerald-700">준비됨</span>}
+      </div>
+      <p className="mt-2 leading-5 text-muted-foreground">
+        이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 수식+AI 예외 신호만 별도 운영 위험검사를 통과할 수 있습니다.
+      </p>
+    </div> : null}
+
     <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs">
       <p className="font-extrabold">마지막 주문 · 체결 · 오류</p>
       <p className="mt-1 text-muted-foreground" data-testid="last-trade-state">
@@ -478,13 +684,28 @@ export function TradeAutomationSettings({ fixture, selectedMarket }: { fixture?:
       </p>
     </div>
 
+    <p className="mt-3 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-[11px] font-semibold leading-5 text-warning-foreground" data-testid="live-position-stop-warning">
+      긴급정지 또는 자동매매 OFF는 새 자동진입을 막지만 기존 Live 자동포지션의 후속 자동청산 감시도 중단될 수 있습니다. 실계좌의 열린 포지션과 보호주문을 직접 확인한 뒤 사용하세요.
+    </p>
+
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-      <button type="button" onClick={() => setConfirming(true)} className="rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground">
+      <button type="button" onClick={() => setConfirming(true)} disabled={effectiveStopped} className={cn(
+        'rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground',
+        effectiveStopped && 'cursor-not-allowed opacity-50',
+      )}>
         설정 저장
       </button>
-      <button type="button" onClick={() => void emergencyStop()} className="flex items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-extrabold text-destructive">
-        <Power className="h-4 w-4" />긴급정지
-      </button>
+      {memberStopped
+        ? <button type="button" onClick={() => void resumeTrading()} data-testid="member-trading-resume" className="flex items-center justify-center gap-2 rounded-2xl border border-card-border bg-secondary px-4 py-3 text-sm font-extrabold">
+            재개 준비
+          </button>
+        : globalOnlyStopped
+          ? <div data-testid="global-trading-stop" className="flex items-center justify-center rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-center text-sm font-extrabold text-destructive">
+              서버 전체 비상정지 · 관리자 해제 필요
+            </div>
+          : <button type="button" onClick={() => void emergencyStop()} className="flex items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-extrabold text-destructive">
+              <Power className="h-4 w-4" />긴급정지
+            </button>}
     </div>
 
     {message && <p role="status" className="mt-3 rounded-2xl bg-secondary p-3 text-xs font-bold">{message}</p>}

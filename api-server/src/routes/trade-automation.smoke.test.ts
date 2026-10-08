@@ -15,7 +15,8 @@ import {
   marketIntelligenceSymbolForTradingPlan,
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from '../services/trade-market-intelligence.service';
-import type { TradingPlanInput } from '../services/trade-automation.types';
+import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../services/trade-automation.types';
+import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
@@ -1493,12 +1494,19 @@ test('status is authenticated, automatic execution defaults off, and never retur
       policy: { mode: string; automaticEnabled: boolean };
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
+      liveAutomaticReadinessByMarket: Record<string, {
+        readyForAutomaticOrderEvaluation: boolean;
+        blockers: string[];
+      }>;
       actualOrderSubmittedByStatusRequest: boolean;
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
+    assert.equal(body.liveAutomaticReadinessByMarket.domestic_stock.readyForAutomaticOrderEvaluation, false);
+    assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('MEMBER_ORDER_CAPABILITY_REQUIRED'));
+    assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('AUTOMATIC_POLICY_OFF'));
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
 });
@@ -1635,6 +1643,160 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
     const body = await response.json() as { error: string };
     assert.equal(body.error, 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED');
   } finally { await close(server); }
+});
+
+test('member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', async () => {
+  const isolated = new InMemoryTradingRepository();
+  await isolated.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+    emergencyStopped: true,
+    newEntriesStopped: true,
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
+    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+  }));
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const { server, baseUrl } = await startServer();
+  try {
+    const bypass = await fetch(`${baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'automatic',
+        automaticEnabled: true,
+        marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: true, crypto_futures: false },
+        exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(bypass.status, 409);
+    assert.equal((await bypass.json() as { error: string }).error, 'MEMBER_TRADING_RESUME_REQUIRED');
+
+    const missing = await fetch(`${baseUrl}/api/trade-automation/resume`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 409);
+    assert.equal(
+      (await missing.json() as { error: string }).error,
+      'MEMBER_TRADING_RESUME_CONFIRMATION_REQUIRED',
+    );
+
+    const resumed = await fetch(`${baseUrl}/api/trade-automation/resume`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmation: 'RESUME_MEMBER_TRADING' }),
+    });
+    assert.equal(resumed.status, 200);
+    const body = await resumed.json() as {
+      automaticTradingEnabledByThisRequest: boolean;
+      memberEmergencyStopped: boolean;
+      memberNewEntriesStopped: boolean;
+      policy: { automaticEnabled: boolean; emergencyStopped: boolean; newEntriesStopped: boolean };
+    };
+    assert.equal(body.automaticTradingEnabledByThisRequest, false);
+    assert.equal(body.memberEmergencyStopped, false);
+    assert.equal(body.memberNewEntriesStopped, false);
+    assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.policy.emergencyStopped, false);
+    assert.equal(body.policy.newEntriesStopped, false);
+
+    const stored = await isolated.getPolicy(USER);
+    assert.equal(stored.automaticEnabled, false);
+    assert.equal(stored.emergencyStopped, false);
+    assert.equal(stored.newEntriesStopped, false);
+  } finally {
+    await close(server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off without enabling trading', async () => {
+  const isolated = new InMemoryTradingRepository();
+  await isolated.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: false,
+    pilotStage: 'approval-20',
+  }));
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const denied = await fetch(`${regular.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'formula-ai-exception',
+        confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+      }),
+    });
+    assert.equal(denied.status, 403);
+  } finally { await close(regular.server); }
+
+  const admin = await startServer(true, 'admin');
+  const keys = ['AUTO_TRADING', 'LIVE_AUTOMATIC_TRADING_ENABLED', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    const missing = await fetch(`${admin.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stage: 'formula-ai-exception' }),
+    });
+    assert.equal(missing.status, 409);
+    assert.equal((await missing.json() as { error: string }).error, 'FORMULA_AI_PILOT_CONFIRMATION_REQUIRED');
+
+    process.env.AUTO_TRADING = 'true';
+    const active = await fetch(`${admin.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'formula-ai-exception',
+        confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+      }),
+    });
+    assert.equal(active.status, 409);
+    assert.equal((await active.json() as { error: string }).error, 'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF');
+    process.env.AUTO_TRADING = 'false';
+
+    const prepared = await fetch(`${admin.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'formula-ai-exception',
+        confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+      }),
+    });
+    assert.equal(prepared.status, 200);
+    const body = await prepared.json() as {
+      pilotStage: string;
+      automaticTradingEnabledByThisRequest: boolean;
+      liveTradingEnabledByThisRequest: boolean;
+      policy: { pilotStage: string; automaticEnabled: boolean };
+    };
+    assert.equal(body.pilotStage, 'formula-ai-exception');
+    assert.equal(body.policy.pilotStage, 'formula-ai-exception');
+    assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.automaticTradingEnabledByThisRequest, false);
+    assert.equal(body.liveTradingEnabledByThisRequest, false);
+
+    const bypass = await fetch(`${admin.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(await isolated.getPolicy(USER)),
+        pilotStage: 'validated',
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(bypass.status, 200);
+    assert.equal((await bypass.json() as { policy: { pilotStage: string } }).policy.pilotStage, 'formula-ai-exception');
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await close(admin.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
 });
 
 test('persistent global emergency stop requires admin capability and exact confirmation', async () => {

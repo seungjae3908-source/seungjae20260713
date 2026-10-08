@@ -13,6 +13,9 @@ import {
   type TradingRepository,
 } from './trade-automation.repository';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import { liveConnectionVerificationFresh } from './live-connection-verification.service';
+import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
 import {
@@ -20,6 +23,7 @@ import {
 } from './paper-journal-supabase.repository';
 import type { PaperJournalRepository } from './paper-journal.types';
 import type {
+  ExchangeConnection,
   TradingAssetClass,
   TradingExchange,
   TradingOrder,
@@ -49,7 +53,19 @@ import { TradeExecutionEventBridgeService } from '../features/user-broker-telegr
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
-import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
+import { readUserTelegramDeliveryWorkerHealth, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from '../features/user-broker-telegram/user-broker-telegram.worker';
+import type { TelegramTransport, UserTelegramConnection } from '../features/user-broker-telegram/user-broker-telegram.types';
+import {
+  evaluateRulePackPilotEntryGuard,
+  deriveRulePackPilotExecutionPolicy,
+  issueRulePackPilotDynamicCapReceipt,
+  readRulePackPilotCapitalState,
+  type RulePackPilotCapitalState,
+} from './trade-rule-pack-pilot-capital.service';
+import {
+  isEvidenceBackedAutoStrategyId,
+  RULE_PACK_PILOT_PROFILE,
+} from './evidence-backed-auto-strategy-catalog.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -58,6 +74,9 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+// A READY handoff without entries otherwise has no per-entry freshness clock.
+// Keep a bounded publisher heartbeat even during quiet market periods.
+const MAX_READY_HANDOFF_AGE_MS = 30 * 60_000;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
@@ -70,6 +89,8 @@ type EligibleMember = Readonly<{
 }>;
 
 type MemberRuntimeState = Readonly<{
+  // Never use missing Paper equity as a zero-PnL proof to authorize entries.
+  paperAccountReady: boolean;
   accountEquity: number;
   dailyPnlPercent: number;
   weeklyPnlPercent: number;
@@ -81,6 +102,10 @@ type MemberRuntimeState = Readonly<{
 export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
+  memberBatchCycleCompleted?(): boolean;
+  telegramDeliveryHealthy?(nowMs: number): boolean;
+  memberTelegramConnected?(userId: string): Promise<boolean>;
+  revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
   resolveFx(
@@ -102,6 +127,25 @@ export interface MemberAutoTradingBackgroundSource {
 
 export type MemberAutoTradingBackgroundRunResult = {
   handoffStatus: 'MISSING' | 'BLOCKED_DATA' | 'READY';
+  handoffReady: boolean;
+  newEntriesFailClosed: boolean;
+  liveEntriesArmed: boolean;
+  liveEntryWarmupComplete: boolean;
+  liveEntriesSuppressedByWarmupOrArm: number;
+  liveEntriesSuppressedByTelegram: number;
+  liveExitsSuppressedByWarmupOrArm: number;
+  liveExitsSuppressedByPolicy: number;
+  runtimeRefreshes: number;
+  executionSyncBlocks: number;
+  overlapSkipped: boolean;
+  liveOrderEligibleMembers: number;
+  livePolicyReadyMembers: number;
+  liveAllFourPolicyReadyMembers: number;
+  liveReadinessCycleComplete: boolean;
+  liveCycleOrderEligible: boolean;
+  liveCyclePolicyReady: boolean;
+  liveCycleAllFourPolicyReady: boolean;
+  globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
   evaluated: number;
@@ -117,13 +161,82 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveOrders: number;
   paperExitOrders: number;
   liveExitOrders: number;
+  liveTrackedPositions: number;
   exitBlocked: number;
   privateTradingRequests: number;
   executionEventsInserted: number;
   notificationDeliveriesQueued: number;
   executionSyncMissingReferences: number;
   executionSyncFailures: number;
+  liveEntryArmPresent: boolean;
 };
+
+export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
+  enabled: boolean;
+  liveModeRequested: boolean;
+  lastTickAt: string | null;
+  tickOk: boolean | null;
+  handoffStatus: MemberAutoTradingBackgroundRunResult['handoffStatus'];
+  handoffReady: boolean;
+  newEntriesFailClosed: boolean;
+  liveEntryArmPresent: boolean;
+  liveEntriesArmed: boolean;
+  liveEntryWarmupComplete: boolean;
+  startupWarmupObserved: boolean;
+  firstWarmupTickLiveEntriesArmed: boolean | null;
+  firstWarmupTickLiveOrders: number | null;
+  firstWarmupTickLiveExitOrders: number | null;
+  liveTrackedPositions: number;
+  liveExitsSuppressedByWarmupOrArm: number;
+  liveExitsSuppressedByPolicy: number;
+  executionSyncFailures: number;
+  executionSyncMissingReferences: number;
+  liveOrderEligibleMembers: number;
+  livePolicyReadyMembers: number;
+  liveAllFourPolicyReadyMembers: number;
+  liveReadinessCycleComplete: boolean;
+  liveCycleOrderEligible: boolean;
+  liveCyclePolicyReady: boolean;
+  liveCycleAllFourPolicyReady: boolean;
+  globalEmergencyStopActive: boolean;
+  errorCode: string | null;
+}>;
+
+let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.freeze({
+  enabled: false,
+  liveModeRequested: false,
+  lastTickAt: null,
+  tickOk: null,
+  handoffStatus: 'MISSING',
+  handoffReady: false,
+  newEntriesFailClosed: true,
+  liveEntryArmPresent: false,
+  liveEntriesArmed: false,
+  liveEntryWarmupComplete: false,
+  startupWarmupObserved: false,
+  firstWarmupTickLiveEntriesArmed: null,
+  firstWarmupTickLiveOrders: null,
+  firstWarmupTickLiveExitOrders: null,
+  liveTrackedPositions: 0,
+  liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
+  executionSyncFailures: 0,
+  executionSyncMissingReferences: 0,
+  liveOrderEligibleMembers: 0,
+  livePolicyReadyMembers: 0,
+  liveAllFourPolicyReadyMembers: 0,
+  liveReadinessCycleComplete: true,
+  liveCycleOrderEligible: false,
+  liveCyclePolicyReady: false,
+  liveCycleAllFourPolicyReady: false,
+  globalEmergencyStopActive: false,
+  errorCode: null,
+});
+
+export function readMemberAutoTradingBackgroundRuntimeHealth() {
+  return backgroundRuntimeHealth;
+}
+
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -241,6 +354,91 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
   const rate = Number(cost?.[key]);
   return finite(rate) && rate >= 0 ? rate * 100 : null;
+}
+
+// Only canonical, signal-bound upstream AI evidence may authorize the formula
+// exception. An absent review means NO live order; never manufacture PASS.
+export function formulaAiReviewReasonsForLive(
+  entry: MemberAutoTradingPaperHandoffEntry,
+  nowMs: number,
+): string[] {
+  const review = (entry as MemberAutoTradingPaperHandoffEntry & { aiReviewEvidence?: unknown }).aiReviewEvidence;
+  if (!canonicalAiReviewEvidenceValid(review, entry.identity, entry.evaluatedAtMs)
+    || !review || nowMs >= review.expiresAtMs || nowMs < review.reviewedAtMs) {
+    throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED');
+  }
+  return [
+    `STRATEGY_RULE_PACK:${entry.identity.strategyId}`,
+    'STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE',
+    'AI_REVIEW_DECISION:PASS',
+    'AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE',
+    `AI_REVIEW_EVIDENCE:${review.evidenceDigest}`,
+    `AI_REVIEW_EXPIRES:${new Date(review.expiresAtMs).toISOString()}`,
+  ];
+}
+
+function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
+  if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) {
+    return false;
+  }
+  const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  return (policy.marketEnabled.domestic_stock && policy.exchangeEnabled[domesticBroker])
+    || (policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom)
+    || (policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit)
+    || (policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget);
+}
+
+function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
+  if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) {
+    return false;
+  }
+  if (policy.pilotStage === 'approval-20') return false;
+  const domesticBroker = policy.stockBrokerByMarket?.domestic_stock ?? 'kiwoom';
+  return policy.marketEnabled.domestic_stock
+    && policy.marketEnabled.us_stock
+    && policy.marketEnabled.crypto_spot
+    && policy.marketEnabled.crypto_futures
+    && policy.exchangeEnabled[domesticBroker]
+    && policy.exchangeEnabled.kiwoom
+    && policy.exchangeEnabled.upbit
+    && policy.exchangeEnabled.bitget;
+}
+
+export function liveAllFourConnectionVerificationReady(
+  policy: TradingPolicy,
+  connections: readonly ExchangeConnection[],
+  nowMs = Date.now(),
+) {
+  if (!automaticPolicyHasAllFourMarkets(policy)) return false;
+  const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];
+  return required.every((exchange) =>
+    liveConnectionVerificationFresh(
+      connections.find((connection) => connection.exchange === exchange),
+      nowMs,
+    ));
+}
+
+function validateFormulaAiPilotEntry(
+  member: EligibleMember,
+  entry: MemberAutoTradingPaperHandoffEntry,
+  runtime: MemberRuntimeState,
+  pilot: RulePackPilotCapitalState,
+  estimatedKrw: number,
+  nowMs: number,
+) {
+  if (member.policy.pilotStage !== 'formula-ai-exception') return;
+  const decision = evaluateRulePackPilotEntryGuard({
+    pilot,
+    strategyId: entry.identity.strategyId,
+    symbol: entry.identity.symbol,
+    signalId: entry.identity.signalId,
+    estimatedKrw,
+    policyMaxOrderKrw: member.policy.maxOrderKrw,
+    policyTotalCapitalKrw: member.policy.totalCapitalKrw,
+    openLivePositions: openAutomaticPlans(runtime, 'live').length,
+    nowMs,
+  });
+  if (!decision.allowed) throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_ENTRY_BLOCKED');
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -380,26 +578,32 @@ async function memberRuntimeState(
   paper: PaperJournalRepository,
   nowMs: number,
 ): Promise<MemberRuntimeState> {
-  const [records, plans, orders] = await Promise.all([
-    paper.listSnapshot(userId),
+  // A missing/broken Paper account must quarantine *new* entries but must
+  // not hide already-filled real broker positions from guarded exit tracking.
+  const [paperResult, plans, orders] = await Promise.all([
+    paper.listSnapshot(userId)
+      .then((records) => ({ records, validRead: true }))
+      .catch(() => ({ records: [] as Awaited<ReturnType<PaperJournalRepository['listSnapshot']>>, validRead: false })),
     repository.listPlans(userId),
     repository.listOrders(userId),
   ]);
-  const accounts = records.filter((row) => row.kind === 'account' && row.deletedAt == null)
+  const accounts = paperResult.records.filter((row) => row.kind === 'account' && row.deletedAt == null)
     .map((row) => record(row.payload))
     .filter((row): row is Record<string, unknown> => row != null);
-  if (accounts.length !== 1 || !positive(Number(accounts[0]?.equity))) {
-    throw new Error('BACKGROUND_PAPER_ACCOUNT_REQUIRED');
-  }
-  const equity = Number(accounts[0]!.equity);
-  const journal = records.filter((row) => row.kind === 'journal' && row.deletedAt == null)
+  const paperAccountReady = paperResult.validRead
+    && accounts.length === 1 && positive(Number(accounts[0]?.equity));
+  const equity = paperAccountReady ? Number(accounts[0]!.equity) : 0;
+  const journal = paperResult.records.filter((row) => row.kind === 'journal' && row.deletedAt == null)
     .map((row) => record(row.payload))
     .filter((row): row is Record<string, unknown> => row != null);
   return Object.freeze({
+    paperAccountReady,
     accountEquity: equity,
-    dailyPnlPercent: pnlPercentSince(journal, equity, nowMs - 24 * 60 * 60_000),
-    weeklyPnlPercent: pnlPercentSince(journal, equity, nowMs - 7 * 24 * 60 * 60_000),
-    consecutiveLosses: currentConsecutiveLosses(journal),
+    // These placeholders are not evidence: caller forbids all fresh entries
+    // while paperAccountReady is false.
+    dailyPnlPercent: paperAccountReady ? pnlPercentSince(journal, equity, nowMs - 24 * 60 * 60_000) : 0,
+    weeklyPnlPercent: paperAccountReady ? pnlPercentSince(journal, equity, nowMs - 7 * 24 * 60 * 60_000) : 0,
+    consecutiveLosses: paperAccountReady ? currentConsecutiveLosses(journal) : 0,
     plans,
     orders,
   });
@@ -613,8 +817,21 @@ function buildPlanInput(
 }
 
 
+/** Paper-only starts independently but can never inherit automatic Live authority. */
+export function memberAutoTradingWorkerMode(
+  env: NodeJS.ProcessEnv = process.env,
+): 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACKGROUND' {
+  const paperOnly = env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  if (paperOnly === 'true') return 'PAPER_ONLY';
+  if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';
+  return env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'
+    ? 'SHARED_BACKGROUND' : 'DISABLED';
+}
+
 export function liveBackgroundEnabled() {
-  return process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'
+  const paperOnly = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  return (paperOnly === undefined || paperOnly === 'false')
+    && process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && process.env.LIVE_TRADING === 'true'
@@ -624,10 +841,6 @@ export function liveBackgroundEnabled() {
 
 function normalizedSymbol(value: unknown) {
   return String(value ?? '').trim().toUpperCase().replace(/^KRW-/u, '');
-}
-
-function activeLivePlans(runtime: MemberRuntimeState) {
-  return openAutomaticPlans(runtime, 'live');
 }
 
 function expectedBalanceCurrency(market: MemberAutoTradingPaperHandoffEntry['identity']['market']) {
@@ -664,6 +877,57 @@ function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEnt
   return plan.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
 }
 
+/**
+ * Unmatched external holdings cannot be valued from automatic plan notional.
+ * Refuse a new Live entry rather than assuming zero external exposure. Exit
+ * tracking is separately protected and must not depend on this entry guard.
+ */
+export function assertCanonicalLiveProviderPositions(
+  snapshot: Pick<CanonicalAccountSnapshot, 'provider' | 'positions'>,
+  plans: readonly TradingPlan[],
+) {
+  if (!Array.isArray(snapshot.positions)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE');
+  for (const position of snapshot.positions) {
+    // Upbit publishes the KRW settlement cash balance in positions, but
+    // KRW is not an open coin exposure and is checked independently as cash.
+    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
+    if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
+    if (Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
+    const matching = plans.filter((plan) =>
+      plan.exchange === snapshot.provider
+      && normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
+    if (matching.length === 0) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
+    const declaredSide = String(position.side ?? '').trim().toLowerCase();
+    if (declaredSide && matching.some((plan) => plan.exchange === 'bitget')
+      && !matching.some((plan) => plan.exchange === 'bitget' && plan.side === declaredSide)) {
+      throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH');
+    }
+  }
+}
+export function liveProviderSnapshotReadyForAutomaticWarmup(
+  snapshot: CanonicalAccountSnapshot,
+  plans: readonly TradingPlan[],
+) {
+  try {
+    if (!snapshot.connected || snapshot.status !== 'CONNECTED' || snapshot.stale || snapshot.errorCode != null) return false;
+    if (!Array.isArray(snapshot.positions) || !Array.isArray(snapshot.openOrders) || snapshot.openOrders.length > 0) return false;
+    assertCanonicalLiveProviderPositions(snapshot, plans);
+    if (snapshot.provider === 'bitget') {
+      if (snapshot.positionMode !== 'one_way_mode') return false;
+      for (const position of snapshot.positions) {
+        if (!finite(position.quantity) || Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
+        if (String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated') return false;
+        const leverage = Number(position.leverage);
+        if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+
 async function liveJournalRiskState(
   source: MemberAutoTradingBackgroundSource,
   repository: TradingRepository,
@@ -673,7 +937,6 @@ async function liveJournalRiskState(
   policy: TradingPolicy,
   nowMs: number,
   fxCache: Map<string, MemberAutoTradingFxQuote>,
-  entrySymbol: string,
 ) {
   const fxFor = async (market: MemberAutoTradingPaperHandoffEntry['identity']['market']) => {
     let fx = fxCache.get(market);
@@ -697,18 +960,18 @@ async function liveJournalRiskState(
     }
     return total;
   };
-  const livePlans = activeLivePlans(runtime);
+  // A pending order is NOT proof of an owned broker position. Bind provider
+  // holdings only to canonically filled/partially-filled entry quantities,
+  // and fail closed until ambiguous fills are reconciled.
+  const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
+  assertCanonicalLiveProviderPositions(snapshot, livePlans);
   const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
   for (const position of snapshot.positions ?? []) {
-    if (!finite(position.quantity) || Math.abs(position.quantity!) <= 0) continue;
+    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
+    if (!finite(position.quantity) || Math.abs(position.quantity!) <= POSITION_QUANTITY_TOLERANCE) continue;
     const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
-    if (!matched) {
-      if (normalizedSymbol(position.symbol) === normalizedSymbol(entrySymbol)) {
-        throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_SAME_SYMBOL');
-      }
-      continue;
-    }
+    if (!matched) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
     if (!finite(position.unrealizedPnl)) continue;
     const fx = await fxFor(tradeMarketForPlan(matched));
     unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
@@ -747,7 +1010,7 @@ async function buildLivePlanInput(input: {
   const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
   const risk = await liveJournalRiskState(
     input.source, input.repository, input.member.userId, input.runtime, input.snapshot,
-    input.member.policy, input.nowMs, input.fxCache, input.entry.identity.symbol,
+    input.member.policy, input.nowMs, input.fxCache,
   );
   const availableBalance = readOnlyAvailableBalance ?? 0;
   const accountValueKrw = Math.max(1, Math.min(
@@ -761,7 +1024,9 @@ async function buildLivePlanInput(input: {
     ...input.paperInput,
     accountMode: 'live',
     signalReasons: [
-      ...input.paperInput.signalReasons.filter((reason) => reason !== 'CANONICAL_PAPER_HANDOFF'),
+      ...input.paperInput.signalReasons,
+      ...(input.member.policy.pilotStage === 'formula-ai-exception'
+        ? formulaAiReviewReasonsForLive(input.entry, input.nowMs) : []),
       'CANONICAL_LIVE_AUTO_HANDOFF',
       'ACCOUNT_READONLY_PRECHECK',
     ],
@@ -920,14 +1185,61 @@ function errorCode(error: unknown) {
   return /^[A-Z0-9_]+$/u.test(value) ? value : 'BACKGROUND_AUTOMATION_FAILED';
 }
 
+export function selectRotatingHandoffEntries<T>(
+  entries: readonly T[], offset: number, limit: number,
+): { entries: readonly T[]; nextOffset: number } {
+  if (!entries.length) return { entries: [], nextOffset: 0 };
+  const start = Number.isSafeInteger(offset) && offset >= 0 ? offset % entries.length : 0;
+  const take = Number.isSafeInteger(limit) && limit > 0 ? limit : 1;
+  const selected = entries.slice(start, start + take);
+  return { entries: selected, nextOffset: start + selected.length >= entries.length ? 0 : start + selected.length };
+}
+
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
+  private liveEntryWarmupComplete = false;
+  // Preserve stop/error evidence across paginated member batches. A later
+  // eligible member must never erase a blocked member from the same rotation.
+  private liveCycleHardWarmupBlocked = false;
+  private liveCycleOrderEligibleSeen = false;
+  private liveCyclePolicyReadySeen = false;
+  private liveCycleAllFourPolicyReadySeen = false;
+  private liveCycleAllFourWitnessUserId: string | null = null;
+  private handoffEntryOffset = 0;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
 
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
+    const liveModeRequested = liveBackgroundEnabled();
+    const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent(now.getTime()) : false;
+    const liveExitsArmedThisTick = liveModeRequested
+      && this.liveEntryWarmupComplete
+      && liveEntryArmPresentThisTick;
+    const liveTelegramHealthyThisTick = !liveModeRequested
+      || this.source.telegramDeliveryHealthy?.(now.getTime()) === true;
+    const liveEntriesArmedThisTick = liveExitsArmedThisTick
+      && liveTelegramHealthyThisTick && !this.liveCycleHardWarmupBlocked;
     const result: MemberAutoTradingBackgroundRunResult = {
       handoffStatus: 'MISSING',
+      handoffReady: false,
+      newEntriesFailClosed: liveModeRequested && !liveTelegramHealthyThisTick,
+      liveEntriesArmed: liveEntriesArmedThisTick,
+      liveEntryWarmupComplete: this.liveEntryWarmupComplete,
+      liveEntriesSuppressedByWarmupOrArm: 0,
+      liveEntriesSuppressedByTelegram: 0,
+      liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
+      runtimeRefreshes: 0,
+      executionSyncBlocks: 0,
+      overlapSkipped: false,
+      liveOrderEligibleMembers: 0,
+      livePolicyReadyMembers: 0,
+      liveAllFourPolicyReadyMembers: 0,
+      liveReadinessCycleComplete: true,
+      liveCycleOrderEligible: false,
+      liveCyclePolicyReady: false,
+      liveCycleAllFourPolicyReady: false,
+      globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
       evaluated: 0,
@@ -943,45 +1255,156 @@ export class MemberAutoTradingBackgroundWorker {
       liveOrders: 0,
       paperExitOrders: 0,
       liveExitOrders: 0,
+      liveTrackedPositions: 0,
       exitBlocked: 0,
       privateTradingRequests: 0,
       executionEventsInserted: 0,
       notificationDeliveriesQueued: 0,
       executionSyncMissingReferences: 0,
       executionSyncFailures: 0,
+      liveEntryArmPresent: liveEntryArmPresentThisTick,
     };
-    if (this.running) return result;
+    if (this.running) {
+      result.overlapSkipped = true;
+      return result;
+    }
     this.running = true;
     try {
       const nowMs = now.getTime();
-      const handoff = await this.source.readHandoff(nowMs);
-      if (handoff) result.handoffStatus = handoff.status;
+      // A broken new-entry handoff cannot suppress guarded existing exits.
+      let handoff: MemberAutoTradingPaperHandoff | null = null;
+      try {
+        handoff = await this.source.readHandoff(nowMs);
+        if (handoff?.status === 'READY'
+          && (!Number.isFinite(handoff.evaluatedAtMs)
+            || nowMs < handoff.evaluatedAtMs
+            || nowMs - handoff.evaluatedAtMs > MAX_READY_HANDOFF_AGE_MS)) {
+          throw new Error('BACKGROUND_PAPER_HANDOFF_STALE');
+        }
+        if (handoff) result.handoffStatus = handoff.status;
+      } catch {
+        handoff = null;
+        result.handoffStatus = 'BLOCKED_DATA';
+        result.failures += 1;
+      }
+      result.handoffReady = handoff?.status === 'READY';
+      if (!result.handoffReady) {
+        result.newEntriesFailClosed = true;
+        this.handoffEntryOffset = 0;
+      }
 
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
-      const entries = handoff?.status === 'READY'
-        ? handoff.entries.slice(0, MAX_ENTRIES_PER_TICK)
-        : [];
+      result.liveOrderEligibleMembers = members.filter((member) =>
+        hasCapability(member.profile, 'canAccessAutoTrading')
+        && hasCapability(member.profile, 'canPlaceOrders')
+        && member.policy.mode === 'automatic'
+        && member.policy.automaticEnabled
+        && !member.policy.emergencyStopped
+        && !member.policy.newEntriesStopped).length;
+      const batch = selectRotatingHandoffEntries(
+        result.handoffReady ? handoff!.entries : [],
+        this.handoffEntryOffset,
+        MAX_ENTRIES_PER_TICK,
+      );
+      this.handoffEntryOffset = batch.nextOffset;
+      const entries = batch.entries;
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
+      let paperAccountMissingThisTick = false;
+      let memberAuditFailedThisTick = false;
 
       for (const member of members) {
-        if (!hasCapability(member.profile, 'canAccessAutoTrading')) {
-          result.skipped += entries.length;
-          continue;
-        }
+        // Losing membership must revoke ALL execution while preserving
+        // read-only visibility of previously filled automatic Live positions.
+        const memberCanRunAutomation = hasCapability(member.profile, 'canAccessAutoTrading');
+        const memberAutoExecutionEnabled = memberCanRunAutomation
+          && member.policy.mode === 'automatic'
+          && member.policy.automaticEnabled && !member.policy.emergencyStopped;
         const repository = this.source.tradingRepositoryFor(member.userId);
         const paper = this.source.paperJournalRepositoryFor(member.userId);
         let runtime: MemberRuntimeState;
+        let persistentGlobalStop = false;
         try {
-          runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          [runtime, persistentGlobalStop] = await Promise.all([
+            memberRuntimeState(member.userId, repository, paper, nowMs),
+            repository.getGlobalEmergencyStop(),
+          ]);
         } catch {
+          memberAuditFailedThisTick = true;
           result.blocked += entries.length;
+          result.newEntriesFailClosed = true;
           continue;
         }
+        if (!runtime.paperAccountReady && memberAutoExecutionEnabled) {
+          paperAccountMissingThisTick = true;
+          result.newEntriesFailClosed = true;
+          result.failures += 1;
+        }
+        const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+        if (persistentGlobalStop || environmentGlobalStop) result.globalEmergencyStopActive = true;
+        if (!memberCanRunAutomation) {
+          if (liveModeRequested) {
+            const protectedPositions = trackedAutomaticPositions(runtime, 'live');
+            result.liveTrackedPositions += protectedPositions.length;
+            result.liveExitsSuppressedByPolicy += protectedPositions.length;
+            if (protectedPositions.length) result.newEntriesFailClosed = true;
+          }
+          result.skipped += entries.length;
+          continue;
+        }
+        if (hasCapability(member.profile, 'canPlaceOrders')
+          && automaticPolicyHasRunnableMarket(member.policy)
+          && !persistentGlobalStop
+          && !environmentGlobalStop) {
+          result.livePolicyReadyMembers += 1;
+        }
+        if (hasCapability(member.profile, 'canPlaceOrders')
+          && hasCapability(member.profile, 'canAccessFutures')
+          && automaticPolicyHasAllFourMarkets(member.policy)
+          && !persistentGlobalStop
+          && !environmentGlobalStop) {
+          result.liveAllFourPolicyReadyMembers += 1;
+          this.liveCycleAllFourWitnessUserId ??= member.userId;
+        }
 
+        const refreshRuntime = async () => {
+          runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          result.runtimeRefreshes += 1;
+        };
+        const syncExecutionProjection = async () => {
+          if (!this.source.syncExecutionEvents) return true;
+          try {
+            const synced = await this.source.syncExecutionEvents({
+              userId: member.userId,
+              profile: member.profile,
+              repository,
+              paperJournalRepository: paper,
+            });
+            result.executionEventsInserted += synced.inserted;
+            result.notificationDeliveriesQueued += synced.deliveryQueued;
+            result.executionSyncMissingReferences += synced.missingReferences;
+            if (synced.missingReferences > 0) {
+              result.executionSyncBlocks += 1;
+              result.newEntriesFailClosed = true;
+              return false;
+            }
+            return true;
+          } catch {
+            // Notification/journal fan-out must never change canonical order state.
+            // A projection failure instead fail-closes subsequent new entries for this tick.
+            result.executionSyncFailures += 1;
+            result.executionSyncBlocks += 1;
+            result.newEntriesFailClosed = true;
+            return false;
+          }
+        };
+
+        let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
+        let entryProjectionHealthy = await syncExecutionProjection();
         let exitChanged = false;
-        for (const position of trackedAutomaticPositions(runtime, 'paper')) {
+        for (const position of memberAutoExecutionEnabled && runtime.paperAccountReady
+          ? trackedAutomaticPositions(runtime, 'paper') : []) {
           try {
             const exit = await processAutomaticExit({
               source: this.source,
@@ -1008,45 +1431,75 @@ export class MemberAutoTradingBackgroundWorker {
           }
         }
 
-        if (liveBackgroundEnabled()) {
-          for (const position of trackedAutomaticPositions(runtime, 'live')) {
-            try {
-              const exit = await processAutomaticExit({
-                source: this.source,
-                repository,
-                member,
-                position,
-                fxCache,
-                now,
-                live: true,
-              });
-              result.privateTradingRequests += exit.privateRequests;
-              if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
-                result.liveExitOrders += 1;
-                exitChanged = true;
-              } else if (exit.status.startsWith('BLOCKED')) {
-                result.exitBlocked += 1;
-              }
-            } catch (error) {
-              const code = errorCode(error);
-              if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
-                result.exitBlocked += 1;
-              } else {
-                result.failures += 1;
+        if (liveModeRequested) {
+          const livePositions = trackedAutomaticPositions(runtime, 'live');
+          result.liveTrackedPositions += livePositions.length;
+          if (!memberAutoExecutionEnabled) {
+            // Emergency-stop / AUTO OFF must not erase existing Live positions
+            // from observation, nor silently run them under manual authority.
+            result.liveExitsSuppressedByPolicy += livePositions.length;
+            if (livePositions.length) result.newEntriesFailClosed = true;
+          } else if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
+            result.liveExitsSuppressedByWarmupOrArm += livePositions.length;
+          } else {
+            for (const position of livePositions) {
+              try {
+                const exit = await processAutomaticExit({
+                  source: this.source,
+                  repository,
+                  member,
+                  position,
+                  fxCache,
+                  now,
+                  live: true,
+                });
+                result.privateTradingRequests += exit.privateRequests;
+                if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
+                  result.liveExitOrders += 1;
+                  exitChanged = true;
+                } else if (exit.status.startsWith('BLOCKED')) {
+                  result.exitBlocked += 1;
+                }
+              } catch (error) {
+                const code = errorCode(error);
+                if (code.startsWith('BACKGROUND_') || code.includes('RISK') || code.includes('BLOCKED')) {
+                  result.exitBlocked += 1;
+                } else {
+                  result.failures += 1;
+                }
               }
             }
           }
         }
 
         if (exitChanged) {
+          entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
           try {
-            runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+            await refreshRuntime();
           } catch {
             result.exitBlocked += 1;
+            result.newEntriesFailClosed = true;
             continue;
           }
         }
 
+        if (!entryProjectionHealthy) {
+          result.blocked += entries.length;
+          continue;
+        }
+
+        // AUTO OFF members remain visible for read-only Live position
+        // monitoring. No Paper or Live auto entries/exits are submitted.
+        if (!memberAutoExecutionEnabled) {
+          result.skipped += entries.length;
+          continue;
+        }
+        // Maintain eligible Live exits above even when Paper storage is
+        // absent. Do not create Paper or Live entries using placeholder equity.
+        if (!runtime.paperAccountReady) {
+          result.blocked += entries.length;
+          continue;
+        }
         for (const entry of entries) {
           if (!policyAllowsEntry(member, entry)) {
             result.skipped += 1;
@@ -1054,22 +1507,46 @@ export class MemberAutoTradingBackgroundWorker {
           }
           result.evaluated += 1;
           try {
+            // Always re-read canonical exposure at the entry boundary. This also
+            // covers a prior entry that mutated an order and then failed during
+            // lifecycle/projection post-processing before its normal refresh.
+            await refreshRuntime();
             let fx = fxCache.get(entry.identity.market);
             if (!fx) {
               fx = await this.source.resolveFx(entry.identity.market, nowMs);
               fxCache.set(entry.identity.market, fx);
             }
-            const paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
+            let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
+            let paperEntryPolicy = member.policy;
+            if (member.policy.pilotStage === 'formula-ai-exception'
+              && paperInput.estimatedKrw > member.policy.maxOrderKrw) {
+              // Compounding beyond the stored base cap requires an immutable
+              // signal-specific review and signed worker-only provenance.
+              formulaAiReviewReasonsForLive(entry, nowMs);
+              formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
+                repository, member.userId, now,
+              );
+              validateFormulaAiPilotEntry(
+                member, entry, runtime, formulaAiPilotCapital, paperInput.estimatedKrw, nowMs,
+              );
+              paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
+                member.policy, formulaAiPilotCapital,
+              );
+              paperInput = issueRulePackPilotDynamicCapReceipt(
+                member.userId, paperInput, nowMs,
+              );
+            }
             const persistentStop = await repository.getGlobalEmergencyStop();
             const paperRun = await executeAutomaticPlan({
               repository,
               userId: member.userId,
               planInput: paperInput,
-              policy: member.policy,
+              policy: paperEntryPolicy,
               emergencyStopped: member.policy.emergencyStopped
                 || persistentStop
                 || process.env.TRADING_EMERGENCY_STOP === 'true',
             });
+            let paperMirrorReady = false;
             if (!paperRun.plan || !paperRun.order) {
               result.blocked += 1;
             } else {
@@ -1085,21 +1562,64 @@ export class MemberAutoTradingBackgroundWorker {
                   entry,
                   now,
                 });
-                if (lifecycle.status === 'PERSISTED') result.positionLifecycles += 1;
-                else if (lifecycle.status === 'IDEMPOTENT') result.lifecycleIdempotent += 1;
-                else result.blocked += 1;
+                if (lifecycle.status === 'PERSISTED') {
+                  result.positionLifecycles += 1;
+                  paperMirrorReady = true;
+                } else if (lifecycle.status === 'IDEMPOTENT') {
+                  result.lifecycleIdempotent += 1;
+                  paperMirrorReady = true;
+                } else {
+                  result.blocked += 1;
+                }
               } else if (paperRun.order.state === 'REJECTED' || paperRun.order.state === 'RECOVERY_REQUIRED') {
                 result.blocked += 1;
               }
+              await refreshRuntime();
+              entryProjectionHealthy = await syncExecutionProjection();
+              if (!entryProjectionHealthy) {
+                result.blocked += 1;
+                break;
+              }
             }
 
-            if (liveBackgroundEnabled() && hasCapability(member.profile, 'canPlaceOrders')) {
-              const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
+            // Live admission requires a canonical filled Paper mirror AND
+            // persisted/idempotent lifecycle proof for this exact candidate.
+            // A rejected Paper order or failed bridge must never lead to Live IO.
+            if (liveModeRequested && !paperMirrorReady) {
+              result.newEntriesFailClosed = true;
+              result.blocked += 1;
+              continue;
+            }
+
+            if (liveModeRequested && hasCapability(member.profile, 'canPlaceOrders')) {
+              if (!liveExitsArmedThisTick) result.liveEntriesSuppressedByWarmupOrArm += 1;
+              else if (!liveTelegramHealthyThisTick) result.liveEntriesSuppressedByTelegram += 1;
+            }
+
+            if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
+              let liveMember = member;
+              if (member.policy.pilotStage === 'formula-ai-exception') {
+                formulaAiReviewReasonsForLive(entry, nowMs);
+                formulaAiPilotCapital ??= await readRulePackPilotCapitalState(repository, member.userId, now);
+                validateFormulaAiPilotEntry(
+                  member,
+                  entry,
+                  runtime,
+                  formulaAiPilotCapital,
+                  paperInput.estimatedKrw,
+                  nowMs,
+                );
+                liveMember = Object.freeze({
+                  ...member,
+                  policy: deriveRulePackPilotExecutionPolicy(member.policy, formulaAiPilotCapital),
+                });
+              }
+              const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
               const liveSeed = await buildLivePlanInput({
                 source: this.source,
                 repository,
-                member,
+                member: liveMember,
                 entry,
                 runtime,
                 paperInput,
@@ -1114,7 +1634,7 @@ export class MemberAutoTradingBackgroundWorker {
                 { fxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency, now },
               );
               result.privateTradingRequests += livePreview.providerRequests;
-              const liveInput: TradingPlanInput = {
+              let liveInput: TradingPlanInput = {
                 ...liveSeed,
                 marketSnapshot: {
                   ...livePreview.snapshot,
@@ -1132,12 +1652,47 @@ export class MemberAutoTradingBackgroundWorker {
                 estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
                 averageSpreadPercent: livePreview.snapshot.spreadPercent,
               };
+              if (member.policy.pilotStage === 'formula-ai-exception'
+                && liveInput.estimatedKrw > member.policy.maxOrderKrw) {
+                liveInput = issueRulePackPilotDynamicCapReceipt(
+                  member.userId, liveInput, nowMs,
+                );
+              }
+              // Recheck after private preflight: a Telegram outage during the tick
+              // must never allow a new automatic live order.
+              // Global delivery proof cannot prove that THIS member's channel
+              // is still connected. Check the actual connection separately.
+              let memberTelegramReady = false;
+              try {
+                memberTelegramReady = await this.source.memberTelegramConnected?.(member.userId) === true;
+              } catch {
+                memberTelegramReady = false;
+              }
+              if (!memberTelegramReady) {
+                result.newEntriesFailClosed = true;
+                result.liveEntriesSuppressedByTelegram += 1;
+                result.blocked += 1;
+                break;
+              }
+              if (this.source.telegramDeliveryHealthy?.(Date.now()) !== true) {
+                result.newEntriesFailClosed = true;
+                result.liveEntriesSuppressedByTelegram += 1;
+                result.blocked += 1;
+                break;
+              }
+              // The operator may revoke the arm during provider preflight.
+              if (!await liveEntryArmPresent()) {
+                result.newEntriesFailClosed = true;
+                result.liveEntriesSuppressedByWarmupOrArm += 1;
+                result.blocked += 1;
+                break;
+              }
               const liveRun = await executeAutomaticPlan({
                 repository,
                 userId: member.userId,
                 planInput: liveInput,
-                policy: member.policy,
-                emergencyStopped: member.policy.emergencyStopped
+                policy: liveMember.policy,
+                emergencyStopped: liveMember.policy.emergencyStopped
                   || persistentStop
                   || process.env.TRADING_EMERGENCY_STOP === 'true',
               });
@@ -1151,10 +1706,22 @@ export class MemberAutoTradingBackgroundWorker {
                   result.liveOrders += 1;
                 }
                 if (liveRun.order.state === 'REJECTED') result.blocked += 1;
+                await refreshRuntime();
+                entryProjectionHealthy = await syncExecutionProjection();
+                if (!entryProjectionHealthy) {
+                  result.blocked += 1;
+                  break;
+                }
               }
             }
           } catch (error) {
             const code = errorCode(error);
+            // Missing signal-specific AI proof is not a normal completed Live
+            // readiness state. Preserve the paper journal, but expose this
+            // failure to the UI and the protected activation warmup as blocked.
+            if (code === 'BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED') {
+              result.newEntriesFailClosed = true;
+            }
             if (code.startsWith('BACKGROUND_')
               || code.includes('RISK')
               || code.includes('LIMIT')
@@ -1163,32 +1730,106 @@ export class MemberAutoTradingBackgroundWorker {
           }
         }
 
-        if (this.source.syncExecutionEvents) {
-          try {
-            const synced = await this.source.syncExecutionEvents({
-              userId: member.userId,
-              profile: member.profile,
-              repository,
-              paperJournalRepository: paper,
-            });
-            result.executionEventsInserted += synced.inserted;
-            result.notificationDeliveriesQueued += synced.deliveryQueued;
-            result.executionSyncMissingReferences += synced.missingReferences;
-          } catch {
-            // Notification/journal fan-out must never change canonical order state.
-            result.executionSyncFailures += 1;
+        if (!entryProjectionHealthy) result.newEntriesFailClosed = true;
+      }
+
+      if (liveModeRequested) {
+        const cycleComplete = this.source.memberBatchCycleCompleted?.() ?? true;
+        this.liveCycleOrderEligibleSeen ||= result.liveOrderEligibleMembers > 0;
+        this.liveCyclePolicyReadySeen ||= result.livePolicyReadyMembers > 0;
+        this.liveCycleAllFourPolicyReadySeen ||= result.liveAllFourPolicyReadyMembers > 0;
+        if (cycleComplete
+          && this.liveCycleAllFourPolicyReadySeen
+          && this.liveCycleAllFourWitnessUserId
+          && this.source.revalidateLiveAllFourReadiness) {
+          const witnessStillReady = await this.source.revalidateLiveAllFourReadiness(
+            this.liveCycleAllFourWitnessUserId,
+          );
+          if (!witnessStillReady) {
+            this.liveCycleOrderEligibleSeen = false;
+            this.liveCyclePolicyReadySeen = false;
+            this.liveCycleAllFourPolicyReadySeen = false;
+          this.liveCycleAllFourWitnessUserId = null;
           }
         }
+        result.liveReadinessCycleComplete = cycleComplete;
+        result.liveCycleOrderEligible = this.liveCycleOrderEligibleSeen;
+        result.liveCyclePolicyReady = this.liveCyclePolicyReadySeen;
+        result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
+
+        const hardWarmupBlock = !result.handoffReady
+          || result.liveExitsSuppressedByPolicy > 0
+          || paperAccountMissingThisTick
+          || result.executionSyncFailures > 0
+          || result.executionSyncMissingReferences > 0
+          || result.globalEmergencyStopActive
+          || memberAuditFailedThisTick;
+        this.liveCycleHardWarmupBlocked ||= hardWarmupBlock;
+        if (this.liveCycleHardWarmupBlocked) {
+          this.liveEntryWarmupComplete = false;
+          result.newEntriesFailClosed = true;
+          // Publish effective readiness, not a pre-block witness snapshot.
+          // Otherwise a failed earlier batch is reported ready on a later one.
+          result.liveCycleOrderEligible = false;
+          result.liveCyclePolicyReady = false;
+          result.liveCycleAllFourPolicyReady = false;
+          this.liveCycleOrderEligibleSeen = false;
+          this.liveCyclePolicyReadySeen = false;
+          this.liveCycleAllFourPolicyReadySeen = false;
+          this.liveCycleAllFourWitnessUserId = null;
+          // A completed blocked rotation is never ready. The NEXT complete
+          // rotation can retry after the offending condition is remedied.
+          if (cycleComplete) this.liveCycleHardWarmupBlocked = false;
+        } else if (cycleComplete) {
+          this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
+            && this.liveCyclePolicyReadySeen
+            && this.liveCycleAllFourPolicyReadySeen;
+          if (!this.liveEntryWarmupComplete) result.newEntriesFailClosed = true;
+          this.liveCycleOrderEligibleSeen = false;
+          this.liveCyclePolicyReadySeen = false;
+          this.liveCycleAllFourPolicyReadySeen = false;
+          this.liveCycleAllFourWitnessUserId = null;
+        }
+      } else {
+        this.liveEntryWarmupComplete = false;
+        this.liveCycleHardWarmupBlocked = false;
+        this.liveCycleOrderEligibleSeen = false;
+        this.liveCyclePolicyReadySeen = false;
+        this.liveCycleAllFourPolicyReadySeen = false;
+          this.liveCycleAllFourWitnessUserId = null;
       }
+      result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       return result;
+    } catch (error) {
+      this.liveEntryWarmupComplete = false;
+      this.liveCycleHardWarmupBlocked = false;
+      this.liveCycleOrderEligibleSeen = false;
+      this.liveCyclePolicyReadySeen = false;
+      this.liveCycleAllFourPolicyReadySeen = false;
+          this.liveCycleAllFourWitnessUserId = null;
+      throw error;
     } finally {
       this.running = false;
     }
   }
 }
 
+export function memberTelegramProofMatchesCurrentBinding(
+  connection: Pick<UserTelegramConnection, 'status' | 'telegramChatId' | 'connectedAt'> | null | undefined,
+  receipt: { state?: string | null; updated_at?: string | null } | null | undefined,
+  nowMs = Date.now(),
+) {
+  if (connection?.status !== 'ACTIVE' || !connection.telegramChatId?.trim()) return false;
+  const boundMs = Date.parse(connection.connectedAt ?? '');
+  if (!Number.isFinite(boundMs) || boundMs > nowMs + 5_000) return false;
+  const confirmedAt = verifiedRecentTelegramDeliveryReceipt(receipt, nowMs);
+  return confirmedAt != null && Date.parse(confirmedAt) >= boundMs;
+}
+
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
+  private memberBatchCursor: string | null = null;
+  private lastMemberBatchCompletedCycle = true;
 
   constructor(
     private readonly client: SupabaseClient = getSupabase(),
@@ -1210,26 +1851,118 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   }
 
   async listEligibleMembers() {
-    const { data, error } = await this.client.from('trade_automation_profiles')
-      .select('user_id,payload').limit(MAX_MEMBERS_PER_TICK);
+    let query = this.client.from('trade_automation_profiles')
+      .select('user_id,payload')
+      // Include previously automatic members after their policy is switched
+      // off, so outstanding Live positions remain visible to the supervisor.
+      .order('user_id', { ascending: true })
+      .limit(MAX_MEMBERS_PER_TICK + 1);
+    if (this.memberBatchCursor) query = query.gt('user_id', this.memberBatchCursor);
+    const { data, error } = await query;
     if (error) throw new Error('BACKGROUND_POLICY_LIST_FAILED');
-    const rows = (data ?? []).flatMap((row) => {
+    const fetched = data ?? [];
+    const hasMore = fetched.length > MAX_MEMBERS_PER_TICK;
+    const batch = fetched.slice(0, MAX_MEMBERS_PER_TICK);
+    const lastUserId = String(batch.at(-1)?.user_id ?? '').trim();
+    this.lastMemberBatchCompletedCycle = !hasMore;
+    this.memberBatchCursor = hasMore && lastUserId ? lastUserId : null;
+    const rows = batch.flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
       if (!userId) return [];
       const policy = normalizeTradingPolicy((row.payload ?? {}) as Partial<TradingPolicy>);
-      return policy.mode === 'automatic' && policy.automaticEnabled ? [{ userId, policy }] : [];
+      return [{ userId, policy }];
     });
     if (rows.length === 0) return [];
     const { data: profiles, error: profileError } = await this.client.from('profiles')
       .select('id,role,status,membership_level,is_active,membership_expires_at').in('id', rows.map((row) => row.userId));
     if (profileError) throw new Error('BACKGROUND_MEMBER_LIST_FAILED');
     const byId = new Map((profiles ?? []).map((profile) => [String(profile.id), profile as MemberAccessProfile & { id: string }]));
-    return rows.flatMap((row) => {
-      const profile = byId.get(row.userId);
-      return profile && hasCapability(profile, 'canAccessAutoTrading')
-        ? [Object.freeze({ userId: row.userId, policy: row.policy, profile })]
-        : [];
-    });
+    // Never silently drop an automation profile: an absent membership row
+    // could hide stored Live fills from the safety supervisor.
+    if (rows.some((row) => !byId.has(row.userId))) {
+      throw new Error('BACKGROUND_MEMBER_ACCESS_PROFILE_MISSING');
+    }
+    return rows.map((row) => Object.freeze({
+      userId: row.userId,
+      policy: row.policy,
+      profile: byId.get(row.userId)!,
+    }));
+  }
+
+  memberBatchCycleCompleted() {
+    return this.lastMemberBatchCompletedCycle;
+  }
+
+  telegramDeliveryHealthy(nowMs: number) {
+    return userTelegramDeliveryWorkerHealthy(readUserTelegramDeliveryWorkerHealth(), nowMs);
+  }
+
+  async memberTelegramConnected(userId: string) {
+    const connection = await createSupabaseUserBrokerTelegramRepository()
+      .getTelegramConnection(userId);
+    if (connection?.status !== 'ACTIVE' || !connection.telegramChatId) return false;
+    // The member may have revoked and rebound to a different chat. A SENT
+    // proof for the old binding must never arm a new Live entry.
+    const nowMs = Date.now();
+    const bindingMs = Date.parse(connection.connectedAt);
+    if (!Number.isFinite(bindingMs) || bindingMs > nowMs + 5_000) return false;
+    const { data, error } = await this.client.from('notification_deliveries')
+      .select('state,updated_at')
+      .eq('user_id', userId)
+      .eq('delivery_kind', 'EXECUTION_EVENT')
+      .in('state', ['SENT', 'RETRY_SCHEDULED', 'DEAD_LETTER', 'FAILED'])
+      .gte('updated_at', new Date(Math.max(bindingMs, nowMs - 24 * 60 * 60_000)).toISOString())
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw new Error('BACKGROUND_MEMBER_TELEGRAM_SENT_RECEIPT_REQUIRED');
+    return memberTelegramProofMatchesCurrentBinding(connection, data?.[0] ?? null, nowMs);
+  }
+
+  async revalidateLiveAllFourReadiness(userId: string) {
+    const { data: policyRows, error: policyError } = await this.client.from('trade_automation_profiles')
+      .select('user_id,payload')
+      .eq('user_id', userId)
+      .limit(1);
+    if (policyError) throw new Error('BACKGROUND_LIVE_READINESS_REVALIDATION_FAILED');
+    const policyRow = policyRows?.[0];
+    if (!policyRow?.payload) return false;
+
+    const { data: profileRows, error: profileError } = await this.client.from('profiles')
+      .select('id,role,status,membership_level,is_active,membership_expires_at')
+      .eq('id', userId)
+      .limit(1);
+    if (profileError) throw new Error('BACKGROUND_LIVE_READINESS_REVALIDATION_FAILED');
+    const profile = profileRows?.[0] as (MemberAccessProfile & { id: string }) | undefined;
+    if (!profile) return false;
+
+    const policy = normalizeTradingPolicy(policyRow.payload as Partial<TradingPolicy>);
+    const nowMs = Date.now();
+    const repository = createServiceRoleTradingRepository(userId, this.client);
+    const paperRepository = createServiceRolePaperJournalRepository(userId, this.client);
+    const [persistentGlobalStop, connections, runtime] = await Promise.all([
+      repository.getGlobalEmergencyStop(),
+      repository.getConnections(userId),
+      memberRuntimeState(userId, repository, paperRepository, nowMs),
+    ]);
+    const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
+    const liveSnapshots = await Promise.all(
+      (['toss', 'kiwoom', 'upbit', 'bitget'] as const)
+        .map((provider) => this.readLiveAccountSnapshot(userId, provider)),
+    );
+    const liveSnapshotsReady = liveSnapshots.every((snapshot) =>
+      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, livePlans));
+    return hasCapability(profile, 'canAccessAutoTrading')
+      && hasCapability(profile, 'canPlaceOrders')
+      && hasCapability(profile, 'canAccessFutures')
+      && automaticPolicyHasAllFourMarkets(policy)
+      && liveAllFourConnectionVerificationReady(policy, connections, nowMs)
+      && liveSnapshotsReady
+      && runtime.paperAccountReady
+      && !persistentGlobalStop
+      && process.env.TRADING_EMERGENCY_STOP !== 'true'
+      // A globally healthy Telegram worker cannot attest a specific user's
+      // channel. Reject full-cycle warmup when the witness has no ACTIVE binding.
+      && await this.memberTelegramConnected(userId);
   }
 
   tradingRepositoryFor(userId: string) {
@@ -1279,23 +2012,179 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
-  if (process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true') {
+  const mode = memberAutoTradingWorkerMode();
+  if (mode === 'DISABLED') {
+    backgroundRuntimeHealth = Object.freeze({
+      ...backgroundRuntimeHealth,
+      enabled: false,
+      liveModeRequested: false,
+      lastTickAt: null,
+      tickOk: null,
+      handoffStatus: 'MISSING',
+      handoffReady: false,
+      newEntriesFailClosed: true,
+      liveEntryArmPresent: false,
+      liveEntriesArmed: false,
+      liveEntryWarmupComplete: false,
+      startupWarmupObserved: false,
+      firstWarmupTickLiveEntriesArmed: null,
+      firstWarmupTickLiveOrders: null,
+      firstWarmupTickLiveExitOrders: null,
+      liveTrackedPositions: 0,
+      liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
+      executionSyncFailures: 0,
+      executionSyncMissingReferences: 0,
+      liveOrderEligibleMembers: 0,
+      livePolicyReadyMembers: 0,
+      liveAllFourPolicyReadyMembers: 0,
+      liveReadinessCycleComplete: true,
+      liveCycleOrderEligible: false,
+      liveCyclePolicyReady: false,
+      liveCycleAllFourPolicyReady: false,
+      globalEmergencyStopActive: false,
+      errorCode: null,
+    });
     console.log('[member-auto-trading-background] disabled; explicit enable flag is required');
     return null;
   }
   if (!hasSupabaseServerKey()) {
+    backgroundRuntimeHealth = Object.freeze({
+      ...backgroundRuntimeHealth,
+      enabled: true,
+      liveModeRequested: liveBackgroundEnabled(),
+      lastTickAt: null,
+      tickOk: false,
+      handoffStatus: 'MISSING',
+      handoffReady: false,
+      newEntriesFailClosed: true,
+      liveEntryArmPresent: false,
+      liveEntriesArmed: false,
+      liveEntryWarmupComplete: false,
+      startupWarmupObserved: false,
+      firstWarmupTickLiveEntriesArmed: null,
+      firstWarmupTickLiveOrders: null,
+      firstWarmupTickLiveExitOrders: null,
+      liveTrackedPositions: 0,
+      liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
+      executionSyncFailures: 0,
+      executionSyncMissingReferences: 0,
+      liveOrderEligibleMembers: 0,
+      livePolicyReadyMembers: 0,
+      liveAllFourPolicyReadyMembers: 0,
+      liveReadinessCycleComplete: true,
+      liveCycleOrderEligible: false,
+      liveCyclePolicyReady: false,
+      liveCycleAllFourPolicyReady: false,
+      globalEmergencyStopActive: false,
+      errorCode: 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED',
+    });
     console.error('[member-auto-trading-background] blocked: service-role Supabase configuration is required');
     return null;
   }
+  backgroundRuntimeHealth = Object.freeze({
+    ...backgroundRuntimeHealth,
+    enabled: true,
+    liveModeRequested: liveBackgroundEnabled(),
+    lastTickAt: null,
+    tickOk: null,
+    handoffStatus: 'MISSING',
+    handoffReady: false,
+    newEntriesFailClosed: true,
+    liveEntryArmPresent: false,
+    liveEntriesArmed: false,
+    liveEntryWarmupComplete: false,
+    startupWarmupObserved: false,
+    firstWarmupTickLiveEntriesArmed: null,
+    firstWarmupTickLiveOrders: null,
+    firstWarmupTickLiveExitOrders: null,
+    liveTrackedPositions: 0,
+    liveExitsSuppressedByWarmupOrArm: 0,
+  liveExitsSuppressedByPolicy: 0,
+    executionSyncFailures: 0,
+    executionSyncMissingReferences: 0,
+    liveOrderEligibleMembers: 0,
+    livePolicyReadyMembers: 0,
+    liveAllFourPolicyReadyMembers: 0,
+    liveReadinessCycleComplete: true,
+    liveCycleOrderEligible: false,
+    liveCyclePolicyReady: false,
+    liveCycleAllFourPolicyReady: false,
+    globalEmergencyStopActive: false,
+    errorCode: null,
+  });
   const worker = new MemberAutoTradingBackgroundWorker(new SupabaseMemberAutoTradingBackgroundSource());
   const tick = async () => {
     try {
       const result = await worker.runOnce(new Date());
-      if (result.evaluated > 0 || result.paperExitOrders > 0 || result.liveExitOrders > 0
-        || result.exitBlocked > 0 || result.failures > 0) {
+      if (result.overlapSkipped) return;
+      const warmupObservedNow = !backgroundRuntimeHealth.startupWarmupObserved
+        && result.liveEntryWarmupComplete;
+      backgroundRuntimeHealth = Object.freeze({
+        enabled: true,
+        liveModeRequested: liveBackgroundEnabled(),
+        lastTickAt: new Date().toISOString(),
+        tickOk: result.failures === 0 && result.executionSyncFailures === 0
+          && result.executionSyncMissingReferences === 0,
+        handoffStatus: result.handoffStatus,
+        handoffReady: result.handoffReady,
+        newEntriesFailClosed: result.newEntriesFailClosed,
+        liveEntryArmPresent: result.liveEntryArmPresent,
+        liveEntriesArmed: result.liveEntriesArmed,
+        liveEntryWarmupComplete: result.liveEntryWarmupComplete,
+        startupWarmupObserved: backgroundRuntimeHealth.startupWarmupObserved || warmupObservedNow,
+        firstWarmupTickLiveEntriesArmed: warmupObservedNow
+          ? result.liveEntriesArmed
+          : backgroundRuntimeHealth.firstWarmupTickLiveEntriesArmed,
+        firstWarmupTickLiveOrders: warmupObservedNow
+          ? result.liveOrders
+          : backgroundRuntimeHealth.firstWarmupTickLiveOrders,
+        firstWarmupTickLiveExitOrders: warmupObservedNow
+          ? result.liveExitOrders
+          : backgroundRuntimeHealth.firstWarmupTickLiveExitOrders,
+        liveTrackedPositions: result.liveTrackedPositions,
+        liveExitsSuppressedByWarmupOrArm: result.liveExitsSuppressedByWarmupOrArm,
+        liveExitsSuppressedByPolicy: result.liveExitsSuppressedByPolicy,
+        executionSyncFailures: result.executionSyncFailures,
+        executionSyncMissingReferences: result.executionSyncMissingReferences,
+        liveOrderEligibleMembers: result.liveOrderEligibleMembers,
+        livePolicyReadyMembers: result.livePolicyReadyMembers,
+        liveAllFourPolicyReadyMembers: result.liveAllFourPolicyReadyMembers,
+        liveReadinessCycleComplete: result.liveReadinessCycleComplete,
+        liveCycleOrderEligible: result.liveCycleOrderEligible,
+        liveCyclePolicyReady: result.liveCyclePolicyReady,
+        liveCycleAllFourPolicyReady: result.liveCycleAllFourPolicyReady,
+        globalEmergencyStopActive: result.globalEmergencyStopActive,
+        errorCode: result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
+          : result.executionSyncFailures > 0 || result.executionSyncMissingReferences > 0
+            ? 'BACKGROUND_EXECUTION_PROJECTION_UNAVAILABLE' : null,
+      });
+      if (result.handoffStatus !== 'READY' || result.evaluated > 0
+        || result.paperExitOrders > 0 || result.liveExitOrders > 0
+        || result.exitBlocked > 0 || result.executionSyncBlocks > 0
+        || result.liveEntriesSuppressedByWarmupOrArm > 0
+        || result.liveEntriesSuppressedByTelegram > 0
+        || result.liveExitsSuppressedByWarmupOrArm > 0
+        || result.liveExitsSuppressedByPolicy > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }
     } catch (error) {
+      backgroundRuntimeHealth = Object.freeze({
+        ...backgroundRuntimeHealth,
+        enabled: true,
+        liveModeRequested: liveBackgroundEnabled(),
+        lastTickAt: new Date().toISOString(),
+        tickOk: false,
+        newEntriesFailClosed: true,
+        liveEntriesArmed: false,
+        liveEntryWarmupComplete: false,
+        liveReadinessCycleComplete: true,
+        liveCycleOrderEligible: false,
+        liveCyclePolicyReady: false,
+        liveCycleAllFourPolicyReady: false,
+        errorCode: errorCode(error),
+      });
       console.error('[member-auto-trading-background] tick failed', {
         errorCode: errorCode(error),
       });
@@ -1304,8 +2193,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs(process.env.MEMBER_AUTO_TRADING_BACKGROUND_INTERVAL_MS));
   timer.unref?.();
-  console.log(liveBackgroundEnabled()
-    ? '[member-auto-trading-background] started in Paper+Live guarded mode'
-    : '[member-auto-trading-background] started in Paper-only mode');
+  console.log(mode === 'PAPER_ONLY'
+    ? '[member-auto-trading-background] started with explicit Paper-only activation; Live override blocked'
+    : liveBackgroundEnabled()
+      ? '[member-auto-trading-background] started in Paper+Live guarded mode'
+      : '[member-auto-trading-background] started in Paper-only mode');
   return { stop: () => clearInterval(timer) };
 }
