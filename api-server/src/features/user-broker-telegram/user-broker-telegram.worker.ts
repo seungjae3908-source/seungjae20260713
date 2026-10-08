@@ -26,6 +26,32 @@ export function readUserTelegramDeliveryWorkerHealth() {
   return telegramDeliveryWorkerHealth;
 }
 
+// A successful contract check or an outdated delivery tick is not live readiness.
+export function userTelegramDeliveryWorkerHealthy(
+  health: UserTelegramDeliveryWorkerHealth,
+  nowMs = Date.now(),
+) {
+  const lastTickMs = Date.parse(health.lastTickAt ?? '');
+  return health.enabled === true
+    && health.tickOk === true
+    && health.errorCode == null
+    && Number.isFinite(nowMs)
+    && Number.isFinite(lastTickMs)
+    && lastTickMs <= nowMs + 5_000
+    && nowMs - lastTickMs <= 360_000;
+}
+
+// A retry or dead letter is a delivery failure, even when the queue processor itself ran.
+// Idle ticks cannot silently clear the failure. Require a confirmed outbound send.
+export function telegramDeliveryTickConfirmed(
+  previouslyConfirmed: boolean,
+  result: Readonly<{ sent: number; retryScheduled: number; deadLetter: number }>,
+) {
+  if (result.retryScheduled > 0 || result.deadLetter > 0) return false;
+  if (result.sent > 0) return true;
+  return previouslyConfirmed;
+}
+
 export interface TelegramDeliveryWorkerSource {
   listDue(now: string, limit: number): Promise<Array<Pick<NotificationDelivery, 'userId' | 'id'>>>;
 }
@@ -40,6 +66,7 @@ export class TelegramDeliveryWorker {
 
   async runOnce(now = new Date()) {
     const result = {
+      overlapSkipped: false,
       scanned: 0,
       processed: 0,
       sent: 0,
@@ -49,7 +76,7 @@ export class TelegramDeliveryWorker {
       ordersCancelled: 0 as const,
       privateBrokerRequests: 0 as const,
     };
-    if (this.running) return result;
+    if (this.running) return { ...result, overlapSkipped: true };
     this.running = true;
     try {
       const due = await this.source.listDue(now.toISOString(), this.batchSize);
@@ -161,14 +188,19 @@ export function startUserTelegramDeliveryWorker(
     tickOk: null,
     errorCode: null,
   });
-  const tick = () => void worker.runOnce().then(() => {
+  let deliveryConfirmed = true;
+  const tick = () => void worker.runOnce().then((result) => {
+    // An overlap is not a completed health probe; never overwrite the in-flight result.
+    if (result.overlapSkipped) return;
+    deliveryConfirmed = telegramDeliveryTickConfirmed(deliveryConfirmed, result);
     telegramDeliveryWorkerHealth = Object.freeze({
       enabled: true,
       lastTickAt: new Date().toISOString(),
-      tickOk: true,
-      errorCode: null,
+      tickOk: deliveryConfirmed,
+      errorCode: deliveryConfirmed ? null : 'TELEGRAM_DELIVERY_UNCONFIRMED',
     });
   }).catch((error) => {
+    deliveryConfirmed = false;
     const code = error instanceof Error ? error.message.split(':')[0] : 'TELEGRAM_WORKER_FAILED';
     telegramDeliveryWorkerHealth = Object.freeze({
       enabled: true,

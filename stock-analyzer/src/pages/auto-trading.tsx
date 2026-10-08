@@ -225,11 +225,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? 'bitget'
       : policy?.stockBrokerByMarket?.[market] ?? 'kiwoom';
   const providerConnection = (runtimeStatus?.connections ?? []).find((item) => item.exchange === selectedProvider);
-  const providerVerified = Boolean(
-    providerConnection?.configured && providerConnection.lastVerifiedAt && !providerConnection.lastErrorCode,
-  );
   const liveReadiness = runtimeStatus?.liveAutomaticReadinessByMarket?.[market]
     ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
+  const providerVerified = liveReadiness?.providerVerified === true;
   const autoWorker = runtimeStatus?.autoTradingBackground;
   const telegramWorker = runtimeStatus?.userTelegramDelivery;
   const runtimeNowMs = runtimeClockMs;
@@ -320,9 +318,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </div>
           <span className={[
             'rounded-full px-2.5 py-1 text-xs font-bold',
-            marketEnabled && !effectiveEntryStopped ? 'bg-emerald-500/10 text-emerald-700' : 'bg-muted text-muted-foreground',
+            'bg-muted text-muted-foreground',
           ].join(' ')}>
-            {marketEnabled && !effectiveEntryStopped ? '시장 ON' : '시장 OFF'}
+            {marketEnabled && !effectiveEntryStopped ? '시장 설정 ON' : '시장 설정 OFF'}
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -344,7 +342,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem
             label="실거래 권한"
             value={liveAuthorityLabel}
-            tone={!runtimeReadError && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
+            tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
           />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
