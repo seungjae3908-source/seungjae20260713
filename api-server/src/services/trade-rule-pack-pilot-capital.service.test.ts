@@ -363,6 +363,33 @@ test('incomplete LIVE automatic fill quantity or average price must not silently
   }
 });
 
+test('unknown LIVE automatic broker submission outcome blocks dynamic capital promotion', async () => {
+  const user = '11111111-1111-1111-1111-111111111111';
+  const repository = new InMemoryTradingRepository();
+  const at = new Date(NOW - 30_000).toISOString();
+  await repository.savePlan({
+    ...pilotReceiptInput(50_000), id: 'pending-unknown', userId: user,
+    idempotencyKey: 'pending-unknown', executionMode: 'automatic',
+    state: 'SUBMITTED', version: 1, approvedAt: at,
+    approvalExpiresAt: new Date(NOW + 60_000).toISOString(),
+    createdAt: at, updatedAt: at,
+  } as never);
+  await repository.saveOrder({
+    id: 'pending-unknown-order', userId: user, planId: 'pending-unknown',
+    exchange: 'upbit', clientOrderId: 'client-pending-unknown',
+    exchangeOrderId: null, state: 'RECOVERY_REQUIRED', version: 1,
+    requestedQuantity: 1, filledQuantity: 0, averageFillPrice: null,
+    feeAmount: null, feeCurrency: null, fills: [],
+    retryCount: 1, lastErrorCode: 'UNKNOWN_OUTCOME',
+    createdAt: at, updatedAt: at,
+  } as never);
+  const pilot = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+  assert.equal(pilot.settlementReady, false);
+  assert.ok(pilot.blockers.includes('PILOT_CAPITAL_AUTO_LIVE_ORDER_RECONCILIATION_REQUIRED'));
+  assert.ok(decision(pilot, { estimatedKrw: 20_000 }).blockers
+    .includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'));
+});
+
 function pilotReceiptInput(estimatedKrw = 525_000): TradingPlanInput {
   return {
     exchange: 'upbit', accountMode: 'live', strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
@@ -499,6 +526,22 @@ test('manual /plans approval cannot forge the dedicated signed automatic policy 
     assert.equal((await repo.listOrders(user)).length, 0);
   });
 });
+test('pilot ledger constructs one order/plan snapshot rather than mixing repeated reads', async () => {
+  const repo = new InMemoryTradingRepository();
+  const readOrders = repo.listOrders.bind(repo);
+  const readPlans = repo.listPlans.bind(repo);
+  let orders = 0;
+  let plans = 0;
+  repo.listOrders = async (userId: string) => { orders += 1; return readOrders(userId); };
+  repo.listPlans = async (userId: string) => { plans += 1; return readPlans(userId); };
+  const ledger = await readRulePackPilotCapitalState(
+    repo, '11111111-1111-1111-1111-111111111111', new Date(NOW),
+  );
+  assert.equal(ledger.settlementReady, true);
+  assert.equal(orders, 1, 'one captured order population');
+  assert.equal(plans, 1, 'one captured plan population');
+});
+
 test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, not 550k', async () => {
   await withPilotDynamicCapEnvironment(async () => {
     const user = '11111111-1111-1111-1111-111111111111';
@@ -575,6 +618,20 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
     assert.equal(wrongSpotQuote.settlementReady, false);
     assert.ok(wrongSpotQuote.blockers.includes('PILOT_CAPITAL_SPOT_KRW_QUOTE_EVIDENCE_REQUIRED'));
     await repository.savePlan(planFor('history-entry', 'buy', false, openedAt) as never);
+
+    // Invalid fill timestamp is rejected by the journal parser. A hidden
+    // auto-LIVE close must block capital promotion instead of disappearing.
+    await repository.saveOrder({
+      ...orderFor('history-exit-order', 'history-exit', closedAt, 1_051_000),
+      fills: [{
+        id: 'fill-history-exit-order', price: 1_051_000, quantity: 1,
+        feeAmount: 500, feeCurrency: 'KRW', filledAt: 'invalid-iso-timestamp',
+      }],
+    } as never);
+    const invalidJournal = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.equal(invalidJournal.settlementReady, false);
+    assert.ok(invalidJournal.blockers.includes('PILOT_CAPITAL_AUTO_LIVE_JOURNAL_INTEGRITY_REQUIRED'));
+    await repository.saveOrder(orderFor('history-exit-order', 'history-exit', closedAt, 1_051_000) as never);
 
     const tooLarge = {
       ...proposed,

@@ -47,11 +47,10 @@ function feeForOrder(order: TradingOrder) {
   return fills.reduce((sum, fill) => sum + Number(fill.feeAmount), 0);
 }
 
-export async function readTradeAutomationJournalPayloads(
-  repository: TradingRepository,
-  userId: string,
-): Promise<Record<string, unknown>[]> {
-  const [orders, plans] = await Promise.all([repository.listOrders(userId), repository.listPlans(userId)]);
+export function tradeAutomationJournalPayloadsFromSnapshot(
+  orders: readonly TradingOrder[],
+  plans: readonly TradingPlan[],
+): Record<string, unknown>[] {
   const planById = new Map(plans.map((plan) => [plan.id, plan]));
   return orders.flatMap((order) => {
     const plan = planById.get(order.planId);
@@ -142,4 +141,12 @@ export async function readTradeAutomationJournalPayloads(
       },
     }];
   });
+}
+
+export async function readTradeAutomationJournalPayloads(
+  repository: TradingRepository,
+  userId: string,
+): Promise<Record<string, unknown>[]> {
+  const [orders, plans] = await Promise.all([repository.listOrders(userId), repository.listPlans(userId)]);
+  return tradeAutomationJournalPayloadsFromSnapshot(orders, plans);
 }
