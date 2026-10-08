@@ -17,3 +17,19 @@ export function liveConnectionVerificationFresh(
     && verifiedAt <= nowMs + 5_000
     && nowMs - verifiedAt <= LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS;
 }
+
+// Risk-reducing exits must not be held hostage by a 30-day re-verification age
+// if the same verified credential is still configured and free from known errors.
+// Fresh provider balance/position/risk rechecks remain mandatory at execution.
+export function liveConnectionVerificationAllowsReducingExit(
+  connection: Pick<ExchangeConnection, 'configured' | 'accountMode' | 'lastVerifiedAt' | 'lastErrorCode'> | null | undefined,
+  nowMs = Date.now(),
+) {
+  const verifiedAt = Date.parse(connection?.lastVerifiedAt ?? '');
+  return connection?.configured === true
+    && connection.accountMode === 'live'
+    && !connection.lastErrorCode
+    && Number.isFinite(nowMs)
+    && Number.isFinite(verifiedAt)
+    && verifiedAt <= nowMs + 5_000;
+}
