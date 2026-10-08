@@ -51,6 +51,14 @@ import { createSupabaseUserBrokerTelegramRepository } from '../features/user-bro
 import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
 import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
+import {
+  readRulePackPilotCapitalState,
+  type RulePackPilotCapitalState,
+} from './trade-rule-pack-pilot-capital.service';
+import {
+  isEvidenceBackedAutoStrategyId,
+  RULE_PACK_PILOT_PROFILE,
+} from './evidence-backed-auto-strategy-catalog.service';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -381,6 +389,70 @@ function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
     && policy.exchangeEnabled.kiwoom
     && policy.exchangeEnabled.upbit
     && policy.exchangeEnabled.bitget;
+}
+
+function formulaAiPilotPolicy(policy: TradingPolicy, pilot: RulePackPilotCapitalState): TradingPolicy {
+  const capital = Math.max(1, Math.min(policy.totalCapitalKrw, pilot.operatingCapitalKrw));
+  const maxEntry = Math.max(1, Math.min(policy.maxOrderKrw, pilot.maxEntryKrw, capital));
+  return {
+    ...policy,
+    totalCapitalKrw: capital,
+    maxOrderKrw: maxEntry,
+    maxInstrumentKrw: Math.min(policy.maxInstrumentKrw, maxEntry),
+    maxAssetClassKrw: {
+      domestic_stock: Math.min(policy.maxAssetClassKrw.domestic_stock, capital),
+      us_stock: Math.min(policy.maxAssetClassKrw.us_stock, capital),
+      crypto_spot: Math.min(policy.maxAssetClassKrw.crypto_spot, capital),
+      crypto_futures: Math.min(policy.maxAssetClassKrw.crypto_futures, capital),
+    },
+  };
+}
+
+function validateFormulaAiPilotEntry(
+  member: EligibleMember,
+  entry: MemberAutoTradingPaperHandoffEntry,
+  runtime: MemberRuntimeState,
+  pilot: RulePackPilotCapitalState,
+  estimatedKrw: number,
+  nowMs: number,
+) {
+  if (member.policy.pilotStage !== 'formula-ai-exception') return;
+  if (!isEvidenceBackedAutoStrategyId(entry.identity.strategyId)) {
+    throw new Error('BACKGROUND_FORMULA_AI_PILOT_STRATEGY_REQUIRED');
+  }
+  if (!pilot.settlementReady || pilot.blockers.length > 0) {
+    throw new Error('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
+  }
+  if (!(pilot.operatingCapitalKrw > 0) || !(pilot.maxEntryKrw > 0)) {
+    throw new Error('BACKGROUND_PILOT_CAPITAL_UNAVAILABLE');
+  }
+  const maxEntryKrw = Math.min(member.policy.maxOrderKrw, pilot.maxEntryKrw);
+  if (!(estimatedKrw > 0) || estimatedKrw > maxEntryKrw) {
+    throw new Error('BACKGROUND_PILOT_ENTRY_LIMIT');
+  }
+  if (pilot.dailyLosingTrades >= RULE_PACK_PILOT_PROFILE.maxDailyLosingTrades) {
+    throw new Error('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT');
+  }
+  if (pilot.dailyRealizedPnlKrw <= -RULE_PACK_PILOT_PROFILE.dailyLossStopKrw) {
+    throw new Error('BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT');
+  }
+  if (pilot.consecutiveLosses >= RULE_PACK_PILOT_PROFILE.maxConsecutiveLosses) {
+    throw new Error('BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT');
+  }
+  if (openAutomaticPlans(runtime, 'live').length >= RULE_PACK_PILOT_PROFILE.maxConcurrentLivePositions) {
+    throw new Error('BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT');
+  }
+  const lastLoss = pilot.latestLossBySymbol[normalizedSymbol(entry.identity.symbol)];
+  if (lastLoss) {
+    if (lastLoss.signalId === entry.identity.signalId) {
+      throw new Error('BACKGROUND_PILOT_FRESH_SIGNAL_REQUIRED');
+    }
+    const closedAt = Date.parse(lastLoss.closedAt);
+    if (!Number.isFinite(closedAt)
+      || nowMs - closedAt < RULE_PACK_PILOT_PROFILE.lossCooldownMinutes * 60_000) {
+      throw new Error('BACKGROUND_PILOT_LOSS_COOLDOWN_ACTIVE');
+    }
+  }
 }
 
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
@@ -1209,6 +1281,7 @@ export class MemberAutoTradingBackgroundWorker {
           }
         };
 
+        let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
         let entryProjectionHealthy = await syncExecutionProjection();
         let exitChanged = false;
         for (const position of trackedAutomaticPositions(runtime, 'paper')) {
@@ -1351,12 +1424,28 @@ export class MemberAutoTradingBackgroundWorker {
             }
 
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
-              const provider = marketMapping(entry.identity.market, member.policy).exchange as AccountProvider;
+              let liveMember = member;
+              if (member.policy.pilotStage === 'formula-ai-exception') {
+                formulaAiPilotCapital ??= await readRulePackPilotCapitalState(repository, member.userId, now);
+                validateFormulaAiPilotEntry(
+                  member,
+                  entry,
+                  runtime,
+                  formulaAiPilotCapital,
+                  paperInput.estimatedKrw,
+                  nowMs,
+                );
+                liveMember = Object.freeze({
+                  ...member,
+                  policy: formulaAiPilotPolicy(member.policy, formulaAiPilotCapital),
+                });
+              }
+              const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
               const accountSnapshot = await this.source.readLiveAccountSnapshot(member.userId, provider);
               const liveSeed = await buildLivePlanInput({
                 source: this.source,
                 repository,
-                member,
+                member: liveMember,
                 entry,
                 runtime,
                 paperInput,
@@ -1393,8 +1482,8 @@ export class MemberAutoTradingBackgroundWorker {
                 repository,
                 userId: member.userId,
                 planInput: liveInput,
-                policy: member.policy,
-                emergencyStopped: member.policy.emergencyStopped
+                policy: liveMember.policy,
+                emergencyStopped: liveMember.policy.emergencyStopped
                   || persistentStop
                   || process.env.TRADING_EMERGENCY_STOP === 'true',
               });
