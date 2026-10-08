@@ -406,6 +406,7 @@ if(automaticTradingChanged.length>0){
  for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
 const canonicalMemberFixtureOnlyPaths=new Set([
+ 'api-server/src/services/research-workspace-authorization-v5.test.ts',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/e2e/research-workspace-v2.spec.ts',
 ]);
