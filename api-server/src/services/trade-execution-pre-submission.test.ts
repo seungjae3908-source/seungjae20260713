@@ -355,7 +355,7 @@ test('stale verification exception cannot be used by a reduceOnly cash BUY', () 
 });
 
 
-test('automatic live order cannot post after exact-SHA entry arm is absent', async () => {
+test('automatic-origin live entry is rejected after AUTO policy is disabled even if manual authority is enabled', async () => {
   const { repository, approved, order } = await setup();
   const automatic = {
     ...approved,
@@ -366,7 +366,9 @@ test('automatic live order cannot post after exact-SHA entry arm is absent', asy
   const provider = installUpbitMock(100_000);
   const result = await new TradeExecutionService(repository).execute(USER_ID, automatic, order);
   assert.equal(result.state, 'REJECTED');
-  assert.equal(result.lastErrorCode, 'AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+  assert.equal(result.lastErrorCode, 'AUTOMATIC_ENTRY_POLICY_REVOKED');
   assert.equal(result.submissionStartedAt ?? null, null);
   assert.equal(provider.counts().actualOrderPosts, 0);
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().openOrderReads, 0);
 });
