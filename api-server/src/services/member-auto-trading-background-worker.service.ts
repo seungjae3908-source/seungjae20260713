@@ -55,6 +55,7 @@ import { readUserTelegramDeliveryWorkerHealth, userTelegramDeliveryWorkerHealthy
 import type { TelegramTransport, UserTelegramConnection } from '../features/user-broker-telegram/user-broker-telegram.types';
 import {
   evaluateRulePackPilotEntryGuard,
+  deriveRulePackPilotExecutionPolicy,
   readRulePackPilotCapitalState,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -400,23 +401,6 @@ function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
     && policy.exchangeEnabled.bitget;
 }
 
-function formulaAiPilotPolicy(policy: TradingPolicy, pilot: RulePackPilotCapitalState): TradingPolicy {
-  const capital = Math.max(1, Math.min(policy.totalCapitalKrw, pilot.operatingCapitalKrw));
-  const maxEntry = Math.max(1, Math.min(policy.maxOrderKrw, pilot.maxEntryKrw, capital));
-  return {
-    ...policy,
-    totalCapitalKrw: capital,
-    maxOrderKrw: maxEntry,
-    maxInstrumentKrw: Math.min(policy.maxInstrumentKrw, maxEntry),
-    maxAssetClassKrw: {
-      domestic_stock: Math.min(policy.maxAssetClassKrw.domestic_stock, capital),
-      us_stock: Math.min(policy.maxAssetClassKrw.us_stock, capital),
-      crypto_spot: Math.min(policy.maxAssetClassKrw.crypto_spot, capital),
-      crypto_futures: Math.min(policy.maxAssetClassKrw.crypto_futures, capital),
-    },
-  };
-}
-
 function validateFormulaAiPilotEntry(
   member: EligibleMember,
   entry: MemberAutoTradingPaperHandoffEntry,
@@ -433,6 +417,7 @@ function validateFormulaAiPilotEntry(
     signalId: entry.identity.signalId,
     estimatedKrw,
     policyMaxOrderKrw: member.policy.maxOrderKrw,
+    policyTotalCapitalKrw: member.policy.totalCapitalKrw,
     openLivePositions: openAutomaticPlans(runtime, 'live').length,
     nowMs,
   });
@@ -1534,7 +1519,7 @@ export class MemberAutoTradingBackgroundWorker {
                 );
                 liveMember = Object.freeze({
                   ...member,
-                  policy: formulaAiPilotPolicy(member.policy, formulaAiPilotCapital),
+                  policy: deriveRulePackPilotExecutionPolicy(member.policy, formulaAiPilotCapital),
                 });
               }
               const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
