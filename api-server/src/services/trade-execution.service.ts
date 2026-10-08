@@ -7,6 +7,7 @@ import {
   livePlanCapabilityDecision,
 } from './trade-automation.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
+import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
@@ -975,6 +976,10 @@ export class TradeExecutionService {
   }
 
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
+    if (risk.plan.accountMode === 'live' && risk.plan.executionMode === 'automatic'
+      && risk.plan.reduceOnly !== true && !await liveEntryArmPresent()) {
+      throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+    }
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
     order.submissionAttemptId = submissionAttemptId;
