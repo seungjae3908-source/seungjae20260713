@@ -1713,6 +1713,92 @@ test('member emergency stop is sticky and only exact confirmed resume clears it 
   }
 });
 
+test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off without enabling trading', async () => {
+  const isolated = new InMemoryTradingRepository();
+  await isolated.savePolicy(USER, normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'automatic',
+    automaticEnabled: false,
+    pilotStage: 'approval-20',
+  }));
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const denied = await fetch(`${regular.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'formula-ai-exception',
+        confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+      }),
+    });
+    assert.equal(denied.status, 403);
+  } finally { await close(regular.server); }
+
+  const admin = await startServer(true, 'admin');
+  const keys = ['AUTO_TRADING', 'LIVE_AUTOMATIC_TRADING_ENABLED', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED'] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    const missing = await fetch(`${admin.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stage: 'formula-ai-exception' }),
+    });
+    assert.equal(missing.status, 409);
+    assert.equal((await missing.json() as { error: string }).error, 'FORMULA_AI_PILOT_CONFIRMATION_REQUIRED');
+
+    process.env.AUTO_TRADING = 'true';
+    const active = await fetch(`${admin.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'formula-ai-exception',
+        confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+      }),
+    });
+    assert.equal(active.status, 409);
+    assert.equal((await active.json() as { error: string }).error, 'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF');
+    process.env.AUTO_TRADING = 'false';
+
+    const prepared = await fetch(`${admin.baseUrl}/api/trade-automation/admin/pilot-stage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        stage: 'formula-ai-exception',
+        confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT',
+      }),
+    });
+    assert.equal(prepared.status, 200);
+    const body = await prepared.json() as {
+      pilotStage: string;
+      automaticTradingEnabledByThisRequest: boolean;
+      liveTradingEnabledByThisRequest: boolean;
+      policy: { pilotStage: string; automaticEnabled: boolean };
+    };
+    assert.equal(body.pilotStage, 'formula-ai-exception');
+    assert.equal(body.policy.pilotStage, 'formula-ai-exception');
+    assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.automaticTradingEnabledByThisRequest, false);
+    assert.equal(body.liveTradingEnabledByThisRequest, false);
+
+    const bypass = await fetch(`${admin.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(await isolated.getPolicy(USER)),
+        pilotStage: 'validated',
+        confirmation: { acknowledged: true },
+      }),
+    });
+    assert.equal(bypass.status, 200);
+    assert.equal((await bypass.json() as { policy: { pilotStage: string } }).policy.pilotStage, 'formula-ai-exception');
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await close(admin.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('persistent global emergency stop requires admin capability and exact confirmation', async () => {
   const regular = await startServer(true, 'regular');
   try {
