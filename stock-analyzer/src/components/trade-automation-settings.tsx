@@ -550,12 +550,12 @@ export function TradeAutomationSettings({
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {visibleExchanges.map((exchange) => {
         const connection = connections[exchange];
-        const providerVerified = Boolean(
-          connection?.configured && connection.lastVerifiedAt && !connection.lastErrorCode,
-        );
         const marketReadiness = selectedMarket
           ? status?.liveAutomaticReadinessByMarket?.[selectedMarket]
           : null;
+        const providerVerified = marketReadiness?.exchange === exchange
+          ? marketReadiness.providerVerified === true
+          : status?.liveExecutionReadiness?.[exchange]?.providerVerified === true;
         const marketReadinessOwnsExchange = marketReadiness?.exchange === exchange;
         const automaticGateEnabled = marketReadinessOwnsExchange
           ? marketReadiness?.automaticServerGateEnabled === true

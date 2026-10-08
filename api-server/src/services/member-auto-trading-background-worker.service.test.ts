@@ -264,6 +264,7 @@ function source(
         stale: false,
       };
     },
+    telegramDeliveryHealthy() { return true; },
     async readLiveAccountSnapshot() {
       throw new Error('LIVE_ACCOUNT_READ_MUST_NOT_RUN_WHEN_DISABLED');
     },
@@ -1358,4 +1359,69 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
   const exitOrder = orders.find((order) => order.planId === exitPlan!.id);
   assert.equal(exitOrder?.state, 'FILLED');
   assert.equal(exitOrder?.filledQuantity, 0.1);
+});
+
+
+test('Telegram outage blocks armed live entry while preserving independent exit warmup', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
+  const root = await mkdtemp(join(tmpdir(), 'auto-telegram-gate-'));
+  const armPath = join(root, 'arm.json');
+  const targetSha = 'c'.repeat(40);
+  let telegramReady = true;
+  let liveReads = 0;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    telegramDeliveryHealthy() { return telegramReady; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER, policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+    async readLiveAccountSnapshot() {
+      liveReads += 1;
+      throw new Error('TELEGRAM_OUTAGE_MUST_NOT_READ_PRIVATE_PROVIDER');
+    },
+  });
+  try {
+    for (const key of keys.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = targetSha;
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    const warmup = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(warmup.liveEntryWarmupComplete, true);
+    assert.equal(warmup.liveEntriesArmed, false);
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true, targetSha,
+      armedAt: new Date(nowMs + 100).toISOString(),
+      activateNotBeforeAt: new Date(nowMs + 200).toISOString(),
+    }) + '\n', { mode: 0o600, flag: 'wx' });
+    telegramReady = false;
+    const blocked = await withFetchMock(() => worker.runOnce(new Date(nowMs + 2_000)));
+    assert.equal(blocked.liveEntryArmPresent, true);
+    assert.equal(blocked.liveEntryWarmupComplete, true);
+    assert.equal(blocked.liveEntriesArmed, false);
+    assert.equal(blocked.newEntriesFailClosed, true);
+    assert.equal(blocked.liveEntriesSuppressedByTelegram, 1);
+    assert.equal(blocked.liveOrders, 0);
+    assert.equal(liveReads, 0);
+    assert.equal((await repository.listOrders(USER)).filter((order) => order.accountMode === 'live').length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of keys) {
+      const value = saved[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

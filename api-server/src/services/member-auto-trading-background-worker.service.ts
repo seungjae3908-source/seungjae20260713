@@ -50,6 +50,7 @@ import { TradeExecutionEventBridgeService } from '../features/user-broker-telegr
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
+import { readUserTelegramDeliveryWorkerHealth, userTelegramDeliveryWorkerHealthy } from '../features/user-broker-telegram/user-broker-telegram.worker';
 import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
 import {
   evaluateRulePackPilotEntryGuard,
@@ -94,6 +95,7 @@ export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
   memberBatchCycleCompleted?(): boolean;
+  telegramDeliveryHealthy?(nowMs: number): boolean;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
@@ -121,6 +123,7 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveEntriesArmed: boolean;
   liveEntryWarmupComplete: boolean;
   liveEntriesSuppressedByWarmupOrArm: number;
+  liveEntriesSuppressedByTelegram: number;
   liveExitsSuppressedByWarmupOrArm: number;
   runtimeRefreshes: number;
   executionSyncBlocks: number;
@@ -1127,16 +1130,20 @@ export class MemberAutoTradingBackgroundWorker {
   async runOnce(now = new Date()): Promise<MemberAutoTradingBackgroundRunResult> {
     const liveModeRequested = liveBackgroundEnabled();
     const liveEntryArmPresentThisTick = liveModeRequested ? await liveEntryArmPresent(now.getTime()) : false;
-    const liveEntriesArmedThisTick = liveModeRequested
+    const liveExitsArmedThisTick = liveModeRequested
       && this.liveEntryWarmupComplete
       && liveEntryArmPresentThisTick;
+    const liveTelegramHealthyThisTick = !liveModeRequested
+      || this.source.telegramDeliveryHealthy?.(now.getTime()) === true;
+    const liveEntriesArmedThisTick = liveExitsArmedThisTick && liveTelegramHealthyThisTick;
     const result: MemberAutoTradingBackgroundRunResult = {
       handoffStatus: 'MISSING',
       handoffReady: false,
-      newEntriesFailClosed: false,
+      newEntriesFailClosed: liveModeRequested && !liveTelegramHealthyThisTick,
       liveEntriesArmed: liveEntriesArmedThisTick,
       liveEntryWarmupComplete: this.liveEntryWarmupComplete,
       liveEntriesSuppressedByWarmupOrArm: 0,
+      liveEntriesSuppressedByTelegram: 0,
       liveExitsSuppressedByWarmupOrArm: 0,
       runtimeRefreshes: 0,
       executionSyncBlocks: 0,
@@ -1296,7 +1303,7 @@ export class MemberAutoTradingBackgroundWorker {
         if (liveModeRequested) {
           const livePositions = trackedAutomaticPositions(runtime, 'live');
           result.liveTrackedPositions += livePositions.length;
-          if (!liveEntriesArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
+          if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders')) {
             result.liveExitsSuppressedByWarmupOrArm += livePositions.length;
           } else {
             for (const position of livePositions) {
@@ -1401,8 +1408,9 @@ export class MemberAutoTradingBackgroundWorker {
               }
             }
 
-            if (liveModeRequested && !liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
-              result.liveEntriesSuppressedByWarmupOrArm += 1;
+            if (liveModeRequested && hasCapability(member.profile, 'canPlaceOrders')) {
+              if (!liveExitsArmedThisTick) result.liveEntriesSuppressedByWarmupOrArm += 1;
+              else if (!liveTelegramHealthyThisTick) result.liveEntriesSuppressedByTelegram += 1;
             }
 
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
@@ -1460,6 +1468,14 @@ export class MemberAutoTradingBackgroundWorker {
                 estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
                 averageSpreadPercent: livePreview.snapshot.spreadPercent,
               };
+              // Recheck after private preflight: a Telegram outage during the tick
+              // must never allow a new automatic live order.
+              if (this.source.telegramDeliveryHealthy?.(Date.now()) !== true) {
+                result.newEntriesFailClosed = true;
+                result.liveEntriesSuppressedByTelegram += 1;
+                result.blocked += 1;
+                break;
+              }
               const liveRun = await executeAutomaticPlan({
                 repository,
                 userId: member.userId,
@@ -1627,6 +1643,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   memberBatchCycleCompleted() {
     return this.lastMemberBatchCompletedCycle;
+  }
+
+  telegramDeliveryHealthy(nowMs: number) {
+    return userTelegramDeliveryWorkerHealthy(readUserTelegramDeliveryWorkerHealth(), nowMs);
   }
 
   async revalidateLiveAllFourReadiness(userId: string) {
@@ -1812,7 +1832,8 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         enabled: true,
         liveModeRequested: liveBackgroundEnabled(),
         lastTickAt: new Date().toISOString(),
-        tickOk: true,
+        tickOk: result.failures === 0 && result.executionSyncFailures === 0
+          && result.executionSyncMissingReferences === 0,
         handoffStatus: result.handoffStatus,
         handoffReady: result.handoffReady,
         newEntriesFailClosed: result.newEntriesFailClosed,
@@ -1841,12 +1862,15 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         liveCyclePolicyReady: result.liveCyclePolicyReady,
         liveCycleAllFourPolicyReady: result.liveCycleAllFourPolicyReady,
         globalEmergencyStopActive: result.globalEmergencyStopActive,
-        errorCode: null,
+        errorCode: result.failures > 0 ? 'BACKGROUND_AUTOMATION_TICK_PARTIAL_FAILURE'
+          : result.executionSyncFailures > 0 || result.executionSyncMissingReferences > 0
+            ? 'BACKGROUND_EXECUTION_PROJECTION_UNAVAILABLE' : null,
       });
       if (result.handoffStatus !== 'READY' || result.evaluated > 0
         || result.paperExitOrders > 0 || result.liveExitOrders > 0
         || result.exitBlocked > 0 || result.executionSyncBlocks > 0
         || result.liveEntriesSuppressedByWarmupOrArm > 0
+        || result.liveEntriesSuppressedByTelegram > 0
         || result.liveExitsSuppressedByWarmupOrArm > 0 || result.failures > 0) {
         console.log('[member-auto-trading-background] tick', result);
       }

@@ -28,6 +28,7 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
 import {
   enforceMemberTradingPolicy,
   resumeMemberTradingPolicy,
@@ -202,13 +203,14 @@ function liveExecutionReadinessForConnection(
   if (!vaultEncryptionConfigured) blockers.push('CREDENTIAL_VAULT_NOT_READY');
   if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
   if (connection?.configured && connection.accountMode === 'live'
-    && (!connection.lastVerifiedAt || connection.lastErrorCode)) {
-    blockers.push('LIVE_CONNECTION_NOT_VERIFIED');
+    && !liveConnectionVerificationFresh(connection)) {
+    blockers.push(connection.lastVerifiedAt && !connection.lastErrorCode
+      ? 'LIVE_CONNECTION_VERIFICATION_EXPIRED' : 'LIVE_CONNECTION_NOT_VERIFIED');
   }
   if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
   return {
     connectionConfigured: connection?.configured === true && connection.accountMode === 'live',
-    providerVerified: Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode,
+    providerVerified: liveConnectionVerificationFresh(connection),
     manualServerGateEnabled: liveExecutionEnabled(exchange),
     readyForManualExitEvaluation: blockers.length === 0,
     blockers,

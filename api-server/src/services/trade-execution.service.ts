@@ -6,6 +6,7 @@ import {
   liveExecutionEnabled,
   livePlanCapabilityDecision,
 } from './trade-automation.service';
+import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
@@ -492,10 +493,10 @@ export class TradeExecutionService {
     if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
       throw new Error('LIVE_EXECUTION_CONNECTION_NOT_CONFIGURED');
     }
-    if (!connection.lastVerifiedAt || connection.lastErrorCode) {
+    const now = options.now ?? new Date();
+    if (!liveConnectionVerificationFresh(connection, now.getTime())) {
       throw new Error('LIVE_EXECUTION_CONNECTION_NOT_VERIFIED');
     }
-    const now = options.now ?? new Date();
     const fx = Number(options.fxKrwPerQuoteCurrency ?? 1);
     if (!Number.isFinite(fx) || fx <= 0) throw new Error('LIVE_PREVIEW_FX_REQUIRED');
     const provisional: TradingPlan = {
@@ -824,7 +825,7 @@ export class TradeExecutionService {
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
     if (plan.accountMode === 'live') {
-      if (!connection?.lastVerifiedAt || connection.lastErrorCode) {
+      if (!liveConnectionVerificationFresh(connection)) {
         return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED', {
           errorCode: 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED',
           orderSubmissionAttempted: false,
