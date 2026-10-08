@@ -36,6 +36,7 @@ function fixture() {
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 7,
     memberAutoPilotStage: 'validated',
+    memberAutoLivePilotReady: true,
     realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,
