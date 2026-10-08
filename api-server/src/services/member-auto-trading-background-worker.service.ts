@@ -752,9 +752,22 @@ async function memberRuntimeState(
     ? selectAutomaticPaperAccountEquity(paperResult.records) : null;
   const paperAccountReady = automaticEquity != null;
   const equity = automaticEquity ?? 0;
-  const risk = automaticPaperRiskEvidenceFromCanonicalLedger(
-    userId, orders, plans, nowMs, equity,
-  );
+  // Invalid historical Paper order dates, incompatible partial fills, or
+  // malformed canonical projections must quarantine NEW exposure without
+  // aborting the member tick: existing risk-reducing exits still need tracking.
+  let risk: ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>;
+  try {
+    risk = automaticPaperRiskEvidenceFromCanonicalLedger(
+      userId, orders, plans, nowMs, equity,
+    );
+  } catch {
+    risk = {
+      ready: false,
+      blockers: ['BACKGROUND_PAPER_RISK_EVIDENCE_UNAVAILABLE'],
+      dailyPnlPercent: 0, weeklyPnlPercent: 0,
+      consecutiveLosses: 0, closedTrades: 0,
+    };
+  }
   return Object.freeze({
     paperAccountReady,
     paperFinancialRiskReady: paperAccountReady && risk.ready,
