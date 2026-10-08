@@ -682,16 +682,21 @@ jobs:
                 const nowMs = Date.now();
                 const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''));
                 const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''));
+                const telegramProofAtMs = Date.parse(String(last?.userTelegramDelivery?.lastConfirmedDeliveryAt || ''));
                 const autoHealthFresh = Number.isFinite(autoLastTickMs)
                   && autoLastTickMs <= nowMs
                   && nowMs - autoLastTickMs <= 360_000;
                 const telegramHealthFresh = Number.isFinite(telegramLastTickMs)
                   && telegramLastTickMs <= nowMs
                   && nowMs - telegramLastTickMs <= 360_000;
+                const telegramProofFresh = Number.isFinite(telegramProofAtMs)
+                  && telegramProofAtMs <= nowMs + 5_000
+                  && nowMs - telegramProofAtMs <= 24 * 60 * 60_000;
                 if (health?.enabled === true
                   && health?.liveModeRequested === true
                   && autoHealthFresh
                   && telegramHealthFresh
+                  && telegramProofFresh
                   && health?.tickOk === true
                   && health?.handoffReady === true
                   && health?.newEntriesFailClosed === false

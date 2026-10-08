@@ -105,6 +105,9 @@ requireText(workflow, 'attempt < 360', 'AUTO_GATE_ROTATING_MEMBER_POLL_WINDOW_MI
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
 requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
 requireText(workflow, 'last?.userTelegramDelivery?.deliveryConfirmed === true', 'AUTO_GATE_TELEGRAM_DELIVERY_PROOF_MISSING');
+requireText(workflow, '&& telegramProofFresh', 'AUTO_GATE_RECENT_DELIVERY_PROOF_REQUIRED');
+requireText(telegramWorker, 'recentConfirmedDelivery(nowMs = Date.now())', 'AUTO_GATE_DURABLE_TELEGRAM_RECEIPT_REQUIRED');
+requireText(telegramWorker, 'const restoreProof = deliverySource.recentConfirmedDelivery()', 'AUTO_GATE_TELEGRAM_RESTART_PROOF_RESTORE_MISSING');
 requireText(paperWorker, "memberTelegramConnected?.(member.userId)", 'AUTO_GATE_MEMBER_TELEGRAM_BINDING_CHECK_MISSING');
 requireText(workflow, "const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''))", 'AUTO_GATE_AUTO_HEALTH_TIMESTAMP_MISSING');
 requireText(workflow, "const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''))", 'AUTO_GATE_TELEGRAM_HEALTH_TIMESTAMP_MISSING');
