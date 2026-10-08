@@ -217,6 +217,35 @@ function liveExecutionReadinessForConnection(
   };
 }
 
+function sanitizedAutomaticRuntimeHealth() {
+  const health = readMemberAutoTradingBackgroundRuntimeHealth();
+  return {
+    enabled: health.enabled,
+    liveModeRequested: health.liveModeRequested,
+    lastTickAt: health.lastTickAt,
+    tickOk: health.tickOk,
+    handoffReady: health.handoffReady,
+    newEntriesFailClosed: health.newEntriesFailClosed,
+    liveEntryArmPresent: health.liveEntryArmPresent,
+    liveEntriesArmed: health.liveEntriesArmed,
+    liveEntryWarmupComplete: health.liveEntryWarmupComplete,
+    liveReadinessCycleComplete: health.liveReadinessCycleComplete,
+    liveCycleAllFourPolicyReady: health.liveCycleAllFourPolicyReady,
+    globalEmergencyStopActive: health.globalEmergencyStopActive,
+    errorCode: health.errorCode,
+  };
+}
+
+function sanitizedTelegramDeliveryRuntimeHealth() {
+  const health = readUserTelegramDeliveryWorkerHealth();
+  return {
+    enabled: health.enabled,
+    lastTickAt: health.lastTickAt,
+    tickOk: health.tickOk,
+    errorCode: health.errorCode,
+  };
+}
+
 function readonlyCredentialRepository(userId: string) {
   return readonlyCredentialRepositoryFactoryForTests?.(userId)
     ?? createAccountReadonlyCredentialRepository(userId);
@@ -1125,8 +1154,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       liveAutomaticReadinessByMarket,
-      autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth(),
-      userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
+      autoTradingBackground: sanitizedAutomaticRuntimeHealth(),
+      userTelegramDelivery: sanitizedTelegramDeliveryRuntimeHealth(),
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
