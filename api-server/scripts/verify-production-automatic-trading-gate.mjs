@@ -199,6 +199,9 @@ for (const token of [
   'liveCyclePolicyReady',
   'liveCycleAllFourPolicyReady',
   'memberBatchCycleCompleted',
+  'this.liveCycleOrderEligibleSeen = false',
+  'this.liveCyclePolicyReadySeen = false',
+  'this.liveCycleAllFourPolicyReadySeen = false',
   'globalEmergencyStopActive',
   'automaticPolicyHasRunnableMarket',
   'automaticPolicyHasAllFourMarkets',
@@ -228,8 +231,11 @@ requireText(paperWorkerTest, 'assert.equal(armed.liveOrders, 0);', 'AUTO_GATE_AC
 requireText(paperWorkerTest, 'assert.equal(armed.privateTradingRequests, 0);', 'AUTO_GATE_ACTIVATION_REHEARSAL_ZERO_PROVIDER_MUTATION_PROOF_MISSING');
 requireText(paperWorkerTest, 'live activation warmup stays fail-closed when no member can place real orders', 'AUTO_GATE_NO_LIVE_MEMBER_FAIL_CLOSED_TEST_MISSING');
 requireText(paperWorkerTest, 'live warmup survives an empty intermediate member batch and drops only after a full empty rotation cycle', 'AUTO_GATE_ROTATION_CYCLE_READINESS_TEST_MISSING');
+requireText(paperWorkerTest, 'worker failure clears partial rotation readiness before the recovery cycle', 'AUTO_GATE_ROTATION_FAILURE_RESET_TEST_MISSING');
+requireText(paperWorkerTest, 'assert.equal(recovered.liveCycleOrderEligible, false);', 'AUTO_GATE_ROTATION_FAILURE_RESET_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(middle.liveEntryWarmupComplete, true);', 'AUTO_GATE_ROTATION_INTERMEDIATE_WARMUP_ASSERTION_MISSING');
 requireText(paperWorkerTest, 'assert.equal(end.liveEntryWarmupComplete, false);', 'AUTO_GATE_ROTATION_COMPLETE_DROP_ASSERTION_MISSING');
+requireText(paperWorker, 'liveReadinessCycleComplete: true', 'AUTO_GATE_ROTATION_HEALTH_RESET_MISSING');
 requireText(paperWorkerTest, 'first live warmup suppresses automatic exits for existing live positions before exact-SHA arm', 'AUTO_GATE_LIVE_EXIT_WARMUP_TEST_MISSING');
 requireText(paperWorkerTest, 'all-four activation readiness requires one order-capable futures member with all four markets enabled', 'AUTO_GATE_ALL4_POLICY_READINESS_TEST_MISSING');
 requireText(paperWorkerTest, 'assert.equal(result.liveAllFourPolicyReadyMembers, 1);', 'AUTO_GATE_ALL4_POLICY_READINESS_ASSERTION_MISSING');
@@ -329,6 +335,7 @@ console.log(JSON.stringify({
   automaticMemberBatchFiltersBeforeLimit: true,
   boundedMemberBatchRotation: true,
   rotationCycleReadinessPreserved: true,
+  rotationFailureClearsPartialReadiness: true,
   activationWaitsForCompletedMemberReadinessCycle: true,
   globalEmergencyStopMustBeClear: true,
   telegramDeliveryHealthRequiredAfterRestart: true,
