@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
+import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
 import type { TelegramAlertInput, TelegramAlertResult } from '../../services/telegram-notification.service';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
@@ -301,7 +301,7 @@ export class UserBrokerTelegramService {
 
   private async personalTelegramEligible(userId: string) {
     const profile = await this.repository.getPersonalTelegramMemberProfile(userId);
-    return hasCapability(profile, 'canConnectPersonalTelegram');
+    return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');
   }
 
   async createTelegramLink(userId: string, now = new Date()) {

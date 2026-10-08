@@ -42,6 +42,7 @@ class FakePortfolioSink implements PortfolioSyncSink {
 
 const APPROVED_ASSOCIATE = Object.freeze({
   status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+  membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',
 });
 
 function fixture() {
@@ -96,6 +97,25 @@ test('member revoked after token issuance cannot bind Telegram', async () => {
     /TELEGRAM_MEMBER_INELIGIBLE/,
   );
   assert.equal(await repository.getTelegramConnection('user-a'), null);
+});
+
+test('expired and schema-incomplete members cannot bind a Telegram link', async () => {
+  for (const profile of [
+    { ...APPROVED_ASSOCIATE, membership_expires_at: '2025-01-01T00:00:00.000Z' },
+    { ...APPROVED_ASSOCIATE, permissions_updated_at: null },
+    { ...APPROVED_ASSOCIATE, membership_level: null, role: 'associate' },
+  ]) {
+    const { service, repository } = fixture();
+    const now = new Date('2026-08-12T00:00:00.000Z');
+    const created = await service.createTelegramLink('user-a', now);
+    const token = new URL(created.deepLink!).searchParams.get('start')!;
+    repository.setMemberProfile('user-a', profile);
+    await assert.rejects(
+      service.bindTelegramStart({ token, telegramChatId: 'chat-a', telegramUserId: 'tg-a', now }),
+      /TELEGRAM_MEMBER_INELIGIBLE/,
+    );
+    assert.equal(await repository.getTelegramConnection('user-a'), null);
+  }
 });
 
 test('expired Telegram link cannot be consumed', async () => {
@@ -245,6 +265,23 @@ test('member revoked after queueing is dead-lettered before Telegram transport',
   const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
   repository.setMemberProfile('user-a', {
     status: 'suspended', membership_level: 'associate', is_active: false, role: 'associate',
+  });
+  const result = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
+  assert.equal(result.state, 'DEAD_LETTER');
+  assert.equal(transport.sent.length, 0);
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.lastErrorCode, 'TELEGRAM_MEMBER_INELIGIBLE');
+});
+
+test('membership expiration after queueing prevents Telegram send and dead-letters the delivery', async () => {
+  const { service, repository, transport } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'expired-after-queue', userId: 'user-a', symbol: '005930', market: 'KR', quantity: 1, price: 72000,
+  });
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
+  assert.equal(queued.deliveryQueued, true);
+  repository.setMemberProfile('user-a', {
+    ...APPROVED_ASSOCIATE, membership_expires_at: '2025-01-01T00:00:00.000Z',
   });
   const result = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
   assert.equal(result.state, 'DEAD_LETTER');
