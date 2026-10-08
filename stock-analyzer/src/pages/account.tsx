@@ -51,9 +51,11 @@ export default function AccountPage() {
     : auth.profile?.status === 'revoked' ? '이용 권한이 회수된 계정입니다.'
     : auth.profile?.status === 'disabled' || auth.profile?.status === 'inactive' ? '이용이 중지된 계정입니다.'
     : auth.profile?.status === 'rejected' ? '가입 신청이 반려되었습니다.'
+    // A pending application is normally is_active=false until approval.
+    // Give the explicit status precedence, never grant approved capabilities here.
+    : auth.profile?.status === 'pending' ? '관리자 승인 대기 중입니다.'
     : auth.profile?.status === 'suspended' || auth.profile?.is_active === false ? '이용이 정지된 계정입니다.'
-    : membershipExpired ? '회원 이용 기간이 만료되었습니다.'
-    : auth.profile?.status === 'pending' ? '관리자 승인 대기 중입니다.' : '';
+    : membershipExpired ? '회원 이용 기간이 만료되었습니다.' : '';
 
   async function logout() {
     setError(''); setNotice('');
