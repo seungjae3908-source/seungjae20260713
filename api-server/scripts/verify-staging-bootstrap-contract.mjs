@@ -18,6 +18,7 @@ const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081
 const telegramPolicyCleanupNormalized = telegramPolicyCleanup.replaceAll('\r\n', '\n');
 const memberWatchlistStorage = await read('api-server/supabase/migrations/2026082704_member_watchlist_items.sql');
 const memberAccessHardening = await read('api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql');
+const memberSecurityDefinerLockdown = await read('api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
 const watchlistVerifier = await read('api-server/scripts/verify-staging-watchlist-store.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
@@ -39,6 +40,11 @@ assert(manifest.includes('2026082704_member_watchlist_items.sql'), 'manifest mus
 assert(runner.includes('2026082704_member_watchlist_items.sql'), 'atomic runner must include authenticated member watchlist storage');
 assert(manifest.includes('2026100601_member_access_s_ai_hardening.sql'), 'manifest must include member S/AI hardening');
 assert(runner.includes('2026100601_member_access_s_ai_hardening.sql'), 'atomic runner must include member S/AI hardening');
+assert(runner.includes('2026100801_member_security_definer_lockdown.sql'), 'atomic runner must include member SECURITY DEFINER lockdown');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'member security lockdown must verify trigger-only direct EXECUTE removal');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'), 'member security lockdown must verify PUBLIC EXECUTE removal from RLS helpers');
+assert(assertion.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'final assertion must verify trigger-only SECURITY DEFINER lockdown');
+assert(assertion.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'), 'final assertion must verify RLS helper PUBLIC privilege lockdown');
 assert(memberAccessHardening.includes('membership_expires_at'), 'member hardening must add membership expiry');
 assert(memberAccessHardening.includes("public.current_membership_level() in ('associate', 'regular', 'admin')"), 'member hardening must allow associate own-journal analytics reads');
 assert(memberAccessHardening.includes('member.password.reset'), 'member hardening must allow audited password reset actions');
