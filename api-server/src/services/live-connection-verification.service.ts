@@ -1,4 +1,4 @@
-import type { ExchangeConnection } from './trade-automation.types';
+import type { ExchangeConnection, TradingPlanInput } from './trade-automation.types';
 
 // A saved credential is not indefinite evidence of current broker authorization.
 // Order-time account/risk snapshots have separate, stricter freshness checks.
@@ -32,4 +32,15 @@ export function liveConnectionVerificationAllowsReducingExit(
     && Number.isFinite(nowMs)
     && Number.isFinite(verifiedAt)
     && verifiedAt <= nowMs + 5_000;
+}
+
+export function isRiskReducingExitPlan(
+  plan: Pick<TradingPlanInput, 'reduceOnly' | 'exchange' | 'side'>,
+) {
+  // Cash markets are long-only, so a SELL can reduce risk. Bitget must carry
+  // reduceOnly at the provider, and its close sides are LONG or SHORT.
+  return plan.reduceOnly === true
+    && (plan.exchange === 'bitget'
+      ? plan.side === 'long' || plan.side === 'short'
+      : plan.side === 'sell');
 }

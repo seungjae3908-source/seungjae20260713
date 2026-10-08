@@ -28,7 +28,7 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
-import { liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
+import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
 import {
   enforceMemberTradingPolicy,
   resumeMemberTradingPolicy,
@@ -204,7 +204,7 @@ function liveExecutionReadinessForConnection(
   if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
   if (connection?.configured && connection.accountMode === 'live'
     && !liveConnectionVerificationFresh(connection)) {
-    blockers.push(connection.lastVerifiedAt && !connection.lastErrorCode
+    blockers.push(liveConnectionVerificationAllowsReducingExit(connection)
       ? 'LIVE_CONNECTION_VERIFICATION_EXPIRED' : 'LIVE_CONNECTION_NOT_VERIFIED');
   }
   if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
