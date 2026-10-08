@@ -508,11 +508,23 @@ export async function readRulePackPilotCapitalState(
   if (!rulePackPilotLedgerHistoryComplete(orders.length, plans.length)) {
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
+  // An unjoined fill is not "no profit"; its missing plan may hide a loss.
+  // Protect shared 500k HWM accounting from incomplete ledger projections.
+  for (const order of orders) {
+    if (order.filledQuantity > 0 && !plansById.has(order.planId)) {
+      blockers.push('PILOT_CAPITAL_ORDER_PLAN_LINEAGE_MISSING');
+    }
+  }
 
   for (const trade of journal.trades) {
-    if (trade.status !== 'CLOSED' || !trade.closedAt || !trade.strategy
-      || !isEvidenceBackedAutoStrategyId(trade.strategy)
-      || trade.source !== 'APP_AUTO') continue;
+    if (trade.source !== 'APP_AUTO' || trade.status !== 'CLOSED') continue;
+    // Any other automatic Live strategy shares real broker capital and may
+    // have losses. Silently excluding its closed trade would overstate HWM.
+    if (!trade.closedAt || !trade.strategy
+      || !isEvidenceBackedAutoStrategyId(trade.strategy)) {
+      blockers.push('PILOT_CAPITAL_UNSUPPORTED_AUTO_LIVE_STRATEGY');
+      continue;
+    }
     const entryPlan = planForBrokerOrder(trade.initialEntry.orderId, ordersByKey, plansById);
     if (!entryPlan || entryPlan.accountMode !== 'live'
       || entryPlan.executionMode !== 'automatic'
