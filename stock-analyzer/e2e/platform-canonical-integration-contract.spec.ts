@@ -87,8 +87,16 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
 
 test('operational observability exposes market activity, delivery health and pre-trade snapshot identity without adding authority', () => {
   expect(tradeAutomationRoute).toContain('marketActivityByMarket');
-  expect(tradeAutomationRoute).toContain('autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()');
-  expect(tradeAutomationRoute).toContain('userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()');
+  expect(tradeAutomationRoute).toContain('autoTradingBackground: sanitizedAutomaticRuntimeHealth()');
+  expect(tradeAutomationRoute).toContain('userTelegramDelivery: sanitizedTelegramDeliveryRuntimeHealth()');
+  const sanitizedRuntimeHealth = tradeAutomationRoute.match(
+    /function sanitizedAutomaticRuntimeHealth\(\) \{[\s\S]*?\n\}/,
+  )?.[0] ?? '';
+  expect(sanitizedRuntimeHealth).toContain('liveEntriesArmed: health.liveEntriesArmed');
+  expect(sanitizedRuntimeHealth).not.toContain('liveTrackedPositions');
+  expect(sanitizedRuntimeHealth).not.toContain('liveOrderEligibleMembers');
+  expect(sanitizedRuntimeHealth).not.toContain('livePolicyReadyMembers');
+  expect(sanitizedRuntimeHealth).not.toContain('privateTradingRequests');
   expect(autoTrading).toContain('data-testid="auto-trading-market-activity"');
   expect(autoTrading).toContain('미결 주문');
   expect(autoTrading).toContain('오늘 주문');
