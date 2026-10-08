@@ -109,6 +109,7 @@ const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled
 if (!autoFn) throw new Error('AUTOMATIC_LIVE_EXECUTION_FUNCTION_MISSING');
 for (const token of [
   "process.env.AUTO_TRADING === 'true'",
+  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'",
   "process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'",
   'liveExecutionEnabled(exchange)',
   "'SPOT_LIVE_LIMITED'",
