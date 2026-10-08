@@ -1475,7 +1475,7 @@ export class MemberAutoTradingBackgroundWorker {
 
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
-  private memberBatchOffset = 0;
+  private memberBatchCursor: string | null = null;
   private lastMemberBatchCompletedCycle = true;
 
   constructor(
@@ -1498,18 +1498,20 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   }
 
   async listEligibleMembers() {
-    const offset = this.memberBatchOffset;
-    const { data, error } = await this.client.from('trade_automation_profiles')
+    let query = this.client.from('trade_automation_profiles')
       .select('user_id,payload')
       .contains('payload', { mode: 'automatic', automaticEnabled: true })
       .order('user_id', { ascending: true })
-      .range(offset, offset + MAX_MEMBERS_PER_TICK);
+      .limit(MAX_MEMBERS_PER_TICK + 1);
+    if (this.memberBatchCursor) query = query.gt('user_id', this.memberBatchCursor);
+    const { data, error } = await query;
     if (error) throw new Error('BACKGROUND_POLICY_LIST_FAILED');
     const fetched = data ?? [];
     const hasMore = fetched.length > MAX_MEMBERS_PER_TICK;
     const batch = fetched.slice(0, MAX_MEMBERS_PER_TICK);
+    const lastUserId = String(batch.at(-1)?.user_id ?? '').trim();
     this.lastMemberBatchCompletedCycle = !hasMore;
-    this.memberBatchOffset = hasMore ? offset + MAX_MEMBERS_PER_TICK : 0;
+    this.memberBatchCursor = hasMore && lastUserId ? lastUserId : null;
     const rows = batch.flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
       if (!userId) return [];
