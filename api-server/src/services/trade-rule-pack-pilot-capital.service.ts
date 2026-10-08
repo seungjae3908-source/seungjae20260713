@@ -525,7 +525,7 @@ export async function readRulePackPilotCapitalState(
     repository.listOrders(userId),
     repository.listPlans(userId),
   ]);
-  const payloads = tradeAutomationJournalPayloadsFromSnapshot(orders, plans);
+  const payloads = tradeAutomationJournalPayloadsFromSnapshot(userId, orders, plans);
   const journal = buildUnifiedTradeJournal(
     payloads.filter((payload) => payload.source === 'APP_AUTO'),
     { range: 'ALL' }, now,
