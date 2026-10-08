@@ -75,6 +75,8 @@ for (const [input, token, code] of [
 requireText(paperWorker, 'automaticPaperLegacyEpochIsolationReadiness(', 'AUTO_GATE_LEGACY_EPOCH_AUDIT_MISSING');
 requireText(paperWorker, 'automaticPaperOrderWithinWalletEpoch(', 'AUTO_GATE_ISOLATED_ORDER_SCOPE_MISSING');
 requireText(paperWorker, 'BACKGROUND_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH', 'AUTO_GATE_LEGACY_RETRY_FAIL_CLOSED_MISSING');
+requireText(paperWorker, 'automaticLiveStrategyAllowlisted(member.policy, entry.identity.strategyId)', 'AUTO_GATE_LIVE_STRATEGY_ALLOWLIST_REQUIRED');
+requireText(paperWorkerTest, 'blank live strategy allowlist is never wildcard authorization', 'AUTO_GATE_EMPTY_STRATEGY_REGRESSION_MISSING');
 requireText(paperJournalRoute, "legacyEpochConfirmation ===", 'AUTO_GATE_EXPLICIT_EPOCH_CONFIRMATION_MISSING');
 requireText(paperJournalRepo, "AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS", 'AUTO_GATE_WALLET_INSERT_ONCE_REQUIRED');
 

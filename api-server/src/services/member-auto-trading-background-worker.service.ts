@@ -641,6 +641,19 @@ function validateFormulaAiPilotEntry(
   if (!decision.allowed) throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_ENTRY_BLOCKED');
 }
 
+/** A blank member strategy list means NO real automatic order authority.
+ * It is not a wildcard; Paper research may remain independent.
+ */
+export function automaticLiveStrategyAllowlisted(
+  policy: Pick<TradingPolicy, 'enabledStrategies'>,
+  strategyId: string,
+): boolean {
+  return typeof strategyId === 'string' && strategyId.trim().length > 0
+    && Array.isArray(policy.enabledStrategies)
+    && policy.enabledStrategies.length > 0
+    && policy.enabledStrategies.includes(strategyId);
+}
+
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
   const policy = member.policy;
   const mapping = marketMapping(entry.identity.market, policy);
@@ -1972,6 +1985,13 @@ export class MemberAutoTradingBackgroundWorker {
             }
 
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
+              if (!automaticLiveStrategyAllowlisted(member.policy, entry.identity.strategyId)) {
+                // The canonical Paper fill remains auditable, but an empty
+                // Live allowlist must not authorize ANY broker-side mutation.
+                result.newEntriesFailClosed = true;
+                result.blocked += 1;
+                continue;
+              }
               let liveMember = member;
               if (member.policy.pilotStage === 'formula-ai-exception') {
                 formulaAiReviewReasonsForLive(entry, nowMs);
