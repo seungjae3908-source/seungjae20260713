@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { deriveMemberTier, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import {
   validateMemberAutoTradingPaperHandoff,
+  canonicalAiReviewEvidenceValid,
   type MemberAutoTradingPaperHandoff,
   type MemberAutoTradingPaperHandoffEntry,
 } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
@@ -341,6 +342,27 @@ function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
   const rate = Number(cost?.[key]);
   return finite(rate) && rate >= 0 ? rate * 100 : null;
+}
+
+// Only canonical, signal-bound upstream AI evidence may authorize the formula
+// exception. An absent review means NO live order; never manufacture PASS.
+export function formulaAiReviewReasonsForLive(
+  entry: MemberAutoTradingPaperHandoffEntry,
+  nowMs: number,
+): string[] {
+  const review = entry.aiReviewEvidence;
+  if (!canonicalAiReviewEvidenceValid(review, entry.identity, entry.evaluatedAtMs)
+    || !review || nowMs >= review.expiresAtMs || nowMs < review.reviewedAtMs) {
+    throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED');
+  }
+  return [
+    `STRATEGY_RULE_PACK:${entry.identity.strategyId}`,
+    'STRATEGY_RULE_PACK_GATE:PAPER_CANDIDATE',
+    'AI_REVIEW_DECISION:PASS',
+    'AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE',
+    `AI_REVIEW_EVIDENCE:${review.evidenceDigest}`,
+    `AI_REVIEW_EXPIRES:${new Date(review.expiresAtMs).toISOString()}`,
+  ];
 }
 
 function automaticPolicyHasRunnableMarket(policy: TradingPolicy) {
@@ -928,6 +950,8 @@ async function buildLivePlanInput(input: {
     accountMode: 'live',
     signalReasons: [
       ...input.paperInput.signalReasons,
+      ...(input.member.policy.pilotStage === 'formula-ai-exception'
+        ? formulaAiReviewReasonsForLive(input.entry, input.nowMs) : []),
       'CANONICAL_LIVE_AUTO_HANDOFF',
       'ACCOUNT_READONLY_PRECHECK',
     ],
@@ -1410,6 +1434,7 @@ export class MemberAutoTradingBackgroundWorker {
             if (liveEntriesArmedThisTick && hasCapability(member.profile, 'canPlaceOrders')) {
               let liveMember = member;
               if (member.policy.pilotStage === 'formula-ai-exception') {
+                formulaAiReviewReasonsForLive(entry, nowMs);
                 formulaAiPilotCapital ??= await readRulePackPilotCapitalState(repository, member.userId, now);
                 validateFormulaAiPilotEntry(
                   member,

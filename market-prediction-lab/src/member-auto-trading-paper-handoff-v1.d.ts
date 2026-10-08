@@ -42,6 +42,21 @@ export type MemberAutoTradingPaperHandoffEntry = Readonly<{
     strategyIdentity: Readonly<Record<string, unknown>>;
     learningSnapshot: Readonly<Record<string, unknown>> | null;
   }>;
+  aiReviewEvidence?: Readonly<{
+    schemaVersion: 'canonical-signal-ai-review-v1';
+    source: 'CANONICAL_SIGNAL_AI_REVIEW';
+    signalId: string;
+    strategyId: string;
+    market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+    direction: 'BUY' | 'LONG' | 'SHORT';
+    researchCodeSha: string;
+    decision: 'PASS';
+    liveEligibility: 'PASS_ONLY_ELIGIBLE';
+    evidenceDigest: string;
+    reviewedAtMs: number;
+    expiresAtMs: number;
+    reviewDigest: string;
+  }>;
   profitEvidence: Readonly<Record<string, unknown>> | null;
   riskEvidence: Readonly<{
     status: 'APPROVED';
@@ -99,3 +114,9 @@ export function validateMemberAutoTradingPaperHandoff(
   value: unknown,
   nowMs?: number,
 ): MemberAutoTradingPaperHandoff;
+
+export function canonicalAiReviewEvidenceValid(
+  review: unknown,
+  identity: MemberAutoTradingPaperHandoffEntry['identity'],
+  evaluatedAtMs: number,
+): boolean;
