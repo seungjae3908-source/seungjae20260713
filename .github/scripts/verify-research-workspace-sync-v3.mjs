@@ -322,6 +322,7 @@ const automaticTradingDriftReviewed=[
  'api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.ts',
  'api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts',
  'api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.ts',
  'api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts',
  'api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts',
  'api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts',
