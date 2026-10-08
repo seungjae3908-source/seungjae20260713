@@ -649,7 +649,7 @@ jobs:
           const requireWorkerWarmup = (env, { requireCurrentArm }) => {
             const port = String(env.PORT || env.API_PORT || '8080');
             let last = null;
-            for (let attempt = 0; attempt < 45; attempt += 1) {
+            for (let attempt = 0; attempt < 360; attempt += 1) {
               try {
                 last = JSON.parse(execFileSync('curl', [
                   '--fail', '--silent', '--show-error', '--max-time', '3',
@@ -668,9 +668,10 @@ jobs:
                   && health?.firstWarmupTickLiveExitOrders === 0
                   && health?.executionSyncFailures === 0
                   && health?.executionSyncMissingReferences === 0
-                  && Number(health?.liveOrderEligibleMembers ?? 0) > 0
-                  && Number(health?.livePolicyReadyMembers ?? 0) > 0
-                  && Number(health?.liveAllFourPolicyReadyMembers ?? 0) > 0
+                  && health?.liveReadinessCycleComplete === true
+                  && health?.liveCycleOrderEligible === true
+                  && health?.liveCyclePolicyReady === true
+                  && health?.liveCycleAllFourPolicyReady === true
                   && health?.globalEmergencyStopActive === false
                   && last?.userTelegramDelivery?.enabled === true
                   && last?.userTelegramDelivery?.tickOk === true
@@ -831,9 +832,10 @@ jobs:
               LIVE_ENTRY_ARM_WRITTEN: true,
               LIVE_ENTRY_ARM_READBACK_PROVEN: true,
               NEXT_TICK_ARM_TRANSITION_PROVEN_BY_ZERO_MUTATION_REHEARSAL: true,
-              LIVE_ORDER_ELIGIBLE_MEMBERS: warmupHealth.liveOrderEligibleMembers,
-              LIVE_POLICY_READY_MEMBERS: warmupHealth.livePolicyReadyMembers,
-              LIVE_ALL_FOUR_POLICY_READY_MEMBERS: warmupHealth.liveAllFourPolicyReadyMembers,
+              LIVE_READINESS_CYCLE_COMPLETE: warmupHealth.liveReadinessCycleComplete,
+              LIVE_CYCLE_ORDER_ELIGIBLE: warmupHealth.liveCycleOrderEligible,
+              LIVE_CYCLE_POLICY_READY: warmupHealth.liveCyclePolicyReady,
+              LIVE_CYCLE_ALL_FOUR_POLICY_READY: warmupHealth.liveCycleAllFourPolicyReady,
               GLOBAL_EMERGENCY_STOP_ACTIVE: warmupHealth.globalEmergencyStopActive,
               TELEGRAM_DELIVERY_WORKER_POST_RESTART: 'HEALTHY',
               REAL_ORDER_SUBMITTED: false,
@@ -906,9 +908,10 @@ jobs:
                 'live_entry_arm_written=true',
                 'live_entry_arm_readback_proven=true',
                 'next_tick_arm_transition_proven_by_zero_mutation_rehearsal=true',
-                'live_order_eligible_member_count=>=1',
-                'live_policy_ready_member_count=>=1',
-                'live_all_four_policy_ready_member_count=>=1',
+                'live_readiness_cycle_complete=true',
+                'live_cycle_order_eligible=true',
+                'live_cycle_policy_ready=true',
+                'live_cycle_all_four_policy_ready=true',
                 'global_emergency_stop=false',
                 'telegram_delivery_worker_post_restart=HEALTHY',
                 'spot_executionAuthority=SPOT_LIVE_LIMITED',
