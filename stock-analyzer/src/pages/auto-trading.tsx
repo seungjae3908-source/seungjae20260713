@@ -123,6 +123,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
   const canPlaceOrders = testFixtureAccess || auth.can('canPlaceOrders');
+  const canManagePilot = testFixtureAccess || auth.can('canManageMembers');
   const [mode, setMode] = useState<TradingMode>(initialMode);
   const initialRouteState = useMemo(tradingRouteState, []);
   const [market, setMarket] = useState<TradingMarket>(initialRouteState.market);
@@ -356,7 +357,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <span aria-hidden className="text-muted-foreground">⌄</span>
         </summary>
         <div className="border-t border-card-border p-3 sm:p-4">
-          <TradeAutomationSettings fixture={fixture} selectedMarket={market} />
+          <TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot} />
         </div>
       </details>
       <details className="rounded-2xl border border-card-border bg-card">
