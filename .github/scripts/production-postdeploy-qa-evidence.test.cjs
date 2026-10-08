@@ -168,6 +168,7 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 7,
     memberAutoPilotStage: 'validated',
+    memberAutoLivePilotReady: true,
     policyRestored: true,
     realOrderSubmitted: false,
     secretValuesRecorded: false,
@@ -181,6 +182,47 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
   assert.equal(evidence.telegramActivationState, 'ACTIVE_VERIFIED');
   assert.equal(evidence.telegramActivationVerified, true);
+  assert.equal(evidence.memberAutoPolicyReady, true);
+});
+
+test('Trading Core evidence may be core-ready while live pilot remains intentionally unprepared', () => {
+  const input = fixture();
+  input.qaScope = 'trading_core';
+  input.comprehensive = null;
+  input.tradingCore = {
+    schemaVersion: 'production-trading-core-qa-v4',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    paperAutomaticTriggered: true,
+    paperFilled: true,
+    journalVisible: true,
+    executionSyncInserted: 1,
+    telegramActivationState: 'READY_FOR_ACTIVATION',
+    telegramActivationReady: true,
+    telegramUserConnectionRequired: true,
+    telegramPersonalActivationRequired: true,
+    telegramConnectedBefore: false,
+    telegramRuntimeReady: false,
+    telegramDeliveryQueued: 0,
+    telegramTestDelivered: false,
+    memberAutoPolicyReady: true,
+    memberAutoPolicyBlockers: [],
+    memberAutoDomesticBroker: 'kiwoom',
+    memberAutoBitgetLeverage: 2,
+    memberAutoPilotStage: 'approval-20',
+    memberAutoLivePilotReady: false,
+    policyRestored: true,
+    realOrderSubmitted: false,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    ...ZERO,
+  };
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
   assert.equal(evidence.memberAutoPolicyReady, true);
 });
 
@@ -213,6 +255,7 @@ test('builds preactivation evidence before Telegram workers are enabled', () => 
     memberAutoDomesticBroker: 'toss',
     memberAutoBitgetLeverage: 2,
     memberAutoPilotStage: 'limited-50',
+    memberAutoLivePilotReady: true,
     policyRestored: true,
     realOrderSubmitted: false,
     secretValuesRecorded: false,
@@ -267,6 +310,7 @@ test('rejects Trading Core evidence when the restored member policy is not activ
     memberAutoDomesticBroker: 'kiwoom',
     memberAutoBitgetLeverage: 2,
     memberAutoPilotStage: 'validated',
+    memberAutoLivePilotReady: true,
     realOrderSubmitted: false,
     secretValuesRecorded: false,
     accountValuesRecorded: false,
