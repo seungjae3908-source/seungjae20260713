@@ -147,10 +147,47 @@ jobs:
             const ciRunId = release.requiredCiRunId;
             const production = { id: release.productionDeployRunId };
             const comprehensive = production;
-            const account = production;
             const productionCompletedAt = Date.parse(release.productionDeployCompletedAt);
             if (!Number.isFinite(productionCompletedAt)) {
               core.setFailed('AUTOMATIC_TRADING_PRODUCTION_COMPLETION_TIME_INVALID');
+              return;
+            }
+            const accountRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-account-readonly-live-qa.yml',
+              event: 'workflow_dispatch',
+              branch: 'main',
+              per_page: 100,
+            });
+            const accountArtifactName = `production-account-readonly-live-${target}`;
+            let account = null;
+            for (const candidate of accountRuns
+              .filter((run) => run.path === '.github/workflows/production-account-readonly-live-qa.yml'
+                && run.head_sha === target
+                && run.head_branch === 'main'
+                && run.event === 'workflow_dispatch'
+                && run.status === 'completed'
+                && run.conclusion === 'success'
+                && Date.parse(run.updated_at || run.created_at || '') >= productionCompletedAt)
+              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at))) {
+              const artifactResponse = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: candidate.id,
+                per_page: 100,
+              });
+              const artifact = (artifactResponse.data.artifacts ?? []).find((item) =>
+                item.name === accountArtifactName
+                  && item.expired !== true
+                  && item.size_in_bytes > 0);
+              if (artifact) {
+                account = candidate;
+                break;
+              }
+            }
+            if (!account) {
+              core.setFailed('AUTOMATIC_TRADING_EXACT_ACCOUNT_QA_REQUIRED:' + target);
               return;
             }
             const telegramRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
@@ -353,7 +390,6 @@ jobs:
             --activation-artifact "$evidence" "$TARGET_SHA"
 
       - name: Download exact-SHA four-provider Account QA evidence
-        if: ${{ false }}
         uses: actions/download-artifact@v4
         with:
           name: production-account-readonly-live-${{ steps.command.outputs.sha }}
@@ -362,7 +398,6 @@ jobs:
           run-id: ${{ steps.gate.outputs.account_run_id }}
 
       - name: Require all four providers connected, fresh, and reconciled
-        if: ${{ false }}
         shell: bash
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
