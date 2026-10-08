@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
-import { liveConnectionVerificationFresh } from './live-connection-verification.service';
+import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
   marketIntelligenceNotAvailable,
@@ -329,4 +329,18 @@ test('stale credential verification blocks live order before any provider reques
   assert.equal(provider.counts().actualOrderPosts, 0);
   assert.equal(provider.counts().orderTestPosts, 0);
   assert.equal(provider.counts().openOrderReads, 0);
+});
+
+
+test('expired entry verification cannot prevent a risk-reducing exit with still-valid credentials', () => {
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  const verified = {
+    configured: true, accountMode: 'live' as const,
+    lastErrorCode: null,
+    lastVerifiedAt: new Date(now - 45 * 24 * 60 * 60_000).toISOString(),
+  };
+  assert.equal(liveConnectionVerificationFresh(verified, now), false);
+  assert.equal(liveConnectionVerificationAllowsReducingExit(verified, now), true);
+  assert.equal(liveConnectionVerificationAllowsReducingExit({ ...verified, lastErrorCode: 'REVOKED' }, now), false);
+  assert.equal(liveConnectionVerificationAllowsReducingExit({ ...verified, lastVerifiedAt: null }, now), false);
 });

@@ -271,7 +271,10 @@ requireText(telegramWorker, "export function userTelegramDeliveryWorkerHealthy("
 requireText(telegramWorkerTest, "Telegram delivery failure stays unhealthy through idle ticks until confirmed success", 'AUTO_GATE_TELEGRAM_FAILURE_REGRESSION_TEST_MISSING');
 requireText(paperWorkerTest, "Telegram outage blocks armed live entry while preserving independent exit warmup", 'AUTO_GATE_TELEGRAM_LIVE_ENTRY_REGRESSION_TEST_MISSING');
 requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
-requireText(liveExecution, "if (!liveConnectionVerificationFresh(connection))", 'AUTO_GATE_ORDER_TIME_CREDENTIAL_RECHECK_MISSING');
+requireText(liveExecution, "liveConnectionVerificationFresh(connection)", 'AUTO_GATE_ORDER_TIME_CREDENTIAL_RECHECK_MISSING');
+requireText(liveExecution, "plan.reduceOnly", 'AUTO_GATE_RISK_REDUCING_EXIT_EXCEPTION_MISSING');
+requireText(liveExecution, "liveConnectionVerificationAllowsReducingExit(connection)", 'AUTO_GATE_RISK_REDUCING_EXIT_GUARD_MISSING');
+requireText(liveConnectionVerification, "export function liveConnectionVerificationAllowsReducingExit(", 'AUTO_GATE_EXIT_VERIFICATION_HELPER_MISSING');
 requireText(tradeAutomationRoute, "providerVerified: liveConnectionVerificationFresh(connection)", 'AUTO_GATE_PROVIDER_FRESHNESS_STATUS_MISSING');
 requireText(paperWorkerTest, 'zero-mutation activation rehearsal transitions warmup to exact-SHA arm with no provider request or live order', 'AUTO_GATE_ZERO_MUTATION_ACTIVATION_REHEARSAL_MISSING');
 requireText(paperWorkerTest, 'activateNotBeforeAt: new Date(nowMs + 1_500).toISOString()', 'AUTO_GATE_DELAYED_ARM_REHEARSAL_MISSING');
