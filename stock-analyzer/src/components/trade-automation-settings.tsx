@@ -79,6 +79,27 @@ type Status = {
     readyForAutomaticOrderEvaluation: boolean;
     blockers: string[];
   }>>;
+  autoTradingBackground?: {
+    enabled: boolean;
+    liveModeRequested: boolean;
+    lastTickAt: string | null;
+    tickOk: boolean | null;
+    handoffReady: boolean;
+    newEntriesFailClosed: boolean;
+    liveEntryArmPresent: boolean;
+    liveEntriesArmed: boolean;
+    liveEntryWarmupComplete: boolean;
+    liveReadinessCycleComplete: boolean;
+    liveCycleAllFourPolicyReady: boolean;
+    globalEmergencyStopActive: boolean;
+    errorCode: string | null;
+  };
+  userTelegramDelivery?: {
+    enabled: boolean;
+    lastTickAt: string | null;
+    tickOk: boolean | null;
+    errorCode: string | null;
+  };
 };
 
 const EXCHANGE_LABELS: Record<Exchange, string> = {
