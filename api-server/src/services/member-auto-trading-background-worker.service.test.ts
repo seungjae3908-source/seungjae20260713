@@ -1195,6 +1195,28 @@ test('first live warmup suppresses automatic exits for existing live positions b
     assert.equal(result.liveExitsSuppressedByWarmupOrArm, 1);
     assert.equal(result.privateTradingRequests, 0);
     assert.equal(liveReads, 0);
+
+    // A broken/missing Paper account can no longer suppress visibility of
+    // this independently persisted Live position. Entries stay fail-closed.
+    const missingPaper = new MemberAutoTradingBackgroundWorker({
+      ...base,
+      paperJournalRepositoryFor() {
+        return {
+          async listSnapshot() { return []; },
+        } as unknown as PaperJournalRepository;
+      },
+      async readLiveAccountSnapshot() {
+        liveReads += 1;
+        throw new Error('NO_PRIVATE_EXIT_DURING_WARMUP');
+      },
+    });
+    const quarantined = await withFetchMock(() => missingPaper.runOnce(new Date(nowMs)));
+    assert.equal(quarantined.liveTrackedPositions, 1);
+    assert.equal(quarantined.liveExitOrders, 0);
+    assert.equal(quarantined.newEntriesFailClosed, true);
+    assert.equal(quarantined.createdPlans, 0);
+    assert.equal(quarantined.failures, 1);
+    assert.equal(liveReads, 0);
   } finally {
     for (const key of keys) {
       const value = previous[key];
@@ -1538,4 +1560,23 @@ test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper ha
   assert.ok(reasons.includes('STRATEGY_RULE_PACK:' + entry.identity.strategyId));
   assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + 'f'.repeat(64)));
   assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs + 60_001), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
+});
+
+
+test('missing Paper account never produces a new entry or a false live warmup', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    paperJournalRepositoryFor() {
+      return { async listSnapshot() { return []; } } as unknown as PaperJournalRepository;
+    },
+  });
+  const r = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(r.newEntriesFailClosed, true);
+  assert.equal(r.createdPlans, 0);
+  assert.equal(r.livePlans, 0);
+  assert.equal(r.failures, 1);
 });

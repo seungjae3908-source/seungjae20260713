@@ -82,6 +82,8 @@ type EligibleMember = Readonly<{
 }>;
 
 type MemberRuntimeState = Readonly<{
+  // Never use missing Paper equity as a zero-PnL proof to authorize entries.
+  paperAccountReady: boolean;
   accountEquity: number;
   dailyPnlPercent: number;
   weeklyPnlPercent: number;
@@ -568,26 +570,32 @@ async function memberRuntimeState(
   paper: PaperJournalRepository,
   nowMs: number,
 ): Promise<MemberRuntimeState> {
-  const [records, plans, orders] = await Promise.all([
-    paper.listSnapshot(userId),
+  // A missing/broken Paper account must quarantine *new* entries but must
+  // not hide already-filled real broker positions from guarded exit tracking.
+  const [paperResult, plans, orders] = await Promise.all([
+    paper.listSnapshot(userId)
+      .then((records) => ({ records, validRead: true }))
+      .catch(() => ({ records: [] as Awaited<ReturnType<PaperJournalRepository['listSnapshot']>>, validRead: false })),
     repository.listPlans(userId),
     repository.listOrders(userId),
   ]);
-  const accounts = records.filter((row) => row.kind === 'account' && row.deletedAt == null)
+  const accounts = paperResult.records.filter((row) => row.kind === 'account' && row.deletedAt == null)
     .map((row) => record(row.payload))
     .filter((row): row is Record<string, unknown> => row != null);
-  if (accounts.length !== 1 || !positive(Number(accounts[0]?.equity))) {
-    throw new Error('BACKGROUND_PAPER_ACCOUNT_REQUIRED');
-  }
-  const equity = Number(accounts[0]!.equity);
-  const journal = records.filter((row) => row.kind === 'journal' && row.deletedAt == null)
+  const paperAccountReady = paperResult.validRead
+    && accounts.length === 1 && positive(Number(accounts[0]?.equity));
+  const equity = paperAccountReady ? Number(accounts[0]!.equity) : 0;
+  const journal = paperResult.records.filter((row) => row.kind === 'journal' && row.deletedAt == null)
     .map((row) => record(row.payload))
     .filter((row): row is Record<string, unknown> => row != null);
   return Object.freeze({
+    paperAccountReady,
     accountEquity: equity,
-    dailyPnlPercent: pnlPercentSince(journal, equity, nowMs - 24 * 60 * 60_000),
-    weeklyPnlPercent: pnlPercentSince(journal, equity, nowMs - 7 * 24 * 60 * 60_000),
-    consecutiveLosses: currentConsecutiveLosses(journal),
+    // These placeholders are not evidence: caller forbids all fresh entries
+    // while paperAccountReady is false.
+    dailyPnlPercent: paperAccountReady ? pnlPercentSince(journal, equity, nowMs - 24 * 60 * 60_000) : 0,
+    weeklyPnlPercent: paperAccountReady ? pnlPercentSince(journal, equity, nowMs - 7 * 24 * 60 * 60_000) : 0,
+    consecutiveLosses: paperAccountReady ? currentConsecutiveLosses(journal) : 0,
     plans,
     orders,
   });
@@ -1219,6 +1227,7 @@ export class MemberAutoTradingBackgroundWorker {
       const entries = batch.entries;
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
+      let paperAccountMissingThisTick = false;
 
       for (const member of members) {
         if (!hasCapability(member.profile, 'canAccessAutoTrading')) {
@@ -1238,6 +1247,11 @@ export class MemberAutoTradingBackgroundWorker {
           result.blocked += entries.length;
           result.newEntriesFailClosed = true;
           continue;
+        }
+        if (!runtime.paperAccountReady) {
+          paperAccountMissingThisTick = true;
+          result.newEntriesFailClosed = true;
+          result.failures += 1;
         }
         const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
         if (persistentGlobalStop || environmentGlobalStop) result.globalEmergencyStopActive = true;
@@ -1291,7 +1305,8 @@ export class MemberAutoTradingBackgroundWorker {
         let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
         let entryProjectionHealthy = await syncExecutionProjection();
         let exitChanged = false;
-        for (const position of trackedAutomaticPositions(runtime, 'paper')) {
+        for (const position of runtime.paperAccountReady
+          ? trackedAutomaticPositions(runtime, 'paper') : []) {
           try {
             const exit = await processAutomaticExit({
               source: this.source,
@@ -1370,6 +1385,12 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
 
+        // Maintain eligible Live exits above even when Paper storage is
+        // absent. Do not create Paper or Live entries using placeholder equity.
+        if (!runtime.paperAccountReady) {
+          result.blocked += entries.length;
+          continue;
+        }
         for (const entry of entries) {
           if (!policyAllowsEntry(member, entry)) {
             result.skipped += 1;
@@ -1587,6 +1608,7 @@ export class MemberAutoTradingBackgroundWorker {
         result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
 
         const hardWarmupBlock = !result.handoffReady
+          || paperAccountMissingThisTick
           || result.executionSyncFailures > 0
           || result.executionSyncMissingReferences > 0
           || result.globalEmergencyStopActive;
