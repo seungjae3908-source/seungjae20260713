@@ -17,5 +17,6 @@
 \ir ../migrations/2026081502_personal_telegram_policy_cleanup.sql
 \ir ../migrations/2026082704_member_watchlist_items.sql
 \ir ../migrations/2026100601_member_access_s_ai_hardening.sql
+\ir ../migrations/2026100801_member_security_definer_lockdown.sql
 \ir staging-bootstrap-assert.sql
 \ir staging-audit-privilege-assert.sql
