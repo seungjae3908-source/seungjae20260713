@@ -328,6 +328,41 @@ test('loss exceeding remaining operating equity blocks further pilot allocation 
   assert.ok(decision(result, { estimatedKrw: 20_000 })
     .blockers.includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'));
 });
+test('incomplete LIVE automatic fill quantity or average price must not silently vanish from 500k settlement', async () => {
+  const user = '11111111-1111-1111-1111-111111111111';
+  const variants = [
+    { name: 'zero-price', state: 'FILLED', filledQuantity: 1, averageFillPrice: 0 },
+    { name: 'zero-quantity', state: 'FILLED', filledQuantity: 0, averageFillPrice: 100_000 },
+    { name: 'partial-without-price', state: 'PARTIALLY_FILLED', filledQuantity: 0.5, averageFillPrice: null },
+  ] as const;
+  for (const variant of variants) {
+    const repository = new InMemoryTradingRepository();
+    const createdAt = new Date(NOW - 60_000).toISOString();
+    const planId = 'incomplete-' + variant.name;
+    await repository.savePlan({
+      ...pilotReceiptInput(50_000), id: planId, userId: user,
+      idempotencyKey: planId, executionMode: 'automatic',
+      state: 'SUBMITTED', version: 1, approvedAt: createdAt,
+      approvalExpiresAt: new Date(NOW + 60_000).toISOString(),
+      createdAt, updatedAt: createdAt,
+    } as never);
+    await repository.saveOrder({
+      id: 'order-' + planId, userId: user, planId,
+      exchange: 'upbit', clientOrderId: 'client-' + planId,
+      exchangeOrderId: 'exchange-' + planId, state: variant.state,
+      version: 1, requestedQuantity: 1, filledQuantity: variant.filledQuantity,
+      averageFillPrice: variant.averageFillPrice, fills: [],
+      feeAmount: 0, feeCurrency: 'KRW', retryCount: 0,
+      lastErrorCode: null, createdAt, updatedAt: createdAt,
+    } as never);
+    const pilot = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.equal(pilot.settlementReady, false, variant.name);
+    assert.ok(pilot.blockers.includes('PILOT_CAPITAL_AUTO_LIVE_FILL_EVIDENCE_INCOMPLETE'), variant.name);
+    assert.ok(decision(pilot, { estimatedKrw: 20_000 }).blockers
+      .includes('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED'), variant.name);
+  }
+});
+
 function pilotReceiptInput(estimatedKrw = 525_000): TradingPlanInput {
   return {
     exchange: 'upbit', accountMode: 'live', strategyId: 'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1',
@@ -522,6 +557,25 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
     assert.equal(projected.maxOrderKrw, 525_000);
     assert.equal(projected.maxInstrumentKrw, 525_000);
     assert.equal(base.maxOrderKrw, 500_000);
+    // A gross KRW gain must not claim a KRW-denominated net return when a
+    // broker fee is recorded in the underlying asset instead.
+    await repository.saveOrder({
+      ...orderFor('history-entry-order', 'history-entry', openedAt, 1_000_000),
+      feeCurrency: 'BTC',
+    } as never);
+    const wrongFeeCurrency = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.equal(wrongFeeCurrency.settlementReady, false);
+    assert.ok(wrongFeeCurrency.blockers.includes('PILOT_CAPITAL_FEE_CURRENCY_EVIDENCE_REQUIRED'));
+    await repository.saveOrder(orderFor('history-entry-order', 'history-entry', openedAt, 1_000_000) as never);
+
+    // The generic journal currency adapter labels all Upbit fills as KRW.
+    // Capital promotion must additionally prove the actual market quote.
+    await repository.savePlan({ ...planFor('history-entry', 'buy', false, openedAt), market: 'BTC' } as never);
+    const wrongSpotQuote = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.equal(wrongSpotQuote.settlementReady, false);
+    assert.ok(wrongSpotQuote.blockers.includes('PILOT_CAPITAL_SPOT_KRW_QUOTE_EVIDENCE_REQUIRED'));
+    await repository.savePlan(planFor('history-entry', 'buy', false, openedAt) as never);
+
     const tooLarge = {
       ...proposed,
       ...issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_001), NOW),
