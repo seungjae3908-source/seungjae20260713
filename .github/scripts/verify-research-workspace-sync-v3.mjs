@@ -312,6 +312,7 @@ const automaticTradingDriftReviewed=[
  '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
  '.github/tests/production-telegram-active-readiness.test.mjs',
  '.github/tests/production-trading-core-qa-contract.test.mjs',
+ '.github/tests/trading-ops-consolidated-preflight.test.mjs',
  '.github/workflows/production-automatic-trading-gate.yml',
  '.github/workflows/production-futures-live-trading-gate.yml',
  '.github/workflows/production-live-trading-gate.yml',
