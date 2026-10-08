@@ -61,6 +61,19 @@ export function telegramDeliveryTickConfirmed(
   return previouslyConfirmed;
 }
 
+// The newest persisted terminal outcome must be a real recent SENT receipt.
+// A self-claimed healthy idle worker is insufficient, and a newer failure
+// invalidates an earlier delivery receipt after restart.
+export function verifiedRecentTelegramDeliveryReceipt(
+  row: { state?: string | null; updated_at?: string | null } | null | undefined,
+  nowMs = Date.now(),
+): string | null {
+  const observed = Date.parse(row?.updated_at ?? '');
+  if (row?.state !== 'SENT' || !Number.isFinite(nowMs) || !Number.isFinite(observed)
+    || observed > nowMs + 5_000 || nowMs - observed > 24 * 60 * 60_000) return null;
+  return new Date(observed).toISOString();
+}
+
 export interface TelegramDeliveryWorkerSource {
   listDue(now: string, limit: number): Promise<Array<Pick<NotificationDelivery, 'userId' | 'id'>>>;
 }
@@ -106,6 +119,18 @@ export class TelegramDeliveryWorker {
 }
 
 export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWorkerSource {
+  async recentConfirmedDelivery(nowMs = Date.now()) {
+    if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
+    const { data, error } = await getSupabase().from('notification_deliveries')
+      .select('state,updated_at')
+      .in('state', ['SENT', 'RETRY_SCHEDULED', 'DEAD_LETTER', 'FAILED'])
+      .gte('updated_at', new Date(nowMs - 24 * 60 * 60_000).toISOString())
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw new Error('TELEGRAM_DELIVERY_RECEIPT_QUERY_FAILED');
+    return verifiedRecentTelegramDeliveryReceipt(data?.[0] ?? null, nowMs);
+  }
+
   async listDue(now: string, limit: number) {
     if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
     const nowMs = Date.parse(now);
@@ -196,7 +221,8 @@ export function startUserTelegramDeliveryWorker(
     process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
     sendTelegramAlert,
   );
-  const worker = new TelegramDeliveryWorker(new SupabaseTelegramDeliveryWorkerSource(), service);
+  const deliverySource = new SupabaseTelegramDeliveryWorkerSource();
+  const worker = new TelegramDeliveryWorker(deliverySource, service);
   telegramDeliveryWorkerHealth = Object.freeze({
     enabled: true,
     lastTickAt: null,
@@ -208,7 +234,18 @@ export function startUserTelegramDeliveryWorker(
   // An empty queue at startup does not prove that any Telegram message arrived.
   let deliveryConfirmed = false;
   let lastConfirmedDeliveryAt: string | null = null;
-  const tick = () => void worker.runOnce().then((result) => {
+  // Read-only durable delivery proof survives a PM2 restart; failures or
+  // missing evidence remain unconfirmed, never silently promoted to PASS.
+  const restoreProof = deliverySource.recentConfirmedDelivery().then((receipt) => {
+    if (!receipt) return;
+    deliveryConfirmed = true;
+    lastConfirmedDeliveryAt = receipt;
+  }).catch((error) => {
+    console.error('[user-telegram-worker] delivery receipt restore failed', {
+      errorCode: error instanceof Error ? error.message.split(':')[0] : 'TELEGRAM_RECEIPT_RESTORE_FAILED',
+    });
+  });
+  const tick = () => void restoreProof.then(() => worker.runOnce()).then((result) => {
     // An overlap is not a completed health probe; never overwrite the in-flight result.
     if (result.overlapSkipped) return;
     deliveryConfirmed = telegramDeliveryTickConfirmed(deliveryConfirmed, result);
