@@ -364,6 +364,16 @@ export class TradeAutomationService {
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
     if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
     if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
+    // A state of FILLED is not evidence of an execution. Never persist the
+    // terminal state with zero/missing quantity or price in any market.
+    // A provider acknowledgement alone cannot reconstruct an actual fill.
+    if (toState === 'FILLED' && (
+      !Number.isFinite(next.filledQuantity) || next.filledQuantity <= 0
+      || !Number.isFinite(next.averageFillPrice) || next.averageFillPrice == null
+      || next.averageFillPrice <= 0
+    )) {
+      throw new Error('TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED');
+    }
     if (typeof metadata.errorCode === 'string') next.lastErrorCode = metadata.errorCode;
     if (typeof metadata.preSubmissionCheckedAt === 'string') next.preSubmissionCheckedAt = metadata.preSubmissionCheckedAt;
     if (metadata.preSubmissionDecision && typeof metadata.preSubmissionDecision === 'object') {

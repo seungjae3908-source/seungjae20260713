@@ -81,6 +81,20 @@ export class TradeExecutionEventBridgeService {
         continue;
       }
 
+      // A historical Paper row can be stamped FILLED without ever carrying
+      // an actual positive execution quantity or fill price. Preserve its
+      // source evidence and report a reconciliation blocker; never project a
+      // fake journal trade or send a false execution Telegram message.
+      if (plan.accountMode === 'paper' && plan.executionMode === 'automatic'
+        && ['FILLED', 'PARTIALLY_FILLED'].includes(transition.toState)
+        && (typeof order.filledQuantity !== 'number'
+          || !Number.isFinite(order.filledQuantity) || order.filledQuantity <= 0
+          || typeof order.averageFillPrice !== 'number'
+          || !Number.isFinite(order.averageFillPrice) || order.averageFillPrice <= 0)) {
+        missingReferences += 1;
+        continue;
+      }
+
       // The order row may already be at a later state than this historical
       // transition. Map the event using the transition state while preserving
       // fill/account metadata from the canonical current row.
