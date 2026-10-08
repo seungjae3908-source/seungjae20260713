@@ -55,6 +55,7 @@ if (staticMode) {
     "public.is_approved_member()",
     "member.password.reset",
     "member.membership.expiry.change",
+    "MEMBER_EXPIRY_INVALID",
     "public.current_membership_level() in ('associate', 'regular', 'admin')",
   ]) requireText(migration, marker, marker);
 
