@@ -122,6 +122,8 @@ export interface MemberAutoTradingBackgroundSource {
     profile: MemberAccessProfile;
     repository: TradingRepository;
     paperJournalRepository: PaperJournalRepository;
+    /** Restrict fresh Paper fan-out to the exact caller-owned canonical order. */
+    orderId?: string;
   }): Promise<{ inserted: number; deliveryQueued: number; missingReferences: number }>;
 }
 
@@ -1170,6 +1172,7 @@ async function processAutomaticExit(input: {
       : 'HOLD' as const,
     privateRequests,
     orderCreated,
+    orderId: execution.order.id,
   };
 }
 
@@ -1372,7 +1375,8 @@ export class MemberAutoTradingBackgroundWorker {
           runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
           result.runtimeRefreshes += 1;
         };
-        const syncExecutionProjection = async () => {
+        let historicalPaperLineageConflict = false;
+        const syncExecutionProjection = async (orderId?: string) => {
           if (!this.source.syncExecutionEvents) return true;
           try {
             const synced = await this.source.syncExecutionEvents({
@@ -1380,6 +1384,7 @@ export class MemberAutoTradingBackgroundWorker {
               profile: member.profile,
               repository,
               paperJournalRepository: paper,
+              ...(orderId ? { orderId } : {}),
             });
             result.executionEventsInserted += synced.inserted;
             result.notificationDeliveriesQueued += synced.deliveryQueued;
@@ -1390,7 +1395,14 @@ export class MemberAutoTradingBackgroundWorker {
               return false;
             }
             return true;
-          } catch {
+          } catch (error) {
+            // A known *historical* method mismatch may not suppress a fresh,
+            // individually authorized Paper fill. Never relax Live, the broad
+            // replay, or an error from the exact new order itself.
+            if (!orderId && !liveModeRequested && memberAutoTradingWorkerMode() === 'PAPER_ONLY'
+              && errorCode(error) === 'EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT') {
+              historicalPaperLineageConflict = true;
+            }
             // Notification/journal fan-out must never change canonical order state.
             // A projection failure instead fail-closes subsequent new entries for this tick.
             result.executionSyncFailures += 1;
@@ -1402,7 +1414,14 @@ export class MemberAutoTradingBackgroundWorker {
 
         let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
         let entryProjectionHealthy = await syncExecutionProjection();
+        if (!entryProjectionHealthy && historicalPaperLineageConflict) {
+          // Historic incorrect source lineage remains immutable and visible in
+          // executionSyncFailures / runtime health (NOT a pass or Live receipt).
+          // A fresh Paper order must still prove its own scoped projection.
+          entryProjectionHealthy = true;
+        }
         let exitChanged = false;
+        const paperExitOrderIds: string[] = [];
         for (const position of memberAutoExecutionEnabled && runtime.paperAccountReady
           ? trackedAutomaticPositions(runtime, 'paper') : []) {
           try {
@@ -1418,6 +1437,9 @@ export class MemberAutoTradingBackgroundWorker {
             if (exit.status === 'EXIT_SUBMITTED' && exit.orderCreated) {
               result.paperExitOrders += 1;
               exitChanged = true;
+              if ('orderId' in exit && typeof exit.orderId === 'string') {
+                paperExitOrderIds.push(exit.orderId);
+              }
             } else if (exit.status.startsWith('BLOCKED')) {
               result.exitBlocked += 1;
             }
@@ -1473,7 +1495,15 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         if (exitChanged) {
-          entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
+          if (liveModeRequested) {
+            // Live retains the stricter full-history integrity barrier.
+            entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
+          } else {
+            // Paper exits must not replay unrelated legacy event identities.
+            for (const exitOrderId of paperExitOrderIds) {
+              entryProjectionHealthy = (await syncExecutionProjection(exitOrderId)) && entryProjectionHealthy;
+            }
+          }
           try {
             await refreshRuntime();
           } catch {
@@ -1575,7 +1605,7 @@ export class MemberAutoTradingBackgroundWorker {
                 result.blocked += 1;
               }
               await refreshRuntime();
-              entryProjectionHealthy = await syncExecutionProjection();
+              entryProjectionHealthy = await syncExecutionProjection(paperRun.order.id);
               if (!entryProjectionHealthy) {
                 result.blocked += 1;
                 break;
@@ -1978,6 +2008,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     profile: MemberAccessProfile;
     repository: TradingRepository;
     paperJournalRepository: PaperJournalRepository;
+    orderId?: string;
   }) {
     const integration = new UserBrokerTelegramService(
       createSupabaseUserBrokerTelegramRepository(),
@@ -1985,7 +2016,8 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       new CanonicalPortfolioSyncSink(input.paperJournalRepository, input.userId),
     );
     const result = await new TradeExecutionEventBridgeService(input.repository, integration)
-      .syncUser(input.userId, deriveMemberTier(input.profile));
+      .syncUser(input.userId, deriveMemberTier(input.profile),
+        input.orderId ? { orderId: input.orderId } : {});
     return {
       inserted: result.inserted,
       deliveryQueued: result.deliveryQueued,
