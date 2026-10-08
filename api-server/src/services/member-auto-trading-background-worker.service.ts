@@ -621,14 +621,18 @@ function buildPlanInput(
 export function memberAutoTradingWorkerMode(
   env: NodeJS.ProcessEnv = process.env,
 ): 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACKGROUND' {
-  if (env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'true') return 'PAPER_ONLY';
+  const paperOnly = env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  if (paperOnly === 'true') return 'PAPER_ONLY';
+  // An invalid Paper-only flag must not silently fall back to shared Live.
+  if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';
   return env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'
     ? 'SHARED_BACKGROUND'
     : 'DISABLED';
 }
 
 export function liveBackgroundEnabled() {
-  return process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'
+  const paperOnly = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  return (paperOnly === undefined || paperOnly === 'false')
     && process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
