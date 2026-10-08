@@ -679,8 +679,19 @@ jobs:
                   'http://127.0.0.1:' + port + '/api/health',
                 ], { encoding: 'utf8' }));
                 const health = last?.autoTradingBackground;
+                const nowMs = Date.now();
+                const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''));
+                const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''));
+                const autoHealthFresh = Number.isFinite(autoLastTickMs)
+                  && autoLastTickMs <= nowMs
+                  && nowMs - autoLastTickMs <= 360_000;
+                const telegramHealthFresh = Number.isFinite(telegramLastTickMs)
+                  && telegramLastTickMs <= nowMs
+                  && nowMs - telegramLastTickMs <= 360_000;
                 if (health?.enabled === true
                   && health?.liveModeRequested === true
+                  && autoHealthFresh
+                  && telegramHealthFresh
                   && health?.tickOk === true
                   && health?.handoffReady === true
                   && health?.newEntriesFailClosed === false
