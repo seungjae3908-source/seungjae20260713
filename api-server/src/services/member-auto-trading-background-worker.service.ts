@@ -84,6 +84,7 @@ type MemberRuntimeState = Readonly<{
 export interface MemberAutoTradingBackgroundSource {
   readHandoff(nowMs: number): Promise<MemberAutoTradingPaperHandoff | null>;
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
+  memberBatchCycleCompleted?(): boolean;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
   resolveFx(
@@ -117,6 +118,10 @@ export type MemberAutoTradingBackgroundRunResult = {
   liveOrderEligibleMembers: number;
   livePolicyReadyMembers: number;
   liveAllFourPolicyReadyMembers: number;
+  liveReadinessCycleComplete: boolean;
+  liveCycleOrderEligible: boolean;
+  liveCyclePolicyReady: boolean;
+  liveCycleAllFourPolicyReady: boolean;
   globalEmergencyStopActive: boolean;
   members: number;
   entries: number;
@@ -165,6 +170,10 @@ export type MemberAutoTradingBackgroundRuntimeHealth = Readonly<{
   liveOrderEligibleMembers: number;
   livePolicyReadyMembers: number;
   liveAllFourPolicyReadyMembers: number;
+  liveReadinessCycleComplete: boolean;
+  liveCycleOrderEligible: boolean;
+  liveCyclePolicyReady: boolean;
+  liveCycleAllFourPolicyReady: boolean;
   globalEmergencyStopActive: boolean;
   errorCode: string | null;
 }>;
@@ -191,6 +200,10 @@ let backgroundRuntimeHealth: MemberAutoTradingBackgroundRuntimeHealth = Object.f
   liveOrderEligibleMembers: 0,
   livePolicyReadyMembers: 0,
   liveAllFourPolicyReadyMembers: 0,
+  liveReadinessCycleComplete: true,
+  liveCycleOrderEligible: false,
+  liveCyclePolicyReady: false,
+  liveCycleAllFourPolicyReady: false,
   globalEmergencyStopActive: false,
   errorCode: null,
 });
@@ -1048,6 +1061,9 @@ function errorCode(error: unknown) {
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
   private liveEntryWarmupComplete = false;
+  private liveCycleOrderEligibleSeen = false;
+  private liveCyclePolicyReadySeen = false;
+  private liveCycleAllFourPolicyReadySeen = false;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
 
@@ -1071,6 +1087,10 @@ export class MemberAutoTradingBackgroundWorker {
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
       liveAllFourPolicyReadyMembers: 0,
+      liveReadinessCycleComplete: true,
+      liveCycleOrderEligible: false,
+      liveCyclePolicyReady: false,
+      liveCycleAllFourPolicyReady: false,
       globalEmergencyStopActive: false,
       members: 0,
       entries: 0,
@@ -1406,17 +1426,38 @@ export class MemberAutoTradingBackgroundWorker {
       }
 
       if (liveModeRequested) {
-        if (result.livePolicyReadyMembers === 0 || result.globalEmergencyStopActive) {
+        const cycleComplete = this.source.memberBatchCycleCompleted?.() ?? true;
+        this.liveCycleOrderEligibleSeen ||= result.liveOrderEligibleMembers > 0;
+        this.liveCyclePolicyReadySeen ||= result.livePolicyReadyMembers > 0;
+        this.liveCycleAllFourPolicyReadySeen ||= result.liveAllFourPolicyReadyMembers > 0;
+        result.liveReadinessCycleComplete = cycleComplete;
+        result.liveCycleOrderEligible = this.liveCycleOrderEligibleSeen;
+        result.liveCyclePolicyReady = this.liveCyclePolicyReadySeen;
+        result.liveCycleAllFourPolicyReady = this.liveCycleAllFourPolicyReadySeen;
+
+        const hardWarmupBlock = !result.handoffReady
+          || result.executionSyncFailures > 0
+          || result.executionSyncMissingReferences > 0
+          || result.globalEmergencyStopActive;
+        if (hardWarmupBlock) {
+          this.liveEntryWarmupComplete = false;
           result.newEntriesFailClosed = true;
+          this.liveCycleOrderEligibleSeen = false;
+          this.liveCyclePolicyReadySeen = false;
+          this.liveCycleAllFourPolicyReadySeen = false;
+        } else if (cycleComplete) {
+          this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
+            && this.liveCyclePolicyReadySeen;
+          if (!this.liveEntryWarmupComplete) result.newEntriesFailClosed = true;
+          this.liveCycleOrderEligibleSeen = false;
+          this.liveCyclePolicyReadySeen = false;
+          this.liveCycleAllFourPolicyReadySeen = false;
         }
-        this.liveEntryWarmupComplete = result.handoffReady
-          && result.executionSyncFailures === 0
-          && result.executionSyncMissingReferences === 0
-          && result.liveOrderEligibleMembers > 0
-          && result.livePolicyReadyMembers > 0
-          && !result.globalEmergencyStopActive;
       } else {
         this.liveEntryWarmupComplete = false;
+        this.liveCycleOrderEligibleSeen = false;
+        this.liveCyclePolicyReadySeen = false;
+        this.liveCycleAllFourPolicyReadySeen = false;
       }
       result.liveEntryWarmupComplete = this.liveEntryWarmupComplete;
       return result;
@@ -1429,6 +1470,7 @@ export class MemberAutoTradingBackgroundWorker {
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
   private memberBatchOffset = 0;
+  private lastMemberBatchCompletedCycle = true;
 
   constructor(
     private readonly client: SupabaseClient = getSupabase(),
@@ -1460,6 +1502,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const fetched = data ?? [];
     const hasMore = fetched.length > MAX_MEMBERS_PER_TICK;
     const batch = fetched.slice(0, MAX_MEMBERS_PER_TICK);
+    this.lastMemberBatchCompletedCycle = !hasMore;
     this.memberBatchOffset = hasMore ? offset + MAX_MEMBERS_PER_TICK : 0;
     const rows = batch.flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
@@ -1478,6 +1521,10 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
         ? [Object.freeze({ userId: row.userId, policy: row.policy, profile })]
         : [];
     });
+  }
+
+  memberBatchCycleCompleted() {
+    return this.lastMemberBatchCompletedCycle;
   }
 
   tradingRepositoryFor(userId: string) {
@@ -1551,6 +1598,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
       liveAllFourPolicyReadyMembers: 0,
+      liveReadinessCycleComplete: true,
+      liveCycleOrderEligible: false,
+      liveCyclePolicyReady: false,
+      liveCycleAllFourPolicyReady: false,
       globalEmergencyStopActive: false,
       errorCode: null,
     });
@@ -1581,6 +1632,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
       liveOrderEligibleMembers: 0,
       livePolicyReadyMembers: 0,
       liveAllFourPolicyReadyMembers: 0,
+      liveReadinessCycleComplete: true,
+      liveCycleOrderEligible: false,
+      liveCyclePolicyReady: false,
+      liveCycleAllFourPolicyReady: false,
       globalEmergencyStopActive: false,
       errorCode: 'TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED',
     });
@@ -1648,6 +1703,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
         liveOrderEligibleMembers: result.liveOrderEligibleMembers,
         livePolicyReadyMembers: result.livePolicyReadyMembers,
         liveAllFourPolicyReadyMembers: result.liveAllFourPolicyReadyMembers,
+        liveReadinessCycleComplete: result.liveReadinessCycleComplete,
+        liveCycleOrderEligible: result.liveCycleOrderEligible,
+        liveCyclePolicyReady: result.liveCyclePolicyReady,
+        liveCycleAllFourPolicyReady: result.liveCycleAllFourPolicyReady,
         globalEmergencyStopActive: result.globalEmergencyStopActive,
         errorCode: null,
       });
