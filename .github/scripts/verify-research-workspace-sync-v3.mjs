@@ -409,6 +409,7 @@ if(automaticTradingChanged.length>0){
 }
 const canonicalMemberFixtureOnlyPaths=new Set([
  'api-server/src/services/research-workspace-authorization-v5.test.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/e2e/research-workspace-v2.spec.ts',
 ]);
