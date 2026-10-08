@@ -29,6 +29,7 @@ import {
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
   automaticExecutionProjectionOrderIds,
+  automaticPaperOrderWithinWalletEpoch,
   automaticPaperWalletServerEpochMs,
   automaticPaperRiskEvidenceFromCanonicalLedger,
   type MemberAutoTradingBackgroundSource,
@@ -2437,4 +2438,50 @@ test('automatic Paper epoch uses immutable server row time, never forged wallet 
   assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:00.000Z' }], currentMs), null);
   assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: '2030-01-01T00:00:00.000Z' }], currentMs), null);
   assert.equal(automaticPaperWalletServerEpochMs([row, row], currentMs), null);
+});
+
+test('new wallet epoch rejects old Paper positions, including post-epoch retries on old plans', () => {
+  const epoch = Date.parse('2026-10-09T00:00:00.000Z');
+  const newPlan = { id: 'new', accountMode: 'paper', executionMode: 'automatic',
+    createdAt: '2026-10-09T00:00:01.000Z' } as TradingPlan;
+  const oldPlan = { ...newPlan, id: 'old', createdAt: '2026-10-06T00:00:00.000Z' };
+  const newOrder = { id: 'order-new', planId: 'new', createdAt: '2026-10-09T00:00:02.000Z' } as import('./trade-automation.types').TradingOrder;
+  const retriedOld = { ...newOrder, id: 'order-retried-old', planId: 'old' };
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, newOrder, epoch, epoch + 10_000), true);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(oldPlan, retriedOld, epoch, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, newOrder, null, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, { ...newOrder, createdAt: '2027-01-01T00:00:00.000Z' }, epoch, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch({ ...newPlan, accountMode: 'live' }, newOrder, epoch, epoch + 10_000), false);
+});
+
+test('legacy Paper fill cannot trigger a new wallet automatic exit even when historically FILLED', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await repository.savePlan({
+    id: 'legacy-paper-plan', userId: USER, executionMode: 'automatic',
+    accountMode: 'paper', exchange: 'upbit', market: 'spot', symbol: 'BTC',
+    state: 'SUBMITTED', reduceOnly: false, signalReasons: ['CANONICAL_PAPER_HANDOFF'],
+    createdAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+  } as TradingPlan);
+  await repository.saveOrder({
+    id: 'legacy-paper-order', userId: USER, planId: 'legacy-paper-plan',
+    exchange: 'upbit', state: 'FILLED', requestedQuantity: 0.1,
+    filledQuantity: 0.1, averageFillPrice: 100_000, feeAmount: null,
+    createdAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+    updatedAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+  } as import('./trade-automation.types').TradingOrder);
+  const base = source(repository, nowMs, { handoffMissing: true });
+  let legacyPriceReads = 0;
+  const result = await new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readMarketMark() {
+      legacyPriceReads++;
+      throw new Error('LEGACY_PAPER_POSITION_MUST_NOT_TRIGGER_EXIT');
+    },
+  }).runOnce(new Date(nowMs));
+  assert.equal(legacyPriceReads, 0);
+  assert.equal(result.paperExitOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+  assert.equal(result.liveOrders, 0);
 });
