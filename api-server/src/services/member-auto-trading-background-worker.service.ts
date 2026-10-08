@@ -1585,12 +1585,16 @@ export class MemberAutoTradingBackgroundWorker {
           runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
           result.runtimeRefreshes += 1;
         };
-        const syncExecutionProjection = async () => {
+        const syncExecutionProjection = async (requiredOrderId?: string) => {
           if (!this.source.syncExecutionEvents) return true;
           const orderIds = automaticExecutionProjectionOrderIds(
-            runtime.plans, runtime.orders, runtime.paperWalletOpenedAtMs, nowMs,
+            runtime.plans, runtime.orders, runtime.paperWalletOpenedAtMs,
+            // Re-evaluate the clock after a long-running provider or settlement call.
+            // A newly FILLED Paper order must never fall outside the scoped outbox.
+            Math.max(nowMs, Date.now()),
           );
-          if (runtime.orders.length >= 500 || runtime.plans.length >= 200
+          if ((requiredOrderId && !orderIds.includes(requiredOrderId))
+            || runtime.orders.length >= 500 || runtime.plans.length >= 200
             || orderIds.length > 100) {
             // Never silently truncate either Live replay or new Paper outbox.
             result.executionSyncMissingReferences += 1;
@@ -1814,7 +1818,7 @@ export class MemberAutoTradingBackgroundWorker {
                 result.blocked += 1;
               }
               await refreshRuntime();
-              entryProjectionHealthy = await syncExecutionProjection();
+              entryProjectionHealthy = await syncExecutionProjection(paperRun.order.id);
               if (!entryProjectionHealthy) {
                 result.blocked += 1;
                 break;
@@ -1946,7 +1950,7 @@ export class MemberAutoTradingBackgroundWorker {
                 }
                 if (liveRun.order.state === 'REJECTED') result.blocked += 1;
                 await refreshRuntime();
-                entryProjectionHealthy = await syncExecutionProjection();
+                entryProjectionHealthy = await syncExecutionProjection(liveRun.order.id);
                 if (!entryProjectionHealthy) {
                   result.blocked += 1;
                   break;
