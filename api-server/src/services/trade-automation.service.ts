@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import type { TradingRepository } from './trade-automation.repository';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
+import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import {
   assertCancellationAllowed,
   buildRiskEnvelope,
@@ -131,6 +133,9 @@ export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchan
     ? futuresLiveExecutionAuthority() === 'FUTURES_LIVE_LIMITED'
     : liveExecutionAuthority() === 'SPOT_LIVE_LIMITED';
   return authorityEnabled
+    // Dedicated Paper-only (including malformed values) cannot inherit Live AUTO.
+    && (process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined
+      || process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false')
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
@@ -155,7 +160,10 @@ export class TradeAutomationService {
   }
 
   private async marketIntelligenceDecision(input: TradingPlanInput) {
-    if (input.reduceOnly === true) {
+    if (input.reduceOnly === true && !isRiskReducingExitPlan(input)) {
+      return { allowed: false, blockCode: 'REDUCE_ONLY_SIDE_INVALID', warnings: [] };
+    }
+    if (isRiskReducingExitPlan(input)) {
       return {
         allowed: true,
         blockCode: null,
@@ -225,10 +233,17 @@ export class TradeAutomationService {
       throw new Error(`TRADE_PLAN_MARKET_INTELLIGENCE_FAILED:${intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK'}`);
     }
 
-    const policy = await this.repository.getPolicy(userId);
+    const storedPolicy = await this.repository.getPolicy(userId);
+    if (plan.executionMode === 'automatic'
+      && (storedPolicy.mode !== 'automatic' || !storedPolicy.automaticEnabled)) {
+      throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    }
+    const policy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, userId, plan, storedPolicy,
+    );
     const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
+      emergencyStopped: await this.emergencyStopActive(userId, storedPolicy),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });
@@ -262,10 +277,14 @@ export class TradeAutomationService {
     if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
     if (plan.state !== 'APPROVAL_PENDING') throw new Error('TRADE_PLAN_NOT_APPROVAL_PENDING');
     const expectedVersion = planVersion(plan);
-    const policy = await this.repository.getPolicy(userId);
-    if (policy.mode !== 'automatic' || !policy.automaticEnabled) {
+    const storedPolicy = await this.repository.getPolicy(userId);
+    if (storedPolicy.mode !== 'automatic' || !storedPolicy.automaticEnabled
+      || plan.executionMode !== 'automatic') {
       throw new Error('USER_APPROVAL_REQUIRED');
     }
+    const policy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, userId, plan, storedPolicy,
+    );
     const intelligence = await this.marketIntelligenceDecision(plan);
     if (!intelligence.allowed) {
       const expired = { ...plan, state: 'EXPIRED' as const, updatedAt: new Date().toISOString() };
@@ -273,8 +292,8 @@ export class TradeAutomationService {
       throw new Error(`TRADE_PLAN_MARKET_INTELLIGENCE_FAILED:${intelligence.blockCode ?? 'MARKET_INTELLIGENCE_BLOCKED_RISK'}`);
     }
     const decision = evaluateTradingPlan(plan, policy, {
-      emergencyStopped: await this.emergencyStopActive(userId, policy),
-      serverLiveEnabled: serverLiveEnabledForPlan(plan, policy),
+      emergencyStopped: await this.emergencyStopActive(userId, storedPolicy),
+      serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });

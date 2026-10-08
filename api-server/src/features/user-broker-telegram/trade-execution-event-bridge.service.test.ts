@@ -18,6 +18,10 @@ class FakeTransport implements TelegramTransport {
 class CapturingPortfolioSink implements PortfolioSyncSink {
   readonly events: UserExecutionEvent[] = [];
   async accept(event: UserExecutionEvent) {
+    // The production CanonicalPortfolioSyncSink persists by sourceEventId:
+    // retries after an interrupted outbox stage must not duplicate journal rows.
+    if (this.events.some((row) =>
+      row.userId === event.userId && row.sourceEventId === event.sourceEventId)) return;
     this.events.push(structuredClone(event));
   }
 }
@@ -127,4 +131,26 @@ test('bridge remains user-scoped and cannot expose another user events', async (
     privateApiRequests: 0, ordersSubmitted: 0, ordersCancelled: 0,
   });
   assert.equal(portfolio.events.length, 0);
+});
+
+
+test('canonical background automatic plans retain AUTO_POLICY classification through event bridge', async () => {
+  const trading = new InMemoryTradingRepository();
+  const plan = { ...planFixture(), executionMode: 'automatic' as const };
+  const order = orderFixture(plan);
+  await trading.savePlan(plan);
+  await trading.saveOrder(order);
+  await trading.appendEvent(eventFixture(order, 'auto-filled', 'ACCEPTED', 'FILLED', '2026-08-12T00:00:02.000Z'));
+  const { integrationRepository, service, portfolio } = await linkedService();
+  const bridge = new TradeExecutionEventBridgeService(trading, service);
+  const first = await bridge.syncUser('user-a', 'associate');
+  assert.equal(first.inserted, 1);
+  const item = portfolio.events[0];
+  assert.ok(item);
+  assert.equal(item.executionMethod, 'AUTO_POLICY');
+  assert.equal(item.metadata.approvalSource, 'AUTO_POLICY');
+  const stored = await integrationRepository.getExecutionEvent('user-a', item.id);
+  assert.equal(stored?.executionMethod, 'AUTO_POLICY');
+  const repeated = await bridge.syncUser('user-a', 'associate');
+  assert.equal(repeated.inserted, 0);
 });

@@ -6,6 +6,9 @@ import {
   liveExecutionEnabled,
   livePlanCapabilityDecision,
 } from './trade-automation.service';
+import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
+import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
@@ -492,10 +495,12 @@ export class TradeExecutionService {
     if (!connection?.configured || connection.accountMode !== 'live' || !connection.encryptedCredentials) {
       throw new Error('LIVE_EXECUTION_CONNECTION_NOT_CONFIGURED');
     }
-    if (!connection.lastVerifiedAt || connection.lastErrorCode) {
+    const now = options.now ?? new Date();
+    if (!(isRiskReducingExitPlan(input)
+      ? liveConnectionVerificationAllowsReducingExit(connection, now.getTime())
+      : liveConnectionVerificationFresh(connection, now.getTime()))) {
       throw new Error('LIVE_EXECUTION_CONNECTION_NOT_VERIFIED');
     }
-    const now = options.now ?? new Date();
     const fx = Number(options.fxKrwPerQuoteCurrency ?? 1);
     if (!Number.isFinite(fx) || fx <= 0) throw new Error('LIVE_PREVIEW_FX_REQUIRED');
     const provisional: TradingPlan = {
@@ -807,6 +812,14 @@ export class TradeExecutionService {
       return this.recovery.reconcile(userId, plan, order);
     }
 
+    // Never allow a previously persisted invalid reduce-only cash BUY to
+    // reach even a private provider preflight. Unknown submission intents
+    // above continue through read-only reconciliation instead.
+    if (plan.reduceOnly === true && !isRiskReducingExitPlan(plan)) {
+      return this.automation.transition(order, 'REJECTED', 'REDUCE_ONLY_SIDE_INVALID', {
+        errorCode: 'REDUCE_ONLY_SIDE_INVALID', orderSubmissionAttempted: false,
+      });
+    }
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (plan.accountMode !== 'paper') {
       if (!connection?.configured || !connection.encryptedCredentials) {
@@ -824,13 +837,34 @@ export class TradeExecutionService {
 
     const mockKiwoom = plan.exchange === 'kiwoom' && plan.accountMode === 'mock';
     if (plan.accountMode === 'live') {
-      if (!connection?.lastVerifiedAt || connection.lastErrorCode) {
+      if (!(isRiskReducingExitPlan(plan)
+        ? liveConnectionVerificationAllowsReducingExit(connection)
+        : liveConnectionVerificationFresh(connection))) {
         return this.automation.transition(order, 'REJECTED', 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED', {
           errorCode: 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED',
           orderSubmissionAttempted: false,
         });
       }
       const currentPolicy = await this.repository.getPolicy(userId);
+      // An automatic-origin order must not inherit manual order authority
+      // when a member turns AUTO OFF mid-flight. Explicit risk-reducing exits
+      // remain independently guarded by the provider position preflight.
+      const automaticEntry = plan.executionMode === 'automatic' && !isRiskReducingExitPlan(plan);
+      if (automaticEntry
+        && (currentPolicy.mode !== 'automatic'
+          || !currentPolicy.automaticEnabled
+          || currentPolicy.emergencyStopped
+          || currentPolicy.newEntriesStopped
+          || process.env.TRADING_EMERGENCY_STOP === 'true'
+          || await this.repository.getGlobalEmergencyStop())) {
+        return this.automation.transition(order, 'REJECTED', 'AUTOMATIC_ENTRY_POLICY_REVOKED', {
+          errorCode: 'AUTOMATIC_ENTRY_POLICY_REVOKED',
+          orderSubmissionAttempted: false,
+        });
+      }
+      // Once AUTO mode is enabled, every new order still requires the stronger
+      // AUTO authority gate (even if the plan predates the mode transition).
+      // An AUTO-origin entry with a disabled policy was rejected above.
       const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;
       const capabilityDecision = livePlanCapabilityDecision(plan, 'ORDER_CREATE');
       const currentLiveAuthority = automaticLive
@@ -969,7 +1003,41 @@ export class TradeExecutionService {
     };
   }
 
+  private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
+    if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
+      || isRiskReducingExitPlan(plan)) return;
+    // A provider-side margin/leverage mutation is still a financial mutation,
+    // even if no order POST follows. Enforce this before EACH mutable call,
+    // and recheck after preflight at the actual order intent boundary.
+    const policy = await this.repository.getPolicy(userId);
+    if (policy.mode !== 'automatic' || !policy.automaticEnabled
+      || policy.emergencyStopped || policy.newEntriesStopped
+      || process.env.TRADING_EMERGENCY_STOP === 'true'
+      || await this.repository.getGlobalEmergencyStop()) {
+      throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    }
+    // Recheck the CURRENT member financial ceiling at every provider mutation
+    // boundary, not only at the earlier broker preflight. This prevents a
+    // 525k signed plan surviving an intervening cap tightening or revoked
+    // settlement proof before Bitget margin/leverage or any order POST.
+    const effectivePolicy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, userId, plan, policy,
+    );
+    if (!Number.isFinite(plan.estimatedKrw)
+      || plan.estimatedKrw > Math.min(
+        effectivePolicy.totalCapitalKrw,
+        effectivePolicy.maxOrderKrw,
+        effectivePolicy.maxInstrumentKrw,
+      )) {
+      throw new Error('AUTOMATIC_ENTRY_POLICY_CAP_REVOKED');
+    }
+    if (!await liveEntryArmPresent()) {
+      throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+    }
+  }
+
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
+    await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
     order.submissionAttemptId = submissionAttemptId;
@@ -1034,12 +1102,14 @@ export class TradeExecutionService {
       serverLiveEnabled: liveExecutionEnabled('bitget'),
     });
     if (!plan.reduceOnly && canChangeMarginMode) {
+      await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetMarginMode(credentials, plan.symbol, plan.marginMode ?? 'isolated'), PREFLIGHT_TIMEOUT_MS));
     }
     if (!plan.reduceOnly) {
       const leverage = Number(plan.leverage);
       if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) throw new Error('BITGET_LEVERAGE_LIMIT');
+      await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);
       assertBitgetSuccess(await sendExchangeRequest(BASE_URLS.bitget,
         prepareBitgetLeverage(credentials, plan.symbol, leverage as 2 | 3 | 4 | 5 | 6 | 7), PREFLIGHT_TIMEOUT_MS));
     }

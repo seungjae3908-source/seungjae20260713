@@ -605,6 +605,7 @@ jobs:
               deploySha: String(env.DEPLOY_SHA ?? ''),
               telegramApproved: bool('LIVE_TELEGRAM_ACTIVATION_APPROVED'),
               telegramWorker: bool('TELEGRAM_INTELLIGENCE_WORKER_ENABLED'),
+              personalTelegramWorker: bool('PERSONAL_TELEGRAM_WORKER_ENABLED'),
               live: bool('LIVE_TRADING'),
               auto: bool('AUTO_TRADING'),
               real: bool('REAL_ORDER_ENABLED'),
@@ -632,7 +633,9 @@ jobs:
             allowedProviders.map((provider) => [provider, providers.includes(provider)]),
           );
           const pre = readRuntime();
-          if (pre.status !== 'online' || pre.deploySha !== target || pre.telegramApproved !== pre.telegramWorker) {
+          if (pre.status !== 'online' || pre.deploySha !== target
+            || pre.telegramApproved !== pre.telegramWorker
+            || (pre.telegramApproved && !pre.personalTelegramWorker)) {
             throw new Error('LIVE_TRADING_RUNTIME_IDENTITY_INVALID');
           }
 
@@ -642,6 +645,7 @@ jobs:
                 ...process.env,
                 LIVE_TELEGRAM_ACTIVATION_APPROVED: String(pre.telegramApproved),
                 TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(pre.telegramWorker),
+                PERSONAL_TELEGRAM_WORKER_ENABLED: String(pre.personalTelegramWorker),
                 LIVE_TRADING: 'false',
                 AUTO_TRADING: 'false',
                 REAL_ORDER_ENABLED: 'false',
@@ -700,6 +704,7 @@ jobs:
                 ...process.env,
                 LIVE_TELEGRAM_ACTIVATION_APPROVED: String(pre.telegramApproved),
                 TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(pre.telegramWorker),
+                PERSONAL_TELEGRAM_WORKER_ENABLED: String(pre.personalTelegramWorker),
                 LIVE_TRADING: 'true',
                 AUTO_TRADING: 'false',
                 REAL_ORDER_ENABLED: 'true',
@@ -753,6 +758,7 @@ jobs:
               || post.deploySha !== target
               || post.telegramApproved !== pre.telegramApproved
               || post.telegramWorker !== pre.telegramWorker
+              || post.personalTelegramWorker !== pre.personalTelegramWorker
               || post.live !== true
               || post.auto !== false
               || post.real !== true

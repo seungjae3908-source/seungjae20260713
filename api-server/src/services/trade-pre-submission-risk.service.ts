@@ -1,7 +1,9 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
+import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder,
@@ -136,7 +138,8 @@ export class TradePreSubmissionRiskService {
     else if (input.order.approvedPlanVersion !== planVersion(currentPlan)) blockCodes.push('APPROVAL_VERSION_CHANGED');
 
     const policy = await this.repository.getPolicy(input.userId);
-    const riskReducing = currentPlan.reduceOnly === true;
+    const riskReducing = isRiskReducingExitPlan(currentPlan);
+    if (currentPlan.reduceOnly === true && !riskReducing) blockCodes.push('REDUCE_ONLY_SIDE_INVALID');
     if (!currentPlan.approvedAt) blockCodes.push('APPROVAL_MISSING');
     const approvedAt = Date.parse(currentPlan.approvedAt ?? '');
     const expiresAt = Date.parse(currentPlan.approvalExpiresAt ?? '');
@@ -272,7 +275,13 @@ export class TradePreSubmissionRiskService {
     blockCodes.push(...envelopeDecision.blockCodes);
 
     const refreshedPlan: TradingPlan = { ...currentPlan, marketSnapshot: snapshot };
-    const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, policy, {
+    // Current settled-profit proof must still authorize the growing ceiling
+    // immediately before ANY provider financial mutation. A stale/replayed
+    // signed approval cannot override today's stored member risk limits.
+    const effectivePolicy = await resolveRulePackPilotDynamicCapPolicy(
+      this.repository, input.userId, refreshedPlan, policy, now, snapshot.openPositionCount,
+    );
+    const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, effectivePolicy, {
       emergencyStopped: policy.emergencyStopped
         || process.env.TRADING_EMERGENCY_STOP === 'true'
         || await this.repository.getGlobalEmergencyStop(),
