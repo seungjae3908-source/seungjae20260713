@@ -880,7 +880,9 @@ export function assertCanonicalLiveProviderPositions(
     if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
     if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
     if (Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
-    const matching = plans.filter((plan) => normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
+    const matching = plans.filter((plan) =>
+      plan.exchange === snapshot.provider
+      && normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
     if (matching.length === 0) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
     const declaredSide = String(position.side ?? '').trim().toLowerCase();
     if (declaredSide && matching.some((plan) => plan.exchange === 'bitget')
