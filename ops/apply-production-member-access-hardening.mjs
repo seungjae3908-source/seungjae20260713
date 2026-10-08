@@ -263,7 +263,7 @@ begin
   if exists (
     select 1 from information_schema.routine_privileges
     where specific_schema = 'public'
-      and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable')
+      and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable','is_full_member')
       and grantee in ('PUBLIC','anon','authenticated')
       and privilege_type = 'EXECUTE'
   ) then raise exception 'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'; end if;
@@ -271,10 +271,24 @@ begin
   if exists (
     select 1 from information_schema.routine_privileges
     where specific_schema = 'public'
-      and routine_name in ('current_membership_level','is_approved_member','is_admin','is_full_member')
+      and routine_name in ('current_membership_level','is_approved_member','is_admin')
       and grantee = 'PUBLIC'
       and privilege_type = 'EXECUTE'
   ) then raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'; end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) or not exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee = 'authenticated'
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'; end if;
 
   if (select count(*) from public.profiles) <> current_setting('app.member_profiles_before')::bigint then
     raise exception 'MEMBER_PROFILE_ROWS_CHANGED';
@@ -363,6 +377,7 @@ const artifact = {
   atomic_transaction: true,
   migration_applied: 2,
   security_definer_privileges_locked: true,
+  permission_rpc_least_access: true,
   profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
