@@ -274,3 +274,18 @@ test('invalid batch size fails rather than silently dropping queued candidates',
   );
 });
 
+
+test('clock-skew tolerance never admits candles or periods occurring in the actual future', async () => {
+  const itemWithFutureCandle = queueItem();
+  itemWithFutureCandle.queuedAt = new Date(Date.now() + 120_000).toISOString();
+  itemWithFutureCandle.dataset.backtestInput.candles.at(-1).timestamp = Date.now() + 60_000;
+  const futureCandle = await evaluateFormulaAutoBacktestQueueItemV1(itemWithFutureCandle);
+  assert.equal(futureCandle.state, 'EXCLUDE');
+  assert.equal(futureCandle.reason, 'FORMULA_QUEUE_CANDLE_TIME_INVALID_OR_FUTURE');
+  const itemWithFutureWindow = queueItem();
+  itemWithFutureWindow.queuedAt = new Date(Date.now() + 120_000).toISOString();
+  itemWithFutureWindow.dataset.period.endTime = Date.now() + 60_000;
+  const futureWindow = await evaluateFormulaAutoBacktestQueueItemV1(itemWithFutureWindow);
+  assert.equal(futureWindow.state, 'EXCLUDE');
+  assert.equal(futureWindow.reason, 'FORMULA_QUEUE_PERIOD_INVALID_OR_FUTURE');
+});
