@@ -8,10 +8,26 @@ export type TradeExecutionEventBridgeResult = {
   inserted: number;
   deliveryQueued: number;
   missingReferences: number;
+  /** Only the caller-owned Paper order was scanned; never a user-wide history sweep. */
+  scopedToOrder?: true;
   privateApiRequests: 0;
   ordersSubmitted: 0;
   ordersCancelled: 0;
 };
+
+/** Fail closed on ambiguous selectors and never broaden a targeted replay. */
+export function parseExecutionSyncOrderId(body: unknown): string | null {
+  if (body == null) return null;
+  if (typeof body !== 'object' || Array.isArray(body)) throw new Error('EXECUTION_SYNC_REQUEST_INVALID');
+  const entries = Object.entries(body);
+  if (entries.length === 0) return null;
+  if (entries.length !== 1 || entries[0]?.[0] !== 'orderId') throw new Error('EXECUTION_SYNC_REQUEST_INVALID');
+  const value = entries[0]?.[1];
+  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error('EXECUTION_SYNC_ORDER_ID_INVALID');
+  }
+  return value.toLowerCase();
+}
 
 /**
  * Read-only bridge from the canonical trade_order_events owner into the
@@ -24,8 +40,30 @@ export class TradeExecutionEventBridgeService {
     private readonly integrationService: UserBrokerTelegramService,
   ) {}
 
-  async syncUser(userId: string, membership: MemberTier = 'pending'): Promise<TradeExecutionEventBridgeResult> {
-    const transitions = await this.tradingRepository.listEvents(userId);
+  async syncUser(
+    userId: string,
+    membership: MemberTier = 'pending',
+    options: { orderId?: string } = {},
+  ): Promise<TradeExecutionEventBridgeResult> {
+    const scopedOrderId = options.orderId ?? null;
+    if (scopedOrderId) {
+      // Strictly resolve the authenticated user's OWN Paper order before fan-out.
+      // This does not alter or hide historical immutable source-event conflicts.
+      const ownedOrder = await this.tradingRepository.getOrder(userId, scopedOrderId);
+      if (!ownedOrder || ownedOrder.userId !== userId || ownedOrder.id !== scopedOrderId) {
+        throw new Error('EXECUTION_SYNC_TARGET_NOT_FOUND');
+      }
+      const ownedPlan = await this.tradingRepository.getPlan(userId, ownedOrder.planId);
+      if (!ownedPlan || ownedPlan.userId !== userId || ownedPlan.id !== ownedOrder.planId) {
+        throw new Error('EXECUTION_SYNC_TARGET_NOT_FOUND');
+      }
+      if (ownedPlan.accountMode !== 'paper') throw new Error('EXECUTION_SYNC_TARGET_LIVE_FORBIDDEN');
+    }
+    const allTransitions = await this.tradingRepository.listEvents(userId);
+    const transitions = scopedOrderId
+      ? allTransitions.filter((event) => event.orderId === scopedOrderId && event.userId === userId)
+      : allTransitions;
+    if (scopedOrderId && transitions.length === 0) throw new Error('EXECUTION_SYNC_TARGET_EVENTS_MISSING');
     let mapped = 0;
     let inserted = 0;
     let deliveryQueued = 0;
@@ -65,6 +103,7 @@ export class TradeExecutionEventBridgeService {
       inserted,
       deliveryQueued,
       missingReferences,
+      ...(scopedOrderId ? { scopedToOrder: true as const } : {}),
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,
