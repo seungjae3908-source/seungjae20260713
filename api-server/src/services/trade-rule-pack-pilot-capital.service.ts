@@ -121,6 +121,76 @@ export function deriveRulePackPilotCapitalFromTrades(
   });
 }
 
+export type RulePackPilotEntryGuardInput = Readonly<{
+  pilot: RulePackPilotCapitalState;
+  strategyId: string;
+  symbol: string;
+  signalId: string;
+  estimatedKrw: number;
+  policyMaxOrderKrw: number;
+  openLivePositions: number;
+  nowMs: number;
+}>;
+
+export type RulePackPilotEntryGuardDecision = Readonly<{
+  allowed: boolean;
+  blockers: readonly string[];
+  effectiveOperatingCapitalKrw: number;
+  effectiveMaxEntryKrw: number;
+}>;
+
+export function evaluateRulePackPilotEntryGuard(
+  input: RulePackPilotEntryGuardInput,
+): RulePackPilotEntryGuardDecision {
+  const blockers: string[] = [];
+  const add = (code: string) => { if (!blockers.includes(code)) blockers.push(code); };
+  const operatingCapital = finite(input.pilot.operatingCapitalKrw)
+    ? Math.max(0, input.pilot.operatingCapitalKrw)
+    : 0;
+  const pilotMaxEntry = finite(input.pilot.maxEntryKrw)
+    ? Math.max(0, input.pilot.maxEntryKrw)
+    : 0;
+  const policyMaxOrder = finite(input.policyMaxOrderKrw)
+    ? Math.max(0, input.policyMaxOrderKrw)
+    : 0;
+  const effectiveMaxEntryKrw = Math.min(operatingCapital, pilotMaxEntry, policyMaxOrder);
+
+  if (!isEvidenceBackedAutoStrategyId(input.strategyId)) add('BACKGROUND_FORMULA_AI_PILOT_STRATEGY_REQUIRED');
+  if (!input.pilot.settlementReady || input.pilot.blockers.length > 0) add('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
+  if (!(operatingCapital > 0) || !(effectiveMaxEntryKrw > 0)) add('BACKGROUND_PILOT_CAPITAL_UNAVAILABLE');
+  if (!(finite(input.estimatedKrw) && input.estimatedKrw > 0)
+    || input.estimatedKrw > effectiveMaxEntryKrw) add('BACKGROUND_PILOT_ENTRY_LIMIT');
+  if (input.pilot.dailyLosingTrades >= RULE_PACK_PILOT_PROFILE.maxDailyLosingTrades) {
+    add('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT');
+  }
+  if (input.pilot.dailyRealizedPnlKrw <= -RULE_PACK_PILOT_PROFILE.dailyLossStopKrw) {
+    add('BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT');
+  }
+  if (input.pilot.consecutiveLosses >= RULE_PACK_PILOT_PROFILE.maxConsecutiveLosses) {
+    add('BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT');
+  }
+  if (input.openLivePositions >= RULE_PACK_PILOT_PROFILE.maxConcurrentLivePositions) {
+    add('BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT');
+  }
+
+  const lastLoss = input.pilot.latestLossBySymbol[normalizedSymbol(input.symbol)];
+  if (lastLoss) {
+    if (lastLoss.signalId === input.signalId) add('BACKGROUND_PILOT_FRESH_SIGNAL_REQUIRED');
+    const closedAt = Date.parse(lastLoss.closedAt);
+    if (!Number.isFinite(closedAt)
+      || input.nowMs - closedAt < RULE_PACK_PILOT_PROFILE.lossCooldownMinutes * 60_000) {
+      add('BACKGROUND_PILOT_LOSS_COOLDOWN_ACTIVE');
+    }
+  }
+
+  return Object.freeze({
+    allowed: blockers.length === 0,
+    blockers: Object.freeze(blockers.sort()),
+    effectiveOperatingCapitalKrw: operatingCapital,
+    effectiveMaxEntryKrw,
+  });
+}
+
 function planForBrokerOrder(
   brokerOrderId: string,
   ordersByKey: Map<string, TradingOrder>,
