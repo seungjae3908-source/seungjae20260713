@@ -1258,10 +1258,12 @@ export class MemberAutoTradingBackgroundWorker {
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
       result.liveOrderEligibleMembers = members.filter((member) =>
-        hasCapability(member.profile, 'canPlaceOrders')
+        hasCapability(member.profile, 'canAccessAutoTrading')
+        && hasCapability(member.profile, 'canPlaceOrders')
         && member.policy.mode === 'automatic'
         && member.policy.automaticEnabled
-        && !member.policy.emergencyStopped).length;
+        && !member.policy.emergencyStopped
+        && !member.policy.newEntriesStopped).length;
       const batch = selectRotatingHandoffEntries(
         result.handoffReady ? handoff!.entries : [],
         this.handoffEntryOffset,
