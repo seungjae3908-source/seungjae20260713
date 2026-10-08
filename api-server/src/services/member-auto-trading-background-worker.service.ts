@@ -1685,6 +1685,11 @@ export class MemberAutoTradingBackgroundWorker {
         if (this.liveCycleHardWarmupBlocked) {
           this.liveEntryWarmupComplete = false;
           result.newEntriesFailClosed = true;
+          // Publish effective readiness, not a pre-block witness snapshot.
+          // Otherwise a failed earlier batch is reported ready on a later one.
+          result.liveCycleOrderEligible = false;
+          result.liveCyclePolicyReady = false;
+          result.liveCycleAllFourPolicyReady = false;
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
           this.liveCycleAllFourPolicyReadySeen = false;
