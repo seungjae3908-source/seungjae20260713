@@ -21,6 +21,7 @@ import type {
   UserExecutionEvent,
 } from './user-broker-telegram.types';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
+import { TelegramDeliveryWorker, telegramDeliveryTickConfirmed, userTelegramDeliveryWorkerHealthy } from './user-broker-telegram.worker';
 
 class FakeTelegramTransport implements TelegramTransport {
   readonly sent: Array<{ chatId: string; text: string }> = [];
@@ -373,4 +374,43 @@ test('canonical trading order event maps to user execution event with owner chec
   assert.equal(message.includes('ORDER_FILLED'), false);
   assert.equal(maskBrokerAccount('12'), '****12');
   assert.throws(() => executionEventFromTradingOrder({ ...transition, userId: 'user-b' }, order, plan), /EXECUTION_OWNER_MISMATCH/);
+});
+
+
+test('Telegram runtime health rejects failed, stale and future worker ticks', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const ready = { enabled: true, lastTickAt: new Date(now - 30_000).toISOString(), tickOk: true, errorCode: null };
+  assert.equal(userTelegramDeliveryWorkerHealthy(ready, now), true);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now - 400_000).toISOString() }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now + 10_000).toISOString() }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, tickOk: false }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, enabled: false }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, errorCode: 'TELEGRAM_UNAVAILABLE' }, now), false);
+});
+
+test('Telegram delivery failure stays unhealthy through idle ticks until confirmed success', () => {
+  const failed = { sent: 0, retryScheduled: 1, deadLetter: 0 };
+  const idle = { sent: 0, retryScheduled: 0, deadLetter: 0 };
+  const sent = { sent: 1, retryScheduled: 0, deadLetter: 0 };
+  assert.equal(telegramDeliveryTickConfirmed(true, failed), false);
+  assert.equal(telegramDeliveryTickConfirmed(false, idle), false);
+  assert.equal(telegramDeliveryTickConfirmed(false, sent), true);
+  assert.equal(telegramDeliveryTickConfirmed(true, { sent: 1, retryScheduled: 0, deadLetter: 1 }), false);
+});
+
+test('overlapping Telegram delivery tick cannot overwrite the in-flight health', async () => {
+  let complete!: (result: { processed: boolean; state: 'SENT' }) => void;
+  const pending = new Promise<{ processed: boolean; state: 'SENT' }>((resolve) => { complete = resolve; });
+  const worker = new TelegramDeliveryWorker(
+    { async listDue() { return [{ userId: 'user-a', id: 'delivery-a' }]; } },
+    { async processDelivery() { return pending; } } as unknown as UserBrokerTelegramService,
+    1,
+  );
+  const first = worker.runOnce();
+  const overlap = await worker.runOnce();
+  assert.equal(overlap.overlapSkipped, true);
+  complete({ processed: true, state: 'SENT' });
+  const done = await first;
+  assert.equal(done.overlapSkipped, false);
+  assert.equal(done.sent, 1);
 });
