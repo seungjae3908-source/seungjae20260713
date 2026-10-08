@@ -5,6 +5,7 @@ import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import {
   deriveRulePackPilotCapitalFromTrades,
   deriveRulePackPilotExecutionPolicy,
+  verifiedRulePackKrwSettlement,
   evaluateRulePackPilotEntryGuard,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
@@ -257,4 +258,27 @@ test('five losing trades in Asia/Seoul day halt entries; previous-KST-day loss d
   assert.equal(result.dailyLosingTrades, 5);
   assert.ok(decision(result, { estimatedKrw: 20_000, nowMs: now.getTime() })
     .blockers.includes('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT'));
+});
+test('realized capital admits KRW net after fees/tax, never estimated foreign FX or unfunded futures PnL', () => {
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'KR_STOCK', currency: 'KRW', grossPnl: 50_500, fees: 300, tax: 200,
+  }), { ok: true, netPnlKrw: 50_000 });
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'CRYPTO_SPOT', currency: 'KRW', grossPnl: 51_000, fees: 1_000, tax: null,
+  }), { ok: true, netPnlKrw: 50_000 });
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'US_STOCK', currency: 'USD', grossPnl: 50, fees: 1, tax: 0,
+  }), { ok: false, code: 'PILOT_CAPITAL_SETTLEMENT_KRW_FX_REQUIRED' });
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'CRYPTO_FUTURES', currency: 'USDT', grossPnl: 100, fees: 1, tax: 0,
+  }), { ok: false, code: 'PILOT_CAPITAL_FUTURES_FUNDING_SETTLEMENT_REQUIRED' });
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'KR_STOCK', currency: 'KRW', grossPnl: 50_000, fees: null, tax: 0,
+  }), { ok: false, code: 'PILOT_CAPITAL_FEE_EVIDENCE_UNAVAILABLE' });
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'KR_STOCK', currency: 'KRW', grossPnl: 50_000, fees: 100, tax: null,
+  }), { ok: false, code: 'PILOT_CAPITAL_KR_TAX_EVIDENCE_UNAVAILABLE' });
+  assert.deepEqual(verifiedRulePackKrwSettlement({
+    market: 'CRYPTO_SPOT', currency: 'KRW', grossPnl: 50_000, fees: -1, tax: 0,
+  }), { ok: false, code: 'PILOT_CAPITAL_FEE_EVIDENCE_UNAVAILABLE' });
 });
