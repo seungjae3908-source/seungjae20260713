@@ -62,12 +62,14 @@ if (staticMode) {
   for (const marker of [
     'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT',
     'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT',
+    'MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING',
     'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID',
     'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT',
     'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID',
     'revoke all privileges on table public.profiles from public, anon, authenticated',
     'grant select on table public.profiles to authenticated',
     'revoke all on function %s from public, anon, authenticated',
+    "grant execute on function %s to authenticated",
   ]) requireText(securityMigration, marker, marker);
 
   if (/(?:placeOrder|cancelOrder|amendOrder|transfer\(|withdraw\()/i.test(apply)) {
