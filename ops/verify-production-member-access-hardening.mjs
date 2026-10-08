@@ -24,6 +24,10 @@ if (staticMode) {
     path.join(root, 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql'),
     'utf8',
   );
+  const securityMigration = readFileSync(
+    path.join(root, 'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql'),
+    'utf8',
+  );
 
   for (const marker of [
     "const SCHEMA_VERSION = 'production-member-access-hardening-v1'",
@@ -54,6 +58,12 @@ if (staticMode) {
     "public.current_membership_level() in ('associate', 'regular', 'admin')",
   ]) requireText(migration, marker, marker);
 
+  for (const marker of [
+    'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT',
+    'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT',
+    'revoke all on function %s from public, anon, authenticated',
+  ]) requireText(securityMigration, marker, marker);
+
   if (/(?:placeOrder|cancelOrder|amendOrder|transfer\(|withdraw\()/i.test(apply)) {
     fail('production member DB gate must not import or call trading mutations');
   }
@@ -68,7 +78,8 @@ for (const [key, value] of Object.entries({
   status: 'passed',
   production_project_match: true,
   atomic_transaction: true,
-  migration_applied: 1,
+  migration_applied: 2,
+  security_definer_privileges_locked: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
   associate_journal_read_only: true,
