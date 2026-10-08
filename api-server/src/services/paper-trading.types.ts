@@ -27,7 +27,7 @@ export type PaperBacktestCandidateIdentity = Readonly<{
   market: string;
   symbol: string;
   timeframe: string;
-  side: 'LONG' | 'SHORT';
+  side: 'BUY' | 'LONG' | 'SHORT';
   leverage: number;
   riskPolicyRef: string;
   costPolicyRef: string;
