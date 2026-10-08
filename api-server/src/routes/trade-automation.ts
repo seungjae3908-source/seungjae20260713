@@ -8,6 +8,8 @@ import { TradeCancelReconciliationService } from '../services/trade-cancel-recon
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
+import { readMemberAutoTradingBackgroundRuntimeHealth } from '../services/member-auto-trading-background-worker.service';
+import { readUserTelegramDeliveryWorkerHealth } from '../features/user-broker-telegram/user-broker-telegram.worker';
 import {
   buildSplitLegRevalidationEvidence,
   TradeSplitOrderExecutionService,
@@ -1123,6 +1125,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       credentialVault: vaultStatus,
       liveExecutionReadiness,
       liveAutomaticReadinessByMarket,
+      autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth(),
+      userTelegramDelivery: readUserTelegramDeliveryWorkerHealth(),
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
