@@ -313,11 +313,27 @@ begin
     select 1 from information_schema.routine_privileges
     where specific_schema = 'public'
       and routine_name in ('current_membership_level','is_approved_member','is_admin')
-      and grantee = 'PUBLIC'
+      and grantee in ('PUBLIC','anon')
       and privilege_type = 'EXECUTE'
   ) then
     raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT';
   end if;
+  if exists (
+    select required.routine_name
+    from (
+      values ('current_membership_level'), ('is_approved_member'), ('is_admin')
+    ) as required(routine_name)
+    where not exists (
+      select 1 from information_schema.routine_privileges p
+      where p.specific_schema = 'public'
+        and p.routine_name = required.routine_name
+        and p.grantee = 'authenticated'
+        and p.privilege_type = 'EXECUTE'
+    )
+  ) then
+    raise exception 'MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING';
+  end if;
+
   if exists (
     select 1 from information_schema.routine_privileges
     where specific_schema = 'public'
