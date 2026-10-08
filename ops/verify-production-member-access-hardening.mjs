@@ -30,7 +30,7 @@ if (staticMode) {
   );
 
   for (const marker of [
-    "const SCHEMA_VERSION = 'production-member-access-hardening-v1'",
+    "const SCHEMA_VERSION = 'production-member-access-hardening-v2'",
     "const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq'",
     'approved_target_sha_invalid',
     'production_database_project_mismatch',
@@ -78,7 +78,7 @@ if (staticMode) {
 if (!artifactPath) fail('artifact path required');
 const artifact = JSON.parse(readFileSync(path.resolve(artifactPath), 'utf8'));
 for (const [key, value] of Object.entries({
-  schemaVersion: 'production-member-access-hardening-v1',
+  schemaVersion: 'production-member-access-hardening-v2',
   status: 'passed',
   production_project_match: true,
   atomic_transaction: true,
