@@ -353,3 +353,20 @@ test('stale verification exception cannot be used by a reduceOnly cash BUY', () 
   assert.equal(isRiskReducingExitPlan({ reduceOnly: false, exchange: 'bitget', side: 'short' }), false);
   assert.equal(isRiskReducingExitPlan({ reduceOnly: true, exchange: 'bitget', side: 'short' }), true);
 });
+
+
+test('automatic live order cannot post after exact-SHA entry arm is absent', async () => {
+  const { repository, approved, order } = await setup();
+  const automatic = {
+    ...approved,
+    executionMode: 'automatic' as const,
+    signalReasons: [...approved.signalReasons, 'CANONICAL_LIVE_AUTO_HANDOFF'],
+  };
+  await repository.savePlan(automatic);
+  const provider = installUpbitMock(100_000);
+  const result = await new TradeExecutionService(repository).execute(USER_ID, automatic, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+  assert.equal(result.submissionStartedAt ?? null, null);
+  assert.equal(provider.counts().actualOrderPosts, 0);
+});
