@@ -1278,6 +1278,45 @@ router.post('/resume', async (req: AuthenticatedRequest, res) => {
   } catch (error) { return errorResponse(res, error); }
 });
 
+router.post('/admin/pilot-stage', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (req.body?.stage !== 'formula-ai-exception') {
+      return res.status(400).json({ ok: false, error: 'FORMULA_AI_PILOT_STAGE_REQUIRED' });
+    }
+    if (req.body?.confirmation !== 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT') {
+      return res.status(409).json({
+        ok: false,
+        error: 'FORMULA_AI_PILOT_CONFIRMATION_REQUIRED',
+        automaticTradingEnabledByThisRequest: false,
+      });
+    }
+    if (process.env.AUTO_TRADING === 'true'
+      || process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+      || process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true') {
+      return res.status(409).json({
+        ok: false,
+        error: 'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF',
+        automaticTradingEnabledByThisRequest: false,
+      });
+    }
+    const current = await repository.getPolicy(userId);
+    const policy = normalizeTradingPolicy({
+      ...current,
+      pilotStage: 'formula-ai-exception',
+      automaticEnabled: false,
+    });
+    await repository.savePolicy(userId, policy);
+    return res.json({
+      ok: true,
+      policy,
+      pilotStage: policy.pilotStage,
+      automaticTradingEnabledByThisRequest: false,
+      liveTradingEnabledByThisRequest: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
 router.post('/connections/:exchange/reuse-readonly', async (req: AuthenticatedRequest, res) => {
   try {
     if (!requireLiveOrderCapability(req, res)) return;
