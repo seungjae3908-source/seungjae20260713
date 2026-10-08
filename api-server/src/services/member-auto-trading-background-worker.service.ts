@@ -14,6 +14,7 @@ import {
 } from './trade-automation.repository';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
@@ -22,6 +23,7 @@ import {
 } from './paper-journal-supabase.repository';
 import type { PaperJournalRepository } from './paper-journal.types';
 import type {
+  ExchangeConnection,
   TradingAssetClass,
   TradingExchange,
   TradingOrder,
@@ -400,6 +402,20 @@ function automaticPolicyHasAllFourMarkets(policy: TradingPolicy) {
     && policy.exchangeEnabled.kiwoom
     && policy.exchangeEnabled.upbit
     && policy.exchangeEnabled.bitget;
+}
+
+export function liveAllFourConnectionVerificationReady(
+  policy: TradingPolicy,
+  connections: readonly ExchangeConnection[],
+  nowMs = Date.now(),
+) {
+  if (!automaticPolicyHasAllFourMarkets(policy)) return false;
+  const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];
+  return required.every((exchange) =>
+    liveConnectionVerificationFresh(
+      connections.find((connection) => connection.exchange === exchange),
+      nowMs,
+    ));
 }
 
 function validateFormulaAiPilotEntry(
@@ -1880,11 +1896,20 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     if (!profile) return false;
 
     const policy = normalizeTradingPolicy(policyRow.payload as Partial<TradingPolicy>);
-    const persistentGlobalStop = await createServiceRoleTradingRepository(userId).getGlobalEmergencyStop();
+    const nowMs = Date.now();
+    const repository = createServiceRoleTradingRepository(userId, this.client);
+    const paperRepository = createServiceRolePaperJournalRepository(userId, this.client);
+    const [persistentGlobalStop, connections, runtime] = await Promise.all([
+      repository.getGlobalEmergencyStop(),
+      repository.getConnections(userId),
+      memberRuntimeState(userId, repository, paperRepository, nowMs),
+    ]);
     return hasCapability(profile, 'canAccessAutoTrading')
       && hasCapability(profile, 'canPlaceOrders')
       && hasCapability(profile, 'canAccessFutures')
       && automaticPolicyHasAllFourMarkets(policy)
+      && liveAllFourConnectionVerificationReady(policy, connections, nowMs)
+      && runtime.paperAccountReady
       && !persistentGlobalStop
       && process.env.TRADING_EMERGENCY_STOP !== 'true'
       // A globally healthy Telegram worker cannot attest a specific user's
