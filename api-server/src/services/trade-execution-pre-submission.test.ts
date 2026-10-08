@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
+import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
   marketIntelligenceNotAvailable,
@@ -296,4 +297,36 @@ test('approval price drift blocks before order test, intent, and actual order PO
   assert.equal(provider.counts().actualOrderPosts, 0);
   const expiredPlan = await repository.getPlan(USER_ID, approved.id);
   assert.equal(expiredPlan?.state, 'EXPIRED');
+});
+
+
+test('saved live credential verification expires and rejects future timestamps', () => {
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  const connection = {
+    configured: true, accountMode: 'live' as const, lastErrorCode: null,
+    lastVerifiedAt: new Date(now - 60_000).toISOString(),
+  };
+  assert.equal(liveConnectionVerificationFresh(connection, now), true);
+  assert.equal(liveConnectionVerificationFresh({ ...connection, lastVerifiedAt: new Date(now - 31 * 24 * 60 * 60_000).toISOString() }, now), false);
+  assert.equal(liveConnectionVerificationFresh({ ...connection, lastVerifiedAt: new Date(now + 6_000).toISOString() }, now), false);
+  assert.equal(liveConnectionVerificationFresh({ ...connection, lastErrorCode: 'REVOKED' }, now), false);
+  assert.equal(liveConnectionVerificationFresh({ ...connection, lastVerifiedAt: 'bad-date' }, now), false);
+});
+
+test('stale credential verification blocks live order before any provider request', async () => {
+  const { repository, approved, order } = await setup();
+  const configured = await repository.getConnection(USER_ID, 'upbit');
+  assert.ok(configured);
+  await repository.saveConnection({
+    ...configured,
+    lastVerifiedAt: new Date(Date.now() - 31 * 24 * 60 * 60_000).toISOString(),
+  });
+  const provider = installUpbitMock(100_000);
+  const execution = new TradeExecutionService(repository);
+  const result = await execution.execute(USER_ID, approved, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'LIVE_EXECUTION_CONNECTION_NOT_VERIFIED');
+  assert.equal(provider.counts().actualOrderPosts, 0);
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().openOrderReads, 0);
 });
