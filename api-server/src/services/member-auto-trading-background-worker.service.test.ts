@@ -47,6 +47,7 @@ function policy(): TradingPolicy {
 function allFourPolicy(): TradingPolicy {
   return normalizeTradingPolicy({
     ...policy(),
+    pilotStage: 'validated',
     marketEnabled: {
       domestic_stock: true,
       us_stock: true,
