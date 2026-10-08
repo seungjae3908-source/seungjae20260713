@@ -831,12 +831,23 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal((lifecycleEvents[0]?.metadata?.safety as any).executionAuthority, 'NONE');
   assert.equal((lifecycleEvents[0]?.metadata?.safety as any).economicSampleCredit, 0);
 
+  const riskEvidence = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, await repository.listOrders(USER), await repository.listPlans(USER),
+    nowMs + 1_000, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
   const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
   assert.equal((await repository.listOrders(USER)).length, 1);
   assert.equal(second.createdPlans, 0);
-  assert.ok(second.duplicates >= 1);
+  if (riskEvidence.ready) {
+    assert.ok(second.duplicates >= 1, 'verified Paper replay must remain idempotent');
+    assert.equal(second.lifecycleIdempotent, 1);
+  } else {
+    assert.equal(second.newEntriesFailClosed, true,
+      'unverified Paper risk must stop fresh evaluations, including replay');
+    assert.equal(second.lifecycleIdempotent, 0);
+    assert.ok(second.blocked >= 1);
+  }
   assert.equal(second.positionLifecycles, 0);
-  assert.equal(second.lifecycleIdempotent, 1);
   assert.equal((await repository.listEvents(USER))
     .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED').length, 1);
   assert.equal(second.liveOrders, 0);
