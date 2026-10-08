@@ -397,7 +397,9 @@ const mount="\n\n// Read pre-existing sanitized research only; the nested worksp
 let current=git('show','HEAD:api-server/src/routes/index.ts');
 const mainRoute=git('show',`${MAIN}:api-server/src/routes/index.ts`);
 const memberAccessContractChanged=changed.some((p)=>(
- memberAccessReviewed.includes(p) && !formulaAiDriftReviewed.includes(p)
+ memberAccessReviewed.includes(p)
+ && !formulaAiDriftReviewed.includes(p)
+ && !automaticTradingDriftReviewed.includes(p)
 ));
 if(memberAccessContractChanged){
  const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
