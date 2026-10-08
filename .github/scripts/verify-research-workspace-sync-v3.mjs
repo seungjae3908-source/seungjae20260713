@@ -267,6 +267,7 @@ const memberAccessReviewed=[
  'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
  'stock-analyzer/e2e/account-touch-korean-ui.spec.ts',
  'stock-analyzer/e2e/admin-read-timeout-contract.spec.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
  'stock-analyzer/e2e/account-connection-credentials.spec.ts',
  'stock-analyzer/e2e/production-member-readonly-qa.spec.ts',
  'stock-analyzer/playwright.production-member.config.ts',
