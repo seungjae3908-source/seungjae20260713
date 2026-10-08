@@ -147,6 +147,26 @@ export function automaticPaperWalletBootstrapReadiness(
  * Telegram/journal outbox. Existing Live auto positions are always included
  * so a restart never hides their canonical execution events.
  */
+/**
+ * Wallet epoch must come from the DB-owned row.created_at. The payload's
+ * createdAt is browser supplied and must never authorize a different replay
+ * interval or hide historical Paper fills.
+ */
+export function automaticPaperWalletServerEpochMs(
+  records: readonly StoredPaperJournalRecord[],
+  nowMs: number,
+): number | null {
+  const wallets = records.filter((row) =>
+    row.kind === 'account' && row.id === AUTOMATIC_PAPER_ACCOUNT_ID && row.deletedAt == null);
+  if (wallets.length !== 1 || !Number.isFinite(nowMs)) return null;
+  const createdAtMs = Date.parse(wallets[0]!.createdAt);
+  const updatedAtMs = Date.parse(wallets[0]!.serverUpdatedAt);
+  if (!Number.isFinite(createdAtMs) || !Number.isFinite(updatedAtMs)
+    || createdAtMs < 0 || createdAtMs > nowMs + 5_000
+    || updatedAtMs < createdAtMs || updatedAtMs > nowMs + 5_000) return null;
+  return createdAtMs;
+}
+
 export function automaticExecutionProjectionOrderIds(
   plans: readonly TradingPlan[],
   orders: readonly TradingOrder[],
@@ -163,9 +183,14 @@ export function automaticExecutionProjectionOrderIds(
       continue;
     }
     if (plan.accountMode !== 'paper' || paperWalletOpenedAtMs === null) continue;
-    const createdMs = Date.parse(order.createdAt);
-    if (Number.isFinite(createdMs) && createdMs >= paperWalletOpenedAtMs
-      && createdMs <= nowMs + 5_000) selected.add(order.id);
+    // The plan, not only its retry/replacement order, must belong to the new
+    // wallet epoch. A post-epoch order on an old plan stays in legacy audit.
+    const planCreatedMs = Date.parse(plan.createdAt);
+    const orderCreatedMs = Date.parse(order.createdAt);
+    if (Number.isFinite(planCreatedMs) && planCreatedMs >= paperWalletOpenedAtMs
+      && planCreatedMs <= nowMs + 5_000
+      && Number.isFinite(orderCreatedMs) && orderCreatedMs >= paperWalletOpenedAtMs
+      && orderCreatedMs <= nowMs + 5_000) selected.add(order.id);
   }
   return [...selected].sort();
 }
@@ -782,12 +807,8 @@ async function memberRuntimeState(
   ]);
   const automaticEquity = paperResult.validRead
     ? selectAutomaticPaperAccountEquity(paperResult.records) : null;
-  const walletRecord = paperResult.validRead ? paperResult.records.find((row) =>
-    row.kind === 'account' && row.id === AUTOMATIC_PAPER_ACCOUNT_ID && row.deletedAt == null) : null;
-  const wallet = walletRecord ? record(walletRecord.payload) : null;
-  const openedAtMs = Date.parse(String(wallet?.createdAt ?? ''));
-  const paperWalletOpenedAtMs = Number.isFinite(openedAtMs)
-    && openedAtMs >= 0 && openedAtMs <= nowMs + 5_000 ? openedAtMs : null;
+  const paperWalletOpenedAtMs = paperResult.validRead
+    ? automaticPaperWalletServerEpochMs(paperResult.records, nowMs) : null;
   // No epoch means new orders cannot safely be distinguished from old QA fills.
   const paperAccountReady = automaticEquity != null && paperWalletOpenedAtMs !== null;
   const equity = automaticEquity ?? 0;
