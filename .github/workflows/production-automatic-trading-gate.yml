@@ -18,6 +18,8 @@ on:
       - ops/verify-production-paper-forward-readiness.mjs
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-automation-policy-guard.service.ts
+      - api-server/src/services/trade-automation-policy-guard.service.test.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
       - api-server/src/routes/trade-automation.smoke.test.ts
       - api-server/src/routes/trade-automation.ts
