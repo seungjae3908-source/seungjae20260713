@@ -428,7 +428,9 @@ const memberAccessContractChanged=changed.some((p)=>(
  && !formulaAiDriftReviewed.includes(p)
  && !automaticTradingDriftReviewed.includes(p)
 ));
-if(memberAccessContractChanged){
+const memberAccessRouteContractChanged=memberAccessContractChanged
+ && changed.includes('api-server/src/routes/index.ts');
+if(memberAccessRouteContractChanged){
  const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
   const aiChartPublicRead = req.method === 'GET'
     && (
