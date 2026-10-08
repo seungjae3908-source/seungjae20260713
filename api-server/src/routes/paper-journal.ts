@@ -8,6 +8,7 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
+  automaticPaperLegacyEpochIsolationReadiness,
 } from '../services/member-auto-trading-background-worker.service';
 import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
 import {
@@ -294,7 +295,15 @@ export function createPaperJournalRouter(
         const bootstrap = automaticPaperWalletBootstrapReadiness(
           canonical.orders, canonical.plans,
         );
-        if (existingPaper.length > 0 || !bootstrap.safeToInitialize) {
+        // An explicit new campaign can isolate historic PAPER-ONLY QA fills,
+        // but never close, delete or fabricate those legacy records.
+        const newEpochApproved = body?.legacyEpochConfirmation ===
+          'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY';
+        const isolationSafe = newEpochApproved
+          && automaticPaperLegacyEpochIsolationReadiness(
+            canonical.orders, canonical.plans, existingPaper, now().getTime(),
+          ).safeToIsolate;
+        if ((existingPaper.length > 0 || !bootstrap.safeToInitialize) && !isolationSafe) {
           throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_HISTORY_RECONCILIATION_REQUIRED',
             '기존 모의거래 체결·일지·계좌를 보존하기 위해 새 원금 설정을 차단했습니다.', 409);
         }

@@ -392,3 +392,46 @@ test('journal routes perform zero external AI or exchange network calls', async 
     assert.equal(outbound, 0);
   } finally { globalThis.fetch = nativeFetch; await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
+
+test('historic Paper-only QA data requires explicit new epoch acknowledgment and remains unchanged', async () => {
+  const earlier = new Date(NOW.getTime() - 3 * 60_000).toISOString();
+  const repository = createRepository();
+  await repository.upsertRecord(USER, {
+    kind: 'journal', id: 'historic-qa-entry', version: 1,
+    updatedAt: earlier, deletedAt: null,
+    payload: { source: 'APP_PAPER', status: 'FILLED', positionEffect: 'OPEN' },
+  }, earlier);
+  const history = {
+    plans: [{ id: 'historic-qa-plan', userId: USER,
+      accountMode: 'paper', executionMode: 'automatic',
+      reduceOnly: false, createdAt: earlier }],
+    orders: [{ id: 'historic-qa-fill', userId: USER,
+      planId: 'historic-qa-plan', state: 'FILLED',
+      filledQuantity: 0, feeAmount: null, createdAt: earlier }],
+  };
+  const { server, baseUrl } = await startServer({ repository, automaticPaperHistory: history });
+  try {
+    const send = async (body: unknown) => fetch(baseUrl + '/api/paper-journal/sync', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const blocked = await send(automaticPaperWalletSetup());
+    assert.equal(blocked.status, 409);
+    assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
+    const request = {
+      ...automaticPaperWalletSetup(),
+      idempotencyKey: 'isolated-paper-campaign-01',
+      legacyEpochConfirmation: 'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY',
+    };
+    const created = await send(request);
+    assert.equal(created.status, 200);
+    const first = await safeJson(created);
+    assert.equal(first.orderSubmitted, false);
+    assert.equal(first.exchangeRequestSent, false);
+    assert.equal(first.uploaded.length, 1);
+    assert.ok(await repository.getRecord(USER, 'journal', 'historic-qa-entry'));
+    const second = await send({ ...request, idempotencyKey: 'isolated-paper-campaign-02' });
+    assert.equal(second.status, 409);
+    assert.ok(await repository.getRecord(USER, 'journal', 'historic-qa-entry'));
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});

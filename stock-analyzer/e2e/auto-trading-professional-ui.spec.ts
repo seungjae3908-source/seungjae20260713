@@ -120,6 +120,9 @@ test('automatic Paper wallet requires explicit simulated-only setup and never tr
   const page = source('src/pages/auto-trading.tsx');
   const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
   expect(page).toContain('data-testid="automatic-paper-wallet-readiness"');
+  expect(page).toContain('data-testid="prepare-isolated-automatic-paper-epoch"');
+  expect(page).toContain('START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY');
+  expect(page).toContain('과거 기록 보존 후 신규 50만원 모의계좌 준비');
   expect(page).toContain('data-testid="prepare-automatic-paper-account"');
   expect(page).toContain('AUTO_PAPER_INITIAL_KRW = 500_000');
   expect(page).toContain('await syncJournalRecords({');
