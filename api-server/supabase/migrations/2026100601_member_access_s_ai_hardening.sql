@@ -313,6 +313,13 @@ begin
     else p_membership_expires_at
   end;
 
+  if v_next_active
+     and v_next_tier in ('associate', 'regular')
+     and v_next_expiry is not null
+     and v_next_expiry <= v_now then
+    raise exception using errcode = 'P0001', message = 'MEMBER_EXPIRY_INVALID';
+  end if;
+
   v_next_role := case v_next_tier
     when 'admin' then 'admin'
     when 'associate' then 'associate'
