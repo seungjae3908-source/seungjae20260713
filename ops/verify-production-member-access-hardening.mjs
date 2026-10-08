@@ -61,6 +61,7 @@ if (staticMode) {
   for (const marker of [
     'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT',
     'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT',
+    'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID',
     'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT',
     'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID',
     'revoke all privileges on table public.profiles from public, anon, authenticated',
@@ -84,6 +85,7 @@ for (const [key, value] of Object.entries({
   atomic_transaction: true,
   migration_applied: 2,
   security_definer_privileges_locked: true,
+  permission_rpc_least_access: true,
   profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
