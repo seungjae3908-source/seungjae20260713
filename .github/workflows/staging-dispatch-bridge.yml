@@ -39,10 +39,12 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      ((github.event.issue.number == 23 &&
+        github.event.issue.title == 'Staging Readiness Control') ||
+       (github.event.issue.number == 1555 &&
+        github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02')) &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-staging ')
@@ -74,8 +76,14 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
           set -Eeuo pipefail
-          [[ "$ISSUE_NUMBER" == "23" ]] || { echo 'Unauthorized control issue.' >&2; exit 1; }
-          [[ "$ISSUE_TITLE" == "Staging Readiness Control" ]] || { echo 'Unexpected control issue title.' >&2; exit 1; }
+          if [[ "$ISSUE_NUMBER" == "23" ]]; then
+            [[ "$ISSUE_TITLE" == "Staging Readiness Control" ]] || { echo 'Unexpected legacy control issue title.' >&2; exit 1; }
+          elif [[ "$ISSUE_NUMBER" == "1555" ]]; then
+            [[ "$ISSUE_TITLE" == "Staging Readiness Control — Rollover 2026-10-02" ]] || { echo 'Unexpected rollover control issue title.' >&2; exit 1; }
+          else
+            echo 'Unauthorized control issue.' >&2
+            exit 1
+          fi
           [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]] || { echo 'Only the repository owner may dispatch staging.' >&2; exit 1; }
           [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]] || { echo 'Comment author is not the repository owner.' >&2; exit 1; }
           node <<'NODE'
@@ -290,10 +298,12 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
-      github.event.issue.number == 23 &&
+      ((github.event.issue.number == 23 &&
+        github.event.issue.title == 'Staging Readiness Control') ||
+       (github.event.issue.number == 1555 &&
+        github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02')) &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
-      github.event.issue.title == 'Staging Readiness Control' &&
       github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/run-staging-account-readonly ')

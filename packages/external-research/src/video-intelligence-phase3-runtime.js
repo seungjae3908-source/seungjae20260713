@@ -84,6 +84,7 @@ function sanitizeRecord(record) {
     language: source.language ?? null,
     durationSec: source.durationSec ?? null,
     transcriptStatus: source.transcriptStatus ?? 'UNKNOWN',
+    contentAccessStatus: source.contentAccessStatus ?? 'UNKNOWN',
     captionsKnownPresent: metadata.captionsKnownPresent ?? null,
     sourceTrustTier: record?.sourceTrustTier ?? 'UNKNOWN',
     contentAuthority: 'UNTRUSTED_EXTERNAL_DATA',
@@ -134,6 +135,8 @@ export function createPublicVideoDiscoveryRuntimeV3({
         relevanceLanguage: options.relevanceLanguage ?? null,
         regionCode: options.regionCode ?? null,
         requireCaptions: options.requireCaptions === true,
+        order: options.order ?? 'relevance',
+        publishedAfter: options.publishedAfter ?? null,
         discoveryReason: options.discoveryReason ?? 'PHASE3_PUBLIC_PROVIDER_RUNTIME_READ_ONLY',
       });
       return freeze({
@@ -171,6 +174,8 @@ export async function runPublicVideoDiscoveryV3(options = {}) {
     relevanceLanguage: options.relevanceLanguage,
     regionCode: options.regionCode,
     requireCaptions: options.requireCaptions,
+    order: options.order,
+    publishedAfter: options.publishedAfter,
     discoveryReason: options.discoveryReason,
     economicEvidenceCredit: 0,
     profitabilityCredit: 0,

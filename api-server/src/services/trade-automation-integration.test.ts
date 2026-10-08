@@ -13,6 +13,8 @@ import {
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
+import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
   SPOT_LIVE_HARD_DENIED_CAPABILITIES,
   spotLiveCapabilityDecision,
@@ -301,6 +303,20 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
 });
 
 test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite duplicate, and keeps reduce-only explicit', () => {
+  for (const leverage of [2, 3, 4, 5, 6, 7] as const) {
+    assert.equal(
+      normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      leverage,
+    );
+  }
+  assert.throws(
+    () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 8 as 7 }),
+    /BITGET_LEVERAGE_POLICY_INVALID/,
+  );
+  assert.throws(
+    () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 as 2 }),
+    /BITGET_LEVERAGE_POLICY_INVALID/,
+  );
   const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 });
   const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
     quoteAmount: null, estimatedKrw: 100_000, leverage: 8, marginMode: 'isolated',
@@ -1016,7 +1032,18 @@ test('paper execution has zero outbound calls and restart scan marks an accepted
   try {
     const executed = await new TradeExecutionService(repository).execute(USER_A, approved, order);
     assert.equal(executed.state, 'FILLED');
+    assert.equal(executed.filledQuantity, 1);
+    assert.equal(executed.averageFillPrice, 100_000);
     assert.equal(outbound, 0);
+    const payloads = await readTradeAutomationJournalPayloads(repository, USER_A);
+    const journal = buildUnifiedTradeJournal(payloads, {
+      range: '30D',
+      source: 'APP_PAPER',
+      strategy: 'breakout-v1',
+    });
+    assert.equal(journal.trades.length, 1);
+    assert.equal(journal.trades[0]?.strategy, 'breakout-v1');
+    assert.deepEqual(journal.trades[0]?.canonicalLineage?.signalIds, ['signal-1']);
   } finally {
     globalThis.fetch = nativeFetch;
     if (previous == null) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
