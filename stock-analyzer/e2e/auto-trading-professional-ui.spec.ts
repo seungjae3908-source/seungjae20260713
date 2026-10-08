@@ -136,6 +136,13 @@ test('Paper wallet initialization is blocked by the current server-owned histori
   const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
   expect(page).toContain("authorizedFetch('/api/trade-automation/status', { signal })");
   expect(page).toContain('body.automaticPaperWalletBootstrap?.safeToInitialize === true');
+  expect(page).toContain('data-testid="automatic-paper-history-audit"');
+  expect(page).toContain('walletAudit.missingFilledQuantityEvidence');
+  expect(page).toContain('walletAudit.missingFeeEvidence');
+  expect(page).toContain('data-testid="automatic-current-risk-policy"');
+  expect(page).toContain('policy.totalCapitalKrw.toLocaleString');
+  expect(page).toContain('policy.bitgetLeverage');
+  expect(page).toContain('이 화면에서 운용 한도를 변경하지 않습니다.');
   expect(page).toContain("return anyRows || !historySafe ? 'blocked' : 'missing';");
   expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED');
   expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
