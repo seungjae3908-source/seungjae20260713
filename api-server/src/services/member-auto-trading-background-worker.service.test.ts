@@ -14,8 +14,10 @@ import {
   resolveMemberStockBroker,
   readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
+  selectRotatingHandoffEntries,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
+import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 
@@ -949,10 +951,11 @@ test('worker failure clears partial rotation readiness before the recovery cycle
     assert.equal(partial.liveEntryWarmupComplete, false);
 
     failHandoff = true;
-    await assert.rejects(
-      () => withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000))),
-      /ROTATION_TEST_HANDOFF_FAILURE/,
-    );
+    const quarantined = await withFetchMock(() => worker.runOnce(new Date(nowMs + 30_000)));
+    assert.equal(quarantined.handoffStatus, 'BLOCKED_DATA');
+    assert.equal(quarantined.newEntriesFailClosed, true);
+    assert.equal(quarantined.liveEntryWarmupComplete, false);
+    assert.equal(quarantined.failures, 1);
 
     failHandoff = false;
     members = [];
@@ -1424,4 +1427,77 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
       else process.env[key] = value;
     }
   }
+});
+
+
+test('fair automatic handoff rotation visits more than 40 sorted signals without permanent starvation', () => {
+  const all = Array.from({ length: 91 }, (_, index) => index);
+  let offset = 0;
+  const visited: number[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const result = selectRotatingHandoffEntries(all, offset, 40);
+    visited.push(...result.entries);
+    offset = result.nextOffset;
+  }
+  assert.deepEqual(visited.slice(0, 91), all);
+  assert.equal(offset, 40);
+  assert.deepEqual(selectRotatingHandoffEntries([], 50, 40), { entries: [], nextOffset: 0 });
+});
+
+test('exact SHA entry arm is invalid after revocation even if an earlier check succeeded', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED', 'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED', 'LIVE_TRADING', 'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED', 'DEPLOY_SHA', 'MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const root = await mkdtemp(join(tmpdir(), 'auto-arm-revocation-'));
+  const armPath = join(root, 'arm.json');
+  try {
+    for (const key of keys.slice(0, 6)) process.env[key] = 'true';
+    process.env.DEPLOY_SHA = 'c'.repeat(40);
+    process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH = armPath;
+    await writeFile(armPath, JSON.stringify({
+      schemaVersion: 'member-auto-trading-live-entry-arm-v1',
+      armed: true,
+      targetSha: 'c'.repeat(40),
+      armedAt: new Date(nowMs - 2_000).toISOString(),
+      activateNotBeforeAt: new Date(nowMs - 1_000).toISOString(),
+    }), { mode: 0o600 });
+    assert.equal(await liveEntryArmPresent(nowMs), true);
+    await rm(armPath);
+    assert.equal(await liveEntryArmPresent(nowMs), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('a broken handoff is fail-closed for entries without terminating the member worker tick', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  let selectedMembers = 0;
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { throw new Error('BROKEN_HANDOFF_DIGEST'); },
+    async listEligibleMembers() {
+      selectedMembers += 1;
+      return base.listEligibleMembers();
+    },
+  });
+  const result = await worker.runOnce(new Date(nowMs));
+  assert.equal(result.handoffStatus, 'BLOCKED_DATA');
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.failures, 1);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(selectedMembers, 1);
 });
