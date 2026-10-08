@@ -1580,3 +1580,22 @@ test('missing Paper account never produces a new entry or a false live warmup', 
   assert.equal(r.livePlans, 0);
   assert.equal(r.failures, 1);
 });
+
+
+test('an old empty READY Paper handoff cannot certify current live warmup or authorize new entries', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const stale = { ...handoff(nowMs - 31 * 60_000), entries: [], entryCount: 0 };
+  const result = await new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readHandoff() { return stale as never; },
+  }).runOnce(new Date(nowMs));
+  assert.equal(result.handoffStatus, 'BLOCKED_DATA');
+  assert.equal(result.handoffReady, false);
+  assert.equal(result.newEntriesFailClosed, true);
+  assert.equal(result.createdPlans, 0);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.failures, 1);
+});
