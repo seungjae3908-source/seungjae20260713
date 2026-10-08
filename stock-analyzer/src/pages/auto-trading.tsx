@@ -242,9 +242,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     && autoWorker.liveEntryWarmupComplete === true
     && autoWorker.liveEntriesArmed === true
     && autoWorker.globalEmergencyStopActive === false;
+  const telegramProofMs = Date.parse(telegramWorker?.lastConfirmedDeliveryAt ?? '');
+  const telegramProofFresh = Number.isFinite(telegramProofMs)
+    && telegramProofMs <= runtimeNowMs + 5_000
+    && runtimeNowMs - telegramProofMs <= 24 * 60 * 60_000;
   const telegramRuntimeReady = telegramWorker?.enabled === true
     && telegramWorker.tickOk === true
     && telegramWorker.deliveryConfirmed === true
+    && telegramProofFresh
     && telegramWorkerFresh
     && telegramWorker.errorCode == null;
   const liveAuthorityLabel = runtimeLoading

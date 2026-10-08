@@ -21,7 +21,7 @@ import type {
   UserExecutionEvent,
 } from './user-broker-telegram.types';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
-import { TelegramDeliveryWorker, telegramDeliveryTickConfirmed, userTelegramDeliveryWorkerHealthy } from './user-broker-telegram.worker';
+import { TelegramDeliveryWorker, telegramDeliveryTickConfirmed, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from './user-broker-telegram.worker';
 
 class FakeTelegramTransport implements TelegramTransport {
   readonly sent: Array<{ chatId: string; text: string }> = [];
@@ -424,4 +424,16 @@ test('idle initial Telegram tick is not actual member delivery proof', () => {
     enabled: true, tickOk: true, lastTickAt: new Date(now).toISOString(),
     deliveryConfirmed: false, lastConfirmedDeliveryAt: null, errorCode: null,
   }, now), false);
+});
+
+
+test('recent durable SENT receipt restores Telegram health only when no newer failed delivery exists', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const row = { state: 'SENT', updated_at: new Date(now - 40_000).toISOString() };
+  assert.equal(verifiedRecentTelegramDeliveryReceipt(row, now), row.updated_at);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, state: 'RETRY_SCHEDULED' }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, state: 'DEAD_LETTER' }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now - 25 * 60 * 60_000).toISOString() }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now + 10_000).toISOString() }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt(null, now), null);
 });
