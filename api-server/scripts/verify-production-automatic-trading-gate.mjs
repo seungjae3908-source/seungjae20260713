@@ -130,6 +130,7 @@ requireText(workflow, "manual.futuresAuthority !== 'FUTURES_LIVE_LIMITED'", 'AUT
 requireText(workflow, "manual.futuresMarginMode !== 'isolated'", 'AUTO_GATE_ISOLATED_RECHECK_MISSING');
 requireText(workflow, "['2', '3', '4', '5', '6', '7'].includes(expectedLeverage)", 'AUTO_GATE_LEVERAGE_BOUND_MISSING');
 
+forbid(paperWorker, /signalReasons\.filter\(\(reason\) => reason !== 'CANONICAL_PAPER_HANDOFF'\)/u, 'AUTO_GATE_PAPER_LINEAGE_REMOVAL_FORBIDDEN');
 forbid(workflow, /^\s{2}(workflow_dispatch|schedule):/m, 'AUTO_GATE_UNATTENDED_TRIGGER_FORBIDDEN');
 forbid(workflow, /if\s*\(false\)/u, 'AUTO_GATE_DEAD_VALIDATION_BLOCK_FORBIDDEN');
 forbid(workflow, /WITHDRAW[^\n]*true/i, 'AUTO_GATE_WITHDRAW_ENABLE_FORBIDDEN');
@@ -177,6 +178,8 @@ for (const token of [
   "process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true'",
   "process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'",
   'buildAutomaticExitPlanInput',
+  "input.paperInput.signalReasons",
+  "'CANONICAL_LIVE_AUTO_HANDOFF'",
   'readMarketMark',
   'paperExitOrders',
   'liveExitOrders',
