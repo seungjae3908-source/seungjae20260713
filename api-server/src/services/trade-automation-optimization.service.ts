@@ -144,10 +144,19 @@ export function evaluateTradingOptimization(
   if (dailyLossKrw >= totalDailyLossBudgetKrw) add(blockCodes, 'TOTAL_DAILY_LOSS_BUDGET');
 
   const stageMaximum = policy.pilotStage === 'approval-20'
-    ? 0 : policy.pilotStage === 'limited-50' ? 50_000 : policy.maxOrderKrw;
+    ? 0
+    : policy.pilotStage === 'limited-50'
+      ? 50_000
+      : policy.pilotStage === 'formula-ai-exception'
+        ? (formulaAiException?.allowed ? policy.maxOrderKrw : 0)
+        : policy.maxOrderKrw;
   if (plan.accountMode === 'live') {
     if (policy.pilotStage === 'approval-20') add(blockCodes, 'PILOT_LIVE_DISABLED');
-    else if (plan.estimatedKrw > stageMaximum) add(blockCodes, 'PILOT_ORDER_LIMIT');
+    else if (policy.pilotStage === 'formula-ai-exception' && !formulaAiException?.allowed) {
+      add(blockCodes, 'PILOT_FORMULA_AI_EXCEPTION_REQUIRED');
+    } else if (plan.estimatedKrw > stageMaximum) {
+      add(blockCodes, 'PILOT_ORDER_LIMIT');
+    }
   }
   if (!policy.riskOptimizationEnabled) add(blockCodes, 'RISK_OPTIMIZATION_DISABLED');
 
