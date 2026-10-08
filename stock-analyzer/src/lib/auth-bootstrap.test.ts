@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   FiniteDeadlineError,
+  authBootstrapErrorMessage,
   reconcileInitialSessionProfile,
   runFiniteAuthBootstrap,
   shouldReconcileInitialSession,
@@ -195,4 +196,12 @@ test('initial session profile recovery does not retry after identity changes', a
     isSessionCurrent: () => false,
   });
   assert.equal(attempts, 1);
+});
+
+
+test('schema drift gets an explicit member-data bootstrap message', () => {
+  assert.equal(
+    authBootstrapErrorMessage(new Error('MEMBER_SCHEMA_NOT_READY')),
+    '회원 권한 데이터 적용이 완료되지 않았습니다. 관리자에게 회원 데이터 점검을 요청해 주세요.',
+  );
 });
