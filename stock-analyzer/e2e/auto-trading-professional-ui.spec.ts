@@ -42,7 +42,7 @@ test('trading shell keeps professional typography and standing-authorization saf
   expect(page).not.toContain('font-black');
   expect(page).not.toContain('TradeApprovalQueue');
   expect(page).not.toContain('approvalFixture');
-  expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} />');
+  expect(page).toContain('<TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot} />');
   expect(page).toContain('<UserBrokerTelegramPanel />');
 });
 
@@ -89,6 +89,12 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(settings).toContain('disabled={effectiveStopped}');
   expect(settings).toContain('data-testid="global-trading-stop"');
   expect(settings).toContain('서버 전체 비상정지 · 관리자 해제 필요');
+  expect(page).toContain("auth.can('canManageMembers')");
+  expect(settings).toContain('data-testid="formula-ai-pilot-control"');
+  expect(settings).toContain('data-testid="formula-ai-pilot-enable"');
+  expect(settings).toContain("stage: 'formula-ai-exception'");
+  expect(settings).toContain("confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT'");
+  expect(settings).toContain('자동매매는 아직 OFF입니다.');
   expect(settings).not.toContain('window.setInterval(() => { void load(); }, 15_000)');
   expect(settings).not.toContain("status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON'");
 });
