@@ -869,11 +869,14 @@ function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEnt
  * tracking is separately protected and must not depend on this entry guard.
  */
 export function assertCanonicalLiveProviderPositions(
-  positions: CanonicalAccountSnapshot['positions'],
+  snapshot: Pick<CanonicalAccountSnapshot, 'provider' | 'positions'>,
   plans: readonly TradingPlan[],
 ) {
-  if (!Array.isArray(positions)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE');
-  for (const position of positions) {
+  if (!Array.isArray(snapshot.positions)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE');
+  for (const position of snapshot.positions) {
+    // Upbit publishes the KRW settlement cash balance in positions, but
+    // KRW is not an open coin exposure and is checked independently as cash.
+    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
     if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
     if (Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
     const matching = plans.filter((plan) => normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
@@ -919,10 +922,11 @@ async function liveJournalRiskState(
     return total;
   };
   const livePlans = activeLivePlans(runtime);
-  assertCanonicalLiveProviderPositions(snapshot.positions, livePlans);
+  assertCanonicalLiveProviderPositions(snapshot, livePlans);
   const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
   for (const position of snapshot.positions ?? []) {
+    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
     if (!finite(position.quantity) || Math.abs(position.quantity!) <= POSITION_QUANTITY_TOLERANCE) continue;
     const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
     if (!matched) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
