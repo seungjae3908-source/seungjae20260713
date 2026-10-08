@@ -191,15 +191,38 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   );
   const liveReadiness = runtimeStatus?.liveAutomaticReadinessByMarket?.[market]
     ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
+  const autoWorker = runtimeStatus?.autoTradingBackground;
+  const telegramWorker = runtimeStatus?.userTelegramDelivery;
+  const automaticRuntimeReady = autoWorker?.enabled === true
+    && autoWorker.liveModeRequested === true
+    && autoWorker.tickOk === true
+    && autoWorker.handoffReady === true
+    && autoWorker.newEntriesFailClosed === false
+    && autoWorker.liveEntryWarmupComplete === true
+    && autoWorker.liveEntriesArmed === true
+    && autoWorker.globalEmergencyStopActive === false;
+  const telegramRuntimeReady = telegramWorker?.enabled === true
+    && telegramWorker.tickOk === true
+    && telegramWorker.errorCode == null;
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
     : !canPlaceOrders
       ? '계정 주문 권한 없음'
-      : liveReadiness?.readyForAutomaticOrderEvaluation
-        ? '자동 실거래 준비됨'
-        : liveReadiness?.automaticServerGateEnabled
+      : !liveReadiness?.automaticServerGateEnabled
+        ? '자동 Gate OFF'
+        : !liveReadiness?.readyForAutomaticOrderEvaluation
           ? '자동 Gate 차단'
-          : '자동 Gate OFF';
+          : autoWorker?.enabled !== true || autoWorker.liveModeRequested !== true
+            ? '자동 워커 OFF'
+            : autoWorker.tickOk !== true || autoWorker.handoffReady !== true || autoWorker.newEntriesFailClosed === true
+              ? '자동 워커 차단'
+              : autoWorker.liveEntriesArmed !== true
+                ? '안전대기 · Arm 준비 중'
+                : !telegramRuntimeReady
+                  ? 'Telegram 전달 점검 필요'
+                  : automaticRuntimeReady
+                    ? '자동 실거래 작동 준비됨'
+                    : '자동 워커 점검 필요';
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
