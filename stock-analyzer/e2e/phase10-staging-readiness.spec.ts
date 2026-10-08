@@ -412,14 +412,23 @@ function isExpectedVerifierTestTeardownMarketSummaryAbortIdentity(input: {
   rawUrl: string;
   errorText: string | undefined;
   origin: string;
+  nowMs?: number;
 }) {
   try {
     const parsed = new URL(input.rawUrl);
+    // apiGet adds precisely one _ts millisecond cache-buster to summary GETs.
+    // An invalid/extra parameter or stale/future request is NOT a teardown proof.
+    const stamp = parsed.searchParams.get('_ts');
+    const now = input.nowMs ?? Date.now();
+    const cacheBustIsCurrent = parsed.searchParams.size === 1
+      && stamp != null && /^[1-9]\d{12}$/.test(stamp)
+      && Number(stamp) <= now + 1_000
+      && now - Number(stamp) <= 60_000;
     return input.method === 'GET'
       && input.errorText === 'net::ERR_ABORTED'
       && parsed.origin === input.origin
       && parsed.pathname === '/api/market/summary'
-      && parsed.searchParams.size === 0;
+      && (parsed.searchParams.size === 0 || cacheBustIsCurrent);
   } catch {
     return false;
   }
@@ -2084,6 +2093,24 @@ test('verifier-owned final market summary abort classifier is exact and fail-clo
   expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, rawUrl: 'https://staging.example/api/market/movers' })).toBe(false);
   expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, rawUrl: 'https://other.example/api/market/summary' })).toBe(false);
   expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...input, errorText: 'net::ERR_CONNECTION_RESET' })).toBe(false);
+  const now = 1_790_000_000_000;
+  const cacheBust = { ...input, rawUrl: `https://staging.example/api/market/summary?_ts=${now}`, nowMs: now + 500 };
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity(cacheBust)).toBe(true);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...cacheBust, nowMs: now + 61_000 })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...cacheBust, nowMs: now - 2_000 })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({
+    ...cacheBust, rawUrl: `https://staging.example/api/market/summary?_ts=${now}&preview=1`,
+  })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({
+    ...cacheBust, rawUrl: 'https://staging.example/api/market/summary?_ts=garbage',
+  })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({
+    ...cacheBust, rawUrl: `https://other.example/api/market/summary?_ts=${now}`,
+  })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({ ...cacheBust, method: 'POST' })).toBe(false);
+  expect(isExpectedVerifierTestTeardownMarketSummaryAbortIdentity({
+    ...cacheBust, errorText: 'net::ERR_FAILED',
+  })).toBe(false);
 });
 
 test.describe('real staging release readiness', () => {
@@ -2103,12 +2130,19 @@ test.describe('real staging release readiness', () => {
     attachDiagnostics(page, testInfo);
   });
 
-  test.afterEach(async ({}, testInfo) => {
+  test.afterEach(async ({ page }, testInfo) => {
     const errors = errorsFor(testInfo);
     expect(errors.console, 'browser console errors').toEqual([]);
     expect(errors.page, 'pageerror events').toEqual([]);
     expect(errors.rejection, 'unhandled promise rejections').toEqual([]);
     expect(errors.http, 'unexpected browser HTTP 4xx/5xx or failed requests').toEqual([]);
+    // Only AFTER a successful regular-member test and settled browser network
+    // may Playwright's owned page teardown classify this single read abort.
+    // In-test route errors retain their strict failure status.
+    if (testInfo.title === 'regular: futures, scanner, paper trading, and safe AI preview are available without real orders') {
+      await waitForBrowserNetworkQuiescence(page);
+      verifierOwnedTestTeardowns.set(page, new URL(page.url()).origin);
+    }
   });
 
   test.afterAll(async () => {
@@ -2425,7 +2459,6 @@ test.describe('real staging release readiness', () => {
     await waitForBrowserNetworkQuiescence(page);
     await runAuthenticatedAiChartCertification(page, browser, testInfo);
     await waitForBrowserNetworkQuiescence(page);
-    verifierOwnedTestTeardowns.set(page, new URL(page.url()).origin);
   });
 
   test('admin: member management is allowed while another users private journal remains blocked', async ({ page }) => {
