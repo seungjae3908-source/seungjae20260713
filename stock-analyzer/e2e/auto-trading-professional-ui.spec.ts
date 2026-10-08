@@ -74,6 +74,10 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain('liveEntriesArmed');
   expect(page).toContain('안전대기 · Arm 준비 중');
   expect(page).toContain('자동 실거래 작동 준비됨');
+  expect(page).toContain("tone={providerVerified ? 'ok' : 'warn'}");
+  expect(page).toContain("tone={effectiveEntryStopped ? 'warn' : 'ok'}");
+  expect(page).toContain("tone={automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}");
+  expect(page).toContain('AlertTriangle');
   expect(page).not.toContain('value="서버 Gate 필요"');
 
   const settings = source('src/components/trade-automation-settings.tsx');
