@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
+import { AlertTriangle, BookOpenCheck, CheckCircle2, ClipboardList, Settings2, ShieldCheck, WalletCards } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -59,12 +59,26 @@ function tradingRouteState(): { market: TradingMarket; section: TradingSection }
   };
 }
 
-function StatusItem({ label, value }: { label: string; value: string }) {
+function StatusItem({
+  label,
+  value,
+  tone = 'ok',
+}: {
+  label: string;
+  value: string;
+  tone?: 'ok' | 'warn' | 'neutral';
+}) {
+  const Icon = tone === 'warn' ? AlertTriangle : CheckCircle2;
+  const iconClass = tone === 'ok'
+    ? 'text-emerald-500'
+    : tone === 'warn'
+      ? 'text-amber-500'
+      : 'text-muted-foreground';
   return (
     <div className="min-w-0 rounded-xl border border-card-border bg-background p-2.5 text-center">
       <p className="truncate text-xs font-medium text-muted-foreground">{label}</p>
       <div className="mt-1 flex min-w-0 items-center justify-center gap-1.5 text-xs font-semibold">
-        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${iconClass}`} />
         <span className="truncate">{value}</span>
       </div>
     </div>
@@ -276,13 +290,26 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatusItem label="연결" value={providerVerified ? '검증됨' : providerConnection?.configured ? '설정만 됨' : '미설정'} />
-          <StatusItem label="최근 주문" value={lastOrder?.state ?? '없음'} />
+          <StatusItem
+            label="연결"
+            value={providerVerified ? '검증됨' : providerConnection?.configured ? '설정만 됨' : '미설정'}
+            tone={providerVerified ? 'ok' : 'warn'}
+          />
+          <StatusItem
+            label="최근 주문"
+            value={lastOrder?.state ?? '없음'}
+            tone={lastOrder && ['REJECTED', 'RECOVERY_REQUIRED'].includes(lastOrder.state) ? 'warn' : lastOrder ? 'ok' : 'neutral'}
+          />
           <StatusItem
             label="비상정지"
             value={emergencyStopped ? '작동 중' : newEntriesStopped ? '신규진입 차단' : '정상'}
+            tone={effectiveEntryStopped ? 'warn' : 'ok'}
           />
-          <StatusItem label="실거래 권한" value={liveAuthorityLabel} />
+          <StatusItem
+            label="실거래 권한"
+            value={liveAuthorityLabel}
+            tone={automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
+          />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
           <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
