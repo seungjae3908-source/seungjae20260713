@@ -188,6 +188,8 @@ jobs:
             && value?.telegramPersonalActivationRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
             && value?.telegramTestDelivered === true;
+          const memberAutoPilotStage = String(value?.memberAutoPilotStage ?? '');
+          const expectedLivePilotReady = ['limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage);
           const memberAutoPolicyReady = value?.memberAutoPolicyReady === true
             && Array.isArray(value?.memberAutoPolicyBlockers)
             && value.memberAutoPolicyBlockers.length === 0
@@ -195,7 +197,8 @@ jobs:
             && Number.isInteger(value?.memberAutoBitgetLeverage)
             && value.memberAutoBitgetLeverage >= 2
             && value.memberAutoBitgetLeverage <= 7
-            && ['limited-50', 'validated'].includes(value?.memberAutoPilotStage);
+            && ['approval-20', 'limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage)
+            && value?.memberAutoLivePilotReady === expectedLivePilotReady;
           if (value?.schemaVersion !== 'production-trading-core-qa-v4'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
