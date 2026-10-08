@@ -1,5 +1,4 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Download, Loader2, PlayCircle, ShieldCheck, X } from 'lucide-react';
 import {
   CartesianGrid,
@@ -15,7 +14,6 @@ import { Link } from 'wouter';
 import { backtestPaperHandoffPath } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import { downloadExcelWorkbook } from '@/lib/excel-export';
-import { fetchResearchCenterOverview } from '@/lib/research-center';
 import {
   runBacktest,
   type BacktestFormValues,
@@ -98,31 +96,6 @@ const money = (value: number, market: BacktestMarket) => {
 const MARKET_CANONICAL: Record<BacktestMarket, string> = {
   'kr-stock': '국내주식', 'us-stock': '미국주식', 'crypto-spot': '코인현물', 'crypto-futures': '코인선물',
 };
-const pipelineLabel = (value: string) => ({
-  'crypto-futures-derivatives': '코인선물',
-  'crypto-spot': '코인현물',
-  stocks: '국내·미국주식',
-}[value] ?? '기타 시장');
-const stepLabel = (value: string) => ({
-  'market-dataset-candidates': '후보 생성',
-  'futures-generalization': '선물 일반화 검증',
-  'futures-pnl': '선물 비용 반영 손익',
-  'futures-regime': '선물 시장상황 검증',
-  'funding-history': '펀딩비 검증',
-  'market-structure': '시장구조 검증',
-  'upbit-spot': '현물 후보 검증',
-  'upbit-spot-pnl': '현물 비용 반영 손익',
-  'upbit-spot-alternatives': '현물 대체전략 검증',
-  'stock-market-candidates': '주식 후보 생성',
-  'stock-pnl': '주식 비용 반영 손익',
-  'stock-generalization': '주식 일반화 검증',
-  'us-pullback': '미국주식 눌림목 검증',
-  'stock-regime': '주식 시장상황 검증',
-}[value] ?? '검증 단계');
-const runStatusLabel = (value: string) => ({
-  success: '성공', complete: '완료', blocked_data: '자료 부족', failed: '실패', partial_failure: '일부 실패',
-  running: '진행 중', queued: '대기',
-}[value] ?? '확인 필요');
 const percent = (value: number | null) => resolveEvidenceDisplay({
   value,
   formatter: (observed) => `${numberFormatter.format(Number(observed))}%`,
@@ -322,86 +295,6 @@ function CurveChart({ title, data, dataKey }: { title: string; data: Array<Recor
   );
 }
 
-function AutomaticResearchBacktestPanel() {
-  const query = useQuery({
-    queryKey: ['backtest', 'automatic-research'],
-    queryFn: ({ signal }) => fetchResearchCenterOverview(signal),
-    staleTime: 30_000,
-    retry: false,
-  });
-  const auto = query.data?.autoBacktest;
-  const pipelines = auto?.pipelines ?? [];
-
-  function exportAutomaticResearch() {
-    if (!auto) return;
-    const timestamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
-    downloadExcelWorkbook(`automatic-research-backtest-${timestamp}.xls`, [
-      {
-        name: '자동백테스트',
-        rows: [
-          ['실행번호', '연구 버전', '생성시각', '시장', '상태', '후보통과', '자동전달', '피드백'],
-          ...pipelines.map((pipeline) => [
-            auto.cycleId ?? '', auto.researchSha ?? '', auto.generatedAt ? dateTime(auto.generatedAt) : '',
-            pipelineLabel(pipeline.id), runStatusLabel(pipeline.status), pipeline.candidatePassed, pipeline.automaticHandoffObserved, pipeline.feedback,
-          ]),
-        ],
-      },
-      {
-        name: '단계별결과',
-        rows: [
-          ['파이프라인', '단계', '상태', '리포트상태', '시작', '종료'],
-          ...pipelines.flatMap((pipeline) => pipeline.steps.map((step) => [
-            pipelineLabel(pipeline.id), stepLabel(step.id), runStatusLabel(step.status), step.reportStatus ? runStatusLabel(step.reportStatus) : '',
-            step.startedAt ? dateTime(step.startedAt) : '', step.endedAt ? dateTime(step.endedAt) : '',
-          ])),
-        ],
-      },
-    ]);
-  }
-
-  return (
-    <section className="rounded-2xl border border-border bg-card p-4" data-testid="automatic-research-backtest">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          
-          <h2 className="mt-1 text-base font-black">자동 연구 백테스트</h2>
-          
-        </div>
-        {auto?.present ? (
-          <button type="button" onClick={exportAutomaticResearch} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs font-black hover:border-primary/50">
-            <Download className="h-4 w-4" /> 자동연구 엑셀
-          </button>
-        ) : null}
-      </div>
-      {query.isLoading ? <p className="mt-3 text-xs text-muted-foreground">자동 연구 상태 확인 중…</p> : null}
-      {query.isError ? <p className="mt-3 text-xs text-muted-foreground">자동 연구 근거는 관리자 리서치센터 권한에서 확인할 수 있습니다.</p> : null}
-      {!query.isLoading && !query.isError && !pipelines.length ? <p className="mt-3 text-xs text-muted-foreground">아직 빠른 과거검증 실행 이력이 없습니다.</p> : null}
-      {pipelines.length ? (
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          {pipelines.map((pipeline) => (
-            <article key={pipeline.id} className="rounded-xl border border-border bg-background p-3">
-              <div className="flex items-center justify-between gap-2">
-                <strong className="text-xs">{pipelineLabel(pipeline.id)}</strong>
-                <span className="rounded-full border border-border px-2 py-0.5 text-[9px] font-black">{runStatusLabel(pipeline.status)}</span>
-              </div>
-              <p className="mt-2 text-[10px] leading-4 text-muted-foreground">{pipeline.feedback}</p>
-              <ol className="mt-3 space-y-1">
-                {pipeline.steps.map((step, index) => (
-                  <li key={step.id} className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] gap-2 rounded-lg border border-border px-2 py-1.5 text-[10px]">
-                    <span className="font-black">{index + 1}</span><span className="truncate font-mono">{stepLabel(step.id)}</span><strong>{runStatusLabel(step.status)}</strong>
-                  </li>
-                ))}
-              </ol>
-              <p className="mt-2 text-[10px] font-bold">자동 전달: {pipeline.automaticHandoffObserved ? '확인됨' : pipeline.candidatePassed ? '후속 검증 대기' : '후보 통과 전'}</p>
-            </article>
-          ))}
-        </div>
-      ) : null}
-      
-    </section>
-  );
-}
-
 function ResultTable({
   title,
   testId,
@@ -521,7 +414,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
           과거 데이터 기반 백테스트이며 미래 수익을 보장하지 않습니다.
         </p>
 
-        {!compact ? <AutomaticResearchBacktestPanel /> : null}
+        
 
         <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" aria-busy={loading} data-testid="backtest-form">
           <h2 className="mb-4 text-center text-base font-black">기본 설정</h2>
