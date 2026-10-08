@@ -29,6 +29,7 @@ import {
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
   automaticExecutionProjectionOrderIds,
+  automaticPaperWalletServerEpochMs,
   automaticPaperRiskEvidenceFromCanonicalLedger,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
@@ -321,6 +322,8 @@ function paperRepository(nowMs: number): PaperJournalRepository {
         id: AUTOMATIC_PAPER_ACCOUNT_ID,
         version: 1,
         updatedAt: new Date(nowMs).toISOString(),
+        createdAt: new Date(nowMs).toISOString(),
+        serverUpdatedAt: new Date(nowMs).toISOString(),
         deletedAt: null,
         payload: {
           id: AUTOMATIC_PAPER_ACCOUNT_ID,
@@ -2362,10 +2365,10 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
 test('automatic outbox selects post-wallet Paper orders and all automatic Live orders, never legacy QA fills', () => {
   const epoch = Date.parse('2026-10-09T00:00:00.000Z');
   const plans = [
-    { id: 'historic-paper', accountMode: 'paper', executionMode: 'automatic' },
-    { id: 'fresh-paper', accountMode: 'paper', executionMode: 'automatic' },
-    { id: 'live-existing', accountMode: 'live', executionMode: 'automatic' },
-    { id: 'manual-paper', accountMode: 'paper', executionMode: 'manual' },
+    { id: 'historic-paper', accountMode: 'paper', executionMode: 'automatic', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'fresh-paper', accountMode: 'paper', executionMode: 'automatic', createdAt: '2026-10-09T00:00:01.000Z' },
+    { id: 'live-existing', accountMode: 'live', executionMode: 'automatic', createdAt: '2026-09-01T00:00:00.000Z' },
+    { id: 'manual-paper', accountMode: 'paper', executionMode: 'manual', createdAt: '2026-10-09T00:00:01.000Z' },
   ] as TradingPlan[];
   const orders = [
     { id: 'historic-order', planId: 'historic-paper', createdAt: '2026-10-06T00:00:00.000Z' },
@@ -2373,6 +2376,7 @@ test('automatic outbox selects post-wallet Paper orders and all automatic Live o
     { id: 'live-old-order', planId: 'live-existing', createdAt: '2026-09-01T00:00:00.000Z' },
     { id: 'manual-order', planId: 'manual-paper', createdAt: '2026-10-09T00:00:02.000Z' },
     { id: 'future-order', planId: 'fresh-paper', createdAt: '2026-10-10T00:00:00.000Z' },
+    { id: 'late-old-plan-order', planId: 'historic-paper', createdAt: '2026-10-09T00:00:04.000Z' },
   ] as import('./trade-automation.types').TradingOrder[];
   assert.deepEqual(
     automaticExecutionProjectionOrderIds(plans, orders, epoch, epoch + 10_000),
@@ -2386,7 +2390,10 @@ test('automatic outbox selects post-wallet Paper orders and all automatic Live o
 
 test('long-running worker must use a fresh clock so a later same-tick Paper fill is selected', () => {
   const walletStartedAtMs = Date.parse('2026-10-09T00:00:00.000Z');
-  const plan = [{ id: 'late-paper-plan', accountMode: 'paper', executionMode: 'automatic' }] as TradingPlan[];
+  const plan = [{
+    id: 'late-paper-plan', accountMode: 'paper', executionMode: 'automatic',
+    createdAt: '2026-10-09T00:00:01.000Z',
+  }] as TradingPlan[];
   const orders = [{
     id: 'late-paper-order', planId: 'late-paper-plan',
     createdAt: '2026-10-09T00:00:45.000Z',
@@ -2399,4 +2406,34 @@ test('long-running worker must use a fresh clock so a later same-tick Paper fill
     automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs + 50_000),
     ['late-paper-order'],
   );
+});
+
+test('automatic Paper epoch uses immutable server row time, never forged wallet payload timestamps', () => {
+  const currentMs = Date.parse('2026-10-09T09:00:00.000Z');
+  const row = {
+    kind: 'account' as const, id: AUTOMATIC_PAPER_ACCOUNT_ID,
+    version: 1, updatedAt: '2026-10-09T08:00:00.000Z',
+    createdAt: '2026-10-09T08:00:00.000Z',
+    serverUpdatedAt: '2026-10-09T08:00:00.000Z',
+    deletedAt: null,
+    payload: {
+      id: AUTOMATIC_PAPER_ACCOUNT_ID,
+      initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      equity: AUTOMATIC_PAPER_INITIAL_KRW, cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      usedMargin: 0, availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+      createdAt: '2021-01-01T00:00:00.000Z',
+    },
+  };
+  const trustedMs = Date.parse(row.createdAt);
+  assert.equal(automaticPaperWalletServerEpochMs([row], currentMs), trustedMs);
+  assert.equal(
+    automaticPaperWalletServerEpochMs([{
+      ...row, payload: { ...row.payload, createdAt: '2035-01-01T00:00:00.000Z' },
+    }], currentMs), trustedMs,
+  );
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: 'malformed' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, deletedAt: row.createdAt }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:00.000Z' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: '2030-01-01T00:00:00.000Z' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([row, row], currentMs), null);
 });
