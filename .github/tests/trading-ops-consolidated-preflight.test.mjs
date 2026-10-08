@@ -78,6 +78,8 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(worker.includes("env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'true'"));
   assert.ok(worker.includes("env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'"));
   assert.ok(worker.includes("process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'"));
+  const tradingService = read('api-server/src/services/trade-automation.service.ts');
+  assert.ok(tradingService.includes("process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED !== 'true'"));
   assert.ok(worker.includes("const mode = memberAutoTradingWorkerMode();"));
   assert.ok(index.includes('startMemberAutoTradingBackgroundWorker()'));
   assert.ok(execution.includes("plan.accountMode === 'paper'"));
