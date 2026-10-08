@@ -788,11 +788,36 @@ jobs:
               throw new Error('AUTOMATIC_TRADING_FLAG_STATE_MISMATCH');
             }
           };
-          const restartAutomatic = (enabled) => {
+          const preservedManualRuntimeEnv = (env) => ({
+            LIVE_TRADING: String(env.LIVE_TRADING ?? 'false'),
+            REAL_ORDER_ENABLED: String(env.REAL_ORDER_ENABLED ?? 'false'),
+            PRIVATE_TRADING_API_ALLOWED: String(env.PRIVATE_TRADING_API_ALLOWED ?? 'false'),
+            ORDER_EXECUTION_ENABLED: String(env.ORDER_EXECUTION_ENABLED ?? 'false'),
+            LIVE_TRADING_ACTIVATION_APPROVED: String(env.LIVE_TRADING_ACTIVATION_APPROVED ?? 'false'),
+            SPOT_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.SPOT_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            TOSS_LIVE_ORDER_ENABLED: String(env.TOSS_LIVE_ORDER_ENABLED ?? 'false'),
+            KIWOOM_LIVE_ORDER_ENABLED: String(env.KIWOOM_LIVE_ORDER_ENABLED ?? 'false'),
+            UPBIT_LIVE_ORDER_ENABLED: String(env.UPBIT_LIVE_ORDER_ENABLED ?? 'false'),
+            executionAuthority: String(env.executionAuthority ?? 'NONE'),
+            SPOT_LIVE_CAPABILITY_ALLOWLIST: String(env.SPOT_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            SPOT_LIVE_MARKET_ALLOWLIST: String(env.SPOT_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED: String(env.FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED ?? 'false'),
+            BITGET_FUTURES_LIVE_ORDER_ENABLED: String(env.BITGET_FUTURES_LIVE_ORDER_ENABLED ?? 'false'),
+            FUTURES_LIVE_EXECUTION_AUTHORITY: String(env.FUTURES_LIVE_EXECUTION_AUTHORITY ?? 'NONE'),
+            FUTURES_LIVE_CAPABILITY_ALLOWLIST: String(env.FUTURES_LIVE_CAPABILITY_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MARKET_ALLOWLIST: String(env.FUTURES_LIVE_MARKET_ALLOWLIST ?? ''),
+            FUTURES_LIVE_MAX_LEVERAGE: String(env.FUTURES_LIVE_MAX_LEVERAGE ?? ''),
+            FUTURES_LIVE_MARGIN_MODE: String(env.FUTURES_LIVE_MARGIN_MODE ?? ''),
+            LIVE_TELEGRAM_ACTIVATION_APPROVED: String(env.LIVE_TELEGRAM_ACTIVATION_APPROVED ?? 'false'),
+            TELEGRAM_INTELLIGENCE_WORKER_ENABLED: String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'false'),
+            PERSONAL_TELEGRAM_WORKER_ENABLED: String(env.PERSONAL_TELEGRAM_WORKER_ENABLED ?? 'false'),
+          });
+          const restartAutomatic = (enabled, baselineEnv) => {
             execFileSync('pm2', ['restart', pm2Name, '--update-env'], {
               stdio: 'inherit',
               env: {
                 ...process.env,
+                ...preservedManualRuntimeEnv(baselineEnv),
                 AUTO_TRADING: enabled ? 'true' : 'false',
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
@@ -833,7 +858,7 @@ jobs:
           let mutated = false;
           try {
             disarmLiveEntries();
-            restartAutomatic(true);
+            restartAutomatic(true, before);
             mutated = true;
             const after = snapshot();
             assertAllFourManual(after, true);
@@ -880,7 +905,7 @@ jobs:
             if (mutated) {
               try {
                 disarmLiveEntries();
-                restartAutomatic(false);
+                restartAutomatic(false, before);
                 const rolledBack = snapshot();
                 assertAllFourManual(rolledBack, false);
                 if (JSON.stringify(manualState(rolledBack)) !== JSON.stringify(preserved)) {
