@@ -1,7 +1,7 @@
 -- Member SECURITY DEFINER privilege lockdown.
--- Preserve RLS helper execution for anon/authenticated while removing broad
--- PUBLIC defaults and preventing direct application-role calls to trigger-only
--- functions. No member rows or trading data are changed.
+-- Preserve only the currently required RLS helper execution while removing
+-- broad PUBLIC defaults and preventing direct application-role calls to
+-- trigger-only or obsolete legacy functions. No member rows or trading data are changed.
 
 begin;
 
@@ -19,8 +19,7 @@ begin
   foreach helper in array array[
     'public.current_membership_level()',
     'public.is_approved_member()',
-    'public.is_admin()',
-    'public.is_full_member()'
+    'public.is_admin()'
   ]
   loop
     if to_regprocedure(helper) is not null then
@@ -32,7 +31,8 @@ begin
   foreach trigger_only in array array[
     'public.handle_new_user()',
     'public.log_profile_change()',
-    'public.rls_auto_enable()'
+    'public.rls_auto_enable()',
+    'public.is_full_member()'
   ]
   loop
     if to_regprocedure(trigger_only) is not null then
@@ -43,7 +43,7 @@ begin
   if to_regprocedure('public.apply_member_permission_change(uuid,text,boolean,timestamptz,text,timestamptz)') is not null then
     revoke all on function public.apply_member_permission_change(
       uuid, text, boolean, timestamptz, text, timestamptz
-    ) from public;
+    ) from public, anon, authenticated;
     grant execute on function public.apply_member_permission_change(
       uuid, text, boolean, timestamptz, text, timestamptz
     ) to authenticated;
@@ -85,7 +85,7 @@ begin
     select 1
     from information_schema.routine_privileges
     where specific_schema = 'public'
-      and routine_name in ('handle_new_user', 'log_profile_change', 'rls_auto_enable')
+      and routine_name in ('handle_new_user', 'log_profile_change', 'rls_auto_enable', 'is_full_member')
       and grantee in ('PUBLIC', 'anon', 'authenticated')
       and privilege_type = 'EXECUTE'
   ) then
@@ -99,8 +99,7 @@ begin
       and routine_name in (
         'current_membership_level',
         'is_approved_member',
-        'is_admin',
-        'is_full_member'
+        'is_admin'
       )
       and grantee = 'PUBLIC'
       and privilege_type = 'EXECUTE'
@@ -109,13 +108,30 @@ begin
   end if;
 
   if exists (
+    select 1
+    from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee in ('PUBLIC', 'anon')
+      and privilege_type = 'EXECUTE'
+  ) or not exists (
+    select 1
+    from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee = 'authenticated'
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID';
+  end if;
+
+  if exists (
     select required.routine_name
     from (
       values
         ('current_membership_level'),
         ('is_approved_member'),
-        ('is_admin'),
-        ('is_full_member')
+        ('is_admin')
     ) as required(routine_name)
     where to_regprocedure('public.' || required.routine_name || '()') is not null
       and (
