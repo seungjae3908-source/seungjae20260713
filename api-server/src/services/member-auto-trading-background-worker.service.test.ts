@@ -1415,7 +1415,7 @@ test('Telegram outage blocks armed live entry while preserving independent exit 
     assert.equal(blocked.liveEntriesSuppressedByTelegram, 1);
     assert.equal(blocked.liveOrders, 0);
     assert.equal(liveReads, 0);
-    assert.equal((await repository.listOrders(USER)).filter((order) => order.accountMode === 'live').length, 0);
+    assert.equal((await repository.listPlans(USER)).filter((plan) => plan.accountMode === 'live').length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
     for (const key of keys) {
