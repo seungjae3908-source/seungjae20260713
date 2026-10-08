@@ -260,6 +260,37 @@ export function deriveRulePackPilotExecutionPolicy(
   };
 }
 
+/**
+ * A compounding allowance must be backed by actually settled KRW net profit.
+ * USD/USDT order-size estimates are NOT evidence of close-time conversion,
+ * and Bitget needs an audited funding-fee statement not yet in this journal.
+ */
+export function verifiedRulePackKrwSettlement(input: Readonly<{
+  market: string;
+  currency: string;
+  grossPnl: number;
+  fees: number | null;
+  tax: number | null;
+}>):
+  | Readonly<{ ok: true; netPnlKrw: number }>
+  | Readonly<{ ok: false; code: string }> {
+  const blocked = (code: string) => Object.freeze({ ok: false as const, code });
+  if (input.fees == null || !finite(input.fees) || input.fees < 0
+    || !finite(input.grossPnl)) return blocked('PILOT_CAPITAL_FEE_EVIDENCE_UNAVAILABLE');
+  if (input.market === 'KR_STOCK' && (input.tax == null || !finite(input.tax))) {
+    return blocked('PILOT_CAPITAL_KR_TAX_EVIDENCE_UNAVAILABLE');
+  }
+  if (input.market === 'CRYPTO_FUTURES') {
+    return blocked('PILOT_CAPITAL_FUTURES_FUNDING_SETTLEMENT_REQUIRED');
+  }
+  if (input.currency !== 'KRW') return blocked('PILOT_CAPITAL_SETTLEMENT_KRW_FX_REQUIRED');
+  const tax = input.tax == null ? 0 : input.tax;
+  if (!finite(tax) || tax < 0) return blocked('PILOT_CAPITAL_TAX_EVIDENCE_INVALID');
+  const netPnlKrw = input.grossPnl - input.fees - tax;
+  if (!finite(netPnlKrw)) return blocked('PILOT_CAPITAL_REALIZED_NET_PNL_INVALID');
+  return Object.freeze({ ok: true as const, netPnlKrw });
+}
+
 function planForBrokerOrder(
   brokerOrderId: string,
   ordersByKey: Map<string, TradingOrder>,
@@ -306,41 +337,14 @@ export async function readRulePackPilotCapitalState(
       blockers.push('PILOT_CAPITAL_ENTRY_FX_BASIS_UNAVAILABLE');
       continue;
     }
-    if (trade.fees == null || !finite(trade.fees) || trade.fees < 0
-      || !finite(trade.grossPnl)) {
-      blockers.push('PILOT_CAPITAL_FEE_EVIDENCE_UNAVAILABLE');
-      continue;
-    }
-    if (trade.market === 'KR_STOCK' && (trade.tax == null || !finite(trade.tax))) {
-      blockers.push('PILOT_CAPITAL_KR_TAX_EVIDENCE_UNAVAILABLE');
-      continue;
-    }
-
-    // The unified journal currently does not expose a separately verified
-    // futures funding settlement or a close-time historical USD/USDT->KRW
-    // conversion. Implied FX from the original entry estimate is NOT a
-    // realized-KRW receipt and must never grow Live order authority.
-    if (trade.market === 'CRYPTO_FUTURES') {
-      blockers.push('PILOT_CAPITAL_FUTURES_FUNDING_SETTLEMENT_REQUIRED');
-      continue;
-    }
-    if (trade.currency !== 'KRW') {
-      blockers.push('PILOT_CAPITAL_SETTLEMENT_KRW_FX_REQUIRED');
-      continue;
-    }
-    const tax = trade.tax == null ? 0 : trade.tax;
-    if (!finite(tax) || tax < 0) {
-      blockers.push('PILOT_CAPITAL_TAX_EVIDENCE_INVALID');
-      continue;
-    }
-    const netPnlKrw = trade.grossPnl - trade.fees - tax;
-    if (!finite(netPnlKrw)) {
-      blockers.push('PILOT_CAPITAL_REALIZED_NET_PNL_INVALID');
+    const settlement = verifiedRulePackKrwSettlement(trade);
+    if (!settlement.ok) {
+      blockers.push(settlement.code);
       continue;
     }
     trades.push(Object.freeze({
       id: trade.id, symbol: trade.symbol, signalId: entryPlan.signalId,
-      closedAt: trade.closedAt, netPnlKrw,
+      closedAt: trade.closedAt, netPnlKrw: settlement.netPnlKrw,
     }));
   }
 
