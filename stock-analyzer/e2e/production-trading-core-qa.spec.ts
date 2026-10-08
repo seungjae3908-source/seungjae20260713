@@ -95,9 +95,11 @@ function memberAutoPolicyReadiness(policy: any) {
   const leverage = Number(policy?.bitgetLeverage);
   if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) blockers.push('BITGET_LEVERAGE_OUT_OF_POLICY');
   requireTrue(policy?.riskOptimizationEnabled, 'RISK_OPTIMIZATION_DISABLED');
-  if (!['limited-50', 'validated'].includes(String(policy?.pilotStage ?? ''))) {
-    blockers.push('PILOT_LIVE_DISABLED');
+  const pilotStage = String(policy?.pilotStage ?? '');
+  if (!['approval-20', 'limited-50', 'validated', 'formula-ai-exception'].includes(pilotStage)) {
+    blockers.push('PILOT_STAGE_INVALID');
   }
+  const livePilotReady = ['limited-50', 'validated', 'formula-ai-exception'].includes(pilotStage);
   for (const key of ['totalCapitalKrw', 'maxOrderKrw', 'maxInstrumentKrw', 'maxOpenPositions', 'maxDailyOrders']) {
     requirePositive(policy?.[key], `INVALID_LIMIT:${key}`);
   }
@@ -110,7 +112,8 @@ function memberAutoPolicyReadiness(policy: any) {
     blockers,
     domesticBroker,
     bitgetLeverage: leverage,
-    pilotStage: String(policy?.pilotStage ?? ''),
+    pilotStage,
+    livePilotReady,
   };
 }
 
@@ -149,7 +152,6 @@ function preparedMemberAutoPolicy(policy: any) {
     },
     bitgetLeverage,
     riskOptimizationEnabled: true,
-    pilotStage: policy?.pilotStage === 'validated' ? 'validated' : 'limited-50',
     confirmation: { acknowledged: true },
   };
 }
@@ -171,8 +173,23 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(connection?.lastErrorCode ?? null, `${provider} must have no verification error`).toBeNull();
   }
 
+  const originalPolicy = structuredClone(statusBefore.body.policy);
+  const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
+  let preparedPolicyReadiness = originalPolicyReadiness;
   let memberAutoPolicyPrepared = false;
+  let memberAutoResumePrepared = false;
   if (prepareMemberAutoPolicy) {
+    if (statusBefore.body?.policy?.emergencyStopped === true || statusBefore.body?.policy?.newEntriesStopped === true) {
+      const resumed = await appApi<any>(page, '/api/trade-automation/resume', 'POST', {
+        confirmation: 'RESUME_MEMBER_TRADING',
+      });
+      expect(resumed.ok, JSON.stringify(resumed.body)).toBe(true);
+      expect(resumed.body?.automaticTradingEnabledByThisRequest).toBe(false);
+      memberAutoResumePrepared = true;
+      statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+      expect(statusBefore.ok).toBe(true);
+      expect(statusBefore.body?.ok).toBe(true);
+    }
     const prepared = await appApi<any>(
       page,
       '/api/trade-automation/policy',
@@ -181,12 +198,14 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     );
     expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
     expect(prepared.body?.ok).toBe(true);
-    expect(memberAutoPolicyReadiness(prepared.body?.policy).ready).toBe(true);
+    preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
+    expect(preparedPolicyReadiness.ready).toBe(true);
 
     statusBefore = await appApi<any>(page, '/api/trade-automation/status');
     expect(statusBefore.ok).toBe(true);
     expect(statusBefore.body?.ok).toBe(true);
-    expect(memberAutoPolicyReadiness(statusBefore.body?.policy).ready).toBe(true);
+    preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
+    expect(preparedPolicyReadiness.ready).toBe(true);
     for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
       expect(
         statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
@@ -208,8 +227,6 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     ? 'ACTIVE_VERIFIED' as const
     : 'READY_FOR_ACTIVATION' as const;
 
-  const originalPolicy = structuredClone(statusBefore.body.policy);
-  const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
   const originalPreferences = structuredClone(integrationBefore.body.preferences ?? {});
   const canarySignalId = `trading-core-qa:${expectedDeploySha.slice(0, 12)}:${Date.now()}`;
   const canaryStrategy = 'TRADING_CORE_QA_CANARY';
@@ -255,7 +272,6 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       maxDailyOrders: 20,
       maxConsecutiveLosses: 3,
       riskOptimizationEnabled: true,
-      pilotStage: 'validated',
       riskPerTradePercent: {
         ...(originalPolicy?.riskPerTradePercent ?? {}),
         upbit: 0.5,
@@ -444,11 +460,14 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramTestDelivered: telegramDelivered,
     policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
     memberAutoPolicyPrepared,
-    memberAutoPolicyReady: originalPolicyReadiness.ready,
-    memberAutoPolicyBlockers: originalPolicyReadiness.blockers,
-    memberAutoDomesticBroker: originalPolicyReadiness.domesticBroker,
-    memberAutoBitgetLeverage: originalPolicyReadiness.bitgetLeverage,
-    memberAutoPilotStage: originalPolicyReadiness.pilotStage,
+    memberAutoResumePrepared,
+    memberAutoPolicyReady: preparedPolicyReadiness.ready,
+    memberAutoPolicyBlockers: preparedPolicyReadiness.blockers,
+    memberAutoDomesticBroker: preparedPolicyReadiness.domesticBroker,
+    memberAutoBitgetLeverage: preparedPolicyReadiness.bitgetLeverage,
+    memberAutoPilotStage: preparedPolicyReadiness.pilotStage,
+    memberAutoLivePilotReady: preparedPolicyReadiness.livePilotReady,
+    memberAutoOriginalPilotStage: originalPolicyReadiness.pilotStage,
     realOrderSubmitted: false,
     liveTradingAuthorityGranted: false,
     autoTradingAuthorityGranted: false,

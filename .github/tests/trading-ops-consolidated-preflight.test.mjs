@@ -68,6 +68,8 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   const execution = read('api-server/src/services/trade-execution.service.ts');
   const gate = read('.github/workflows/production-automatic-trading-gate.yml');
   const verifier = read('api-server/scripts/verify-production-automatic-trading-gate.mjs');
+  const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-evidence.cjs');
+  const preactivationEvidence = read('.github/scripts/verify-production-preactivation-evidence.cjs');
   const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
   const deploy = read('ops/deploy-production.sh');
   for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']) {
@@ -75,13 +77,26 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   }
   assert.ok(worker.includes("accountMode: 'paper'"));
   assert.ok(worker.includes('persistMemberAutoTradingPaperPositionBridge'));
-  assert.ok(worker.includes("process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true'"));
+  assert.ok(worker.includes("if (paperOnly === 'true') return 'PAPER_ONLY';"));
+  assert.ok(worker.includes("if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';"));
+  assert.ok(worker.includes("return (paperOnly === undefined || paperOnly === 'false')"));
+  assert.ok(worker.includes('const mode = memberAutoTradingWorkerMode();'));
+  const tradingService = read('api-server/src/services/trade-automation.service.ts');
+  assert.ok(tradingService.includes("process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined"));
+  assert.ok(tradingService.includes("process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false'"));
   assert.ok(index.includes('startMemberAutoTradingBackgroundWorker()'));
   assert.ok(execution.includes("plan.accountMode === 'paper'"));
   assert.ok(execution.includes('PAPER_BROKER_FILLED'));
   assert.ok(gate.includes('/activate-production-auto-trading '));
   assert.ok(gate.includes('all4'));
-  assert.ok(gate.includes('production-account-readonly-live-qa-v3'));
+  // The activation workflow delegates to the canonical postdeploy verifier.
+  // Keep the 4-provider QA v3 contract enforced in that actual verifier,
+  // rather than demanding obsolete duplicate checks inside the workflow.
+  assert.ok(gate.includes('node .github/scripts/verify-production-preactivation-evidence.cjs'));
+  assert.ok(postdeployEvidence.includes('production-account-readonly-live-qa-v3'));
+  assert.ok(postdeployEvidence.includes('reconciliationPassed !== true'));
+  assert.ok(preactivationEvidence.includes('assertAccountReceipt(account, context);'));
+  assert.ok(preactivationEvidence.includes('assertCredentialReceipt(credential, context);'));
   assert.ok(gate.includes('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED'));
   assert.ok(gate.includes('paper-forward-no-deploy-'));
   assert.ok(gate.includes('validateMemberAutoTradingPaperHandoff'));
@@ -91,11 +106,13 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'"));
+  assert.ok(gate.includes("MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false'"));
   assert.ok(gate.includes("CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
   assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
+  assert.ok(deploy.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false'));
   assert.ok(deploy.includes('CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false'));
   assert.ok(worker.includes('buildAutomaticExitPlanInput'));
   assert.ok(worker.includes('readMarketMark'));

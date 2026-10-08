@@ -50,6 +50,7 @@ export class TradeExecutionEventBridgeService {
         transition,
         { ...order, state: transition.toState },
         plan,
+        { executionMethod: plan.executionMode === 'automatic' ? 'AUTO_POLICY' : 'USER_APPROVED' },
       );
       if (!event) continue;
       mapped += 1;
