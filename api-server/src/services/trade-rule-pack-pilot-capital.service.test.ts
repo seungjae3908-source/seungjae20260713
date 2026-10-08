@@ -531,5 +531,21 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
       /BACKGROUND_PILOT_ENTRY_LIMIT/,
     );
     assert.equal((await repository.listOrders(user)).length, 2, 'cannot place a broker order');
+    // An existing unapproved auto strategy is still real exposure, so its
+    // realized outcomes must not be ignored by the shared 500k profit HWM.
+    await repository.savePlan({
+      ...planFor('history-entry', 'buy', false, openedAt),
+      strategyId: 'UNVERIFIED_AUTO_STRATEGY',
+    } as never);
+    const unrecognized = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.equal(unrecognized.settlementReady, false);
+    assert.ok(unrecognized.blockers.includes('PILOT_CAPITAL_UNSUPPORTED_AUTO_LIVE_STRATEGY'));
+    // Also quarantine orphan fills, which would otherwise vanish when the
+    // adapter cannot join an order to its canonical plan.
+    await repository.saveOrder(
+      orderFor('orphan-order', 'unknown-plan-id', closedAt, 1_000_000) as never,
+    );
+    const orphan = await readRulePackPilotCapitalState(repository, user, new Date(NOW));
+    assert.ok(orphan.blockers.includes('PILOT_CAPITAL_ORDER_PLAN_LINEAGE_MISSING'));
   });
 });
