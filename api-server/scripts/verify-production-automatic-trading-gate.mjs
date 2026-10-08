@@ -270,11 +270,11 @@ for (const token of [
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
   'if (liveEntriesArmedThisTick && hasCapability',
-  'expired automatic member retains read-only Live fill visibility and has zero order authority',
-  'blocked member evidence survives paginated warmup and cannot be erased by a ready later batch',
 ]) {
   requireText(paperWorker, token, 'AUTO_GATE_PAPER_BACKGROUND_CONTRACT_DRIFT');
 }
+requireText(paperWorkerTest, 'expired automatic member retains read-only Live fill visibility and has zero order authority', 'AUTO_GATE_EXPIRED_LIVE_FILL_REGRESSION_MISSING');
+requireText(paperWorkerTest, 'blocked member evidence survives paginated warmup and cannot be erased by a ready later batch', 'AUTO_GATE_PAGINATED_WARMUP_BLOCKER_REGRESSION_MISSING');
 requireText(liveEntryArm, 'activateNotBeforeMs >= armedAtMs', 'AUTO_GATE_WORKER_ARM_TIMESTAMP_ORDER_MISSING');
 requireText(liveEntryArm, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_NOT_BEFORE_ENFORCEMENT_MISSING');
 requireText(liveEntryArm, 'member-auto-trading-live-entry-arm-v1', 'AUTO_GATE_WORKER_ARM_SCHEMA_MISSING');
