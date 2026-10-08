@@ -23,8 +23,8 @@ begin
   ]
   loop
     if to_regprocedure(helper) is not null then
-      execute format('revoke all on function %s from public', helper);
-      execute format('grant execute on function %s to anon, authenticated', helper);
+      execute format('revoke all on function %s from public, anon, authenticated', helper);
+      execute format('grant execute on function %s to authenticated', helper);
     end if;
   end loop;
 
@@ -101,7 +101,7 @@ begin
         'is_approved_member',
         'is_admin'
       )
-      and grantee = 'PUBLIC'
+      and grantee in ('PUBLIC', 'anon')
       and privilege_type = 'EXECUTE'
   ) then
     raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT';
@@ -136,13 +136,6 @@ begin
     where to_regprocedure('public.' || required.routine_name || '()') is not null
       and (
         not exists (
-          select 1 from information_schema.routine_privileges p
-          where p.specific_schema = 'public'
-            and p.routine_name = required.routine_name
-            and p.grantee = 'anon'
-            and p.privilege_type = 'EXECUTE'
-        )
-        or not exists (
           select 1 from information_schema.routine_privileges p
           where p.specific_schema = 'public'
             and p.routine_name = required.routine_name
