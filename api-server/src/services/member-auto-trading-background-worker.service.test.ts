@@ -745,7 +745,8 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
-  await repository.savePolicy(USER, policy());
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
   const syncCalls = { count: 0 };
   let liveReads = 0;
   const base = source(repository, nowMs, { syncCalls, tier: 'admin' });
@@ -754,7 +755,7 @@ test('first live-enabled worker tick is a read/sync warmup and cannot create a l
     async listEligibleMembers() {
       return [{
         userId: USER,
-        policy: policy(),
+        policy: readyPolicy,
         profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
       }];
     },
@@ -794,10 +795,11 @@ test('live warmup survives an empty intermediate member batch and drops only aft
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
-  await repository.savePolicy(USER, policy());
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
   const readyMember = {
     userId: USER,
-    policy: policy(),
+    policy: readyPolicy,
     profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
   } as const;
   let members: readonly any[] = [readyMember];
@@ -1001,6 +1003,51 @@ test('live activation warmup stays fail-closed when no member can place real ord
   }
 });
 
+test('partial-market automatic policy cannot complete live warmup even with order capability', async () => {
+  const keys = [
+    'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+    'AUTO_TRADING',
+    'LIVE_AUTOMATIC_TRADING_ENABLED',
+    'LIVE_TRADING',
+    'REAL_ORDER_ENABLED',
+    'PRIVATE_TRADING_API_ALLOWED',
+  ] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  const partialPolicy = policy();
+  await repository.savePolicy(USER, partialPolicy);
+  const base = source(repository, nowMs, { tier: 'admin' });
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: partialPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
+  });
+
+  try {
+    for (const key of keys) process.env[key] = 'true';
+    const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+    assert.equal(result.liveOrderEligibleMembers, 1);
+    assert.equal(result.livePolicyReadyMembers, 1);
+    assert.equal(result.liveAllFourPolicyReadyMembers, 0);
+    assert.equal(result.liveCycleAllFourPolicyReady, false);
+    assert.equal(result.liveEntryWarmupComplete, false);
+    assert.equal(result.newEntriesFailClosed, true);
+    assert.equal(result.liveOrders, 0);
+  } finally {
+    for (const key of keys) {
+      const value = previous[key];
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('all-four activation readiness requires one order-capable futures member with all four markets enabled', async () => {
   const keys = [
     'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
@@ -1165,7 +1212,8 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
-  await repository.savePolicy(USER, policy());
+  const readyPolicy = allFourPolicy();
+  await repository.savePolicy(USER, readyPolicy);
   const syncCalls = { count: 0 };
   const root = await mkdtemp(join(tmpdir(), 'auto-trading-activation-rehearsal-'));
   const armPath = join(root, 'live-entry-arm.json');
@@ -1176,6 +1224,13 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
   const base = source(repository, nowMs, { syncCalls, tier: 'admin' });
   const worker = new MemberAutoTradingBackgroundWorker({
     ...base,
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: readyPolicy,
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
+      }];
+    },
     async readHandoff() { return empty as never; },
     async readLiveAccountSnapshot() {
       throw new Error('ZERO_MUTATION_REHEARSAL_LIVE_ACCOUNT_READ_FORBIDDEN');
@@ -1200,6 +1255,7 @@ test('zero-mutation activation rehearsal transitions warmup to exact-SHA arm wit
     assert.equal(warmup.executionSyncMissingReferences, 0);
     assert.equal(warmup.liveOrderEligibleMembers, 1);
     assert.equal(warmup.livePolicyReadyMembers, 1);
+    assert.equal(warmup.liveAllFourPolicyReadyMembers, 1);
     assert.equal(warmup.globalEmergencyStopActive, false);
 
     await writeFile(armPath, JSON.stringify({
