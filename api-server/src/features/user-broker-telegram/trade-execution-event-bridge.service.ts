@@ -45,7 +45,25 @@ export class TradeExecutionEventBridgeService {
     membership: MemberTier = 'pending',
     options: { orderId?: string } = {},
   ): Promise<TradeExecutionEventBridgeResult> {
-    const scopedOrderId = options.orderId ?? null;
+    return this.syncInternal(userId, membership, options.orderId ?? null, false);
+  }
+
+  /** Server-owned worker only. The public syncUser route remains Paper-only. */
+  async syncAutomaticOrder(
+    userId: string,
+    membership: MemberTier,
+    orderId: string,
+  ): Promise<TradeExecutionEventBridgeResult> {
+    if (!orderId) throw new Error('EXECUTION_SYNC_ORDER_ID_INVALID');
+    return this.syncInternal(userId, membership, orderId, true);
+  }
+
+  private async syncInternal(
+    userId: string,
+    membership: MemberTier,
+    scopedOrderId: string | null,
+    allowAutomaticLiveOrder: boolean,
+  ): Promise<TradeExecutionEventBridgeResult> {
     if (scopedOrderId) {
       // Strictly resolve the authenticated user's OWN Paper order before fan-out.
       // This does not alter or hide historical immutable source-event conflicts.
@@ -57,12 +75,26 @@ export class TradeExecutionEventBridgeService {
       if (!ownedPlan || ownedPlan.userId !== userId || ownedPlan.id !== ownedOrder.planId) {
         throw new Error('EXECUTION_SYNC_TARGET_NOT_FOUND');
       }
-      if (ownedPlan.accountMode !== 'paper') throw new Error('EXECUTION_SYNC_TARGET_LIVE_FORBIDDEN');
+      if (allowAutomaticLiveOrder) {
+        if (ownedPlan.executionMode !== 'automatic'
+          || (ownedPlan.accountMode !== 'paper' && ownedPlan.accountMode !== 'live')) {
+          throw new Error('EXECUTION_SYNC_TARGET_AUTOMATIC_REQUIRED');
+        }
+      } else if (ownedPlan.accountMode !== 'paper') {
+        throw new Error('EXECUTION_SYNC_TARGET_LIVE_FORBIDDEN');
+      }
     }
-    const allTransitions = await this.tradingRepository.listEvents(userId);
     const transitions = scopedOrderId
-      ? allTransitions.filter((event) => event.orderId === scopedOrderId && event.userId === userId)
-      : allTransitions;
+      ? this.tradingRepository.listEventsForOrder
+        ? await this.tradingRepository.listEventsForOrder(userId, scopedOrderId)
+        : (await this.tradingRepository.listEvents(userId))
+          .filter((event) => event.orderId === scopedOrderId && event.userId === userId)
+      : await this.tradingRepository.listEvents(userId);
+    // A repository adapter is not an authorization boundary by itself.
+    if (scopedOrderId && transitions.some((event) =>
+      event.orderId !== scopedOrderId || event.userId !== userId)) {
+      throw new Error('EXECUTION_SYNC_TARGET_EVENT_SCOPE_MISMATCH');
+    }
     if (scopedOrderId && transitions.length === 0) throw new Error('EXECUTION_SYNC_TARGET_EVENTS_MISSING');
     let mapped = 0;
     let inserted = 0;
