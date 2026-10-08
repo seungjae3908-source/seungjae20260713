@@ -895,7 +895,6 @@ async function liveJournalRiskState(
   policy: TradingPolicy,
   nowMs: number,
   fxCache: Map<string, MemberAutoTradingFxQuote>,
-  entrySymbol: string,
 ) {
   const fxFor = async (market: MemberAutoTradingPaperHandoffEntry['identity']['market']) => {
     let fx = fxCache.get(market);
@@ -965,7 +964,7 @@ async function buildLivePlanInput(input: {
   const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
   const risk = await liveJournalRiskState(
     input.source, input.repository, input.member.userId, input.runtime, input.snapshot,
-    input.member.policy, input.nowMs, input.fxCache, input.entry.identity.symbol,
+    input.member.policy, input.nowMs, input.fxCache,
   );
   const availableBalance = readOnlyAvailableBalance ?? 0;
   const accountValueKrw = Math.max(1, Math.min(
