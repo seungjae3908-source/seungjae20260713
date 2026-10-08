@@ -99,6 +99,10 @@ requireText(workflow, 'health?.liveCycleAllFourPolicyReady === true', 'AUTO_GATE
 requireText(workflow, 'attempt < 360', 'AUTO_GATE_ROTATING_MEMBER_POLL_WINDOW_MISSING');
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
 requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
+requireText(workflow, "const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''))", 'AUTO_GATE_AUTO_HEALTH_TIMESTAMP_MISSING');
+requireText(workflow, "const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''))", 'AUTO_GATE_TELEGRAM_HEALTH_TIMESTAMP_MISSING');
+requireText(workflow, 'nowMs - autoLastTickMs <= 360_000', 'AUTO_GATE_AUTO_HEALTH_FRESHNESS_MISSING');
+requireText(workflow, 'nowMs - telegramLastTickMs <= 360_000', 'AUTO_GATE_TELEGRAM_HEALTH_FRESHNESS_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE', 'AUTO_GATE_TELEGRAM_PM2_FLAGS_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false', 'AUTO_GATE_FIRST_TICK_ENTRY_BLOCK_PROOF_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_ORDER_PROOF_MISSING');
@@ -404,6 +408,7 @@ console.log(JSON.stringify({
   activationWaitsForCompletedMemberReadinessCycle: true,
   globalEmergencyStopMustBeClear: true,
   telegramDeliveryHealthRequiredAfterRestart: true,
+  activationWorkerHealthFreshnessRequired: true,
   manualGatesPreservePersonalTelegramDelivery: true,
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
