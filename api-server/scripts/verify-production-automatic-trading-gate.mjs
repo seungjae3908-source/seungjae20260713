@@ -270,6 +270,7 @@ requireText(paperWorker, "result.handoffStatus = 'BLOCKED_DATA';", 'AUTO_GATE_BA
 requireText(paperWorker, 'selectRotatingHandoffEntries(', 'AUTO_GATE_FAIR_ENTRY_PAGING_MISSING');
 requireText(paperWorker, '&& await this.memberTelegramConnected(userId);', 'AUTO_GATE_READINESS_WITNESS_TELEGRAM_REQUIRED');
 requireText(paperWorker, 'formulaAiReviewReasonsForLive(input.entry, input.nowMs)', 'AUTO_GATE_FORMULA_AI_PROOF_FORWARDING_MISSING');
+requireText(paperWorker, "if (code === 'BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_BLOCKED_RUNTIME_STATUS_MISSING');
 requireText(paperWorker, "throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_MISSING_PROOF_BLOCK_MISSING');
 requireText(handoffContract, 'canonicalAiReviewEvidenceValid(', 'AUTO_GATE_CANONICAL_AI_REVIEW_VALIDATION_MISSING');
 requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
