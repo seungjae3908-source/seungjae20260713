@@ -99,8 +99,58 @@ $expired_associate_block$;
 
 reset role;
 
--- The new audit action must be accepted only as an audit record; this test runs
--- as the database owner and rolls back, so no credential or password is stored.
+-- Admin audit writes must use the narrow RPC. Direct authenticated INSERT is
+-- denied even to an admin, while the RPC validates actor, target, reason and
+-- writes only the fixed password-reset audit shape.
+set role authenticated;
+select set_config('request.jwt.claim.sub', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', true);
+
+do $admin_password_reset_audit_rpc$
+declare
+  evidence jsonb;
+begin
+  evidence := public.record_member_password_reset_authorization(
+    '33333333-3333-3333-3333-333333333333',
+    'member hardening integration RPC'
+  );
+  if evidence->>'action' <> 'member.password.reset'
+     or (evidence->>'resetAuthorized')::boolean is not true
+     or (evidence->>'credentialStored')::boolean is not false then
+    raise exception 'password reset audit RPC returned invalid evidence';
+  end if;
+  if not exists (
+    select 1 from public.member_permission_audit
+    where target_user_id = '33333333-3333-3333-3333-333333333333'
+      and actor_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      and action = 'member.password.reset'
+      and before_value = '{"password":"REDACTED"}'::jsonb
+      and after_value = '{"resetAuthorized":true,"credentialStored":false}'::jsonb
+  ) then
+    raise exception 'password reset audit RPC did not write canonical evidence';
+  end if;
+
+  begin
+    insert into public.member_permission_audit (
+      actor_id, target_user_id, action, before_value, after_value, reason
+    ) values (
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      '33333333-3333-3333-3333-333333333333',
+      'member.password.reset',
+      '{}',
+      '{}',
+      'direct insert must be blocked'
+    );
+    raise exception 'admin directly inserted permission audit evidence';
+  exception
+    when insufficient_privilege then null;
+  end;
+end
+$admin_password_reset_audit_rpc$;
+
+reset role;
+
+-- The audit action constraint still accepts the canonical action when written
+-- by the database owner; the transaction rolls back and no credential is stored.
 insert into public.member_permission_audit (
   actor_id, target_user_id, action, before_value, after_value, reason
 ) values (
