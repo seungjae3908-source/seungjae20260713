@@ -222,6 +222,8 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && tradingCore?.telegramPersonalActivationRequired === false
     && Number(tradingCore?.telegramDeliveryQueued) >= 1
     && tradingCore?.telegramTestDelivered === true;
+  const memberAutoPilotStage = String(tradingCore?.memberAutoPilotStage ?? '');
+  const expectedLivePilotReady = ['limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage);
   const memberAutoPolicyReady = tradingCore?.memberAutoPolicyReady === true
     && Array.isArray(tradingCore?.memberAutoPolicyBlockers)
     && tradingCore.memberAutoPolicyBlockers.length === 0
@@ -229,7 +231,8 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
     && Number.isInteger(tradingCore?.memberAutoBitgetLeverage)
     && tradingCore.memberAutoBitgetLeverage >= 2
     && tradingCore.memberAutoBitgetLeverage <= 7
-    && ['limited-50', 'validated'].includes(tradingCore?.memberAutoPilotStage);
+    && ['approval-20', 'limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage)
+    && tradingCore?.memberAutoLivePilotReady === expectedLivePilotReady;
   if (tradingCore?.schemaVersion !== 'production-trading-core-qa-v4'
     || tradingCore?.productionDeployRunId !== deployRunId
     || tradingCore?.officialProductionOrigin !== true
