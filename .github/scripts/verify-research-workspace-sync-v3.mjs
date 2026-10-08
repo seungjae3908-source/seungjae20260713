@@ -307,6 +307,53 @@ const formulaAiDriftReviewed=[
  'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
  'api-server/test.mjs',
 ];
+const automaticTradingDriftReviewed=[
+ '.github/scripts/production-postdeploy-qa-evidence.cjs',
+ '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
+ '.github/tests/production-telegram-active-readiness.test.mjs',
+ '.github/tests/production-trading-core-qa-contract.test.mjs',
+ '.github/workflows/production-automatic-trading-gate.yml',
+ '.github/workflows/production-futures-live-trading-gate.yml',
+ '.github/workflows/production-live-trading-gate.yml',
+ '.github/workflows/production-trading-core-qa.yml',
+ 'api-server/scripts/verify-production-automatic-trading-gate.mjs',
+ 'api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts',
+ 'api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts',
+ 'api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts',
+ 'api-server/src/index.ts',
+ 'api-server/src/routes/trade-automation.smoke.test.ts',
+ 'api-server/src/routes/trade-automation.ts',
+ 'api-server/src/services/formula-ai-live-exception.service.test.ts',
+ 'api-server/src/services/live-connection-verification.service.ts',
+ 'api-server/src/services/member-auto-trading-ai-review-evidence.service.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.test.ts',
+ 'api-server/src/services/member-auto-trading-background-worker.service.ts',
+ 'api-server/src/services/member-auto-trading-live-arm.service.ts',
+ 'api-server/src/services/trade-automation-integration.test.ts',
+ 'api-server/src/services/trade-automation-optimization.service.ts',
+ 'api-server/src/services/trade-automation-policy-guard.service.test.ts',
+ 'api-server/src/services/trade-automation-policy-guard.service.ts',
+ 'api-server/src/services/trade-automation-risk.service.ts',
+ 'api-server/src/services/trade-automation.service.ts',
+ 'api-server/src/services/trade-automation.types.ts',
+ 'api-server/src/services/trade-execution-pre-submission.test.ts',
+ 'api-server/src/services/trade-execution.service.ts',
+ 'api-server/src/services/trade-pre-submission-risk.service.ts',
+ 'api-server/src/services/trade-risk-envelope.service.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts',
+ 'api-server/src/services/trade-rule-pack-pilot-capital.service.ts',
+ 'api-server/test.mjs',
+ 'stock-analyzer/e2e/auto-trading-professional-ui.spec.ts',
+ 'stock-analyzer/e2e/platform-canonical-integration-contract.spec.ts',
+ 'stock-analyzer/e2e/production-trading-core-qa.spec.ts',
+ 'stock-analyzer/src/components/trade-automation-settings.tsx',
+ 'stock-analyzer/src/pages/auto-trading.tsx',
+ 'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -318,8 +365,19 @@ const allowed=new Set([
  ...tradingQaReviewed,
  ...telegramReleaseReviewed,
  ...formulaAiDriftReviewed,
+ ...automaticTradingDriftReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p));
+if(automaticTradingChanged.length>0){
+ const requiredAutomaticTradingGuards=[
+  '.github/workflows/production-automatic-trading-gate.yml',
+  'api-server/scripts/verify-production-automatic-trading-gate.mjs',
+ ];
+ for(const p of requiredAutomaticTradingGuards)if(!changed.includes(p))throw new Error('AUTOMATIC_TRADING_SCOPE_GUARD_MISSING:'+p);
+ const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
+ for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
+}
 const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
 if(researchCenterChanged.length>0){
  const requiredIntegrationGuards=[
