@@ -613,8 +613,27 @@ function buildPlanInput(
 }
 
 
+/**
+ * A dedicated Paper-only activation takes precedence over every Live authority
+ * switch, including previously enabled values left in the process environment.
+ * This flag never grants real-order or private provider authority.
+ */
+export function memberAutoTradingWorkerMode(
+  env: NodeJS.ProcessEnv = process.env,
+): 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACKGROUND' {
+  const paperOnly = env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  if (paperOnly === 'true') return 'PAPER_ONLY';
+  // An invalid Paper-only flag must not silently fall back to shared Live.
+  if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';
+  return env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'
+    ? 'SHARED_BACKGROUND'
+    : 'DISABLED';
+}
+
 export function liveBackgroundEnabled() {
-  return process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'
+  const paperOnly = process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;
+  return (paperOnly === undefined || paperOnly === 'false')
+    && process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && process.env.LIVE_TRADING === 'true'
@@ -1279,7 +1298,8 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 }
 
 export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | null {
-  if (process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true') {
+  const mode = memberAutoTradingWorkerMode();
+  if (mode === 'DISABLED') {
     console.log('[member-auto-trading-background] disabled; explicit enable flag is required');
     return null;
   }
@@ -1304,8 +1324,10 @@ export function startMemberAutoTradingBackgroundWorker(): { stop(): void } | nul
   void tick();
   const timer = setInterval(() => { void tick(); }, intervalMs(process.env.MEMBER_AUTO_TRADING_BACKGROUND_INTERVAL_MS));
   timer.unref?.();
-  console.log(liveBackgroundEnabled()
-    ? '[member-auto-trading-background] started in Paper+Live guarded mode'
-    : '[member-auto-trading-background] started in Paper-only mode');
+  console.log(mode === 'PAPER_ONLY'
+    ? '[member-auto-trading-background] started with explicit Paper-only activation; Live override blocked'
+    : liveBackgroundEnabled()
+      ? '[member-auto-trading-background] started in Paper+Live guarded mode'
+      : '[member-auto-trading-background] started in Paper-only mode');
   return { stop: () => clearInterval(timer) };
 }

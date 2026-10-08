@@ -75,7 +75,15 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   }
   assert.ok(worker.includes("accountMode: 'paper'"));
   assert.ok(worker.includes('persistMemberAutoTradingPaperPositionBridge'));
-  assert.ok(worker.includes("process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true'"));
+  assert.ok(worker.includes('const paperOnly = env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED;'));
+  assert.ok(worker.includes("if (paperOnly === 'true') return 'PAPER_ONLY';"));
+  assert.ok(worker.includes("env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED === 'true'"));
+  assert.ok(worker.includes("if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';"));
+  assert.ok(worker.includes("return (paperOnly === undefined || paperOnly === 'false')"));
+  const tradingService = read('api-server/src/services/trade-automation.service.ts');
+  assert.ok(tradingService.includes("process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined"));
+  assert.ok(tradingService.includes("process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false'"));
+  assert.ok(worker.includes("const mode = memberAutoTradingWorkerMode();"));
   assert.ok(index.includes('startMemberAutoTradingBackgroundWorker()'));
   assert.ok(execution.includes("plan.accountMode === 'paper'"));
   assert.ok(execution.includes('PAPER_BROKER_FILLED'));
@@ -91,11 +99,13 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'"));
+  assert.ok(gate.includes("MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false'"));
   assert.ok(gate.includes("CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false'"));
   assert.ok(gate.includes('AUTOMATIC_TRADING_ACTIVATION_FAILED_ROLLED_BACK'));
   assert.ok(verifier.includes('AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false'));
   assert.ok(deploy.includes('MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false'));
+  assert.ok(deploy.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false'));
   assert.ok(deploy.includes('CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false'));
   assert.ok(worker.includes('buildAutomaticExitPlanInput'));
   assert.ok(worker.includes('readMarketMark'));
