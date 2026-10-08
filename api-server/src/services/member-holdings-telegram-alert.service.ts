@@ -1,3 +1,5 @@
+import { hasCanonicalMemberAccessState, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
+import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import {
   deliverPersonalTelegramAlert,
   type PersonalTelegramAlertDependencies,
@@ -479,6 +481,19 @@ export function ownerHoldingsChatIdForUser(
   return chatId;
 }
 
+/** Owner holdings room must not bypass canonical member expiry or the
+ * recipient's suppressed, batched, disconnected, or failed personal policy. */
+export function ownerHoldingsMirrorAllowed(
+  personal: PersonalTelegramAlertDispatchResult,
+  profile: MemberAccessProfile | null,
+): boolean {
+  return personal.status === 'POLICY'
+    && personal.policy.decision.action === 'IMMEDIATE'
+    && personal.deliveryQueued === true
+    && hasCanonicalMemberAccessState(profile)
+    && hasCapability(profile, 'canConnectPersonalTelegram');
+}
+
 export async function deliverMemberHoldingTelegramAlert(
   input: MemberHoldingTelegramEvidence,
   dependencies: PersonalTelegramAlertDependencies = {},
@@ -491,8 +506,14 @@ export async function deliverMemberHoldingTelegramAlert(
   }, dependencies);
 
   const ownerChatId = ownerHoldingsChatIdForUser(dispatch.event.userId);
-  if (ownerChatId && !dependencies.sender) {
+  if (ownerChatId && !dependencies.sender && personal.status === 'POLICY'
+      && personal.policy.decision.action === 'IMMEDIATE' && personal.deliveryQueued === true) {
     try {
+      // A user's membership can expire between the initial holdings fanout
+      // and the owner's advisory mirror. Always re-read canonical DB proof.
+      const profile = await createSupabaseUserBrokerTelegramRepository()
+        .getPersonalTelegramMemberProfile(dispatch.event.userId);
+      if (!ownerHoldingsMirrorAllowed(personal, profile)) return personal;
       await sendTelegramAlert({
         ...dispatch.alert,
         destinationChatId: ownerChatId,

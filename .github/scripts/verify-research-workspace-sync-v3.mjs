@@ -365,6 +365,18 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
  'ops/deploy-production.sh',
 ];
+// Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
+const memberTelegramReviewed=[
+ 'api-server/src/services/member-holdings-telegram-producer.service.test.ts',
+ 'api-server/src/services/member-holdings-telegram-producer.service.ts',
+ 'api-server/src/services/member-holdings-telegram-alert.service.ts',
+ 'api-server/src/services/scanner-telegram-delivery.service.ts',
+ 'api-server/src/services/telegram-investment-intelligence.service.ts',
+ 'api-server/src/services/telegram-notification.service.test.ts',
+ 'api-server/src/services/telegram-notification.service.ts',
+ 'api-server/src/services/telegram-signal-followup.service.ts',
+ 'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -377,6 +389,7 @@ const allowed=new Set([
  ...telegramReleaseReviewed,
  ...formulaAiDriftReviewed,
  ...automaticTradingDriftReviewed,
+ ...memberTelegramReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 // The personal Telegram member-profile reads share a repository with automatic
