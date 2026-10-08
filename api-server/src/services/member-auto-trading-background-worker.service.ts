@@ -4,7 +4,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { deriveMemberTier, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import {
   validateMemberAutoTradingPaperHandoff,
-  canonicalAiReviewEvidenceValid,
   type MemberAutoTradingPaperHandoff,
   type MemberAutoTradingPaperHandoffEntry,
 } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
@@ -15,6 +14,7 @@ import {
 } from './trade-automation.repository';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
 import {
@@ -350,7 +350,7 @@ export function formulaAiReviewReasonsForLive(
   entry: MemberAutoTradingPaperHandoffEntry,
   nowMs: number,
 ): string[] {
-  const review = entry.aiReviewEvidence;
+  const review = (entry as MemberAutoTradingPaperHandoffEntry & { aiReviewEvidence?: unknown }).aiReviewEvidence;
   if (!canonicalAiReviewEvidenceValid(review, entry.identity, entry.evaluatedAtMs)
     || !review || nowMs >= review.expiresAtMs || nowMs < review.reviewedAtMs) {
     throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED');

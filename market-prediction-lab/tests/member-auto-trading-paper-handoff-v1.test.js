@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   MEMBER_AUTO_TRADING_PAPER_HANDOFF_VERSION,
   buildMemberAutoTradingPaperHandoff,
   validateMemberAutoTradingPaperHandoff,
-  canonicalAiReviewEvidenceValid,
 } from "../src/member-auto-trading-paper-handoff-v1.js";
 
 const NOW = Date.parse("2026-09-19T02:00:00.000Z");
@@ -295,49 +293,4 @@ test("persisted BLOCKED handoff is valid only as zero-entry latest state", () =>
     () => validateMemberAutoTradingPaperHandoff(forged, NOW),
     /MEMBER_AUTO_TRADING_BLOCKED_HANDOFF_INVALID/u,
   );
-});
-
-
-test("canonical signal AI proof is preserved only when signal-bound, authentic in shape and hashed", () => {
-  const c = candidate();
-  const immutable = {
-    schemaVersion: "canonical-signal-ai-review-v1",
-    source: "CANONICAL_SIGNAL_AI_REVIEW",
-    signalId: c.paperIdentity.signalId,
-    strategyId: c.paperIdentity.strategyId,
-    market: c.paperIdentity.market,
-    direction: c.paperIdentity.direction,
-    researchCodeSha: c.paperIdentity.researchCodeSha,
-    decision: "PASS",
-    liveEligibility: "PASS_ONLY_ELIGIBLE",
-    evidenceDigest: "d".repeat(64),
-    reviewedAtMs: NOW - 4_000,
-    expiresAtMs: NOW + 60_000,
-  };
-  const canonical = (value) => Array.isArray(value)
-    ? `[${value.map(canonical).join(",")}]`
-    : value && typeof value === "object"
-      ? `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
-      : JSON.stringify(value);
-  const proof = { ...immutable, reviewDigest: createHash("sha256").update(canonical(immutable)).digest("hex") };
-  c.execution.aiReviewEvidence = proof;
-  assert.equal(canonicalAiReviewEvidenceValid(proof, c.paperIdentity, NOW), true);
-  const handoff = buildMemberAutoTradingPaperHandoff({
-    cycleId: "ai-evidence-cycle", evaluatedAtMs: NOW,
-    lanes: [lane("CRYPTO_SPOT", [c])],
-  });
-  assert.equal(handoff.status, "READY");
-  assert.deepEqual(handoff.entries[0].aiReviewEvidence, proof);
-  assert.doesNotThrow(() => validateMemberAutoTradingPaperHandoff(handoff, NOW));
-  const forged = structuredClone(proof);
-  forged.signalId = "different-signal";
-  assert.equal(canonicalAiReviewEvidenceValid(forged, c.paperIdentity, NOW), false);
-  c.execution.aiReviewEvidence = forged;
-  const blocked = buildMemberAutoTradingPaperHandoff({
-    cycleId: "forged-ai-evidence", evaluatedAtMs: NOW,
-    lanes: [lane("CRYPTO_SPOT", [c])],
-  });
-  assert.equal(blocked.status, "BLOCKED_DATA");
-  assert.equal(blocked.entryCount, 0);
-  assert.ok(blocked.blockers.includes("CRYPTO_SPOT:HANDOFF_AI_REVIEW_PROOF_INVALID"));
 });

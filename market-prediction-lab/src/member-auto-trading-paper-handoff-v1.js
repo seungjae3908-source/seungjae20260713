@@ -74,39 +74,6 @@ function allowedDirection(market, direction) {
   return market === "CRYPTO_FUTURES" && (direction === "LONG" || direction === "SHORT");
 }
 
-// Preserve AI evidence only when already attached by the canonical producer.
-// Matching hashes bind the review to this exact signal/strategy; no PASS is
-// synthesized from a missing or unverified source.
-export function canonicalAiReviewEvidenceValid(review, identity, evaluatedAtMs) {
-  if (!review || typeof review !== "object" || Array.isArray(review)) return false;
-  const expectedKeys = [
-    "schemaVersion", "source", "signalId", "strategyId", "market", "direction",
-    "researchCodeSha", "decision", "liveEligibility", "evidenceDigest",
-    "reviewedAtMs", "expiresAtMs", "reviewDigest",
-  ];
-  if (Object.keys(review).sort().join("|") !== expectedKeys.sort().join("|")) return false;
-  const { reviewDigest, ...payload } = review;
-  return review.schemaVersion === "canonical-signal-ai-review-v1"
-    && review.source === "CANONICAL_SIGNAL_AI_REVIEW"
-    && review.signalId === identity?.signalId
-    && review.strategyId === identity?.strategyId
-    && review.market === identity?.market
-    && review.direction === identity?.direction
-    && String(review.researchCodeSha).toLowerCase() === String(identity?.researchCodeSha).toLowerCase()
-    && immutableSha(review.researchCodeSha)
-    && review.decision === "PASS"
-    && review.liveEligibility === "PASS_ONLY_ELIGIBLE"
-    && /^[0-9a-f]{64}$/u.test(String(review.evidenceDigest))
-    && finite(review.reviewedAtMs)
-    && finite(review.expiresAtMs)
-    && review.reviewedAtMs > 0
-    && review.reviewedAtMs <= evaluatedAtMs
-    && review.expiresAtMs > review.reviewedAtMs
-    && review.expiresAtMs - review.reviewedAtMs <= 24 * 60 * 60_000
-    && /^[0-9a-f]{64}$/u.test(String(reviewDigest))
-    && reviewDigest === digest(payload);
-}
-
 function candidateBlockers(candidate, market, evaluatedAtMs) {
   const signal = candidate?.signal;
   const identity = candidate?.paperIdentity;
@@ -157,10 +124,6 @@ function candidateBlockers(candidate, market, evaluatedAtMs) {
   }
   if (!safeEnvelope(candidate) || identity?.executionAuthority !== "NONE") {
     blockers.push("HANDOFF_EXECUTION_AUTHORITY_FORBIDDEN");
-  }
-  if (execution?.aiReviewEvidence != null
-    && !canonicalAiReviewEvidenceValid(execution.aiReviewEvidence, identity, evaluatedAtMs)) {
-    blockers.push("HANDOFF_AI_REVIEW_PROOF_INVALID");
   }
 
   if (dataEvidence?.publicOnly !== true || dataEvidence?.dataQuality !== "READY"
@@ -228,7 +191,6 @@ function safeEntry(candidate, cycleId, evaluatedAtMs) {
     },
     profitEvidence: clone(candidate.profitEvidence),
     riskEvidence: clone(candidate.riskEvidence ?? null),
-    ...(candidate.execution?.aiReviewEvidence == null ? {} : { aiReviewEvidence: clone(candidate.execution.aiReviewEvidence) }),
     execution: {
       marketAdapterIdentity: clone(candidate.execution?.marketAdapterIdentity ?? null),
       costPolicy: clone(candidate.execution?.costPolicy ?? null),
@@ -399,10 +361,6 @@ function validatePersistedEntry(entry, cycleId, evaluatedAtMs, nowMs) {
     throw new Error("HANDOFF_ENTRY_STRATEGY_IDENTITY_INVALID");
   }
 
-  if (entry.aiReviewEvidence != null
-    && !canonicalAiReviewEvidenceValid(entry.aiReviewEvidence, identity, evaluatedAtMs)) {
-    throw new Error("HANDOFF_AI_REVIEW_PROOF_INVALID");
-  }
   const risk = entry.riskEvidence;
   if (risk?.status !== "APPROVED" || risk?.source !== "TRADING_RISK_ENGINE"
     || risk?.allowed !== true || risk?.simulatedOnly !== true || risk?.executionAuthority !== "NONE"
