@@ -1531,7 +1531,8 @@ export class MemberAutoTradingBackgroundWorker {
           this.liveCycleAllFourWitnessUserId = null;
         } else if (cycleComplete) {
           this.liveEntryWarmupComplete = this.liveCycleOrderEligibleSeen
-            && this.liveCyclePolicyReadySeen;
+            && this.liveCyclePolicyReadySeen
+            && this.liveCycleAllFourPolicyReadySeen;
           if (!this.liveEntryWarmupComplete) result.newEntriesFailClosed = true;
           this.liveCycleOrderEligibleSeen = false;
           this.liveCyclePolicyReadySeen = false;
