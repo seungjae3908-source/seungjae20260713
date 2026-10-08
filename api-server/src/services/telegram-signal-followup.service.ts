@@ -243,7 +243,12 @@ export function buildTelegramSignalFollowups(
     if (!state) continue;
     state.lastSeenAt = now;
 
-    if (finite(card.price)) {
+    const expiryMs = Date.parse(state.expiresAt);
+    const entryAlreadyExpired = Number.isFinite(expiryMs) && expiryMs <= now
+      && ['CANDIDATE', 'CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING',
+        'DETECTED', 'WATCHING', 'READY_FOR_APPROVAL', 'WEAKENED'].includes(card.signalState);
+
+    if (!entryAlreadyExpired && finite(card.price)) {
       const targets = card.pricePlan.targets.filter((target) => finite(target) && target > 0);
       targets.forEach((target, index) => {
         if (state.reachedTargets.has(index)) return;
@@ -274,18 +279,34 @@ export function buildTelegramSignalFollowups(
       state.lastPrice = card.price;
     }
 
-    const lifecycle = stateEvent(card, state.lastState);
-    if (lifecycle) {
-      updates.push({
-        kind: lifecycle.kind,
-        signalId: card.signalId,
-        symbol: card.symbol,
-        market: card.market,
-        details: lifecycle.details,
-        dedupeKey: `signal-followup:${card.signalId}:state:${card.signalState}`,
-      });
+    if (entryAlreadyExpired) {
+      // The original entry expiry is authoritative even if Scanner has not
+      // yet emitted EXPIRED. Revoke the old order keyboard exactly once.
+      if (state.lastState !== 'EXPIRED') {
+        updates.push({
+          kind: 'EXPIRED',
+          signalId: card.signalId,
+          symbol: card.symbol,
+          market: card.market,
+          details: '⌛ 원래 신호 유효시간이 만료되어 기존 주문 버튼을 제거합니다.',
+          dedupeKey: `signal-followup:${card.signalId}:entry-expired`,
+        });
+      }
+      state.lastState = 'EXPIRED';
+    } else {
+      const lifecycle = stateEvent(card, state.lastState);
+      if (lifecycle) {
+        updates.push({
+          kind: lifecycle.kind,
+          signalId: card.signalId,
+          symbol: card.symbol,
+          market: card.market,
+          details: lifecycle.details,
+          dedupeKey: `signal-followup:${card.signalId}:state:${card.signalState}`,
+        });
+      }
+      if (card.signalState) state.lastState = card.signalState;
     }
-    if (card.signalState) state.lastState = card.signalState;
     announced.set(card.signalId, state);
   }
   return updates;
