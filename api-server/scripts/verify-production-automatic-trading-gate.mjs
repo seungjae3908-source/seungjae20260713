@@ -278,6 +278,11 @@ requireText(paperWorkerTest, 'assert.equal(health.liveAllFourPolicyReadyMembers,
 requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);', 'AUTO_GATE_NO_LIVE_MEMBER_ASSERTION_MISSING');
 
 requireText(autoTradingPage, 'readyForAutomaticOrderEvaluation', 'AUTO_UI_RUNTIME_READINESS_MISSING');
+requireText(autoTradingPage, 'runtimeStatus?.autoTradingBackground', 'AUTO_UI_WORKER_RUNTIME_HEALTH_MISSING');
+requireText(autoTradingPage, 'runtimeStatus?.userTelegramDelivery', 'AUTO_UI_TELEGRAM_RUNTIME_HEALTH_MISSING');
+requireText(autoTradingPage, 'autoWorker.liveEntriesArmed === true', 'AUTO_UI_ARMED_STATE_MISSING');
+requireText(autoTradingPage, '안전대기 · Arm 준비 중', 'AUTO_UI_ARM_WAIT_LABEL_MISSING');
+requireText(autoTradingPage, '자동 실거래 작동 준비됨', 'AUTO_UI_RUNTIME_READY_LABEL_MISSING');
 requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
 requireText(autoTradingPage, "const newEntriesStopped = policy?.newEntriesStopped === true", 'AUTO_UI_NEW_ENTRY_STOP_STATE_MISSING');
@@ -301,6 +306,8 @@ requireText(autoTradingSettings, 'disabled={effectiveStopped}', 'AUTO_SETTINGS_S
 requireText(autoTradingSettings, 'data-testid="global-trading-stop"', 'AUTO_SETTINGS_GLOBAL_STOP_UI_MISSING');
 requireText(autoTradingSettings, '서버 전체 비상정지 · 관리자 해제 필요', 'AUTO_SETTINGS_GLOBAL_STOP_LABEL_MISSING');
 forbid(autoTradingSettings, /window\.setInterval\(\(\) => \{ void load\(\); \}, 15_000\)/u, 'AUTO_SETTINGS_DESTRUCTIVE_REFRESH_FORBIDDEN');
+requireText(tradeAutomationRoute, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_ROUTE_WORKER_HEALTH_STATUS_MISSING');
+requireText(tradeAutomationRoute, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_ROUTE_TELEGRAM_HEALTH_STATUS_MISSING');
 requireText(tradeAutomationRoute, 'enforceMemberTradingPolicy(candidate, current)', 'AUTO_ROUTE_MEMBER_POLICY_GUARD_MISSING');
 requireText(tradeAutomationRoute, 'MEMBER_TRADING_RESUME_REQUIRED', 'AUTO_ROUTE_MEMBER_STOP_BYPASS_BLOCK_MISSING');
 requireText(tradeAutomationRoute, "router.post('/resume'", 'AUTO_ROUTE_MEMBER_RESUME_ENDPOINT_MISSING');
@@ -420,6 +427,7 @@ console.log(JSON.stringify({
   automaticDisablePreservesManualRuntime: true,
   liveEntryArmWorkerUidReadable: true,
   runtimeBackedUiGateStatus: true,
+  workerBackedUiLiveTruth: true,
   stickyStopDashboardTruth: true,
   marketScopedAutomaticReadiness: true,
   stickyMemberStopRequiresConfirmedResume: true,
