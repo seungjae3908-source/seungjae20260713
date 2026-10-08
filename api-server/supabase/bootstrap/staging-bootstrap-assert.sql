@@ -270,3 +270,28 @@ end
 $staging_bootstrap_assert$;
 
 drop function if exists public.raise_exception(text);
+
+
+do $staging_member_security_definer_assert$
+begin
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable')
+      and grantee in ('PUBLIC','anon','authenticated')
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT';
+  end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('current_membership_level','is_approved_member','is_admin','is_full_member')
+      and grantee = 'PUBLIC'
+      and privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT';
+  end if;
+end
+$staging_member_security_definer_assert$;
