@@ -381,9 +381,25 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     paperAutomaticTriggered = true;
     paperFilled = true;
 
-    const synced = await appApi<any>(page, '/api/user-integrations/execution/sync', 'POST', {});
+    const canaryOrderId = String(created.body?.order?.id ?? '');
+    expect(canaryOrderId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(created.body?.order?.planId).toBe(created.body?.plan?.id);
+    expect(created.body?.order?.state).toBe('FILLED');
+    expect(created.body?.plan?.accountMode).toBe('paper');
+    expect(created.body?.plan?.executionMode).toBe('automatic');
+    // Production QA must not replay and reclassify an unrelated user's historic
+    // event history. The exact new, owned simulated fill is the only sync scope.
+    const synced = await appApi<any>(page, '/api/user-integrations/execution/sync', 'POST', {
+      orderId: canaryOrderId,
+    });
     expect(synced.ok, JSON.stringify(synced.body)).toBe(true);
     expect(synced.body?.ok).toBe(true);
+    expect(synced.body?.scopedToOrder).toBe(true);
+    expect(Number(synced.body?.scanned ?? 0)).toBeGreaterThanOrEqual(1);
+    expect(Number(synced.body?.missingReferences ?? -1)).toBe(0);
+    expect(synced.body?.privateApiRequests).toBe(0);
+    expect(synced.body?.ordersSubmitted).toBe(0);
+    expect(synced.body?.ordersCancelled).toBe(0);
     syncInserted = Number(synced.body?.inserted ?? 0);
     deliveryQueued = Number(synced.body?.deliveryQueued ?? 0);
     expect(syncInserted).toBeGreaterThanOrEqual(1);
