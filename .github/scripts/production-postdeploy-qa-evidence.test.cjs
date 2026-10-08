@@ -183,6 +183,8 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.telegramActivationState, 'ACTIVE_VERIFIED');
   assert.equal(evidence.telegramActivationVerified, true);
   assert.equal(evidence.memberAutoPolicyReady, true);
+  assert.equal(evidence.memberAutoLivePilotReady, true);
+  assert.equal(evidence.memberAutoPilotStage, 'validated');
 });
 
 test('Trading Core evidence may be core-ready while live pilot remains intentionally unprepared', () => {
@@ -224,6 +226,8 @@ test('Trading Core evidence may be core-ready while live pilot remains intention
   const evidence = buildProductionPostdeployQaEvidence(input);
   assert.equal(evidence.activationReady, true);
   assert.equal(evidence.memberAutoPolicyReady, true);
+  assert.equal(evidence.memberAutoLivePilotReady, false);
+  assert.equal(evidence.memberAutoPilotStage, 'approval-20');
 });
 
 test('builds preactivation evidence before Telegram workers are enabled', () => {
