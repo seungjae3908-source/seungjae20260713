@@ -51,7 +51,7 @@ import { TradeExecutionEventBridgeService } from '../features/user-broker-telegr
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import { CanonicalPortfolioSyncSink } from '../features/user-broker-telegram/user-broker-telegram.runtime';
 import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
-import { readUserTelegramDeliveryWorkerHealth, userTelegramDeliveryWorkerHealthy } from '../features/user-broker-telegram/user-broker-telegram.worker';
+import { readUserTelegramDeliveryWorkerHealth, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from '../features/user-broker-telegram/user-broker-telegram.worker';
 import type { TelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.types';
 import {
   evaluateRulePackPilotEntryGuard,
@@ -863,6 +863,29 @@ function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEnt
   return plan.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
 }
 
+/**
+ * Unmatched external holdings cannot be valued from automatic plan notional.
+ * Refuse a new Live entry rather than assuming zero external exposure. Exit
+ * tracking is separately protected and must not depend on this entry guard.
+ */
+export function assertCanonicalLiveProviderPositions(
+  positions: CanonicalAccountSnapshot['positions'],
+  plans: readonly TradingPlan[],
+) {
+  if (!Array.isArray(positions)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE');
+  for (const position of positions) {
+    if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
+    if (Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
+    const matching = plans.filter((plan) => normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
+    if (matching.length === 0) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
+    const declaredSide = String(position.side ?? '').trim().toLowerCase();
+    if (declaredSide && matching.some((plan) => plan.exchange === 'bitget')
+      && !matching.some((plan) => plan.exchange === 'bitget' && plan.side === declaredSide)) {
+      throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH');
+    }
+  }
+}
+
 async function liveJournalRiskState(
   source: MemberAutoTradingBackgroundSource,
   repository: TradingRepository,
@@ -897,17 +920,13 @@ async function liveJournalRiskState(
     return total;
   };
   const livePlans = activeLivePlans(runtime);
+  assertCanonicalLiveProviderPositions(snapshot.positions, livePlans);
   const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
   for (const position of snapshot.positions ?? []) {
-    if (!finite(position.quantity) || Math.abs(position.quantity!) <= 0) continue;
+    if (!finite(position.quantity) || Math.abs(position.quantity!) <= POSITION_QUANTITY_TOLERANCE) continue;
     const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
-    if (!matched) {
-      if (normalizedSymbol(position.symbol) === normalizedSymbol(entrySymbol)) {
-        throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_SAME_SYMBOL');
-      }
-      continue;
-    }
+    if (!matched) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
     if (!finite(position.unrealizedPnl)) continue;
     const fx = await fxFor(tradeMarketForPlan(matched));
     unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
@@ -1730,7 +1749,20 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   async memberTelegramConnected(userId: string) {
     const connection = await createSupabaseUserBrokerTelegramRepository()
       .getTelegramConnection(userId);
-    return connection?.status === 'ACTIVE' && Boolean(connection.telegramChatId);
+    if (connection?.status !== 'ACTIVE' || !connection.telegramChatId) return false;
+    // Global worker SENT can belong to another user. Only a genuine, recent
+    // execution delivery to this SAME member can prove their chat works.
+    const nowMs = Date.now();
+    const { data, error } = await this.client.from('notification_deliveries')
+      .select('state,updated_at')
+      .eq('user_id', userId)
+      .eq('delivery_kind', 'EXECUTION_EVENT')
+      .in('state', ['SENT', 'RETRY_SCHEDULED', 'DEAD_LETTER', 'FAILED'])
+      .gte('updated_at', new Date(nowMs - 24 * 60 * 60_000).toISOString())
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw new Error('BACKGROUND_MEMBER_TELEGRAM_SENT_RECEIPT_REQUIRED');
+    return verifiedRecentTelegramDeliveryReceipt(data?.[0] ?? null, nowMs) !== null;
   }
 
   async revalidateLiveAllFourReadiness(userId: string) {
