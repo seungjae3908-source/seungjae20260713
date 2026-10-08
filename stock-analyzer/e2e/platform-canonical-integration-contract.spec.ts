@@ -87,8 +87,9 @@ test('unified journal exposes canonical signal plan order fill lineage', () => {
 
 test('operational observability exposes market activity, delivery health and pre-trade snapshot identity without adding authority', () => {
   expect(tradeAutomationRoute).toContain('marketActivityByMarket');
-  expect(tradeAutomationRoute).toContain('autoTradingBackground: sanitizedAutomaticRuntimeHealth()');
-  expect(tradeAutomationRoute).toContain('userTelegramDelivery: sanitizedTelegramDeliveryRuntimeHealth()');
+  expect(tradeAutomationRoute).toContain("const mayInspectLiveRuntime = Boolean(req.member && hasCapability(req.member, 'canPlaceOrders'))");
+  expect(tradeAutomationRoute).toContain('autoTradingBackground: mayInspectLiveRuntime ? sanitizedAutomaticRuntimeHealth() : null');
+  expect(tradeAutomationRoute).toContain('userTelegramDelivery: mayInspectLiveRuntime ? sanitizedTelegramDeliveryRuntimeHealth() : null');
   const sanitizedRuntimeHealth = tradeAutomationRoute.match(
     /function sanitizedAutomaticRuntimeHealth\(\) \{[\s\S]*?\n\}/,
   )?.[0] ?? '';
