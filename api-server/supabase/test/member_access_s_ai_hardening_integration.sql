@@ -13,6 +13,30 @@ on conflict (user_id, id) do update set payload = excluded.payload, version = ex
 set role authenticated;
 select set_config('request.jwt.claim.sub', '33333333-3333-3333-3333-333333333333', true);
 
+do $profile_acl_least_privilege$
+begin
+  if (select count(*) from public.profiles where id = auth.uid()) <> 1 then
+    raise exception 'authenticated member cannot read own profile';
+  end if;
+
+  begin
+    update public.profiles
+    set display_name = display_name
+    where id = auth.uid();
+    raise exception 'authenticated member directly updated profile';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  begin
+    truncate table public.profiles;
+    raise exception 'authenticated member truncated profiles';
+  exception
+    when insufficient_privilege then null;
+  end;
+end
+$profile_acl_least_privilege$;
+
 do $associate_read_only_analysis$
 declare
   affected integer;
