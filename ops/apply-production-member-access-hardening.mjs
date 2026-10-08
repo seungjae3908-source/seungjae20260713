@@ -240,6 +240,27 @@ begin
   ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
 
   if exists (
+    select 1 from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee in ('PUBLIC','anon')
+  ) then raise exception 'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT'; end if;
+
+  if exists (
+    select 1 from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type <> 'SELECT'
+  ) or not exists (
+    select 1 from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type = 'SELECT'
+  ) then raise exception 'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID'; end if;
+
+  if exists (
     select 1 from information_schema.routine_privileges
     where specific_schema = 'public'
       and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable')
@@ -342,6 +363,7 @@ const artifact = {
   atomic_transaction: true,
   migration_applied: 2,
   security_definer_privileges_locked: true,
+  profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
   associate_journal_read_only: true,
