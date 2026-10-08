@@ -19,6 +19,15 @@ on:
       - ops/verify-production-telegram-runtime-readiness.mjs
       - api-server/src/services/trade-automation.service.ts
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/routes/trade-automation.smoke.test.ts
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/services/trade-automation.types.ts
+      - api-server/src/services/trade-automation-risk.service.ts
+      - api-server/src/services/trade-automation-optimization.service.ts
+      - api-server/src/services/formula-ai-live-exception.service.test.ts
+      - api-server/src/services/formula-ai-live-exception.service.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts
+      - api-server/src/services/trade-rule-pack-pilot-capital.service.ts
       - api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts
       - api-server/src/index.ts
       - api-server/src/services/spot-live-limited-capability.service.ts
