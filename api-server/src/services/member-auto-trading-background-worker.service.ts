@@ -1,6 +1,5 @@
 import path from 'node:path';
-import { constants } from 'node:fs';
-import { open, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deriveMemberTier, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import {
@@ -14,6 +13,7 @@ import {
   type TradingRepository,
 } from './trade-automation.repository';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
+import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
 import {
@@ -67,8 +67,6 @@ const MIN_INTERVAL_MS = 10_000;
 const MAX_INTERVAL_MS = 300_000;
 const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
-const DEFAULT_LIVE_ENTRY_ARM_PATH =
-  '/opt/stock-app/.deploy/auto-trading-live-entry-arm.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
 const executionProjectionTransport: TelegramTransport = {
@@ -225,36 +223,6 @@ export function readMemberAutoTradingBackgroundRuntimeHealth() {
   return backgroundRuntimeHealth;
 }
 
-async function liveEntryArmPresent(nowMs = Date.now()) {
-  if (!liveBackgroundEnabled()) return false;
-  const targetSha = String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase();
-  if (!/^[a-f0-9]{40}$/u.test(targetSha)) return false;
-  const configured = process.env.MEMBER_AUTO_TRADING_LIVE_ENTRY_ARM_PATH?.trim()
-    || DEFAULT_LIVE_ENTRY_ARM_PATH;
-  if (!path.isAbsolute(configured)) return false;
-  let handle;
-  try {
-    handle = await open(path.resolve(configured), constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size <= 0 || stat.size > 16 * 1024
-      || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
-      || (stat.mode & 0o077)) return false;
-    const value = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
-    const armedAtMs = Date.parse(String(value.armedAt ?? ''));
-    const activateNotBeforeMs = Date.parse(String(value.activateNotBeforeAt ?? ''));
-    return value.schemaVersion === 'member-auto-trading-live-entry-arm-v1'
-      && value.armed === true
-      && String(value.targetSha ?? '').toLowerCase() === targetSha
-      && Number.isFinite(armedAtMs)
-      && Number.isFinite(activateNotBeforeMs)
-      && activateNotBeforeMs >= armedAtMs
-      && nowMs >= activateNotBeforeMs;
-  } catch {
-    return false;
-  } finally {
-    await handle?.close().catch(() => {});
-  }
-}
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -1117,6 +1085,16 @@ function errorCode(error: unknown) {
   return /^[A-Z0-9_]+$/u.test(value) ? value : 'BACKGROUND_AUTOMATION_FAILED';
 }
 
+export function selectRotatingHandoffEntries<T>(
+  entries: readonly T[], offset: number, limit: number,
+): { entries: readonly T[]; nextOffset: number } {
+  if (!entries.length) return { entries: [], nextOffset: 0 };
+  const start = Number.isSafeInteger(offset) && offset >= 0 ? offset % entries.length : 0;
+  const take = Number.isSafeInteger(limit) && limit > 0 ? limit : 1;
+  const selected = entries.slice(start, start + take);
+  return { entries: selected, nextOffset: start + selected.length >= entries.length ? 0 : start + selected.length };
+}
+
 export class MemberAutoTradingBackgroundWorker {
   private running = false;
   private liveEntryWarmupComplete = false;
@@ -1124,6 +1102,7 @@ export class MemberAutoTradingBackgroundWorker {
   private liveCyclePolicyReadySeen = false;
   private liveCycleAllFourPolicyReadySeen = false;
   private liveCycleAllFourWitnessUserId: string | null = null;
+  private handoffEntryOffset = 0;
 
   constructor(private readonly source: MemberAutoTradingBackgroundSource) {}
 
@@ -1187,18 +1166,32 @@ export class MemberAutoTradingBackgroundWorker {
     this.running = true;
     try {
       const nowMs = now.getTime();
-      const handoff = await this.source.readHandoff(nowMs);
-      if (handoff) result.handoffStatus = handoff.status;
+      // A broken new-entry handoff cannot suppress guarded existing exits.
+      let handoff: MemberAutoTradingPaperHandoff | null = null;
+      try {
+        handoff = await this.source.readHandoff(nowMs);
+        if (handoff) result.handoffStatus = handoff.status;
+      } catch {
+        result.handoffStatus = 'BLOCKED_DATA';
+        result.failures += 1;
+      }
       result.handoffReady = handoff?.status === 'READY';
-      if (!result.handoffReady) result.newEntriesFailClosed = true;
+      if (!result.handoffReady) {
+        result.newEntriesFailClosed = true;
+        this.handoffEntryOffset = 0;
+      }
 
       const members = (await this.source.listEligibleMembers()).slice(0, MAX_MEMBERS_PER_TICK);
       result.members = members.length;
       result.liveOrderEligibleMembers = members.filter((member) =>
         hasCapability(member.profile, 'canPlaceOrders')).length;
-      const entries = result.handoffReady
-        ? handoff!.entries.slice(0, MAX_ENTRIES_PER_TICK)
-        : [];
+      const batch = selectRotatingHandoffEntries(
+        result.handoffReady ? handoff!.entries : [],
+        this.handoffEntryOffset,
+        MAX_ENTRIES_PER_TICK,
+      );
+      this.handoffEntryOffset = batch.nextOffset;
+      const entries = batch.entries;
       result.entries = entries.length;
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
 
@@ -1473,6 +1466,13 @@ export class MemberAutoTradingBackgroundWorker {
               if (this.source.telegramDeliveryHealthy?.(Date.now()) !== true) {
                 result.newEntriesFailClosed = true;
                 result.liveEntriesSuppressedByTelegram += 1;
+                result.blocked += 1;
+                break;
+              }
+              // The operator may revoke the arm during provider preflight.
+              if (!await liveEntryArmPresent()) {
+                result.newEntriesFailClosed = true;
+                result.liveEntriesSuppressedByWarmupOrArm += 1;
                 result.blocked += 1;
                 break;
               }
