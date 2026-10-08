@@ -330,6 +330,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const marketMeta = MARKETS.find((item) => item.value === market)!;
   const selectionMatchesMarket = Boolean(selection && selection.market === marketMeta.selectionMarket);
   const policy = runtimeStatus?.policy;
+  const liveStrategyConfigured = Array.isArray(policy?.enabledStrategies)
+    && policy.enabledStrategies.length > 0;
   const walletAudit = runtimeStatus?.automaticPaperWalletBootstrap;
   const marketEnabled = Boolean(policy?.marketEnabled?.[market]);
   const selectedProvider = market === 'crypto_spot'
@@ -346,7 +348,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const runtimeNowMs = runtimeClockMs;
   const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
   const telegramWorkerFresh = runtimeHealthFresh(telegramWorker?.lastTickAt, runtimeNowMs);
-  const automaticRuntimeReady = autoWorker?.enabled === true
+  const automaticRuntimeReady = liveStrategyConfigured
+    && autoWorker?.enabled === true
     && autoWorker.liveModeRequested === true
     && autoWorker.tickOk === true
     && autoWorkerFresh
@@ -371,6 +374,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? '상태 조회 실패'
       : !canPlaceOrders
       ? '계정 주문 권한 없음'
+      : !liveStrategyConfigured
+        ? '실자동매매 전략 미등록'
       : !liveReadiness?.automaticServerGateEnabled
         ? '자동 Gate OFF'
         : !liveReadiness?.readyForAutomaticOrderEvaluation
