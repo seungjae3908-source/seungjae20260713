@@ -34,7 +34,10 @@ class FakeTelegramTransport implements TelegramTransport {
 
 class FakePortfolioSink implements PortfolioSyncSink {
   readonly events: UserExecutionEvent[] = [];
-  async accept(event: UserExecutionEvent) { this.events.push(structuredClone(event)); }
+  async accept(event: UserExecutionEvent) {
+    if (this.events.some((row) => row.sourceEventId === event.sourceEventId && row.userId === event.userId)) return;
+    this.events.push(structuredClone(event));
+  }
 }
 
 const APPROVED_ASSOCIATE = Object.freeze({
@@ -436,4 +439,68 @@ test('recent durable SENT receipt restores Telegram health only when no newer fa
   assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now - 25 * 60 * 60_000).toISOString() }, now), null);
   assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now + 10_000).toISOString() }, now), null);
   assert.equal(verifiedRecentTelegramDeliveryReceipt(null, now), null);
+});
+
+
+test('interrupted canonical event fan-out recovers journal and Telegram using the original persisted event ID', async () => {
+  const { service, repository, portfolio } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const original = {
+    ...manualPortfolioEvent({
+      id: 'crash-after-event-insert', userId: 'user-a',
+      symbol: 'BTC', market: 'CRYPTO_SPOT', quantity: 0.01, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+  };
+  let failOnce = true;
+  const failingPortfolio: PortfolioSyncSink = {
+    async accept(event) {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error('TEST_PORTFOLIO_PROJECTION_CRASH');
+      }
+      await portfolio.accept(event);
+    },
+  };
+  const recoveryService = new UserBrokerTelegramService(repository, new FakeTelegramTransport(),
+    failingPortfolio, 'ci_test_bot');
+  await assert.rejects(
+    () => recoveryService.recordEvent(original, new Date(), 'associate'),
+    /TEST_PORTFOLIO_PROJECTION_CRASH/,
+  );
+  const persisted = await repository.getExecutionEventBySource('user-a', original.sourceEventId);
+  assert.equal(persisted?.id, original.id);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+  const recovered = await recoveryService.recordEvent({
+    ...original, id: 'fresh-uuid-on-retry',
+  }, new Date(), 'associate');
+  assert.equal(recovered.inserted, false);
+  assert.equal(recovered.deliveryQueued, true);
+  assert.equal(portfolio.events.length, 1);
+  const deliveries = await repository.listDeliveries('user-a');
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]?.eventId, original.id);
+  const repeated = await recoveryService.recordEvent({
+    ...original, id: 'second-retry-id',
+  }, new Date(), 'associate');
+  assert.equal(repeated.inserted, false);
+  assert.equal(repeated.deliveryQueued, false);
+  assert.equal(portfolio.events.length, 1);
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
+});
+
+test('source-event replay recovers a missed outbox even when canonical event and journal already exist', async () => {
+  const { service, repository } = fixture();
+  const original = manualPortfolioEvent({
+    id: 'late-telegram-bind', userId: 'user-a', symbol: 'AAPL',
+    market: 'US', quantity: 1, price: 100,
+  });
+  assert.deepEqual(await service.recordEvent(original, new Date(), 'associate'),
+    { inserted: true, deliveryQueued: false });
+  await link(service, 'user-a', 'chat-a');
+  const retry = await service.recordEvent({ ...original, id: 'different-event-uuid' }, new Date(), 'associate');
+  assert.equal(retry.inserted, false);
+  assert.equal(retry.deliveryQueued, true);
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
 });
