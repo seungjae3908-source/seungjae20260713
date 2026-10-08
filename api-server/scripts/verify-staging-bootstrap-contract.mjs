@@ -44,6 +44,8 @@ assert(runner.includes('2026100601_member_access_s_ai_hardening.sql'), 'atomic r
 assert(runner.includes('2026100801_member_security_definer_lockdown.sql'), 'atomic runner must include member SECURITY DEFINER lockdown');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'member security lockdown must verify trigger-only direct EXECUTE removal');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'), 'member security lockdown must verify PUBLIC EXECUTE removal from RLS helpers');
+assert(memberSecurityDefinerLockdown.includes('MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING'), 'member security lockdown must preserve authenticated RLS helper execution');
+assert(memberSecurityDefinerLockdown.includes("grant execute on function %s to authenticated"), 'member security lockdown must not regrant helper execution to anon');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'), 'member security lockdown must reject PUBLIC/anon permission RPC execution');
 assert(memberSecurityDefinerLockdown.includes("'public.is_full_member()'"), 'member security lockdown must revoke the obsolete legacy full-member helper');
 assert(memberSecurityDefinerLockdown.includes('MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT'), 'member security lockdown must remove public/anon profile table grants');
@@ -52,6 +54,7 @@ assert(memberSecurityDefinerLockdown.includes('revoke all privileges on table pu
 assert(memberSecurityDefinerLockdown.includes('grant select on table public.profiles to authenticated'), 'member security lockdown must restore authenticated profile SELECT only');
 assert(assertion.includes('MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'), 'final assertion must verify trigger-only SECURITY DEFINER lockdown');
 assert(assertion.includes('MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'), 'final assertion must verify RLS helper PUBLIC privilege lockdown');
+assert(assertion.includes('MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING'), 'final assertion must verify authenticated helper execution');
 assert(assertion.includes('MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'), 'final assertion must verify permission RPC least privilege');
 assert(memberAccessHardening.includes('membership_expires_at'), 'member hardening must add membership expiry');
 assert(memberAccessHardening.includes("public.current_membership_level() in ('associate', 'regular', 'admin')"), 'member hardening must allow associate own-journal analytics reads');
