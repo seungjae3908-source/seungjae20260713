@@ -48,6 +48,13 @@ on:
       - market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
       - market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
+      - .github/workflows/research-center-predeploy-validation.yml
+      - .github/workflows/research-production-validation.yml
+      - market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
+      - market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+      - market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+      - market-prediction-lab/tests/research-bundle-formula-fixture.js
+      - research-production/test/historical-pipelines.test.mjs
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
@@ -306,6 +313,16 @@ jobs:
             market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
             .github/workflows/paper-forward-schedule-validation.yml
+            .github/workflows/research-center-predeploy-validation.yml
+            .github/workflows/research-production-validation.yml
+            market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
+            market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+            market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+            market-prediction-lab/tests/research-bundle-formula-fixture.js
+            research-production/src/engine.mjs
+            research-production/test/historical-pipelines.test.mjs
+            research-production/test/paper-risk-policy-transport.test.mjs
+            research-production/test/research-engine.test.mjs
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
@@ -518,6 +535,17 @@ jobs:
             }
             [[ "$path" != stock-analyzer/* ]]
           done
+
+      - name: Verify Research formula queue does not grant execution authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          node --check market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
+          node --test market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
+          grep -Fq "executionAuthority: 'NONE'" market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          grep -Fq 'FORMULA_QUEUE_UNATTESTED_STAGE_EVIDENCE_FORBIDDEN' market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          grep -Fq "id: 'formula-backtest-queue'" research-production/src/engine.mjs
 
       - name: Validate JavaScript and shell syntax
         shell: bash
