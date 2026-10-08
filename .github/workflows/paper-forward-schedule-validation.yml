@@ -283,6 +283,30 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
 
+      - name: Verify current Release Control gates and Paper-only authority remain isolated
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for workflow in \
+            .github/workflows/paper-forward-schedule-activation.yml \
+            .github/workflows/paper-forward-schedule-no-deploy-activation.yml \
+            .github/workflows/paper-forward-schedule-disable.yml; do
+            grep -Fq 'github.event.issue.number == 1555' "$workflow"
+            ! grep -Eq 'github\\.event\\.issue\\.number == 23\\b' "$workflow"
+          done
+          for workflow in \
+            .github/workflows/paper-forward-schedule-activation.yml \
+            .github/workflows/paper-forward-schedule-disable.yml; do
+            grep -Fq "github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02'" "$workflow"
+            grep -Fq 'issue_number: context.issue.number' "$workflow"
+            ! grep -Eq 'for \\(const issue_number of \\[23' "$workflow"
+          done
+          grep -Fq "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" \
+            .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+          ! grep -Eiq 'LIVE_TRADING:[[:space:]]+true|REAL_ORDER_ENABLED:[[:space:]]+true' \
+            .github/workflows/paper-forward-schedule-activation.yml \
+            .github/workflows/paper-forward-schedule-no-deploy-activation.yml
+
       - name: Require bounded non-UI diff
         shell: bash
         run: |

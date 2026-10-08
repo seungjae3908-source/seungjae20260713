@@ -16,8 +16,8 @@ jobs:
   gate:
     name: Validate owner stale-schedule disable command
     if: >-
-      github.event.issue.number == 23 &&
-      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
       startsWith(github.event.comment.body, '/disable-paper-forward-schedule ')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -275,11 +275,9 @@ jobs:
               '- Live Trading: `false`',
               '- Schedule active: `false`',
             ].join('\n');
-            for (const issue_number of [23, 62]) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number,
-                body,
-              });
-            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
