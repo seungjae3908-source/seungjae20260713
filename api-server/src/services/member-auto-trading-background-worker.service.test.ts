@@ -2383,3 +2383,20 @@ test('automatic outbox selects post-wallet Paper orders and all automatic Live o
     ['live-old-order'],
   );
 });
+
+test('long-running worker must use a fresh clock so a later same-tick Paper fill is selected', () => {
+  const walletStartedAtMs = Date.parse('2026-10-09T00:00:00.000Z');
+  const plan = [{ id: 'late-paper-plan', accountMode: 'paper', executionMode: 'automatic' }] as TradingPlan[];
+  const orders = [{
+    id: 'late-paper-order', planId: 'late-paper-plan',
+    createdAt: '2026-10-09T00:00:45.000Z',
+  }] as import('./trade-automation.types').TradingOrder[];
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs),
+    [],
+  );
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs + 50_000),
+    ['late-paper-order'],
+  );
+});
