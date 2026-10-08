@@ -275,6 +275,31 @@ drop function if exists public.raise_exception(text);
 do $staging_member_security_definer_assert$
 begin
   if exists (
+    select 1 from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee in ('PUBLIC','anon')
+  ) then
+    raise exception 'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT';
+  end if;
+
+  if exists (
+    select 1 from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type <> 'SELECT'
+  ) or not exists (
+    select 1 from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type = 'SELECT'
+  ) then
+    raise exception 'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID';
+  end if;
+
+  if exists (
     select 1 from information_schema.routine_privileges
     where specific_schema = 'public'
       and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable')
