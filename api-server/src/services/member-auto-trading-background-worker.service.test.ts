@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +16,7 @@ import {
   readMemberAutoTradingBackgroundRuntimeHealth,
   startMemberAutoTradingBackgroundWorker,
   selectRotatingHandoffEntries,
+  formulaAiReviewReasonsForLive,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -1500,4 +1502,40 @@ test('a broken handoff is fail-closed for entries without terminating the member
   assert.equal(result.createdPlans, 0);
   assert.equal(result.liveOrders, 0);
   assert.equal(selectedMembers, 1);
+});
+
+
+test('formula+AI pilot cannot synthesize a PASS review from an ordinary Paper handoff', () => {
+  const nowMs = Date.now();
+  const entry = handoff(nowMs).entries[0] as any;
+  assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
+  const immutable = {
+    schemaVersion: 'canonical-signal-ai-review-v1',
+    source: 'CANONICAL_SIGNAL_AI_REVIEW',
+    signalId: entry.identity.signalId,
+    strategyId: entry.identity.strategyId,
+    market: entry.identity.market,
+    direction: entry.identity.direction,
+    researchCodeSha: entry.identity.researchCodeSha,
+    decision: 'PASS',
+    liveEligibility: 'PASS_ONLY_ELIGIBLE',
+    evidenceDigest: 'f'.repeat(64),
+    reviewedAtMs: nowMs - 2_000,
+    expiresAtMs: nowMs + 60_000,
+  };
+  const canonical = (v: any): string => Array.isArray(v)
+    ? `[${v.map(canonical).join(',')}]`
+    : v && typeof v === 'object'
+      ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`
+      : JSON.stringify(v);
+  entry.aiReviewEvidence = {
+    ...immutable,
+    reviewDigest: createHash('sha256').update(canonical(immutable)).digest('hex'),
+  };
+  const reasons = formulaAiReviewReasonsForLive(entry, nowMs);
+  assert.ok(reasons.includes('AI_REVIEW_DECISION:PASS'));
+  assert.ok(reasons.includes('AI_REVIEW_LIVE_ELIGIBLE:PASS_ONLY_ELIGIBLE'));
+  assert.ok(reasons.includes('STRATEGY_RULE_PACK:' + entry.identity.strategyId));
+  assert.ok(reasons.includes('AI_REVIEW_EVIDENCE:' + 'f'.repeat(64)));
+  assert.throws(() => formulaAiReviewReasonsForLive(entry, nowMs + 60_001), /BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED/);
 });
