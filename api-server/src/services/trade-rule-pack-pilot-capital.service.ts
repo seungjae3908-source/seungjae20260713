@@ -1,5 +1,5 @@
 import type { TradingRepository } from './trade-automation.repository';
-import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import type { TradingOrder, TradingPlan, TradingPolicy } from './trade-automation.types';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
@@ -64,7 +64,11 @@ export function deriveRulePackPilotCapitalFromTrades(
   let dailyRealizedPnlKrw = 0;
   let dailyLosingTrades = 0;
   const latestLossBySymbol: Record<string, RulePackPilotLossReference> = {};
+  const blockers: string[] = [];
+  const seenTradeIds = new Set<string>();
+  let settledTradeCount = 0;
   const today = kstDay(now);
+  const nowMs = now.getTime();
 
   const sorted = [...trades].sort((left, right) => {
     const time = Date.parse(left.closedAt) - Date.parse(right.closedAt);
@@ -72,7 +76,21 @@ export function deriveRulePackPilotCapitalFromTrades(
   });
 
   for (const trade of sorted) {
-    if (!finite(trade.netPnlKrw) || !Number.isFinite(Date.parse(trade.closedAt))) continue;
+    const closedAtMs = Date.parse(trade.closedAt);
+    // Never silently treat invalid/duplicate/future trade evidence as a
+    // successful settlement, or credit the same close twice on replay.
+    if (!trade.id?.trim() || !trade.symbol?.trim() || !trade.signalId?.trim()
+      || !finite(trade.netPnlKrw) || !Number.isFinite(closedAtMs)
+      || !Number.isFinite(nowMs) || closedAtMs > nowMs + 5_000) {
+      blockers.push('PILOT_CAPITAL_TRADE_EVIDENCE_INVALID');
+      continue;
+    }
+    if (seenTradeIds.has(trade.id)) {
+      blockers.push('PILOT_CAPITAL_DUPLICATE_SETTLEMENT');
+      continue;
+    }
+    seenTradeIds.add(trade.id);
+    settledTradeCount += 1;
     const pnl = trade.netPnlKrw;
     realizedNetPnlKrw += pnl;
     if (kstDay(trade.closedAt) === today) {
@@ -89,7 +107,7 @@ export function deriveRulePackPilotCapitalFromTrades(
       continue;
     }
 
-    consecutiveLosses = 0;
+    if (pnl > 0) consecutiveLosses = 0;
     const totalBefore = operatingCapitalKrw + reserveKrw;
     const totalAfter = totalBefore + pnl;
     const newHighProfit = Math.max(0, totalAfter - highWaterMarkKrw);
@@ -110,13 +128,13 @@ export function deriveRulePackPilotCapitalFromTrades(
     maxEntryKrw: roundKrw(operatingCapitalKrw),
     realizedNetPnlKrw: roundKrw(realizedNetPnlKrw),
     compoundedProfitKrw: roundKrw(compoundedProfitKrw),
-    settledTradeCount: sorted.length,
+    settledTradeCount,
     dailyRealizedPnlKrw: roundKrw(dailyRealizedPnlKrw),
     dailyLosingTrades,
     consecutiveLosses,
     latestLossBySymbol: Object.freeze({ ...latestLossBySymbol }),
-    settlementReady: true,
-    blockers: Object.freeze([]),
+    settlementReady: blockers.length === 0,
+    blockers: Object.freeze([...new Set(blockers)].sort()),
     reserveWithdrawalAutomatic: false,
   });
 }
@@ -128,6 +146,7 @@ export type RulePackPilotEntryGuardInput = Readonly<{
   signalId: string;
   estimatedKrw: number;
   policyMaxOrderKrw: number;
+  policyTotalCapitalKrw: number;
   openLivePositions: number;
   nowMs: number;
 }>;
@@ -153,7 +172,20 @@ export function evaluateRulePackPilotEntryGuard(
   const policyMaxOrder = finite(input.policyMaxOrderKrw)
     ? Math.max(0, input.policyMaxOrderKrw)
     : 0;
-  const effectiveMaxEntryKrw = Math.min(operatingCapital, pilotMaxEntry, policyMaxOrder);
+  // The original 500k ceiling tracks verified profit: 500k -> 525k after
+  // 50k net profit (25k compound / 25k reserve). A deliberately stricter
+  // policy (e.g. 30k) must NOT be silently elevated to 500k.
+  const initial = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+  const growth = Math.max(0, operatingCapital - initial);
+  const dynamicPolicyCap = policyMaxOrder >= initial ? policyMaxOrder + growth : policyMaxOrder;
+  const effectiveMaxEntryKrw = Math.min(operatingCapital, pilotMaxEntry, dynamicPolicyCap);
+
+  if (!finite(input.policyTotalCapitalKrw) || input.policyTotalCapitalKrw < initial) {
+    add('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED');
+  }
+  // 500k is a risk floor, NOT a fabricated deposit or an instruction to
+  // draw from the separately earmarked reserve after a loss.
+  if (operatingCapital < initial) add('BACKGROUND_PILOT_BASE_CAPITAL_UNDERFUNDED');
 
   if (!isEvidenceBackedAutoStrategyId(input.strategyId)) add('BACKGROUND_FORMULA_AI_PILOT_STRATEGY_REQUIRED');
   if (!input.pilot.settlementReady || input.pilot.blockers.length > 0) add('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
@@ -191,6 +223,43 @@ export function evaluateRulePackPilotEntryGuard(
   });
 }
 
+
+/**
+ * A verified, settlement-backed capital snapshot is the only source allowed
+ * to grow the 500k risk ceiling. This is a POLICY PROJECTION ONLY: it does not
+ * deposit/withdraw funds, change stored member policy or grant Live authority.
+ */
+export function deriveRulePackPilotExecutionPolicy(
+  policy: TradingPolicy,
+  pilot: RulePackPilotCapitalState,
+): TradingPolicy {
+  const initial = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+  const operating = pilot.operatingCapitalKrw;
+  if (!pilot.settlementReady || pilot.blockers.length > 0
+    || !finite(operating) || operating < initial
+    || !finite(policy.totalCapitalKrw) || policy.totalCapitalKrw < initial) {
+    throw new Error('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
+  }
+  const growth = Math.max(0, operating - initial);
+  const capital = roundKrw(Math.min(operating, policy.totalCapitalKrw + growth));
+  const growingCap = (original: number) => roundKrw(Math.min(
+    capital,
+    original >= initial ? original + growth : original,
+  ));
+  return {
+    ...policy,
+    totalCapitalKrw: capital,
+    maxOrderKrw: growingCap(policy.maxOrderKrw),
+    maxInstrumentKrw: growingCap(policy.maxInstrumentKrw),
+    maxAssetClassKrw: {
+      domestic_stock: growingCap(policy.maxAssetClassKrw.domestic_stock),
+      us_stock: growingCap(policy.maxAssetClassKrw.us_stock),
+      crypto_spot: growingCap(policy.maxAssetClassKrw.crypto_spot),
+      crypto_futures: growingCap(policy.maxAssetClassKrw.crypto_futures),
+    },
+  };
+}
+
 function planForBrokerOrder(
   brokerOrderId: string,
   ordersByKey: Map<string, TradingOrder>,
@@ -223,9 +292,10 @@ export async function readRulePackPilotCapitalState(
   for (const trade of journal.trades) {
     if (trade.status !== 'CLOSED' || !trade.closedAt || !trade.strategy
       || !isEvidenceBackedAutoStrategyId(trade.strategy)
-      || (trade.source !== 'APP_AUTO' && trade.source !== 'APP_MANUAL')) continue;
+      || trade.source !== 'APP_AUTO') continue;
     const entryPlan = planForBrokerOrder(trade.initialEntry.orderId, ordersByKey, plansById);
     if (!entryPlan || entryPlan.accountMode !== 'live'
+      || entryPlan.executionMode !== 'automatic'
       || !isEvidenceBackedAutoStrategyId(entryPlan.strategyId)) {
       blockers.push('PILOT_CAPITAL_ENTRY_LINEAGE_UNAVAILABLE');
       continue;
@@ -259,7 +329,7 @@ export async function readRulePackPilotCapitalState(
   }
 
   const derived = deriveRulePackPilotCapitalFromTrades(trades, now);
-  const uniqueBlockers = [...new Set(blockers)].sort();
+  const uniqueBlockers = [...new Set([...blockers, ...derived.blockers])].sort();
   return Object.freeze({
     ...derived,
     settlementReady: uniqueBlockers.length === 0,
