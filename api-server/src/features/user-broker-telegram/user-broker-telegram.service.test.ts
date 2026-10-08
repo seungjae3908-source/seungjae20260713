@@ -490,17 +490,66 @@ test('interrupted canonical event fan-out recovers journal and Telegram using th
   assert.equal((await repository.listDeliveries('user-a')).length, 1);
 });
 
-test('source-event replay recovers a missed outbox even when canonical event and journal already exist', async () => {
+test('late Telegram connection cannot retroactively enqueue an originally disconnected source event', async () => {
   const { service, repository } = fixture();
   const original = manualPortfolioEvent({
     id: 'late-telegram-bind', userId: 'user-a', symbol: 'AAPL',
     market: 'US', quantity: 1, price: 100,
+    occurredAt: '2026-08-11T23:59:00.000Z',
   });
   assert.deepEqual(await service.recordEvent(original, new Date(), 'associate'),
     { inserted: true, deliveryQueued: false });
   await link(service, 'user-a', 'chat-a');
   const retry = await service.recordEvent({ ...original, id: 'different-event-uuid' }, new Date(), 'associate');
   assert.equal(retry.inserted, false);
-  assert.equal(retry.deliveryQueued, true);
+  assert.equal(retry.deliveryQueued, false);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+  assert.equal((await repository.getExecutionEventBySource('user-a', original.sourceEventId))
+    ?.metadata.telegramDeliveryIntendedAtInsert, false);
+});
+
+
+test('later preference enable never retroactively makes old canonical events deliverable', async () => {
+  const { repository, service } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const preferences = await repository.getPreferences('user-a');
+  await repository.savePreferences('user-a', { ...preferences, ORDER_FILLED: false }, new Date().toISOString());
+  const event = {
+    ...manualPortfolioEvent({
+      id: 'opted-out-event', userId: 'user-a', symbol: 'BTC',
+      market: 'CRYPTO_SPOT', quantity: 0.1, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+  };
+  assert.equal((await service.recordEvent(event, new Date(), 'associate')).deliveryQueued, false);
+  await repository.savePreferences('user-a', { ...preferences, ORDER_FILLED: true }, new Date().toISOString());
+  const retried = await service.recordEvent({ ...event, id: 'retry-opted-out' }, new Date(), 'associate');
+  assert.equal(retried.inserted, false);
+  assert.equal(retried.deliveryQueued, false);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+});
+
+test('source event replay detects historical incorrect AUTO_POLICY attribution instead of silently sending', async () => {
+  const { repository, service } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const event = {
+    ...manualPortfolioEvent({
+      id: 'historical-manual-method', userId: 'user-a', symbol: 'BTC',
+      market: 'CRYPTO_SPOT', quantity: 0.1, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+    executionMethod: 'USER_APPROVED' as const,
+  };
+  const first = await service.recordEvent(event, new Date(), 'associate');
+  assert.equal(first.inserted, true);
+  await assert.rejects(
+    () => service.recordEvent({
+      ...event, id: 'auto-origin-correction-needs-approval',
+      executionMethod: 'AUTO_POLICY',
+    }, new Date(), 'associate'),
+    /EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT/,
+  );
   assert.equal((await repository.listDeliveries('user-a')).length, 1);
 });
