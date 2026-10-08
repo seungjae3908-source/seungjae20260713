@@ -26,53 +26,83 @@ export function enforceMemberTradingPolicy(
     pilotStage: current.pilotStage,
     maxInstrumentKrw: noMoreThan(
       candidate.maxInstrumentKrw ?? DEFAULT_TRADING_POLICY.maxInstrumentKrw,
-      DEFAULT_TRADING_POLICY.maxInstrumentKrw,
+      noMoreThan(current.maxInstrumentKrw, DEFAULT_TRADING_POLICY.maxInstrumentKrw),
     ),
     maxAssetClassKrw: {
-      domestic_stock: noMoreThan(candidateClassLimits.domestic_stock, DEFAULT_TRADING_POLICY.maxAssetClassKrw.domestic_stock),
-      us_stock: noMoreThan(candidateClassLimits.us_stock, DEFAULT_TRADING_POLICY.maxAssetClassKrw.us_stock),
-      crypto_spot: noMoreThan(candidateClassLimits.crypto_spot, DEFAULT_TRADING_POLICY.maxAssetClassKrw.crypto_spot),
-      crypto_futures: noMoreThan(candidateClassLimits.crypto_futures, DEFAULT_TRADING_POLICY.maxAssetClassKrw.crypto_futures),
+      domestic_stock: noMoreThan(
+        candidateClassLimits.domestic_stock,
+        noMoreThan(current.maxAssetClassKrw.domestic_stock, DEFAULT_TRADING_POLICY.maxAssetClassKrw.domestic_stock),
+      ),
+      us_stock: noMoreThan(
+        candidateClassLimits.us_stock,
+        noMoreThan(current.maxAssetClassKrw.us_stock, DEFAULT_TRADING_POLICY.maxAssetClassKrw.us_stock),
+      ),
+      crypto_spot: noMoreThan(
+        candidateClassLimits.crypto_spot,
+        noMoreThan(current.maxAssetClassKrw.crypto_spot, DEFAULT_TRADING_POLICY.maxAssetClassKrw.crypto_spot),
+      ),
+      crypto_futures: noMoreThan(
+        candidateClassLimits.crypto_futures,
+        noMoreThan(current.maxAssetClassKrw.crypto_futures, DEFAULT_TRADING_POLICY.maxAssetClassKrw.crypto_futures),
+      ),
     },
     weeklyLossLimitPercent: noMoreThan(
       candidate.weeklyLossLimitPercent ?? DEFAULT_TRADING_POLICY.weeklyLossLimitPercent,
-      DEFAULT_TRADING_POLICY.weeklyLossLimitPercent,
+      noMoreThan(current.weeklyLossLimitPercent, DEFAULT_TRADING_POLICY.weeklyLossLimitPercent),
     ),
     riskPerTradePercent: {
-      bitget: noMoreThan(candidate.riskPerTradePercent.bitget, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
-      upbit: noMoreThan(candidate.riskPerTradePercent.upbit, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
-      kiwoom: noMoreThan(candidate.riskPerTradePercent.kiwoom, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
-      toss: noMoreThan(candidate.riskPerTradePercent.toss, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
+      bitget: noMoreThan(
+        candidate.riskPerTradePercent.bitget,
+        noMoreThan(current.riskPerTradePercent.bitget, DEFAULT_TRADING_POLICY.riskPerTradePercent.bitget),
+      ),
+      upbit: noMoreThan(
+        candidate.riskPerTradePercent.upbit,
+        noMoreThan(current.riskPerTradePercent.upbit, DEFAULT_TRADING_POLICY.riskPerTradePercent.upbit),
+      ),
+      kiwoom: noMoreThan(
+        candidate.riskPerTradePercent.kiwoom,
+        noMoreThan(current.riskPerTradePercent.kiwoom, DEFAULT_TRADING_POLICY.riskPerTradePercent.kiwoom),
+      ),
+      toss: noMoreThan(
+        candidate.riskPerTradePercent.toss,
+        noMoreThan(current.riskPerTradePercent.toss, DEFAULT_TRADING_POLICY.riskPerTradePercent.toss),
+      ),
     },
     totalDailyLossLimitPercent: noMoreThan(
       candidate.totalDailyLossLimitPercent,
-      DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent,
+      noMoreThan(current.totalDailyLossLimitPercent, DEFAULT_TRADING_POLICY.totalDailyLossLimitPercent),
     ),
-    minExpectedValueR: noLessThan(candidate.minExpectedValueR, DEFAULT_TRADING_POLICY.minExpectedValueR),
+    minExpectedValueR: noLessThan(
+      candidate.minExpectedValueR,
+      noLessThan(current.minExpectedValueR, DEFAULT_TRADING_POLICY.minExpectedValueR),
+    ),
     minStrategySampleSize: Math.round(noLessThan(
       candidate.minStrategySampleSize,
-      DEFAULT_TRADING_POLICY.minStrategySampleSize,
+      noLessThan(current.minStrategySampleSize, DEFAULT_TRADING_POLICY.minStrategySampleSize),
     )),
-    minProfitFactor: noLessThan(candidate.minProfitFactor, DEFAULT_TRADING_POLICY.minProfitFactor),
+    minProfitFactor: noLessThan(
+      candidate.minProfitFactor,
+      noLessThan(current.minProfitFactor, DEFAULT_TRADING_POLICY.minProfitFactor),
+    ),
     maxStrategyDrawdownPercent: noMoreThan(
       candidate.maxStrategyDrawdownPercent,
-      DEFAULT_TRADING_POLICY.maxStrategyDrawdownPercent,
+      noMoreThan(current.maxStrategyDrawdownPercent, DEFAULT_TRADING_POLICY.maxStrategyDrawdownPercent),
     ),
     maxEstimatedSlippagePercent: noMoreThan(
       candidate.maxEstimatedSlippagePercent,
-      DEFAULT_TRADING_POLICY.maxEstimatedSlippagePercent,
+      noMoreThan(current.maxEstimatedSlippagePercent, DEFAULT_TRADING_POLICY.maxEstimatedSlippagePercent),
     ),
     maxAverageSpreadPercent: noMoreThan(
       candidate.maxAverageSpreadPercent,
-      DEFAULT_TRADING_POLICY.maxAverageSpreadPercent,
+      noMoreThan(current.maxAverageSpreadPercent, DEFAULT_TRADING_POLICY.maxAverageSpreadPercent),
     ),
     maxCorrelatedExposurePercent: noMoreThan(
       candidate.maxCorrelatedExposurePercent,
-      DEFAULT_TRADING_POLICY.maxCorrelatedExposurePercent,
+      noMoreThan(current.maxCorrelatedExposurePercent, DEFAULT_TRADING_POLICY.maxCorrelatedExposurePercent),
     ),
     maxEconomicsAgeHours: noMoreThan(
       candidate.maxEconomicsAgeHours,
-      DEFAULT_TRADING_POLICY.maxEconomicsAgeHours,
+      noMoreThan(current.maxEconomicsAgeHours, DEFAULT_TRADING_POLICY.maxEconomicsAgeHours),
     ),
   };
 }
