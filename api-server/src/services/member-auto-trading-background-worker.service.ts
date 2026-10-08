@@ -1470,6 +1470,7 @@ export class MemberAutoTradingBackgroundWorker {
                 || persistentStop
                 || process.env.TRADING_EMERGENCY_STOP === 'true',
             });
+            let paperMirrorReady = false;
             if (!paperRun.plan || !paperRun.order) {
               result.blocked += 1;
             } else {
@@ -1485,9 +1486,15 @@ export class MemberAutoTradingBackgroundWorker {
                   entry,
                   now,
                 });
-                if (lifecycle.status === 'PERSISTED') result.positionLifecycles += 1;
-                else if (lifecycle.status === 'IDEMPOTENT') result.lifecycleIdempotent += 1;
-                else result.blocked += 1;
+                if (lifecycle.status === 'PERSISTED') {
+                  result.positionLifecycles += 1;
+                  paperMirrorReady = true;
+                } else if (lifecycle.status === 'IDEMPOTENT') {
+                  result.lifecycleIdempotent += 1;
+                  paperMirrorReady = true;
+                } else {
+                  result.blocked += 1;
+                }
               } else if (paperRun.order.state === 'REJECTED' || paperRun.order.state === 'RECOVERY_REQUIRED') {
                 result.blocked += 1;
               }
@@ -1497,6 +1504,15 @@ export class MemberAutoTradingBackgroundWorker {
                 result.blocked += 1;
                 break;
               }
+            }
+
+            // Live admission requires a canonical filled Paper mirror AND
+            // persisted/idempotent lifecycle proof for this exact candidate.
+            // A rejected Paper order or failed bridge must never lead to Live IO.
+            if (liveModeRequested && !paperMirrorReady) {
+              result.newEntriesFailClosed = true;
+              result.blocked += 1;
+              continue;
             }
 
             if (liveModeRequested && hasCapability(member.profile, 'canPlaceOrders')) {
