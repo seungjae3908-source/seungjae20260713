@@ -342,23 +342,33 @@ export class UserBrokerTelegramService {
   }
   async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
     const inserted = await this.repository.insertExecutionEvent(event);
-    if (!inserted) return { inserted: false, deliveryQueued: false };
-    if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
-    const preferences = await this.repository.getPreferences(event.userId);
-    if (!preferences[event.type]) return { inserted: true, deliveryQueued: false };
-    if (!personalTelegramEventAllowed(membership, event)) {
-      return { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
+    // A crash after canonical insert but before portfolio/outbox projection
+    // must not permanently consume this source event. Replay the persisted
+    // identity, never the caller's newly generated UUID, through idempotent
+    // journal and queue stages. The actual journal sink uses sourceEventId
+    // for its durable idempotency key.
+    const canonical = inserted
+      ? event
+      : await this.repository.getExecutionEventBySource(event.userId, event.sourceEventId);
+    if (!canonical || canonical.userId !== event.userId || canonical.sourceEventId !== event.sourceEventId) {
+      throw new Error('EXECUTION_SOURCE_EVENT_RECOVERY_REQUIRED');
     }
-    const connection = await this.repository.getTelegramConnection(event.userId);
-    if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
+    if (canonical.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(canonical);
+    const preferences = await this.repository.getPreferences(canonical.userId);
+    if (!preferences[canonical.type]) return { inserted, deliveryQueued: false };
+    if (!personalTelegramEventAllowed(membership, canonical)) {
+      return { inserted, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
+    }
+    const connection = await this.repository.getTelegramConnection(canonical.userId);
+    if (!connection || connection.status !== 'ACTIVE') return { inserted, deliveryQueued: false };
     const timestamp = now.toISOString();
     const delivery: NotificationDelivery = {
-      id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
+      id: randomUUID(), userId: canonical.userId, eventId: canonical.id, dedupeKey: `${canonical.id}:${canonical.type}`,
       state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp,
       kind: 'EXECUTION_EVENT', payload: null,
     };
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
-    return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
+    return { inserted, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);
