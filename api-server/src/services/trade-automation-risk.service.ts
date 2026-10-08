@@ -75,7 +75,9 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
   if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
     throw new Error('BITGET_LEVERAGE_POLICY_INVALID');
   }
-  const pilotStage = input.pilotStage === 'limited-50' || input.pilotStage === 'validated'
+  const pilotStage = input.pilotStage === 'limited-50'
+    || input.pilotStage === 'validated'
+    || input.pilotStage === 'formula-ai-exception'
     ? input.pilotStage : 'approval-20';
   const totalCapitalKrw = clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw);
   const maxOrderKrw = clampNumber(input.maxOrderKrw, 5_000, Math.min(1_000_000, totalCapitalKrw), Math.min(DEFAULT_TRADING_POLICY.maxOrderKrw, totalCapitalKrw));
