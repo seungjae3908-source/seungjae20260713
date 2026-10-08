@@ -8,6 +8,8 @@ import { TradeCancelReconciliationService } from '../services/trade-cancel-recon
 import { TradeExecutionService } from '../services/trade-execution.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
+import { readMemberAutoTradingBackgroundRuntimeHealth } from '../services/member-auto-trading-background-worker.service';
+import { readUserTelegramDeliveryWorkerHealth } from '../features/user-broker-telegram/user-broker-telegram.worker';
 import {
   buildSplitLegRevalidationEvidence,
   TradeSplitOrderExecutionService,
@@ -26,6 +28,11 @@ import {
   type ReadonlyCredentialProvider,
 } from '../features/account-readonly/account-readonly.repository';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from '../services/live-connection-verification.service';
+import {
+  enforceMemberTradingPolicy,
+  resumeMemberTradingPolicy,
+} from '../services/trade-automation-policy-guard.service';
 import { spotLiveRuntimeStatus } from '../services/spot-live-limited-capability.service';
 import { futuresLiveRuntimeStatus } from '../services/futures-live-limited-capability.service';
 import {
@@ -196,18 +203,51 @@ function liveExecutionReadinessForConnection(
   if (!vaultEncryptionConfigured) blockers.push('CREDENTIAL_VAULT_NOT_READY');
   if (!connection?.configured || connection.accountMode !== 'live') blockers.push('LIVE_CONNECTION_NOT_CONFIGURED');
   if (connection?.configured && connection.accountMode === 'live'
-    && (!connection.lastVerifiedAt || connection.lastErrorCode)) {
-    blockers.push('LIVE_CONNECTION_NOT_VERIFIED');
+    && !liveConnectionVerificationFresh(connection)) {
+    blockers.push(liveConnectionVerificationAllowsReducingExit(connection)
+      ? 'LIVE_CONNECTION_VERIFICATION_EXPIRED' : 'LIVE_CONNECTION_NOT_VERIFIED');
   }
   if (!liveExecutionEnabled(exchange)) blockers.push('MANUAL_LIVE_SERVER_GATE_OFF');
   return {
     connectionConfigured: connection?.configured === true && connection.accountMode === 'live',
-    providerVerified: Boolean(connection?.lastVerifiedAt) && !connection?.lastErrorCode,
+    providerVerified: liveConnectionVerificationFresh(connection),
     manualServerGateEnabled: liveExecutionEnabled(exchange),
-    readyForManualExitEvaluation: blockers.length === 0,
+    readyForManualExitEvaluation: blockers.filter((code) => code !== 'LIVE_CONNECTION_VERIFICATION_EXPIRED').length === 0,
+    readyForManualOrderEvaluation: blockers.length === 0,
     blockers,
     orderSubmissionPerformedByPreview: false,
     executionAuthorityGrantedByPreview: false,
+  };
+}
+
+function sanitizedAutomaticRuntimeHealth() {
+  const health = readMemberAutoTradingBackgroundRuntimeHealth();
+  return {
+    enabled: health.enabled,
+    liveModeRequested: health.liveModeRequested,
+    lastTickAt: health.lastTickAt,
+    tickOk: health.tickOk,
+    handoffReady: health.handoffReady,
+    newEntriesFailClosed: health.newEntriesFailClosed,
+    liveEntryArmPresent: health.liveEntryArmPresent,
+    liveEntriesArmed: health.liveEntriesArmed,
+    liveEntryWarmupComplete: health.liveEntryWarmupComplete,
+    liveReadinessCycleComplete: health.liveReadinessCycleComplete,
+    liveCycleAllFourPolicyReady: health.liveCycleAllFourPolicyReady,
+    globalEmergencyStopActive: health.globalEmergencyStopActive,
+    errorCode: health.errorCode,
+  };
+}
+
+function sanitizedTelegramDeliveryRuntimeHealth() {
+  const health = readUserTelegramDeliveryWorkerHealth();
+  return {
+    enabled: health.enabled,
+    lastTickAt: health.lastTickAt,
+    tickOk: health.tickOk,
+    deliveryConfirmed: health.deliveryConfirmed,
+    lastConfirmedDeliveryAt: health.lastConfirmedDeliveryAt,
+    errorCode: health.errorCode,
   };
 }
 
@@ -1024,6 +1064,7 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       if (!activity.lastActivityAt || order.updatedAt > activity.lastActivityAt) activity.lastActivityAt = order.updatedAt;
     }
     const environmentGlobalStop = process.env.TRADING_EMERGENCY_STOP === 'true';
+    const mayInspectLiveRuntime = Boolean(req.member && hasCapability(req.member, 'canPlaceOrders'));
     const vaultStatus = credentialConfigurationStatus();
     const liveExecutionReadiness = Object.fromEntries(
       [...EXCHANGES].map((exchange) => {
@@ -1036,9 +1077,58 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
           providerVerified: manual.providerVerified,
           manualServerGateEnabled: manual.manualServerGateEnabled,
           automaticServerGateEnabled: automaticLiveExecutionEnabled(exchange),
-          readyForManualOrderEvaluation: manual.readyForManualExitEvaluation,
+          readyForManualOrderEvaluation: manual.readyForManualOrderEvaluation,
+          readyForManualExitEvaluation: manual.readyForManualExitEvaluation,
           readyForAutomaticOrderEvaluation: blockers.length === 0,
           blockers,
+          orderTimeRiskRecheckRequired: true,
+          orderSubmissionPerformedByStatusRequest: false,
+        }];
+      }),
+    );
+    const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+    const marketProvider: Record<TradingAssetClass, TradingExchange> = {
+      domestic_stock: domesticBroker,
+      us_stock: 'kiwoom',
+      crypto_spot: 'upbit',
+      crypto_futures: 'bitget',
+    };
+    const liveAutomaticReadinessByMarket = Object.fromEntries(
+      (Object.keys(marketProvider) as TradingAssetClass[]).map((assetClass) => {
+        const exchange = marketProvider[assetClass];
+        const provider = liveExecutionReadiness[exchange] as {
+          connectionConfigured: boolean;
+          providerVerified: boolean;
+          manualServerGateEnabled: boolean;
+          automaticServerGateEnabled: boolean;
+          blockers: string[];
+        };
+        const blockers = [...provider.blockers];
+        if (!req.member || !hasCapability(req.member, 'canPlaceOrders')) blockers.push('MEMBER_ORDER_CAPABILITY_REQUIRED');
+        if (assetClass === 'crypto_futures'
+          && (!req.member || !hasCapability(req.member, 'canAccessFutures'))) {
+          blockers.push('FUTURES_CAPABILITY_REQUIRED');
+        }
+        if (policy.mode !== 'automatic' || !policy.automaticEnabled) blockers.push('AUTOMATIC_POLICY_OFF');
+        if (policy.emergencyStopped || policy.newEntriesStopped) blockers.push('MEMBER_POLICY_STOPPED');
+        if (persistentGlobalStop || environmentGlobalStop) blockers.push('GLOBAL_EMERGENCY_STOP_ACTIVE');
+        if (!policy.marketEnabled[assetClass]) blockers.push('MARKET_AUTOMATIC_DISABLED');
+        if (!policy.exchangeEnabled[exchange]) blockers.push('EXCHANGE_AUTOMATIC_DISABLED');
+        const uniqueBlockers = [...new Set(blockers)];
+        return [assetClass, {
+          exchange,
+          connectionConfigured: provider.connectionConfigured,
+          providerVerified: provider.providerVerified,
+          manualServerGateEnabled: provider.manualServerGateEnabled,
+          automaticServerGateEnabled: provider.automaticServerGateEnabled,
+          automaticPolicyEnabled: policy.mode === 'automatic' && policy.automaticEnabled,
+          marketAutomaticEnabled: policy.marketEnabled[assetClass],
+          exchangeAutomaticEnabled: policy.exchangeEnabled[exchange],
+          memberOrderCapability: Boolean(req.member && hasCapability(req.member, 'canPlaceOrders')),
+          memberStopped: policy.emergencyStopped || policy.newEntriesStopped,
+          globalStopped: persistentGlobalStop || environmentGlobalStop,
+          readyForAutomaticOrderEvaluation: uniqueBlockers.length === 0,
+          blockers: uniqueBlockers,
           orderTimeRiskRecheckRequired: true,
           orderSubmissionPerformedByStatusRequest: false,
         }];
@@ -1070,6 +1160,9 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       futuresLiveLimited: futuresLiveRuntimeStatus(),
       credentialVault: vaultStatus,
       liveExecutionReadiness,
+      liveAutomaticReadinessByMarket,
+      autoTradingBackground: mayInspectLiveRuntime ? sanitizedAutomaticRuntimeHealth() : null,
+      userTelegramDelivery: mayInspectLiveRuntime ? sanitizedTelegramDeliveryRuntimeHealth() : null,
       lastOrder: orders[0] ?? null,
       lastOrderByMarket,
       marketActivityByMarket,
@@ -1169,27 +1262,98 @@ router.get('/plans/:id/approval-status', async (req: AuthenticatedRequest, res) 
 router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
-    const policy = normalizeTradingPolicy(req.body);
+    const current = await repository.getPolicy(userId);
+    let candidate = normalizeTradingPolicy(req.body);
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
-      policy.marketEnabled.crypto_futures = false;
-      policy.exchangeEnabled.bitget = false;
-      policy.enabledAssets.bitget = [];
+      candidate.marketEnabled.crypto_futures = false;
+      candidate.exchangeEnabled.bitget = false;
+      candidate.enabledAssets.bitget = [];
     }
-    const enablingAutomatic = policy.mode === 'automatic'
-      && (policy.automaticEnabled
-        || Object.values(policy.marketEnabled).some(Boolean)
-        || Object.values(policy.exchangeEnabled).some(Boolean));
+    const enablingAutomatic = candidate.mode === 'automatic'
+      && (candidate.automaticEnabled
+        || Object.values(candidate.marketEnabled).some(Boolean)
+        || Object.values(candidate.exchangeEnabled).some(Boolean));
     if (enablingAutomatic && req.body?.confirmation?.acknowledged !== true) {
       return res.status(409).json({ ok: false, error: 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED' });
     }
-    if (policy.mode !== 'automatic') {
-      policy.automaticEnabled = false;
-      policy.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
-      policy.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
-      policy.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
+    if ((current.emergencyStopped || current.newEntriesStopped) && enablingAutomatic) {
+      return res.status(409).json({ ok: false, error: 'MEMBER_TRADING_RESUME_REQUIRED' });
     }
+    if (candidate.mode !== 'automatic') {
+      candidate.automaticEnabled = false;
+      candidate.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };
+      candidate.exchangeEnabled = { bitget: false, upbit: false, kiwoom: false, toss: false };
+      candidate.enabledAssets = { bitget: [], upbit: [], kiwoom: [], toss: [] };
+    }
+    const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/resume', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (req.body?.confirmation !== 'RESUME_MEMBER_TRADING') {
+      return res.status(409).json({
+        ok: false,
+        error: 'MEMBER_TRADING_RESUME_CONFIRMATION_REQUIRED',
+        automaticTradingEnabledByThisRequest: false,
+      });
+    }
+    const [current, persistentGlobalStop] = await Promise.all([
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+    ]);
+    const policy = resumeMemberTradingPolicy(current);
+    await repository.savePolicy(userId, policy);
+    return res.json({
+      ok: true,
+      policy,
+      automaticTradingEnabledByThisRequest: false,
+      memberEmergencyStopped: false,
+      memberNewEntriesStopped: false,
+      effectiveGlobalEmergencyStopped: persistentGlobalStop || process.env.TRADING_EMERGENCY_STOP === 'true',
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.post('/admin/pilot-stage', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    if (req.body?.stage !== 'formula-ai-exception') {
+      return res.status(400).json({ ok: false, error: 'FORMULA_AI_PILOT_STAGE_REQUIRED' });
+    }
+    if (req.body?.confirmation !== 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT') {
+      return res.status(409).json({
+        ok: false,
+        error: 'FORMULA_AI_PILOT_CONFIRMATION_REQUIRED',
+        automaticTradingEnabledByThisRequest: false,
+      });
+    }
+    if (process.env.AUTO_TRADING === 'true'
+      || process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
+      || process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true') {
+      return res.status(409).json({
+        ok: false,
+        error: 'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF',
+        automaticTradingEnabledByThisRequest: false,
+      });
+    }
+    const current = await repository.getPolicy(userId);
+    const policy = normalizeTradingPolicy({
+      ...current,
+      pilotStage: 'formula-ai-exception',
+      automaticEnabled: false,
+    });
+    await repository.savePolicy(userId, policy);
+    return res.json({
+      ok: true,
+      policy,
+      pilotStage: policy.pilotStage,
+      automaticTradingEnabledByThisRequest: false,
+      liveTradingEnabledByThisRequest: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 

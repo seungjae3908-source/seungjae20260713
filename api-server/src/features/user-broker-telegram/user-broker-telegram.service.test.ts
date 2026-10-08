@@ -21,6 +21,7 @@ import type {
   UserExecutionEvent,
 } from './user-broker-telegram.types';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
+import { TelegramDeliveryWorker, telegramDeliveryTickConfirmed, userTelegramDeliveryWorkerHealthy, verifiedRecentTelegramDeliveryReceipt } from './user-broker-telegram.worker';
 
 class FakeTelegramTransport implements TelegramTransport {
   readonly sent: Array<{ chatId: string; text: string }> = [];
@@ -33,7 +34,10 @@ class FakeTelegramTransport implements TelegramTransport {
 
 class FakePortfolioSink implements PortfolioSyncSink {
   readonly events: UserExecutionEvent[] = [];
-  async accept(event: UserExecutionEvent) { this.events.push(structuredClone(event)); }
+  async accept(event: UserExecutionEvent) {
+    if (this.events.some((row) => row.sourceEventId === event.sourceEventId && row.userId === event.userId)) return;
+    this.events.push(structuredClone(event));
+  }
 }
 
 const APPROVED_ASSOCIATE = Object.freeze({
@@ -373,4 +377,179 @@ test('canonical trading order event maps to user execution event with owner chec
   assert.equal(message.includes('ORDER_FILLED'), false);
   assert.equal(maskBrokerAccount('12'), '****12');
   assert.throws(() => executionEventFromTradingOrder({ ...transition, userId: 'user-b' }, order, plan), /EXECUTION_OWNER_MISMATCH/);
+});
+
+
+test('Telegram runtime health rejects failed, stale and future worker ticks', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const ready = { enabled: true, lastTickAt: new Date(now - 30_000).toISOString(), tickOk: true, deliveryConfirmed: true, lastConfirmedDeliveryAt: new Date(now - 45_000).toISOString(), errorCode: null };
+  assert.equal(userTelegramDeliveryWorkerHealthy(ready, now), true);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now - 400_000).toISOString() }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, lastTickAt: new Date(now + 10_000).toISOString() }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, tickOk: false }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, enabled: false }, now), false);
+  assert.equal(userTelegramDeliveryWorkerHealthy({ ...ready, errorCode: 'TELEGRAM_UNAVAILABLE' }, now), false);
+});
+
+test('Telegram delivery failure stays unhealthy through idle ticks until confirmed success', () => {
+  const failed = { sent: 0, retryScheduled: 1, deadLetter: 0 };
+  const idle = { sent: 0, retryScheduled: 0, deadLetter: 0 };
+  const sent = { sent: 1, retryScheduled: 0, deadLetter: 0 };
+  assert.equal(telegramDeliveryTickConfirmed(true, failed), false);
+  assert.equal(telegramDeliveryTickConfirmed(false, idle), false);
+  assert.equal(telegramDeliveryTickConfirmed(false, sent), true);
+  assert.equal(telegramDeliveryTickConfirmed(true, { sent: 1, retryScheduled: 0, deadLetter: 1 }), false);
+});
+
+test('overlapping Telegram delivery tick cannot overwrite the in-flight health', async () => {
+  let complete!: (result: { processed: boolean; state: 'SENT' }) => void;
+  const pending = new Promise<{ processed: boolean; state: 'SENT' }>((resolve) => { complete = resolve; });
+  const worker = new TelegramDeliveryWorker(
+    { async listDue() { return [{ userId: 'user-a', id: 'delivery-a' }]; } },
+    { async processDelivery() { return pending; } } as unknown as UserBrokerTelegramService,
+    1,
+  );
+  const first = worker.runOnce();
+  const overlap = await worker.runOnce();
+  assert.equal(overlap.overlapSkipped, true);
+  complete({ processed: true, state: 'SENT' });
+  const done = await first;
+  assert.equal(done.overlapSkipped, false);
+  assert.equal(done.sent, 1);
+});
+
+
+test('idle initial Telegram tick is not actual member delivery proof', () => {
+  const idle = { sent: 0, retryScheduled: 0, deadLetter: 0 };
+  assert.equal(telegramDeliveryTickConfirmed(false, idle), false);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  assert.equal(userTelegramDeliveryWorkerHealthy({
+    enabled: true, tickOk: true, lastTickAt: new Date(now).toISOString(),
+    deliveryConfirmed: false, lastConfirmedDeliveryAt: null, errorCode: null,
+  }, now), false);
+});
+
+
+test('recent durable SENT receipt restores Telegram health only when no newer failed delivery exists', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const row = { state: 'SENT', updated_at: new Date(now - 40_000).toISOString() };
+  assert.equal(verifiedRecentTelegramDeliveryReceipt(row, now), row.updated_at);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, state: 'RETRY_SCHEDULED' }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, state: 'DEAD_LETTER' }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now - 25 * 60 * 60_000).toISOString() }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt({ ...row, updated_at: new Date(now + 10_000).toISOString() }, now), null);
+  assert.equal(verifiedRecentTelegramDeliveryReceipt(null, now), null);
+});
+
+
+test('interrupted canonical event fan-out recovers journal and Telegram using the original persisted event ID', async () => {
+  const { service, repository, portfolio } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const original = {
+    ...manualPortfolioEvent({
+      id: 'crash-after-event-insert', userId: 'user-a',
+      symbol: 'BTC', market: 'CRYPTO_SPOT', quantity: 0.01, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+  };
+  let failOnce = true;
+  const failingPortfolio: PortfolioSyncSink = {
+    async accept(event) {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error('TEST_PORTFOLIO_PROJECTION_CRASH');
+      }
+      await portfolio.accept(event);
+    },
+  };
+  const recoveryService = new UserBrokerTelegramService(repository, new FakeTelegramTransport(),
+    failingPortfolio, 'ci_test_bot');
+  await assert.rejects(
+    () => recoveryService.recordEvent(original, new Date(), 'associate'),
+    /TEST_PORTFOLIO_PROJECTION_CRASH/,
+  );
+  const persisted = await repository.getExecutionEventBySource('user-a', original.sourceEventId);
+  assert.equal(persisted?.id, original.id);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+  const recovered = await recoveryService.recordEvent({
+    ...original, id: 'fresh-uuid-on-retry',
+  }, new Date(), 'associate');
+  assert.equal(recovered.inserted, false);
+  assert.equal(recovered.deliveryQueued, true);
+  assert.equal(portfolio.events.length, 1);
+  const deliveries = await repository.listDeliveries('user-a');
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0]?.eventId, original.id);
+  const repeated = await recoveryService.recordEvent({
+    ...original, id: 'second-retry-id',
+  }, new Date(), 'associate');
+  assert.equal(repeated.inserted, false);
+  assert.equal(repeated.deliveryQueued, false);
+  assert.equal(portfolio.events.length, 1);
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
+});
+
+test('late Telegram connection cannot retroactively enqueue an originally disconnected source event', async () => {
+  const { service, repository } = fixture();
+  const original = manualPortfolioEvent({
+    id: 'late-telegram-bind', userId: 'user-a', symbol: 'AAPL',
+    market: 'US', quantity: 1, price: 100,
+    occurredAt: '2026-08-11T23:59:00.000Z',
+  });
+  assert.deepEqual(await service.recordEvent(original, new Date(), 'associate'),
+    { inserted: true, deliveryQueued: false });
+  await link(service, 'user-a', 'chat-a');
+  const retry = await service.recordEvent({ ...original, id: 'different-event-uuid' }, new Date(), 'associate');
+  assert.equal(retry.inserted, false);
+  assert.equal(retry.deliveryQueued, false);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+  assert.equal((await repository.getExecutionEventBySource('user-a', original.sourceEventId))
+    ?.metadata.telegramDeliveryIntendedAtInsert, false);
+});
+
+
+test('later preference enable never retroactively makes old canonical events deliverable', async () => {
+  const { repository, service } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const preferences = await repository.getPreferences('user-a');
+  await repository.savePreferences('user-a', { ...preferences, ORDER_FILLED: false }, new Date().toISOString());
+  const event = {
+    ...manualPortfolioEvent({
+      id: 'opted-out-event', userId: 'user-a', symbol: 'BTC',
+      market: 'CRYPTO_SPOT', quantity: 0.1, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+  };
+  assert.equal((await service.recordEvent(event, new Date(), 'associate')).deliveryQueued, false);
+  await repository.savePreferences('user-a', { ...preferences, ORDER_FILLED: true }, new Date().toISOString());
+  const retried = await service.recordEvent({ ...event, id: 'retry-opted-out' }, new Date(), 'associate');
+  assert.equal(retried.inserted, false);
+  assert.equal(retried.deliveryQueued, false);
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+});
+
+test('source event replay detects historical incorrect AUTO_POLICY attribution instead of silently sending', async () => {
+  const { repository, service } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const event = {
+    ...manualPortfolioEvent({
+      id: 'historical-manual-method', userId: 'user-a', symbol: 'BTC',
+      market: 'CRYPTO_SPOT', quantity: 0.1, price: 100_000,
+    }),
+    type: 'ORDER_FILLED' as const,
+    source: 'PAPER_EXECUTION' as const,
+    executionMethod: 'USER_APPROVED' as const,
+  };
+  const first = await service.recordEvent(event, new Date(), 'associate');
+  assert.equal(first.inserted, true);
+  await assert.rejects(
+    () => service.recordEvent({
+      ...event, id: 'auto-origin-correction-needs-approval',
+      executionMethod: 'AUTO_POLICY',
+    }, new Date(), 'associate'),
+    /EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT/,
+  );
+  assert.equal((await repository.listDeliveries('user-a')).length, 1);
 });
