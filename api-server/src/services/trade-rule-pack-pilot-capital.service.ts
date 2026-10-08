@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
 import type { TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy } from './trade-automation.types';
-import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
+import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
   isEvidenceBackedAutoStrategyId,
@@ -518,12 +518,18 @@ export async function readRulePackPilotCapitalState(
   userId: string,
   now = new Date(),
 ): Promise<RulePackPilotCapitalState> {
-  const [payloads, orders, plans] = await Promise.all([
-    readTradeAutomationJournalPayloads(repository, userId),
+  // One immutable order/plan read per ledger derivation. A second independent
+  // journal query could race a closing loss and construct a phantom profit HWM
+  // from two different snapshots.
+  const [orders, plans] = await Promise.all([
     repository.listOrders(userId),
     repository.listPlans(userId),
   ]);
-  const journal = buildUnifiedTradeJournal(payloads, { range: 'ALL' }, now);
+  const payloads = tradeAutomationJournalPayloadsFromSnapshot(orders, plans);
+  const journal = buildUnifiedTradeJournal(
+    payloads.filter((payload) => payload.source === 'APP_AUTO'),
+    { range: 'ALL' }, now,
+  );
   const ordersByKey = new Map<string, TradingOrder>();
   for (const order of orders) {
     ordersByKey.set(order.id, order);
@@ -532,6 +538,11 @@ export async function readRulePackPilotCapitalState(
   const plansById = new Map(plans.map((plan) => [plan.id, plan]));
   const trades: RulePackPilotRealizedTrade[] = [];
   const blockers: string[] = [];
+  // A malformed LIVE automatic event may be dropped by journal normalization.
+  // Never silently omit its loss and still permit higher risk capital.
+  if (journal.integrityIssues.length > 0) {
+    blockers.push('PILOT_CAPITAL_AUTO_LIVE_JOURNAL_INTEGRITY_REQUIRED');
+  }
   if (!rulePackPilotLedgerHistoryComplete(orders.length, plans.length)) {
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
@@ -544,6 +555,12 @@ export async function readRulePackPilotCapitalState(
     if (!plan && apparentlyFilled) {
       blockers.push('PILOT_CAPITAL_ORDER_PLAN_LINEAGE_MISSING');
       continue;
+    }
+    // Unknown broker outcome can hide a settled loss, even when the cached
+    // quantity is still zero. Never grow capital until reconciliation finishes.
+    if (plan?.accountMode === 'live' && plan.executionMode === 'automatic'
+      && order.state === 'RECOVERY_REQUIRED') {
+      blockers.push('PILOT_CAPITAL_AUTO_LIVE_ORDER_RECONCILIATION_REQUIRED');
     }
     // The journal adapter omits records without positive average price / fill
     // quantity. A LIVE automatic fill must never disappear from the 500k
