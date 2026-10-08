@@ -315,7 +315,7 @@ function handoff(nowMs: number, missingRecentMove = false) {
   } as const;
 }
 
-function paperRepository(nowMs: number): PaperJournalRepository {
+function paperRepository(nowMs: number, originalWalletCreatedMs = nowMs): PaperJournalRepository {
   return {
     async listSnapshot() {
       return [{
@@ -323,7 +323,7 @@ function paperRepository(nowMs: number): PaperJournalRepository {
         id: AUTOMATIC_PAPER_ACCOUNT_ID,
         version: 1,
         updatedAt: new Date(nowMs).toISOString(),
-        createdAt: new Date(nowMs).toISOString(),
+        createdAt: new Date(originalWalletCreatedMs).toISOString(),
         serverUpdatedAt: new Date(nowMs).toISOString(),
         deletedAt: null,
         payload: {
@@ -333,7 +333,7 @@ function paperRepository(nowMs: number): PaperJournalRepository {
           cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
           usedMargin: 0,
           availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
-          createdAt: new Date(nowMs).toISOString(),
+          createdAt: new Date(originalWalletCreatedMs).toISOString(),
         },
       }];
     },
@@ -349,6 +349,7 @@ function source(
     expired?: boolean;
     handoffMissing?: boolean;
     markPrice?: number;
+    walletCreatedAtMs?: number;
     syncCalls?: { count: number };
     syncFailure?: boolean;
     syncMissingReferences?: number;
@@ -372,7 +373,9 @@ function source(
       }];
     },
     tradingRepositoryFor() { return repository; },
-    paperJournalRepositoryFor() { return paperRepository(nowMs); },
+    paperJournalRepositoryFor() {
+      return paperRepository(nowMs, options.walletCreatedAtMs ?? nowMs);
+    },
     async resolveFx() {
       return {
         market: 'CRYPTO_SPOT',
@@ -1751,7 +1754,9 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
   assert.equal(first.paperExitOrders, 0);
 
   const secondWorker = new MemberAutoTradingBackgroundWorker(
-    source(repository, nowMs + 5_000, { handoffMissing: true, markPrice: 90_000 }),
+    source(repository, nowMs + 5_000, {
+      handoffMissing: true, markPrice: 90_000, walletCreatedAtMs: nowMs,
+    }),
   );
   const second = await withFetchMock(() => secondWorker.runOnce(new Date(nowMs + 5_000)));
   assert.equal(second.handoffStatus, 'MISSING');
