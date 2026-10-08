@@ -15,6 +15,13 @@ const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
 const tradeAutomationPolicyGuard = read('api-server/src/services/trade-automation-policy-guard.service.ts');
 const tradeAutomationSmoke = read('api-server/src/routes/trade-automation.smoke.test.ts');
+const tradeTypes = read('api-server/src/services/trade-automation.types.ts');
+const tradeRisk = read('api-server/src/services/trade-automation-risk.service.ts');
+const tradeOptimization = read('api-server/src/services/trade-automation-optimization.service.ts');
+const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exception.service.test.ts');
+const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
+const pilotCapitalTest = read('api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts');
+const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
@@ -280,6 +287,38 @@ requireText(tradeAutomationRoute, 'resumeMemberTradingPolicy(current)', 'AUTO_RO
 requireText(tradeAutomationPolicyGuard, 'Emergency/new-entry stops are sticky', 'AUTO_POLICY_STICKY_STOP_CONTRACT_MISSING');
 requireText(tradeAutomationPolicyGuard, 'newEntriesStopped: false', 'AUTO_POLICY_CONFIRMED_RESUME_CLEAR_MISSING');
 requireText(tradeAutomationSmoke, 'member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', 'AUTO_ROUTE_MEMBER_RESUME_SMOKE_MISSING');
+requireText(tradeTypes, "'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_STAGE_TYPE_MISSING');
+requireText(tradeRisk, "input.pilotStage === 'formula-ai-exception'", 'AUTO_FORMULA_AI_PILOT_NORMALIZATION_MISSING');
+requireText(tradeOptimization, "'PILOT_FORMULA_AI_EXCEPTION_REQUIRED'", 'AUTO_FORMULA_AI_PILOT_RISK_BINDING_MISSING');
+requireText(tradeAutomationRoute, "router.post('/admin/pilot-stage'", 'AUTO_FORMULA_AI_PILOT_ROUTE_MISSING');
+requireText(tradeAutomationRoute, "'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT'", 'AUTO_FORMULA_AI_PILOT_CONFIRMATION_MISSING');
+requireText(tradeAutomationRoute, "'FORMULA_AI_PILOT_CHANGE_REQUIRES_AUTO_OFF'", 'AUTO_FORMULA_AI_PILOT_AUTO_OFF_GUARD_MISSING');
+requireText(tradeAutomationSmoke, 'formula-ai pilot stage requires admin, exact confirmation, and AUTO off without enabling trading', 'AUTO_FORMULA_AI_PILOT_SMOKE_MISSING');
+requireText(formulaAiException, "'AI_REVIEW_DECISION:PASS'", 'AUTO_FORMULA_AI_PASS_EVIDENCE_MISSING');
+requireText(formulaAiException, "'CANONICAL_PAPER_HANDOFF'", 'AUTO_FORMULA_AI_CANONICAL_HANDOFF_REQUIRED');
+requireText(formulaAiExceptionTest, 'dedicated formula-ai pilot stage allows only a valid formula+AI live exception', 'AUTO_FORMULA_AI_PILOT_TEST_MISSING');
+requireText(paperWorker, 'readRulePackPilotCapitalState', 'AUTO_PILOT_CAPITAL_WORKER_BINDING_MISSING');
+requireText(paperWorker, 'evaluateRulePackPilotEntryGuard', 'AUTO_PILOT_ENTRY_GUARD_WORKER_MISSING');
+requireText(pilotCapital, 'evaluateRulePackPilotEntryGuard', 'AUTO_PILOT_ENTRY_GUARD_MISSING');
+for (const token of [
+  'BACKGROUND_PILOT_ENTRY_LIMIT',
+  'BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT',
+  'BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT',
+  'BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT',
+  'BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT',
+  'BACKGROUND_PILOT_FRESH_SIGNAL_REQUIRED',
+  'BACKGROUND_PILOT_LOSS_COOLDOWN_ACTIVE',
+]) {
+  requireText(pilotCapital, token, 'AUTO_PILOT_CAPITAL_BLOCKER_MISSING');
+}
+requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
+requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -25_000", 'AUTO_PILOT_DAILY_LOSS_KRW_TEST_MISSING');
+requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');
+requireText(pilotCapitalTest, "openLivePositions: 2", 'AUTO_PILOT_CONCURRENT_POSITION_TEST_MISSING');
+requireText(autoTradingPage, "auth.can('canManageMembers')", 'AUTO_FORMULA_AI_PILOT_ADMIN_UI_CAPABILITY_MISSING');
+requireText(autoTradingSettings, 'data-testid="formula-ai-pilot-control"', 'AUTO_FORMULA_AI_PILOT_UI_MISSING');
+requireText(autoTradingSettings, "confirmation: 'ENABLE_FORMULA_AI_AUTOMATIC_LIVE_PILOT'", 'AUTO_FORMULA_AI_PILOT_UI_CONFIRMATION_MISSING');
 
 requireText(tradeAutomationRoute, 'liveAutomaticReadinessByMarket', 'AUTO_STATUS_MARKET_READINESS_MISSING');
 requireText(tradeAutomationRoute, "'MEMBER_ORDER_CAPABILITY_REQUIRED'", 'AUTO_STATUS_MEMBER_CAPABILITY_BLOCKER_MISSING');
