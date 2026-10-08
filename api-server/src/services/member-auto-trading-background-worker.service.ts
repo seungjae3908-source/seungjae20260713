@@ -169,6 +169,23 @@ export function automaticPaperWalletServerEpochMs(
   return createdAtMs;
 }
 
+/** Protect a new virtual Paper wallet from all pre-wallet QA positions.
+ * Never apply this filter to Live orders or their risk-reducing exits.
+ */
+export function automaticPaperOrderWithinWalletEpoch(
+  plan: TradingPlan,
+  order: TradingOrder,
+  epochMs: number | null,
+  nowMs: number,
+): boolean {
+  if (plan.accountMode !== 'paper' || plan.executionMode !== 'automatic'
+    || epochMs === null || !Number.isFinite(epochMs) || !Number.isFinite(nowMs)) return false;
+  const planMs = Date.parse(plan.createdAt);
+  const orderMs = Date.parse(order.createdAt);
+  return Number.isFinite(planMs) && planMs >= epochMs && planMs <= nowMs + 5_000
+    && Number.isFinite(orderMs) && orderMs >= epochMs && orderMs <= nowMs + 5_000;
+}
+
 export function automaticExecutionProjectionOrderIds(
   plans: readonly TradingPlan[],
   orders: readonly TradingOrder[],
@@ -184,15 +201,9 @@ export function automaticExecutionProjectionOrderIds(
       selected.add(order.id);
       continue;
     }
-    if (plan.accountMode !== 'paper' || paperWalletOpenedAtMs === null) continue;
-    // The plan, not only its retry/replacement order, must belong to the new
-    // wallet epoch. A post-epoch order on an old plan stays in legacy audit.
-    const planCreatedMs = Date.parse(plan.createdAt);
-    const orderCreatedMs = Date.parse(order.createdAt);
-    if (Number.isFinite(planCreatedMs) && planCreatedMs >= paperWalletOpenedAtMs
-      && planCreatedMs <= nowMs + 5_000
-      && Number.isFinite(orderCreatedMs) && orderCreatedMs >= paperWalletOpenedAtMs
-      && orderCreatedMs <= nowMs + 5_000) selected.add(order.id);
+    if (automaticPaperOrderWithinWalletEpoch(plan, order, paperWalletOpenedAtMs, nowMs)) {
+      selected.add(order.id);
+    }
   }
   return [...selected].sort();
 }
@@ -214,6 +225,7 @@ type MemberRuntimeState = Readonly<{
   // Never use missing Paper equity as a zero-PnL proof to authorize entries.
   paperAccountReady: boolean;
   paperWalletOpenedAtMs: number | null;
+  snapshotObservedAtMs: number;
   paperFinancialRiskReady: boolean;
   accountEquity: number;
   dailyPnlPercent: number;
@@ -616,6 +628,9 @@ function trackedAutomaticPositions(
     if (!parentId) continue;
     const exitOrder = orderByPlan.get(exitPlan.id);
     if (!exitOrder) continue;
+    if (accountMode === 'paper' && !automaticPaperOrderWithinWalletEpoch(
+      exitPlan, exitOrder, runtime.paperWalletOpenedAtMs,
+      Math.max(runtime.snapshotObservedAtMs, Date.now()))) continue;
     const rows = exitsByParent.get(parentId) ?? [];
     rows.push(exitOrder);
     exitsByParent.set(parentId, rows);
@@ -624,6 +639,9 @@ function trackedAutomaticPositions(
     if (plan.accountMode !== accountMode || plan.reduceOnly === true || !backgroundAutomaticPlan(plan)) return [];
     const order = orderByPlan.get(plan.id);
     if (!order || !['PARTIALLY_FILLED', 'FILLED'].includes(order.state) || !(order.filledQuantity > 0)) return [];
+    if (accountMode === 'paper' && !automaticPaperOrderWithinWalletEpoch(
+      plan, order, runtime.paperWalletOpenedAtMs,
+      Math.max(runtime.snapshotObservedAtMs, Date.now()))) return [];
     const exits = exitsByParent.get(plan.id) ?? [];
     const exited = exits.reduce((sum, row) => (
       ['PARTIALLY_FILLED', 'FILLED'].includes(row.state) && row.filledQuantity > 0
@@ -648,6 +666,9 @@ function openAutomaticPlans(runtime: MemberRuntimeState, accountMode: 'paper' | 
     if (plan.accountMode !== accountMode || plan.reduceOnly === true || !backgroundAutomaticPlan(plan)) return false;
     if (openPositionIds.has(plan.id)) return true;
     const order = orderByPlan.get(plan.id);
+    if (accountMode === 'paper' && (!order || !automaticPaperOrderWithinWalletEpoch(
+      plan, order, runtime.paperWalletOpenedAtMs,
+      Math.max(runtime.snapshotObservedAtMs, Date.now())))) return false;
     return Boolean(order && ['SUBMITTED', 'ACCEPTED', 'RECOVERY_REQUIRED'].includes(order.state));
   });
 }
@@ -833,6 +854,7 @@ async function memberRuntimeState(
   return Object.freeze({
     paperAccountReady,
     paperWalletOpenedAtMs,
+    snapshotObservedAtMs: nowMs,
     paperFinancialRiskReady: paperAccountReady && risk.ready,
     accountEquity: equity,
     // Only canonical automatic Paper close evidence can affect risk limits.
@@ -873,6 +895,8 @@ function exposureState(
       const plan = runtime.plans.find((candidate) => candidate.id === order.planId);
       const at = Date.parse(order.createdAt);
       return plan?.accountMode === accountMode
+        && (accountMode !== 'paper' || automaticPaperOrderWithinWalletEpoch(
+          plan, order, runtime.paperWalletOpenedAtMs, nowMs))
         && Number.isFinite(at) && at >= nowMs - 24 * 60 * 60_000;
     }).length,
     existingPositionSide: sameInstrument.find((plan) => plan.side === side)?.side
