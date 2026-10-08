@@ -94,6 +94,7 @@ export interface MemberAutoTradingBackgroundSource {
   listEligibleMembers(): Promise<readonly EligibleMember[]>;
   memberBatchCycleCompleted?(): boolean;
   telegramDeliveryHealthy?(nowMs: number): boolean;
+  memberTelegramConnected?(userId: string): Promise<boolean>;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
@@ -1463,6 +1464,20 @@ export class MemberAutoTradingBackgroundWorker {
               };
               // Recheck after private preflight: a Telegram outage during the tick
               // must never allow a new automatic live order.
+              // Global delivery proof cannot prove that THIS member's channel
+              // is still connected. Check the actual connection separately.
+              let memberTelegramReady = false;
+              try {
+                memberTelegramReady = await this.source.memberTelegramConnected?.(member.userId) === true;
+              } catch {
+                memberTelegramReady = false;
+              }
+              if (!memberTelegramReady) {
+                result.newEntriesFailClosed = true;
+                result.liveEntriesSuppressedByTelegram += 1;
+                result.blocked += 1;
+                break;
+              }
               if (this.source.telegramDeliveryHealthy?.(Date.now()) !== true) {
                 result.newEntriesFailClosed = true;
                 result.liveEntriesSuppressedByTelegram += 1;
@@ -1647,6 +1662,12 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   telegramDeliveryHealthy(nowMs: number) {
     return userTelegramDeliveryWorkerHealthy(readUserTelegramDeliveryWorkerHealth(), nowMs);
+  }
+
+  async memberTelegramConnected(userId: string) {
+    const connection = await createSupabaseUserBrokerTelegramRepository()
+      .getTelegramConnection(userId);
+    return connection?.status === 'ACTIVE' && Boolean(connection.telegramChatId);
   }
 
   async revalidateLiveAllFourReadiness(userId: string) {
