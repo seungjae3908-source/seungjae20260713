@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createHumanRuleDigestDecisionV16 } from '../src/research-workspace-one-shot-bind-v16.js';
 import { assessCanonicalEvaluationReadinessV17 } from '../src/research-workspace-canonical-evaluation-readiness-v17.js';
-import { assessCanonicalEvaluationExecutionContractV18 } from '../src/research-workspace-canonical-evaluation-one-shot-v18.js';
+import { assessCanonicalEvaluationExecutionContractV18, createCanonicalEvaluationExecutionRequestV18 } from '../src/research-workspace-canonical-evaluation-one-shot-v18.js';
 
 const now='2026-09-26T08:40:00.000Z';
 const sourceSha='a'.repeat(40),manifestDigest='b'.repeat(64),packageDigest='c'.repeat(64),reviewedRuleDigest='d'.repeat(64);
@@ -124,4 +124,17 @@ test('expired one-shot request blocks without consuming the reservation',()=>{
   const q=request(d,c,p,proof,{expiresAt:'2026-09-26T08:39:30.000Z'});
   const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
   assert.equal(out.status,'BLOCKED');assert.equal(out.replayAllowed,false);assert.equal(out.compilerRuns,0);assert.equal(out.backtestRuns,0);
+});
+
+test('builder produces the exact validated one-shot request and reservation identity',()=>{
+  const r=review(),d=decision(r),c=config(),p=preflight(r,d,c),proof=runtimeProof();
+  const q=createCanonicalEvaluationExecutionRequestV18({
+    evaluationId:'eval-built-v18',requestedAt:'2026-09-26T08:39:00.000Z',expiresAt:'2026-09-26T08:55:00.000Z',
+    currentSha:sourceSha,decision:d,config:c,preflight:p,runtimeProof:proof,
+  });
+  const out=assessCanonicalEvaluationExecutionContractV18({request:q,currentSha:sourceSha,review:r,decision:d,config:c,preflight:p,runtimeProof:proof,checkedAt:now});
+  assert.equal(out.status,'READY_FOR_BOUNDED_COMPILER_BACKTEST_ONE_SHOT');
+  assert.match(q.oneShotReservationId,/^[a-f0-9]{64}$/);
+  assert.match(q.requestDigest,/^[a-f0-9]{64}$/);
+  assert.equal(q.compiler.maxRuns,1);assert.equal(q.backtester.maxRuns,1);assert.equal(q.statisticalFirewall.required,true);
 });

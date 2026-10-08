@@ -17,7 +17,7 @@ function emptySnapshot(provider: 'toss' | 'kiwoom' | 'upbit' | 'bitget', overrid
   };
 }
 
-async function installRegular(page: Page) {
+async function installMember(page: Page, membershipLevel: 'regular' | 'admin' = 'regular') {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const expiresAt = 4_102_444_800;
@@ -39,7 +39,17 @@ async function installRegular(page: Page) {
 
   await page.route('**/__e2e-supabase/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
-    if (pathname.endsWith('/rest/v1/profiles')) return fulfill(route, { id: USER_ID, login_name: 'account-link-regular', display_name: '계좌연동 사용자', role: 'regular', status: 'approved', membership_level: 'regular', is_active: true, permissions_updated_at: NOW, updated_at: NOW });
+    if (pathname.endsWith('/rest/v1/profiles')) return fulfill(route, {
+      id: USER_ID,
+      login_name: membershipLevel === 'admin' ? 'account-link-admin' : 'account-link-regular',
+      display_name: '계좌연동 사용자',
+      role: membershipLevel === 'admin' ? 'admin' : 'regular',
+      status: 'approved',
+      membership_level: membershipLevel,
+      is_active: true,
+      permissions_updated_at: NOW,
+      updated_at: NOW,
+    });
     if (pathname.endsWith('/auth/v1/user')) return fulfill(route, { id: USER_ID, aud: 'authenticated', role: 'authenticated', email: 'account-link@accounts.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { display_name: '계좌연동 사용자' }, identities: [], created_at: NOW });
     return fulfill(route, { ok: true });
   });
@@ -56,7 +66,7 @@ async function installRegular(page: Page) {
 }
 
 test('regular user sees only Toss Upbit Bitget account linking and Kiwoom is hidden', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
@@ -74,12 +84,12 @@ test('regular user sees only Toss Upbit Bitget account linking and Kiwoom is hid
   const readonlyPanel = page.getByTestId('brokerage-account-connections');
   await expect(readonlyPanel).not.toContainText('Kiwoom');
   await expect(readonlyPanel).not.toContainText('키움');
-  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  await expect(page.getByTestId('trade-execution-connections')).toHaveCount(0);
   assertClean();
 });
 
 test('regular user saves Upbit credentials only through canonical account-readonly vault', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   let savedBody: Record<string, unknown> | null = null;
   let configured = false;
   await page.route('**/api/**', async (route) => {
@@ -117,7 +127,7 @@ test('regular user saves Upbit credentials only through canonical account-readon
 });
 
 test('Toss credential form is read-only, Account Seq is optional, and mobile dialogs stay in viewport', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   let tossBody: Record<string, unknown> | null = null;
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -137,12 +147,12 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
   await page.getByRole('button', { name: 'Bitget 조회 연결 설정' }).click(); const bitgetBox = await page.getByRole('dialog').boundingBox(); expect(bitgetBox).not.toBeNull(); expect(bitgetBox!.x + bitgetBox!.width).toBeLessThanOrEqual(361);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361);
   await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
-  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  await expect(page.getByTestId('trade-execution-connections')).toHaveCount(0);
   assertClean();
 });
 
 test('account metrics distinguish real zero from missing, stale, and unavailable evidence', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss', {
@@ -186,13 +196,13 @@ test('account metrics distinguish real zero from missing, stale, and unavailable
   await expect(bitget).toContainText('사용 불가');
 
   await expect(page.getByTestId('brokerage-account-connections')).not.toContainText('Kiwoom');
-  await expect(page.getByTestId('trade-execution-connections')).toContainText('Kiwoom · 주식 실주문');
+  await expect(page.getByTestId('trade-execution-connections')).toHaveCount(0);
   assertClean();
 });
 
 
 test('server-declared Kiwoom capability exposes a read-only setup card and saves only App Key/App Secret', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   let savedBody: Record<string, unknown> | null = null;
   let configured = false;
 
@@ -270,8 +280,8 @@ test('server-declared Kiwoom capability exposes a read-only setup card and saves
 });
 
 
-test('live Upbit trading key is saved separately with read+orders only and does not activate live execution', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+test('admin live Upbit trading key is saved separately with read+orders only and does not activate live execution', async ({ page }) => {
+  const { assertClean } = await installMember(page, 'admin');
   let savedBody: Record<string, unknown> | null = null;
   let configured = false;
 
@@ -379,8 +389,8 @@ test('live Upbit trading key is saved separately with read+orders only and does 
   assertClean(1);
 });
 
-test('saved read-only Upbit key can connect and verify live execution without retyping secrets', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+test('admin can reuse a saved read-only Upbit key for live verification without retyping secrets', async ({ page }) => {
+  const { assertClean } = await installMember(page, 'admin');
   let reused = false;
   let reuseRequests = 0;
 
@@ -509,7 +519,7 @@ test('saved read-only Upbit key can connect and verify live execution without re
 });
 
 test('account refresh displays only allowlisted Toss and Bitget authentication diagnostics', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   let bitgetConnected = false;
   const forbidden = [
     'BITGET_UI_KEY_MUST_NOT_LEAK',
@@ -587,7 +597,7 @@ test('account refresh displays only allowlisted Toss and Bitget authentication d
 });
 
 test('saving Toss read-only credentials immediately refreshes its snapshot without a workflow or mutation', async ({ page }) => {
-  const { assertClean } = await installRegular(page);
+  const { assertClean } = await installMember(page);
   const clientId = 'TOSS_SAVE_REFRESH_CLIENT_TEST_ONLY';
   const clientSecret = 'TOSS_SAVE_REFRESH_SECRET_TEST_ONLY';
   let configured = false;
