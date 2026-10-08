@@ -133,6 +133,9 @@ export function automaticLiveExecutionEnabled(exchange: TradingPlanInput['exchan
     ? futuresLiveExecutionAuthority() === 'FUTURES_LIVE_LIMITED'
     : liveExecutionAuthority() === 'SPOT_LIVE_LIMITED';
   return authorityEnabled
+    // Dedicated Paper-only (including malformed values) cannot inherit Live AUTO.
+    && (process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined
+      || process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false')
     && process.env.AUTO_TRADING === 'true'
     && process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'
     && liveExecutionEnabled(exchange);
