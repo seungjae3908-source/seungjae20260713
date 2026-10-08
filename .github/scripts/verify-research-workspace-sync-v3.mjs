@@ -338,6 +338,7 @@ const automaticTradingDriftReviewed=[
  'api-server/src/services/trade-automation-optimization.service.ts',
  'api-server/src/services/trade-automation-policy-guard.service.test.ts',
  'api-server/src/services/trade-automation-policy-guard.service.ts',
+ 'api-server/src/services/trade-automation-unified-journal-adapter.ts',
  'api-server/src/services/trade-automation-risk.service.ts',
  'api-server/src/services/trade-automation.service.ts',
  'api-server/src/services/trade-automation.types.ts',
