@@ -731,6 +731,7 @@ jobs:
               || bool(env, 'LIVE_AUTOMATIC_TRADING_ENABLED') !== expectedAuto
               || bool(env, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED') !== expectedAuto
               || bool(env, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED') !== expectedAuto
+              || bool(env, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED') !== false
               || bool(env, 'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED') !== false
               || bool(env, 'CRYPTO_AUTO_TRADE_ENABLED') !== false
               || bool(env, 'BITGET_AUTO_TRADE_ENABLED') !== false) {
@@ -771,6 +772,7 @@ jobs:
                 LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
                 MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false',
+                MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
                 CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
                 CRYPTO_AUTO_TRADE_ENABLED: 'false',
                 BITGET_AUTO_TRADE_ENABLED: 'false',
@@ -1118,6 +1120,7 @@ jobs:
               LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
               MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
               MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false',
               CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED: 'false',
               CRYPTO_AUTO_TRADE_ENABLED: 'false',
               BITGET_AUTO_TRADE_ENABLED: 'false',
@@ -1130,7 +1133,8 @@ jobs:
           if (bool(after, 'AUTO_TRADING')
             || bool(after, 'LIVE_AUTOMATIC_TRADING_ENABLED')
             || bool(after, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED')
-            || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')) {
+            || bool(after, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED')
+            || bool(after, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED')) {
             throw new Error('AUTOMATIC_TRADING_DISABLE_POSTCHECK_FAILED');
           }
           if (JSON.stringify(manual(after)) !== JSON.stringify(preserved)) {

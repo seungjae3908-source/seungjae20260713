@@ -150,6 +150,7 @@ requireText(workflow, "AUTO_TRADING: enabled ? 'true' : 'false'", 'AUTO_GATE_AUT
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_AUTO_TRUE_MISSING');
 requireText(workflow, "MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_PAPER_WORKER_TRUE_MISSING');
 requireText(workflow, "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false'", 'AUTO_GATE_LIVE_WORKER_TRUE_MISSING');
+requireText(workflow, "MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'false'", 'AUTO_GATE_PAPER_ONLY_OVERRIDE_MUST_BE_OFF');
 requireText(workflow, "AUTO_TRADING: 'false'", 'AUTO_GATE_AUTO_DISABLE_MISSING');
 requireText(workflow, "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'", 'AUTO_GATE_LIVE_AUTO_DISABLE_MISSING');
 requireText(workflow, "MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false'", 'AUTO_GATE_PAPER_WORKER_DISABLE_MISSING');
@@ -209,6 +210,8 @@ const autoFn = tradeService.match(/export function automaticLiveExecutionEnabled
 if (!autoFn) throw new Error('AUTOMATIC_LIVE_EXECUTION_FUNCTION_MISSING');
 for (const token of [
   "process.env.AUTO_TRADING === 'true'",
+  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === undefined",
+  "process.env.MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED === 'false'",
   "process.env.LIVE_AUTOMATIC_TRADING_ENABLED === 'true'",
   'liveExecutionEnabled(exchange)',
   "'SPOT_LIVE_LIMITED'",
@@ -220,7 +223,11 @@ for (const token of [
 for (const token of [
   "accountMode: 'paper'",
   'persistMemberAutoTradingPaperPositionBridge',
-  "process.env.MEMBER_AUTO_TRADING_BACKGROUND_ENABLED !== 'true'",
+  'export function memberAutoTradingWorkerMode(',
+  "if (paperOnly === 'true') return 'PAPER_ONLY';",
+  "if (paperOnly !== undefined && paperOnly !== 'false') return 'DISABLED';",
+  "return (paperOnly === undefined || paperOnly === 'false')",
+  "const mode = memberAutoTradingWorkerMode();",
   "process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED === 'true'",
   'buildAutomaticExitPlanInput',
   "input.paperInput.signalReasons",
@@ -461,6 +468,7 @@ requireText(tradeAutomationRoute, "'MARKET_AUTOMATIC_DISABLED'", 'AUTO_STATUS_MA
 requireText(deploy, 'LIVE_TRADING=false AUTO_TRADING=false REAL_ORDER_ENABLED=false PRIVATE_TRADING_API_ALLOWED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false', 'DEPLOY_PAPER_AUTO_RESET_MISSING');
 requireText(deploy, 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false', 'DEPLOY_LIVE_WORKER_RESET_MISSING');
+requireText(deploy, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false', 'DEPLOY_PAPER_ONLY_RESET_MISSING');
 requireText(deploy, 'LIVE_AUTOMATIC_TRADING_ENABLED=false', 'DEPLOY_LIVE_AUTO_RESET_MISSING');
 requireText(deploy, 'FUTURES_LIVE_EXECUTION_AUTHORITY=NONE', 'DEPLOY_FUTURES_RESET_MISSING');
 requireText(deploy, 'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED=false', 'DEPLOY_LEGACY_CRYPTO_RESET_MISSING');
