@@ -78,9 +78,13 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain('360_000');
   expect(page).toContain('자동 워커 상태 지연');
   expect(page).toContain('Telegram 상태 지연');
+  expect(page).toContain('runtimeRefreshInFlight');
+  expect(page).toContain('setRuntimeClockMs(Date.now())');
+  expect(page).toContain('setRuntimeReadError(true)');
+  expect(page).toContain('상태 조회 실패');
   expect(page).toContain("tone={providerVerified ? 'ok' : 'warn'}");
   expect(page).toContain("tone={effectiveEntryStopped ? 'warn' : 'ok'}");
-  expect(page).toContain("tone={automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}");
+  expect(page).toContain("tone={!runtimeReadError && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}");
   expect(page).toContain('AlertTriangle');
   expect(page).not.toContain('value="서버 Gate 필요"');
 
