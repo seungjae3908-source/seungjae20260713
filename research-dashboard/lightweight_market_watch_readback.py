@@ -63,7 +63,8 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
     if not isinstance(raw, dict) or raw.get('schemaVersion') != SOURCE_CONTRACT \
             or not isinstance(raw.get('researchSha'), str) \
             or not SHA.fullmatch(raw['researchSha']) \
-            or raw.get('status') not in RAW_STATUSES \
+            or not isinstance(raw.get('status'), str) \
+            or raw['status'] not in RAW_STATUSES \
             or (expected_sha is not None and raw['researchSha'] != expected_sha):
         return blank('INVALID', True)
     observed_at = time_ms(raw.get('observedAt'), now_ms)
@@ -76,7 +77,9 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
             or not SAFE_SOURCE.fullmatch(budget['reason']) \
             or (raw['status'] == 'HOLD' and budget['status'] != 'HOLD') \
             or (raw['status'] == 'THROTTLED' and budget['status'] != 'THROTTLED') \
-            or (budget['status'] == 'RUN' and raw['status'] in ('THROTTLED', 'HOLD')):
+            or (budget['status'] == 'RUN' and raw['status'] in ('THROTTLED', 'HOLD')) \
+            or (budget['status'] == 'HOLD' and raw['status'] != 'HOLD') \
+            or (budget['status'] == 'THROTTLED' and raw['status'] != 'THROTTLED'):
         return blank('INVALID', True)
     safety = raw.get('safety')
     if not isinstance(safety, dict) or safety.get('researchOnly') is not True \
@@ -99,7 +102,7 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
         status = row.get('status')
         source = row.get('source')
         blocked = isinstance(status, str) and BLOCKED_SOURCE.fullmatch(status)
-        healthy = status in SOURCE_STATUSES
+        healthy = isinstance(status, str) and status in SOURCE_STATUSES
         if not (blocked or healthy) \
                 or not isinstance(source, str) or not SAFE_SOURCE.fullmatch(source) \
                 or (blocked and source != 'NONE') \
@@ -112,7 +115,7 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
                 or not bounded_count(observed, 8001) \
                 or not bounded_count(candidates, 13) \
                 or observed > listed or candidates > observed \
-                or (status == 'READY' and observed != listed) \
+                or (status == 'READY' and (observed == 0 or observed != listed)) \
                 or (blocked and (observed != 0 or candidates != 0)) \
                 or row.get('executionAuthority') != 'NONE':
             return blank('INVALID', True)
@@ -133,10 +136,12 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
             or stats['cyclesSinceRelease'] < stats['cyclesToday']:
         return blank('INVALID', True)
     coverage = sum(m['status'] == 'READY' for m in markets)
-    if raw['status'] == 'OBSERVING_ALL_FOUR' and coverage != 4:
-        return blank('INVALID', True)
-    if budget['status'] != 'RUN' \
-            and any(m['status'] in SOURCE_STATUSES for m in markets):
+    usable = sum(m['status'] in SOURCE_STATUSES for m in markets)
+    if (raw['status'] == 'OBSERVING_ALL_FOUR' and coverage != 4) \
+            or (raw['status'] == 'PARTIAL_MARKET_COVERAGE'
+                and (usable == 0 or coverage == 4)) \
+            or (raw['status'] == 'BLOCKED_DATA' and usable != 0) \
+            or (budget['status'] != 'RUN' and usable != 0):
         return blank('INVALID', True)
     age_ms = max(0, now_ms - observed_at)
     if age_ms > STALE_AFTER_MS:
@@ -157,7 +162,46 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
     }
 
 
-def read_watch_status(root, now_ms=None, expected_sha=None):
+
+def read_active_research_sha(research_home='/opt/investment-research', environ=None):
+    """Bind status to the root-managed exact detached Research release.
+
+    The Dashboard's systemd unit does not carry RESEARCH_CODE_SHA. Never treat
+    a syntactically valid SHA from the market-watch JSON as independent proof.
+    The installed /current symlink must point directly inside /releases/<sha>
+    and that checkout's detached .git/HEAD must independently match <sha>.
+    """
+    try:
+        home = Path(research_home)
+        current = home / 'current'
+        if not current.is_symlink():
+            return None
+        released = current.resolve(strict=True)
+        directory = (home / 'releases').resolve(strict=True)
+        if released.parent != directory or not SHA.fullmatch(released.name):
+            return None
+        head_path = released / '.git' / 'HEAD'
+        fd = os.open(head_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            meta = os.fstat(fd)
+            if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 \
+                    or not (40 <= meta.st_size <= 80) or meta.st_mode & 0o022:
+                return None
+            text = os.read(fd, 81).decode('ascii').strip()
+        finally:
+            os.close(fd)
+        if not SHA.fullmatch(text) or text != released.name:
+            return None
+        env = os.environ if environ is None else environ
+        configured = env.get('RESEARCH_CODE_SHA')
+        if configured is not None and configured != '' and configured != text:
+            return None
+        return text
+    except (OSError, RuntimeError, ValueError, UnicodeError):
+        return None
+
+
+def read_watch_status(root, now_ms=None, expected_sha=None, require_exact_sha=False):
     """Read one bounded regular private file with O_NOFOLLOW; never create it."""
     path = Path(root) / 'latest' / 'lightweight-market-watch.json'
     fd = None
@@ -167,6 +211,9 @@ def read_watch_status(root, now_ms=None, expected_sha=None):
         if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1 \
                 or meta.st_size < 1 or meta.st_size > MAX_BYTES \
                 or meta.st_mode & 0o022:
+            return blank('INVALID', True)
+        if require_exact_sha and (not isinstance(expected_sha, str)
+                or not SHA.fullmatch(expected_sha)):
             return blank('INVALID', True)
         data = os.read(fd, MAX_BYTES + 1)
         if len(data) > MAX_BYTES:

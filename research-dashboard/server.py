@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlsplit
 
 from v3_independence import read_v3_independence_summary
 from video_research_readback import read_video_research_readback
-from lightweight_market_watch_readback import read_watch_status
+from lightweight_market_watch_readback import read_active_research_sha, read_watch_status
 
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
@@ -950,7 +950,11 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
     formula_backtest = read_formula_queue_readback(root)
-    market_watch_status = read_watch_status(root, expected_sha=os.environ.get('RESEARCH_CODE_SHA') or None)
+    # A persisted SHA is untrusted until independently matched to the exact
+    # root-managed detached Research release currently installed on the host.
+    market_watch_status = read_watch_status(
+        root, expected_sha=read_active_research_sha(), require_exact_sha=True,
+    )
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
