@@ -43,7 +43,11 @@ test('six formula+AI strategy packs reach ACTIVE_REHEARSAL without OOS/promotion
       direction,
       ...ready,
       ...(market === 'CRYPTO_FUTURES'
-        ? { futuresMarginMode: 'isolated' as const, futuresLeverage: 7 }
+        ? {
+            futuresMarginMode: 'isolated' as const,
+            futuresLeverage: 7,
+            futuresMaximumLeverage: 7,
+          }
         : {}),
     });
     assert.equal(result.status, 'ACTIVE_REHEARSAL', strategyId);
@@ -66,6 +70,7 @@ test('formula+AI rehearsal allows futures SHORT only with isolated margin and le
     ...ready,
     futuresMarginMode: 'isolated',
     futuresLeverage: 7,
+    futuresMaximumLeverage: 7,
   });
   assert.equal(pass.status, 'ACTIVE_REHEARSAL');
 
@@ -76,6 +81,7 @@ test('formula+AI rehearsal allows futures SHORT only with isolated margin and le
     ...ready,
     futuresMarginMode: 'crossed',
     futuresLeverage: 7,
+    futuresMaximumLeverage: 7,
   });
   assert.equal(crossed.status, 'BLOCKED_REHEARSAL');
   assert.ok(crossed.blockers.includes('FORMULA_AI_FUTURES_ISOLATED_REQUIRED'));
@@ -87,9 +93,22 @@ test('formula+AI rehearsal allows futures SHORT only with isolated margin and le
     ...ready,
     futuresMarginMode: 'isolated',
     futuresLeverage: 8,
+    futuresMaximumLeverage: 7,
   });
   assert.equal(over.status, 'BLOCKED_REHEARSAL');
   assert.ok(over.blockers.includes('FORMULA_AI_FUTURES_LEVERAGE_LIMIT'));
+
+  const memberOver = evaluateFormulaAiAutoRehearsal({
+    strategyId: 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    market: 'CRYPTO_FUTURES',
+    direction: 'LONG',
+    ...ready,
+    futuresMarginMode: 'isolated',
+    futuresLeverage: 4,
+    futuresMaximumLeverage: 3,
+  });
+  assert.equal(memberOver.status, 'BLOCKED_REHEARSAL');
+  assert.ok(memberOver.blockers.includes('FORMULA_AI_FUTURES_LEVERAGE_LIMIT'));
 });
 
 test('AI veto, cash-market short, missing provider chain, and unknown strategy fail closed', () => {
