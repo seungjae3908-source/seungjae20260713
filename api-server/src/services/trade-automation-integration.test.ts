@@ -1012,6 +1012,39 @@ test('live connection verification authenticates the three spot providers with z
   }
 });
 
+test('FILLED state transition rejects missing execution evidence before storing a false terminal fill', async () => {
+  const repository = new InMemoryTradingRepository();
+  const automation = new TradeAutomationService(repository);
+  const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
+  const created = await automation.createPlan(USER_A, plan({ signalId: 'no-fake-fill-signal' }), policy, false);
+  assert.ok(created.plan);
+  const approved = await automation.approvePlan(USER_A, created.plan.id);
+  const order = (await automation.createOrder(USER_A, approved)).order;
+  const accepted = await automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED');
+
+  await assert.rejects(
+    automation.transition(accepted, 'FILLED', 'PAPER_BROKER_FILLED'),
+    /TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED/,
+  );
+  await assert.rejects(
+    automation.transition(accepted, 'FILLED', 'PAPER_BROKER_FILLED', {
+      filledQuantity: 0, averageFillPrice: 100_000,
+    }),
+    /TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED/,
+  );
+  const persisted = await repository.getOrder(USER_A, accepted.id);
+  assert.equal(persisted?.state, 'ACCEPTED');
+  assert.equal(persisted?.filledQuantity, 0);
+  assert.ok((await repository.listEvents(USER_A)).every((event) => event.toState !== 'FILLED'));
+
+  const completed = await automation.transition(accepted, 'FILLED', 'PAPER_BROKER_FILLED', {
+    filledQuantity: 1, averageFillPrice: 100_000, feeAmount: 50, feeCurrency: 'KRW',
+  });
+  assert.equal(completed.state, 'FILLED');
+  assert.equal(completed.filledQuantity, 1);
+  assert.equal((await repository.getOrder(USER_A, accepted.id))?.filledQuantity, 1);
+});
+
 test('paper execution has zero outbound calls and restart scan marks an accepted order for reconciliation', async () => {
   const repository = new InMemoryTradingRepository();
   const automation = new TradeAutomationService(repository);

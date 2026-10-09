@@ -24,6 +24,16 @@ import {
   liveProviderSnapshotReadyForAutomaticWarmup,
   memberTelegramProofMatchesCurrentBinding,
   liveAllFourConnectionVerificationReady,
+  selectAutomaticPaperAccountEquity,
+  AUTOMATIC_PAPER_ACCOUNT_ID,
+  AUTOMATIC_PAPER_INITIAL_KRW,
+  automaticPaperWalletBootstrapReadiness,
+  automaticLiveStrategyAllowlisted,
+  automaticPaperLegacyEpochIsolationReadiness,
+  automaticExecutionProjectionOrderIds,
+  automaticPaperOrderWithinWalletEpoch,
+  automaticPaperWalletServerEpochMs,
+  automaticPaperRiskEvidenceFromCanonicalLedger,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -107,6 +117,61 @@ test('all-four live readiness requires fresh verified Toss, Kiwoom, Upbit, and B
     connection('upbit'),
     connection('bitget', { lastErrorCode: 'AUTH_REVOKED' }),
   ], nowMs), false);
+});
+
+
+test('dedicated automatic Paper equity never borrows manual simulator cash or corrupt wallets', () => {
+  const at = new Date().toISOString();
+  const manual = {
+    kind: 'account' as const, id: 'paper-manual-wallet', version: 1,
+    updatedAt: at, deletedAt: null, createdAt: at, serverUpdatedAt: at,
+    payload: { id: 'paper-manual-wallet', equity: 1_000_000 },
+  };
+  const dedicated = {
+    kind: 'account' as const, id: AUTOMATIC_PAPER_ACCOUNT_ID, version: 1,
+    updatedAt: at, deletedAt: null, createdAt: at, serverUpdatedAt: at,
+    payload: {
+      id: AUTOMATIC_PAPER_ACCOUNT_ID, initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      equity: AUTOMATIC_PAPER_INITIAL_KRW, cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      usedMargin: 0, availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+    },
+  };
+  assert.equal(selectAutomaticPaperAccountEquity([]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 500_000);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, { ...dedicated, deletedAt: at }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, {
+    ...dedicated, payload: { ...dedicated.payload, initialBalance: 1_000_000 },
+  }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, {
+    ...dedicated, payload: { ...dedicated.payload, equity: -1 },
+  }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, {
+    ...dedicated, payload: { ...dedicated.payload, availableMargin: Number.POSITIVE_INFINITY },
+  }]), null);
+  assert.equal(selectAutomaticPaperAccountEquity([dedicated, dedicated]), null);
+});
+
+test('FILLED Paper rows with zero quantity or unknown fees remain blocked without guessing fills', () => {
+  const plan = {
+    id: 'bad-paper-plan', accountMode: 'paper', executionMode: 'automatic',
+  } as never;
+  const orders = [
+    { id: 'bad-filled-zero', planId: 'bad-paper-plan', state: 'FILLED',
+      filledQuantity: 0, averageFillPrice: 100_000, feeAmount: null, fills: [] },
+    { id: 'valid-filled', planId: 'bad-paper-plan', state: 'FILLED',
+      filledQuantity: 0.05, averageFillPrice: 100_000,
+      feeAmount: 50, feeCurrency: 'KRW', fills: [] },
+  ] as never;
+  const proof = automaticPaperWalletBootstrapReadiness(orders, [plan]);
+  assert.equal(proof.safeToInitialize, false);
+  assert.equal(proof.executedAutomaticPaperOrderCount, 2);
+  assert.equal(proof.missingFilledQuantityEvidence, 1);
+  assert.equal(proof.missingFeeEvidence, 1);
+  assert.ok(proof.blockers.includes('AUTOMATIC_PAPER_FILLED_QUANTITY_EVIDENCE_MISSING'));
+  assert.ok(proof.blockers.includes('AUTOMATIC_PAPER_FEE_EVIDENCE_MISSING'));
+  assert.equal(proof.orderSubmitted, false);
+  assert.equal(proof.privateTradingRequests, 0);
 });
 
 function handoff(nowMs: number, missingRecentMove = false) {
@@ -252,20 +317,25 @@ function handoff(nowMs: number, missingRecentMove = false) {
   } as const;
 }
 
-function paperRepository(nowMs: number): PaperJournalRepository {
+function paperRepository(nowMs: number, originalWalletCreatedMs = nowMs): PaperJournalRepository {
   return {
     async listSnapshot() {
       return [{
         kind: 'account',
-        id: 'paper-account',
+        id: AUTOMATIC_PAPER_ACCOUNT_ID,
         version: 1,
         updatedAt: new Date(nowMs).toISOString(),
+        createdAt: new Date(originalWalletCreatedMs).toISOString(),
+        serverUpdatedAt: new Date(nowMs).toISOString(),
         deletedAt: null,
         payload: {
-          id: 'paper-account',
-          equity: 1_000_000,
-          cashBalance: 1_000_000,
-          availableMargin: 1_000_000,
+          id: AUTOMATIC_PAPER_ACCOUNT_ID,
+          initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+          equity: AUTOMATIC_PAPER_INITIAL_KRW,
+          cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+          usedMargin: 0,
+          availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+          createdAt: new Date(originalWalletCreatedMs).toISOString(),
         },
       }];
     },
@@ -281,6 +351,7 @@ function source(
     expired?: boolean;
     handoffMissing?: boolean;
     markPrice?: number;
+    walletCreatedAtMs?: number;
     syncCalls?: { count: number };
     syncFailure?: boolean;
     syncMissingReferences?: number;
@@ -304,7 +375,9 @@ function source(
       }];
     },
     tradingRepositoryFor() { return repository; },
-    paperJournalRepositoryFor() { return paperRepository(nowMs); },
+    paperJournalRepositoryFor() {
+      return paperRepository(nowMs, options.walletCreatedAtMs ?? nowMs);
+    },
     async resolveFx() {
       return {
         market: 'CRYPTO_SPOT',
@@ -378,6 +451,77 @@ async function withFetchMock<T>(run: () => Promise<T>) {
   globalThis.fetch = async () => sidecarPaperOnly();
   try { return await run(); } finally { globalThis.fetch = original; }
 }
+
+
+test('automatic Paper risk excludes user-imported manual loss journals and uses only canonical automatic orders', async () => {
+  const nowMs = Date.now();
+  const repo = new InMemoryTradingRepository();
+  await repo.savePolicy(USER, policy());
+  const fakeLocalClose = {
+    kind: 'journal' as const, id: 'forged-manual-loss', version: 1,
+    updatedAt: new Date(nowMs).toISOString(), deletedAt: null,
+    payload: {
+      source: 'APP_MANUAL', recordType: 'unified_trade_cycle',
+      status: 'CLOSED', closedAt: new Date(nowMs).toISOString(),
+      netPnl: -500_000, strategy: 'manual-only',
+    },
+  };
+  const paper = paperRepository(nowMs);
+  const worker = new MemberAutoTradingBackgroundWorker({
+    ...source(repo, nowMs),
+    paperJournalRepositoryFor() {
+      return {
+        async listSnapshot(userId: string) {
+          return [...await paper.listSnapshot(userId), fakeLocalClose] as never;
+        },
+      } as unknown as PaperJournalRepository;
+    },
+  });
+  const risk = automaticPaperRiskEvidenceFromCanonicalLedger(USER, [], [], nowMs, 500_000);
+  assert.equal(risk.ready, true);
+  assert.equal(risk.dailyPnlPercent, 0);
+  assert.equal(risk.consecutiveLosses, 0);
+  const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
+  assert.equal(result.createdPlans, 1, 'client-uploaded manual loss cannot block automatic Paper');
+  assert.equal(result.filledOrders, 1);
+  assert.equal(result.liveOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+});
+
+test('automatic Paper risk fails closed for terminal fills without quantity, fee and complete history', () => {
+  const nowMs = Date.now();
+  const plan = {
+    id: 'bad-history-plan', userId: USER,
+    accountMode: 'paper', executionMode: 'automatic', exchange: 'upbit',
+    market: 'KRW', symbol: 'BTC', side: 'buy',
+  } as never;
+  const corrupted = [{
+    id: 'bad-history-order', planId: 'bad-history-plan',
+    state: 'FILLED', filledQuantity: 0, averageFillPrice: 100_000,
+    feeAmount: null, feeCurrency: null,
+  }] as never;
+  const proof = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, corrupted, [plan], nowMs, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
+  assert.equal(proof.ready, false);
+  assert.ok(proof.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+  assert.ok(proof.blockers.includes('BACKGROUND_PAPER_FEE_EVIDENCE_REQUIRED'));
+  assert.equal(proof.dailyPnlPercent, 0, 'unknown fill cannot be counted as a winning day');
+  const truncated = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [], Array.from({ length: 200 }, (_, i) => ({
+      id: 'old-plan-' + i, accountMode: 'mock', executionMode: 'manual',
+    })) as never, nowMs, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
+  assert.equal(truncated.ready, false);
+  assert.ok(truncated.blockers.includes('BACKGROUND_PAPER_CANONICAL_HISTORY_TRUNCATED'));
+});
+
+test('unpriced multi-currency Paper settlement cannot masquerade as verified KRW risk', () => {
+  const nowMs = Date.now();
+  const badEquity = automaticPaperRiskEvidenceFromCanonicalLedger(USER, [], [], nowMs, 0);
+  assert.equal(badEquity.ready, false);
+  assert.ok(badEquity.blockers.includes('BACKGROUND_PAPER_EQUITY_UNVERIFIED'));
+});
 
 test('member stock broker routing is user-selectable for stocks and fixed away from crypto', () => {
   const selected = normalizeTradingPolicy({
@@ -698,12 +842,23 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal((lifecycleEvents[0]?.metadata?.safety as any).executionAuthority, 'NONE');
   assert.equal((lifecycleEvents[0]?.metadata?.safety as any).economicSampleCredit, 0);
 
+  const riskEvidence = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, await repository.listOrders(USER), await repository.listPlans(USER),
+    nowMs + 1_000, AUTOMATIC_PAPER_INITIAL_KRW,
+  );
   const second = await withFetchMock(() => worker.runOnce(new Date(nowMs + 1_000)));
   assert.equal((await repository.listOrders(USER)).length, 1);
   assert.equal(second.createdPlans, 0);
-  assert.ok(second.duplicates >= 1);
+  if (riskEvidence.ready) {
+    assert.ok(second.duplicates >= 1, 'verified Paper replay must remain idempotent');
+    assert.equal(second.lifecycleIdempotent, 1);
+  } else {
+    assert.equal(second.newEntriesFailClosed, true,
+      'unverified Paper risk must stop fresh evaluations, including replay');
+    assert.equal(second.lifecycleIdempotent, 0);
+    assert.ok(second.blocked >= 1);
+  }
   assert.equal(second.positionLifecycles, 0);
-  assert.equal(second.lifecycleIdempotent, 1);
   assert.equal((await repository.listEvents(USER))
     .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED').length, 1);
   assert.equal(second.liveOrders, 0);
@@ -1601,7 +1756,9 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
   assert.equal(first.paperExitOrders, 0);
 
   const secondWorker = new MemberAutoTradingBackgroundWorker(
-    source(repository, nowMs + 5_000, { handoffMissing: true, markPrice: 90_000 }),
+    source(repository, nowMs + 5_000, {
+      handoffMissing: true, markPrice: 90_000, walletCreatedAtMs: nowMs,
+    }),
   );
   const second = await withFetchMock(() => secondWorker.runOnce(new Date(nowMs + 5_000)));
   assert.equal(second.handoffStatus, 'MISSING');
@@ -2211,4 +2368,195 @@ test('armed Live worker cannot bypass an unfilled Paper mirror to call a private
       else process.env[flag] = old;
     }
   }
+});
+
+test('automatic outbox selects post-wallet Paper orders and all automatic Live orders, never legacy QA fills', () => {
+  const epoch = Date.parse('2026-10-09T00:00:00.000Z');
+  const plans = [
+    { id: 'historic-paper', accountMode: 'paper', executionMode: 'automatic', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'fresh-paper', accountMode: 'paper', executionMode: 'automatic', createdAt: '2026-10-09T00:00:01.000Z' },
+    { id: 'live-existing', accountMode: 'live', executionMode: 'automatic', createdAt: '2026-09-01T00:00:00.000Z' },
+    { id: 'manual-paper', accountMode: 'paper', executionMode: 'manual', createdAt: '2026-10-09T00:00:01.000Z' },
+  ] as TradingPlan[];
+  const orders = [
+    { id: 'historic-order', planId: 'historic-paper', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'fresh-order', planId: 'fresh-paper', createdAt: '2026-10-09T00:00:02.000Z' },
+    { id: 'live-old-order', planId: 'live-existing', createdAt: '2026-09-01T00:00:00.000Z' },
+    { id: 'manual-order', planId: 'manual-paper', createdAt: '2026-10-09T00:00:02.000Z' },
+    { id: 'future-order', planId: 'fresh-paper', createdAt: '2026-10-10T00:00:00.000Z' },
+    { id: 'late-old-plan-order', planId: 'historic-paper', createdAt: '2026-10-09T00:00:04.000Z' },
+  ] as import('./trade-automation.types').TradingOrder[];
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plans, orders, epoch, epoch + 10_000),
+    ['fresh-order', 'live-old-order'],
+  );
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plans, orders, null, epoch + 10_000),
+    ['live-old-order'],
+  );
+});
+
+test('long-running worker must use a fresh clock so a later same-tick Paper fill is selected', () => {
+  const walletStartedAtMs = Date.parse('2026-10-09T00:00:00.000Z');
+  const plan = [{
+    id: 'late-paper-plan', accountMode: 'paper', executionMode: 'automatic',
+    createdAt: '2026-10-09T00:00:01.000Z',
+  }] as TradingPlan[];
+  const orders = [{
+    id: 'late-paper-order', planId: 'late-paper-plan',
+    createdAt: '2026-10-09T00:00:45.000Z',
+  }] as import('./trade-automation.types').TradingOrder[];
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs),
+    [],
+  );
+  assert.deepEqual(
+    automaticExecutionProjectionOrderIds(plan, orders, walletStartedAtMs, walletStartedAtMs + 50_000),
+    ['late-paper-order'],
+  );
+});
+
+test('automatic Paper epoch uses immutable server row time, never forged wallet payload timestamps', () => {
+  const currentMs = Date.parse('2026-10-09T09:00:00.000Z');
+  const row = {
+    kind: 'account' as const, id: AUTOMATIC_PAPER_ACCOUNT_ID,
+    version: 1, updatedAt: '2026-10-09T08:00:00.000Z',
+    createdAt: '2026-10-09T08:00:00.000Z',
+    serverUpdatedAt: '2026-10-09T08:00:00.000Z',
+    deletedAt: null,
+    payload: {
+      id: AUTOMATIC_PAPER_ACCOUNT_ID,
+      initialBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      equity: AUTOMATIC_PAPER_INITIAL_KRW, cashBalance: AUTOMATIC_PAPER_INITIAL_KRW,
+      usedMargin: 0, availableMargin: AUTOMATIC_PAPER_INITIAL_KRW,
+      createdAt: '2021-01-01T00:00:00.000Z',
+    },
+  };
+  const trustedMs = Date.parse(row.createdAt);
+  assert.equal(automaticPaperWalletServerEpochMs([row], currentMs), trustedMs);
+  assert.equal(
+    automaticPaperWalletServerEpochMs([{
+      ...row, payload: { ...row.payload, createdAt: '2035-01-01T00:00:00.000Z' },
+    }], currentMs), trustedMs,
+  );
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: 'malformed' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, deletedAt: row.createdAt }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:58.000Z' }], currentMs), trustedMs);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, serverUpdatedAt: '2026-10-09T07:59:00.000Z' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([{ ...row, createdAt: '2030-01-01T00:00:00.000Z' }], currentMs), null);
+  assert.equal(automaticPaperWalletServerEpochMs([row, row], currentMs), null);
+});
+
+test('new wallet epoch rejects old Paper positions, including post-epoch retries on old plans', () => {
+  const epoch = Date.parse('2026-10-09T00:00:00.000Z');
+  const newPlan = { id: 'new', accountMode: 'paper', executionMode: 'automatic',
+    createdAt: '2026-10-09T00:00:01.000Z' } as TradingPlan;
+  const oldPlan = { ...newPlan, id: 'old', createdAt: '2026-10-06T00:00:00.000Z' };
+  const newOrder = { id: 'order-new', planId: 'new', createdAt: '2026-10-09T00:00:02.000Z' } as import('./trade-automation.types').TradingOrder;
+  const retriedOld = { ...newOrder, id: 'order-retried-old', planId: 'old' };
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, newOrder, epoch, epoch + 10_000), true);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(oldPlan, retriedOld, epoch, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, newOrder, null, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch(newPlan, { ...newOrder, createdAt: '2027-01-01T00:00:00.000Z' }, epoch, epoch + 10_000), false);
+  assert.equal(automaticPaperOrderWithinWalletEpoch({ ...newPlan, accountMode: 'live' }, newOrder, epoch, epoch + 10_000), false);
+});
+
+test('legacy Paper fill cannot trigger a new wallet automatic exit even when historically FILLED', async () => {
+  const nowMs = Date.now();
+  const repository = new InMemoryTradingRepository();
+  await repository.savePolicy(USER, policy());
+  await repository.savePlan({
+    id: 'legacy-paper-plan', userId: USER, executionMode: 'automatic',
+    accountMode: 'paper', exchange: 'upbit', market: 'spot', symbol: 'BTC',
+    state: 'SUBMITTED', reduceOnly: false, signalReasons: ['CANONICAL_PAPER_HANDOFF'],
+    createdAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+  } as TradingPlan);
+  await repository.saveOrder({
+    id: 'legacy-paper-order', userId: USER, planId: 'legacy-paper-plan',
+    exchange: 'upbit', state: 'FILLED', requestedQuantity: 0.1,
+    filledQuantity: 0.1, averageFillPrice: 100_000, feeAmount: null,
+    createdAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+    updatedAt: new Date(nowMs - 3 * 24 * 60 * 60_000).toISOString(),
+  } as import('./trade-automation.types').TradingOrder);
+  const base = source(repository, nowMs, { handoffMissing: true });
+  let legacyPriceReads = 0;
+  const result = await new MemberAutoTradingBackgroundWorker({
+    ...base,
+    async readMarketMark() {
+      legacyPriceReads++;
+      throw new Error('LEGACY_PAPER_POSITION_MUST_NOT_TRIGGER_EXIT');
+    },
+  }).runOnce(new Date(nowMs));
+  assert.equal(legacyPriceReads, 0);
+  assert.equal(result.paperExitOrders, 0);
+  assert.equal(result.privateTradingRequests, 0);
+  assert.equal(result.liveOrders, 0);
+});
+
+test('legacy Paper isolation is explicit, immutable, Paper-only and audit-preserving', () => {
+  const now = Date.parse('2026-10-09T09:00:00.000Z');
+  const old = new Date(now - 2 * 60 * 60_000).toISOString();
+  const plan = { id: 'old', userId: USER, accountMode: 'paper',
+    executionMode: 'automatic', reduceOnly: false, createdAt: old } as TradingPlan;
+  const order = { id: 'old-fill', userId: USER, planId: plan.id, state: 'FILLED',
+    filledQuantity: 0, feeAmount: null, createdAt: old } as import('./trade-automation.types').TradingOrder;
+  const journal = { kind: 'journal' as const, id: 'old-fill', version: 1,
+    createdAt: old, updatedAt: old, serverUpdatedAt: old, deletedAt: null,
+    payload: { source: 'APP_PAPER', status: 'FILLED', positionEffect: 'OPEN' } };
+  const result = automaticPaperLegacyEpochIsolationReadiness([order], [plan], [journal], now);
+  assert.equal(result.safeToIsolate, true);
+  assert.equal(result.legacyFilledWithoutQuantity, 1);
+  assert.equal(result.historicalPositionsClosed, false);
+  assert.equal(result.realOrderSubmitted, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([order], [{
+    ...plan, accountMode: 'live',
+  }], [journal], now).safeToIsolate, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([{
+    ...order, state: 'RECOVERY_REQUIRED',
+  }], [plan], [journal], now).safeToIsolate, false);
+  assert.equal(automaticPaperLegacyEpochIsolationReadiness([order], [plan], [{
+    ...journal, payload: { ...journal.payload, status: 'OPEN' },
+  }], now).safeToIsolate, false);
+});
+
+test('new wallet calculates only scoped Paper risk, still blocking new invalid fills', () => {
+  const now = Date.parse('2026-10-09T09:00:00.000Z');
+  const old = new Date(now - 2 * 60 * 60_000).toISOString();
+  const epoch = now - 60_000;
+  const oldPlan = { id: 'old', userId: USER, accountMode: 'paper',
+    executionMode: 'automatic', exchange: 'upbit', createdAt: old } as TradingPlan;
+  const oldOrder = { id: 'bad', userId: USER, planId: oldPlan.id, state: 'FILLED',
+    filledQuantity: 0, feeAmount: null, createdAt: old } as import('./trade-automation.types').TradingOrder;
+  assert.equal(automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder], [oldPlan], now, 500_000,
+  ).ready, false);
+  const isolated = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder], [oldPlan], now, 500_000, epoch,
+  );
+  assert.equal(isolated.ready, true);
+  assert.equal(isolated.closedTrades, 0);
+  const newPlan = { ...oldPlan, id: 'new', createdAt: new Date(epoch + 1_000).toISOString() };
+  const newOrder = { ...oldOrder, id: 'new-bad', planId: newPlan.id,
+    createdAt: new Date(epoch + 2_000).toISOString() };
+  const blocked = automaticPaperRiskEvidenceFromCanonicalLedger(
+    USER, [oldOrder, newOrder], [oldPlan, newPlan], now, 500_000, epoch,
+  );
+  assert.equal(blocked.ready, false);
+  assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+});
+
+test('blank live strategy allowlist is never wildcard authorization for a real order', () => {
+  const unset = normalizeTradingPolicy({
+    ...allFourPolicy(), enabledStrategies: [],
+  });
+  assert.equal(automaticLiveStrategyAllowlisted(unset, 'safe-canonical-setup'), false);
+  const approved = normalizeTradingPolicy({
+    ...allFourPolicy(), enabledStrategies: ['safe-canonical-setup'],
+  });
+  assert.equal(automaticLiveStrategyAllowlisted(approved, 'safe-canonical-setup'), true);
+  assert.equal(automaticLiveStrategyAllowlisted(approved, 'unapproved-setup'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(approved, ''), false);
+  assert.equal(automaticLiveStrategyAllowlisted({
+    enabledStrategies: undefined as never,
+  }, 'safe-canonical-setup'), false);
 });
