@@ -614,7 +614,9 @@ jobs:
                   errors.push(`${label}_UNREACHABLE`);
                 } else if (label.endsWith('_CHAT') && label !== 'DEFAULT_CHAT'
                     && label !== 'STOCK_CHAT_LEGACY' && label !== 'CRYPTO_CHAT_LEGACY') {
-                  if (verifiedBotId == null) {
+                  if (!['group', 'supergroup', 'channel'].includes(String(chat.value?.result?.type ?? ''))) {
+                    errors.push(`${label}_INVALID_ROOM_TYPE`);
+                  } else if (verifiedBotId == null) {
                     errors.push(`${label}_BOT_MEMBER_ID_UNVERIFIED`);
                   } else {
                     const membership = await api('getChatMember', { chat_id: chatId, user_id: verifiedBotId });
@@ -1059,7 +1061,9 @@ jobs:
                   telegramPreflightErrors.push(`${label}_UNREACHABLE`);
                 } else if (label.endsWith('_CHAT') && label !== 'DEFAULT_CHAT'
                     && label !== 'STOCK_CHAT_LEGACY' && label !== 'CRYPTO_CHAT_LEGACY') {
-                  if (verifiedBotId == null) {
+                  if (!['group', 'supergroup', 'channel'].includes(String(room.value?.result?.type ?? ''))) {
+                    telegramPreflightErrors.push(`${label}_INVALID_ROOM_TYPE`);
+                  } else if (verifiedBotId == null) {
                     telegramPreflightErrors.push(`${label}_BOT_MEMBER_ID_UNVERIFIED`);
                   } else {
                     const membership = await telegramApiRead('getChatMember', { chat_id: roomId, user_id: verifiedBotId });
