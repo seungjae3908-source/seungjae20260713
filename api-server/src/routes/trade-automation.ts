@@ -64,7 +64,9 @@ import type {
   TradingSignalState,
 } from '../services/trade-automation.types';
 import {
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from '../services/trade-automation.types';
 
@@ -918,7 +920,9 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       credentialsExposed: false;
     }>;
 
-    const paper = runFormulaAiPaperRehearsalProbe(new Date(), maximumSingleEntryKrw(req));
+    const paper = runFormulaAiPaperRehearsalProbe(
+      new Date(), maximumSingleEntryKrw(req), maximumBitgetLeverage(req),
+    );
     const journalReadReady = req.body?.journalReadReady === true;
     const telegramReady = req.body?.telegramReady === true;
     const futures = futuresLiveRuntimeStatus();
@@ -978,7 +982,11 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
         journalReady: paper.journalReady && journalReadReady,
         telegramReady,
         ...(item.market === 'CRYPTO_FUTURES'
-          ? { futuresMarginMode, futuresLeverage }
+          ? {
+              futuresMarginMode,
+              futuresLeverage,
+              futuresMaximumLeverage: maximumBitgetLeverage(req),
+            }
           : {}),
       });
       return {
@@ -1054,7 +1062,10 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
         marginMode: futures.marginMode || null,
         maxLeverage: futures.maxLeverage,
         isolatedReady: futures.marginMode === 'isolated',
-        leverageReady: Number.isInteger(futuresLeverage) && futuresLeverage >= 2 && futuresLeverage <= 7,
+        maximumLeverageForRequester: maximumBitgetLeverage(req),
+        leverageReady: Number.isInteger(futuresLeverage)
+          && futuresLeverage >= 2
+          && futuresLeverage <= maximumBitgetLeverage(req),
       },
       markets,
       allProvidersReady,
@@ -1260,6 +1271,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       policy,
       initialMaxOrderKrw: maximumSingleEntryKrw(req),
       administratorOrderBaseline: maximumSingleEntryKrw(req) === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      maximumBitgetLeverage: maximumBitgetLeverage(req),
+      administratorLeveragePolicy: maximumBitgetLeverage(req) === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
       connections: safeConnections(connections),
       emergencyStopped: policy.emergencyStopped || persistentGlobalStop || environmentGlobalStop,
       emergencyStopSources: {
@@ -1387,6 +1400,21 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const current = await repository.getPolicy(userId);
+    const requestedLeverage = req.body?.bitgetLeverage == null
+      ? null
+      : Number(req.body.bitgetLeverage);
+    if (Number.isInteger(requestedLeverage)
+      && requestedLeverage! >= 2
+      && requestedLeverage! <= PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      && requestedLeverage! > maximumBitgetLeverage(req)) {
+      return res.status(409).json({
+        ok: false,
+        error: 'BITGET_LEVERAGE_ROLE_LIMIT',
+        maximumBitgetLeverage: maximumBitgetLeverage(req),
+        orderSubmitted: false,
+        providerMutationRequests: 0,
+      });
+    }
     let candidate = normalizeTradingPolicy(req.body, maximumSingleEntryKrw(req));
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
       candidate.marketEnabled.crypto_futures = false;
@@ -1438,6 +1466,12 @@ function maximumSingleEntryKrw(req: AuthenticatedRequest) {
   return req.member && hasCapability(req.member, 'canManageMembers')
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
+function maximumBitgetLeverage(req: AuthenticatedRequest) {
+  return req.member && hasCapability(req.member, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
 }
 
 router.post('/admin/order-limit-1m', requireAdmin, async (req: AuthenticatedRequest, res) => {
@@ -1555,7 +1589,7 @@ router.post('/admin/pilot-stage', requireAdmin, async (req: AuthenticatedRequest
       ...current,
       pilotStage: 'formula-ai-exception',
       automaticEnabled: false,
-    });
+    }, maximumSingleEntryKrw(req));
     await repository.savePolicy(userId, policy);
     return res.json({
       ok: true,
@@ -1823,7 +1857,7 @@ router.post('/emergency-stop', async (req: AuthenticatedRequest, res) => {
       ...current, automaticEnabled: false, emergencyStopped: true, mode: 'approval',
       marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
       exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
-    });
+    }, maximumSingleEntryKrw(req));
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, emergencyStopped: true, newOrdersBlocked: true, existingOrdersCanceled: false });
   } catch (error) { return errorResponse(res, error); }

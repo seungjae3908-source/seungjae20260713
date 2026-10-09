@@ -5,7 +5,10 @@ import {
   evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
 } from './formula-ai-live-exception.service';
 import { evaluateTradingPlan, normalizeTradingPolicy } from './trade-automation-risk.service';
-import type { TradingPlanInput } from './trade-automation.types';
+import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type TradingPlanInput,
+} from './trade-automation.types';
 
 const HEX64 = 'a'.repeat(64);
 
@@ -56,7 +59,7 @@ function policy() {
     maxAverageSpreadPercent: 0.15,
     maxCorrelatedExposurePercent: 40,
     maxEconomicsAgeHours: 24,
-  });
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
 }
 
 function reasons(strategyId: string) {
