@@ -166,8 +166,8 @@ export function createBacktestsRouter(dependencies: Partial<BacktestDependencies
       const request = parseRequest(req.body);
       const execution = (async () => {
         const [history, rules] = await Promise.all([
-          deps.loadCandles({ symbol: request.symbol, timeframe: request.timeframe, startTime: request.startTime, endTime: request.endTime, signal: controller.signal }),
-          deps.loadContractRules(request.symbol),
+          deps.loadCandles({ market: request.market, symbol: request.symbol, timeframe: request.timeframe, startTime: request.startTime, endTime: request.endTime, signal: controller.signal }),
+          request.market === 'crypto-futures' ? deps.loadContractRules(request.symbol) : Promise.resolve({ symbol: request.symbol, quantityStep: null, quantityPrecision: null, minimumQuantity: null, minimumNotional: null, maximumLeverage: 1, maintenanceMarginRate: null, status: 'live' as const, updatedAt: new Date().toISOString(), warnings: [] as string[] }),
         ]);
         const started = performance.now();
         const acceptedRequest: BacktestRequest = {
