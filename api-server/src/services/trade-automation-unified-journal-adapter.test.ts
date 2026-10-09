@@ -106,3 +106,22 @@ test('Bitget reduce-only exit keeps the original position side so entry and exit
     'fill-future-entry-order','fill-future-exit-order',
   ].sort());
 });
+
+
+test('Paper tax must be independently evidenced; zero from an explicit cost policy is distinct from missing', async () => {
+  const repository = new InMemoryTradingRepository();
+  const p = plan('tax-evidence','paper','automatic');
+  const base = { ...order('tax-order','tax-evidence'),feeAmount:500,feeCurrency:'KRW' };
+  await repository.savePlan(p);
+  await repository.saveOrder({ ...base,taxAmount:0,taxCurrency:'KRW' });
+  const valid = await readTradeAutomationJournalPayloads(repository,USER);
+  assert.equal(valid[0]?.fees,500);
+  assert.equal(valid[0]?.tax,0);
+  const unverified = [{ ...base,taxAmount:null,taxCurrency:null },
+    { ...base,taxAmount:0,taxCurrency:'USD' }];
+  for(const malformed of unverified) {
+    await repository.saveOrder(malformed);
+    const rows = await readTradeAutomationJournalPayloads(repository,USER);
+    assert.equal(rows[0]?.tax,null);
+  }
+});
