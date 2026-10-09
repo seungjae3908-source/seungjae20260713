@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -380,6 +381,8 @@ test('staged canonical TRAIN producer input reaches the backtest inbox and never
   assert.equal(result.stagedIntake.producerBound, false);
   assert.equal(result.stagedIntake.upstreamPublicDataAttested, false);
   assert.equal(result.paperRegisteredCount, 0);
+  assert.equal(result.automationReadiness, 'BLOCKED_DATA_OOS_NOT_ATTESTED');
+  assert.equal(result.paperOrderAuthorityGranted, false);
   assert.equal(result.counts.PASS, 0);
   assert.equal(result.scanned, 1);
   const second = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: sha });
@@ -432,8 +435,36 @@ test('missing authentic formula producer stays observable as missing rather than
   const root = await mkdtemp(join(tmpdir(), 'formula-producer-missing-'));
   const summary = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: 'a'.repeat(40) });
   assert.equal(summary.stagedIntake.status, 'MISSING_PRODUCER_OUTBOX');
+  assert.equal(summary.automationReadiness, 'BLOCKED_DATA_NO_TRAIN_INPUT');
+  assert.equal(summary.genuineResearchProducerVerified, false);
+  assert.equal(summary.paperOrderAuthorityGranted, false);
   assert.equal(summary.stagedIntake.producerBound, false);
   assert.equal(summary.stagedIntake.paperDispatchAllowed, false);
   assert.equal(summary.scanned, 0);
   assert.equal(summary.paperRegisteredCount, 0);
+});
+
+
+test('hourly formula runner classifies absent producer as BLOCKED_DATA exit 2 without financial authority', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-hourly-empty-'));
+  const run = spawnSync(process.execPath, ['scripts/run-formula-auto-backtest-queue-v1.js'], {
+    cwd: new URL('../', import.meta.url),
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH ?? '',
+      FORMULA_BACKTEST_STATE_ROOT: root,
+      RESEARCH_CODE_SHA: 'a'.repeat(40),
+      LIVE_TRADING: 'false',
+      PRIVATE_API_ENABLED: 'false',
+    },
+  });
+  assert.equal(run.status, 2, run.stderr);
+  const result = JSON.parse(run.stdout.trim());
+  assert.equal(result.automationReadiness, 'BLOCKED_DATA_NO_TRAIN_INPUT');
+  assert.equal(result.paperOrderAuthorityGranted, false);
+  assert.equal(result.stagedIntake.producerBound, false);
+  assert.equal(result.paperRegisteredCount, 0);
+  assert.equal(result.executionAuthority, 'NONE');
+  assert.equal(result.liveTrading, false);
+  assert.equal(result.realOrder, false);
 });
