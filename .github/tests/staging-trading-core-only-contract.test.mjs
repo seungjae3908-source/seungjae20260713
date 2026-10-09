@@ -10,6 +10,7 @@ const config = readFileSync('stock-analyzer/playwright.staging-trading-core-only
 const spec = readFileSync('stock-analyzer/e2e/staging-trading-core-only.spec.ts', 'utf8');
 const verdictPath = '.github/scripts/build-staging-trading-core-only-verdict.mjs';
 const verdict = readFileSync(verdictPath, 'utf8');
+const adminProbe = readFileSync('api-server/scripts/staging-trading-core-admin-profile.mjs', 'utf8');
 const SHA = 'a'.repeat(40);
 const requireAll = (text, markers) => {
   for (const marker of markers) assert.ok(text.includes(marker), 'missing contract marker: ' + marker);
@@ -59,6 +60,43 @@ test('Hub command is owner-only and staging-only', () => {
   requireAll(workflow, markers);
   assert.ok(workflow.includes('([0-9a-f]{40}) (--preflight|--deploy)$/u.exec(process.env.OWNER_BODY'));
   assert.ok(!workflow.includes('actions: write'));
+  assert.ok(!workflow.includes('environment: production'));
+});
+
+test('Owner preflight proves canonical DB admin capability and owner Paper GET before Staging mutation', () => {
+  requireAll(workflow, [
+    'api-server/scripts/staging-trading-core-admin-profile.mjs',
+    '.github/tests/staging-trading-core-admin-profile.test.mjs',
+    'Verify Staging admin DB authorization and owner-scoped Paper GET before deployment',
+    'run: node api-server/scripts/staging-trading-core-admin-profile.mjs',
+    'node --check api-server/scripts/staging-trading-core-admin-profile.mjs',
+    'STAGING_BASE_URL: ${{ env.STAGING_BASE_URL }}',
+  ]);
+  assert.ok(workflow.indexOf('Verify Staging admin DB authorization and owner-scoped Paper GET before deployment')
+    < workflow.indexOf('  stage-deploy:'));
+  requireAll(spec, [
+    "hasCapability(profile, 'canManageMembers')",
+    "hasCapability(profile, 'canAccessJournalSync')",
+    "profile?.status !== 'approved'",
+    'profile?.is_active !== true',
+    "'STAGING_ADMIN_PROFILE_NOT_APPROVED'",
+  ]);
+  requireAll(adminProbe, [
+    'classifyStagingTradingAdminProfile',
+    "hasCapability(row, 'canManageMembers')",
+    "hasCapability(row, 'canAccessJournalSync')",
+    "'STAGING_CORE_ADMIN_PROFILE_UNAPPROVED'",
+    "'STAGING_CORE_ADMIN_PROFILE_INACTIVE'",
+    "'STAGING_CORE_ADMIN_PROFILE_CAPABILITY_MISSING'",
+    "'STAGING_CORE_ADMIN_ISOLATED_PROJECT_REQUIRED'",
+    "'STAGING_CORE_ADMIN_PAPER_READ_HTTP_'",
+    "'/api/auth/profile'",
+    "'/api/paper-journal/admin-four-market/status'",
+    "'STAGING_CORE_ADMIN_PAPER_READONLY_PASS'",
+  ]);
+  assert.ok(!adminProbe.includes('.auth.admin.updateUserById'));
+  assert.ok(!adminProbe.includes('.auth.admin.createUser'));
+  assert.ok(!adminProbe.includes('service_role'));
   assert.ok(!workflow.includes('environment: production'));
 });
 
