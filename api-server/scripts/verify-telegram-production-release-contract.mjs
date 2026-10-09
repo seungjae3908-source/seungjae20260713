@@ -269,9 +269,9 @@ for (const key of isolatedRoomKeys) {
     throw new Error('TELEGRAM_SIX_ROOM_READONLY_PREFLIGHT_KEY_MISSING:'+key);
   }
 }
-const isolationDefinitions = source.match(/function requireIsolatedSixRooms\\(runtime\\) \\{/g) ?? [];
+const isolationDefinitions = source.match(/function requireIsolatedSixRooms\(runtime\) \{/g) ?? [];
 if (isolationDefinitions.length !== 2) throw new Error('TELEGRAM_SIX_ROOM_GUARD_DUPLICATION_INVALID');
-const isolationCalls = source.match(/requireIsolatedSixRooms\\(env\\);/g) ?? [];
+const isolationCalls = source.match(/requireIsolatedSixRooms\(env\);/g) ?? [];
 if (isolationCalls.length < 3) throw new Error('TELEGRAM_SIX_ROOM_CHECK_BEFORE_AND_AFTER_RESTART_MISSING');
 for (const marker of [
   "new Set(dedicatedIds).size !== dedicatedIds.length",
