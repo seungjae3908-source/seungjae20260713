@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import path from 'node:path';
 import {
   loginProductionReadOnly,
@@ -157,6 +158,9 @@ function preparedMemberAutoPolicy(policy: any) {
 }
 
 test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with zero real order authority', async ({ page }) => {
+  // The authorized Telegram worker ticks every 30s by default; its delivery
+  // cadence must not race against the 30s poll boundary during Production QA.
+  test.setTimeout(4 * 60_000);
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
   let statusBefore = await appApi<any>(page, '/api/trade-automation/status');
@@ -173,56 +177,119 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(connection?.lastErrorCode ?? null, `${provider} must have no verification error`).toBeNull();
   }
 
+  // Collect separate, member-scoped Worker readiness BEFORE any temporary
+  // canary policy changes. A synthetic fill is not a real background tick.
+  const paperRuntime = await appApi<any>(page, '/api/trade-automation/paper-runtime-readiness');
+  expect(paperRuntime.ok, JSON.stringify(paperRuntime.body)).toBe(true);
+  expect(paperRuntime.body?.readOnlyProbe).toBe(true);
+  expect(paperRuntime.body?.memberScope).toBe('SELF');
+  expect(paperRuntime.body?.financialMutationCount).toBe(0);
+  expect(paperRuntime.body?.privateProviderRequests).toBe(0);
+  expect(paperRuntime.body?.orderSubmitted).toBe(false);
+  expect(paperRuntime.body?.exchangeRequestSent).toBe(false);
+  expect(paperRuntime.body?.realOrderAuthorityGranted).toBe(false);
+  const paperRuntimeBlockersBeforeQa: string[] = Array.isArray(paperRuntime.body?.blockers)
+    ? paperRuntime.body.blockers.filter((value: unknown): value is string => typeof value === 'string')
+    : [];
+  const paperRuntimeReadyBeforeQa = paperRuntime.body?.readyForPaperEvaluation === true;
+  expect(paperRuntimeReadyBeforeQa).toBe(paperRuntimeBlockersBeforeQa.length === 0);
+
   const originalPolicy = structuredClone(statusBefore.body.policy);
+  // Protected Production QA must not clear a member's explicit safety stop.
+  if (originalPolicy?.emergencyStopped !== false || originalPolicy?.newEntriesStopped !== false) {
+    throw new Error('PRODUCTION_TRADING_CORE_MEMBER_STOP_ACTIVE');
+  }
+  // The member policy guard is intentionally monotonic: tightening risk budgets
+  // cannot be undone by a subsequent member PUT. Refuse non-restorable baselines.
+  if (originalPolicy?.riskOptimizationEnabled !== true) {
+    throw new Error('PRODUCTION_TRADING_CORE_RISK_BASELINE_NOT_RESTORABLE');
+  }
+  const minimumCanaryKrw = 5_000;
+  if ([
+    originalPolicy?.totalCapitalKrw,
+    originalPolicy?.maxOrderKrw,
+    originalPolicy?.maxInstrumentKrw,
+    originalPolicy?.maxAssetClassKrw?.crypto_spot,
+  ].some((value) => typeof value !== 'number' || value < minimumCanaryKrw)) {
+    throw new Error('PRODUCTION_TRADING_CORE_CANARY_BUDGET_TOO_LOW');
+  }
+  const qaCapitalKrw: number = originalPolicy.totalCapitalKrw;
   const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
   let preparedPolicyReadiness = originalPolicyReadiness;
   let memberAutoPolicyPrepared = false;
   let memberAutoResumePrepared = false;
-  if (prepareMemberAutoPolicy) {
-    if (statusBefore.body?.policy?.emergencyStopped === true || statusBefore.body?.policy?.newEntriesStopped === true) {
-      const resumed = await appApi<any>(page, '/api/trade-automation/resume', 'POST', {
-        confirmation: 'RESUME_MEMBER_TRADING',
-      });
-      expect(resumed.ok, JSON.stringify(resumed.body)).toBe(true);
-      expect(resumed.body?.automaticTradingEnabledByThisRequest).toBe(false);
-      memberAutoResumePrepared = true;
+  let integrationBefore: ApiResult<any>;
+  try {
+    if (prepareMemberAutoPolicy) {
+      const prepared = await appApi<any>(
+        page,
+        '/api/trade-automation/policy',
+        'PUT',
+        preparedMemberAutoPolicy(statusBefore.body.policy),
+      );
+      expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
+      expect(prepared.body?.ok).toBe(true);
+      preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
+      expect(preparedPolicyReadiness.ready).toBe(true);
+
       statusBefore = await appApi<any>(page, '/api/trade-automation/status');
       expect(statusBefore.ok).toBe(true);
       expect(statusBefore.body?.ok).toBe(true);
+      preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
+      expect(preparedPolicyReadiness.ready).toBe(true);
+      for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+        expect(
+          statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
+          `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
+        ).toBe(false);
+      }
+      memberAutoPolicyPrepared = true;
     }
-    const prepared = await appApi<any>(
-      page,
-      '/api/trade-automation/policy',
-      'PUT',
-      preparedMemberAutoPolicy(statusBefore.body.policy),
-    );
-    expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
-    expect(prepared.body?.ok).toBe(true);
-    preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
-    expect(preparedPolicyReadiness.ready).toBe(true);
 
-    statusBefore = await appApi<any>(page, '/api/trade-automation/status');
-    expect(statusBefore.ok).toBe(true);
-    expect(statusBefore.body?.ok).toBe(true);
-    preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
-    expect(preparedPolicyReadiness.ready).toBe(true);
-    for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
-      expect(
-        statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
-        `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
-      ).toBe(false);
+    integrationBefore = await appApi<any>(page, '/api/user-integrations');
+    expect(integrationBefore.ok).toBe(true);
+    expect(integrationBefore.body?.ok).toBe(true);
+    expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
+    if (integrationBefore.body?.telegram?.connected === true) {
+      const worker = integrationBefore.body?.telegramRuntime ?? {};
+      if (worker.deliveryReady !== true || worker.backgroundWorkersEnabled !== true
+        || worker.personalWorkerEnabled !== true || worker.personalWorkerStarted !== true
+        || worker.workerActivationApproved !== true) {
+        throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY');
+      }
     }
-    memberAutoPolicyPrepared = true;
+  } catch (preflightError) {
+    // Member policy preparation may have resumed STOP before later assertions fail.
+    // Restore the exact captured policy even when the main canary never starts.
+    if (prepareMemberAutoPolicy) {
+      try {
+        const restored = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
+          ...originalPolicy,
+          confirmation: { acknowledged: true },
+        });
+        if (!restored.ok || restored.body?.ok !== true) {
+          throw new Error(`POLICY_RESTORE_HTTP_${restored.status}`);
+        }
+        const verified = await appApi<any>(page, '/api/trade-automation/status');
+        if (!verified.ok || verified.body?.ok !== true
+          || !isDeepStrictEqual(verified.body?.policy, originalPolicy)) {
+          throw new Error('POLICY_RESTORE_STATE_MISMATCH');
+        }
+      } catch (restoreError) {
+        throw new Error('PRODUCTION_TRADING_CORE_PREFLIGHT_RESTORE_FAILED', {
+          cause: new AggregateError([preflightError, restoreError]),
+        });
+      }
+    }
+    throw preflightError;
   }
 
-  const integrationBefore = await appApi<any>(page, '/api/user-integrations');
-  expect(integrationBefore.ok).toBe(true);
-  expect(integrationBefore.body?.ok).toBe(true);
-  expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
   const telegramConnectedBefore = integrationBefore.body?.telegram?.connected === true;
   const telegramRuntimeReady = integrationBefore.body?.telegramRuntime?.deliveryReady === true
     && integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled === true
-    && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true;
+    && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true
+    && integrationBefore.body?.telegramRuntime?.personalWorkerStarted === true
+    && integrationBefore.body?.telegramRuntime?.workerActivationApproved === true;
   const telegramActivationState = telegramConnectedBefore && telegramRuntimeReady
     ? 'ACTIVE_VERIFIED' as const
     : 'READY_FOR_ACTIVATION' as const;
@@ -235,15 +302,17 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let journalVisible = false;
   let deliveryQueued = 0;
   let telegramDelivered = false;
+  let telegramFillDeliveryConfirmed = false;
   let syncInserted = 0;
 
   try {
+    // Only reversible canary scope changes. Do not lower risk ceilings or raise
+    // risk floors: member writes enforce monotonic risk hardening and cannot
+    // restore stronger limits after an exploratory QA override.
     const qaPolicy = {
       ...originalPolicy,
       mode: 'automatic',
       automaticEnabled: true,
-      emergencyStopped: false,
-      newEntriesStopped: false,
       marketEnabled: {
         domestic_stock: false,
         us_stock: false,
@@ -258,33 +327,6 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       },
       enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
       enabledStrategies: [canaryStrategy],
-      totalCapitalKrw: 1_000_000,
-      maxOrderKrw: 100_000,
-      maxInstrumentKrw: 1_000_000,
-      maxAssetClassKrw: {
-        domestic_stock: 1_000_000,
-        us_stock: 1_000_000,
-        crypto_spot: 1_000_000,
-        crypto_futures: 1_000_000,
-      },
-      maxAssetPercent: 30,
-      maxOpenPositions: 5,
-      maxDailyOrders: 20,
-      maxConsecutiveLosses: 3,
-      riskOptimizationEnabled: true,
-      riskPerTradePercent: {
-        ...(originalPolicy?.riskPerTradePercent ?? {}),
-        upbit: 0.5,
-      },
-      totalDailyLossLimitPercent: 1,
-      minExpectedValueR: 0.15,
-      minStrategySampleSize: 50,
-      minProfitFactor: 1.2,
-      maxStrategyDrawdownPercent: 15,
-      maxEstimatedSlippagePercent: 0.25,
-      maxAverageSpreadPercent: 0.15,
-      maxCorrelatedExposurePercent: 40,
-      maxEconomicsAgeHours: 24,
       confirmation: { acknowledged: true },
     };
     const saved = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', qaPolicy);
@@ -331,8 +373,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
         spreadPercent: 0.05,
         orderbookGapPercent: 0.05,
         halted: false,
-        availableBalance: 1_000_000,
-        accountValueKrw: 1_000_000,
+        availableBalance: qaCapitalKrw,
+        accountValueKrw: qaCapitalKrw,
         dailyPnlPercent: 0,
         weeklyPnlPercent: 0,
         assetExposurePercent: 0,
@@ -402,9 +444,14 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(synced.body?.ordersCancelled).toBe(0);
     syncInserted = Number(synced.body?.inserted ?? 0);
     deliveryQueued = Number(synced.body?.deliveryQueued ?? 0);
+    const filledDeliveryIds: string[] = Array.isArray(synced.body?.filledDeliveryIds)
+      ? synced.body.filledDeliveryIds.filter((id: unknown) =>
+        typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+      : [];
     expect(syncInserted).toBeGreaterThanOrEqual(1);
     if (telegramActivationState === 'ACTIVE_VERIFIED') {
       expect(deliveryQueued).toBeGreaterThanOrEqual(1);
+      expect(filledDeliveryIds.length).toBeGreaterThanOrEqual(1);
     } else {
       expect(deliveryQueued).toBe(0);
     }
@@ -420,6 +467,16 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     journalVisible = true;
 
     if (telegramActivationState === 'ACTIVE_VERIFIED') {
+      // Poll authenticated user-owned delivery receipts for the exact fresh fill.
+      // A separate [TEST] bot message is not proof that this fill was delivered.
+      await expect.poll(async () => {
+        const current = await appApi<any>(page, '/api/user-integrations');
+        if (!current.ok || current.body?.ok !== true || !Array.isArray(current.body?.deliveries)) return false;
+        return filledDeliveryIds.some((id) => current.body.deliveries.some((delivery: any) =>
+          delivery?.id === id && delivery?.state === 'SENT'
+          && (delivery?.kind ?? 'EXECUTION_EVENT') === 'EXECUTION_EVENT'));
+      }, { timeout: 90_000, intervals: [1_000, 2_000, 3_000, 5_000] }).toBe(true);
+      telegramFillDeliveryConfirmed = true;
       const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
       expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
       expect(telegram.body?.status).toBe('DELIVERED');
@@ -429,19 +486,42 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       telegramDelivered = true;
     }
   } finally {
-    const restorePreferences = await appApi<any>(
-      page,
-      '/api/user-integrations/notifications',
-      'PATCH',
-      originalPreferences,
-    );
-    expect(restorePreferences.ok, JSON.stringify(restorePreferences.body)).toBe(true);
+    // A preferences restoration failure must never skip policy restoration.
+    const restoreFailures: string[] = [];
+    try {
+      const restorePreferences = await appApi<any>(
+        page,
+        '/api/user-integrations/notifications',
+        'PATCH',
+        originalPreferences,
+      );
+      if (!restorePreferences.ok || restorePreferences.body?.ok !== true) {
+        restoreFailures.push(`PREFERENCES_HTTP_${restorePreferences.status}`);
+      }
+    } catch {
+      restoreFailures.push('PREFERENCES_REQUEST_FAILED');
+    }
 
-    const restore = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
-      ...originalPolicy,
-      confirmation: { acknowledged: true },
-    });
-    expect(restore.ok, JSON.stringify(restore.body)).toBe(true);
+    try {
+      const restoredPolicy = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
+        ...originalPolicy,
+        confirmation: { acknowledged: true },
+      });
+      if (!restoredPolicy.ok || restoredPolicy.body?.ok !== true) {
+        restoreFailures.push(`POLICY_HTTP_${restoredPolicy.status}`);
+      } else {
+        const verified = await appApi<any>(page, '/api/trade-automation/status');
+        if (!verified.ok || verified.body?.ok !== true
+          || !isDeepStrictEqual(verified.body?.policy, originalPolicy)) {
+          restoreFailures.push('POLICY_STATE_MISMATCH');
+        }
+      }
+    } catch {
+      restoreFailures.push('POLICY_REQUEST_FAILED');
+    }
+    if (restoreFailures.length > 0) {
+      throw new Error(`PRODUCTION_TRADING_CORE_RESTORE_FAILED:${restoreFailures.join(',')}`);
+    }
   }
 
   const statusAfter = await appApi<any>(page, '/api/trade-automation/status');
@@ -464,6 +544,13 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     },
     paperAutomaticTriggered,
     paperFilled,
+    // Independent Production background Worker readiness, never inferred from
+    // the directly created and simulated one-order QA canary.
+    paperRuntimeReadOnlyVerified: true,
+    paperRuntimeReadyBeforeQa,
+    paperRuntimeBlockersBeforeQa,
+    paperRuntimeWalletReadyBeforeQa: paperRuntime.body?.paperWalletReady === true,
+    paperRuntimeWorkerFreshBeforeQa: paperRuntime.body?.workerTickFresh === true,
     journalVisible,
     executionSyncInserted: syncInserted,
     telegramActivationState,
@@ -474,7 +561,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
-    policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
+    telegramFillDeliveryConfirmed,
+    policyRestored: isDeepStrictEqual(statusAfter.body?.policy, originalPolicy),
     memberAutoPolicyPrepared,
     memberAutoResumePrepared,
     memberAutoPolicyReady: preparedPolicyReadiness.ready,
