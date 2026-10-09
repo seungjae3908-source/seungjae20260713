@@ -153,3 +153,15 @@ test('Paper wallet initialization is blocked by the current server-owned histori
   expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
   expect(route).toContain('automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans)');
 });
+
+test('associate can see auto and Paper dashboards without probing forbidden journal snapshot', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const server = source('../api-server/src/routes/index.ts');
+  expect(page).toContain("const canJournalSync = testFixtureAccess || auth.can('canAccessJournalSync')");
+  expect(page).toContain("if (!canJournalSync) {");
+  expect(page).toContain("setAutoPaperStatus('restricted')");
+  expect(page).toContain('모의계좌 관리 권한 없음');
+  expect(page).toContain("if (autoPaperBusy || !userId || !canAuto || !canJournalSync");
+  expect(server).toContain("return requireCapability('canAccessJournalSync')(req, res, next)");
+  expect(page).not.toContain("auth.can('canAccessPaperTrading') || auth.can('canAccessJournalSync')");
+});

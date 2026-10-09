@@ -2399,6 +2399,13 @@ test.describe('real staging release readiness', () => {
   });
 
   test('associate: stock, spot, scanner, paper/auto trading, portfolio, AI chart and safe AI review preview allowed; futures and privileged APIs denied', async ({ page }) => {
+    const journalSnapshotRequests: string[] = [];
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/api/paper-journal/snapshot') {
+        journalSnapshotRequests.push(url.pathname);
+      }
+    });
     await login(page, accounts.associate.loginName, accounts.associate.password);
     await expectMembership(page, /준회원/);
     await expectHealthyRoute(page, '/');
@@ -2427,6 +2434,7 @@ test.describe('real staging release readiness', () => {
       `safe associate AI preview diagnostic: ${JSON.stringify(previewDiagnostic)}`,
     ).toBeTruthy();
     expect(previewDiagnostic.externalAiCalled).toBe(false);
+    expect(journalSnapshotRequests, 'associate dashboard must never probe a regular-only journal snapshot').toEqual([]);
   });
 
   test('regular: futures, scanner, paper trading, and safe AI preview are available without real orders', async ({ page, browser }, testInfo) => {
