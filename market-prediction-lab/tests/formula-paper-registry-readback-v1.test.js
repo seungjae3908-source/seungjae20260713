@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { compiledMomentumFormula } from './research-bundle-formula-fixture.js';
+import { runPaperForwardScheduleCli } from '../scripts/run-paper-forward-schedule.js';
 import {
   FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
   buildFormulaPaperStrategyRegistryV1,
@@ -156,5 +157,44 @@ test('symlink and malformed path are explicitly blocked without following privat
     });
     assert.equal(relative.status, 'INVALID');
     mustNotAdmit(relative);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Paper scheduled CLI shows exact registry readiness but never injects historical PASS into admission', async () => {
+  const registry = validOneRegistry();
+  const { root, registryPath } = await fixture(registry);
+  const inputs = [];
+  try {
+    const output = await runPaperForwardScheduleCli({
+      PAPER_FORWARD_SCHEDULE_ACTIVE: 'true',
+      PAPER_FORWARD_RESEARCH_SHA: SHA,
+      PAPER_FORWARD_ROOT: join(root, 'paper'),
+      PAPER_FORWARD_ACTIVATION_AT_MS: '1',
+      PAPER_FORWARD_TRIGGER_SOURCE: 'cron',
+      PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH: registryPath,
+    }, {
+      runScheduledInvocation: async (input) => {
+        inputs.push(input);
+        return {
+          status: 'BLOCKED_DATA',
+          cycleId: null,
+          mutationCount: 0,
+          invocation: { naturalScheduleInvocation: false },
+          persistedStatus: { simulatedFinancialAdaptersEnabled: false },
+          summary: {},
+        };
+      },
+      alphaArchitectureReadinessBuilder: () => ({ status: 'BLOCKED_DATA' }),
+      alphaHandoffReader: async () => null,
+    });
+    assert.equal(inputs.length, 1);
+    assert.equal(Object.hasOwn(inputs[0], 'formulaPaperRegistryReadback'), false);
+    assert.equal(Object.hasOwn(inputs[0], 'formulaStrategyRegistry'), false);
+    assert.equal(output.formulaPaperRegistryReadback.status, 'WAITING_FUTURE_SIGNAL');
+    assert.equal(output.formulaPaperRegistryReadback.entryCount, 1);
+    mustNotAdmit(output.formulaPaperRegistryReadback);
+    assert.equal(output.privateRequestCount, 0);
+    assert.equal(output.financialMutationCount, 0);
+    assert.equal(output.orderCount, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
