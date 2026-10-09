@@ -65,6 +65,9 @@ test('protected Stage deploy is exact-main, isolated, serialized with official f
   assert.ok(workflow.indexOf('Destroy Staging SSH deployment authority')
     < workflow.indexOf('  scoped-qa:'));
   assert.ok(workflow.includes('Upload scoped Staging evidence'));
+  // A clean GH Actions runner must install node_modules before Playwright.
+  assert.ok(workflow.indexOf('pnpm install --frozen-lockfile')
+    < workflow.indexOf('pnpm --dir stock-analyzer exec playwright install chromium'));
 });
 test('only Trading Core browser + own Paper DB reads; no provider-private requests, simulated orders, Telegram sends, full release verdict', () => {
   requireAll(spec, [
