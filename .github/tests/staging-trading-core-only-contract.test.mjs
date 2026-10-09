@@ -26,6 +26,17 @@ test('Staging admin login maps protected email to the actual app login ID withou
   assert.ok(!spec.includes("username.fill(required('STAGING_ADMIN_EMAIL'))"));
   assert.ok(workflow.includes('STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}'));
 });
+test('Staging auth identity/token are never printed or written into scoped QA receipts', () => {
+  assert.ok(!/console\.(?:log|info|warn|error)\(\s*(?:body|loginName|email|password)\b/.test(spec));
+  assert.ok(!/writeFileSync\([^,]+,\s*JSON\.stringify\(body\b/.test(spec));
+  requireAll(spec, [
+    "'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING'",
+    "'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH'",
+    "return loginName;",
+  ]);
+  assert.ok(!verdict.includes('adminEmail'));
+  assert.ok(!verdict.includes('accessToken'));
+});
 test('PR validation never requests Staging secrets, deploy, private provider or production authority', () => {
   requireAll(workflow, [
     '  pull_request:', '  workflow_dispatch:', "group: ${{ github.event_name == 'workflow_dispatch'",
