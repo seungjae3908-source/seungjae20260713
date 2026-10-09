@@ -11,7 +11,12 @@ import { TradeExecutionLedgerProjectionService } from '../services/trade-executi
 import {
   readMemberAutoTradingBackgroundRuntimeHealth,
   automaticPaperWalletBootstrapReadiness,
+  AUTOMATIC_PAPER_ACCOUNT_ID,
+  memberAutoTradingWorkerMode,
 } from '../services/member-auto-trading-background-worker.service';
+import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
+import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
+import { memberAutomaticPaperReadiness } from '../services/member-auto-trading-readiness.service';
 import { readUserTelegramDeliveryWorkerHealth } from '../features/user-broker-telegram/user-broker-telegram.worker';
 import {
   buildSplitLegRevalidationEvidence,
@@ -64,6 +69,14 @@ const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
 ]);
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
+let paperRuntimeWalletReaderForTests:
+  ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null = null;
+
+export function setTradePaperRuntimeWalletReaderForTests(
+  reader: ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null,
+) {
+  paperRuntimeWalletReaderForTests = reader;
+}
 let splitRepositoryFactoryForTests: ((userId: string) => SplitOrderRepository) | null = null;
 let readonlyCredentialRepositoryFactoryForTests:
   ((userId: string) => Pick<AccountReadonlyCredentialRepository, 'get'>) | null = null;
@@ -1034,6 +1047,64 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       error: error instanceof Error ? error.message.split(':')[0] : 'AUTO_REHEARSAL_FAILED',
       wouldActivateLiveAuto: false,
       ...safety,
+    });
+  }
+});
+
+router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) => {
+  // Member-owned Paper readiness only. Never enumerate other members or
+  // inspect private brokerage accounts from this endpoint.
+  if (!req.member?.id || !hasCapability(req.member, 'canAccessAutoTrading')
+    || !hasCapability(req.member, 'canAccessJournalSync')) {
+    return res.status(403).json({
+      ok: false,
+      error: 'CAPABILITY_REQUIRED',
+      readOnlyProbe: true,
+      orderSubmitted: false,
+      privateProviderRequests: 0,
+    });
+  }
+  try {
+    const { userId, repository } = context(req);
+    const walletRead = paperRuntimeWalletReaderForTests
+      ? paperRuntimeWalletReaderForTests(userId)
+      : req.accessToken
+        ? createSupabasePaperJournalRepository(req.accessToken, userId)
+          .getRecord(userId, 'account', AUTOMATIC_PAPER_ACCOUNT_ID)
+        : Promise.reject(new Error('LOGIN_REQUIRED'));
+    const [policy, globalStopped, wallet] = await Promise.all([
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+      walletRead,
+    ]);
+    const readiness = memberAutomaticPaperReadiness({
+      policy,
+      wallet,
+      workerHealth: readMemberAutoTradingBackgroundRuntimeHealth(),
+      workerMode: memberAutoTradingWorkerMode(),
+      globalStopped: globalStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
+      nowMs: Date.now(),
+    });
+    return res.json({
+      ok: true,
+      readOnlyProbe: true,
+      memberScope: 'SELF',
+      ...readiness,
+      financialMutationCount: 0,
+      privateProviderRequests: 0,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+    });
+  } catch {
+    return res.status(503).json({
+      ok: false,
+      error: 'BACKGROUND_PAPER_READINESS_UNAVAILABLE',
+      readOnlyProbe: true,
+      readyForPaperEvaluation: false,
+      financialMutationCount: 0,
+      privateProviderRequests: 0,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
     });
   }
 });
