@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildProductionPostdeployQaEvidence } = require('./production-postdeploy-qa-evidence.cjs');
+const { buildProductionPostdeployQaEvidence, verifyPostDeployMainLineage, isActiveProductionTradingGateRun } = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
 const ZERO = {
@@ -94,6 +94,8 @@ function fixture() {
       schemaVersion: 'production-postdeploy-context-v2',
       deploymentVerificationMode: 'completed-successful-run',
       mainSha: SHA,
+      mainAncestorVerified: true,
+      mainAdvancedAfterDeployment: false,
       productionDeploySha: SHA,
       processDeploySha: SHA,
       deployMarkerSha: SHA,
@@ -113,6 +115,62 @@ function fixture() {
   };
 }
 
+test('only executing Trading Gate workflows block post-deploy QA; PR checks are not authority', () => {
+  assert.equal(isActiveProductionTradingGateRun({event:'pull_request', status:'in_progress'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'push', status:'queued'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'waiting'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'in_progress'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'workflow_dispatch', status:'queued'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'workflow_dispatch', status:'in_progress'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'pull_request', status:'waiting'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed', conclusion:'failure'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed'}), false);
+});
+test('postdeploy main movement requires proven fast-forward ancestry, not a forced or diverged SHA', () => {
+  const laterSha = 'c'.repeat(40);
+  assert.deepEqual(verifyPostDeployMainLineage({ targetSha: SHA, currentMainSha: SHA }), {
+    mainSha: SHA, mainAncestorVerified: true, mainAdvancedAfterDeployment: false,
+  });
+  const valid = {
+    status: 'ahead', ahead_by: 1, behind_by: 0,
+    base_commit: { sha: SHA }, merge_base_commit: { sha: SHA },
+  };
+  assert.deepEqual(verifyPostDeployMainLineage({ targetSha: SHA, currentMainSha: laterSha, comparison: valid }), {
+    mainSha: laterSha, mainAncestorVerified: true, mainAdvancedAfterDeployment: true,
+  });
+  for (const comparison of [
+    null, { ...valid, status: 'diverged' },
+    { ...valid, behind_by: 1 },
+    { ...valid, merge_base_commit: { sha: laterSha } },
+    { ...valid, base_commit: { sha: laterSha } },
+    { ...valid, ahead_by: 0 },
+  ]) {
+    assert.throws(
+      () => verifyPostDeployMainLineage({ targetSha: SHA, currentMainSha: laterSha, comparison }),
+      /POSTDEPLOY_CONTEXT_MAIN_NOT_FORWARD_DESCENDANT/,
+    );
+  }
+});
+
+test('forward-only main advancement does not falsify the deployed SHA or bypass context proof', () => {
+  const input = fixture();
+  const laterSha = 'c'.repeat(40);
+  input.context.mainSha = laterSha;
+  input.context.mainAncestorVerified = true;
+  input.context.mainAdvancedAfterDeployment = true;
+  const receipt = buildProductionPostdeployQaEvidence(input);
+  assert.equal(receipt.mainSha, laterSha);
+  assert.equal(receipt.productionSha, SHA);
+  assert.equal(receipt.mainAdvancedAfterDeployment, true);
+  input.context.mainAncestorVerified = false;
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /MAIN_LINEAGE_UNVERIFIED/);
+  input.context.mainAncestorVerified = true;
+  input.context.mainAdvancedAfterDeployment = false;
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /MAIN_LINEAGE_UNVERIFIED/);
+  input.context.mainAdvancedAfterDeployment = true;
+  input.context.processDeploySha = laterSha;
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /PROCESS_SHA_MISMATCH/);
+});
 test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () => {
   const evidence = buildProductionPostdeployQaEvidence(fixture());
   assert.equal(evidence.activationReady, true);

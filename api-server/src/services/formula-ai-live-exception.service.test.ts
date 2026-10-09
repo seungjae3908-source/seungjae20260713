@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   FORMULA_AI_LIVE_EXCEPTION_POLICY_VERSION,
-  evaluateFormulaAiLiveException,
+  evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
 } from './formula-ai-live-exception.service';
 import { evaluateTradingPlan, normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { TradingPlanInput } from './trade-automation.types';
@@ -24,7 +24,10 @@ function policy() {
     stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
     exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
     enabledAssets: { bitget: [], upbit: [], kiwoom: [], toss: [] },
-    enabledStrategies: [],
+    enabledStrategies: [
+      'KR_PRESSURE_BREAKOUT_V1', 'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+      'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1', 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    ],
     totalCapitalKrw: 500_000,
     maxOrderKrw: 50_000,
     maxInstrumentKrw: 500_000,
@@ -275,4 +278,73 @@ test('exception never bypasses isolated margin, leverage, or cash-market directi
   const spot = spotPlan();
   spot.side = 'sell';
   assert.equal(evaluateFormulaAiLiveException(spot).allowed, false);
+});
+
+test('authorized formula+AI Paper candidate bypasses only research economics, preserving live false', () => {
+  const paper = { ...spotPlan(), accountMode: 'paper' as const, economics: null };
+  const status = evaluateFormulaAiPaperException(paper);
+  assert.equal(status.allowed, true, status.blockers.join(','));
+  assert.equal(status.researchPromotionBypassed, true);
+  const prepared = normalizeTradingPolicy({ ...policy(), pilotStage: 'formula-ai-exception' });
+  const simulated = evaluateTradingPlan(paper, prepared, {
+    emergencyStopped: false, serverLiveEnabled: false,
+  });
+  assert.equal(simulated.allowed, true, simulated.blockCodes.join(','));
+  assert.ok(simulated.warnings.includes('FORMULA_AI_PAPER_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED'));
+  assert.equal(simulated.blockCodes.includes('ECONOMICS_REQUIRED'), false);
+  const stale = { ...paper, signalReasons: paper.signalReasons.filter(
+    (reason) => reason !== 'AI_REVIEW_DECISION:PASS',
+  ) };
+  const blocked = evaluateTradingPlan(stale, prepared, {
+    emergencyStopped: false, serverLiveEnabled: false,
+  });
+  assert.ok(blocked.blockCodes.includes('ECONOMICS_REQUIRED'));
+  assert.equal(evaluateFormulaAiPaperException(spotPlan()).allowed, false);
+});
+
+test('formula+AI Paper exception cannot bypass spread, daily loss, stop, or liquidity gates', () => {
+  const prepared = normalizeTradingPolicy({ ...policy(), pilotStage: 'formula-ai-exception' });
+  const paper = { ...spotPlan(), accountMode: 'paper' as const, economics: null };
+  const badCost = { ...paper, averageSpreadPercent: null };
+  assert.ok(evaluateTradingPlan(badCost, prepared, {
+    emergencyStopped: false, serverLiveEnabled: false,
+  }).blockCodes.includes('AVERAGE_SPREAD_REQUIRED'));
+  const stopped = { ...paper,
+    marketSnapshot: { ...paper.marketSnapshot, dailyPnlPercent: -5.1 },
+  };
+  assert.ok(evaluateTradingPlan(stopped, prepared, {
+    emergencyStopped: false, serverLiveEnabled: false,
+  }).blockCodes.includes('DAILY_LOSS_LIMIT'));
+  const noStop = { ...paper, stopPrice: 0 };
+  assert.ok(evaluateTradingPlan(noStop, prepared, {
+    emergencyStopped: false, serverLiveEnabled: false,
+  }).blockCodes.includes('EXIT_PLAN_REQUIRED'));
+});
+
+test('Paper-only exploratory trading keeps required cost/risk checks without inventing profitability', () => {
+  const p = normalizeTradingPolicy({ ...policy(), pilotStage:'validated' });
+  const trade: TradingPlanInput = {
+    ...spotPlan(), accountMode:'paper', economics:null,
+    signalReasons:['CANONICAL_PAPER_HANDOFF'],
+  };
+  const simulated = evaluateTradingPlan(trade,p,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  });
+  assert.equal(simulated.blockCodes.includes('ECONOMICS_REQUIRED'),false);
+  assert.ok(simulated.warnings.includes('PAPER_RESEARCH_ONLY_NO_PROFITABILITY_EVIDENCE'));
+  assert.equal(simulated.allowed,true,simulated.blockCodes.join(','));
+
+  const spread = {
+    ...trade,averageSpreadPercent:null,
+  };
+  assert.ok(evaluateTradingPlan(spread,p,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  }).blockCodes.includes('AVERAGE_SPREAD_REQUIRED'));
+
+  const live:TradingPlanInput = { ...trade,accountMode:'live' };
+  const notLive = evaluateTradingPlan(live,p,{
+    emergencyStopped:false,serverLiveEnabled:true,
+  });
+  assert.ok(notLive.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
+  assert.equal(notLive.warnings.includes('PAPER_RESEARCH_ONLY_NO_PROFITABILITY_EVIDENCE'),false);
 });

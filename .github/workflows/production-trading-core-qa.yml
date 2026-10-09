@@ -179,7 +179,8 @@ jobs:
             && value?.telegramUserConnectionRequired === !telegramConnected
             && value?.telegramPersonalActivationRequired === true
             && value?.telegramDeliveryQueued === 0
-            && value?.telegramTestDelivered === false;
+            && value?.telegramTestDelivered === false
+            && value?.telegramFillDeliveryConfirmed === false;
           const telegramVerified = value?.telegramActivationState === 'ACTIVE_VERIFIED'
             && value?.telegramActivationReady === true
             && telegramConnected === true
@@ -187,7 +188,8 @@ jobs:
             && value?.telegramUserConnectionRequired === false
             && value?.telegramPersonalActivationRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
-            && value?.telegramTestDelivered === true;
+            && value?.telegramTestDelivered === true
+            && value?.telegramFillDeliveryConfirmed === true;
           const memberAutoPilotStage = String(value?.memberAutoPilotStage ?? '');
           const expectedLivePilotReady = ['limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage);
           const memberAutoPolicyReady = value?.memberAutoPolicyReady === true
@@ -199,6 +201,14 @@ jobs:
             && value.memberAutoBitgetLeverage <= 7
             && ['approval-20', 'limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage)
             && value?.memberAutoLivePilotReady === expectedLivePilotReady;
+          const backgroundPaperEvidenceValid = value?.paperRuntimeReadOnlyVerified === true
+            && typeof value?.paperRuntimeReadyBeforeQa === 'boolean'
+            && Array.isArray(value?.paperRuntimeBlockersBeforeQa)
+            && value.paperRuntimeBlockersBeforeQa.every((code) =>
+              typeof code === 'string' && /^[A-Z0-9_]+$/.test(code))
+            && value.paperRuntimeReadyBeforeQa === (value.paperRuntimeBlockersBeforeQa.length === 0)
+            && typeof value?.paperRuntimeWalletReadyBeforeQa === 'boolean'
+            && typeof value?.paperRuntimeWorkerFreshBeforeQa === 'boolean';
           if (value?.schemaVersion !== 'production-trading-core-qa-v4'
             || value?.targetSha !== sha
             || value?.productionDeployRunId !== Number(runId)
@@ -212,6 +222,7 @@ jobs:
             || !(Number(value?.executionSyncInserted) >= 1)
             || (!telegramReady && !telegramVerified)
             || !memberAutoPolicyReady
+            || !backgroundPaperEvidenceValid
             || value?.policyRestored !== true
             || value?.realOrderSubmitted !== false
             || value?.liveTradingAuthorityGranted !== false
@@ -247,6 +258,6 @@ jobs:
             echo '- scope: 4 Provider + Paper Auto + Unified Journal + Telegram only'
             echo '- Research/AI Chart/Backtester/other UI: not evaluated'
             echo '- real orders/cancels/amends/transfers/withdrawals: 0/0/0/0/0'
-            echo '- Paper canary: one bounded QA trade'
-            echo '- Telegram: explicit READY_FOR_ACTIVATION or ACTIVE_VERIFIED receipt; [TEST] delivery required only for ACTIVE_VERIFIED'
+            echo '- Paper canary: one bounded synthetic QA trade; real background Worker readiness recorded independently, not implied'
+            echo '- Telegram: ACTIVE_VERIFIED requires exact canary ORDER_FILLED SENT receipt and an independent [TEST] delivery; otherwise readiness only'
           } >> "$GITHUB_STEP_SUMMARY"

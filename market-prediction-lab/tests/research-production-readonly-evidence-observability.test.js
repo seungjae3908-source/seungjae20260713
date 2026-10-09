@@ -536,6 +536,8 @@ test("Research Production read-only evidence exports only sanitized forward fail
 
   for (const token of [
     "TASK_FAILURE_SIGNATURE",
+    "emit_task_failure_signature forward formula-backtest-queue",
+    "FORMULA_TRAIN_RUNTIME",
     "tail -c 65536",
     "raw_log_included=false",
     "FAILED_TASK_STDERR_PATH_UNAVAILABLE",
@@ -569,6 +571,15 @@ test("Research Production read-only evidence exports only sanitized forward fail
   assert.equal(
     runInline(resolver, { input: canonicalCycle, args: [stateRoot, "paper-forward", sha] }),
     canonicalStderr,
+  );
+  const formulaStderr = join(stateRoot, "runs", "cycle-1", "formula-backtest-queue", "stderr.log");
+  const formulaCycle = JSON.stringify({
+    researchSha: sha,
+    results: [{ id: "formula-backtest-queue", status: "failed", stderrPath: formulaStderr }],
+  });
+  assert.equal(
+    runInline(resolver, { input: formulaCycle, args: [stateRoot, "formula-backtest-queue", sha] }),
+    formulaStderr,
   );
 
   const outsideCycle = JSON.stringify({

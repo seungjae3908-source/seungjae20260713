@@ -142,11 +142,15 @@ export function normalizeStockFeed(raw, market, nowMs) {
     const price = number(row?.price);
     const turnover = number(row?.turnover24h);
     const percent = number(row?.change24hPercent);
-    if (!ticker || !(price > 0) || !(turnover >= 0) || percent == null) continue;
+    // A freshly written file does not prove that each stock quotation is fresh.
+    // Require an independent as-of timestamp for the exact symbol and price.
+    const quoteAtMs = typeof row?.asOf === 'string' ? Date.parse(row.asOf) : NaN;
+    if (!ticker || !(price > 0) || !(turnover >= 0) || percent == null
+      || !validAge(quoteAtMs, nowMs) || quoteAtMs > observed + 5_000) continue;
     quotes.push(Object.freeze({
       symbol: ticker, price,
       turnover24h: turnover, change24hPercent: percent,
-      sourceAtMs: observed,
+      sourceAtMs: quoteAtMs,
     }));
   }
   if (!quotes.length) throw new Error('STOCK_PUBLIC_FEED_EMPTY');
@@ -182,7 +186,11 @@ export function evaluateMarketOpportunities(input) {
   const prior = new Map(previousRows.map((row) => [row.symbol, row]));
   const priorAt = number(previous?.observedAtMs);
   const elapsed = priorAt == null ? null : nowMs - priorAt;
+  // Baselines from another provider, or without known source identity, are
+  // never comparable even if their ticker string happens to match.
   const comparable = elapsed != null
+    && typeof previous?.source === 'string'
+    && previous.source === source.source
     && elapsed >= WATCH_LIMITS.minComparisonAgeMs
     && elapsed <= WATCH_LIMITS.maxComparisonAgeMs;
   const minValue = WATCH_LIMITS.minTurnover[market];
@@ -190,7 +198,9 @@ export function evaluateMarketOpportunities(input) {
   for (const row of rows) {
     if (!(row.turnover24h >= minValue) || !comparable) continue;
     const old = prior.get(row.symbol);
-    if (!old || !(old.price > 0) || !(row.sourceAtMs > old.sourceAtMs)) continue;
+    if (!old || !(old.price > 0) || !validAge(old.sourceAtMs, nowMs)
+      || !(old.sourceAtMs <= priorAt + 5_000)
+      || !(row.sourceAtMs > old.sourceAtMs)) continue;
     const movePercent = (row.price / old.price - 1) * 100;
     if (!Number.isFinite(movePercent)
       || Math.abs(movePercent) < WATCH_LIMITS.minPriceMovePercent) continue;
@@ -208,6 +218,8 @@ export function evaluateMarketOpportunities(input) {
       observedAt: new Date(nowMs).toISOString(),
       priorObservedAt: new Date(priorAt).toISOString(),
       comparisonMinutes: Math.round(elapsed / 60_000 * 100) / 100,
+      sourceAtMs: row.sourceAtMs,
+      priorSourceAtMs: old.sourceAtMs,
       movePercent: Math.round(movePercent * 10_000) / 10_000,
       change24hPercent: row.change24hPercent,
       turnover24h: row.turnover24h,
@@ -234,6 +246,7 @@ export function evaluateMarketOpportunities(input) {
     candidates: selected,
     next: Object.freeze({
       observedAtMs: nowMs,
+      source: source.source,
       quotes: rows.map((row) => ({
         symbol: row.symbol, price: row.price, sourceAtMs: row.sourceAtMs,
       })),

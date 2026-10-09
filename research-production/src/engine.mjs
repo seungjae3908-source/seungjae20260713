@@ -90,6 +90,9 @@ export const PROFILES = Object.freeze({
       args: ['scripts/run-formula-auto-backtest-queue-v1.js'],
       timeoutMs: 10 * 60_000,
       acceptedExitCodes: [0, 2],
+      // Required by formula generator and transitive strategy contract in the
+      // isolated workspace, not an authorization for any Paper/Live order.
+      sharedPackages: Object.freeze(['strategy-hypothesis', 'external-research']),
     }),
     Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000, acceptedExitCodes: [0, 2] }),
     Object.freeze({

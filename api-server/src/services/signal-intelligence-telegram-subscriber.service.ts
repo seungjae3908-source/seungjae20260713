@@ -69,7 +69,6 @@ function chatIdForMarket(market: V3Event['market']): string | null {
   return telegramMarketRoomChatId(
     telegramMarketRoomForLane(market),
     process.env,
-    { allowLegacyFallback: true },
   );
 }
 
