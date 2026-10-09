@@ -630,3 +630,45 @@ test('Telegram intelligence worker collapses four market destinations sharing on
   assert.equal(result.delivered, 2);
   assert.equal(calls, 2);
 });
+
+
+test('readable six-room Telegram alert has paragraph spacing and safe HTML', () => {
+  const text=renderTelegramAlert({
+    type:'strong_buy',title:'국내주식 <005930>',
+    details:'진입: 100\\n목표가: 110\n[AI 판단]\n• 거래량 <증가> & 뉴스'
+  });
+  assert.match(text,/<b>국내주식 &lt;005930&gt;<\/b>\n\n/u);
+  assert.match(text,/진입: 100\n목표가: 110\n\n<b>\[AI 판단\]<\/b>/u);
+  assert.match(text,/거래량 &lt;증가&gt; &amp; 뉴스/u);
+});
+
+test('long rich signal never clips to photo caption: sends complete text', async () => {
+  setFakeConfig();
+  let endpoint='';
+  let payload:Record<string,unknown>={};
+  globalThis.fetch=async (url,init)=>{
+    endpoint=String(url);
+    payload=JSON.parse(String(init?.body)) as Record<string,unknown>;
+    return new Response(JSON.stringify({ok:true,result:{message_id:88}}),{status:200,headers:{'Content-Type':'application/json'}});
+  };
+  const details='[AI 분석]\n'+Array.from({length:35},(_,i)=>'• 근거 '+i+': '+'시황자료 '.repeat(7)).join('\n');
+  const delivered=await sendTelegramAlertWithReceipt({
+    type:'strong_buy',symbol:'AAPL',market:'US',details,
+    photo:{bytes:new Uint8Array([137,80,78,71,0,1])},
+    cooldownMs:0,duplicateWindowMs:0,
+  });
+  assert.equal(delivered.ok,true);
+  if(!delivered.ok)return;
+  assert.equal(delivered.receipt.messageKind,'TEXT');
+  assert.ok(delivered.receipt.renderedText.length>1024);
+  assert.ok(delivered.receipt.renderedText.length<=4096);
+  assert.match(endpoint,/\/sendMessage$/u);
+  assert.match(String(payload.text),/<b>\[AI 분석\]<\/b>/u);
+});
+
+test('max-length escaping never truncates inside Telegram HTML tag/entity',()=>{
+  const output=renderTelegramAlert({type:'intelligence_report',details:'[뉴스]\n'+('<tag> & '.repeat(1600))});
+  assert.ok(output.length<=4096);
+  assert.equal((output.match(/<b>/gu)||[]).length,(output.match(/<\/b>/gu)||[]).length);
+  assert.doesNotMatch(output,/&(?:a|am|amp|l|lt|g|gt|quo|quot|#|#3|#39)$/u);
+});
