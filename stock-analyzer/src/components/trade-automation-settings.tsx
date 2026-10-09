@@ -631,10 +631,16 @@ export function TradeAutomationSettings({
           ...value,
           enabledStrategies: event.target.value.split(',').map((item) => item.trim()).filter(Boolean),
         }))}
-        placeholder="비우면 위험검사를 통과한 전략 전체 · 예: trend-breakout-v1"
+        placeholder="비우면 자동 신규진입 차단 · 예: trend-breakout-v1"
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3 text-sm"
       />
     </label>
+    {draft.enabledStrategies.length === 0 ? (
+      <p className="mt-1 text-xs text-amber-700" data-testid="empty-strategy-blocks-automatic-entry">
+        허용 전략이 없습니다. 자동매매·자동모의매매 신규진입은 차단됩니다.
+        전략을 입력해도 증거·계좌·위험·Provider 검사는 별도로 통과해야 합니다.
+      </p>
+    ) : null}
 
     {!selectedMarket || selectedMarket === 'crypto_futures' ? <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       Bitget 레버리지
@@ -677,7 +683,9 @@ export function TradeAutomationSettings({
             >
               Pilot 준비
             </button>
-          : <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 font-extrabold text-emerald-700">준비됨</span>}
+          : <span className="rounded-full border border-card-border px-2.5 py-1 font-extrabold">
+              Pilot 단계 설정됨 · 운영 준비도 별도 확인
+            </span>}
       </div>
       <p className="mt-2 leading-5 text-muted-foreground">
         이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 수식+AI 예외 신호만 별도 운영 위험검사를 통과할 수 있습니다.
@@ -734,7 +742,7 @@ export function TradeAutomationSettings({
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
           <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
-          <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '위험검사 통과 전략 전체'}</dd>
+          <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '없음 · 자동 신규진입 차단'}</dd>
           <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
           <dt className="font-bold">코인현물</dt><dd>Upbit 고정</dd>
