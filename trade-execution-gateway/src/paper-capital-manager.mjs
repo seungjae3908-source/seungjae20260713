@@ -392,6 +392,7 @@ export class PaperCompoundingCapitalManager {
     }
 
     const effectiveTradingCapitalKrw = initialized ? Math.min(base, active) : 0;
+    const previousState = this.#state;
     this.#state = {
       schemaVersion: SCHEMA_VERSION,
       mode: MODE,
@@ -422,7 +423,14 @@ export class PaperCompoundingCapitalManager {
       autoTradingEnabled: false,
       privateTradingApiAllowed: false,
     };
-    await this.#persist(createdSteps.length > 0 ? "PAPER_CAPITAL_RESERVE_MILESTONE" : "PAPER_CAPITAL_SETTLEMENT");
+    try {
+      await this.#persist(createdSteps.length > 0 ? "PAPER_CAPITAL_RESERVE_MILESTONE" : "PAPER_CAPITAL_SETTLEMENT");
+    } catch (error) {
+      // No unpersisted settlement or reserve milestone may be credited,
+      // including after a virtual 1M seed has been initialized.
+      this.#state = previousState;
+      throw error;
+    }
     return Object.freeze({ ...this.getState(), idempotentReplay: false, reserveStepsCreated: createdSteps.length, reserveSteps: Object.freeze(createdSteps) });
   }
 
