@@ -85,7 +85,9 @@ declare
 begin
   foreach target_table in array array[
     'trade_order_plans','trade_orders','trade_order_events',
-    'trade_automation_profiles','trade_exchange_connections'
+    'trade_order_legs','trade_protection_orders',
+    'trade_automation_profiles','trade_exchange_connections',
+    'audit_logs','notification_history'
   ]
   loop
     if to_regclass(format('public.%I', target_table)) is not null then
@@ -142,7 +144,31 @@ begin
             and coalesce(plan.payload->>'executionMode','') = 'automatic'
             and wallet.id like 'automatic-paper-admin-v2:%'
         )
-      $event_guard$)
+      $event_guard$),
+      ('trade_order_legs', $leg_guard$
+        not exists (
+          select 1 from public.trade_order_plans plan
+          join public.paper_accounts wallet on wallet.user_id = plan.user_id
+          where plan.id = trade_order_legs.plan_id
+            and plan.user_id = trade_order_legs.user_id
+            and coalesce(plan.payload->>'accountMode','') = 'paper'
+            and coalesce(plan.payload->>'executionMode','') = 'automatic'
+            and wallet.id like 'automatic-paper-admin-v2:%'
+        )
+      $leg_guard$),
+      ('trade_protection_orders', $protection_guard$
+        not exists (
+          select 1 from public.trade_orders parent
+          join public.trade_order_plans plan
+            on plan.id = parent.plan_id and plan.user_id = parent.user_id
+          join public.paper_accounts wallet on wallet.user_id = plan.user_id
+          where parent.id = trade_protection_orders.parent_order_id
+            and parent.user_id = trade_protection_orders.user_id
+            and coalesce(plan.payload->>'accountMode','') = 'paper'
+            and coalesce(plan.payload->>'executionMode','') = 'automatic'
+            and wallet.id like 'automatic-paper-admin-v2:%'
+        )
+      $protection_guard$)
     ) as guards(table_name, predicate)
   loop
     p_name := 'admin_v2_auto_paper_insert_guard';
@@ -207,14 +233,15 @@ as $readiness$
   and (
     select count(*) from pg_catalog.pg_policies
     where schemaname = 'public'
-      and tablename in ('trade_order_plans','trade_orders','trade_order_events')
+      and tablename in ('trade_order_plans','trade_orders','trade_order_events',
+        'trade_order_legs','trade_protection_orders')
       and policyname in ('admin_v2_auto_paper_insert_guard',
         'admin_v2_auto_paper_update_guard','admin_v2_auto_paper_delete_guard')
       and permissive = 'RESTRICTIVE'
       and 'authenticated'::name = any(roles)
       and (coalesce(qual,'') like '%automatic-paper-admin-v2:%'
         or coalesce(with_check,'') like '%automatic-paper-admin-v2:%')
-  ) = 9
+  ) = 15
   and not exists (
     select 1 from information_schema.role_table_grants
     where table_schema = 'public'
@@ -222,7 +249,9 @@ as $readiness$
         'paper_accounts','paper_orders','paper_positions',
         'paper_fills','paper_journal_entries','paper_sync_state',
         'trade_order_plans','trade_orders','trade_order_events',
-        'trade_automation_profiles','trade_exchange_connections'
+        'trade_order_legs','trade_protection_orders',
+        'trade_automation_profiles','trade_exchange_connections',
+        'audit_logs','notification_history'
       )
       and grantee in ('PUBLIC','anon','authenticated')
       and privilege_type = 'TRUNCATE'
