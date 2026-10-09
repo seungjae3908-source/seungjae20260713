@@ -90,6 +90,27 @@ insert into public.trade_order_events (
   'FILLED','{}'::jsonb
 );
 
+-- Seed two additional canonical children. These are used for staged RLS
+-- mutation-denial checks; neither row is an executed broker order.
+insert into public.trade_order_legs(
+  user_id,id,plan_id,leg_key,leg_type,sequence_no,idempotency_key,
+  planned_quantity,filled_quantity,state,payload,version
+) values (
+  '99999999-9999-4999-8999-999999999999',
+  '77777777-7777-4777-8777-777777777704',
+  '77777777-7777-4777-8777-777777777701',
+  'entry-v2-proof','ENTRY',1,'v2-leg-owner-proof',1,0,'PLANNED','{}'::jsonb,0
+);
+insert into public.trade_protection_orders(
+  user_id,id,parent_order_id,protection_type,sequence_no,client_order_id,
+  quantity,trigger_price,reduce_only,state,payload,version
+) values (
+  '99999999-9999-4999-8999-999999999999',
+  '77777777-7777-4777-8777-777777777705',
+  '77777777-7777-4777-8777-777777777702',
+  'STOP',1,'v2-protection-owner-proof',1,90,true,'PLANNED','{}'::jsonb,0
+);
+
 set role authenticated;
 select set_config('request.jwt.claim.sub','99999999-9999-4999-8999-999999999999',true);
 do $client_guard$
@@ -171,7 +192,9 @@ declare
 begin
   foreach target_table in array array[
     'trade_order_plans','trade_orders','trade_order_events',
-    'trade_automation_profiles','trade_exchange_connections'
+    'trade_order_legs','trade_protection_orders',
+    'trade_automation_profiles','trade_exchange_connections',
+    'audit_logs','notification_history'
   ]
   loop
     begin
@@ -248,6 +271,55 @@ begin
     where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777703';
   get diagnostics mutated = row_count;
   if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_EVENT_UPDATE_ALLOWED'; end if;
+
+  -- A browser could otherwise forge a split leg or a stop/target
+  -- protection order for an immutable V2 automatic Paper position.
+  was_denied := false;
+  begin
+    insert into public.trade_order_legs(
+      user_id,id,plan_id,leg_key,leg_type,sequence_no,idempotency_key,
+      planned_quantity,filled_quantity,state,payload,version
+    ) values (
+      auth.uid(),'77777777-7777-4777-8777-777777777715',
+      '77777777-7777-4777-8777-777777777701',
+      'forged-leg','ENTRY',2,'forged-v2-leg',900,900,'FILLED','{}'::jsonb,0
+    );
+  exception when insufficient_privilege then was_denied := true;
+  end;
+  if not was_denied then raise exception 'ADMIN_V2_CLIENT_FORGED_LEG_ALLOWED'; end if;
+  update public.trade_order_legs
+    set filled_quantity = 900
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777704';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_LEG_UPDATE_ALLOWED'; end if;
+  delete from public.trade_order_legs
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777704';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_LEG_DELETE_ALLOWED'; end if;
+
+  was_denied := false;
+  begin
+    insert into public.trade_protection_orders(
+      user_id,id,parent_order_id,protection_type,sequence_no,client_order_id,
+      quantity,trigger_price,reduce_only,state,payload,version
+    ) values (
+      auth.uid(),'77777777-7777-4777-8777-777777777716',
+      '77777777-7777-4777-8777-777777777702',
+      'TARGET',2,'forged-v2-protection',1000,200,true,
+      'FILLED','{}'::jsonb,0
+    );
+  exception when insufficient_privilege then was_denied := true;
+  end;
+  if not was_denied then raise exception 'ADMIN_V2_CLIENT_FORGED_PROTECTION_ALLOWED'; end if;
+  update public.trade_protection_orders
+    set quantity=1000000
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777705';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_PROTECTION_UPDATE_ALLOWED'; end if;
+  delete from public.trade_protection_orders
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777705';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_PROTECTION_DELETE_ALLOWED'; end if;
 
   -- Existing manual Paper workflows must retain their authenticated CRUD.
   insert into public.trade_order_plans (
