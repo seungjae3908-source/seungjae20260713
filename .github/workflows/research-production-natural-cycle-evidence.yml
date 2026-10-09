@@ -172,7 +172,8 @@ jobs:
           grep -Fx 'RESEARCH_PRODUCTION_READONLY_EVIDENCE_BEGIN' "$EVIDENCE_FILE" >/dev/null
           grep -Fx 'RESEARCH_PRODUCTION_READONLY_EVIDENCE_END' "$EVIDENCE_FILE" >/dev/null
           grep -Fx "target_research_sha=$RESEARCH_SHA" "$EVIDENCE_FILE" >/dev/null
-          grep -Fx 'current_release_match=true' "$EVIDENCE_FILE" >/dev/null
+          # A stale deployment is diagnostic evidence, never an allowed PASS.
+          grep -Ex 'current_release_match=(true|false)' "$EVIDENCE_FILE" >/dev/null
           grep -Fx 'server_files_written=0' "$EVIDENCE_FILE" >/dev/null
           grep -Fx 'server_files_deleted=0' "$EVIDENCE_FILE" >/dev/null
           grep -Fx 'server_processes_restarted=0' "$EVIDENCE_FILE" >/dev/null
@@ -191,6 +192,7 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import { buildNaturalPaperFirstZeroTraceFromRuntime } from './research-production/src/natural-cycle-verdict-trace.mjs';
+          import { assessForwardCycleEvidence, classifyNaturalCycleEvidence } from './research-production/src/production-natural-cycle-observer.mjs';
           const lines = fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8').split(/\r?\n/).filter(Boolean);
           const find = (prefix) => lines.find((line) => line.startsWith(prefix));
           const all = (prefix) => lines.filter((line) => line.startsWith(prefix));
@@ -221,13 +223,14 @@ jobs:
           const evidenceSources = all('PAPER_EVIDENCE_SOURCE ').map(fields);
           const evidenceTransport = fields(find('PAPER_EVIDENCE_TRANSPORT '));
           const timersHealthy = ['forward','fast-historical','long-history'].every((p) => timer[p]?.enabled === 'enabled' && timer[p]?.active === 'active');
-          const forwardTasks = tasks.filter((row) => row.profile === 'forward');
-          const forwardProven = timer.forward?.last_trigger && !/^n\/a|^null|^$/.test(timer.forward.last_trigger)
-            && cycle.forward?.present === 'true'
-            && cycle.forward?.research_sha === process.env.RESEARCH_SHA
-            && cycle.forward?.failed_count === '0'
-            && forwardTasks.length === 2
-            && forwardTasks.every((row) => ['success','blocked_data'].includes(row.status));
+          const forward = assessForwardCycleEvidence({
+            expectedSha: process.env.RESEARCH_SHA,
+            timer: timer.forward,
+            cycle: cycle.forward,
+            tasks,
+          });
+          const forwardProven = forward.observed;
+          const releaseMatch = lines.includes('current_release_match=true');
           const paperSafe = paper.present === 'true'
             && paper.live_trading === 'false'
             && paper.order_authority === 'false'
@@ -260,16 +263,17 @@ jobs:
               naturalTraceError = String(error?.message ?? error).replace(/[\r\n]/g, '_').slice(0, 200);
             }
           }
-          let status = 'failed';
-          if (timersHealthy && forwardProven && paperSafe && historicalComplete) status = 'passed';
-          else if (timersHealthy && forwardProven && paperSafe && historicalRunning) status = 'forward_pass_historical_running';
-          else if (timersHealthy && forwardProven && paperSafe) status = 'forward_pass_historical_unproven';
+          const status = classifyNaturalCycleEvidence({
+            releaseMatch, timersHealthy, forward, paperSafe,
+            historicalComplete, historicalRunning,
+          });
           const out = process.env.GITHUB_OUTPUT;
           const writeOutput = (key, value) => {
             const safe = String(value ?? 'unknown').replace(/[\r\n]/g, '_').slice(0, 2000);
             fs.appendFileSync(out, `${key}=${safe}\n`);
           };
           fs.appendFileSync(out, `status=${status}\n`);
+          fs.appendFileSync(out, `release_match=${releaseMatch}\n`);
           fs.appendFileSync(out, `timers_healthy=${timersHealthy}\n`);
           fs.appendFileSync(out, `forward_proven=${forwardProven}\n`);
           fs.appendFileSync(out, `paper_safe=${paperSafe}\n`);
@@ -318,7 +322,7 @@ jobs:
           writeOutput('risk_policy_record_transport', evidenceTransport.risk_policy_record);
           writeOutput('supplemental_cost_transport', evidenceTransport.supplemental_cost);
           writeOutput('authoritative_source_blockers', evidenceTransport.source_blockers);
-          if (status === 'failed') process.exitCode = 1;
+          if (['failed', 'stale_release', 'blocked_data'].includes(status)) process.exitCode = 1;
           NODE
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
@@ -342,6 +346,7 @@ jobs:
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           VERDICT_STATUS: ${{ steps.verdict.outputs.status }}
+          RELEASE_MATCH: ${{ steps.verdict.outputs.release_match }}
           TIMERS_HEALTHY: ${{ steps.verdict.outputs.timers_healthy }}
           FORWARD_PROVEN: ${{ steps.verdict.outputs.forward_proven }}
           PAPER_SAFE: ${{ steps.verdict.outputs.paper_safe }}
@@ -401,6 +406,7 @@ jobs:
             const body = [
               '[RESEARCH_PRODUCTION_NATURAL_CYCLE_EVIDENCE]',
               `status: ${status}`,
+              `current_release_match: ${observed(process.env.RELEASE_MATCH)}`,
               `research_sha: ${process.env.RESEARCH_SHA}`,
               `workflow_run: ${context.runId}`,
               `source_outcome: ${process.env.SOURCE_OUTCOME}`,
