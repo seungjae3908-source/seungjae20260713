@@ -911,12 +911,39 @@ export class TradeExecutionService {
         const feeCurrency = plan.exchange === 'upbit' || plan.market === 'KR'
           ? 'KRW'
           : plan.exchange === 'bitget' ? 'USDT' : 'USD';
+        // Synthetic tax exists only when the prospective cost policy carried
+        // an explicit finite percentage. Missing is never interpreted as zero.
+        const taxPercent = risk.snapshot.estimatedTaxPercent;
+        const taxAmount = typeof taxPercent === 'number' && Number.isFinite(taxPercent)
+          && taxPercent >= 0 && taxPercent <= 100
+          ? averageFillPrice * filledQuantity * taxPercent / 100 : null;
+        // A currency rate observed after this fill, or an outdated/current
+        // unbound rate, cannot mint KRW-compounded Paper gains.
+        const quoteRate = risk.snapshot.settlementFxKrwPerQuoteCurrency;
+        const quoteSource = risk.snapshot.settlementFxSource;
+        const quoteObserved = risk.snapshot.settlementFxObservedAt;
+        const quoteMs = typeof quoteObserved === 'string' ? Date.parse(quoteObserved) : NaN;
+        const observedAge = Date.now() - quoteMs;
+        const expectedSource = feeCurrency === 'KRW' ? 'NATIVE_KRW'
+          : feeCurrency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+        const maxAgeMs = feeCurrency === 'USD' ? 24 * 60 * 60_000
+          : feeCurrency === 'USDT' ? 10 * 60_000 : 5 * 60_000;
+        const settlementFxEvidence = typeof quoteRate === 'number'
+          && Number.isFinite(quoteRate) && quoteRate > 0
+          && (feeCurrency !== 'KRW' || quoteRate === 1)
+          && quoteSource === expectedSource
+          && Number.isFinite(quoteMs)
+          && observedAge >= -5_000 && observedAge <= maxAgeMs
+          ? { krwPerQuoteCurrency: quoteRate, source: quoteSource, observedAt: quoteObserved! }
+          : null;
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
           exchangeOrderId: `paper-${order.clientOrderId}`,
           filledQuantity,
           averageFillPrice,
           ...(feeAmount == null ? {} : { feeAmount, feeCurrency }),
+          ...(taxAmount == null ? {} : { taxAmount, taxCurrency: feeCurrency }),
+          ...(settlementFxEvidence ? { settlementFxEvidence } : {}),
         });
       }
 
