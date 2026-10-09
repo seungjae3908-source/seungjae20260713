@@ -243,3 +243,26 @@ test('unknown tax and unbound or forged FX cannot mint 1m Paper capital or reser
     assert.equal(us.newEntriesAllowed,false);
   }
 });
+
+test('duplicate broker-facing Paper order identity cannot bind a second fill or mint reserves', () => {
+  const valid = certifiedAutoPaperPair({
+    id:'alias-collision',exchange:'kiwoom',market:'US',symbol:'AAPL',
+    entrySide:'buy',exitSide:'sell',entryPrice:100,exitPrice:120,
+    entryFx:1400,exitFx:1400,fxSource:'YAHOO:USDKRW=X',
+  });
+  const reusedBrokerAlias = valid.orders[0]!.exchangeOrderId;
+  assert.ok(reusedBrokerAlias);
+  const orders = valid.orders.map((order, index) => index === 1
+    ? { ...order, exchangeOrderId: reusedBrokerAlias }
+    : order);
+  const state = adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans:valid.plans,orders,nowMs:NOW,
+  });
+  const us = state.marketReadback.us_stock;
+  assert.equal(us.settlementReady,false);
+  assert.deepEqual(us.blockers,['ADMIN_PAPER_CANONICAL_ORDER_IDENTITY_COLLISION']);
+  assert.equal(us.operatingCapitalKrw,null);
+  assert.equal(us.reserveKrw,null);
+  assert.equal(us.newEntriesAllowed,false);
+  assert.equal(state.reserveTransferred,false);
+});
