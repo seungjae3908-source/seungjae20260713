@@ -6,6 +6,12 @@ import type { AddressInfo } from 'node:net';
 import { createPaperJournalRouter } from './paper-journal';
 import type { PaperJournalRepository } from '../services/paper-journal.types';
 import type { TradingReviewProvider } from '../services/trading-review-provider';
+import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
+import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import {
+  ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW,
+  ADMIN_WALLET_CONFIRMATION, adminPaperWalletId,
+} from '../services/admin-four-market-paper-capital.service';
 
 const NOW = new Date('2026-08-02T05:00:00.000Z');
 const USER = '11111111-1111-1111-1111-111111111111';
@@ -47,7 +53,15 @@ const reviewProvider: TradingReviewProvider = { async generateReview(input) {
   } };
 } };
 
-async function startServer(options: { authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean; reviewProvider?: TradingReviewProvider | null; memberTier?: string; automaticPaperHistory?: { orders: any[]; plans: any[] } } = {}) {
+async function startServer(options: {
+  authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean;
+  reviewProvider?: TradingReviewProvider | null; memberTier?: string;
+  automaticPaperHistory?: { orders: any[]; plans: any[] };
+  adminRlsGuardReader?: (req: unknown) => Promise<boolean>;
+  adminPolicyReader?: (req: unknown, owner: string) => Promise<any>;
+  adminPolicyWriter?: (req: unknown, owner: string, policy: any) => Promise<void>;
+  adminFourMarketInsert?: (req: unknown, owner: string, records: any[]) => Promise<any[]>;
+} = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   if (options.authenticated !== false) app.use('/api', (req: any, _res, next) => { req.member = { id: USER, membership_level: options.memberTier ?? 'regular', status: 'approved', is_active: true }; req.accessToken = 'test-token'; next(); });
@@ -61,6 +75,10 @@ async function startServer(options: { authenticated?: boolean; repository?: Pape
     now: () => NOW,
     reviewProvider: options.reviewProvider === undefined ? reviewProvider : options.reviewProvider,
     automaticPaperHistoryReader: async () => options.automaticPaperHistory ?? { orders: [], plans: [] },
+    adminRlsGuardReader: options.adminRlsGuardReader ?? (async () => true),
+    ...(options.adminPolicyReader ? { adminPolicyReader: options.adminPolicyReader } : {}),
+    ...(options.adminPolicyWriter ? { adminPolicyWriter: options.adminPolicyWriter } : {}),
+    ...(options.adminFourMarketInsert ? { adminFourMarketInsert: options.adminFourMarketInsert } : {}),
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -109,6 +127,52 @@ function automaticPaperWalletSetup() {
     }],
   };
 }
+
+test('automatic 500k wallet preflight is owner-scoped, read-only and consistent with fresh creation', async () => {
+  const { server, baseUrl, repository } = await startServer();
+  try {
+    const read = async () => {
+      const response = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+      assert.equal(response.status, 200);
+      return safeJson(response);
+    };
+    const before = await read();
+    assert.equal(before.ok, true);
+    assert.equal(before.readOnlyProbe, true);
+    assert.equal(before.mode, 'paper-wallet-readiness-only');
+    assert.equal(before.initialCapitalKrw, 500_000);
+    assert.equal(before.state, 'READY_FRESH');
+    assert.equal(before.safeToPrepare, true);
+    assert.equal(before.requiresHistoryPreservationConfirmation, false);
+    assert.deepEqual(before.blockers, []);
+    assert.equal(before.financialMutationCount, 0);
+    assert.equal(before.privateProviderRequests, 0);
+    assert.equal(before.orderSubmitted, false);
+    assert.equal(before.exchangeRequestSent, false);
+    assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
+    const created = await fetch(baseUrl + '/api/paper-journal/sync', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(automaticPaperWalletSetup()),
+    });
+    assert.equal(created.status, 200);
+    const after = await read();
+    assert.equal(after.state, 'ALREADY_EXISTS');
+    assert.equal(after.safeToPrepare, false);
+    assert.ok(after.blockers.includes('AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS'));
+    assert.equal((await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'))?.payload?.equity, 500_000);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('automatic wallet preflight rejects unauthorized members and never reads another user wallet', async () => {
+  const { server, baseUrl } = await startServer({ memberTier: 'associate' });
+  try {
+    const response = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    assert.equal(response.status, 403);
+    const body = await safeJson(response);
+    assert.equal(body.ok, false);
+    assert.equal(body.orderSubmitted, false);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
 
 test('server permits only a fresh exact 500k Paper wallet and refuses tampered reset', async () => {
   const { server, baseUrl, repository } = await startServer();
@@ -415,6 +479,16 @@ test('historic Paper-only QA data requires explicit new epoch acknowledgment and
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
+    const readinessResponse = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    assert.equal(readinessResponse.status, 200);
+    const preflight = await safeJson(readinessResponse);
+    assert.equal(preflight.state, 'READY_ISOLATE_LEGACY');
+    assert.equal(preflight.safeToPrepare, true);
+    assert.equal(preflight.requiresHistoryPreservationConfirmation, true);
+    assert.equal(preflight.historical.missingFilledQuantityEvidence, 1);
+    assert.equal(preflight.financialMutationCount, 0);
+    assert.equal(preflight.orderSubmitted, false);
+
     const blocked = await send(automaticPaperWalletSetup());
     assert.equal(blocked.status, 409);
     assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
@@ -433,5 +507,245 @@ test('historic Paper-only QA data requires explicit new epoch acknowledgment and
     const second = await send({ ...request, idempotencyKey: 'isolated-paper-campaign-02' });
     assert.equal(second.status, 409);
     assert.ok(await repository.getRecord(USER, 'journal', 'historic-qa-entry'));
+    const afterResponse = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    const after = await safeJson(afterResponse);
+    assert.equal(after.state, 'ALREADY_EXISTS');
+    assert.equal(after.safeToPrepare, false);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('automatic wallet preflight blocks manual journal contamination instead of mislabeling isolation as safe', async () => {
+  const repository = createRepository();
+  await repository.upsertRecord(USER, {
+    kind: 'journal', id: 'manual-history', version: 1, updatedAt: NOW.toISOString(),
+    deletedAt: null, payload: { source: 'MANUAL', status: 'FILLED' },
+  }, NOW.toISOString());
+  const { server, baseUrl } = await startServer({ repository });
+  try {
+    const preflightResponse = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    const preflight = await safeJson(preflightResponse);
+    assert.equal(preflight.state, 'BLOCKED');
+    assert.equal(preflight.safeToPrepare, false);
+    assert.ok(preflight.blockers.includes('AUTOMATIC_PAPER_EPOCH_HISTORY_REQUIRED'));
+    const attempted = await fetch(baseUrl + '/api/paper-journal/sync', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...automaticPaperWalletSetup(),
+        legacyEpochConfirmation: 'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY',
+      }),
+    });
+    assert.equal(attempted.status, 409);
+    assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('four independent admin 1m wallets are protected from non-admin and direct generic sync', async () => {
+  const regular = await startServer({ memberTier: 'regular' });
+  try {
+    const response = await fetch(regular.baseUrl + '/api/paper-journal/admin-four-market/status');
+    assert.equal(response.status, 403);
+    const denied = await safeJson(response);
+    assert.equal(denied.code, 'CAPABILITY_REQUIRED');
+    const direct = await fetch(regular.baseUrl + '/api/paper-journal/sync', {
+      method: 'POST', headers: { 'content-type':'application/json' },
+      body: JSON.stringify({
+        idempotencyKey: 'attempt-admin-wallet-sync',
+        clientTime: NOW.toISOString(),
+        records: [{
+          kind:'account',id:adminPaperWalletId('us_stock'),version:1,
+          deletedAt:null,updatedAt:NOW.toISOString(),payload:{ initialBalance:1_000_000 },
+        }],
+      }),
+    });
+    assert.equal(direct.status, 403);
+    assert.equal((await safeJson(direct)).code, 'ADMIN_MARKET_WALLET_SERVER_ONLY');
+  } finally { await new Promise<void>((resolve) => regular.server.close(() => resolve())); }
+});
+
+test('admin Paper-only 4x1m setup: explicit policy step + single four-row insert, no live authority', async () => {
+  let current = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false,
+    totalCapitalKrw: 100_000, maxOrderKrw: 30_000,
+    maxInstrumentKrw: 100_000,
+    maxAssetClassKrw: {
+      domestic_stock:100_000,us_stock:100_000,crypto_spot:100_000,crypto_futures:100_000,
+    },
+  });
+  const repository = createRepository();
+  let insertBatches = 0;
+  let savedPolicies = 0;
+  const fixture = await startServer({
+    memberTier: 'admin', repository,
+    adminPolicyReader: async () => current,
+    adminPolicyWriter: async (_req, _owner, next) => {
+      current = next; savedPolicies += 1;
+    },
+    adminFourMarketInsert: async (_req, owner, records) => {
+      assert.equal(owner,USER);
+      insertBatches += 1;
+      assert.equal(records.length,4);
+      const snapshot = await repository.listSnapshot(owner);
+      assert.equal(snapshot.filter((r) => r.kind==='account').length,0);
+      const result = [];
+      for (const record of records) {
+        result.push(await repository.upsertRecord(owner, record, NOW.toISOString()));
+      }
+      return result;
+    },
+  });
+  const prefix=fixture.baseUrl+'/api/paper-journal/admin-four-market';
+  const post = (suffix, confirmation) => fetch(prefix+suffix, {
+    method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({confirmation}),
+  });
+  try {
+    const beforeResponse=await fetch(prefix+'/status');
+    assert.equal(beforeResponse.status,200);
+    const before=await safeJson(beforeResponse);
+    assert.equal(before.ok,true);
+    assert.equal(before.canCreate,false);
+    assert.ok(before.creationBlockers.includes('ADMIN_PAPER_POLICY_1M_REQUIRED'));
+    assert.equal(before.financialMutationCount,0);
+    assert.equal(insertBatches,0);
+
+    const noConfirm=await post('/prepare-policy','UNKNOWN');
+    assert.equal(noConfirm.status,409);
+    assert.equal(savedPolicies,0);
+    const change=await post('/prepare-policy','SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY');
+    assert.equal(change.status,200);
+    const applied=await safeJson(change);
+    assert.equal(applied.savedPolicyCapitalKrw,ADMIN_MARKET_INITIAL_KRW);
+    assert.equal(applied.liveTradingEnabledByThisRequest,false);
+    assert.equal(applied.automaticTradingEnabledByThisRequest,false);
+    assert.equal(current.maxOrderKrw,30_000);
+    assert.equal(current.maxInstrumentKrw,100_000);
+    assert.equal(current.maxAssetClassKrw.us_stock,100_000);
+    assert.equal(savedPolicies,1);
+    const created=await post('/bootstrap',ADMIN_WALLET_CONFIRMATION);
+    assert.equal(created.status,200);
+    const outcome=await safeJson(created);
+    assert.equal(outcome.ready,true);
+    assert.equal(outcome.initialCapitalKrw,4_000_000);
+    assert.equal(outcome.realOrderAuthorityGranted,false);
+    assert.equal(outcome.automaticWithdrawalEnabled,false);
+    assert.equal(outcome.orderSubmitted,false);
+    assert.equal(insertBatches,1);
+    assert.equal((await repository.listSnapshot(USER)).filter((r)=>r.kind==='account').length,4);
+    assert.deepEqual(ADMIN_FOUR_PAPER_MARKETS.map((market)=>
+      outcome.marketWallets[market].equityKrw),[1_000_000,1_000_000,1_000_000,1_000_000]);
+    const repeated=await post('/bootstrap',ADMIN_WALLET_CONFIRMATION);
+    assert.equal(repeated.status,409);
+    assert.equal(insertBatches,1);
+    const erase=await fetch(fixture.baseUrl+'/api/paper-journal/all',{
+      method:'DELETE', headers:{'content-type':'application/json'},
+      body:JSON.stringify({confirmation:'DELETE MY PAPER JOURNAL'}),
+    });
+    assert.equal(erase.status,409);
+    assert.equal((await safeJson(erase)).code,'ADMIN_PAPER_CAMPAIGN_DELETE_FORBIDDEN');
+  } finally { await new Promise<void>((resolve)=>fixture.server.close(()=>resolve())); }
+});
+
+test('legacy Paper historical fills cannot be replaced by admin wallet start', async () => {
+  const earlier=new Date(NOW.getTime()-10*60_000).toISOString();
+  const repository=createRepository();
+  const plan={ id:'historic-admin-plan',userId:USER,accountMode:'paper',executionMode:'automatic',
+    reduceOnly:false,createdAt:earlier };
+  const order={ id:'historic-admin-fill',userId:USER,planId:plan.id,state:'FILLED',
+    filledQuantity:0,feeAmount:null,createdAt:earlier };
+  await repository.upsertRecord(USER,{
+    kind:'journal',id:'historic-admin-paper',version:1,deletedAt:null,updatedAt:earlier,
+    payload:{source:'APP_PAPER',status:'FILLED'},
+  },earlier);
+  const fixture=await startServer({
+    memberTier:'admin', repository,
+    automaticPaperHistory:{ plans:[plan],orders:[order] },
+    adminPolicyReader:async ()=>normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY,totalCapitalKrw:1_000_000 }),
+    adminFourMarketInsert:async (_req,owner,records)=>{
+      assert.equal(records.length,4);
+      return Promise.all(records.map((row)=>repository.upsertRecord(owner,row,NOW.toISOString())));
+    },
+  });
+  const url=fixture.baseUrl+'/api/paper-journal/admin-four-market';
+  try {
+    const before=await safeJson(await fetch(url+'/status'));
+    assert.equal(before.canCreate,true);
+    assert.equal(before.requiresLegacyHistoryConfirmation,true);
+    assert.equal(before.historical.orders,1);
+    const created=await fetch(url+'/bootstrap',{
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({confirmation:ADMIN_WALLET_CONFIRMATION}),
+    });
+    assert.equal(created.status,200);
+    const after=await safeJson(created);
+    assert.equal(after.preservedHistoricOrders,1);
+    assert.equal(after.preservedHistoricJournalRows,1);
+    assert.ok(await repository.getRecord(USER,'journal','historic-admin-paper'));
+    assert.equal((await repository.listSnapshot(USER)).filter((r)=>r.kind==='account').length,4);
+  } finally { await new Promise<void>((resolve)=>fixture.server.close(()=>resolve())); }
+});
+
+test('admin 1m setup rejects AUTO-on policies before any capital mutation', async () => {
+  let policyWrites = 0;
+  const sourcePolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+    totalCapitalKrw: 100_000,
+  });
+  const fixture = await startServer({
+    memberTier:'admin',
+    adminPolicyReader: async () => sourcePolicy,
+    adminPolicyWriter: async () => { policyWrites += 1; },
+  });
+  try {
+    const prefix = fixture.baseUrl + '/api/paper-journal/admin-four-market';
+    const preview = await safeJson(await fetch(prefix + '/status'));
+    assert.equal(preview.canCreate, false);
+    assert.ok(preview.creationBlockers.includes('ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF'));
+    const policyPrepare = await fetch(prefix+'/prepare-policy', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body:JSON.stringify({confirmation:'SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY'}),
+    });
+    assert.equal(policyPrepare.status,409);
+    assert.equal((await safeJson(policyPrepare)).code, 'ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF');
+    assert.equal(policyWrites,0);
+    const create = await fetch(prefix+'/bootstrap', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body:JSON.stringify({confirmation:ADMIN_WALLET_CONFIRMATION}),
+    });
+    assert.equal(create.status,409);
+  } finally { await new Promise<void>(resolve=>fixture.server.close(()=>resolve())); }
+});
+
+test('administrator wallet mutation refuses unknown database RLS state, even with valid owner confirmation', async () => {
+  let policyWrites = 0;
+  let walletInserts = 0;
+  const fixture = await startServer({
+    memberTier: 'admin',
+    adminRlsGuardReader: async () => false,
+    adminPolicyReader: async () => normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY, mode:'approval', automaticEnabled:false,
+      totalCapitalKrw:1_000_000,
+    }),
+    adminPolicyWriter: async () => { policyWrites += 1; },
+    adminFourMarketInsert: async () => { walletInserts += 1; return []; },
+  });
+  const prefix = fixture.baseUrl + '/api/paper-journal/admin-four-market';
+  const request = (suffix: string, confirmation: string) => fetch(prefix + suffix, {
+    method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ confirmation }),
+  });
+  try {
+    const status = await safeJson(await fetch(prefix + '/status'));
+    assert.equal(status.rlsGuardReady, false);
+    assert.equal(status.canCreate, false);
+    assert.ok(status.creationBlockers.includes('ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED'));
+    const policyResp = await request('/prepare-policy','SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY');
+    assert.equal(policyResp.status,409);
+    assert.equal((await safeJson(policyResp)).code,'ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED');
+    const bootstrapResp = await request('/bootstrap',ADMIN_WALLET_CONFIRMATION);
+    assert.equal(bootstrapResp.status,409);
+    assert.equal((await safeJson(bootstrapResp)).code,'ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED');
+    assert.equal(policyWrites,0);
+    assert.equal(walletInserts,0);
+  } finally {
+    await new Promise<void>(resolve => fixture.server.close(() => resolve()));
+  }
 });
