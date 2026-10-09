@@ -39,6 +39,7 @@ const forbiddenActivationKeys = [
   "PRIVATE_ACCOUNT_ACCESS",
   "PRIVATE_TRADING_API_ALLOWED",
 ];
+const PAPER_FORWARD_KRW_INITIAL_CAPITAL = 1_000_000;
 const PAPER_STATE_BINDING_VERSION = "paper-state-publisher-runtime-binding-v1";
 const PAPER_STATE_SNAPSHOT_VERSION = "paper-trading-state-snapshot-v2";
 
@@ -850,6 +851,13 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     return;
   }
 
+  // Never interpret KRW 1,000,000 as USDT 1,000,000. Existing USDT
+  // Paper account currency conversion and actual seed remain unverified.
+  if (env.PAPER_FORWARD_INITIAL_CAPITAL_KRW != null
+    && String(env.PAPER_FORWARD_INITIAL_CAPITAL_KRW).trim() !== String(PAPER_FORWARD_KRW_INITIAL_CAPITAL)) {
+    fail("PAPER_FORWARD_KRW_INITIAL_CAPITAL_MISMATCH", 72);
+    return;
+  }
   const rootDirectory = env.PAPER_FORWARD_ROOT ?? "/opt/stock-app-data/paper-forward-v1/runtime-state";
   const researchCodeSha = String(env.PAPER_FORWARD_RESEARCH_SHA ?? "").trim().toLowerCase();
   const activationAtMs = Number(env.PAPER_FORWARD_ACTIVATION_AT_MS);
@@ -1217,6 +1225,18 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       scheduleActive: true,
       researchProduction,
       authoritativeAccountRequired,
+      paperPilotCapital: Object.freeze({
+        targetInitialCapitalKrw: PAPER_FORWARD_KRW_INITIAL_CAPITAL,
+        baseCurrency: "KRW",
+        policyConfiguredExact: String(env.PAPER_FORWARD_INITIAL_CAPITAL_KRW ?? "").trim() === String(PAPER_FORWARD_KRW_INITIAL_CAPITAL),
+        canonicalPaperWalletSeedVerified: false,
+        settlementCurrencyConversionVerified: false,
+        observedSeedBalanceKrw: null,
+        automaticResetAllowed: false,
+        withdrawalAuthority: false,
+        liveTrading: false,
+        executionAuthority: "NONE",
+      }),
       // READ ONLY: even a verified registry PASS is not a fresh Paper signal.
       // Never inject this object into canonical admission or order execution.
       formulaPaperRegistryReadback,

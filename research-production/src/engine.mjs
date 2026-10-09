@@ -5,6 +5,7 @@ import { cp, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from '
 import { cpus } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
+export const PAPER_FORWARD_PILOT_INITIAL_CAPITAL_KRW = 1_000_000;
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 const FORBIDDEN_ACTIVATION_KEYS = Object.freeze([
   'LIVE_TRADING',
@@ -229,6 +230,8 @@ export function buildTaskPlan({
       env.FORMULA_BACKTEST_STATE_ROOT = resolve(stateRoot);
     }
     if (task.kind === 'paper') {
+      // Four-market Paper KRW target only; not a USDT balance and never a live funding instruction.
+      env.PAPER_FORWARD_INITIAL_CAPITAL_KRW = String(PAPER_FORWARD_PILOT_INITIAL_CAPITAL_KRW);
       env.PAPER_FORWARD_SCHEDULE_ACTIVE = 'true';
       env.PAPER_FORWARD_ROOT = join(stateRoot, 'forward', 'paper');
       env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH = join(resolve(stateRoot), 'latest', 'formula-paper-strategy-registry.json');
