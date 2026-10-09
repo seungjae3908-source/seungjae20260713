@@ -566,9 +566,10 @@ jobs:
           git fetch --quiet --no-tags --depth 1 origin "$previous_sha"
           git cat-file -e "$previous_sha^{commit}"
           schema_compatible=false
-          if git diff --quiet "$previous_sha" "$TARGET_SHA" --             api-server/supabase/migrations supabase/migrations database/migrations; then
+          if git diff --quiet "$previous_sha" "$TARGET_SHA" -- api-server/supabase supabase database; then
             prior_admin="$(git show "$previous_sha:api-server/src/routes/admin.ts" 2>/dev/null || true)"
-            if [[ "$prior_admin" == *"apply_member_permission_change"*               && "$prior_admin" == *"p_expected_permissions_updated_at"*               && "$prior_admin" == *"permissions_updated_at"* ]]; then
+            prior_deployer="$(git show "$previous_sha:ops/deploy-production.sh" 2>/dev/null || true)"
+            if [[ "$prior_admin" == *"apply_member_permission_change"*               && "$prior_admin" == *"p_expected_permissions_updated_at"*               && "$prior_admin" == *"permissions_updated_at"*               && "$prior_deployer" == *"application_runtime_ready()"*               && "$prior_deployer" == *"restart_application_preserving_telegram()"*               && "$prior_deployer" == *"MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false"*               && "$prior_deployer" == *"executionAuthority=NONE"* ]]; then
               schema_compatible=true
             fi
           fi
@@ -933,12 +934,26 @@ jobs:
             'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
             'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
             'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED','MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
             'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
-            'TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
+            'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED','CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
           ]) {
             if (env[key] === true || env[key] === 'true') {
               throw new Error('POSTDEPLOY_ROLLBACK_TRADING_AUTHORITY_PRESENT:' + key);
             }
+          }
+          for (const key of [
+            'SPOT_LIVE_CAPABILITY_ALLOWLIST','SPOT_LIVE_MARKET_ALLOWLIST',
+            'FUTURES_LIVE_CAPABILITY_ALLOWLIST','FUTURES_LIVE_MARKET_ALLOWLIST',
+          ]) {
+            if (String(env[key] ?? '').trim() !== '') {
+              throw new Error('POSTDEPLOY_ROLLBACK_CAPABILITY_ALLOWLIST_PRESENT:' + key);
+            }
+          }
+          if (env.executionAuthority !== 'NONE'
+            || env.FUTURES_LIVE_EXECUTION_AUTHORITY !== 'NONE') {
+            throw new Error('POSTDEPLOY_ROLLBACK_EXECUTION_AUTHORITY_PRESENT');
           }
           NODE
           # Use the signed prior commit in this repository only; the remote
@@ -1010,13 +1025,27 @@ jobs:
             'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
             'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
             'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED','MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
             'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
-            'TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
+            'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED','CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
           ]) {
             const v = apps[0].pm2_env[key];
             if (v === true || v === 'true') {
               throw new Error('POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT:' + key);
             }
+          }
+          for (const key of [
+            'SPOT_LIVE_CAPABILITY_ALLOWLIST','SPOT_LIVE_MARKET_ALLOWLIST',
+            'FUTURES_LIVE_CAPABILITY_ALLOWLIST','FUTURES_LIVE_MARKET_ALLOWLIST',
+          ]) {
+            if (String(apps[0].pm2_env[key] ?? '').trim() !== '') {
+              throw new Error('POSTDEPLOY_FAILCLOSED_CAPABILITY_ALLOWLIST_PRESENT:' + key);
+            }
+          }
+          if (apps[0].pm2_env.executionAuthority !== 'NONE'
+            || apps[0].pm2_env.FUTURES_LIVE_EXECUTION_AUTHORITY !== 'NONE') {
+            throw new Error('POSTDEPLOY_FAILCLOSED_EXECUTION_AUTHORITY_PRESENT');
           }
           process.stdout.write('POSTDEPLOY_FAILCLOSED_TARGET_PRESERVED_SCHEMA_BOUNDARY\n');
           NODE
