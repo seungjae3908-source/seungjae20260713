@@ -88,6 +88,8 @@ jobs:
           git cat-file -e "$EXPECTED_MAIN_SHA^{commit}"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"
+          test "$GITHUB_SHA" = "$EXPECTED_MAIN_SHA"
           echo 'VAULT_PREFLIGHT_IMMUTABLE_MAIN_ANCESTRY_OK'
 
       - name: Prepare protected Production SSH (no secret logging)
@@ -128,6 +130,11 @@ jobs:
             || report.readOnly !== true || report.secretValuesRecorded !== false
             || report.serverMutations !== 0 || report.telegramSends !== 0
             || report.financialMutations !== 0 || report.tradingAuthorityModified === true
+            || !['INITIAL','PM2','VAULT','BOT_GETME','BOT_SIXROOM','VERDICT'].includes(report.failureStage)
+            || !/^(PASS|NOT_CHECKED|BOT_API_[A-Z_]+)$/u.test(String(report.botApiDiagnostic))
+            || !(report.runtimeNodeMajor === null ||
+              (Number.isInteger(report.runtimeNodeMajor) &&
+               report.runtimeNodeMajor >= 8 && report.runtimeNodeMajor <= 50))
             || Object.keys(report.roomResults ?? {}).sort().join() !== expected.sort().join()
             || !/^[A-Z_]+$/u.test(String(report.classification ?? ''))
             || Object.values(report.roomResults).some(v => !/^[A-Z_]+$/u.test(String(v)))) {
@@ -157,6 +164,9 @@ jobs:
               '- Actual deploy marker SHA: ' + (v.markerSha || 'unverified'),
               '- Production PM2 online: ' + String(v.pm2Online),
               '- Classification: ' + v.classification,
+              '- Failure stage: ' + v.failureStage,
+              '- Bot API GET diagnostic: ' + v.botApiDiagnostic,
+              '- Production Node major: ' + String(v.runtimeNodeMajor ?? 'unverified'),
               '- Six-room Vault config valid: ' + String(v.vaultValid),
               '- Vault config reason: ' + (v.vaultReason || 'none'),
               '- Owner membership proof / config validated: ' + String(v.vaultValid),
@@ -171,3 +181,30 @@ jobs:
               owner: context.repo.owner, repo: context.repo.repo,
               issue_number: 1555, body,
             });
+
+      - name: Block false-green when Production is not Telegram-ready
+        env:
+          REPORT: ${{ env.SANITIZED_REPORT }}
+        run: |
+          set -Eeuo pipefail
+          node - "$REPORT" <<'NODE'
+          const fs = require('node:fs');
+          const r = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const ready = r.classification === 'READY_FOR_PROTECTED_BINDING_REVIEW'
+            && r.pm2Online === true
+            && r.vaultValid === true
+            && r.botIdentityVerified === true
+            && r.botApiDiagnostic === 'PASS'
+            && r.autoRoomMismatch === false
+            && r.mainSha === r.pm2Sha && r.pm2Sha === r.markerSha
+            && Object.values(r.roomResults ?? {}).length === 6
+            && Object.values(r.roomResults ?? {}).every(x => x === 'PASS');
+          if (!ready) {
+            console.error('VAULT_PREFLIGHT_OPERATIONAL_NOT_READY');
+            console.error('Sanitized classification: ' + r.classification);
+            console.error('Sanitized failure stage: ' + r.failureStage);
+            console.error('Sanitized Bot API code: ' + r.botApiDiagnostic);
+            process.exit(1);
+          }
+          console.log('VAULT_PREFLIGHT_OPERATIONAL_READY');
+          NODE
