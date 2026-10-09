@@ -207,7 +207,6 @@ function validOverview() {
   };
 }
 
-
 function marketWatch() {
   return {
     contract: 'lightweight-market-watch-readback/v1',
@@ -271,6 +270,7 @@ test('market watch readback rejects forged orders, full coverage, counts and pat
   assert.equal(sanitizeMarketWatchReadback({ ...x, markets: x.markets.map((m, i) =>
     i === 3 ? { ...m, market: 'US_STOCK' } : m) }).status, 'INVALID');
 });
+
 
 test('Research Center contract publishes a GET-only, authority-free allowlisted DTO', () => {
   const input = validOverview();
@@ -508,4 +508,74 @@ test('development diagnostic Factory blockers pass the browser allowlist without
   assert.equal(factory.readyProfileCount, 1);
   assert.equal(factory.blockedProfileCount, 11);
   assert.equal(JSON.stringify(result).includes('profile ids must not cross browser boundary'), false);
+});
+
+
+test('formula queue readback allows only diagnostic TRAIN without Paper or OOS promotion', () => {
+  const input = validOverview();
+  Object.assign(input.research, {
+    formulaBacktest: {
+      present: true,
+      status: 'TRAIN_ONLY',
+      inboxCount: 5,
+      scanned: 2,
+      counts: { PASS: 0, HOLD: 2, RESERVE: 0, EXCLUDE: 0 },
+      paperRegisteredCount: 0,
+      producerBound: false,
+      paperConsumerBound: false,
+      validationComplete: false,
+      oosComplete: false,
+      fullCostReady: false,
+      liveTrading: false,
+      autoTrading: false,
+      executionAuthority: 'NONE',
+      firstBlocker: 'FORMULA_QUEUE_PRODUCER_AND_OOS_UNATTESTED',
+      filePath: '/var/lib/secret-paper',
+      itemDigest: 'secret-nonpublic-digest',
+    },
+  });
+  const result = sanitizeResearchCenterOverview(input)!;
+  const formula = (result.research as { formulaBacktest: Record<string, unknown> }).formulaBacktest;
+  assert.equal(formula.status, 'TRAIN_ONLY');
+  assert.equal(formula.scanned, 2);
+  assert.equal(formula.paperRegisteredCount, 0);
+  assert.equal(formula.oosComplete, false);
+  assert.equal(formula.paperConsumerBound, false);
+  assert.equal(JSON.stringify(result).includes('secret-nonpublic-digest'), false);
+  assert.equal(JSON.stringify(result).includes('/var/lib/secret-paper'), false);
+});
+
+test('formula queue proof injection and forged stored PASS remain INVALID', () => {
+  const input = validOverview();
+  const diagnostic = {
+    present: true,
+    status: 'TRAIN_ONLY',
+    inboxCount: 2,
+    scanned: 1,
+    counts: { PASS: 0, HOLD: 1, RESERVE: 0, EXCLUDE: 0 },
+    paperRegisteredCount: 0,
+    producerBound: false,
+    paperConsumerBound: false,
+    validationComplete: false,
+    oosComplete: false,
+    fullCostReady: false,
+    liveTrading: false,
+    autoTrading: false,
+    executionAuthority: 'NONE',
+    firstBlocker: 'FORMULA_QUEUE_PRODUCER_AND_OOS_UNATTESTED',
+  };
+  for (const mutation of [
+    { ...diagnostic, counts: { PASS: 1, HOLD: 0, RESERVE: 0, EXCLUDE: 0 } },
+    { ...diagnostic, paperRegisteredCount: 1 },
+    { ...diagnostic, producerBound: true },
+    { ...diagnostic, executionAuthority: 'LIVE', liveTrading: true },
+    { ...diagnostic, validationComplete: true, oosComplete: true, fullCostReady: true },
+  ]) {
+    Object.assign(input.research, { formulaBacktest: mutation });
+    const result = sanitizeResearchCenterOverview(input)!;
+    const formula = (result.research as { formulaBacktest: { status: string; scanned: number | null; executionAuthority: string } }).formulaBacktest;
+    assert.equal(formula.status, 'INVALID');
+    assert.equal(formula.scanned, null);
+    assert.equal(formula.executionAuthority, 'NONE');
+  }
 });
