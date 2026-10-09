@@ -2583,6 +2583,7 @@ test('admin four-market Paper worker isolates the 1m capital floor without creat
     stockBrokerByMarket: {domestic_stock:'kiwoom',us_stock:'kiwoom'},
   });
   const underfundedRepo = new InMemoryTradingRepository();
+  await underfundedRepo.savePolicy(USER, makePolicy(ADMIN_MARKET_INITIAL_KRW-1));
   const underfunded = new MemberAutoTradingBackgroundWorker(source(underfundedRepo, nowMs, {
     adminFourWallets:true,tier:'admin',policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW-1),
   }));
@@ -2593,6 +2594,7 @@ test('admin four-market Paper worker isolates the 1m capital floor without creat
   assert.equal((await underfundedRepo.listPlans(USER)).length,0);
 
   const fundedRepo = new InMemoryTradingRepository();
+  await fundedRepo.savePolicy(USER, makePolicy(ADMIN_MARKET_INITIAL_KRW));
   const funded = new MemberAutoTradingBackgroundWorker(source(fundedRepo, nowMs, {
     adminFourWallets:true,tier:'admin',policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW),
   }));
@@ -2608,6 +2610,7 @@ test('admin four-market Paper worker isolates the 1m capital floor without creat
   assert.equal(plans[0]!.marketSnapshot.accountValueKrw,ADMIN_MARKET_INITIAL_KRW);
 
   const missingRepo = new InMemoryTradingRepository();
+  await missingRepo.savePolicy(USER, makePolicy(ADMIN_MARKET_INITIAL_KRW));
   const incomplete = new MemberAutoTradingBackgroundWorker(source(missingRepo,nowMs,{
     adminFourWallets:true,adminWalletsPartial:true,tier:'admin',
     policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW),
