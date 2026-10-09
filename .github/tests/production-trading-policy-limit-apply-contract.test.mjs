@@ -1,0 +1,48 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const read = (file) => fs.readFileSync(file, 'utf8');
+
+test('Production 1M policy apply stays inside the one-approval exact-SHA deploy and is zero-order', () => {
+  const workflow = read('.github/workflows/production-deploy.yml');
+  const spec = read('stock-analyzer/e2e/production-trading-policy-limit-apply.spec.ts');
+  const route = read('api-server/src/routes/trade-automation.ts');
+  const types = read('api-server/src/services/trade-automation.types.ts');
+  const risk = read('api-server/src/services/trade-automation-risk.service.ts');
+  const pilotCatalog = read('api-server/src/services/evidence-backed-auto-strategy-catalog.service.ts');
+  const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
+  const memberPaper = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const adminPaper = read('api-server/src/services/admin-four-market-paper-capital.service.ts');
+  const ui = read('stock-analyzer/src/components/trade-automation-settings.tsx');
+
+  assert.ok(workflow.includes('environment: production'));
+  assert.ok(workflow.includes('apply_trading_policy_limit_1m:'));
+  assert.ok(workflow.includes('Require verified post-merge release provenance'));
+  assert.ok(workflow.includes('assertProductionRuntimeIdentity'));
+  assert.ok(workflow.includes('if: ${{ inputs.apply_trading_policy_limit_1m }}'));
+  assert.ok(workflow.includes('EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}'));
+  assert.ok(workflow.includes('PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}'));
+  assert.ok(workflow.includes('production-trading-policy-limit-${{ env.TARGET_SHA }}'));
+  const deployIndex = workflow.indexOf('- name: Deploy exact approved revision');
+  const applyIndex = workflow.indexOf('- name: Apply and verify the one-time 1M Production order policy');
+  const readOnlyIndex = workflow.indexOf('- name: Pre-QA identity, authority, and gate-conflict check');
+  assert.ok(deployIndex >= 0 && applyIndex > deployIndex && readOnlyIndex > applyIndex);
+  assert.ok(spec.includes("'/api/trade-automation/admin/order-limit-1m'"));
+  assert.ok(spec.includes('SET_MAX_ORDER_KRW_1000000_WITH_LIVE_DISABLED'));
+  assert.ok(spec.includes('manual LIVE gate must be OFF'));
+  assert.ok(spec.includes("executionAuthority).toBe('NONE')"));
+  assert.ok(route.includes("router.post('/admin/order-limit-1m', requireAdmin"));
+  assert.ok(route.includes('PRODUCTION_ORDER_LIMIT_CHANGE_REQUIRES_ALL_LIVE_GATES_OFF'));
+  assert.ok(route.includes("executionAuthority: 'NONE'"));
+  assert.ok(types.includes('PRODUCTION_MAX_SINGLE_ENTRY_KRW = 1_000_000'));
+  assert.ok(risk.includes('Math.min(PRODUCTION_MAX_SINGLE_ENTRY_KRW, totalCapitalKrw)'));
+  assert.ok(pilotCatalog.includes('initialOperatingCapitalKrw: 1_000_000'));
+  assert.ok(pilotCapital.includes('policyMaxOrder + growth'));
+  assert.ok(memberPaper.includes('AUTOMATIC_PAPER_INITIAL_KRW = 500_000 as const'));
+  assert.ok(adminPaper.includes('ADMIN_MARKET_INITIAL_KRW = 1_000_000'));
+  assert.ok(ui.includes('1회 기준 주문금액 (초기 최대 100만원)'));
+  assert.ok(ui.includes('확정 순수익의 50%만 재투자'));
+  assert.ok(ui.includes('max={1_000_000}'));
+  assert.doesNotMatch(spec, /\/api\/trade-automation\/(plans|orders|cancel|amend)/u);
+});

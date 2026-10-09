@@ -91,6 +91,29 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
+  assert.equal(policy.totalCapitalKrw, 1_000_000);
+  assert.equal(policy.maxOrderKrw, 1_000_000);
+});
+
+test('single-entry limit accepts exactly 1M KRW and fails closed above 1M', () => {
+  const policy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  });
+  assert.equal(policy.maxOrderKrw, 1_000_000);
+
+  const exact = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_000,
+    estimatedKrw: 1_000_000,
+  }), policy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.equal(exact.blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+
+  const exceeded = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_001,
+    estimatedKrw: 1_000_001,
+  }), policy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.ok(exceeded.blockCodes.includes('MAX_ORDER_AMOUNT'));
 });
 
 test('spot live create is capability allowlisted and exact-authority bound', () => {

@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import router, {
   normalizeReadonlyCredentialsForLiveExecution,
   setTradeAutomationRepositoryFactoryForTests,
+  setTradeLivePolicyAuthorityOverrideForTests,
   setTradePaperRuntimeWalletReaderForTests,
   setTradePaperRuntimeRecordsReaderForTests,
   setTradePaperRuntimeAdminGuardReaderForTests,
@@ -1922,6 +1923,98 @@ test('formula-ai pilot stage requires admin, exact confirmation, and AUTO off wi
       if (value == null) delete process.env[key];
       else process.env[key] = value;
     }
+    await close(admin.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
+test('admin may align the Production single-entry ceiling to 1M only while every live gate is off', async () => {
+  const isolated = new InMemoryTradingRepository();
+  const original = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+    totalCapitalKrw: 500_000,
+    maxOrderKrw: 500_000,
+    maxInstrumentKrw: 400_000,
+    maxAssetClassKrw: {
+      domestic_stock: 300_000,
+      us_stock: 300_000,
+      crypto_spot: 250_000,
+      crypto_futures: 200_000,
+    },
+  });
+  await isolated.savePolicy(USER, original);
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const endpoint = '/api/trade-automation/admin/order-limit-1m';
+  const requestBody = {
+    maxOrderKrw: 1_000_000,
+    confirmation: 'SET_MAX_ORDER_KRW_1000000_WITH_LIVE_DISABLED',
+  };
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const denied = await fetch(`${regular.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(denied.status, 403);
+  } finally { await close(regular.server); }
+
+  setTradeLivePolicyAuthorityOverrideForTests(false);
+  const admin = await startServer(true, 'admin');
+  try {
+    const missing = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ maxOrderKrw: 1_000_000 }),
+    });
+    assert.equal(missing.status, 409);
+    assert.equal((await missing.json() as { error: string }).error,
+      'PRODUCTION_ORDER_LIMIT_CONFIRMATION_REQUIRED');
+
+    setTradeLivePolicyAuthorityOverrideForTests(true);
+    const active = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(active.status, 409);
+    assert.equal((await active.json() as { error: string }).error,
+      'PRODUCTION_ORDER_LIMIT_CHANGE_REQUIRES_ALL_LIVE_GATES_OFF');
+    assert.deepEqual(await isolated.getPolicy(USER), original);
+    setTradeLivePolicyAuthorityOverrideForTests(false);
+
+    const applied = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(applied.status, 200);
+    const body = await applied.json() as Record<string, any>;
+    assert.equal(body.ok, true);
+    assert.equal(body.policyUpdated, true);
+    assert.equal(body.idempotent, false);
+    assert.equal(body.policy.totalCapitalKrw, 1_000_000);
+    assert.equal(body.policy.maxOrderKrw, 1_000_000);
+    assert.equal(body.policy.maxInstrumentKrw, original.maxInstrumentKrw);
+    assert.deepEqual(body.policy.maxAssetClassKrw, original.maxAssetClassKrw);
+    assert.equal(body.policy.mode, original.mode);
+    assert.equal(body.policy.automaticEnabled, original.automaticEnabled);
+    assert.equal(body.liveTradingEnabledByThisRequest, false);
+    assert.equal(body.automaticTradingEnabledByThisRequest, false);
+    assert.equal(body.executionAuthority, 'NONE');
+    for (const key of ['orderSubmitted', 'cancelRequested', 'amendRequested', 'transferRequested', 'withdrawalRequested']) {
+      assert.equal(body[key], false);
+    }
+
+    const replay = await fetch(`${admin.baseUrl}${endpoint}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(replay.status, 200);
+    const replayBody = await replay.json() as Record<string, any>;
+    assert.equal(replayBody.policyUpdated, false);
+    assert.equal(replayBody.idempotent, true);
+  } finally {
+    setTradeLivePolicyAuthorityOverrideForTests(null);
     await close(admin.server);
     setTradeAutomationRepositoryFactoryForTests(() => repository);
   }

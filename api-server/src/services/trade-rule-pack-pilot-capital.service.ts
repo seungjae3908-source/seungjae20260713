@@ -211,9 +211,9 @@ export function evaluateRulePackPilotEntryGuard(
   const policyMaxOrder = finite(input.policyMaxOrderKrw)
     ? Math.max(0, input.policyMaxOrderKrw)
     : 0;
-  // The original 500k ceiling tracks verified profit: 500k -> 525k after
-  // 50k net profit (25k compound / 25k reserve). A deliberately stricter
-  // policy (e.g. 30k) must NOT be silently elevated to 500k.
+  // The 1M ceiling tracks verified profit: 1M -> 1.025M after 50k net profit
+  // (25k compound / 25k reserve). A deliberately stricter policy (e.g. 30k)
+  // must NOT be silently elevated to 1M.
   const initial = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
   const growth = Math.max(0, operatingCapital - initial);
   const dynamicPolicyCap = policyMaxOrder >= initial ? policyMaxOrder + growth : policyMaxOrder;
@@ -222,7 +222,7 @@ export function evaluateRulePackPilotEntryGuard(
   if (!finite(input.policyTotalCapitalKrw) || input.policyTotalCapitalKrw < initial) {
     add('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED');
   }
-  // 500k is a risk floor, NOT a fabricated deposit or an instruction to
+  // 1M is a risk floor, NOT a fabricated deposit or an instruction to
   // draw from the separately earmarked reserve after a loss.
   if (operatingCapital < initial) add('BACKGROUND_PILOT_BASE_CAPITAL_UNDERFUNDED');
 
@@ -265,7 +265,7 @@ export function evaluateRulePackPilotEntryGuard(
 
 /**
  * A verified, settlement-backed capital snapshot is the only source allowed
- * to grow the 500k risk ceiling. This is a POLICY PROJECTION ONLY: it does not
+ * to grow the 1M risk ceiling. This is a POLICY PROJECTION ONLY: it does not
  * deposit/withdraw funds, change stored member policy or grant Live authority.
  */
 export function deriveRulePackPilotExecutionPolicy(
@@ -561,7 +561,7 @@ export async function readRulePackPilotCapitalState(
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
   // An unjoined fill is not "no profit"; its missing plan may hide a loss.
-  // Protect shared 500k HWM accounting from incomplete ledger projections.
+  // Protect shared 1M HWM accounting from incomplete ledger projections.
   for (const order of orders) {
     const plan = plansById.get(order.planId);
     const apparentlyFilled = order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
@@ -577,7 +577,7 @@ export async function readRulePackPilotCapitalState(
       blockers.push('PILOT_CAPITAL_AUTO_LIVE_ORDER_RECONCILIATION_REQUIRED');
     }
     // The journal adapter omits records without positive average price / fill
-    // quantity. A LIVE automatic fill must never disappear from the 500k
+    // quantity. A LIVE automatic fill must never disappear from the 1M
     // high-water ledger simply because that execution evidence is incomplete.
     if (plan?.accountMode === 'live' && plan.executionMode === 'automatic'
       && apparentlyFilled

@@ -82,6 +82,8 @@ export type TradingProtectionOrder = {
   version: number;
 };
 
+export const PRODUCTION_MAX_SINGLE_ENTRY_KRW = 1_000_000 as const;
+
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,
   automaticEnabled: false,
@@ -93,7 +95,7 @@ export const DEFAULT_TRADING_POLICY = Object.freeze({
   enabledAssets: { bitget: [] as string[], upbit: [] as string[], kiwoom: [] as string[], toss: [] as string[] },
   enabledStrategies: [] as string[],
   totalCapitalKrw: 1_000_000,
-  maxOrderKrw: 1_000_000,
+  maxOrderKrw: PRODUCTION_MAX_SINGLE_ENTRY_KRW,
   maxInstrumentKrw: 1_000_000,
   maxAssetClassKrw: {
     domestic_stock: 1_000_000,
