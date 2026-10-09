@@ -177,3 +177,18 @@ test('Paper Worker readiness UI exposes genuine member-specific blockers without
   assert.ok(page.includes('autoPaperRuntimeError ?'));
   assert.ok(page.includes('!fixture && canAuto && canJournalSync'));
 });
+
+test('Admin four-market virtual Paper UI is self-scoped and never silently activates Live', () => {
+  const admin = read('stock-analyzer/src/components/admin-four-market-paper-panel.tsx');
+  const page = read('stock-analyzer/src/pages/auto-trading.tsx');
+  assert.ok(admin.includes("'/api/paper-journal/admin-four-market'"));
+  assert.ok(admin.includes('START_ADMIN_FOUR_1M_PAPER_WALLETS_PRESERVE_HISTORY'));
+  assert.ok(admin.includes('SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY'));
+  assert.ok(admin.includes('data-testid="admin-four-market-paper-panel"'));
+  assert.ok(admin.includes('data-testid="admin-four-market-paper-prepare"'));
+  assert.ok(admin.includes('const verified = await readStatus()'));
+  assert.ok(admin.includes("window.confirm("));
+  assert.ok(page.includes('canManagePilot && !fixture ?'));
+  assert.ok(page.includes('<AdminFourMarketPaperPanel />'));
+  assert.ok(page.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
+});
