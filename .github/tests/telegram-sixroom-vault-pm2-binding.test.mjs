@@ -159,6 +159,9 @@ test('approved APPLY runs one PM2 restart and requires post-health and unchanged
       assert.equal(env.TELEGRAM_BINDING_APPLY_APPROVED,undefined);
       assert.equal(env.LIVE_TRADING,'false');
       assert.equal(env.executionAuthority,'NONE');
+      assert.equal(env.status,undefined);
+      assert.equal(env.pm_exec_path,undefined);
+      assert.equal(env.TELEGRAM_BINDING_APPLY_APPROVED,undefined);
       restarts++;
       started=runtime(env);
     },
