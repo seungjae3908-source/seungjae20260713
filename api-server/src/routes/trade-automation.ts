@@ -60,7 +60,12 @@ import type {
   TradingOrder,
   TradingPlan,
   TradingPlanInput,
+  TradingPolicy,
   TradingSignalState,
+} from '../services/trade-automation.types';
+import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from '../services/trade-automation.types';
 
 const router: IRouter = Router();
@@ -70,6 +75,7 @@ const CANCEL_RECONCILIATION_STATES = new Set([
   'SUBMITTED', 'ACCEPTED', 'PARTIALLY_FILLED', 'CANCEL_REQUESTED', 'RECOVERY_REQUIRED',
 ]);
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
+let livePolicyAuthorityOverrideForTests: boolean | null = null;
 let paperRuntimeWalletReaderForTests:
   ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null = null;
 let paperRuntimeRecordsReaderForTests:
@@ -98,6 +104,10 @@ export function setTradeAutomationRepositoryFactoryForTests(
   factory: ((userId: string) => TradingRepository) | null,
 ) {
   repositoryFactoryForTests = factory;
+}
+
+export function setTradeLivePolicyAuthorityOverrideForTests(value: boolean | null) {
+  livePolicyAuthorityOverrideForTests = value;
 }
 
 export function setTradeSplitOrderRepositoryFactoryForTests(
@@ -182,7 +192,7 @@ function context(req: AuthenticatedRequest) {
   const repository = repositoryFactoryForTests
     ? repositoryFactoryForTests(userId)
     : req.accessToken
-      ? createSupabaseTradingRepository(req.accessToken, userId)
+      ? createSupabaseTradingRepository(req.accessToken, userId, maximumSingleEntryKrw(req))
       : (() => { throw new Error('LOGIN_REQUIRED'); })();
   const splitRepository = splitRepositoryFactoryForTests
     ? splitRepositoryFactoryForTests(userId)
@@ -908,7 +918,7 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       credentialsExposed: false;
     }>;
 
-    const paper = runFormulaAiPaperRehearsalProbe();
+    const paper = runFormulaAiPaperRehearsalProbe(new Date(), maximumSingleEntryKrw(req));
     const journalReadReady = req.body?.journalReadReady === true;
     const telegramReady = req.body?.telegramReady === true;
     const futures = futuresLiveRuntimeStatus();
@@ -1248,6 +1258,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     return res.json({
       ok: true,
       policy,
+      initialMaxOrderKrw: maximumSingleEntryKrw(req),
+      administratorOrderBaseline: maximumSingleEntryKrw(req) === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
       connections: safeConnections(connections),
       emergencyStopped: policy.emergencyStopped || persistentGlobalStop || environmentGlobalStop,
       emergencyStopSources: {
@@ -1375,7 +1387,7 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const current = await repository.getPolicy(userId);
-    let candidate = normalizeTradingPolicy(req.body);
+    let candidate = normalizeTradingPolicy(req.body, maximumSingleEntryKrw(req));
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
       candidate.marketEnabled.crypto_futures = false;
       candidate.exchangeEnabled.bitget = false;
@@ -1400,6 +1412,92 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
     const policy = enforceMemberTradingPolicy(candidate, current);
     await repository.savePolicy(userId, policy);
     return res.json({ ok: true, policy, defaultOff: !policy.automaticEnabled });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+const LIVE_POLICY_AUTHORITY_ENV_KEYS = [
+  'ORDER_EXECUTION_ENABLED',
+  'REAL_ORDER_ENABLED',
+  'PRIVATE_TRADING_API_ALLOWED',
+  'LIVE_TRADING_ACTIVATION_APPROVED',
+  'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+  'FUTURES_LIVE_TRADING_ACTIVATION_APPROVED',
+  'AUTO_TRADING',
+  'LIVE_AUTOMATIC_TRADING_ENABLED',
+  'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+] as const;
+
+function livePolicyAuthorityActive() {
+  if (livePolicyAuthorityOverrideForTests != null) return livePolicyAuthorityOverrideForTests;
+  return [...EXCHANGES].some((exchange) =>
+    liveExecutionEnabled(exchange) || automaticLiveExecutionEnabled(exchange))
+    || LIVE_POLICY_AUTHORITY_ENV_KEYS.some((key) => process.env[key] === 'true');
+}
+
+function maximumSingleEntryKrw(req: AuthenticatedRequest) {
+  return req.member && hasCapability(req.member, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
+router.post('/admin/order-limit-1m', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (req.body?.confirmation !== 'SET_MAX_ORDER_KRW_1000000_WITH_LIVE_DISABLED'
+      || req.body?.maxOrderKrw !== PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW) {
+      return res.status(409).json({
+        ok: false,
+        error: 'PRODUCTION_ORDER_LIMIT_CONFIRMATION_REQUIRED',
+        policyUpdated: false,
+        orderSubmitted: false,
+        cancelRequested: false,
+        amendRequested: false,
+        transferRequested: false,
+        withdrawalRequested: false,
+      });
+    }
+    if (livePolicyAuthorityActive()) {
+      return res.status(409).json({
+        ok: false,
+        error: 'PRODUCTION_ORDER_LIMIT_CHANGE_REQUIRES_ALL_LIVE_GATES_OFF',
+        policyUpdated: false,
+        orderSubmitted: false,
+        cancelRequested: false,
+        amendRequested: false,
+        transferRequested: false,
+        withdrawalRequested: false,
+      });
+    }
+
+    const { userId, repository } = context(req);
+    const current = await repository.getPolicy(userId);
+    const policy: TradingPolicy = {
+      ...current,
+      totalCapitalKrw: Math.max(current.totalCapitalKrw, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW),
+      maxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+    };
+    const changed = current.totalCapitalKrw !== policy.totalCapitalKrw
+      || current.maxOrderKrw !== policy.maxOrderKrw;
+    if (changed) await repository.savePolicy(userId, policy);
+
+    return res.json({
+      ok: true,
+      policy,
+      targetMaxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      policyUpdated: changed,
+      idempotent: !changed,
+      riskCeilingsPreserved: {
+        maxInstrumentKrw: policy.maxInstrumentKrw,
+        maxAssetClassKrw: policy.maxAssetClassKrw,
+      },
+      liveTradingEnabledByThisRequest: false,
+      automaticTradingEnabledByThisRequest: false,
+      executionAuthority: 'NONE',
+      orderSubmitted: false,
+      cancelRequested: false,
+      amendRequested: false,
+      transferRequested: false,
+      withdrawalRequested: false,
+    });
   } catch (error) { return errorResponse(res, error); }
 });
 
