@@ -130,9 +130,29 @@ jobs:
             }
             return {missing,duplicates};
           }
+          // Inspect only fixed, local config sources; emit key NAMES, never values.
+          // Presence in a file is not proof of a valid chat ID or active PM2 binding.
+          function findMissingKeysInAlternateEnvFiles(missing, read=path=>fs.readFileSync(path,'utf8')) {
+            const paths=[
+              '/opt/stock-app/.env','/opt/stock-app/.env.production',
+              '/opt/stock-app/api-server/.env','/opt/stock-app/api-server/.env.production'
+            ];
+            return missing.filter(key=>paths.some(path=>{
+              let source='';try{source=read(path);}catch{return false;}
+              if(typeof source!=='string'||source.length>1_000_000)return false;
+              return source.split(/\r?\n/).some(line=>{
+                const match=/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+                if(!match||match[1]!==key)return false;
+                const value=match[2].trim();
+                return Boolean(value&&value!=='""'&&value!=="''"&&!value.startsWith('#'));
+              });
+            }));
+          }
           const evidence={schemaVersion:'telegram-sixroom-readonly-v1',readOnly:true,
             pm2Online:false,identityMatch:false,missingCore:[],missingSixRooms:[],
             duplicateKeyPairs:[],backgroundWorkersEnabled:false,classification:'OK',
+            missingKeyFoundInEnvFiles:[],telegramActivationApproved:false,
+            telegramIntelligenceWorkerEnabled:false,personalTelegramWorkerEnabled:false,
             secretValuesRecorded:false,telegramSends:0,financialMutationCount:0};
           try{
             const list=JSON.parse(execFileSync('pm2',['jlist'],{encoding:'utf8',maxBuffer:20000000}));
@@ -147,13 +167,20 @@ jobs:
               evidence.missingCore=coreKeys.filter(k=>!String(runtime[k]||'').trim());
               const rooms=inspectSixRoomBindings(runtime);
               evidence.missingSixRooms=rooms.missing;
+              evidence.missingKeyFoundInEnvFiles=findMissingKeysInAlternateEnvFiles(rooms.missing);
               evidence.duplicateKeyPairs=rooms.duplicates;
+              evidence.telegramActivationApproved=String(runtime.LIVE_TELEGRAM_ACTIVATION_APPROVED||'')==='true';
+              evidence.telegramIntelligenceWorkerEnabled=String(runtime.TELEGRAM_INTELLIGENCE_WORKER_ENABLED||'')!=='false';
+              evidence.personalTelegramWorkerEnabled=String(runtime.PERSONAL_TELEGRAM_WORKER_ENABLED||'')==='true';
               evidence.backgroundWorkersEnabled=String(runtime.BACKGROUND_WORKERS_ENABLED||'true')!=='false';
               if(!evidence.identityMatch)evidence.classification='PRODUCTION_SHA_MISMATCH';
               else if(evidence.missingCore.length)evidence.classification='CORE_CONFIG_MISSING';
               else if(rooms.missing.length)evidence.classification='SIX_ROOM_CONFIG_MISSING';
               else if(rooms.duplicates.length)evidence.classification='SIX_ROOM_ROUTING_COLLISION';
               else if(!evidence.backgroundWorkersEnabled)evidence.classification='BACKGROUND_WORKERS_DISABLED';
+              else if(!evidence.telegramActivationApproved)evidence.classification='TELEGRAM_ACTIVATION_DISABLED';
+              else if(!evidence.telegramIntelligenceWorkerEnabled)evidence.classification='TELEGRAM_MARKET_WORKER_DISABLED';
+              else if(!evidence.personalTelegramWorkerEnabled)evidence.classification='TELEGRAM_PERSONAL_WORKER_DISABLED';
             }
           }catch{evidence.classification='PM2_INSPECTION_FAILED';}
           process.stdout.write(JSON.stringify(evidence)+'\n');
@@ -163,7 +190,7 @@ jobs:
           if(v.schemaVersion!=='telegram-sixroom-readonly-v1'||v.readOnly!==true||
              v.secretValuesRecorded!==false||v.telegramSends!==0||v.financialMutationCount!==0||
              !Array.isArray(v.missingCore)||!Array.isArray(v.missingSixRooms)||
-             !Array.isArray(v.duplicateKeyPairs)){
+             !Array.isArray(v.duplicateKeyPairs)||!Array.isArray(v.missingKeyFoundInEnvFiles)){ 
              console.error('UNSAFE_OR_INVALID_DIAGNOSTIC_EVIDENCE');process.exit(1);
           }
           console.log('READ_ONLY_DIAGNOSTIC_EVIDENCE_VALID');
@@ -196,6 +223,8 @@ jobs:
                 '- Classification: '+v.classification,
                 '- Missing core KEY NAMES: '+(v.missingCore.join(', ')||'none'),
                 '- Missing dedicated room KEY NAMES: '+(v.missingSixRooms.join(', ')||'none'),
+                '- Missing keys also present in fixed server env files (not PM2): '+(v.missingKeyFoundInEnvFiles.join(', ')||'none'),
+                '- Telegram activation / market worker / personal worker: '+[v.telegramActivationApproved,v.telegramIntelligenceWorkerEnabled,v.personalTelegramWorkerEnabled].map(String).join(' / '),
                 '- Duplicate room KEY PAIRS: '+(v.duplicateKeyPairs.map(x=>x.join(' ↔ ')).join(', ')||'none'),
                 '- Background workers enabled: '+String(v.backgroundWorkersEnabled),
                 '- Telegram sends / financial mutations: 0 / 0',
