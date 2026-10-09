@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { requestWithBrowserSession } from './support/browser-session-api';
 
@@ -15,6 +16,38 @@ function required(name: string) {
   if (!value) throw new Error('STAGING_TRADING_CORE_REQUIRED_CONFIGURATION:' + name);
   return value;
 }
+// The protected Staging credential is a Supabase *email*, but the app login
+// accepts a login_name and hashes it into an internal email. Resolve and
+// verify that mapping using staging-only Auth; never log the token or identity.
+async function resolveStagingAdminLoginName() {
+  const email = required('STAGING_ADMIN_EMAIL').toLowerCase();
+  const password = required('STAGING_ADMIN_PASSWORD');
+  const supabase = new URL(required('STAGING_SUPABASE_URL'));
+  const response = await fetch(new URL('/auth/v1/token?grant_type=password', supabase), {
+    method: 'POST',
+    headers: {
+      apikey: required('STAGING_SUPABASE_ANON_KEY'),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ email, password }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error('STAGING_ADMIN_LOGIN_NAME_DISCOVERY_HTTP_' + response.status);
+  }
+  const body: any = await response.json().catch(() => null);
+  const loginName = String(body?.user?.user_metadata?.login_name ?? '').trim();
+  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
+    throw new Error('STAGING_ADMIN_LOGIN_ID_METADATA_MISSING');
+  }
+  const internalEmail = createHash('sha256')
+    .update('seungjae-stock-account:' + loginName.normalize('NFKC').toLowerCase(), 'utf8')
+    .digest('hex').slice(0, 40) + '@accounts.seungjae-stock.com';
+  if (email !== internalEmail) {
+    throw new Error('STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH');
+  }
+  return loginName;
+}
 function validateIsolation() {
   const target = required('STAGING_TARGET_SHA').toLowerCase();
   expect(target).toMatch(/^[0-9a-f]{40}$/);
@@ -29,11 +62,12 @@ function validateIsolation() {
   return target;
 }
 async function signInAdmin(page: Page) {
+  const loginName = await resolveStagingAdminLoginName();
   await page.goto('/login', { waitUntil: 'domcontentloaded' });
   const username = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
   const password = page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]').first();
   await expect(username).toBeVisible();
-  await username.fill(required('STAGING_ADMIN_EMAIL'));
+  await username.fill(loginName);
   await password.fill(required('STAGING_ADMIN_PASSWORD'));
   await page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i }).click();
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i }).first()).toBeVisible({ timeout: 30_000 });
