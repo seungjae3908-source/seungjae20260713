@@ -225,6 +225,30 @@ export interface ResearchLightweightMarketWatch {
   executionAuthority: 'NONE';
 }
 
+export interface ResearchLightweightMarketWatchCadence {
+  contract: 'public-watch-cadence-admin-readback-v1';
+  status: 'MISSING' | 'INVALID' | 'INCOMPLETE_OR_INTERRUPTED' | 'PUBLIC_CADENCE_OBSERVED';
+  present: boolean;
+  sampleCount: number | null;
+  duplicateRows: number | null;
+  maxGapMs: number | null;
+  latestAgeMs: number | null;
+  hostHoldCycles: number | null;
+  hostThrottledCycles: number | null;
+  blockedDataCycles: number | null;
+  allFourMarketReadyCycles: number | null;
+  filesRead: number | null;
+  cadenceWindowObserved: boolean;
+  continuous24hProven: false;
+  completeFourMarketCoverageProven: false;
+  economicEvidenceCredit: 0;
+  oosCredit: 0;
+  paperCredit: 0;
+  profitabilityProven: false;
+  formulaCandidateProduced: false;
+  executionAuthority: 'NONE';
+}
+
 export interface ResearchCenterOverview {
   schemaVersion: 'research-dashboard-overview-v1';
   generatedAt: number;
@@ -274,6 +298,7 @@ export interface ResearchCenterOverview {
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
     lightweightMarketWatch?: ResearchLightweightMarketWatch;
+    lightweightMarketWatchCadence?: ResearchLightweightMarketWatchCadence;
   };
   factory?: ResearchFactoryRuntimeSummary;
   paper: {

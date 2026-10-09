@@ -383,7 +383,10 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
       </section>
 
-      <ResearchLightweightMarketWatchPanel watch={overview.dataFactory?.lightweightMarketWatch} />
+      <ResearchLightweightMarketWatchPanel
+        watch={overview.dataFactory?.lightweightMarketWatch}
+        cadence={overview.dataFactory?.lightweightMarketWatchCadence}
+      />
 
       {!promotion ? (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs" role="status" data-testid="research-partial-state">

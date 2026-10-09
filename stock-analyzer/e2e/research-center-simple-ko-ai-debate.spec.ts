@@ -351,6 +351,36 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
   });
 }
 
+test('24-hour public cadence readback is visible but never advertised as proven server uptime', async ({ page }) => {
+  const value = overview();
+  Object.assign(value, {
+    dataFactory: {
+      lightweightMarketWatchCadence: {
+        contract: 'public-watch-cadence-admin-readback-v1',
+        status: 'PUBLIC_CADENCE_OBSERVED', present: true,
+        sampleCount: 720, duplicateRows: 1, maxGapMs: 120000,
+        latestAgeMs: 90000, hostHoldCycles: 0, hostThrottledCycles: 0,
+        blockedDataCycles: 0, allFourMarketReadyCycles: 0, filesRead: 2,
+        cadenceWindowObserved: true, continuous24hProven: false,
+        completeFourMarketCoverageProven: false, economicEvidenceCredit: 0,
+        oosCredit: 0, paperCredit: 0, profitabilityProven: false,
+        formulaCandidateProduced: false, executionAuthority: 'NONE',
+      },
+    },
+  });
+  const { assertClean } = await installAdmin(page, value);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openExpertResearch(page);
+  const watch = page.getByTestId('research-market-watch-cadence');
+  await expect(watch).toBeVisible();
+  await expect(page.getByTestId('research-market-watch-cadence-status')).toContainText('자체 기록 충족');
+  await expect(watch).toContainText('유효 주기 720회');
+  await expect(watch).toContainText('4시장 전체 시세 수집 주기 0회');
+  await expect(page.getByTestId('research-market-watch-cadence-warning')).toContainText('독립 검증되지 않았습니다');
+  await expectNoHorizontalOverflow(page);
+  await assertClean();
+});
+
 test('CASE A all missing stays empty rather than fabricated zero', async ({ page }) => {
   const { assertClean } = await installAdmin(page, emptyOverview(), { error: 'PROMOTION_UNAVAILABLE' }, 503);
   await openExpertResearch(page);
