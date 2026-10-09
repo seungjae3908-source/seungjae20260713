@@ -84,6 +84,8 @@ export type TradingProtectionOrder = {
 
 export const PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW = 500_000 as const;
 export const PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW = 1_000_000 as const;
+export const PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3 as const;
+export const PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7 as const;
 
 export const DEFAULT_TRADING_POLICY = Object.freeze({
   mode: 'approval' as TradingMode,

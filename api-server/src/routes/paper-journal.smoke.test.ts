@@ -6,7 +6,10 @@ import type { AddressInfo } from 'node:net';
 import { createPaperJournalRouter } from './paper-journal';
 import type { PaperJournalRepository } from '../services/paper-journal.types';
 import type { TradingReviewProvider } from '../services/trading-review-provider';
-import { DEFAULT_TRADING_POLICY } from '../services/trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+} from '../services/trade-automation.types';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW,
@@ -570,7 +573,8 @@ test('admin Paper-only 4x1m setup: explicit policy step + single four-row insert
     maxAssetClassKrw: {
       domestic_stock:100_000,us_stock:100_000,crypto_spot:100_000,crypto_futures:100_000,
     },
-  });
+    bitgetLeverage: 7,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
   const repository = createRepository();
   let insertBatches = 0;
   let savedPolicies = 0;
@@ -620,6 +624,7 @@ test('admin Paper-only 4x1m setup: explicit policy step + single four-row insert
     assert.equal(current.maxOrderKrw,30_000);
     assert.equal(current.maxInstrumentKrw,100_000);
     assert.equal(current.maxAssetClassKrw.us_stock,100_000);
+    assert.equal(current.bitgetLeverage,7);
     assert.equal(savedPolicies,1);
     const created=await post('/bootstrap',ADMIN_WALLET_CONFIRMATION);
     assert.equal(created.status,200);
