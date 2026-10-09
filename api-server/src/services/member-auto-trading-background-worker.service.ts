@@ -317,6 +317,8 @@ export interface MemberAutoTradingBackgroundSource {
   memberBatchCycleCompleted?(): boolean;
   telegramDeliveryHealthy?(nowMs: number): boolean;
   memberTelegramConnected?(userId: string): Promise<boolean>;
+  /** Recheck V2 database protections every tick. Missing RPC means FAIL-CLOSED. */
+  adminPaperDatabaseGuardReady?(): Promise<boolean>;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
@@ -1798,6 +1800,9 @@ export class MemberAutoTradingBackgroundWorker {
       const fxCache = new Map<string, MemberAutoTradingFxQuote>();
       let paperAccountMissingThisTick = false;
       let memberAuditFailedThisTick = false;
+      // Database wallet and canonical-order guards apply globally and must
+      // be reverified on every Worker run (never carried across restarts).
+      let adminDbGuardThisTick: boolean | null = null;
 
       for (const member of members) {
         // Losing membership must revoke ALL execution while preserving
@@ -1821,6 +1826,19 @@ export class MemberAutoTradingBackgroundWorker {
           result.blocked += entries.length;
           result.newEntriesFailClosed = true;
           continue;
+        }
+        let adminWalletDbGuardReady = true;
+        if (runtime.adminMarketWalletRows !== null) {
+          if (adminDbGuardThisTick === null) {
+            try {
+              adminDbGuardThisTick =
+                await this.source.adminPaperDatabaseGuardReady?.() === true;
+            } catch {
+              adminDbGuardThisTick = false;
+            }
+          }
+          adminWalletDbGuardReady = adminDbGuardThisTick === true;
+          if (!adminWalletDbGuardReady) result.newEntriesFailClosed = true;
         }
         if (!runtime.paperAccountReady && memberAutoExecutionEnabled) {
           paperAccountMissingThisTick = true;
@@ -1904,7 +1922,10 @@ export class MemberAutoTradingBackgroundWorker {
         };
 
         let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
-        let entryProjectionHealthy = await syncExecutionProjection();
+        // Do not promote potentially browser-forged V2 Paper fills into
+        // Journal/Telegram when the DB write barriers cannot be attested.
+        let entryProjectionHealthy = adminWalletDbGuardReady
+          && await syncExecutionProjection();
         let exitChanged = false;
         for (const position of memberAutoExecutionEnabled && runtime.paperAccountReady
           ? trackedAutomaticPositions(runtime, 'paper') : []) {
@@ -2024,6 +2045,19 @@ export class MemberAutoTradingBackgroundWorker {
             // covers a prior entry that mutated an order and then failed during
             // lifecycle/projection post-processing before its normal refresh.
             await refreshRuntime();
+            if (runtime.adminMarketWalletRows !== null) {
+              // Revalidate at the new-entry boundary so a revoked migration
+              // cannot be hidden by the earlier tick-scoped readiness cache.
+              let guarded = false;
+              try {
+                guarded = await this.source.adminPaperDatabaseGuardReady?.() === true;
+              } catch { guarded = false; }
+              if (!guarded) {
+                result.newEntriesFailClosed = true;
+                result.blocked += 1;
+                break;
+              }
+            }
             const candidateMarket = marketMapping(entry.identity.market, member.policy).assetClass;
             if (!runtime.paperAccountReady || (runtime.adminMarketRisk
               ? runtime.adminMarketRisk[candidateMarket].ready !== true
@@ -2423,6 +2457,13 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
 
   telegramDeliveryHealthy(nowMs: number) {
     return userTelegramDeliveryWorkerHealthy(readUserTelegramDeliveryWorkerHealth(), nowMs);
+  }
+
+  async adminPaperDatabaseGuardReady() {
+    // SECURITY INVOKER returns only a boolean: strict V2 wallet+canonical
+    // policies, seed constraint and revoked TRUNCATE must ALL still exist.
+    const { data, error } = await this.client.rpc('admin_four_paper_wallet_rls_guard_ready');
+    return !error && data === true;
   }
 
   async memberTelegramConnected(userId: string) {

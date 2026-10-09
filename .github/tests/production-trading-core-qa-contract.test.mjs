@@ -288,3 +288,13 @@ test('Admin V2 canonical Paper order evidence rejects direct browser forgery, pr
   }
   assert.ok(migration.includes("coalesce(plan.payload->>'executionMode','') = 'automatic'"));
 });
+
+test('Admin V2 Paper Worker revalidates DB wallet and canonical-order guard before both projection and each entry', () => {
+  const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const sql = read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
+  assert.ok(worker.includes('adminPaperDatabaseGuardReady?(): Promise<boolean>'));
+  assert.ok(worker.includes("this.client.rpc('admin_four_paper_wallet_rls_guard_ready')"));
+  assert.ok(worker.includes('let entryProjectionHealthy = adminWalletDbGuardReady'));
+  assert.ok(worker.includes('guarded = await this.source.adminPaperDatabaseGuardReady?.() === true'));
+  assert.ok(sql.includes('to authenticated, service_role;'));
+});
