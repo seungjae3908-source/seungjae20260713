@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Power, RefreshCw, ShieldAlert } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
-import { policyModeForAutomaticEnabled } from '@/lib/trade-automation-policy-mode';
+import { automaticPolicyNeedsSafeOff, policyModeForAutomaticEnabled } from '@/lib/trade-automation-policy-mode';
 
 type Exchange = 'bitget' | 'upbit' | 'kiwoom' | 'toss';
 type Market = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
@@ -353,7 +353,8 @@ export function TradeAutomationSettings({
       || status?.policy.newEntriesStopped === true
       || status?.emergencyStopped === true;
     if (!stopped || safeOffBusy || !status
-      || (!draft.automaticEnabled && !status.policy.automaticEnabled)) return;
+      || (!automaticPolicyNeedsSafeOff(draft)
+        && !automaticPolicyNeedsSafeOff(status.policy))) return;
     if (!window.confirm(
       '비상정지는 유지하고 AUTO 정책만 OFF로 저장합니다. 기존 Live 자동포지션의 자동청산 감시가 중단될 수 있으므로 열린 포지션과 보호주문을 확인하세요. 계속할까요?',
     )) return;
@@ -377,7 +378,7 @@ export function TradeAutomationSettings({
       if (!beforeResponse.ok || !before?.policy || before.ok === false) {
         throw new Error(before?.error ?? 'AUTO OFF 전 정책 재조회 실패');
       }
-      if (before.policy.mode === 'approval' && before.policy.automaticEnabled === false) {
+      if (!automaticPolicyNeedsSafeOff(before.policy)) {
         setDraft(normalizeUiPolicy(before.policy));
         setStatus(before);
         setMessage('서버의 AUTO 정책이 이미 OFF입니다. 비상정지 상태는 유지됩니다.');
@@ -800,7 +801,8 @@ export function TradeAutomationSettings({
             </button>}
     </div>
 
-    {effectiveStopped && (draft.automaticEnabled || status?.policy.automaticEnabled === true) && (
+    {effectiveStopped && (automaticPolicyNeedsSafeOff(draft)
+      || (status != null && automaticPolicyNeedsSafeOff(status.policy))) && (
       <button type="button" onClick={() => void saveSafeOffDuringStop()}
         disabled={safeOffBusy} data-testid="automatic-policy-safe-off-during-stop"
         className="mt-3 w-full min-h-11 rounded-2xl border border-destructive/40 bg-secondary px-4 py-3 text-sm font-extrabold disabled:opacity-50">
