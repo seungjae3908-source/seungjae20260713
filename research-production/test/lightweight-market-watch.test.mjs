@@ -1,0 +1,174 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import {
+  WATCH_CONTRACT, WATCH_LIMITS, WATCH_SAFETY, blockedSource,
+  evaluateMarketOpportunities, evaluateWatchBudget,
+  normalizeBitgetSnapshot, normalizeStockFeed, normalizeUpbitSnapshot,
+  watchCycleDigest,
+} from '../src/lightweight-market-watch.mjs';
+
+const NOW = Date.parse('2026-10-09T04:00:00.000Z');
+const GOOD_DISK = 37 * 1024 ** 3;
+const GOOD_RAM = 2.3 * 1024 ** 3;
+
+test('2-vCPU/4GB Vultr budget protects existing app under memory, CPU or disk pressure', () => {
+  const normal = { cpuCount: 2, loadOne: 0.3,
+    memoryAvailableBytes: GOOD_RAM, diskFreeBytes: GOOD_DISK };
+  assert.equal(evaluateWatchBudget(normal).status, 'RUN');
+  assert.equal(evaluateWatchBudget({ ...normal, loadOne: 1.8 }).status, 'THROTTLED');
+  assert.equal(evaluateWatchBudget({
+    ...normal, memoryAvailableBytes: 600 * 1024 ** 2,
+  }).status, 'THROTTLED');
+  assert.equal(evaluateWatchBudget({
+    ...normal, memoryAvailableBytes: 400 * 1024 ** 2,
+  }).status, 'HOLD');
+  assert.equal(evaluateWatchBudget({ ...normal, diskFreeBytes: 3 * 1024 ** 3 }).status, 'HOLD');
+  assert.equal(evaluateWatchBudget({ ...normal, memoryAvailableBytes: null }).status, 'HOLD');
+});
+
+test('Upbit public snapshot scans KRW tickers, excludes warning and stale quotes', () => {
+  const markets = [
+    { market: 'KRW-BTC', market_warning: 'NONE' },
+    { market: 'KRW-ETH', market_warning: 'NONE' },
+    { market: 'BTC-ETH', market_warning: 'NONE' },
+    { market: 'KRW-BAD', market_warning: 'CAUTION' },
+  ];
+  const tickers = [
+    { market: 'KRW-BTC', trade_price: 100, signed_change_rate: 0.05,
+      acc_trade_price_24h: 1e10, timestamp: NOW - 2_000 },
+    { market: 'KRW-ETH', trade_price: 200, signed_change_rate: -0.03,
+      acc_trade_price_24h: 9e9, timestamp: NOW - 1_000 },
+    { market: 'KRW-BAD', trade_price: 100, signed_change_rate: 0.1,
+      acc_trade_price_24h: 9e9, timestamp: NOW - 1_000 },
+  ];
+  const data = normalizeUpbitSnapshot(markets, tickers, NOW);
+  assert.equal(data.status, 'READY');
+  assert.deepEqual(data.quotes.map((x) => x.symbol), ['BTC', 'ETH']);
+  assert.equal(data.quotes[0].change24hPercent, 5);
+  const stale = normalizeUpbitSnapshot(markets,
+    tickers.map((x) => x.market === 'KRW-ETH'
+      ? { ...x, timestamp: NOW - 500_000 } : x), NOW);
+  assert.equal(stale.status, 'PARTIAL_TICKERS');
+  assert.equal(stale.quotes.length, 1);
+});
+
+test('Bitget public aggregate does not manufacture a trade from ticker data', () => {
+  const market = normalizeBitgetSnapshot({
+    code: '00000',
+    data: [
+      { symbol: 'BTCUSDT', lastPr: '100', change24h: '0.04',
+        usdtVolume: '22000000', ts: String(NOW - 1_000) },
+      { symbol: 'ETHUSDT', lastPr: '1', change24h: '-0.1',
+        usdtVolume: '0', ts: String(NOW - 1_000) },
+    ],
+  }, NOW);
+  assert.equal(market.status, 'READY');
+  assert.equal(market.quotes.length, 2);
+  assert.equal(market.quotes[0].change24hPercent, 4);
+  assert.equal(WATCH_SAFETY.orderAuthority, 'NONE');
+  assert.equal(WATCH_SAFETY.paperAdmissionAllowed, false);
+});
+
+test('stock feeds require fresh explicit provenance and expose subset coverage', () => {
+  const input = {
+    schemaVersion: 'research-stock-public-snapshot-v1',
+    market: 'KR_STOCK', source: 'licensed-public-snapshot',
+    asOf: new Date(NOW - 2_000).toISOString(),
+    completeUniverse: false,
+    quotes: [{ symbol: '005930', price: 82000,
+      turnover24h: 2e9, change24hPercent: 2.5 }],
+  };
+  const result = normalizeStockFeed(input, 'KR_STOCK', NOW);
+  assert.equal(result.status, 'PARTIAL_UNIVERSE');
+  assert.equal(result.quotes[0].symbol, '005930');
+  assert.throws(() => normalizeStockFeed(
+    { ...input, asOf: new Date(NOW - 500_000).toISOString() },
+    'KR_STOCK', NOW), /STALE/);
+  assert.throws(() => normalizeStockFeed(
+    { ...input, source: 'my_secret=ABC' }, 'KR_STOCK', NOW), /INVALID/);
+  assert.equal(blockedSource('US_STOCK', 'BLOCKED_PUBLIC_STOCK_FEED_MISSING').quotes.length, 0);
+});
+
+test('cold start never forges opportunity or historical price comparison', () => {
+  const source = normalizeBitgetSnapshot({
+    code: '00000', data: [{ symbol: 'BTCUSDT', lastPr: '105',
+      change24h: '0.06', usdtVolume: '12000000', ts: NOW }],
+  }, NOW);
+  const r = evaluateMarketOpportunities({ market: 'CRYPTO_FUTURES',
+    source, previous: null, lastAlerts: {}, nowMs: NOW });
+  assert.equal(r.candidates.length, 0);
+  assert.equal(r.summary.previousSnapshotComparable, false);
+});
+
+test('fresh two-snapshot price acceleration generates only provisional research observations', () => {
+  const source = normalizeBitgetSnapshot({
+    code: '00000', data: [{ symbol: 'BTCUSDT', lastPr: '101',
+      change24h: '0.03', usdtVolume: '12000000', ts: NOW - 1_000 }],
+  }, NOW);
+  const previous = { observedAtMs: NOW - 120_000,
+    quotes: [{ symbol: 'BTCUSDT', price: 100, sourceAtMs: NOW - 121_000 }] };
+  const r = evaluateMarketOpportunities({ market: 'CRYPTO_FUTURES',
+    source, previous, lastAlerts: {}, nowMs: NOW });
+  assert.equal(r.candidates.length, 1);
+  assert.equal(r.candidates[0].direction, 'UP');
+  assert.equal(r.candidates[0].kind, 'PROVISIONAL_PRICE_ACCELERATION');
+  assert.equal(r.candidates[0].executionAuthority, 'NONE');
+  assert.equal(r.candidates[0].isTradingSignal, false);
+  assert.equal(r.candidates[0].oosPassed, false);
+  assert.equal(r.candidates[0].paperAdmitted, false);
+  assert.equal(r.candidates[0].aiReviewed, false);
+  const repeated = evaluateMarketOpportunities({ market: 'CRYPTO_FUTURES',
+    source, previous, lastAlerts: { 'CRYPTO_FUTURES:BTCUSDT:UP': NOW - 30_000 },
+    nowMs: NOW });
+  assert.equal(repeated.candidates.length, 0);
+});
+
+test('KR/US/spot falling price is a watch observation, never a short sell instruction', () => {
+  const source = {
+    market: 'CRYPTO_SPOT', status: 'READY', source: 'PUBLIC_TEST',
+    listedCount: 1, quotes: [{ symbol: 'BTC', price: 98,
+      sourceAtMs: NOW - 1_000, turnover24h: 2e9, change24hPercent: -2 }],
+  };
+  const r = evaluateMarketOpportunities({
+    market: 'CRYPTO_SPOT', source, nowMs: NOW, lastAlerts: {},
+    previous: { observedAtMs: NOW - 60_000,
+      quotes: [{ symbol: 'BTC', price: 100, sourceAtMs: NOW - 61_000 }] },
+  });
+  assert.equal(r.candidates.length, 1);
+  assert.equal(r.candidates[0].direction, 'DOWN');
+  assert.equal(r.candidates[0].isTradingSignal, false);
+  assert.equal(r.candidates[0].executionAuthority, 'NONE');
+});
+
+test('same-timestamp and expired snapshots cannot create fake accelerations', () => {
+  const source = { market: 'KR_STOCK', status: 'PARTIAL_UNIVERSE',
+    source: 'PUBLIC_TEST', listedCount: 1,
+    quotes: [{ symbol: '005930', price: 110,
+      sourceAtMs: NOW - 1_000, turnover24h: 2e9, change24hPercent: 10 }] };
+  const old = { quotes: [{ symbol: '005930', price: 100,
+    sourceAtMs: NOW - 1_000 }], observedAtMs: NOW - 60_000 };
+  assert.equal(evaluateMarketOpportunities({ market: 'KR_STOCK',
+    source, previous: old, nowMs: NOW }).candidates.length, 0);
+  assert.equal(evaluateMarketOpportunities({ market: 'KR_STOCK',
+    source, previous: { ...old, observedAtMs: NOW - 600_000 },
+    nowMs: NOW }).candidates.length, 0);
+});
+
+test('digest is deterministic, never used as profit or authorization proof', () => {
+  assert.equal(watchCycleDigest({ a: 1 }), watchCycleDigest({ a: 1 }));
+  assert.notEqual(watchCycleDigest({ a: 1 }), watchCycleDigest({ a: 2 }));
+  assert.equal(WATCH_CONTRACT, 'lightweight-market-opportunity-watch-v1');
+  assert.equal(WATCH_LIMITS.maxCandidatesPerMarket, 12);
+});
+
+test('new systemd service is rate-limited, isolated and never enabled by this code', async () => {
+  const unit = await readFile(new URL('../deploy/research-production-market-watch.service', import.meta.url), 'utf8');
+  assert.match(unit, /CPUQuota=40%/);
+  assert.match(unit, /MemoryMax=512M/);
+  assert.match(unit, /MemoryHigh=384M/);
+  assert.match(unit, /NoNewPrivileges=true/);
+  assert.match(unit, /ProtectSystem=strict/);
+  assert.match(unit, /ReadWritePaths=\/var\/lib\/investment-research-production/);
+  assert.doesNotMatch(unit, /ExecStart=.*(trade-automation|order|broker)/i);
+});
