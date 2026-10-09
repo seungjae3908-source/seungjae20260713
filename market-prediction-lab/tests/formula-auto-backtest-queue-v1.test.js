@@ -394,7 +394,16 @@ test('staged producer rejects mismatched SHA, digest, file permissions and links
   for (const mutate of [
     (record) => ({ ...record, researchCodeSha: 'b'.repeat(40) }),
     (record) => ({ ...record, itemDigest: 'c'.repeat(64) }),
-    (record) => ({ ...record, item: { ...record.item, dataset: { ...record.item.dataset, stageEvidence: { oos: { status: 'PASS' } } } }),
+    (record) => ({
+      ...record,
+      item: {
+        ...record.item,
+        dataset: {
+          ...record.item.dataset,
+          stageEvidence: { oos: { status: 'PASS' } },
+        },
+      },
+    }),
   ]) {
     const root = await mkdtemp(join(tmpdir(), 'formula-producer-forged-'));
     const staged = join(root, 'formula-backtest', 'producer-outbox');
@@ -402,7 +411,7 @@ test('staged producer rejects mismatched SHA, digest, file permissions and links
     const valid = buildFormulaProducedTrainInputV1({ item: queueItem(), researchCodeSha: sha });
     await writeFile(join(staged, valid.itemDigest + '.json'), JSON.stringify(mutate(valid)), { mode: 0o600 });
     await assert.rejects(() => ingestFormulaProducedTrainInputsV1({ stateRoot: root, researchCodeSha: sha }), /FORMULA_INTAKE_/);
-    assert.equal((await readdir(join(root, 'formula-backtest'))).includes('inbox'), false);
+    assert.deepEqual(await readdir(join(root, 'formula-backtest', 'inbox')), []);
   }
   const root = await mkdtemp(join(tmpdir(), 'formula-producer-file-mode-'));
   const staged = join(root, 'formula-backtest', 'producer-outbox');

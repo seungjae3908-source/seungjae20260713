@@ -481,10 +481,16 @@ async function assertPrivateIntakeDirectory(path) {
 }
 
 async function readPrivateIntakeJson(path) {
-  const handle = await open(
-    path,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
+  let handle;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    if (error?.code === 'ELOOP') throw new Error('FORMULA_INTAKE_FILE_UNSAFE');
+    throw error;
+  }
   try {
     const first = await handle.stat();
     if (!first.isFile() || first.nlink !== 1 || first.size <= 0 || first.size > MAX_INTAKE_BYTES
