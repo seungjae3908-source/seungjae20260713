@@ -262,6 +262,38 @@ function historicalDependencies(validated) {
   return dependencies;
 }
 
+/**
+ * Prior result files are immutable audit artifacts, not a second strategy
+ * authority. A file with the expected digest *name* can still contain a
+ * substituted PASS or weakened safety envelope. Never promote cached PASS:
+ * this TRAIN-only reader has no attested OOS/forward/cost callbacks.
+ */
+function assertSafeCachedFormulaResultV1(result, expectedDigest, expectedFormulaId, queuedAt) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)
+    || result.contract !== FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1
+    || result.schemaVersion !== 1
+    || result.itemDigest !== expectedDigest
+    || result.formulaId !== expectedFormulaId
+    || result.queuedAt !== queuedAt
+    || !FORMULA_AUTO_BACKTEST_STATES_V1.includes(result.state)
+    || result.state === 'PASS'
+    || result.deleted !== false
+    || result.retainedForAudit !== true
+    || result.liveTrading !== false
+    || result.autoTrading !== false
+    || result.realOrder !== false
+    || result.privateTradingApi !== false
+    || result.executionAuthority !== 'NONE'
+    || !Number.isSafeInteger(result.candidateCount) || result.candidateCount < 0
+    || result.researchSurvivorCount !== 0
+    || typeof result.reason !== 'string' || result.reason.length > 300
+    || !Array.isArray(result.blockers)
+    || result.blockers.some((code) => typeof code !== 'string' || code.length > 300)) {
+    throw new Error('FORMULA_QUEUE_CACHED_RESULT_UNSAFE');
+  }
+  return result;
+}
+
 function candidateState(candidate) {
   if (candidate?.researchSurvivor === true && candidate?.failure === null) return 'PASS';
   const failure = candidate?.failure;
@@ -474,23 +506,26 @@ export async function processFormulaAutoBacktestQueueV1({
     const item = JSON.parse(await readFile(path, 'utf8'));
     const itemDigest = digest(item);
     const resultPath = join(resultsRoot, itemDigest + '.json');
+    const formulaId = typeof item?.formulaCandidate?.candidateId === 'string'
+      ? item.formulaCandidate.candidateId : basename(name, '.json');
+    const queuedAt = typeof item?.queuedAt === 'string' ? item.queuedAt : null;
     let result;
     try {
-      result = JSON.parse(await readFile(resultPath, 'utf8'));
+      result = assertSafeCachedFormulaResultV1(
+        JSON.parse(await readFile(resultPath, 'utf8')), itemDigest, formulaId, queuedAt,
+      );
       rows.push({ ...result, repeated: true });
       continue;
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
     const evaluated = await evaluateFormulaAutoBacktestQueueItemV1(item);
-    const formulaId = typeof item?.formulaCandidate?.candidateId === 'string'
-      ? item.formulaCandidate.candidateId : basename(name, '.json');
     result = {
       schemaVersion: 1,
       contract: FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1,
       itemDigest,
       formulaId,
-      queuedAt: typeof item?.queuedAt === 'string' ? item.queuedAt : null,
+      queuedAt,
       evaluatedAt: new Date().toISOString(),
       state: evaluated.state,
       reason: evaluated.reason,
@@ -544,7 +579,15 @@ export async function processFormulaAutoBacktestQueueV1({
           || entry.directTradeOnBacktestPass !== false
           || entry.paperState !== 'REGISTERED_WAITING_FUTURE_SIGNAL'
           || entry.researchCodeSha !== currentSha
-          || typeof entry.registryId !== 'string') {
+          || entry.futureSignalRequired !== true
+          || entry.freshPublicEvidenceRequired !== true
+          || entry.canonicalPaperAdmissionRequired !== true
+          || entry.simulationAuthorityRequired !== true
+          || entry.enabledForPaperEvaluation !== true
+          || entry.retainedForAudit !== true
+          || typeof entry.registryId !== 'string'
+          || !/^[0-9a-f]{64}$/u.test(entry.registryId)
+          || !/^[0-9a-f]{64}$/u.test(entry.itemDigest ?? '')) {
           throw new Error('FORMULA_QUEUE_PRIOR_REGISTRY_ENTRY_UNSAFE');
         }
       }
