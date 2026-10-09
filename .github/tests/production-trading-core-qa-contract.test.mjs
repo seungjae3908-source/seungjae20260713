@@ -316,3 +316,30 @@ test('Admin V2 split-leg and stop-target policies prevent client forged executio
   assert.ok(migration.includes(') = 15'));
   assert.ok(migration.includes("'audit_logs','notification_history'"));
 });
+
+// Full app QA is not substituted for the owner-requested dedicated Trading Core
+// release. The production workflow still owns the unchanged protected gates.
+test('owner release bridge accepts explicit Trading Core QA scope without bypassing Production safeguards', () => {
+  const bridge = read('.github/workflows/production-app-release-control.yml');
+  const official = read('.github/workflows/production-deploy.yml');
+  assert.ok(bridge.includes('/run-production-app ([0-9a-fA-F]{40})(?: (--trading-core))?'),
+    'the authenticated owner command must require exact SHA and optional --trading-core');
+  assert.ok(bridge.includes("match[2] === '--trading-core' ? 'trading_core' : 'full'"),
+    'legacy full QA must stay intact and --trading-core must select scoped QA');
+  assert.ok(bridge.includes('QA_SCOPE: ${{ steps.command.outputs.qa_scope }}'));
+  assert.ok(bridge.includes('qa_scope: qaScope,'),
+    'Production dispatch must actually pass Trading Core scope');
+  assert.ok(bridge.includes("['full','trading_core'].includes(qaScope)"));
+  assert.ok(bridge.includes("active = existing.find(run => run.name === 'Production Deploy'"),
+    'never blindly dispatch a duplicate active protected Production deployment');
+  assert.ok(bridge.includes('No duplicate dispatched.'));
+  for (const gate of [
+    'Require verified post-merge release provenance',
+    'Require successful exact-SHA PostgreSQL authentication artifact',
+    'Require successful exact-SHA release-ready Staging verdict',
+  ]) assert.ok(bridge.includes(gate), `existing release protection removed: ${gate}`);
+  assert.ok(official.includes('qa_scope:'));
+  assert.ok(official.includes('trading_core'));
+  assert.ok(official.includes("inputs.qa_scope == 'trading_core'"));
+  assert.ok(bridge.includes("'- Trading authority granted: `false`'"));
+});
