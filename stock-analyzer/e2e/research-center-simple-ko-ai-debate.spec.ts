@@ -358,8 +358,14 @@ test('CASE A all missing stays empty rather than fabricated zero', async ({ page
   await page.getByRole('tab', { name: '모의매매' }).click();
   await expect(page.getByTestId('research-paper-tab')).toContainText('미측정');
   await expect(page.getByTestId('paper-open-positions')).toContainText('자료 없음');
-  await expect(page.locator('body')).not.toContainText('0원');
-  await expect(page.locator('body')).not.toContainText('0.00');
+  await expect(page.getByTestId('research-paper-target-capital')).toContainText('1,000,000원 (KRW)');
+  // The declared 1M KRW target is not a measured result. Assert that the
+  // candidate economics are unknown instead of banning zero-valued text
+  // anywhere in the document (which incorrectly matches "1,000,000원").
+  await expect(page.getByTestId('paper-candidate-performance')).not.toContainText('0원');
+  await expect(page.getByTestId('paper-candidate-performance')).not.toContainText('0.00');
+  await expect(page.getByTestId('research-paper-tab')).toContainText('모의 평가금액');
+  await expect(page.getByTestId('research-paper-tab')).toContainText('미측정');
   await assertClean({ allow5xx: true });
 });
 
