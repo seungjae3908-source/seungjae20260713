@@ -95,12 +95,15 @@ async function writeCreateOnly(path, value) {
 }
 
 async function githubJson(path) {
-  const url = `https://api.github.com/repos/${REPOSITORY}${path}`;
+  const url = new URL(`https://api.github.com/repos/${REPOSITORY}${path}`);
+  url.searchParams.set('_canonical_observed_at_ms', String(Date.now()));
   const response = await fetch(url, {
     headers: {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'stock-app-public-forward-server-canonical-v1',
       'X-GitHub-Api-Version': '2022-11-28',
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
     },
     signal: AbortSignal.timeout(15_000),
   });
@@ -269,7 +272,7 @@ async function githubDeliveryObservation({
   const [workflow, targetResponse, repoResponse] = await Promise.all([
     githubJson(`/actions/workflows/${TARGET_WORKFLOW_ID}`),
     githubJson(`/actions/workflows/${TARGET_WORKFLOW_ID}/runs?event=schedule&branch=main&per_page=100`),
-    githubJson('/actions/runs?event=schedule&branch=main&per_page=100'),
+    githubJson(`/actions/runs?event=schedule&branch=main&head_sha=${encodeURIComponent(currentMainSha)}&per_page=100`),
   ]);
   const targetRuns = Array.isArray(targetResponse?.workflow_runs)
     ? targetResponse.workflow_runs.filter((run) => run.event === 'schedule')
