@@ -261,6 +261,13 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
   assertNoForbiddenEvidenceKeys(tradingCore);
 }
 
+function isActiveProductionTradingGateRun(run) {
+  // PR checks validate contracts only: they cannot activate Live/Auto authority.
+  // Operational issue commands (or future workflow dispatches) must still
+  // stop QA while their run is nonterminal, even if its intent is uncertain.
+  return (run?.event === 'issue_comment' || run?.event === 'workflow_dispatch')
+    && run?.status !== 'completed';
+}
 function verifyPostDeployMainLineage({ targetSha, currentMainSha, comparison = null }) {
   const target = String(targetSha ?? '').trim().toLowerCase();
   const mainSha = String(currentMainSha ?? '').trim().toLowerCase();
@@ -436,4 +443,5 @@ module.exports = {
   assertTradingCoreReceipt,
   buildProductionPostdeployQaEvidence,
   verifyPostDeployMainLineage,
+  isActiveProductionTradingGateRun,
 };
