@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import path from 'node:path';
 import {
   loginProductionReadOnly,
@@ -174,6 +175,25 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   }
 
   const originalPolicy = structuredClone(statusBefore.body.policy);
+  // Protected Production QA must not clear a member's explicit safety stop.
+  if (originalPolicy?.emergencyStopped !== false || originalPolicy?.newEntriesStopped !== false) {
+    throw new Error('PRODUCTION_TRADING_CORE_MEMBER_STOP_ACTIVE');
+  }
+  // The member policy guard is intentionally monotonic: tightening risk budgets
+  // cannot be undone by a subsequent member PUT. Refuse non-restorable baselines.
+  if (originalPolicy?.riskOptimizationEnabled !== true) {
+    throw new Error('PRODUCTION_TRADING_CORE_RISK_BASELINE_NOT_RESTORABLE');
+  }
+  const minimumCanaryKrw = 5_000;
+  if ([
+    originalPolicy?.totalCapitalKrw,
+    originalPolicy?.maxOrderKrw,
+    originalPolicy?.maxInstrumentKrw,
+    originalPolicy?.maxAssetClassKrw?.crypto_spot,
+  ].some((value) => typeof value !== 'number' || value < minimumCanaryKrw)) {
+    throw new Error('PRODUCTION_TRADING_CORE_CANARY_BUDGET_TOO_LOW');
+  }
+  const qaCapitalKrw: number = originalPolicy.totalCapitalKrw;
   const originalPolicyReadiness = memberAutoPolicyReadiness(originalPolicy);
   let preparedPolicyReadiness = originalPolicyReadiness;
   let memberAutoPolicyPrepared = false;
@@ -181,17 +201,6 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let integrationBefore: ApiResult<any>;
   try {
     if (prepareMemberAutoPolicy) {
-      if (statusBefore.body?.policy?.emergencyStopped === true || statusBefore.body?.policy?.newEntriesStopped === true) {
-        const resumed = await appApi<any>(page, '/api/trade-automation/resume', 'POST', {
-          confirmation: 'RESUME_MEMBER_TRADING',
-        });
-        expect(resumed.ok, JSON.stringify(resumed.body)).toBe(true);
-        expect(resumed.body?.automaticTradingEnabledByThisRequest).toBe(false);
-        memberAutoResumePrepared = true;
-        statusBefore = await appApi<any>(page, '/api/trade-automation/status');
-        expect(statusBefore.ok).toBe(true);
-        expect(statusBefore.body?.ok).toBe(true);
-      }
       const prepared = await appApi<any>(
         page,
         '/api/trade-automation/policy',
@@ -233,6 +242,11 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
         if (!restored.ok || restored.body?.ok !== true) {
           throw new Error(`POLICY_RESTORE_HTTP_${restored.status}`);
         }
+        const verified = await appApi<any>(page, '/api/trade-automation/status');
+        if (!verified.ok || verified.body?.ok !== true
+          || !isDeepStrictEqual(verified.body?.policy, originalPolicy)) {
+          throw new Error('POLICY_RESTORE_STATE_MISMATCH');
+        }
       } catch (restoreError) {
         throw new Error('PRODUCTION_TRADING_CORE_PREFLIGHT_RESTORE_FAILED', {
           cause: new AggregateError([preflightError, restoreError]),
@@ -261,12 +275,13 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let syncInserted = 0;
 
   try {
+    // Only reversible canary scope changes. Do not lower risk ceilings or raise
+    // risk floors: member writes enforce monotonic risk hardening and cannot
+    // restore stronger limits after an exploratory QA override.
     const qaPolicy = {
       ...originalPolicy,
       mode: 'automatic',
       automaticEnabled: true,
-      emergencyStopped: false,
-      newEntriesStopped: false,
       marketEnabled: {
         domestic_stock: false,
         us_stock: false,
@@ -281,33 +296,6 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       },
       enabledAssets: { bitget: [], upbit: ['BTC'], kiwoom: [], toss: [] },
       enabledStrategies: [canaryStrategy],
-      totalCapitalKrw: 1_000_000,
-      maxOrderKrw: 100_000,
-      maxInstrumentKrw: 1_000_000,
-      maxAssetClassKrw: {
-        domestic_stock: 1_000_000,
-        us_stock: 1_000_000,
-        crypto_spot: 1_000_000,
-        crypto_futures: 1_000_000,
-      },
-      maxAssetPercent: 30,
-      maxOpenPositions: 5,
-      maxDailyOrders: 20,
-      maxConsecutiveLosses: 3,
-      riskOptimizationEnabled: true,
-      riskPerTradePercent: {
-        ...(originalPolicy?.riskPerTradePercent ?? {}),
-        upbit: 0.5,
-      },
-      totalDailyLossLimitPercent: 1,
-      minExpectedValueR: 0.15,
-      minStrategySampleSize: 50,
-      minProfitFactor: 1.2,
-      maxStrategyDrawdownPercent: 15,
-      maxEstimatedSlippagePercent: 0.25,
-      maxAverageSpreadPercent: 0.15,
-      maxCorrelatedExposurePercent: 40,
-      maxEconomicsAgeHours: 24,
       confirmation: { acknowledged: true },
     };
     const saved = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', qaPolicy);
@@ -354,8 +342,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
         spreadPercent: 0.05,
         orderbookGapPercent: 0.05,
         halted: false,
-        availableBalance: 1_000_000,
-        accountValueKrw: 1_000_000,
+        availableBalance: qaCapitalKrw,
+        accountValueKrw: qaCapitalKrw,
         dailyPnlPercent: 0,
         weeklyPnlPercent: 0,
         assetExposurePercent: 0,
@@ -475,6 +463,12 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       });
       if (!restoredPolicy.ok || restoredPolicy.body?.ok !== true) {
         restoreFailures.push(`POLICY_HTTP_${restoredPolicy.status}`);
+      } else {
+        const verified = await appApi<any>(page, '/api/trade-automation/status');
+        if (!verified.ok || verified.body?.ok !== true
+          || !isDeepStrictEqual(verified.body?.policy, originalPolicy)) {
+          restoreFailures.push('POLICY_STATE_MISMATCH');
+        }
       }
     } catch {
       restoreFailures.push('POLICY_REQUEST_FAILED');
@@ -514,7 +508,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
-    policyRestored: JSON.stringify(statusAfter.body?.policy) === JSON.stringify(originalPolicy),
+    policyRestored: isDeepStrictEqual(statusAfter.body?.policy, originalPolicy),
     memberAutoPolicyPrepared,
     memberAutoResumePrepared,
     memberAutoPolicyReady: preparedPolicyReadiness.ready,
