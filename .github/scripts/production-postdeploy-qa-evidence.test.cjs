@@ -178,6 +178,8 @@ test('builds ACTIVATION_READY only from exact-SHA zero-authority evidence', () =
   assert.equal(evidence.activeConflictingTradingGates, 0);
   assert.equal(evidence.realOrderSubmitted, false);
   assert.equal(evidence.schemaVersion, 'production-postdeploy-activation-ready-v4');
+  assert.equal(evidence.bitgetAdministratorLeveragePolicy, '2-7');
+  assert.equal(evidence.bitgetMemberLeveragePolicy, '2-3');
   assert.equal(evidence.qaScope, 'full');
   assert.equal(evidence.comprehensiveQa, 'PASS');
   assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
