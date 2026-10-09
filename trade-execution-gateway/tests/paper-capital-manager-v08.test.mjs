@@ -224,7 +224,7 @@ test("virtual 1M Paper bootstrap refuses to reset an existing 500k account or a 
     (error) => error.code === "CAPITAL_WALLET_ALREADY_INITIALIZED",
   );
   assert.deepEqual(manager.exportState(), before);
-  const virtual = new PaperCompoundingCapitalManager();
+  const virtual = new PaperCompoundingCapitalManager({ admissionGateEnabled: true });
   await virtual.initializeVirtualPaperWallet({ nowMs: T0 });
   const tampered = structuredClone(virtual.exportState());
   tampered.initialVirtualSeed.initialCapitalKrw = 500_000;
@@ -236,6 +236,7 @@ test("virtual 1M Paper bootstrap refuses to reset an existing 500k account or a 
 
 test("virtual Paper bootstrap rolls back its in-memory state if durable persistence fails", async () => {
   const manager = new PaperCompoundingCapitalManager({
+    admissionGateEnabled: true,
     persistState: async () => { throw new Error("DISK_UNAVAILABLE"); },
   });
   await assert.rejects(
@@ -268,4 +269,14 @@ test("failed durable Paper settlement does not acknowledge an unpersisted reserv
   assert.equal(retried.profitReserveKrw, 50_000);
   assert.equal(retried.compoundBaseKrw, 1_050_000);
   assert.equal(retried.lastSettlement.sequence, 2);
+});
+
+
+test("the virtual 1M KRW Paper seed refuses a manager whose admission gate is disabled", async () => {
+  const manager = new PaperCompoundingCapitalManager({ admissionGateEnabled: false });
+  await assert.rejects(
+    () => manager.initializeVirtualPaperWallet({ nowMs: T0 }),
+    (error) => error.code === "PAPER_VIRTUAL_SEED_ADMISSION_GATE_REQUIRED",
+  );
+  assert.equal(manager.getState().initialized, false);
 });
