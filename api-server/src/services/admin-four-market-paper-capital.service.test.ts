@@ -168,3 +168,18 @@ test('market budget admits only canonical settlement-backed compounding and neve
   assert.equal(invalid.ready,false);
   assert.equal(invalid.availableToTradeKrw,0);
 });
+
+test('admin market daily loss count and 50k net loss guard stay market-specific', () => {
+  const now=AT.getTime()+10_000;
+  const losses=Array.from({length:5},(_,i)=>({
+    id:'losing-'+i,market:'crypto_spot' as const,
+    closedAt:new Date(AT.getTime()+i*1000).toISOString(),
+    netPnlKrw:-5_000,fullCostsVerified:true,closeTimeFxVerified:true,
+  }));
+  const projected=projectAdminMarketCapital('crypto_spot',losses,now);
+  assert.equal(projected.dailyLosingTrades,5);
+  assert.equal(projected.newEntriesAllowed,false);
+  const untouched=projectAdminMarketCapital('domestic_stock',losses,now);
+  assert.equal(untouched.dailyLosingTrades,0);
+  assert.equal(untouched.newEntriesAllowed,true);
+});
