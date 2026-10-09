@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   ROOM_NAMES, sanitizedSha, checkSixRoomConfig,
   botPermissionVerdict, classifyPreflight, parseDatabaseTarget,
+  classifyTelegramTransportError, readTelegram,
 } from '../../ops/telegram-sixroom-vault-readonly-preflight.mjs';
 
 const rooms = {
@@ -113,4 +114,43 @@ test('issue receipt and GitHub report only sanitized proof and room codes',()=>{
   assert.ok(workflow.includes('Actual Production PM2 SHA:'));
   assert.ok(workflow.includes('Actual deploy marker SHA:'));
   assert.ok(!workflow.includes('console.log(report)'));
+});
+
+test('Telegram GET transport failures are classified without ever exposing URL, token, or raw errors', async () => {
+  const token = '123456:ABCDEF1234567890abcdefghijklmnop';
+  const e = new TypeError('fetch failed: https://api.telegram.org/bot' + token + '/getMe');
+  e.cause = { code: 'ENOTFOUND' };
+  assert.equal(classifyTelegramTransportError(e), 'BOT_API_DNS_FAILED');
+  assert.equal(classifyTelegramTransportError({cause:{code:'EAI_AGAIN'}}), 'BOT_API_DNS_FAILED');
+  assert.equal(classifyTelegramTransportError({cause:{code:'ENETUNREACH'}}), 'BOT_API_NETWORK_UNREACHABLE');
+  assert.equal(classifyTelegramTransportError({cause:{code:'CERT_HAS_EXPIRED'}}), 'BOT_API_TLS_FAILED');
+  assert.equal(classifyTelegramTransportError({cause:{code:'UND_ERR_CONNECT_TIMEOUT'}}), 'BOT_API_TIMEOUT');
+  assert.equal(classifyTelegramTransportError({name:'TimeoutError'}), 'BOT_API_TIMEOUT');
+  assert.equal(classifyTelegramTransportError(new Error('secret')), 'BOT_API_TRANSPORT_FAILED');
+  const denied = await readTelegram(token,'getMe',{},async () => ({
+    status:401, ok:false, json: async () => ({ok:false,description:'SECRET_RESPONSE'}),
+  }));
+  assert.deepEqual(denied,{status:'BOT_API_AUTH_REJECTED',data:null});
+  const down = await readTelegram(token,'getMe',{},async () => {throw e});
+  assert.deepEqual(down,{status:'BOT_API_DNS_FAILED',data:null});
+  assert.equal(JSON.stringify(down).includes(token),false);
+  assert.equal(JSON.stringify(down).includes('SECRET_RESPONSE'),false);
+  assert.deepEqual(await readTelegram(token,'getMe',{},null),
+    {status:'BOT_API_RUNTIME_UNSUPPORTED',data:null});
+  const working = await readTelegram(token,'getMe',{},async () => ({
+    status:200,ok:true,json:async()=>({ok:true,result:{is_bot:true,id:12345,username:'test_bot'}}),
+  }));
+  assert.deepEqual(working,{status:'PASS',data:{is_bot:true,id:12345,username:'test_bot'}});
+});
+
+test('a non-ready Production preflight cannot end as a green workflow',()=>{
+  assert.ok(workflow.includes('Block false-green when Production is not Telegram-ready'));
+  assert.ok(workflow.includes('VAULT_PREFLIGHT_OPERATIONAL_NOT_READY'));
+  assert.ok(workflow.includes("r.classification === 'READY_FOR_PROTECTED_BINDING_REVIEW'"));
+  assert.ok(workflow.includes('git rev-parse origin/main'));
+  assert.ok(workflow.includes('test "$GITHUB_SHA" = "$EXPECTED_MAIN_SHA"'));
+  assert.ok(workflow.includes('Failure stage:'));
+  assert.ok(workflow.includes('Bot API GET diagnostic:'));
+  assert.ok(script.includes("result.failureStage = 'BOT_GETME'"));
+  assert.ok(script.includes('result.botApiDiagnostic = botResponse.status'));
 });
