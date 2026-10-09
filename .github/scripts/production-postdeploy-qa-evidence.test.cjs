@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildProductionPostdeployQaEvidence, verifyPostDeployMainLineage } = require('./production-postdeploy-qa-evidence.cjs');
+const { buildProductionPostdeployQaEvidence, verifyPostDeployMainLineage, isActiveProductionTradingGateRun } = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
 const ZERO = {
@@ -115,6 +115,14 @@ function fixture() {
   };
 }
 
+test('only executing Trading Gate workflows block post-deploy QA; PR checks are not authority', () => {
+  assert.equal(isActiveProductionTradingGateRun({event:'pull_request', status:'in_progress'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'push', status:'queued'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'waiting'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'in_progress'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'workflow_dispatch', status:'queued'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed'}), false);
+});
 test('postdeploy main movement requires proven fast-forward ancestry, not a forced or diverged SHA', () => {
   const laterSha = 'c'.repeat(40);
   assert.deepEqual(verifyPostDeployMainLineage({ targetSha: SHA, currentMainSha: SHA }), {
