@@ -49,13 +49,34 @@ test('exit plan is reduce-only and bound to entry identity',()=>{
     reason:'TAKE_PROFIT',
   });
   assert.equal(input.reduceOnly,true);
-  assert.equal(input.side,'long');
+  // A reduce-only SELL ('short') closes an existing LONG in one-way futures.
+  assert.equal(input.side,'short');
   assert.equal(input.accountMode,'paper');
   assert.ok(input.signalReasons.includes(`AUTO_EXIT_ENTRY_PLAN:${entry.id}`));
   assert.equal(input.targetPrices.length,0);
   assert.equal(input.stopPrice,94);
 });
 
+
+
+test('Bitget isolated reduce-only exits reverse entry side without opening a new futures position',()=>{
+  for (const [entrySide, expectedCloseSide] of [
+    ['long','short'], ['short','long'],
+  ] as const) {
+    const entry=plan(entrySide,'bitget');
+    const close=buildAutomaticExitPlanInput({
+      entryPlan:entry,entryOrder:order(entry),
+      mark:{market:'CRYPTO_FUTURES',symbol:'BTC',price:94,observedAt:NOW,source:'public'},
+      fx:{market:'CRYPTO_FUTURES',krwPerQuoteCurrency:1400,source:'UPBIT:KRW-USDT',observedAt:NOW,stale:false},
+      reason:'STOP_LOSS',
+    });
+    assert.equal(close.side,expectedCloseSide);
+    assert.equal(close.reduceOnly,true);
+    assert.equal(close.accountMode,'paper');
+    assert.equal(close.marginMode,'isolated');
+    assert.ok(close.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
+  }
+});
 
 test('exit plan can close only the remaining tracked quantity and reason is part of idempotency identity',()=>{
   const entry=plan('buy','upbit');
@@ -78,4 +99,23 @@ test('fresh mark identity allows a safe retry only after a prior automatic exit 
   assert.notEqual(first.signalId,retry.signalId);
   assert.ok(first.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
   assert.ok(retry.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
+});
+
+
+test('automatic close captures a fresh settlement FX quote instead of reusing entry FX', () => {
+  const entry = plan('long','bitget');
+  entry.marketSnapshot.settlementFxKrwPerQuoteCurrency=999;
+  entry.marketSnapshot.settlementFxSource='UNTRUSTED_OLD_RATE';
+  entry.marketSnapshot.settlementFxObservedAt='2026-10-01T01:00:00Z';
+  const input=buildAutomaticExitPlanInput({
+    entryPlan:entry,entryOrder:order(entry),
+    mark:{market:'CRYPTO_FUTURES',symbol:'BTC',price:94,observedAt:NOW,source:'public'},
+    fx:{market:'CRYPTO_FUTURES',krwPerQuoteCurrency:1400,
+      source:'UPBIT:KRW-USDT',observedAt:NOW,stale:false},
+    reason:'TAKE_PROFIT',
+  });
+  assert.equal(input.marketSnapshot.settlementFxKrwPerQuoteCurrency,1400);
+  assert.equal(input.marketSnapshot.settlementFxSource,'UPBIT:KRW-USDT');
+  assert.equal(input.marketSnapshot.settlementFxObservedAt,NOW);
+  assert.equal(input.accountMode,'paper');
 });

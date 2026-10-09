@@ -459,6 +459,24 @@ function paperFill(plan: TradingPlan, snapshot: TradingMarketSnapshot) {
   return { averageFillPrice, filledQuantity };
 }
 
+/**
+ * A simulated Paper charge is proven only by a finite, explicit percentage.
+ * No absent policy component may silently turn into a zero-cost execution.
+ * This is a pure Paper calculation; it does not call a real provider.
+ */
+export function paperSimulatedCostAmount(
+  price: number | null | undefined,
+  quantity: number | null | undefined,
+  ratePercent: number | null | undefined,
+): number | null {
+  if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0
+    || typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0
+    || typeof ratePercent !== 'number' || !Number.isFinite(ratePercent)
+    || ratePercent < 0 || ratePercent > 100) return null;
+  const amount = price * quantity * ratePercent / 100;
+  return Number.isFinite(amount) && amount >= 0 ? amount : null;
+}
+
 export class TradeExecutionService {
   private automation: TradeAutomationService;
   private recovery: TradeOrderRecoveryService;
@@ -903,20 +921,46 @@ export class TradeExecutionService {
         const metadata = this.riskMetadata(risk, false);
         const { filledQuantity, averageFillPrice } = paperFill(plan, risk.snapshot);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
-        const feePercent = Number(risk.snapshot.estimatedFeePercent);
-        const feeAmount = Number.isFinite(averageFillPrice) && Number.isFinite(filledQuantity)
-          && averageFillPrice! > 0 && filledQuantity > 0 && Number.isFinite(feePercent) && feePercent >= 0
-          ? averageFillPrice! * filledQuantity * feePercent / 100
-          : null;
+        // Missing commission must not become an apparently evidenced 0:
+        // Number(null) === 0, while a genuine policy rate of 0 is valid.
+        const feeAmount = paperSimulatedCostAmount(
+          averageFillPrice, filledQuantity, risk.snapshot.estimatedFeePercent,
+        );
         const feeCurrency = plan.exchange === 'upbit' || plan.market === 'KR'
           ? 'KRW'
           : plan.exchange === 'bitget' ? 'USDT' : 'USD';
+        // Synthetic tax exists only when the prospective cost policy carried
+        // an explicit finite percentage. Missing is never interpreted as zero.
+        const taxAmount = paperSimulatedCostAmount(
+          averageFillPrice, filledQuantity, risk.snapshot.estimatedTaxPercent,
+        );
+        // A currency rate observed after this fill, or an outdated/current
+        // unbound rate, cannot mint KRW-compounded Paper gains.
+        const quoteRate = risk.snapshot.settlementFxKrwPerQuoteCurrency;
+        const quoteSource = risk.snapshot.settlementFxSource;
+        const quoteObserved = risk.snapshot.settlementFxObservedAt;
+        const quoteMs = typeof quoteObserved === 'string' ? Date.parse(quoteObserved) : NaN;
+        const observedAge = Date.now() - quoteMs;
+        const expectedSource = feeCurrency === 'KRW' ? 'NATIVE_KRW'
+          : feeCurrency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+        const maxAgeMs = feeCurrency === 'USD' ? 24 * 60 * 60_000
+          : feeCurrency === 'USDT' ? 10 * 60_000 : 5 * 60_000;
+        const settlementFxEvidence = typeof quoteRate === 'number'
+          && Number.isFinite(quoteRate) && quoteRate > 0
+          && (feeCurrency !== 'KRW' || quoteRate === 1)
+          && quoteSource === expectedSource
+          && Number.isFinite(quoteMs)
+          && observedAge >= -5_000 && observedAge <= maxAgeMs
+          ? { krwPerQuoteCurrency: quoteRate, source: quoteSource, observedAt: quoteObserved! }
+          : null;
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
           exchangeOrderId: `paper-${order.clientOrderId}`,
           filledQuantity,
           averageFillPrice,
           ...(feeAmount == null ? {} : { feeAmount, feeCurrency }),
+          ...(taxAmount == null ? {} : { taxAmount, taxCurrency: feeCurrency }),
+          ...(settlementFxEvidence ? { settlementFxEvidence } : {}),
         });
       }
 

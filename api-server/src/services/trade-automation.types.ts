@@ -216,6 +216,12 @@ export type TradingMarketSnapshot = {
   availableLiquidityKrw?: number | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
+  /** Versioned prospective Paper cost evidence, not a broker tax receipt. */
+  estimatedTaxPercent?: number | null;
+  /** Immutable quote-to-KRW observation stamped at Paper order creation. */
+  settlementFxKrwPerQuoteCurrency?: number | null;
+  settlementFxSource?: string | null;
+  settlementFxObservedAt?: string | null;
   correlatedExposurePercent?: number | null;
   signalState?: TradingSignalState | null;
   signalObservedAt?: string | null;
@@ -330,6 +336,15 @@ export type TradingOrder = {
   fills?: TradingFill[];
   feeAmount?: number | null;
   feeCurrency?: string | null;
+  /** Synthetic Paper transaction tax derived from explicit signed cost policy. */
+  taxAmount?: number | null;
+  taxCurrency?: string | null;
+  /** FX receipt from the quote used for this exact canonical Paper fill. */
+  settlementFxEvidence?: {
+    krwPerQuoteCurrency: number;
+    source: string;
+    observedAt: string;
+  } | null;
   exchangeCreatedAt?: string | null;
   exchangeUpdatedAt?: string | null;
   cancelable?: boolean | null;
