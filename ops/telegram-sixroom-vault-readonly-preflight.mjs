@@ -47,7 +47,9 @@ export function botPermissionVerdict(chat, member) {
   if (!['group', 'supergroup', 'channel'].includes(type)) return 'INVALID_ROOM_TYPE';
   const status = String(member?.status ?? '');
   if (!['creator', 'administrator', 'member', 'restricted'].includes(status)) return 'BOT_NOT_A_ROOM_MEMBER';
-  if ((type === 'group' || type === 'supergroup') && status === 'member'\n    && chat?.permissions?.can_send_messages === false) return 'BOT_ROOM_SEND_FORBIDDEN';\n  if (type === 'channel' && status !== 'creator'
+  if ((type === 'group' || type === 'supergroup') && status === 'member'
+    && chat?.permissions?.can_send_messages === false) return 'BOT_ROOM_SEND_FORBIDDEN';
+  if (type === 'channel' && status !== 'creator'
     && !(status === 'administrator' && member?.can_post_messages === true)) {
     return 'BOT_CHANNEL_POST_FORBIDDEN';
   }
