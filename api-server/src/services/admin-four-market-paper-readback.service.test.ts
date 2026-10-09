@@ -73,3 +73,40 @@ test('a missing market wallet cannot be depicted as settled or available', () =>
   assert.equal(result.marketReadback.us_stock.settlementReady,false);
   assert.equal(result.marketReadback.us_stock.operatingCapitalKrw,null);
 });
+
+test('a post-epoch retry of an old Paper plan is blocked for its market, not hidden as zero PnL', () => {
+  const oldPlan={
+    id:'old-late-spot',userId:'owner-only',accountMode:'paper',
+    executionMode:'automatic',exchange:'upbit',market:'KRW',
+    createdAt:new Date(NOW-900_000).toISOString(),
+  } as TradingPlan;
+  const lateFill={
+    id:'old-late-fill',userId:'owner-only',planId:oldPlan.id,
+    state:'FILLED',filledQuantity:1,averageFillPrice:100,
+    createdAt:new Date(NOW-35_000).toISOString(),
+  } as TradingOrder;
+  const status=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),
+    plans:[oldPlan],orders:[lateFill],nowMs:NOW,
+  });
+  assert.equal(status.marketReadback.crypto_spot.settlementReady,false);
+  assert.equal(status.marketReadback.crypto_spot.operatingCapitalKrw,null);
+  assert.equal(status.marketReadback.crypto_spot.reserveKrw,null);
+  assert.deepEqual(status.marketReadback.crypto_spot.blockers,['ADMIN_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH']);
+  assert.equal(status.marketReadback.us_stock.settlementReady,true);
+  assert.equal(status.marketReadback.domestic_stock.settlementReady,true);
+});
+
+test('cross-account canonical Paper rows never count as the current admin ledger', () => {
+  const otherPlan={
+    id:'other-owner',userId:'different-owner',accountMode:'paper',
+    executionMode:'automatic',exchange:'upbit',market:'KRW',
+    createdAt:new Date(NOW-25_000).toISOString(),
+  } as TradingPlan;
+  const status=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans:[otherPlan],orders:[],nowMs:NOW,
+  });
+  assert.equal(status.marketReadback.crypto_spot.settlementReady,false);
+  assert.ok(status.marketReadback.crypto_spot.blockers.includes('ADMIN_PAPER_OWNER_SCOPE_MISMATCH'));
+  assert.equal(status.marketReadback.us_stock.settlementReady,false);
+});
