@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { compiledMomentumFormula } from './research-bundle-formula-fixture.js';
+import { canonicalSerializeStrategyFormulaV1 } from '../src/autonomous-strategy-formula-generator-v1.js';
 import { runPaperForwardScheduleCli } from '../scripts/run-paper-forward-schedule.js';
 import {
   FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
@@ -32,12 +34,19 @@ function emptyRegistry() {
 
 function validOneRegistry() {
   const { formula } = compiledMomentumFormula();
+  const selectedParameters = Object.fromEntries(formula.parameterSpace.map(p => [p.name, p.min]));
+  const parameterIdentity = createHash('sha256')
+    .update(canonicalSerializeStrategyFormulaV1({
+      formulaHash: formula.formulaHash,
+      selectedParameters,
+    }), 'utf8')
+    .digest('hex');
   const generatedCandidate = {
     generatedCandidateId: 'generated-paper-pass-v1',
     formulaCandidateId: formula.candidateId,
     formulaHash: formula.formulaHash,
-    parameterIdentity: 'b'.repeat(64),
-    selectedParameters: Object.fromEntries(formula.parameterSpace.map(p => [p.name, p.min])),
+    parameterIdentity,
+    selectedParameters,
     safety: { executionAuthority: 'NONE' },
   };
   const survivor = {
@@ -125,6 +134,17 @@ test('invalid registry SHA, permission and forged candidate admission cannot bec
       { ...registry, realOrder: true },
       { ...registry, entries: [...registry.entries, registry.entries[0]], entryCount: 2 },
       { ...registry, executionAuthority: 'LIVE' },
+      { ...registry, acceptedSourceState: 'HOLD' },
+      { ...registry, rejectedSourceStates: ['RESERVE'] },
+      { ...registry, entries: [{ ...registry.entries[0], market: 'CRYPTO_SPOT', direction: 'SHORT' }] },
+      { ...registry, entries: [{ ...registry.entries[0], formulaCandidate: {
+        ...registry.entries[0].formulaCandidate, formulaHash: 'f'.repeat(64),
+      } }] },
+      { ...registry, entries: [{ ...registry.entries[0], generatedCandidate: {
+        ...registry.entries[0].generatedCandidate,
+        selectedParameters: { ...registry.entries[0].generatedCandidate.selectedParameters,
+          [Object.keys(registry.entries[0].generatedCandidate.selectedParameters)[0]]: 999999 },
+      } }] },
     ];
     for (const record of broken) {
       await writeFile(registryPath, JSON.stringify(record), { mode: 0o600 });
@@ -157,6 +177,26 @@ test('symlink and malformed path are explicitly blocked without following privat
     });
     assert.equal(relative.status, 'INVALID');
     mustNotAdmit(relative);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('hardlink and symlinked parent are blocked before registry is reported as a valid PASS', async () => {
+  const { root, registryPath } = await fixture(validOneRegistry());
+  try {
+    const alias = join(root, 'alias');
+    await mkdir(alias, { mode: 0o700 });
+    const linkedPath = join(alias, 'formula-paper-strategy-registry.json');
+    await link(registryPath, linkedPath);
+    const hardlinked = await readFormulaPaperRegistryReadbackV1({ registryPath, researchCodeSha: SHA });
+    assert.equal(hardlinked.status, 'INVALID');
+    mustNotAdmit(hardlinked);
+    await import('node:fs/promises').then(({ unlink }) => unlink(linkedPath));
+    const symlinkedParent = join(root, 'aliased-latest');
+    await symlink(join(root, 'latest'), symlinkedParent, 'dir');
+    const parentPath = join(symlinkedParent, 'formula-paper-strategy-registry.json');
+    const parentResult = await readFormulaPaperRegistryReadbackV1({ registryPath: parentPath, researchCodeSha: SHA });
+    assert.equal(parentResult.status, 'INVALID');
+    mustNotAdmit(parentResult);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
