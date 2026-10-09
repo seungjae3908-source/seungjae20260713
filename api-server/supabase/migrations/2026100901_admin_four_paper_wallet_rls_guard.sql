@@ -15,6 +15,39 @@ $admin_v2_wallet_prereqs$;
 
 alter table public.paper_accounts enable row level security;
 
+-- Immutable administrator market-wallet *seed* evidence. Live virtual equity
+-- is recomputed from canonical settled fills, not by rewriting this row.
+-- Even privileged server code must never insert a 500k, cross-market, or
+-- malformed V2 seed which could be mistaken for 1m capital later.
+alter table public.paper_accounts
+  drop constraint if exists admin_four_market_paper_seed_contract;
+alter table public.paper_accounts
+  add constraint admin_four_market_paper_seed_contract check (
+    case when id like 'automatic-paper-admin-v2:%' then
+      coalesce(
+        id = ('automatic-paper-admin-v2:' || (payload->>'market'))
+        and (payload->>'market') in (
+          'domestic_stock','us_stock','crypto_spot','crypto_futures'
+        )
+        and (payload->>'id') = id
+        and (payload->>'schemaVersion') = 'admin-four-market-paper-v2'
+        and (payload->>'initialBalance')::numeric = 1000000
+        and (payload->>'equity')::numeric = 1000000
+        and (payload->>'cashBalance')::numeric = 1000000
+        and (payload->>'availableMargin')::numeric = 1000000
+        and (payload->>'usedMargin')::numeric = 0
+        and (payload->>'reserveKrw')::numeric = 0
+        and (payload->>'compoundedProfitKrw')::numeric = 0
+        and (payload->>'compoundShare')::numeric = 0.5
+        and (payload->>'reserveShare')::numeric = 0.5
+        and (payload->>'reserveWithdrawalAutomatic')::boolean is false
+        and deleted_at is null
+        and version = 1,
+        false
+      )
+    else true end
+  );
+
 -- Existing permissive owner-scoped policies are retained for normal Paper.
 -- RESTRICTIVE write policies are logically AND-ed with every permissive
 -- policy: even an accidentally-added permissive owner policy cannot grant
@@ -57,16 +90,35 @@ as $readiness$
         'admin_v2_paper_wallet_delete_guard'
       )
       and permissive = 'RESTRICTIVE'
+      -- A policy belonging only to anon or a different role is NOT an
+      -- authenticated wallet guard. Check both role and denial operator;
+      -- matching the wallet prefix alone would also accept an unsafe LIKE.
+      and 'authenticated'::name = any(roles)
       and (
-        (cmd = 'INSERT' and with_check like '%automatic-paper-admin-v2:%')
-        or (cmd = 'UPDATE' and qual like '%automatic-paper-admin-v2:%'
-            and with_check like '%automatic-paper-admin-v2:%')
-        or (cmd = 'DELETE' and qual like '%automatic-paper-admin-v2:%')
+        (cmd = 'INSERT' and with_check like '%automatic-paper-admin-v2:%'
+          and with_check ~* '(!~~|not[[:space:]]+like)')
+        or (cmd = 'UPDATE'
+          and qual like '%automatic-paper-admin-v2:%'
+          and with_check like '%automatic-paper-admin-v2:%'
+          and qual ~* '(!~~|not[[:space:]]+like)'
+          and with_check ~* '(!~~|not[[:space:]]+like)')
+        or (cmd = 'DELETE' and qual like '%automatic-paper-admin-v2:%'
+          and qual ~* '(!~~|not[[:space:]]+like)')
       )
   ) = 3
+  and exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.paper_accounts'::regclass
+      and conname = 'admin_four_market_paper_seed_contract'
+      and contype = 'c'
+  )
   and not exists (
     select 1 from information_schema.role_table_grants
-    where table_schema = 'public' and table_name = 'paper_accounts'
+    where table_schema = 'public'
+      and table_name in (
+        'paper_accounts','paper_orders','paper_positions',
+        'paper_fills','paper_journal_entries','paper_sync_state'
+      )
       and grantee in ('PUBLIC','anon','authenticated')
       and privilege_type = 'TRUNCATE'
   )
