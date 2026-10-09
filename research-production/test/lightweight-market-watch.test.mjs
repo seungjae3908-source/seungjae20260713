@@ -6,7 +6,7 @@ import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_SAFETY, blockedSource,
   evaluateMarketOpportunities, evaluateWatchBudget,
   normalizeBitgetSnapshot, normalizeStockFeed, normalizeUpbitSnapshot,
-  watchCycleDigest,
+  parseBoundedPublicJson, watchCycleDigest,
 } from '../src/lightweight-market-watch.mjs';
 
 const NOW = Date.parse('2026-10-09T04:00:00.000Z');
@@ -225,6 +225,71 @@ test('new systemd service is rate-limited, isolated and never enabled by this co
   assert.doesNotMatch(unit, /ExecStart=.*(trade-automation|order|broker)/i);
 });
 
+
+
+
+test('incomplete Bitget tickers cannot be labeled full-universe READY', () => {
+  const snapshot = normalizeBitgetSnapshot({
+    code: '00000',
+    data: [
+      { symbol: 'BTCUSDT', lastPr: '100', change24h: '0.02',
+        usdtVolume: '10000000', ts: String(NOW - 1_000) },
+      { symbol: 'ETHUSDT', lastPr: 'not-a-number', change24h: '0.01',
+        usdtVolume: '11000000', ts: String(NOW - 1_000) },
+    ],
+  }, NOW);
+  assert.equal(snapshot.status, 'PARTIAL_TICKERS');
+  assert.equal(snapshot.listedCount, 2);
+  assert.equal(snapshot.quotes.length, 1);
+});
+
+test('stock full-universe claims require unique current quotes and no cap truncation', () => {
+  const base = { schemaVersion: 'research-stock-public-snapshot-v1',
+    market: 'US_STOCK', source: 'verified-feed-v1',
+    asOf: new Date(NOW - 1_000).toISOString(), completeUniverse: true };
+  const q = { symbol: 'MSFT', price: 300, turnover24h: 3e6,
+    change24hPercent: 1, asOf: new Date(NOW - 1_000).toISOString() };
+  const complete = normalizeStockFeed({
+    ...base, quotes: [q],
+  }, 'US_STOCK', NOW);
+  assert.equal(complete.status, 'READY');
+  const duplicate = normalizeStockFeed({
+    ...base, quotes: [q, q],
+  }, 'US_STOCK', NOW);
+  assert.equal(duplicate.status, 'PARTIAL_UNIVERSE');
+  const capped = normalizeStockFeed({
+    ...base, quotes: Array.from({ length: WATCH_LIMITS.maxSymbolsPerMarket + 1 },
+      (_, i) => ({ ...q, symbol: 'S' + i })),
+  }, 'US_STOCK', NOW);
+  assert.equal(capped.status, 'PARTIAL_UNIVERSE');
+  assert.equal(capped.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
+});
+
+test('bounded public JSON parser refuses status errors, oversized and malformed payloads', async () => {
+  assert.deepEqual(await parseBoundedPublicJson(new Response('{"a":1}')),
+    { a: 1 });
+  await assert.rejects(parseBoundedPublicJson(new Response('{}', { status: 429 })),
+    /PUBLIC_HTTP_429/);
+  await assert.rejects(parseBoundedPublicJson(new Response('{}', {
+    headers: { 'content-length': '5000000' },
+  })), /PUBLIC_RESPONSE_OVERSIZE/);
+  await assert.rejects(parseBoundedPublicJson(new Response('{bad')), /PUBLIC_RESPONSE_JSON_INVALID/);
+  await assert.rejects(parseBoundedPublicJson(new Response(null)), /PUBLIC_RESPONSE_BODY_MISSING/);
+  await assert.rejects(parseBoundedPublicJson(new Response('{}'), 4000001),
+    /PUBLIC_RESPONSE_LIMIT_INVALID/);
+});
+
+test('oversized chunked payload fails before accumulating beyond 4MB', async () => {
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(2_500_000));
+      controller.enqueue(new Uint8Array(2_500_000));
+      controller.close();
+    },
+  }));
+  await assert.rejects(parseBoundedPublicJson(response),
+    /PUBLIC_RESPONSE_OVERSIZE/);
+});
 
 test('systemd unit passes real syntax verification in Linux CI', {
   skip: process.platform !== 'linux',
