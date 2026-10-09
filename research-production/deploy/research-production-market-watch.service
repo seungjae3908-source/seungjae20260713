@@ -9,7 +9,7 @@ User=investment-research
 Group=investment-research
 WorkingDirectory=/opt/investment-research/current
 EnvironmentFile=/etc/investment-research/research-production.env
-ExecStart=/usr/bin/node --max-old-space-size=192 research-production/bin/lightweight-market-watch.mjs
+ExecStart=/usr/bin/env node --max-old-space-size=192 research-production/bin/lightweight-market-watch.mjs
 Restart=on-failure
 RestartSec=30s
 CPUAccounting=true
