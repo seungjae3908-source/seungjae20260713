@@ -39,8 +39,13 @@ test('react-query cancellation, stale data, and member mutations stay fail close
   expect(source).toContain("if (!memberMutationEnabled) { setError('회원 목록의 최신 상태를 확인한 뒤 다시 시도해 주세요.'); return; }");
   expect(source).toContain('mutationEnabled={memberMutationEnabled}');
   expect(source).toContain('data-testid="admin-member-mutations-locked"');
-  expect(source).toContain("disabled={busy || !mutationEnabled || initialTier !== 'pending'}");
-  expect(source).toContain('disabled={busy || !mutationEnabled}');
+  // The stricter per-row gate is cumulative with the existing stale-list
+  // freeze: incomplete member state must never be editable or approved.
+  expect(source).toContain('const allowMutations = mutationEnabled && stateVerified;');
+  expect(source).toContain('adminMemberMutationStateVerified(member)');
+  expect(source).toContain("disabled={busy || !allowMutations || member.status !== 'pending'}");
+  expect(source).toContain('disabled={busy || !allowMutations}');
+  expect(source).toContain('data-testid="admin-member-state-unverified"');
 });
 
 test('audit read failure is never rendered as a truthful empty or current history', () => {
