@@ -32,8 +32,9 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'preparedMemberAutoPolicy',
     'memberAutoPolicyPrepared',
     'memberAutoResumePrepared',
-    "/api/trade-automation/resume",
-    "confirmation: 'RESUME_MEMBER_TRADING'",
+    'PRODUCTION_TRADING_CORE_MEMBER_STOP_ACTIVE',
+    'PRODUCTION_TRADING_CORE_CANARY_BUDGET_TOO_LOW',
+    'PRODUCTION_TRADING_CORE_RISK_BASELINE_NOT_RESTORABLE',
     'const originalPolicy = structuredClone(statusBefore.body.policy)',
     'Member policy preparation must not grant LIVE AUTO server authority',
     'memberAutoPolicyReady',
@@ -50,6 +51,8 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
 
   for (const forbidden of [
     "accountMode: 'live'",
+    "/api/trade-automation/resume",
+    "confirmation: 'RESUME_MEMBER_TRADING'",
     '/api/admin/research',
     '/api/research',
     'research-center',
@@ -85,4 +88,25 @@ test('Trading Core Production QA restores member policy on early failures and in
   assert.ok(finallyBlock.includes('POLICY_REQUEST_FAILED'));
   assert.ok(finallyBlock.indexOf('PREFERENCES_REQUEST_FAILED') < finallyBlock.indexOf('POLICY_REQUEST_FAILED'));
   assert.ok(finallyBlock.includes('if (restoreFailures.length > 0)'));
+});
+
+test('Canary QA never bypasses member stops or changes irreversible risk guardrails', () => {
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  const start = spec.indexOf('    const qaPolicy = {');
+  const end = spec.indexOf("    const saved = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', qaPolicy);", start);
+  assert.ok(start >= 0 && end > start, 'QA policy setup must be present');
+  const policy = spec.slice(start, end);
+  assert.ok(policy.includes('...originalPolicy'), 'Original risk ceilings/floors must be preserved');
+  for (const irreversible of [
+    'riskPerTradePercent:', 'totalDailyLossLimitPercent:', 'minProfitFactor:',
+    'minExpectedValueR:', 'maxInstrumentKrw:', 'maxOrderKrw:',
+    'maxStrategyDrawdownPercent:', 'maxAverageSpreadPercent:',
+  ]) {
+    assert.equal(policy.includes(irreversible), false, irreversible);
+  }
+  assert.ok(spec.includes('qaCapitalKrw: number = originalPolicy.totalCapitalKrw'));
+  assert.ok(spec.includes('availableBalance: qaCapitalKrw'));
+  assert.ok(spec.includes('POLICY_RESTORE_STATE_MISMATCH'));
+  assert.ok(spec.includes('POLICY_STATE_MISMATCH'));
+  assert.ok(spec.includes('isDeepStrictEqual(statusAfter.body?.policy, originalPolicy)'));
 });
