@@ -23,6 +23,13 @@ import { sanitizeResearchCenterOverview } from '../services/research-center-read
 
 const router = Router();
 router.use(requireAuthenticated, requireAdmin);
+// All authenticated member, audit and mutation responses contain private
+// administrator context. Never allow browser or shared proxy caching.
+router.use((_req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  next();
+});
 
 const PROFILE_FIELDS = [
   'id', 'login_name', 'display_name', 'membership_level', 'is_active',
