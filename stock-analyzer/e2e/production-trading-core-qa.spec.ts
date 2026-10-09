@@ -178,47 +178,70 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let preparedPolicyReadiness = originalPolicyReadiness;
   let memberAutoPolicyPrepared = false;
   let memberAutoResumePrepared = false;
-  if (prepareMemberAutoPolicy) {
-    if (statusBefore.body?.policy?.emergencyStopped === true || statusBefore.body?.policy?.newEntriesStopped === true) {
-      const resumed = await appApi<any>(page, '/api/trade-automation/resume', 'POST', {
-        confirmation: 'RESUME_MEMBER_TRADING',
-      });
-      expect(resumed.ok, JSON.stringify(resumed.body)).toBe(true);
-      expect(resumed.body?.automaticTradingEnabledByThisRequest).toBe(false);
-      memberAutoResumePrepared = true;
+  let integrationBefore: ApiResult<any>;
+  try {
+    if (prepareMemberAutoPolicy) {
+      if (statusBefore.body?.policy?.emergencyStopped === true || statusBefore.body?.policy?.newEntriesStopped === true) {
+        const resumed = await appApi<any>(page, '/api/trade-automation/resume', 'POST', {
+          confirmation: 'RESUME_MEMBER_TRADING',
+        });
+        expect(resumed.ok, JSON.stringify(resumed.body)).toBe(true);
+        expect(resumed.body?.automaticTradingEnabledByThisRequest).toBe(false);
+        memberAutoResumePrepared = true;
+        statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+        expect(statusBefore.ok).toBe(true);
+        expect(statusBefore.body?.ok).toBe(true);
+      }
+      const prepared = await appApi<any>(
+        page,
+        '/api/trade-automation/policy',
+        'PUT',
+        preparedMemberAutoPolicy(statusBefore.body.policy),
+      );
+      expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
+      expect(prepared.body?.ok).toBe(true);
+      preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
+      expect(preparedPolicyReadiness.ready).toBe(true);
+
       statusBefore = await appApi<any>(page, '/api/trade-automation/status');
       expect(statusBefore.ok).toBe(true);
       expect(statusBefore.body?.ok).toBe(true);
+      preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
+      expect(preparedPolicyReadiness.ready).toBe(true);
+      for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+        expect(
+          statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
+          `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
+        ).toBe(false);
+      }
+      memberAutoPolicyPrepared = true;
     }
-    const prepared = await appApi<any>(
-      page,
-      '/api/trade-automation/policy',
-      'PUT',
-      preparedMemberAutoPolicy(statusBefore.body.policy),
-    );
-    expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
-    expect(prepared.body?.ok).toBe(true);
-    preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
-    expect(preparedPolicyReadiness.ready).toBe(true);
 
-    statusBefore = await appApi<any>(page, '/api/trade-automation/status');
-    expect(statusBefore.ok).toBe(true);
-    expect(statusBefore.body?.ok).toBe(true);
-    preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
-    expect(preparedPolicyReadiness.ready).toBe(true);
-    for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
-      expect(
-        statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
-        `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
-      ).toBe(false);
+    integrationBefore = await appApi<any>(page, '/api/user-integrations');
+    expect(integrationBefore.ok).toBe(true);
+    expect(integrationBefore.body?.ok).toBe(true);
+    expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
+  } catch (preflightError) {
+    // Member policy preparation may have resumed STOP before later assertions fail.
+    // Restore the exact captured policy even when the main canary never starts.
+    if (prepareMemberAutoPolicy) {
+      try {
+        const restored = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
+          ...originalPolicy,
+          confirmation: { acknowledged: true },
+        });
+        if (!restored.ok || restored.body?.ok !== true) {
+          throw new Error(`POLICY_RESTORE_HTTP_${restored.status}`);
+        }
+      } catch (restoreError) {
+        throw new Error('PRODUCTION_TRADING_CORE_PREFLIGHT_RESTORE_FAILED', {
+          cause: new AggregateError([preflightError, restoreError]),
+        });
+      }
     }
-    memberAutoPolicyPrepared = true;
+    throw preflightError;
   }
 
-  const integrationBefore = await appApi<any>(page, '/api/user-integrations');
-  expect(integrationBefore.ok).toBe(true);
-  expect(integrationBefore.body?.ok).toBe(true);
-  expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
   const telegramConnectedBefore = integrationBefore.body?.telegram?.connected === true;
   const telegramRuntimeReady = integrationBefore.body?.telegramRuntime?.deliveryReady === true
     && integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled === true
@@ -429,19 +452,36 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       telegramDelivered = true;
     }
   } finally {
-    const restorePreferences = await appApi<any>(
-      page,
-      '/api/user-integrations/notifications',
-      'PATCH',
-      originalPreferences,
-    );
-    expect(restorePreferences.ok, JSON.stringify(restorePreferences.body)).toBe(true);
+    // A preferences restoration failure must never skip policy restoration.
+    const restoreFailures: string[] = [];
+    try {
+      const restorePreferences = await appApi<any>(
+        page,
+        '/api/user-integrations/notifications',
+        'PATCH',
+        originalPreferences,
+      );
+      if (!restorePreferences.ok || restorePreferences.body?.ok !== true) {
+        restoreFailures.push(`PREFERENCES_HTTP_${restorePreferences.status}`);
+      }
+    } catch {
+      restoreFailures.push('PREFERENCES_REQUEST_FAILED');
+    }
 
-    const restore = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
-      ...originalPolicy,
-      confirmation: { acknowledged: true },
-    });
-    expect(restore.ok, JSON.stringify(restore.body)).toBe(true);
+    try {
+      const restoredPolicy = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
+        ...originalPolicy,
+        confirmation: { acknowledged: true },
+      });
+      if (!restoredPolicy.ok || restoredPolicy.body?.ok !== true) {
+        restoreFailures.push(`POLICY_HTTP_${restoredPolicy.status}`);
+      }
+    } catch {
+      restoreFailures.push('POLICY_REQUEST_FAILED');
+    }
+    if (restoreFailures.length > 0) {
+      throw new Error(`PRODUCTION_TRADING_CORE_RESTORE_FAILED:${restoreFailures.join(',')}`);
+    }
   }
 
   const statusAfter = await appApi<any>(page, '/api/trade-automation/status');
