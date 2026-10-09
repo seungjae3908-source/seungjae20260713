@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { logger } from '../lib/logger';
+import { normalizeTelegramReadableText } from './telegram-readable-format.service';
 
 const TELEGRAM_API_BASE_URL = 'https://api.telegram.org';
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -146,23 +147,65 @@ function titleForType(type: TelegramAlertType): string {
   }
 }
 
+function escapedPrefix(text: string, budget: number): string {
+  let result = '';
+  for (const codePoint of text) {
+    const piece = escapeTelegramHtml(codePoint);
+    if (result.length + piece.length > budget) break;
+    result += piece;
+  }
+  return result;
+}
+
+/** Respect the 4096-char Telegram HTML limit without cutting entities or tags. */
+function boundedTelegramHtmlLines(lines: readonly { text: string; bold?: boolean }[]): string {
+  let result = '';
+  for (const line of lines) {
+    const separator = result ? '\n' : '';
+    const escaped = escapeTelegramHtml(line.text);
+    const formatted = line.bold ? '<b>' + escaped + '</b>' : escaped;
+    if (result.length + separator.length + formatted.length <= TELEGRAM_TEXT_LIMIT) {
+      result += separator + formatted;
+      continue;
+    }
+    const budget = TELEGRAM_TEXT_LIMIT - result.length - separator.length - (line.bold ? 7 : 0) - 1;
+    if (budget > 0) {
+      const shortened = escapedPrefix(line.text, budget);
+      if (shortened) result += separator + (line.bold ? '<b>' + shortened + '…</b>' : shortened + '…');
+    }
+    break;
+  }
+  return result.trimEnd();
+}
+
 export function renderTelegramAlert(input: TelegramAlertInput): string {
   const customTitle = typeof input.title === 'string' && input.title.trim()
     ? input.title.trim().slice(0, 180)
     : null;
-  const lines = [`<b>${escapeTelegramHtml(customTitle || titleForType(input.type))}</b>`];
-
-  if (!customTitle && input.symbol) lines.push(`<code>${escapeTelegramHtml(input.symbol)}</code>${input.market ? ` · ${escapeTelegramHtml(input.market)}` : ''}`);
-  if (input.provider) lines.push(`${escapeTelegramHtml(input.provider)}`);
-
+  const lines: Array<{ text: string; bold?: boolean }> = [
+    { text: customTitle || titleForType(input.type), bold: true },
+    { text: '' },
+  ];
+  if (!customTitle && input.symbol) {
+    lines.push({ text: input.symbol + (input.market ? ' · ' + input.market : '') });
+  }
+  if (input.provider) lines.push({ text: input.provider });
   const currentPrice = formatNumber(input.currentPrice);
-  if (currentPrice) lines.push(`현재가 ${escapeTelegramHtml(currentPrice)}`);
+  if (currentPrice) lines.push({ text: '현재가 ' + currentPrice });
   const targetPrice = formatNumber(input.targetPrice);
-  if (targetPrice) lines.push(`기준가 ${escapeTelegramHtml(targetPrice)}`);
+  if (targetPrice) lines.push({ text: '기준가 ' + targetPrice });
 
-  if (input.details) lines.push(escapeTelegramHtml(input.details));
-  if (input.timestamp && !customTitle) lines.push(escapeTelegramHtml(input.timestamp));
-  return lines.join('\n').slice(0, TELEGRAM_TEXT_LIMIT);
+  const details = normalizeTelegramReadableText(input.details);
+  if (details) {
+    if (lines.at(-1)?.text !== '') lines.push({ text: '' });
+    for (const line of details.split('\n')) {
+      lines.push({ text: line, bold: /^\[[^\]\n]{1,72}\]/u.test(line) });
+    }
+  }
+  if (input.timestamp && !customTitle) {
+    lines.push({ text: '' }, { text: input.timestamp });
+  }
+  return boundedTelegramHtmlLines(lines);
 }
 
 export function normalizeTelegramHttpUrl(value: unknown): string | null {
@@ -260,9 +303,11 @@ async function sendOnce(
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const keyboard = telegramInlineKeyboard(input.buttons);
-    const photo = safePhoto(input.photo);
+    // Preserve full plans and news. A long rich alert becomes TEXT instead
+    // of silently losing everything after Telegram's 1024-char photo caption.
+    const photo = text.length <= TELEGRAM_CAPTION_LIMIT ? safePhoto(input.photo) : null;
     const messageKind: TelegramMessageKind = photo ? 'PHOTO' : 'TEXT';
-    const renderedText = text.slice(0, photo ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT);
+    const renderedText = text;
     const endpoint = photo ? 'sendPhoto' : 'sendMessage';
     let body: BodyInit;
     let headers: HeadersInit;
@@ -355,8 +400,8 @@ async function sendOnce(
       delivered: false,
       attempts: attempt + 1,
       messageId: null,
-      messageKind: safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
-      renderedText: text.slice(0, safePhoto(input.photo) ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT),
+      messageKind: text.length <= TELEGRAM_CAPTION_LIMIT && safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
+      renderedText: text,
     };
   } finally {
     clearTimeout(timeout);
@@ -440,6 +485,33 @@ export async function sendTelegramAlert(
     : result;
 }
 
+/**
+ * Keep Telegram HTML entities and formatting tags whole when editing a long
+ * signal. A raw slice can end inside <b>, </b>, or &amp; and reject the edit,
+ * leaving obsolete order buttons on the old Telegram message.
+ */
+function boundedTelegramEditHtml(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const tokens = text.match(/<[^<>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);|[\s\S]/giu) ?? [];
+  const openTags: string[] = [];
+  let result = '';
+
+  for (const token of tokens) {
+    const opening = /^<(b|strong|i|em|u|s|strike|code|pre|a)(?:\s[^<>]*)?>$/iu.exec(token);
+    const closing = /^<\/(b|strong|i|em|u|s|strike|code|pre|a)>$/iu.exec(token);
+    const nextOpen = [...openTags];
+    if (opening) nextOpen.push(opening[1].toLowerCase());
+    else if (closing && nextOpen.at(-1) === closing[1].toLowerCase()) nextOpen.pop();
+
+    const closingCost = nextOpen.reduce((n, tag) => n + tag.length + 3, 0);
+    if (result.length + token.length + closingCost + 1 > limit) break;
+    result += token;
+    openTags.splice(0, openTags.length, ...nextOpen);
+  }
+  const closings = [...openTags].reverse().map((tag) => '</' + tag + '>').join('');
+  return result.trimEnd() + '…' + closings;
+}
+
 export async function editTelegramMessage(input: {
   destinationChatId: string;
   messageId: number;
@@ -454,8 +526,8 @@ export async function editTelegramMessage(input: {
     return { ok: false, attempts: 0, skipped: 'NOT_CONFIGURED' };
   }
 
-  const renderedText = input.text.slice(
-    0,
+  const renderedText = boundedTelegramEditHtml(
+    input.text,
     input.messageKind === 'PHOTO' ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT,
   );
 

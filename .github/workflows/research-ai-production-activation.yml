@@ -27,6 +27,7 @@ on:
       - research-production/test/research-ai-diagnostic.test.mjs
       - research-production/test/research-forward-runtime-diagnostic.test.mjs
       - research-production/test/research-ai-review-worker.test.mjs
+      - research-production/test/research-approved-job-intake.test.mjs
       - research-production/test/research-ai-units-install-contract.test.mjs
       - research-production/test/research-provider-bootstrap.test.mjs
       - research-production/test/research-video-approved-job.test.mjs
@@ -42,7 +43,7 @@ permissions:
   statuses: read
 
 concurrency:
-  group: research-ai-production-activation
+  group: research-ai-production-activation-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
@@ -72,6 +73,7 @@ jobs:
             research-production/test/research-ai-diagnostic.test.mjs \
             research-production/test/research-forward-runtime-diagnostic.test.mjs \
             research-production/test/research-ai-review-worker.test.mjs \
+            research-production/test/research-approved-job-intake.test.mjs \
             research-production/test/research-ai-units-install-contract.test.mjs \
             research-production/test/research-provider-bootstrap.test.mjs \
             research-production/test/research-video-approved-job.test.mjs \
@@ -272,7 +274,7 @@ jobs:
           remote_status=${PIPESTATUS[0]}
           set -e
           if (( remote_status != 0 )); then
-            failure_reason="$(grep -Eo 'AI_RESEARCH_[A-Z0-9_.:=-]+' "$RUNNER_TEMP/ai-research-activation.txt" | grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=' | tail -1 || true)"
+            failure_reason="$(grep -Eo 'AI_RESEARCH_[-A-Za-z0-9_.:=]+' "$RUNNER_TEMP/ai-research-activation.txt" | grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=' | tail -1 || true)"
             failure_reason="${failure_reason:-AI_RESEARCH_ACTIVATION_REMOTE_FAILED}"
             printf 'failure_reason=%s\n' "$failure_reason" >> "$GITHUB_OUTPUT"
             exit "$remote_status"
