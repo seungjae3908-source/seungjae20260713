@@ -266,3 +266,29 @@ test('duplicate broker-facing Paper order identity cannot bind a second fill or 
   assert.equal(us.newEntriesAllowed,false);
   assert.equal(state.reserveTransferred,false);
 });
+
+test('duplicate internal canonical order IDs with distinct broker aliases cannot create Paper reserves', () => {
+  const valid = certifiedAutoPaperPair({
+    id:'canonical-row-collision',exchange:'kiwoom',market:'US',symbol:'AAPL',
+    entrySide:'buy',exitSide:'sell',entryPrice:100,exitPrice:120,
+    entryFx:1400,exitFx:1400,fxSource:'YAHOO:USDKRW=X',
+  });
+  const repeatedRow = {
+    ...valid.orders[0]!,
+    // Broker ID is not duplicated: only the canonical repository ID is.
+    // A distinct displayed alias must not make one fill count twice.
+    exchangeOrderId:'second-exchange-alias',
+    clientOrderId:'second-client-alias',
+  };
+  const state = adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans:valid.plans,
+    orders:[...valid.orders,repeatedRow],nowMs:NOW,
+  });
+  const us = state.marketReadback.us_stock;
+  assert.equal(us.settlementReady,false);
+  assert.deepEqual(us.blockers,['ADMIN_PAPER_CANONICAL_ORDER_IDENTITY_COLLISION']);
+  assert.equal(us.operatingCapitalKrw,null);
+  assert.equal(us.reserveKrw,null);
+  assert.equal(us.newEntriesAllowed,false);
+  assert.equal(state.reserveTransferred,false);
+});

@@ -194,13 +194,18 @@ export function adminFourMarketPaperCapitalReadback(input: {
       // Key the same way as tradeAutomationJournalPayloadsFromSnapshot and
       // reject duplicate aliases before one order can certify another fill.
       const ordersByJournalId = new Map<string, TradingOrder>();
+      const canonicalOrderIds = new Set<string>();
       let journalIdCollision = false;
       for (const order of scoped.orders) {
         const journalId = order.exchangeOrderId ?? order.id;
-        if (!journalId || ordersByJournalId.has(journalId)) {
+        // A duplicated internal row with distinct broker-facing aliases can
+        // otherwise be counted as two independent fills in the journal.
+        if (!order.id || canonicalOrderIds.has(order.id)
+          || !journalId || ordersByJournalId.has(journalId)) {
           journalIdCollision = true;
           break;
         }
+        canonicalOrderIds.add(order.id);
         ordersByJournalId.set(journalId, order);
       }
       if (journalIdCollision) {
