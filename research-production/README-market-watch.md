@@ -29,6 +29,11 @@ The continuous scanner is **stage 1 discovery only**:
   model PASS, future signal, approved trading strategy, Paper or Live authority.
   Downward spot/stock movements are *observations*, never SHORT instructions.
 - A missing/stale source is a visible gap; zero activity is not claimed as success.
+- A subset of usable Bitget tickers is explicitly PARTIAL_TICKERS, not READY.
+- Public HTTP JSON is streamed with a 4 MB decompressed payload ceiling.
+- The observation time is measured after each collection cycle, not before HTTP requests.
+- Daily cycle/discovery counters are **diagnostic only**, not 24-hour uptime proof.
+- The systemd unit has a 3-restart/10-minute safety limit for repeated fatal errors.
 
 ## Optional public stock feed input (not connected yet)
 
