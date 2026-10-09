@@ -49,13 +49,34 @@ test('exit plan is reduce-only and bound to entry identity',()=>{
     reason:'TAKE_PROFIT',
   });
   assert.equal(input.reduceOnly,true);
-  assert.equal(input.side,'long');
+  // A reduce-only SELL ('short') closes an existing LONG in one-way futures.
+  assert.equal(input.side,'short');
   assert.equal(input.accountMode,'paper');
   assert.ok(input.signalReasons.includes(`AUTO_EXIT_ENTRY_PLAN:${entry.id}`));
   assert.equal(input.targetPrices.length,0);
   assert.equal(input.stopPrice,94);
 });
 
+
+
+test('Bitget isolated reduce-only exits reverse entry side without opening a new futures position',()=>{
+  for (const [entrySide, expectedCloseSide] of [
+    ['long','short'], ['short','long'],
+  ] as const) {
+    const entry=plan(entrySide,'bitget');
+    const close=buildAutomaticExitPlanInput({
+      entryPlan:entry,entryOrder:order(entry),
+      mark:{market:'CRYPTO_FUTURES',symbol:'BTC',price:94,observedAt:NOW,source:'public'},
+      fx:{market:'CRYPTO_FUTURES',krwPerQuoteCurrency:1400,source:'UPBIT:KRW-USDT',observedAt:NOW,stale:false},
+      reason:'STOP_LOSS',
+    });
+    assert.equal(close.side,expectedCloseSide);
+    assert.equal(close.reduceOnly,true);
+    assert.equal(close.accountMode,'paper');
+    assert.equal(close.marginMode,'isolated');
+    assert.ok(close.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
+  }
+});
 
 test('exit plan can close only the remaining tracked quantity and reason is part of idempotency identity',()=>{
   const entry=plan('buy','upbit');
