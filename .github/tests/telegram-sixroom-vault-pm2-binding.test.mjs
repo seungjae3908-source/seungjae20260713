@@ -251,4 +251,5 @@ test('protected GitHub workflow separates read-only PLAN from risky APPLY approv
   assert.ok(workflow.includes("r.restartAttempts!==0||r.rollbackAttempts!==0"));
   assert.ok(workflow.includes("r.secretValuesRecorded!==false"));
   assert.ok(workflow.includes("Post sanitized binding classification"));
+  assert.ok(workflow.includes('flock -n /var/lock/stock-app-deploy.lock node --input-type=module -'));
 });
