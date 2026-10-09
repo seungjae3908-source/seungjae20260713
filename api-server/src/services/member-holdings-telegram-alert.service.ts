@@ -1,5 +1,6 @@
 import { hasCanonicalMemberAccessState, hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
+import { telegramSixRoomRoutingIsolated } from './telegram-market-room.service';
 import {
   deliverPersonalTelegramAlert,
   type PersonalTelegramAlertDependencies,
@@ -478,6 +479,7 @@ export function ownerHoldingsChatIdForUser(
   const ownerUserId = env.TELEGRAM_OWNER_MEMBER_ID?.trim();
   const chatId = env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID?.trim();
   if (!ownerUserId || !chatId || ownerUserId !== userId.trim()) return null;
+  if (!telegramSixRoomRoutingIsolated(env)) return null;
   return chatId;
 }
 
