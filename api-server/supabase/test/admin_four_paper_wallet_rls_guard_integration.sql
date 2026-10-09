@@ -134,5 +134,25 @@ begin
   end;
 end
 $client_guard$;
+
+-- Canonical order evidence cannot be wiped with TRUNCATE despite broad
+-- historical role-table grants. Keep scoped CRUD so manual trading is intact.
+do $canonical_no_truncate$
+declare
+  target_table text;
+begin
+  foreach target_table in array array[
+    'trade_order_plans','trade_orders','trade_order_events',
+    'trade_automation_profiles','trade_exchange_connections'
+  ]
+  loop
+    begin
+      execute format('truncate table public.%I', target_table);
+      raise exception 'CANONICAL_TRADE_CLIENT_TRUNCATE_ALLOWED:%', target_table;
+    exception when insufficient_privilege then null;
+    end;
+  end loop;
+end
+$canonical_no_truncate$;
 reset role;
 rollback;

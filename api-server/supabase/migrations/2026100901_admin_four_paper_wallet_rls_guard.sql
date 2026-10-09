@@ -75,6 +75,29 @@ on table public.paper_accounts, public.paper_orders, public.paper_positions,
   public.paper_fills, public.paper_journal_entries, public.paper_sync_state
 from public, anon, authenticated;
 
+-- TRUNCATE bypasses row level security on every table, not just Paper.
+-- Production presently grants this privilege even to anon on the canonical
+-- order plan/order/event tables. Revoke only schema/bulk destructive rights,
+-- not the existing scoped SELECT/INSERT/UPDATE/DELETE API permissions.
+do $canonical_trade_truncate_guard$
+declare
+  target_table text;
+begin
+  foreach target_table in array array[
+    'trade_order_plans','trade_orders','trade_order_events',
+    'trade_automation_profiles','trade_exchange_connections'
+  ]
+  loop
+    if to_regclass(format('public.%I', target_table)) is not null then
+      execute format(
+        'revoke truncate, references, trigger on table public.%I from public, anon, authenticated',
+        target_table
+      );
+    end if;
+  end loop;
+end
+$canonical_trade_truncate_guard$;
+
 -- An ordinary authenticated client can inspect whether its DB rollout is
 -- protected; the RPC is SECURITY INVOKER and returns only a boolean, not rows.
 create or replace function public.admin_four_paper_wallet_rls_guard_ready()
@@ -117,7 +140,9 @@ as $readiness$
     where table_schema = 'public'
       and table_name in (
         'paper_accounts','paper_orders','paper_positions',
-        'paper_fills','paper_journal_entries','paper_sync_state'
+        'paper_fills','paper_journal_entries','paper_sync_state',
+        'trade_order_plans','trade_orders','trade_order_events',
+        'trade_automation_profiles','trade_exchange_connections'
       )
       and grantee in ('PUBLIC','anon','authenticated')
       and privilege_type = 'TRUNCATE'
