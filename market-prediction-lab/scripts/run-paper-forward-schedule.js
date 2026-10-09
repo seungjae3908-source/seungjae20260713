@@ -18,6 +18,7 @@ import {
   validateAuthoritativeNaturalPaperLedger,
 } from "../src/authoritative-natural-paper-accounting-v1.js";
 import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
+import { readFormulaPaperRegistryReadbackV1 } from "../src/formula-paper-registry-readback-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 import {
   runPaperForwardScheduledInvocation,
@@ -859,6 +860,10 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   const authoritativeAccountRequired = researchProduction && explicitOutcomeAccumulation;
 
   try {
+    const formulaPaperRegistryReadback = await readFormulaPaperRegistryReadbackV1({
+      registryPath: env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH ?? null,
+      researchCodeSha,
+    });
     let authoritativeSourceWiringAudit = null;
     let authoritativeRuntimePackageAudit = null;
     let paperStateOwnerAudit = null;
@@ -1212,6 +1217,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       scheduleActive: true,
       researchProduction,
       authoritativeAccountRequired,
+      // READ ONLY: even a verified registry PASS is not a fresh Paper signal.
+      // Never inject this object into canonical admission or order execution.
+      formulaPaperRegistryReadback,
       authoritativeAccount: result.invocation?.authoritativeAccount ?? null,
       identityCutover: cutover.identityCutover === true,
       archivedResearchSha: cutover.archivedResearchSha ?? null,
