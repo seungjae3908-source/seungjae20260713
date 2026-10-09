@@ -162,6 +162,9 @@ requireText(memberQaConfig, "trace: 'off'", 'MEMBER_QA_TRACE_RETENTION_FORBIDDEN
 requireText(memberQaConfig, "screenshot: 'off'", 'MEMBER_QA_SCREENSHOT_RETENTION_FORBIDDEN');
 requireText(runner, "comprehensive|account|credential|member", 'MEMBER_QA_RUNNER_MODE_MISSING');
 requireText(contextBuilder, 'activeConflictingTradingGates: conflicts', 'POSTDEPLOY_GATE_CONFLICT_CONTEXT_MISSING');
+requireText(contextBuilder, 'verifyPostDeployMainLineage', 'POSTDEPLOY_MAIN_LINEAGE_HELPER_MISSING');
+requireText(contextBuilder, '/compare/${normalizedTarget}...${currentMainSha}', 'POSTDEPLOY_GITHUB_ANCESTRY_VERIFICATION_MISSING');
+requireText(evidenceBuilder, 'POSTDEPLOY_QA_MAIN_LINEAGE_UNVERIFIED', 'POSTDEPLOY_UNVERIFIED_MAIN_GUARD_MISSING');
 requireText(contextBuilder, "mode === 'inline'", 'INLINE_DEPLOY_CONTEXT_MODE_MISSING');
 requireText(evidenceBuilder, "deploymentVerificationMode === 'inline-approved-job'", 'INLINE_DEPLOY_EVIDENCE_MODE_MISSING');
 requireText(evidenceBuilder, 'requireZeroAuthority', 'POSTDEPLOY_ZERO_AUTHORITY_EVIDENCE_MISSING');
