@@ -27,8 +27,40 @@ insert into public.paper_accounts(user_id,id,payload,version)
 values (
   '99999999-9999-4999-8999-999999999999',
   'automatic-paper-admin-v2:crypto_spot',
-  '{"id":"automatic-paper-admin-v2:crypto_spot","initialBalance":1000000}'::jsonb,1
+  '{
+    "id":"automatic-paper-admin-v2:crypto_spot",
+    "schemaVersion":"admin-four-market-paper-v2",
+    "market":"crypto_spot",
+    "initialBalance":1000000,
+    "equity":1000000,
+    "cashBalance":1000000,
+    "availableMargin":1000000,
+    "usedMargin":0,
+    "reserveKrw":0,
+    "compoundedProfitKrw":0,
+    "compoundShare":0.5,
+    "reserveShare":0.5,
+    "reserveWithdrawalAutomatic":false
+  }'::jsonb,1
 );
+
+-- The DB owner itself cannot create a V2 wallet with the wrong market,
+-- fabricated cash or a 500k initial balance: RLS alone would not stop it.
+do $seed_invariant$
+declare
+  denied boolean := false;
+begin
+  begin
+    insert into public.paper_accounts(user_id,id,payload,version)
+    values('99999999-9999-4999-8999-999999999999',
+      'automatic-paper-admin-v2:us_stock',
+      '{"id":"automatic-paper-admin-v2:us_stock","market":"us_stock",
+         "schemaVersion":"admin-four-market-paper-v2","initialBalance":500000}'::jsonb,1);
+  exception when check_violation then denied := true;
+  end;
+  if not denied then raise exception 'ADMIN_PAPER_DB_OWNER_FALSE_SEED_ALLOWED'; end if;
+end
+$seed_invariant$;
 
 set role authenticated;
 select set_config('request.jwt.claim.sub','99999999-9999-4999-8999-999999999999',true);
@@ -72,6 +104,34 @@ begin
     where user_id=auth.uid() and id='normal-client-paper-wallet';
   get diagnostics updated = row_count;
   if updated <> 1 then raise exception 'NORMAL_PAPER_CLIENT_UPDATE_REGRESSION'; end if;
+
+  -- A normal owner wallet cannot be renamed into a protected administrator
+  -- ID by UPDATE WITH CHECK. Otherwise no INSERT guard can be sufficient.
+  begin
+    update public.paper_accounts
+    set id = 'automatic-paper-admin-v2:us_stock'
+    where user_id=auth.uid() and id='normal-client-paper-wallet';
+    get diagnostics updated = row_count;
+    if updated <> 0 then raise exception 'ADMIN_PAPER_RLS_RENAME_ALLOWED'; end if;
+  exception when insufficient_privilege then null;
+  end;
+
+  -- A direct client INSERT ... ON CONFLICT DO UPDATE must not overwrite
+  -- an existing immutable administrator wallet.
+  begin
+    insert into public.paper_accounts(user_id,id,payload,version)
+    values(auth.uid(),'automatic-paper-admin-v2:crypto_spot',
+      '{"equity":12345678}'::jsonb,1)
+    on conflict (user_id,id) do update set payload=excluded.payload;
+    raise exception 'ADMIN_PAPER_RLS_UPSERT_ALLOWED';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    execute 'truncate table public.paper_accounts';
+    raise exception 'ADMIN_PAPER_CLIENT_TRUNCATE_ALLOWED';
+  exception when insufficient_privilege then null;
+  end;
 end
 $client_guard$;
 reset role;
