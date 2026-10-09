@@ -217,6 +217,30 @@ export function adminMarketPaperRiskBudget(input: {
     availableToTradeKrw: Math.max(0, collateral - exposureKrw),
   };
 }
+/**
+ * Keep Paper cash on the verified per-market ledger: the original 1m
+ * member-wide authorization ceiling is not a market cash balance.
+ * A signed, settled 50% compound gain can increase cash without silently
+ * raising per-order/risk or Live/Provider permissions.
+ */
+export function adminMarketPaperAvailableBalance(
+  storedPolicyCapitalKrw: number,
+  openMarketExposureKrw: number,
+  certifiedMarketBudget?: Readonly<{
+    ready: boolean;
+    availableToTradeKrw: number;
+  }> | null,
+): number {
+  if (certifiedMarketBudget) {
+    return certifiedMarketBudget.ready === true
+      && finiteNonnegative(certifiedMarketBudget.availableToTradeKrw)
+      ? certifiedMarketBudget.availableToTradeKrw : 0;
+  }
+  if (!finiteNonnegative(storedPolicyCapitalKrw)
+    || !finiteNonnegative(openMarketExposureKrw)) return 0;
+  return Math.max(0, storedPolicyCapitalKrw - openMarketExposureKrw);
+}
+
 export type VerifiedMarketSettlement = Readonly<{
   id: string;
   market: AdminPaperMarket;
