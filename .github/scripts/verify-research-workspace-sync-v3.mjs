@@ -178,6 +178,8 @@ const researchCenterIntegrationReviewed=[
  'research-dashboard/test/test_server.py',
  'stock-analyzer/src/lib/research-center.ts',
  'stock-analyzer/src/pages/research-center.tsx',
+ // Exact Research Center zero-fabrication regression; not a scope wildcard.
+ 'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
