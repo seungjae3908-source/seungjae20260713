@@ -554,12 +554,42 @@ jobs:
               return { ok: response.ok && value?.ok === true, value };
             }
 
+            // Chat visibility alone is insufficient: a dedicated "room" must
+            // actually be a group/supergroup/channel the bot can post to.
+            // This classifier receives getChat/getChatMember results only;
+            // never log room IDs, bot user IDs, or Telegram response bodies.
+            function telegramDedicatedRoomGuard(label, chat, member) {
+              const dedicatedLabels = new Set([
+                'KR_STOCK_CHAT', 'US_STOCK_CHAT', 'CRYPTO_SPOT_CHAT',
+                'CRYPTO_FUTURES_CHAT', 'HOLDINGS_CHAT', 'AUTO_TRADING_CHAT',
+              ]);
+              if (!dedicatedLabels.has(label)) return null;
+              const kind = String(chat?.type ?? '');
+              if (!['group', 'supergroup', 'channel'].includes(kind)) return label + '_INVALID_ROOM_TYPE';
+              const status = String(member?.status ?? '');
+              if (!['creator', 'administrator', 'member', 'restricted'].includes(status)) {
+                return label + '_BOT_MEMBERSHIP_INVALID';
+              }
+              if (kind === 'channel' && status !== 'creator'
+                  && !(status === 'administrator' && member?.can_post_messages === true)) {
+                return label + '_CHANNEL_POST_DENIED';
+              }
+              if (status === 'restricted' && member?.can_send_messages !== true) {
+                return label + '_BOT_WRITE_DENIED';
+              }
+              return null;
+            }
+
             const errors = [];
+            let verifiedBotId = null;
             try {
               const me = await api('getMe');
               const username = String(me.value?.result?.username ?? '').trim().toLowerCase();
               if (!me.ok) errors.push('BOT_TOKEN_INVALID_OR_UNREACHABLE');
               else if (!username || username !== configuredUsername) errors.push('BOT_USERNAME_MISMATCH');
+              const botId = Number(me.value?.result?.id);
+              if (me.ok && Number.isSafeInteger(botId) && botId > 0) verifiedBotId = botId;
+              else errors.push('BOT_MEMBER_ID_UNVERIFIED');
             } catch {
               errors.push('BOT_IDENTITY_CHECK_FAILED');
             }
@@ -580,7 +610,23 @@ jobs:
             for (const [label, chatId] of roomTargets) {
               try {
                 const chat = await api('getChat', { chat_id: chatId });
-                if (!chat.ok) errors.push(`${label}_UNREACHABLE`);
+                if (!chat.ok) {
+                  errors.push(`${label}_UNREACHABLE`);
+                } else if (label.endsWith('_CHAT') && label !== 'DEFAULT_CHAT'
+                    && label !== 'STOCK_CHAT_LEGACY' && label !== 'CRYPTO_CHAT_LEGACY') {
+                  if (!['group', 'supergroup', 'channel'].includes(String(chat.value?.result?.type ?? ''))) {
+                    errors.push(`${label}_INVALID_ROOM_TYPE`);
+                  } else if (verifiedBotId == null) {
+                    errors.push(`${label}_BOT_MEMBER_ID_UNVERIFIED`);
+                  } else {
+                    const membership = await api('getChatMember', { chat_id: chatId, user_id: verifiedBotId });
+                    if (!membership.ok) errors.push(`${label}_BOT_MEMBERSHIP_UNREACHABLE`);
+                    else {
+                      const reason = telegramDedicatedRoomGuard(label, chat.value?.result, membership.value?.result);
+                      if (reason) errors.push(reason);
+                    }
+                  }
+                }
               } catch {
                 errors.push(`${label}_CHECK_FAILED`);
               }
@@ -969,19 +1015,65 @@ jobs:
               const value = await response.json().catch(() => null);
               return { ok: response.ok && value?.ok === true, value };
             }
+            // Chat visibility alone is insufficient: a dedicated "room" must
+            // actually be a group/supergroup/channel the bot can post to.
+            // This classifier receives getChat/getChatMember results only;
+            // never log room IDs, bot user IDs, or Telegram response bodies.
+            function telegramDedicatedRoomGuard(label, chat, member) {
+              const dedicatedLabels = new Set([
+                'KR_STOCK_CHAT', 'US_STOCK_CHAT', 'CRYPTO_SPOT_CHAT',
+                'CRYPTO_FUTURES_CHAT', 'HOLDINGS_CHAT', 'AUTO_TRADING_CHAT',
+              ]);
+              if (!dedicatedLabels.has(label)) return null;
+              const kind = String(chat?.type ?? '');
+              if (!['group', 'supergroup', 'channel'].includes(kind)) return label + '_INVALID_ROOM_TYPE';
+              const status = String(member?.status ?? '');
+              if (!['creator', 'administrator', 'member', 'restricted'].includes(status)) {
+                return label + '_BOT_MEMBERSHIP_INVALID';
+              }
+              if (kind === 'channel' && status !== 'creator'
+                  && !(status === 'administrator' && member?.can_post_messages === true)) {
+                return label + '_CHANNEL_POST_DENIED';
+              }
+              if (status === 'restricted' && member?.can_send_messages !== true) {
+                return label + '_BOT_WRITE_DENIED';
+              }
+              return null;
+            }
+
             const telegramPreflightErrors = [];
+            let verifiedBotId = null;
             try {
               const bot = await telegramApiRead('getMe');
               const actualUsername = String(bot.value?.result?.username ?? '').trim().toLowerCase();
               if (!bot.ok) telegramPreflightErrors.push('BOT_TOKEN_INVALID_OR_UNREACHABLE');
               else if (!actualUsername || actualUsername !== preflightBotUsername) telegramPreflightErrors.push('BOT_USERNAME_MISMATCH');
+              const botId = Number(bot.value?.result?.id);
+              if (bot.ok && Number.isSafeInteger(botId) && botId > 0) verifiedBotId = botId;
+              else telegramPreflightErrors.push('BOT_MEMBER_ID_UNVERIFIED');
             } catch {
               telegramPreflightErrors.push('BOT_IDENTITY_CHECK_FAILED');
             }
             for (const [label, roomId] of preflightRooms) {
               try {
                 const room = await telegramApiRead('getChat', { chat_id: roomId });
-                if (!room.ok) telegramPreflightErrors.push(`${label}_UNREACHABLE`);
+                if (!room.ok) {
+                  telegramPreflightErrors.push(`${label}_UNREACHABLE`);
+                } else if (label.endsWith('_CHAT') && label !== 'DEFAULT_CHAT'
+                    && label !== 'STOCK_CHAT_LEGACY' && label !== 'CRYPTO_CHAT_LEGACY') {
+                  if (!['group', 'supergroup', 'channel'].includes(String(room.value?.result?.type ?? ''))) {
+                    telegramPreflightErrors.push(`${label}_INVALID_ROOM_TYPE`);
+                  } else if (verifiedBotId == null) {
+                    telegramPreflightErrors.push(`${label}_BOT_MEMBER_ID_UNVERIFIED`);
+                  } else {
+                    const membership = await telegramApiRead('getChatMember', { chat_id: roomId, user_id: verifiedBotId });
+                    if (!membership.ok) telegramPreflightErrors.push(`${label}_BOT_MEMBERSHIP_UNREACHABLE`);
+                    else {
+                      const reason = telegramDedicatedRoomGuard(label, room.value?.result, membership.value?.result);
+                      if (reason) telegramPreflightErrors.push(reason);
+                    }
+                  }
+                }
               } catch {
                 telegramPreflightErrors.push(`${label}_CHECK_FAILED`);
               }
