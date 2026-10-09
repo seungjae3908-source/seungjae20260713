@@ -66,6 +66,8 @@ test('Production admin policy aligns the single-entry ceiling to 1M with zero or
   const before = await appApi<any>(page, '/api/trade-automation/status');
   expect(before.ok, JSON.stringify(before.body)).toBe(true);
   expect(before.body?.ok).toBe(true);
+  expect(before.body?.initialMaxOrderKrw).toBe(TARGET_MAX_ORDER_KRW);
+  expect(before.body?.administratorOrderBaseline).toBe(true);
   const providers = ['toss', 'kiwoom', 'upbit', 'bitget'];
   for (const provider of providers) {
     expect(before.body?.liveExecutionServerEnabled?.[provider], `manual LIVE gate must be OFF: ${provider}`).toBe(false);

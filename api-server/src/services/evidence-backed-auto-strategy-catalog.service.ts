@@ -76,7 +76,7 @@ export type StrategyPilotProfile = Readonly<{
 
 export const RULE_PACK_PILOT_PROFILE: StrategyPilotProfile = Object.freeze({
   mode: 'PAPER_MIRROR_MANUAL_LIVE_CONFIRM',
-  initialOperatingCapitalKrw: 1_000_000,
+  initialOperatingCapitalKrw: 500_000,
   profitCompoundShare: 0.5,
   profitReserveShare: 0.5,
   maxEntryTracksOperatingCapital: true,

@@ -63,7 +63,10 @@ import type {
   TradingPolicy,
   TradingSignalState,
 } from '../services/trade-automation.types';
-import { PRODUCTION_MAX_SINGLE_ENTRY_KRW } from '../services/trade-automation.types';
+import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+} from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 router.use(createScannerPaperPlansRouter());
@@ -189,7 +192,7 @@ function context(req: AuthenticatedRequest) {
   const repository = repositoryFactoryForTests
     ? repositoryFactoryForTests(userId)
     : req.accessToken
-      ? createSupabaseTradingRepository(req.accessToken, userId)
+      ? createSupabaseTradingRepository(req.accessToken, userId, maximumSingleEntryKrw(req))
       : (() => { throw new Error('LOGIN_REQUIRED'); })();
   const splitRepository = splitRepositoryFactoryForTests
     ? splitRepositoryFactoryForTests(userId)
@@ -915,7 +918,7 @@ router.post('/rehearsal/run', async (req: AuthenticatedRequest, res) => {
       credentialsExposed: false;
     }>;
 
-    const paper = runFormulaAiPaperRehearsalProbe();
+    const paper = runFormulaAiPaperRehearsalProbe(new Date(), maximumSingleEntryKrw(req));
     const journalReadReady = req.body?.journalReadReady === true;
     const telegramReady = req.body?.telegramReady === true;
     const futures = futuresLiveRuntimeStatus();
@@ -1255,6 +1258,8 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     return res.json({
       ok: true,
       policy,
+      initialMaxOrderKrw: maximumSingleEntryKrw(req),
+      administratorOrderBaseline: maximumSingleEntryKrw(req) === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
       connections: safeConnections(connections),
       emergencyStopped: policy.emergencyStopped || persistentGlobalStop || environmentGlobalStop,
       emergencyStopSources: {
@@ -1382,7 +1387,7 @@ router.put('/policy', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
     const current = await repository.getPolicy(userId);
-    let candidate = normalizeTradingPolicy(req.body);
+    let candidate = normalizeTradingPolicy(req.body, maximumSingleEntryKrw(req));
     if (req.member && !hasCapability(req.member, 'canAccessFutures')) {
       candidate.marketEnabled.crypto_futures = false;
       candidate.exchangeEnabled.bitget = false;
@@ -1429,10 +1434,16 @@ function livePolicyAuthorityActive() {
     || LIVE_POLICY_AUTHORITY_ENV_KEYS.some((key) => process.env[key] === 'true');
 }
 
+function maximumSingleEntryKrw(req: AuthenticatedRequest) {
+  return req.member && hasCapability(req.member, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
 router.post('/admin/order-limit-1m', requireAdmin, async (req: AuthenticatedRequest, res) => {
   try {
     if (req.body?.confirmation !== 'SET_MAX_ORDER_KRW_1000000_WITH_LIVE_DISABLED'
-      || req.body?.maxOrderKrw !== PRODUCTION_MAX_SINGLE_ENTRY_KRW) {
+      || req.body?.maxOrderKrw !== PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW) {
       return res.status(409).json({
         ok: false,
         error: 'PRODUCTION_ORDER_LIMIT_CONFIRMATION_REQUIRED',
@@ -1461,8 +1472,8 @@ router.post('/admin/order-limit-1m', requireAdmin, async (req: AuthenticatedRequ
     const current = await repository.getPolicy(userId);
     const policy: TradingPolicy = {
       ...current,
-      totalCapitalKrw: Math.max(current.totalCapitalKrw, PRODUCTION_MAX_SINGLE_ENTRY_KRW),
-      maxOrderKrw: PRODUCTION_MAX_SINGLE_ENTRY_KRW,
+      totalCapitalKrw: Math.max(current.totalCapitalKrw, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW),
+      maxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
     };
     const changed = current.totalCapitalKrw !== policy.totalCapitalKrw
       || current.maxOrderKrw !== policy.maxOrderKrw;
@@ -1471,7 +1482,7 @@ router.post('/admin/order-limit-1m', requireAdmin, async (req: AuthenticatedRequ
     return res.json({
       ok: true,
       policy,
-      targetMaxOrderKrw: PRODUCTION_MAX_SINGLE_ENTRY_KRW,
+      targetMaxOrderKrw: PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
       policyUpdated: changed,
       idempotent: !changed,
       riskCeilingsPreserved: {
