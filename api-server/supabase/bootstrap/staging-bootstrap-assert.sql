@@ -351,3 +351,18 @@ begin
   end if;
 end
 $staging_member_security_definer_assert$;
+
+-- A successful staging release must exercise the V2 wallet + 15 canonical
+-- Paper order write barriers. Merely including a migration file is not proof.
+-- Keep the assertion read-only; account creation and provider order execution
+-- are intentionally outside the staging bootstrap.
+do $staging_admin_v2_rls_assert$
+begin
+  if to_regprocedure('public.admin_four_paper_wallet_rls_guard_ready()') is null then
+    raise exception 'STAGING_ADMIN_V2_RLS_GUARD_REQUIRED';
+  end if;
+  if public.admin_four_paper_wallet_rls_guard_ready() is not true then
+    raise exception 'STAGING_ADMIN_V2_RLS_GUARD_REQUIRED';
+  end if;
+end
+$staging_admin_v2_rls_assert$;
