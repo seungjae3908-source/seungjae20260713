@@ -37,7 +37,8 @@ test('Telegram group and channel permissions fail closed',()=>{
     assert.equal(botPermissionVerdict({type},{status:'member'}),'PASS');
     assert.equal(botPermissionVerdict({type},{status:'restricted',can_send_messages:false}),'BOT_ROOM_SEND_FORBIDDEN');
   }
-  assert.equal(botPermissionVerdict({type:'supergroup',permissions:{can_send_messages:false}},{status:'member'}),'BOT_ROOM_SEND_FORBIDDEN');\n  assert.equal(botPermissionVerdict({type:'channel'},{status:'creator'}),'PASS');
+  assert.equal(botPermissionVerdict({type:'supergroup',permissions:{can_send_messages:false}},{status:'member'}),'BOT_ROOM_SEND_FORBIDDEN');
+  assert.equal(botPermissionVerdict({type:'channel'},{status:'creator'}),'PASS');
   assert.equal(botPermissionVerdict({type:'channel'},{status:'administrator',can_post_messages:true}),'PASS');
   assert.equal(botPermissionVerdict({type:'channel'},{status:'administrator',can_post_messages:false}),'BOT_CHANNEL_POST_FORBIDDEN');
   assert.equal(botPermissionVerdict({type:'channel'},{status:'member'}),'BOT_CHANNEL_POST_FORBIDDEN');
