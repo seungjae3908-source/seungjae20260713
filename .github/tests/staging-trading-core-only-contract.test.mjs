@@ -14,25 +14,32 @@ const SHA = 'a'.repeat(40);
 const requireAll = (text, markers) => {
   for (const marker of markers) assert.ok(text.includes(marker), 'missing contract marker: ' + marker);
 };
-test('Staging admin login maps protected email to the actual app login ID without storing a token', () => {
+test('Staging browser restores the real isolated admin password session without inventing login metadata', () => {
   requireAll(spec, [
-    'resolveStagingAdminLoginName',
-    'STAGING_SUPABASE_ANON_KEY',
-    'user_metadata?.login_name',
-    'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING',
-    'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH',
-    'await username.fill(loginName)',
+    'restoreStagingAdminSession',
+    "new URL('/auth/v1/token?grant_type=password', supabase)",
+    "new URL('/api/auth/profile', origin)",
+    'STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH',
+    'STAGING_ADMIN_PROFILE_NOT_APPROVED',
+    'STAGING_ADMIN_SESSION_CONTRACT_INVALID',
+    'window.localStorage.setItem(storageKey, JSON.stringify(session))',
+    "await page.reload({ waitUntil: 'domcontentloaded' })",
+    'STAGING_PASSWORD_SESSION_RESTORE',
+    'interactiveLoginFormTested: false',
   ]);
-  assert.ok(!spec.includes("username.fill(required('STAGING_ADMIN_EMAIL'))"));
-  assert.ok(workflow.includes('STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}'));
+  assert.ok(!spec.includes('STAGING_ADMIN_LOGIN_ID_METADATA_MISSING'));
+  assert.ok(!spec.includes('username.fill('));
+  assert.ok(!spec.includes('password.fill('));
+  assert.ok(!spec.includes('user_metadata?.login_name'));
 });
+
 test('Staging auth identity/token are never printed or written into scoped QA receipts', () => {
   assert.ok(!/console\.(?:log|info|warn|error)\(\s*(?:body|loginName|email|password)\b/.test(spec));
   assert.ok(!/writeFileSync\([^,]+,\s*JSON\.stringify\(body\b/.test(spec));
   requireAll(spec, [
-    "'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING'",
-    "'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH'",
-    "return loginName;",
+    "'STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH'",
+    "'STAGING_ADMIN_PROFILE_NOT_APPROVED'",
+    "'STAGING_ADMIN_SESSION_CONTRACT_INVALID'",
   ]);
   assert.ok(!verdict.includes('adminEmail'));
   assert.ok(!verdict.includes('accessToken'));
@@ -158,7 +165,8 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
   const dir = mkdtempSync(path.join(os.tmpdir(), 'trading-core-staging-scoped-'));
   const base = (project) => ({
     schemaVersion: 'staging-trading-core-only-v1', targetSha: SHA, project,
-    stagingScopedQa: 'PASS', fourMarketsStructural: true,
+    stagingScopedQa: 'PASS', browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
+    interactiveLoginFormTested: false, fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true, walletSeedPerMarketKrw: 1000000,
     stagesChecked: Array.from({ length: 8 }, (_, i) => String(i)),
     walletCount: 0, stagingWalletReady: false, paperWorkerReady: false,
@@ -180,6 +188,8 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     assert.equal(result.status, 0, result.stderr);
     const receipt = JSON.parse(readFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), 'utf8'));
     assert.equal(receipt.scopedStagingQa, 'PASS');
+    assert.equal(receipt.browserAuthMode, 'STAGING_PASSWORD_SESSION_RESTORE');
+    assert.equal(receipt.interactiveLoginFormTested, false);
     assert.equal(receipt.productionReleaseReady, false);
     assert.equal(receipt.automaticTradingActivated, false);
     assert.equal(receipt.operationalReadiness, 'BLOCKED');
