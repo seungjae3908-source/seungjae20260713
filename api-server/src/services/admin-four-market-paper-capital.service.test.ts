@@ -71,12 +71,15 @@ test('all four markets have separate, non-cross-subsidizing trading budgets', ()
     ? { ...row, payload: { ...row.payload, equity: 900_000, cashBalance: 900_000, availableMargin: 900_000 } } : row);
   const usBudget = adminMarketPaperRiskBudget({
     market: 'us_stock', records: poorerUS, openPlans: [us, spot], nowMs: AT.getTime() + 5_000,
+    verifiedCapital: projectAdminMarketCapital('us_stock', [], AT.getTime() + 5_000),
   });
   const krBudget = adminMarketPaperRiskBudget({
     market: 'domestic_stock', records: poorerUS, openPlans: [us, spot], nowMs: AT.getTime() + 5_000,
+    verifiedCapital: projectAdminMarketCapital('domestic_stock', [], AT.getTime() + 5_000),
   });
   const spotBudget = adminMarketPaperRiskBudget({
     market: 'crypto_spot', records: poorerUS, openPlans: [us, spot], nowMs: AT.getTime() + 5_000,
+    verifiedCapital: projectAdminMarketCapital('crypto_spot', [], AT.getTime() + 5_000),
   });
   assert.equal(usBudget.availableToTradeKrw, 200_000);
   assert.equal(krBudget.availableToTradeKrw, 1_000_000);
@@ -153,6 +156,7 @@ test('market budget admits only canonical settlement-backed compounding and neve
   });
   const kr = adminMarketPaperRiskBudget({
     market:'domestic_stock',records:ready,openPlans:[],
+    verifiedCapital:projectAdminMarketCapital('domestic_stock',[],AT.getTime()+5_000),
     nowMs:AT.getTime()+5_000,
   });
   assert.equal(us.ready,true);
@@ -266,4 +270,19 @@ test('verified 50/50 compound cash is market-local and cannot expand Live order 
     ready: true, availableToTradeKrw: Number.NaN,
   }), 0);
   assert.equal(adminMarketPaperAvailableBalance(1_000_000, 200_000), 800_000);
+});
+
+test('wallet seed alone cannot authorize Paper trading without canonical closing-ledger verification', () => {
+  const missing=adminMarketPaperRiskBudget({
+    market:'crypto_spot',records:wallets(),openPlans:[],nowMs:AT.getTime()+5_000,
+  });
+  assert.equal(missing.ready,false);
+  assert.equal(missing.availableToTradeKrw,0);
+  assert.ok(missing.blockers.includes('ADMIN_PAPER_CANONICAL_SETTLEMENT_REQUIRED'));
+  const reviewed=adminMarketPaperRiskBudget({
+    market:'crypto_spot',records:wallets(),openPlans:[],nowMs:AT.getTime()+5_000,
+    verifiedCapital:projectAdminMarketCapital('crypto_spot',[],AT.getTime()+5_000),
+  });
+  assert.equal(reviewed.ready,true);
+  assert.equal(reviewed.availableToTradeKrw,1_000_000);
 });
