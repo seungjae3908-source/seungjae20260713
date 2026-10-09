@@ -1,6 +1,10 @@
 import type { TradingPolicy } from './trade-automation.types';
 import type { StoredPaperJournalRecord } from './paper-journal.types';
 import {
+  ADMIN_MARKET_INITIAL_KRW,
+  inspectAdminFourMarketPaperWallets,
+} from './admin-four-market-paper-capital.service';
+import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   automaticPaperCapitalPolicyReady,
   automaticPaperWalletServerEpochMs,
@@ -13,6 +17,8 @@ export type AutomaticPaperRuntimeMode = 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACK
 export type MemberAutomaticPaperReadinessInput = Readonly<{
   policy: TradingPolicy;
   wallet: StoredPaperJournalRecord | null;
+  administratorFourMarket?: boolean;
+  adminMarketWalletRecords?: readonly StoredPaperJournalRecord[];
   workerHealth: MemberAutoTradingBackgroundRuntimeHealth;
   workerMode: AutomaticPaperRuntimeMode;
   globalStopped: boolean;
@@ -26,13 +32,20 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     && input.wallet.id === AUTOMATIC_PAPER_ACCOUNT_ID ? [input.wallet] : [];
   const equity = selectAutomaticPaperAccountEquity(account);
   const epoch = automaticPaperWalletServerEpochMs(account, nowMs);
-  const paperWalletReady = equity !== null && epoch !== null;
-  if (!paperWalletReady) blockers.push('BACKGROUND_PAPER_WALLET_REQUIRED');
-  // A 500k dedicated virtual wallet cannot honestly be called ready when
-  // the stored member policy still budgets only 100k for automatic trading.
-  // Allow growth from the agreed 500k floor; never change the policy here.
-  const paperCapitalPolicyReady = automaticPaperCapitalPolicyReady(policy);
-  if (!paperCapitalPolicyReady) blockers.push('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW');
+  const adminWallets = input.administratorFourMarket === true
+    ? inspectAdminFourMarketPaperWallets(input.adminMarketWalletRecords ?? [], nowMs)
+    : null;
+  const paperWalletReady = adminWallets
+    ? adminWallets.ready : equity !== null && epoch !== null;
+  if (!paperWalletReady) blockers.push(adminWallets
+    ? 'BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED' : 'BACKGROUND_PAPER_WALLET_REQUIRED');
+  if (adminWallets && !adminWallets.ready) blockers.push(...adminWallets.blockers);
+  const paperCapitalPolicyReady = adminWallets
+    ? Number.isFinite(policy.totalCapitalKrw)
+      && policy.totalCapitalKrw >= ADMIN_MARKET_INITIAL_KRW
+    : automaticPaperCapitalPolicyReady(policy);
+  if (!paperCapitalPolicyReady) blockers.push(adminWallets
+    ? 'BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED' : 'BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW');
 
   const enabledMarketCount = Object.values(policy.marketEnabled).filter((value) => value === true).length;
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
@@ -49,6 +62,9 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   if (policy.emergencyStopped || policy.newEntriesStopped || input.globalStopped) blockers.push('BACKGROUND_TRADING_STOP_ACTIVE');
   if (enabledMarketCount === 0) blockers.push('BACKGROUND_MEMBER_MARKETS_DISABLED');
   if (connectedPolicyMarketCount === 0) blockers.push('BACKGROUND_MARKET_PROVIDER_POLICY_DISABLED');
+  if (adminWallets && connectedPolicyMarketCount !== 4) {
+    blockers.push('BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED');
+  }
   if (!strategyAllowlistReady) blockers.push('BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED');
 
   // A shared Worker might gain Live authority under separate environment
@@ -81,6 +97,8 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     blockers: uniqueBlockers,
     workerMode,
     paperWalletReady,
+    administratorFourMarket: adminWallets != null,
+    adminMarketWalletsReady: adminWallets?.ready ?? null,
     paperCapitalPolicyReady,
     strategyAllowlistReady,
     enabledMarketCount,

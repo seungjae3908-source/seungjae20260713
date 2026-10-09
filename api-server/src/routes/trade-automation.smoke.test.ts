@@ -6,6 +6,7 @@ import router, {
   normalizeReadonlyCredentialsForLiveExecution,
   setTradeAutomationRepositoryFactoryForTests,
   setTradePaperRuntimeWalletReaderForTests,
+  setTradePaperRuntimeRecordsReaderForTests,
   setTradeExitPreviewReadersFactoryForTests,
   setTradeReadonlyCredentialRepositoryFactoryForTests,
 } from './trade-automation';
@@ -350,6 +351,7 @@ test.beforeEach(async () => {
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
   setTradePaperRuntimeWalletReaderForTests(null);
+  setTradePaperRuntimeRecordsReaderForTests(null);
   setTradeReadonlyCredentialRepositoryFactoryForTests(null);
   setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
@@ -2707,6 +2709,33 @@ test('formula+AI rehearsal HTTP route proves four-market readiness and never cre
     }
     delete process.env.FUTURES_LIVE_MAX_LEVERAGE;
     delete process.env.FUTURES_LIVE_MARGIN_MODE;
+    await close(server);
+  }
+});
+
+test('administrator Paper readiness reads all four own-market wallets without provider calls', async () => {
+  let reads = 0;
+  setTradePaperRuntimeWalletReaderForTests(async () => null);
+  setTradePaperRuntimeRecordsReaderForTests(async (userId) => {
+    assert.equal(userId,USER);
+    reads += 1;
+    return [];
+  });
+  const {server,baseUrl}=await startServer(true,'admin');
+  try {
+    const result=await fetch(baseUrl+'/api/trade-automation/paper-runtime-readiness');
+    assert.equal(result.status,200);
+    const body=await result.json() as Record<string,any>;
+    assert.equal(body.ok,true);
+    assert.equal(body.administratorFourMarket,true);
+    assert.equal(body.adminMarketWalletsReady,false);
+    assert.ok(body.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
+    assert.equal(body.orderSubmitted,false);
+    assert.equal(body.privateProviderRequests,0);
+    assert.equal(reads,1);
+  } finally {
+    setTradePaperRuntimeWalletReaderForTests(null);
+    setTradePaperRuntimeRecordsReaderForTests(null);
     await close(server);
   }
 });
