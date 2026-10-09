@@ -261,6 +261,33 @@ function assertTradingCoreReceipt(tradingCore, { targetSha, productionDeployRunI
   assertNoForbiddenEvidenceKeys(tradingCore);
 }
 
+function isActiveProductionTradingGateRun(run) {
+  // PR checks validate contracts only: they cannot activate Live/Auto authority.
+  // Operational issue commands (or future workflow dispatches) must still
+  // stop QA while their run is nonterminal, even if its intent is uncertain.
+  return (run?.event === 'issue_comment' || run?.event === 'workflow_dispatch')
+    && run?.status !== 'completed';
+}
+function verifyPostDeployMainLineage({ targetSha, currentMainSha, comparison = null }) {
+  const target = String(targetSha ?? '').trim().toLowerCase();
+  const mainSha = String(currentMainSha ?? '').trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(target) || !/^[0-9a-f]{40}$/.test(mainSha)) {
+    throw new Error('POSTDEPLOY_CONTEXT_MAIN_LINEAGE_SHA_INVALID');
+  }
+  // Exact main is mandatory at initial release authorization. After that
+  // immutable Production QA may outlive an ordinary fast-forward merge.
+  if (mainSha === target) {
+    return { mainSha, mainAncestorVerified: true, mainAdvancedAfterDeployment: false };
+  }
+  const baseSha = String(comparison?.base_commit?.sha ?? '').toLowerCase();
+  const mergeBaseSha = String(comparison?.merge_base_commit?.sha ?? '').toLowerCase();
+  if (comparison?.status !== 'ahead' || baseSha !== target
+    || mergeBaseSha !== target || comparison?.behind_by !== 0
+    || !Number.isSafeInteger(comparison?.ahead_by) || comparison.ahead_by < 1) {
+    throw new Error('POSTDEPLOY_CONTEXT_MAIN_NOT_FORWARD_DESCENDANT');
+  }
+  return { mainSha, mainAncestorVerified: true, mainAdvancedAfterDeployment: true };
+}
 function buildProductionPostdeployQaEvidence({
   targetSha,
   productionDeployRunId,
@@ -287,7 +314,14 @@ function buildProductionPostdeployQaEvidence({
   assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });
   assertCredentialReceipt(credential, { targetSha: sha, productionDeployRunId: deployRunId });
 
-  requireExactSha(context?.mainSha, sha, 'POSTDEPLOY_QA_MAIN_SHA_MISMATCH');
+  const actualMainSha = String(context?.mainSha ?? '').trim().toLowerCase();
+  // The context builder has verified the exact GitHub compare ancestry;
+  // neither an unrelated/divergent main nor a missing proof is acceptable.
+  if (!/^[0-9a-f]{40}$/.test(actualMainSha)
+    || context?.mainAncestorVerified !== true
+    || context?.mainAdvancedAfterDeployment !== (actualMainSha !== sha)) {
+    throw new Error('POSTDEPLOY_QA_MAIN_LINEAGE_UNVERIFIED');
+  }
   requireExactSha(context?.productionDeploySha, sha, 'POSTDEPLOY_QA_PRODUCTION_SHA_MISMATCH');
   requireExactSha(context?.processDeploySha, sha, 'POSTDEPLOY_QA_PROCESS_SHA_MISMATCH');
   requireExactSha(context?.deployMarkerSha, sha, 'POSTDEPLOY_QA_MARKER_SHA_MISMATCH');
@@ -339,7 +373,9 @@ function buildProductionPostdeployQaEvidence({
     schemaVersion: 'production-postdeploy-activation-ready-v4',
     qaScope,
     targetSha: sha,
-    mainSha: sha,
+    mainSha: actualMainSha,
+    mainAncestorVerified: true,
+    mainAdvancedAfterDeployment: context.mainAdvancedAfterDeployment,
     productionSha: sha,
     productionDeployRunId: deployRunId,
     generatedAt,
@@ -406,4 +442,6 @@ module.exports = {
   assertMemberReceipt,
   assertTradingCoreReceipt,
   buildProductionPostdeployQaEvidence,
+  verifyPostDeployMainLineage,
+  isActiveProductionTradingGateRun,
 };
