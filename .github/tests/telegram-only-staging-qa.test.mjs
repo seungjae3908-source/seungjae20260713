@@ -114,12 +114,13 @@ test('read-only staging probe never reads Production path and never records secr
   assert.ok(!source.includes('setWebhook'));
   assert.ok(!source.includes('writeFileSync'));
   const unavailable = await runStagingReadOnlyProbe({
-    target:sha, pm2Exec:()=> { throw new Error('secret'); },
-    fileRead:()=> { throw new Error('secret'); },
+    target:sha, pm2Exec:()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
+    fileRead:()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
     network:async()=> 'IPV4_DNS_FAILED',
   });
   assert.equal(unavailable.classification, 'STAGING_PM2_OFFLINE');
-  assert.ok(!JSON.stringify(unavailable).includes('secret'));
+  assert.equal(unavailable.secretValuesRecorded, false);
+  assert.ok(!JSON.stringify(unavailable).includes('SENSITIVE_EXCEPTION_MARKER_123'));
 });
 
 test('owner command is exact-current-main, protected in isolated staging environment', () => {
