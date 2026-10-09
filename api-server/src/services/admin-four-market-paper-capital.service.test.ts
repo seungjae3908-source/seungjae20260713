@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { StoredPaperJournalRecord, PaperJournalSyncRecord } from './paper-journal.types';
-import type { TradingPlan } from './trade-automation.types';
+import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW, ADMIN_TOTAL_INITIAL_KRW,
   adminPaperWalletId, adminPaperMarketFromPlan, adminMarketPaperRiskBudget,
