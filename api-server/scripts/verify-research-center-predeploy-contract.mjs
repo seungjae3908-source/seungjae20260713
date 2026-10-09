@@ -198,9 +198,9 @@ const technicalFailure = multiMarket.slice(failureStart, nextJob);
 forbidText(technicalFailure, "steps.market_suite.outputs.research_ready != 'true'", 'Multi-Market expected research hold');
 requireText(technicalFailure, "steps.research_hold.outcome == 'failure'", 'Multi-Market research-hold validation failure guard');
 
-requireText(product, 'data-testid="research-paper-target-capital"', 'Paper KRW 1M target not a funded balance');
-requireText(product, '1,000,000원 (KRW)', 'Paper canonical target');
-requireText(product, '평가금액은 미측정', 'Paper funding evidence missing');
+requireText(researchPage, 'data-testid="research-paper-target-capital"', 'Paper KRW 1M target not a funded balance');
+requireText(researchPage, '1,000,000원 (KRW)', 'Paper canonical target');
+requireText(researchPage, '평가금액은 미측정', 'Paper funding evidence missing');
 requireText(overviewContract, "safety.readOnlyDashboard !== true", 'overview read-only safety sanitizer');
 requireText(overviewContract, "safety.liveTrading !== false", 'overview live-trading safety sanitizer');
 requireText(overviewContract, "safety.privateApi !== false", 'overview private-API safety sanitizer');
