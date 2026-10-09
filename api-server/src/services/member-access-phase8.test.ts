@@ -5,6 +5,7 @@ import {
   MEMBER_CAPABILITIES,
   MEMBER_PERMISSION_MATRIX,
   deriveMemberTier,
+  hasCanonicalMemberAccessState,
   hasCapability,
   memberTierLabel,
   permissionsFor,
@@ -35,6 +36,24 @@ for (const tier of ['pending', 'associate', 'regular', 'admin'] as const) {
     });
   }
 }
+
+test('canonical member access state detects approved legacy schema drift without breaking pending onboarding', () => {
+  assert.equal(hasCanonicalMemberAccessState({
+    role: 'admin',
+    status: 'approved',
+  }), false);
+  assert.equal(hasCanonicalMemberAccessState({
+    membership_level: 'admin',
+    role: 'admin',
+    status: 'approved',
+    is_active: true,
+    permissions_updated_at: '2026-10-08T00:00:00.000Z',
+  }), true);
+  assert.equal(hasCanonicalMemberAccessState({
+    role: 'associate',
+    status: 'pending',
+  }), true);
+});
 
 test('legacy approved user requires explicit active state', () => {
   assert.equal(deriveMemberTier({ role: 'user', status: 'approved' }), 'pending');

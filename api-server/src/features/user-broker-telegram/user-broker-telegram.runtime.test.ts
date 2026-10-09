@@ -63,6 +63,7 @@ function telegramRepository() {
   for (const userId of [USER_A, USER_B]) {
     repository.setMemberProfile(userId, {
       status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+      membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',
     });
   }
   return repository;

@@ -50,3 +50,10 @@ test('audit read failure is never rendered as a truthful empty or current histor
   expect(source).toContain("!audits.isLoading && !audits.error && audits.data?.logs.length === 0");
   expect(source).not.toContain("!audits.isLoading && !audits.data?.logs.length");
 });
+
+
+test('legacy approval provenance gaps are explicit and never silently backfilled in UI', () => {
+  expect(source).toContain("const approvalProvenanceMissing = member.status === 'approved'");
+  expect(source).toContain('data-testid="member-approval-provenance-missing"');
+  expect(source).toContain('과거 승인 정보 일부가 확인되지 않습니다. 임의로 승인자나 승인시각을 보정하지 않습니다.');
+});

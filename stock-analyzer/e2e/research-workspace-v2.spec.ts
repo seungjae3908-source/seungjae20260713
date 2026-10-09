@@ -44,7 +44,7 @@ async function setup(page:Page,payload:unknown={available:true,workspace},status
   },USER);
   await page.route('**/__e2e-supabase/**',async route=>{
     const path=new URL(route.request().url()).pathname;
-    const body=path.endsWith('/rest/v1/profiles')?{id:USER,login_name:'test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true}:path.endsWith('/auth/v1/user')?{id:USER,aud:'authenticated',role:'authenticated',email:'test@accounts.invalid'}:{ok:true};
+    const body=path.endsWith('/rest/v1/profiles')?{id:USER,login_name:'test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true,permissions_updated_at:'2026-10-08T00:00:00.000Z'}:path.endsWith('/auth/v1/user')?{id:USER,aud:'authenticated',role:'authenticated',email:'test@accounts.invalid'}:{ok:true};
     await route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
   });
   const requests:Array<{path:string;method:string;hasAuth:boolean}>=[];

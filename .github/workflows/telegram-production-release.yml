@@ -60,6 +60,7 @@ jobs:
           node-version: "22"
       - run: |
           node api-server/scripts/verify-telegram-production-release-contract.mjs
+          node --test .github/tests/telegram-six-room-gate.test.mjs
           node ops/verify-production-personal-telegram-storage.mjs --static
           node --test .github/tests/production-telegram-active-readiness.test.mjs
 
@@ -520,6 +521,26 @@ jobs:
               process.exit(4);
             }
 
+            function requireIsolatedSixRooms(runtime) {
+              const keys = [
+                'TELEGRAM_KR_STOCK_CHAT_ID',
+                'TELEGRAM_US_STOCK_CHAT_ID',
+                'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+                'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+                'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+                'TELEGRAM_AUTO_TRADING_CHAT_ID',
+              ];
+              const missing = keys.filter((key) => !String(runtime[key] ?? '').trim());
+              if (!String(runtime.TELEGRAM_OWNER_MEMBER_ID ?? '').trim()) missing.push('TELEGRAM_OWNER_MEMBER_ID');
+              if (missing.length) throw new Error('TELEGRAM_SIX_ROOM_CONFIG_MISSING');
+              const dedicatedIds = keys.map((key) => String(runtime[key]).trim());
+              if (new Set(dedicatedIds).size !== dedicatedIds.length) {
+                throw new Error('TELEGRAM_SIX_ROOM_ROUTING_COLLISION');
+              }
+              return true;
+            }
+            requireIsolatedSixRooms(env);
+
             const botToken = String(env.TELEGRAM_BOT_TOKEN).trim();
             const configuredUsername = String(env.TELEGRAM_BOT_USERNAME).trim().replace(/^@/, '').toLowerCase();
             async function api(method, params = {}) {
@@ -802,6 +823,27 @@ jobs:
               process.exit(6);
             }
 
+            // Dedicated market/holdings/AUTO rooms are mandatory for six-room activation.
+            function requireIsolatedSixRooms(runtime) {
+              const keys = [
+                'TELEGRAM_KR_STOCK_CHAT_ID',
+                'TELEGRAM_US_STOCK_CHAT_ID',
+                'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+                'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+                'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+                'TELEGRAM_AUTO_TRADING_CHAT_ID',
+              ];
+              const missing = keys.filter((key) => !String(runtime[key] ?? '').trim());
+              if (!String(runtime.TELEGRAM_OWNER_MEMBER_ID ?? '').trim()) missing.push('TELEGRAM_OWNER_MEMBER_ID');
+              if (missing.length) throw new Error('TELEGRAM_SIX_ROOM_CONFIG_MISSING');
+              const dedicatedIds = keys.map((key) => String(runtime[key]).trim());
+              if (new Set(dedicatedIds).size !== dedicatedIds.length) {
+                throw new Error('TELEGRAM_SIX_ROOM_ROUTING_COLLISION');
+              }
+              return true;
+            }
+            requireIsolatedSixRooms(env);
+
             // TELEGRAM_SPECIFIC_ACTIVATION: this step is reachable only after the
             // exact owner command, protected production gate, CI/Auth/Staging and
             // successful exact-SHA generic app deployment. No generic deploy input
@@ -829,10 +871,10 @@ jobs:
                 'MEMBER_HOLDINGS_NEWS_INTELLIGENCE_ENABLED',
                 'MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED',
               ];
-              // Market-specific rooms and the optional owner mapping enhance routing,
-              // but the canonical legacy stock/crypto rooms remain the documented
-              // fallback. Keep the activation gate aligned with the read-only
-              // preflight contract instead of rejecting a valid fallback setup.
+              // The six independent room keys were verified before any storage
+              // change and again before this function can mutate runtime state.
+              // Legacy stock/crypto identifiers remain for backward compatibility
+              // but cannot substitute for one of the six dedicated rooms.
               const coreTelegramConfigKeys = [
                 'TELEGRAM_BOT_TOKEN',
                 'TELEGRAM_CHAT_ID',
@@ -963,6 +1005,7 @@ jobs:
               if (!env || env.status !== 'online' || env.DEPLOY_SHA !== targetSha) {
                 throw new Error('TELEGRAM_POST_RESTART_IDENTITY_MISMATCH');
               }
+              requireIsolatedSixRooms(env);
             }
 
             const healthTargets = [

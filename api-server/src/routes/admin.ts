@@ -263,17 +263,19 @@ router.post('/members/:id/password-reset', async (req: AuthenticatedRequest, res
     }
     const temporaryPassword = `R9!${randomBytes(18).toString('base64url')}a`;
 
-    // The authorization/audit row always goes through the caller-scoped RLS
-    // client. Only the Auth credential mutation is delegated to a narrow helper.
-    const { error: auditError } = await adminDb(req).from('member_permission_audit').insert({
-      actor_id: req.member!.id,
-      target_user_id: targetId,
-      action: 'member.password.reset',
-      before_value: { password: 'REDACTED' },
-      after_value: { resetAuthorized: true, credentialStored: false },
-      reason,
-    });
-    if (auditError) {
+    // Audit evidence is written only through a narrow SECURITY DEFINER RPC.
+    // The browser role has no direct INSERT privilege on the immutable audit table.
+    const { data: auditData, error: auditError } = await adminDb(req).rpc(
+      'record_member_password_reset_authorization',
+      { p_target_user_id: targetId, p_reason: reason },
+    );
+    if (
+      auditError
+      || !isRecord(auditData)
+      || auditData.action !== 'member.password.reset'
+      || auditData.resetAuthorized !== true
+      || auditData.credentialStored !== false
+    ) {
       throw new MemberAdministrationError(
         'PASSWORD_RESET_AUDIT_FAILED',
         '감사기록을 저장하지 못해 비밀번호 재설정을 중단했습니다.',

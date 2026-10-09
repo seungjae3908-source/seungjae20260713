@@ -445,6 +445,8 @@ export async function editTelegramMessage(input: {
   messageId: number;
   messageKind: TelegramMessageKind;
   text: string;
+  buttons?: TelegramAlertInput['buttons'];
+  linkPreview?: boolean;
 }): Promise<TelegramAlertResult> {
   const botToken = token();
   const destination = input.destinationChatId.trim();
@@ -470,7 +472,11 @@ export async function editTelegramMessage(input: {
       if (input.messageKind === 'PHOTO') payload.caption = renderedText;
       else {
         payload.text = renderedText;
-        payload.link_preview_options = { is_disabled: true };
+        payload.link_preview_options = { is_disabled: input.linkPreview !== true };
+      }
+      // Explicit empty keyboard revokes a stale order link, including photo captions.
+      if (input.buttons !== undefined) {
+        payload.reply_markup = telegramInlineKeyboard(input.buttons) ?? { inline_keyboard: [] };
       }
 
       const response = await fetch(
