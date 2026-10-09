@@ -283,6 +283,8 @@ jobs:
             throw new Error('STAGING_TRADING_CORE_PUBLIC_SHA_MISMATCH');
           console.log('STAGING_TRADING_CORE_EXACT_SHA_VERIFIED');
           NODE
+      - name: Install immutable workspace dependencies for scoped Playwright
+        run: pnpm install --frozen-lockfile
       - name: Install isolated Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run ONLY Trading Core scoped Staging UI/API tests (never place an order)
