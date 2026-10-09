@@ -14,6 +14,7 @@ import type { ScannerAlertCandidate } from './scanner-signal.types';
 import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
+  telegramStockLaneForMarket,
   type TelegramMarketRoom,
 } from './telegram-market-room.service';
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
@@ -110,12 +111,14 @@ export function scannerInAppNotificationInput(
   if (alert.assetClass === 'stock' && alert.direction !== 'LONG') return null;
   if (alert.assetClass === 'coin_spot' && alert.direction !== 'LONG') return null;
   if (alert.assetClass === 'coin_futures' && alert.direction !== 'LONG' && alert.direction !== 'SHORT') return null;
+  const stockLane = alert.assetClass === 'stock' ? telegramStockLaneForMarket(alert.market) : null;
+  if (alert.assetClass === 'stock' && !stockLane) return null;
 
   const lane = alert.assetClass === 'coin_futures'
     ? '코인선물'
     : alert.assetClass === 'coin_spot'
       ? '코인현물'
-      : alert.market.trim().toUpperCase() === 'US'
+      : stockLane === 'US_STOCK'
         ? '미국주식'
         : '국내주식';
   const reasons = alert.evidence.map((item) => item.trim()).filter(Boolean).slice(0, 3);
@@ -165,12 +168,12 @@ async function runScannerInAppNotification(
 
 export function scannerTelegramRoomFor(
   alert: Pick<ScannerAlertCandidate, 'assetClass' | 'market'>,
-): ScannerTelegramRoom {
+): ScannerTelegramRoom | null {
   if (alert.assetClass === 'coin_spot') return telegramMarketRoomForLane('CRYPTO_SPOT');
   if (alert.assetClass === 'coin_futures') return telegramMarketRoomForLane('CRYPTO_FUTURES');
-  return telegramMarketRoomForLane(
-    alert.market.trim().toUpperCase().includes('US') ? 'US_STOCK' : 'KR_STOCK',
-  );
+  if (alert.assetClass !== 'stock') return null;
+  const lane = telegramStockLaneForMarket(alert.market);
+  return lane ? telegramMarketRoomForLane(lane) : null;
 }
 
 export function scannerTelegramRoomChatId(room: ScannerTelegramRoom): string | null {
@@ -184,7 +187,9 @@ export function scannerTelegramInput(
 ): TelegramAlertInput | null {
   if (alert.state !== 'APPROVAL_PENDING' && alert.state !== 'READY_FOR_APPROVAL') return null;
 
-  const destinationChatId = resolveRoomChatId(scannerTelegramRoomFor(alert));
+  const room = scannerTelegramRoomFor(alert);
+  if (!room) return null;
+  const destinationChatId = resolveRoomChatId(room);
   if (!destinationChatId) return null;
 
   if (alert.assetClass === 'stock') {
