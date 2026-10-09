@@ -149,20 +149,6 @@ function responseError(res: Response, error: unknown) {
       exchangeRequestSent: false,
     });
   }
-  if (error instanceof ScanProviderUnavailableError) {
-    return res.status(502).json({
-      ok: false,
-      error: 'SCAN_PROVIDER_ERROR',
-      dataState: 'unavailable',
-      cards: [],
-      alerts: [],
-      providerHealth: providerHealthFrom(error),
-      message: '조건검색 데이터 공급자 오류이며 정상적인 결과 0건이 아닙니다.',
-      outcome: 'PROVIDER_FAILURE',
-      orderSubmitted: false,
-      exchangeRequestSent: false,
-    });
-  }
   const code = error instanceof Error ? error.message.split(':')[0] : 'SCAN_FAILED';
   const status = code === 'SCAN_TIMEFRAME_UNSUPPORTED' ? 400 : 500;
   return res.status(status).json({
@@ -173,6 +159,46 @@ function responseError(res: Response, error: unknown) {
     orderSubmitted: false,
     exchangeRequestSent: false,
   });
+}
+
+function providerUnavailableResponse(input: {
+  market: 'KR' | 'US';
+  timeframe: string;
+  cursor: number;
+  deadlineMs: number;
+  elapsedMs: number;
+  error: ScanProviderUnavailableError;
+}) {
+  const providerHealth = providerHealthFrom(input.error);
+  const timeoutCount = providerHealth.filter((provider) => provider.timeout || provider.state === 'TIMEOUT').length;
+  const providerErrorCount = providerHealth.filter((provider) =>
+    provider.state !== 'READY' && provider.state !== 'SEARCH_EMPTY').length;
+  const fallback = routeDeadlineResponse(input);
+  return {
+    ...fallback,
+    failures: [{
+      symbol: '*',
+      reason: 'provider_error' as const,
+      message: 'Scanner providers did not return enough verified market data.',
+    }],
+    providerHealth: providerHealth.length > 0
+      ? providerHealth
+      : [createScannerProviderHealth({
+        provider: 'scanner-provider',
+        state: 'PROVIDER_FAILURE',
+        freshness: 'UNKNOWN',
+        failureReason: 'SCAN_PROVIDER_ERROR',
+      })],
+    execution: {
+      ...fallback.execution,
+      providerErrorCount: Math.max(1, providerErrorCount),
+      timeoutCount,
+      timedOut: timeoutCount > 0,
+      elapsedMs: Math.max(0, Math.min(input.deadlineMs, input.elapsedMs)),
+    },
+    dataState: 'unavailable' as const,
+    message: '조건검색 데이터 공급자가 불안정해 검증되지 않은 후보는 표시하지 않습니다. 잠시 후 다시 시도해 주세요.',
+  };
 }
 
 function routeDeadlineResponse(input: {
@@ -286,6 +312,7 @@ export function createBoundedMarketScanRouter(
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let routeDeadlineExceeded = false;
     const cursor = finite(req.query.cursor, 0, 1_000_000) ?? 0;
+    const scanStartedAt = Date.now();
 
     try {
       lease = guard.acquire(req.member!.id, requestKey(req));
@@ -344,6 +371,23 @@ export function createBoundedMarketScanRouter(
         const fallback = withScannerOutcome(routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs }));
         res.setHeader('X-Scanner-Request-Id', fallback.requestId);
         return res.json({ ...fallback, strategy: strategyMode, partial: true, elapsedMs: routeDeadlineMs });
+      }
+      if (error instanceof ScanProviderUnavailableError && !res.writableEnded) {
+        const fallback = withScannerOutcome(providerUnavailableResponse({
+          market,
+          timeframe,
+          cursor,
+          deadlineMs: routeDeadlineMs,
+          elapsedMs: Date.now() - scanStartedAt,
+          error,
+        }));
+        res.setHeader('X-Scanner-Request-Id', fallback.requestId);
+        return res.json({
+          ...fallback,
+          strategy: strategyMode,
+          partial: true,
+          elapsedMs: fallback.execution.elapsedMs,
+        });
       }
       if (controller.signal.aborted || error instanceof ScanRequestAbortedError || res.writableEnded) return;
       return responseError(res, error);

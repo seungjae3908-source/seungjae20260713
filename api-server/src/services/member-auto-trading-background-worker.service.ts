@@ -44,7 +44,9 @@ import type {
   TradingSide,
 } from './trade-automation.types';
 import {
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from './trade-automation.types';
 import {
@@ -1206,9 +1208,13 @@ function buildPlanInput(
   let leverage: 2 | 3 | 4 | 5 | 6 | 7 | null = null;
   let marginMode: 'crossed' | 'isolated' | null = null;
   if (mapping.exchange === 'bitget') {
+    const maximumLeverage = hasCapability(member.profile, 'canManageMembers')
+      ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
     if (!Number.isInteger(leverageEvidence)
       || leverageEvidence < 2
-      || leverageEvidence > 7
+      || leverageEvidence > maximumLeverage
+      || member.policy.bitgetLeverage > maximumLeverage
       || leverageEvidence !== member.policy.bitgetLeverage) {
       throw new Error('BACKGROUND_LEVERAGE_EVIDENCE_MISMATCH');
     }
