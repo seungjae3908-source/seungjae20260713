@@ -1149,6 +1149,15 @@ function buildPlanInput(
   if (slippage == null || fee == null || averageSpread == null) {
     throw new Error('BACKGROUND_COST_EVIDENCE_REQUIRED');
   }
+  // Conservative worst-case correlation: treat every existing same-market
+  // Paper exposure as fully correlated; missing historical covariance cannot
+  // be misreported as low risk. Any upstream risk estimate may only tighten it.
+  const correlatedUpperBound = Math.min(100, Math.max(0,
+    exposure.accountExposureKrw / Math.max(1, exposure.accountValueKrw) * 100));
+  const upstreamCorrelation = Number(evidence?.correlatedExposurePercent);
+  const correlatedExposurePercent = Number.isFinite(upstreamCorrelation)
+    && upstreamCorrelation >= 0 && upstreamCorrelation <= 100
+    ? Math.max(correlatedUpperBound, upstreamCorrelation) : correlatedUpperBound;
   const marketStatus = snapshotMarketStatus(entry);
   const leverageEvidence = Number(evidence?.leverage);
   const marginModeEvidence = String(evidence?.marginMode ?? '').toLowerCase();
@@ -1210,6 +1219,8 @@ function buildPlanInput(
     invalidateAction: 'hold',
     signalReasons: [
       'CANONICAL_PAPER_HANDOFF',
+      ...(member.policy.pilotStage === 'formula-ai-exception'
+        ? formulaAiReviewReasonsForLive(entry, nowMs) : []),
       `HANDOFF_ID:${entry.handoffId}`,
       `FX:${fx.source}`,
       ...(mapping.stockBroker ? [`STOCK_BROKER:${mapping.stockBroker.toUpperCase()}`] : []),
@@ -1249,15 +1260,15 @@ function buildPlanInput(
       availableLiquidityKrw: null,
       estimatedSlippagePercent: slippage,
       estimatedFeePercent: fee,
-      correlatedExposurePercent: null,
+      correlatedExposurePercent,
       signalState: 'entry_ready',
       signalObservedAt,
     },
     entryPrice: null,
     entryZoneLow: null,
     entryZoneHigh: null,
-    estimatedSlippagePercent: null,
-    averageSpreadPercent: null,
+    estimatedSlippagePercent: slippage,
+    averageSpreadPercent: averageSpread,
     economics: null,
   };
 }

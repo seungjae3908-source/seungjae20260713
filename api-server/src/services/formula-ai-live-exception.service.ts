@@ -122,3 +122,22 @@ export function evaluateFormulaAiLiveException(
     blockers: Object.freeze(unique),
   });
 }
+
+// Formula+AI Paper rehearsal uses the SAME canonical AI PASS/expiry/market
+// evidence as Live, but has no ability to grant a Live order permission.
+export function evaluateFormulaAiPaperException(
+  plan: TradingPlanInput, nowMs = Date.now(),
+): FormulaAiLiveExceptionDecision {
+  if (plan.accountMode !== 'paper') {
+    const blocked = evaluateFormulaAiLiveException(plan, nowMs);
+    return Object.freeze({
+      ...blocked, allowed: false, researchPromotionBypassed: false,
+      blockers: Object.freeze([...new Set([...blocked.blockers,
+        'FORMULA_AI_PAPER_ACCOUNT_REQUIRED'])].sort()),
+    });
+  }
+  // Validate provenance and evidence without bypassing a single executable
+  // risk/provider gate. Only the historical sample/promotion requirement is
+  // relaxed; bad cost/slippage/AI fields remain blocked at entry.
+  return evaluateFormulaAiLiveException({ ...plan, accountMode: 'live' }, nowMs);
+}
