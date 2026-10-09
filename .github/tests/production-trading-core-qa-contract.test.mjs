@@ -162,3 +162,18 @@ test('Trading Core QA records real Worker preflight independently of one synthet
   assert.ok(workflow.includes('|| !backgroundPaperEvidenceValid'));
   assert.ok(workflow.includes('recorded independently, not implied'));
 });
+
+test('Paper Worker readiness UI exposes genuine member-specific blockers without activation controls', () => {
+  const page = read('stock-analyzer/src/pages/auto-trading.tsx');
+  assert.ok(page.includes("'/api/trade-automation/paper-runtime-readiness'"));
+  assert.ok(page.includes('data-testid="automatic-paper-worker-readiness"'));
+  assert.ok(page.includes('data-testid="automatic-paper-worker-blockers"'));
+  assert.ok(page.includes('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW'));
+  assert.ok(page.includes('BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED'));
+  assert.ok(page.includes('data.realOrderAuthorityGranted !== false'));
+  assert.ok(page.includes('data.financialMutationCount !== 0'));
+  assert.ok(page.includes("autoPaperRuntimeReadiness.readyForPaperEvaluation !== (data.blockers.length === 0)") === false);
+  assert.ok(page.includes('data.readyForPaperEvaluation !== (data.blockers.length === 0)'));
+  assert.ok(page.includes('autoPaperRuntimeError ?'));
+  assert.ok(page.includes('!fixture && canAuto && canJournalSync'));
+});
