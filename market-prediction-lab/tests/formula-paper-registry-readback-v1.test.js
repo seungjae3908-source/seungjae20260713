@@ -164,6 +164,7 @@ test('Paper scheduled CLI shows exact registry readiness but never injects histo
   const registry = validOneRegistry();
   const { root, registryPath } = await fixture(registry);
   const inputs = [];
+  const priorExitCode = process.exitCode;
   try {
     const output = await runPaperForwardScheduleCli({
       PAPER_FORWARD_SCHEDULE_ACTIVE: 'true',
@@ -196,5 +197,8 @@ test('Paper scheduled CLI shows exact registry readiness but never injects histo
     assert.equal(output.privateRequestCount, 0);
     assert.equal(output.financialMutationCount, 0);
     assert.equal(output.orderCount, 0);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    process.exitCode = priorExitCode;
+    await rm(root, { recursive: true, force: true });
+  }
 });
