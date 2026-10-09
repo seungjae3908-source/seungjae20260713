@@ -26,9 +26,13 @@ export async function liveEntryArmPresent(nowMs = Date.now()) {
   try {
     handle = await open(path.resolve(configured), constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = await handle.stat();
+    // Windows does not expose trustworthy POSIX permission bits. Production is
+    // Linux, where owner-only mode remains mandatory; Windows QA still checks
+    // the absolute path, no-follow open, exact SHA, schema, and activation time.
+    const insecurePosixMode = process.platform !== 'win32' && Boolean(stat.mode & 0o077);
     if (!stat.isFile() || stat.size <= 0 || stat.size > 16 * 1024
       || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
-      || (stat.mode & 0o077)) return false;
+      || insecurePosixMode) return false;
     const value = JSON.parse(await handle.readFile('utf8')) as Record<string, unknown>;
     const armedAtMs = Date.parse(String(value.armedAt ?? ''));
     const activateNotBeforeMs = Date.parse(String(value.activateNotBeforeAt ?? ''));

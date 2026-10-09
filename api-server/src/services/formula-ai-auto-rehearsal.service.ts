@@ -41,7 +41,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
   const at = new Date(now);
   if (!Number.isFinite(at.getTime())) throw new Error('FORMULA_AI_REHEARSAL_INVALID_TIME');
   const observedAt = at.toISOString();
-  const state = createPaperTradingState(500_000, at);
+  const state = createPaperTradingState(1_000_000, at);
   const entryResult = applyPaperTradingAction(state, {
     type: 'place_order',
     eventId: `formula-ai-rehearsal-${at.getTime()}`,
@@ -86,7 +86,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
       market: 'crypto-futures',
       symbol: 'BTCUSDT',
       side: 'long',
-      accountBalance: 500_000,
+      accountBalance: 1_000_000,
       entryPrice: 100,
       stopLossPrice: 98,
       targetPrice1: 105,

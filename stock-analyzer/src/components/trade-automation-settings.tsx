@@ -614,13 +614,22 @@ export function TradeAutomationSettings({
 
     <div className="mt-4 grid grid-cols-2 gap-2">
       <NumberField label="총 운용금액" value={draft.totalCapitalKrw} onChange={(value) => updateNumber('totalCapitalKrw', value)} suffix="원" />
-      <NumberField label="1회 주문금액" value={draft.maxOrderKrw} onChange={(value) => updateNumber('maxOrderKrw', value)} suffix="원" />
+      <NumberField
+        label="1회 기준 주문금액 (초기 최대 100만원)"
+        value={draft.maxOrderKrw}
+        onChange={(value) => updateNumber('maxOrderKrw', value)}
+        suffix="원"
+        max={1_000_000}
+      />
       <NumberField label="최대 보유비중" value={draft.maxAssetPercent} onChange={(value) => updateNumber('maxAssetPercent', value)} suffix="%" />
       <NumberField label="일일 손실한도" value={draft.dailyLossLimitPercent} onChange={(value) => updateNumber('dailyLossLimitPercent', value)} suffix="%" />
       <NumberField label="동시 보유 수" value={draft.maxOpenPositions} onChange={(value) => updateNumber('maxOpenPositions', value)} suffix="개" />
       <NumberField label="일일 주문 수" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
+    <p className="mt-2 text-[11px] font-semibold text-muted-foreground">
+      초기 기준은 100만원이며, 확정 순수익의 50%만 재투자되어 다음 주문 가능액이 증가합니다. 미확정 손익은 반영하지 않습니다.
+    </p>
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       허용 전략
@@ -765,11 +774,17 @@ function Switch({ active }: { active: boolean }) {
   </span>;
 }
 
-function NumberField({ label, value, onChange, suffix }: { label: string; value: number; onChange: (value: string) => void; suffix: string }) {
+function NumberField({ label, value, onChange, suffix, max }: {
+  label: string;
+  value: number;
+  onChange: (value: string) => void;
+  suffix: string;
+  max?: number;
+}) {
   return <label className="rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
     {label}
     <span className="mt-2 flex items-center gap-1">
-      <input type="number" min="0" value={value} onChange={(event) => onChange(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold" />
+      <input type="number" min="0" max={max} value={value} onChange={(event) => onChange(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold" />
       <span>{suffix}</span>
     </span>
   </label>;

@@ -509,7 +509,7 @@ for (const token of [
 ]) {
   requireText(pilotCapital, token, 'AUTO_PILOT_CAPITAL_BLOCKER_MISSING');
 }
-requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, 'pilot capital starts at 1M and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -25_000", 'AUTO_PILOT_DAILY_LOSS_KRW_TEST_MISSING');
 requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');
