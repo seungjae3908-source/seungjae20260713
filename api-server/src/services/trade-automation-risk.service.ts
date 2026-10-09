@@ -2,6 +2,8 @@ import { evaluateTradingOptimization } from './trade-automation-optimization.ser
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type TradingAssetClass,
   type TradingMarketSnapshot,
   type TradingPlanInput,
@@ -68,8 +70,14 @@ function plannedOpenRiskKrw(plan: TradingPlanInput) {
   return plan.estimatedKrw * Math.abs(reference - plan.stopPrice) / reference;
 }
 
-export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | undefined): TradingPolicy {
+export function normalizeTradingPolicy(
+  value: Partial<TradingPolicy> | null | undefined,
+  requestedMaximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+): TradingPolicy {
   const input = value ?? {};
+  const maximumSingleEntryKrw = requestedMaximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
   const leverage = input.bitgetLeverage == null
     ? DEFAULT_TRADING_POLICY.bitgetLeverage
     : Number(input.bitgetLeverage);
@@ -81,7 +89,12 @@ export function normalizeTradingPolicy(value: Partial<TradingPolicy> | null | un
     || input.pilotStage === 'formula-ai-exception'
     ? input.pilotStage : 'approval-20';
   const totalCapitalKrw = clampNumber(input.totalCapitalKrw, 10_000, 10_000_000_000, DEFAULT_TRADING_POLICY.totalCapitalKrw);
-  const maxOrderKrw = clampNumber(input.maxOrderKrw, 5_000, Math.min(1_000_000, totalCapitalKrw), Math.min(DEFAULT_TRADING_POLICY.maxOrderKrw, totalCapitalKrw));
+  const maxOrderKrw = clampNumber(
+    input.maxOrderKrw,
+    5_000,
+    Math.min(maximumSingleEntryKrw, totalCapitalKrw),
+    Math.min(maximumSingleEntryKrw, totalCapitalKrw),
+  );
   const maxInstrumentKrw = clampNumber(input.maxInstrumentKrw, 5_000, totalCapitalKrw, Math.min(maxOrderKrw, totalCapitalKrw));
   const classLimits = input.maxAssetClassKrw;
   const maxAssetClassKrw: Record<TradingAssetClass, number> = {
