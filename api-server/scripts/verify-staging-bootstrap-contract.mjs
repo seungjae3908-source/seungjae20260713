@@ -207,4 +207,20 @@ assert(
   'health response must expose deploySha from the process-start identity',
 );
 
+for (const migration of [
+  '2026080502_trade_automation_safety_hardening.sql',
+  '2026100901_admin_four_paper_wallet_rls_guard.sql',
+]) {
+  assert(manifest.includes(migration), `staging manifest must include ${migration}`);
+  assert(runner.includes(migration), `staging atomic runner must include ${migration}`);
+}
+assert(assertion.includes('STAGING_ADMIN_V2_RLS_GUARD_REQUIRED'),
+  'staging SQL must attest administrator V2 paper wallet and order-write RLS');
+assert(assertion.includes('admin_four_paper_wallet_rls_guard_ready()'),
+  'staging SQL must invoke the real DB guard readiness function');
+assert(runner.includes('admin_v2_rls_verified: true'),
+  'staging atomic bootstrap artifact must record V2 guard proof');
+assert(dbVerifier.includes('value.admin_v2_rls_verified !== true'),
+  'staging release DB gate must reject old bootstrap artifacts lacking V2 guard proof');
+
 console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, member watchlist storage, no-user-copy, and no-manual-account-secret contracts verified');
