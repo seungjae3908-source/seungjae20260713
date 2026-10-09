@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
 const contract = readFileSync('.github/scripts/verify-production-postdeploy-qa-contract.mjs', 'utf8');
@@ -37,4 +38,33 @@ test('incompatible rollback preserves latest target only when all live trading a
   }
   assert.ok(contract.includes('const qaTailRaw'));
   assert.ok(contract.includes('const recoveryTail'));
+});
+
+function exactRunScript(name) {
+  const marker = `      - name: ${name}\n`;
+  const start = workflow.indexOf(marker);
+  assert.ok(start !== -1, `missing workflow step: ${name}`);
+  const runLine = '        run: |\n';
+  const codeStart = workflow.indexOf(runLine, start);
+  const nextStep = workflow.indexOf('\n      - name: ', start + marker.length);
+  assert.ok(codeStart > start && (nextStep === -1 || codeStart < nextStep), `missing run block: ${name}`);
+  const code = workflow.slice(codeStart + runLine.length, nextStep === -1 ? undefined : nextStep);
+  return code.split('\n').map((line) => {
+    if (line.trim() && !line.startsWith('          ')) {
+      throw new Error(`invalid YAML script indentation for ${name}`);
+    }
+    return line.startsWith('          ') ? line.slice(10) : line;
+  }).join('\n');
+}
+
+test('all protected post-deploy recovery shell blocks pass bash syntax inspection before approval', () => {
+  for (const name of [
+    'Capture exact predeploy rollback target and schema compatibility',
+    'Roll back application SHA after failed post-deploy QA when schema is compatible',
+    'Preserve fail-closed release if previous schema cannot safely be restored',
+  ]) {
+    const code = exactRunScript(name);
+    const syntax = spawnSync('bash', ['-n'], { input: code, encoding: 'utf8', timeout: 5000 });
+    assert.equal(syntax.status, 0, `${name}: ${syntax.stderr || syntax.error?.message || 'syntax error'}`);
+  }
 });
