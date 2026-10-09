@@ -9,6 +9,8 @@ const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
   if (receipt.schemaVersion !== 'staging-trading-core-only-v1'
     || receipt.targetSha !== sha || receipt.project !== project
     || receipt.stagingScopedQa !== 'PASS'
+    || receipt.browserAuthMode !== 'STAGING_PASSWORD_SESSION_RESTORE'
+    || receipt.interactiveLoginFormTested !== false
     || receipt.fourMarketsStructural !== true
     || receipt.providersValidatedWithoutPrivateCalls !== true
     || receipt.walletSeedPerMarketKrw !== 1_000_000
@@ -37,6 +39,8 @@ const verdict = {
   targetSha: sha,
   scope: 'TRADING_CORE_ONLY',
   scopedStagingQa: 'PASS',
+  browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
+  interactiveLoginFormTested: false,
   operationalReadiness,
   desktop: 'PASS',
   mobile: 'PASS',
