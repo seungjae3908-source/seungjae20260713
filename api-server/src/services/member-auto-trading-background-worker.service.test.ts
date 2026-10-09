@@ -52,6 +52,8 @@ function policy(): TradingPolicy {
       crypto_futures: false,
     },
     exchangeEnabled: { bitget: false, upbit: true, kiwoom: false, toss: false },
+    // Explicitly permit the fixture strategy; an empty Paper allowlist is not a wildcard.
+    enabledStrategies: ['trend-breakout-v1'],
     totalCapitalKrw: 1_000_000,
     maxOrderKrw: 100_000,
     maxInstrumentKrw: 300_000,
@@ -2543,6 +2545,14 @@ test('new wallet calculates only scoped Paper risk, still blocking new invalid f
   );
   assert.equal(blocked.ready, false);
   assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+});
+
+test('automatic Paper background uses the same explicit member strategy allowlist as Live', () => {
+  const noStrategies = normalizeTradingPolicy({ ...policy(), enabledStrategies: [] });
+  assert.equal(automaticLiveStrategyAllowlisted(noStrategies, 'trend-breakout-v1'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(policy(), 'trend-breakout-v1'), true);
+  assert.equal(automaticLiveStrategyAllowlisted(policy(), 'unapproved-strategy'), false);
+  assert.equal(automaticLiveStrategyAllowlisted(policy(), ''), false);
 });
 
 test('blank live strategy allowlist is never wildcard authorization for a real order', () => {
