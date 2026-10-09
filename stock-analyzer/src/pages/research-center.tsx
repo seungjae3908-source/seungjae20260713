@@ -696,6 +696,10 @@ function PaperTab({
           <div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary"><WalletCards className="h-5 w-5" /></span><div><div className="flex items-center gap-2"><h2 className="text-lg font-black">모의매매</h2><span className="rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">PAPER</span></div><p className="mt-1 text-xs font-bold text-emerald-700 dark:text-emerald-300">실주문 비활성</p></div></div>
           <StatusBadge status={paper.status} />
         </div>
+        <div className="mt-3 rounded-xl border border-card-border bg-background p-3" data-testid="research-paper-target-capital">
+          <p className="text-xs font-black">모의매매 목표 초기자본: 1,000,000원 (KRW)</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">이는 4시장 연구용 기준자본이며 실제 모의계좌 잔고가 아닙니다. Paper 계좌 생성·원화→USD/USDT 환율·체결·일지 연결의 운영 검증이 완료되기 전까지 평가금액은 미측정입니다. 기존 모의 거래내역과 실계좌 자금은 자동 변경하지 않습니다.</p>
+        </div>
         <div className="mt-3 grid grid-cols-1 gap-2 text-[10px] sm:grid-cols-5">
           {['LIVE_TRADING=false', 'AUTO_TRADING=false', 'REAL_ORDER_ENABLED=false', 'PRIVATE_TRADING_API_ALLOWED=false', 'executionAuthority=NONE'].map((item) => <span key={item} className="whitespace-nowrap rounded-lg border border-card-border bg-background px-2 py-1.5 text-center font-mono" title={item}>{item}</span>)}
         </div>
