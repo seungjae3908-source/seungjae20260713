@@ -2005,7 +2005,8 @@ export class MemberAutoTradingBackgroundWorker {
             result.newEntriesFailClosed = true;
             continue;
           }
-          entryProjectionHealthy = (await syncExecutionProjection()) && entryProjectionHealthy;
+          entryProjectionHealthy = adminWalletDbGuardReady
+            && (await syncExecutionProjection()) && entryProjectionHealthy;
         }
 
         if (!entryProjectionHealthy) {
