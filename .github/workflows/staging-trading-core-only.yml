@@ -254,6 +254,7 @@ jobs:
       STAGING_TARGET_SHA: ${{ needs.owner-gate.outputs.target_sha }}
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
       STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
     steps:
@@ -305,6 +306,7 @@ jobs:
           echo '## Trading Core Only Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
           echo '- Production release_ready: NOT_EVALUATED' >> "$GITHUB_STEP_SUMMARY"
           echo '- Full Staging browser suite: NOT_RUN' >> "$GITHUB_STEP_SUMMARY"
+          node -e "const v=require('./stock-analyzer/staging-trading-core-artifacts/trading-core-scoped-staging-verdict.json'); console.log('- Operational prerequisites: '+v.operationalReadiness)" >> "$GITHUB_STEP_SUMMARY"
           echo '- Production order/provider private calls: 0' >> "$GITHUB_STEP_SUMMARY"
           echo '- Real Paper Worker fill/Journal/Telegram SENT: NOT_PROVEN' >> "$GITHUB_STEP_SUMMARY"
           echo '- Production deployment/activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
