@@ -59,9 +59,11 @@ async function linkedService() {
   const integrationRepository = new InMemoryUserBrokerTelegramRepository();
   integrationRepository.setMemberProfile('user-a', {
     status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+    membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',
   });
   integrationRepository.setMemberProfile('user-b', {
     status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+    membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',
   });
   const transport = new FakeTransport();
   const portfolio = new CapturingPortfolioSink();

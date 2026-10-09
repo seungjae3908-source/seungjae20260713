@@ -216,6 +216,8 @@ run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/ph
 
 run_sql "apply member S/AI access hardening" "api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql"
 run_sql "reapply member S/AI access hardening idempotently" "api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql"
+run_sql "apply member SECURITY DEFINER privilege lockdown" "api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql"
+run_sql "reapply member SECURITY DEFINER privilege lockdown idempotently" "api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql"
 run_sql "verify associate analytics RLS and membership expiry" "api-server/supabase/test/member_access_s_ai_hardening_integration.sql"
 
 echo "[phase8-db] disposable database and atomic staging bootstrap verification completed"

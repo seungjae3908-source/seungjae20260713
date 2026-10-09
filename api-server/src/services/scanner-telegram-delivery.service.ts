@@ -238,6 +238,19 @@ function normalizeRichTradePlan(
   return { ...input, details: lines.join('\n') };
 }
 
+function removeStaleTelegramOrderButtons(buttons: TelegramAlertInput['buttons']): TelegramAlertInput['buttons'] {
+  if (!buttons) return buttons;
+  // Keep charts and news links, but never render a stale order-review button.
+  return buttons.map((row) => row.filter((button) => {
+    try {
+      const parsed = new URL(button.url);
+      return parsed.pathname.replace(/\/+$/u, '') !== '/telegram-order';
+    } catch {
+      return false;
+    }
+  })).filter((row) => row.length > 0);
+}
+
 function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
   if (freshness.status === 'FRESH') return null;
   if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
@@ -262,7 +275,14 @@ export function addTelegramSignalFreshness(
   const lines = input.details ? input.details.split('\n') : [];
 
   if (freshness.status !== 'FRESH' && warning) lines.push(warning);
-  return { ...input, details: lines.join('\n') };
+  const actionable = freshness.status === 'FRESH'
+    && (alert.state === 'APPROVAL_PENDING' || alert.state === 'READY_FOR_APPROVAL')
+    && !alert.orderSubmitted && !alert.exchangeRequestSent;
+  return {
+    ...input,
+    details: lines.join('\n'),
+    buttons: actionable ? input.buttons : removeStaleTelegramOrderButtons(input.buttons),
+  };
 }
 
 async function richInput(

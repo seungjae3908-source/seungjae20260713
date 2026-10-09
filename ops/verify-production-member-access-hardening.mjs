@@ -24,9 +24,13 @@ if (staticMode) {
     path.join(root, 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql'),
     'utf8',
   );
+  const securityMigration = readFileSync(
+    path.join(root, 'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql'),
+    'utf8',
+  );
 
   for (const marker of [
-    "const SCHEMA_VERSION = 'production-member-access-hardening-v1'",
+    "const SCHEMA_VERSION = 'production-member-access-hardening-v2'",
     "const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq'",
     'approved_target_sha_invalid',
     'production_database_project_mismatch',
@@ -51,8 +55,26 @@ if (staticMode) {
     "public.is_approved_member()",
     "member.password.reset",
     "member.membership.expiry.change",
+    "MEMBER_EXPIRY_INVALID",
     "public.current_membership_level() in ('associate', 'regular', 'admin')",
   ]) requireText(migration, marker, marker);
+
+  for (const marker of [
+    'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT',
+    'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT',
+    'MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING',
+    'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID',
+    'MEMBER_AUDIT_TABLE_PRIVILEGE_INVALID',
+    'MEMBER_AUDIT_DIRECT_INSERT_POLICY_PRESENT',
+    'MEMBER_PASSWORD_RESET_AUDIT_RPC_MISSING',
+    'MEMBER_PASSWORD_RESET_AUDIT_RPC_PRIVILEGE_INVALID',
+    'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT',
+    'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID',
+    'revoke all privileges on table public.profiles from public, anon, authenticated',
+    'grant select on table public.profiles to authenticated',
+    'revoke all on function %s from public, anon, authenticated',
+    "grant execute on function %s to authenticated",
+  ]) requireText(securityMigration, marker, marker);
 
   if (/(?:placeOrder|cancelOrder|amendOrder|transfer\(|withdraw\()/i.test(apply)) {
     fail('production member DB gate must not import or call trading mutations');
@@ -64,11 +86,15 @@ if (staticMode) {
 if (!artifactPath) fail('artifact path required');
 const artifact = JSON.parse(readFileSync(path.resolve(artifactPath), 'utf8'));
 for (const [key, value] of Object.entries({
-  schemaVersion: 'production-member-access-hardening-v1',
+  schemaVersion: 'production-member-access-hardening-v2',
   status: 'passed',
   production_project_match: true,
   atomic_transaction: true,
-  migration_applied: 1,
+  migration_applied: 2,
+  security_definer_privileges_locked: true,
+  permission_rpc_least_access: true,
+  audit_insert_rpc_only: true,
+  profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
   associate_journal_read_only: true,

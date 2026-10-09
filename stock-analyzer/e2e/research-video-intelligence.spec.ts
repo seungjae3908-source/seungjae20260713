@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 // Synthetic provider responses only. No actual YouTube call or caption access.
 const USER='99999999-9999-4999-8999-999999999999';
-const PROFILE={id:USER,login_name:'video-test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true};
+const PROFILE={id:USER,login_name:'video-test-admin',display_name:'검증용 관리자',role:'admin',status:'approved',membership_level:'admin',is_active:true,permissions_updated_at:'2026-10-08T00:00:00.000Z'};
 const safety={researchOnly:true,economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE',paidProviderEnabled:false,scheduleActive:false,automaticDiscoveryEnabled:false,liveTrading:false,privateTradingApi:false,realOrderEnabled:false,credentialMutation:false,transcriptDownloadEnabled:false};
 const row={videoId:'TEST_ONLY_VIDEO',canonicalUrl:'https://www.youtube.com/watch?v=TEST_ONLY_VIDEO',title:'TEST_ONLY source',channelOrPublisher:'TEST_ONLY channel',publishedAt:'2026-09-12T00:00:00.000Z',discoveredAt:'2026-09-13T00:00:00.000Z',language:'ko',durationSec:321,transcriptStatus:'NOT_PROVIDED',captionsKnownPresent:false,sourceTrustTier:'UNKNOWN',contentAuthority:'UNTRUSTED_EXTERNAL_DATA',economicEvidenceCredit:0,profitabilityCredit:0,executionAuthority:'NONE'};
 const automation={schemaVersion:'research-video-discovery-scan-v1',status:'COMPLETE',observedAt:'2026-10-02T03:00:00.000Z',researchSha:'a'.repeat(40),query:'TEST_ONLY research',sourceCount:1,snapshotDigest:'b'.repeat(64),providerNetworkCalls:1,invocationMode:'SYSTEMD_TIMER',scheduledInvocationObserved:true,reason:null,nextRequiredStep:'SOURCE_REVIEW_THEN_EXISTING_GEMINI_GROQ_ORCHESTRATOR',snapshotBound:true};

@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const SCHEMA_VERSION = 'production-member-access-hardening-v1';
+const SCHEMA_VERSION = 'production-member-access-hardening-v2';
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
@@ -70,10 +70,18 @@ try {
   fail('production_database_project_mismatch');
 }
 
-const migrationPath = 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql';
+const migrationPaths = [
+  'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
+  'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql',
+];
 let migrationBody;
 try {
-  migrationBody = stripOuterTransaction(readFileSync(path.join(root, migrationPath), 'utf8'), migrationPath);
+  migrationBody = migrationPaths
+    .map((migrationPath) => stripOuterTransaction(
+      readFileSync(path.join(root, migrationPath), 'utf8'),
+      migrationPath,
+    ))
+    .join('\n');
 } catch {
   fail('migration_source_invalid');
 }
@@ -214,22 +222,102 @@ begin
 
   if has_table_privilege('authenticated', 'public.profiles', 'UPDATE')
      or not has_table_privilege('authenticated', 'public.member_permission_audit', 'SELECT')
-     or not has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'INSERT')
      or has_table_privilege('authenticated', 'public.member_permission_audit', 'UPDATE')
-     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE') then
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'DELETE')
+     or has_table_privilege('authenticated', 'public.member_permission_audit', 'TRUNCATE') then
     raise exception 'MEMBER_DIRECT_MUTATION_PRIVILEGE_INVALID';
   end if;
 
-  if not exists (
+  if exists (
     select 1 from pg_catalog.pg_policies
     where schemaname = 'public'
       and tablename = 'member_permission_audit'
-      and policyname = 'member audit admins insert'
       and cmd = 'INSERT'
-      and with_check ilike '%current_membership_level%'
-      and with_check ilike '%auth.uid()%'
-      and with_check ilike '%actor_id%'
-  ) then raise exception 'MEMBER_ADMIN_AUDIT_INSERT_POLICY_INVALID'; end if;
+  ) then raise exception 'MEMBER_AUDIT_DIRECT_INSERT_POLICY_PRESENT'; end if;
+
+  if to_regprocedure('public.record_member_password_reset_authorization(uuid,text)') is null then
+    raise exception 'MEMBER_PASSWORD_RESET_AUDIT_RPC_MISSING';
+  end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'record_member_password_reset_authorization'
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) or not exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'record_member_password_reset_authorization'
+      and grantee = 'authenticated'
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_PASSWORD_RESET_AUDIT_RPC_PRIVILEGE_INVALID'; end if;
+
+  if exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee in ('PUBLIC','anon')
+  ) then raise exception 'MEMBER_PROFILE_PUBLIC_OR_ANON_PRIVILEGE_PRESENT'; end if;
+
+  if exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type <> 'SELECT'
+  ) or not exists (
+    select 1 from information_schema.table_privileges
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee = 'authenticated'
+      and privilege_type = 'SELECT'
+  ) then raise exception 'MEMBER_PROFILE_AUTHENTICATED_PRIVILEGE_INVALID'; end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('handle_new_user','log_profile_change','rls_auto_enable','is_full_member')
+      and grantee in ('PUBLIC','anon','authenticated')
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_TRIGGER_SECURITY_DEFINER_DIRECT_EXECUTE_PRESENT'; end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name in ('current_membership_level','is_approved_member','is_admin')
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_RLS_HELPER_PUBLIC_EXECUTE_PRESENT'; end if;
+
+  if exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee in ('PUBLIC','anon')
+      and privilege_type = 'EXECUTE'
+  ) or not exists (
+    select 1 from information_schema.routine_privileges
+    where specific_schema = 'public'
+      and routine_name = 'apply_member_permission_change'
+      and grantee = 'authenticated'
+      and privilege_type = 'EXECUTE'
+  ) then raise exception 'MEMBER_PERMISSION_RPC_EXECUTE_PRIVILEGE_INVALID'; end if;
+
+  if exists (
+    select required.routine_name
+    from (
+      values ('current_membership_level'), ('is_approved_member'), ('is_admin')
+    ) as required(routine_name)
+    where not exists (
+      select 1 from information_schema.routine_privileges p
+      where p.specific_schema = 'public'
+        and p.routine_name = required.routine_name
+        and p.grantee = 'authenticated'
+        and p.privilege_type = 'EXECUTE'
+    )
+  ) then raise exception 'MEMBER_RLS_HELPER_AUTHENTICATED_EXECUTE_MISSING'; end if;
 
   if (select count(*) from public.profiles) <> current_setting('app.member_profiles_before')::bigint then
     raise exception 'MEMBER_PROFILE_ROWS_CHANGED';
@@ -274,7 +362,7 @@ const sql = [
   'begin;',
   "set local lock_timeout = '5s';",
   "set local statement_timeout = '60s';",
-  "select pg_advisory_xact_lock(hashtextextended('production-member-access-hardening-v1', 0));",
+  "select pg_advisory_xact_lock(hashtextextended('production-member-access-hardening-v2', 0));",
   "select set_config('app.approved_target_sha', '" + approvedTargetSha + "', true);",
   preflightSql,
   migrationBody,
@@ -316,7 +404,11 @@ const artifact = {
   production_project_match: true,
   database_endpoint_type: database.endpointType,
   atomic_transaction: true,
-  migration_applied: 1,
+  migration_applied: 2,
+  security_definer_privileges_locked: true,
+  permission_rpc_least_access: true,
+  audit_insert_rpc_only: true,
+  profile_api_privileges_least_access: true,
   membership_expiry_ready: true,
   associate_s_ai_policy_ready: true,
   associate_journal_read_only: true,

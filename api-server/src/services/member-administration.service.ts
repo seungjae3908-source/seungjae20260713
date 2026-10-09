@@ -88,6 +88,13 @@ export function classifyAtomicMemberChangeFailure(cause: unknown): MemberAdminis
   if (message.includes('CHANGE_REASON_REQUIRED')) {
     return new MemberAdministrationError('CHANGE_REASON_REQUIRED', '변경 사유를 3~500자로 입력하세요.', 400);
   }
+  if (message.includes('MEMBER_EXPIRY_INVALID')) {
+    return new MemberAdministrationError(
+      'MEMBER_EXPIRY_INVALID',
+      '활성 회원의 만료일은 현재보다 이후이거나 기간 제한 없음이어야 합니다.',
+      400,
+    );
+  }
   if (message.includes('INVALID_MEMBER_CHANGE')) {
     return new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 변경 요청을 확인하세요.', 400);
   }
@@ -216,6 +223,18 @@ export function planMemberChange(
   const nextActive = nextTier === 'pending' ? false : requestedActive;
   const requestedExpiry = request.membershipExpiresAt === undefined ? currentExpiry : request.membershipExpiresAt;
   const nextExpiry = nextTier === 'pending' || nextTier === 'admin' ? null : requestedExpiry;
+  if (
+    nextActive
+    && (nextTier === 'associate' || nextTier === 'regular')
+    && nextExpiry != null
+    && Date.parse(nextExpiry) <= now.getTime()
+  ) {
+    throw new MemberAdministrationError(
+      'MEMBER_EXPIRY_INVALID',
+      '활성 회원의 만료일은 현재보다 이후이거나 기간 제한 없음이어야 합니다.',
+      400,
+    );
+  }
 
   if (isActiveAdmin(current) && (nextTier !== 'admin' || !nextActive) && activeAdminCount <= 1) {
     throw new MemberAdministrationError(

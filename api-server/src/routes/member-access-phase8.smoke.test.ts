@@ -52,6 +52,7 @@ function memberProfile(overrides = {}) {
     status: 'approved',
     membership_level: 'associate',
     is_active: true,
+    permissions_updated_at: '2026-10-08T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -283,6 +284,36 @@ test('requireAuthenticated accepts an approved active member after valid Supabas
   assert.equal(result.req.member.status, 'approved');
   assert.equal(result.req.member.is_active, true);
   assert.equal(result.req.accessToken, 'valid-token');
+});
+
+test('requireAuthenticated fails closed explicitly when approved profile uses legacy membership schema', async () => {
+  const result = await runRequireAuthenticated({
+    profile: memberProfile({
+      membership_level: undefined,
+      is_active: undefined,
+      permissions_updated_at: undefined,
+    }),
+  });
+  assert.equal(result.nextCalls, 0);
+  assert.equal(result.state.statusCode, 503);
+  assert.deepEqual(result.state.body, { error: 'MEMBER_SCHEMA_NOT_READY' });
+  assert.equal(result.req.member, undefined);
+  assert.equal(result.req.accessToken, undefined);
+});
+
+test('pending onboarding remains readable even before canonical membership columns are populated', async () => {
+  const result = await runRequireAuthenticated({
+    profile: memberProfile({
+      status: 'pending',
+      role: 'associate',
+      membership_level: undefined,
+      is_active: undefined,
+      permissions_updated_at: undefined,
+    }),
+  });
+  assert.equal(result.nextCalls, 1);
+  assert.equal(result.req.membershipLevel, 'pending');
+  assert.equal(result.req.member.status, 'pending');
 });
 
 test('requireAuthenticated denies approved inactive member after valid Supabase identity and fresh profile reload', async () => {

@@ -23,6 +23,7 @@ import {
 } from '@/lib/backup-sync-lifecycle';
 import {
   deriveMemberTier,
+  hasCanonicalMemberAccessState,
   hasCapability,
   permissionsFor,
   type MemberCapability,
@@ -157,6 +158,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const { data, error } = await (options.signal ? query.abortSignal(options.signal) : query).maybeSingle();
             if (error) throw error;
             const nextProfile = (data as MemberProfile | null) ?? null;
+            if (nextProfile && !hasCanonicalMemberAccessState(nextProfile)) {
+              throw new Error('MEMBER_SCHEMA_NOT_READY');
+            }
             if (
               hasCapability(profileRef.current, 'canAccessBasicInfo')
               && !hasCapability(nextProfile, 'canAccessBasicInfo')
