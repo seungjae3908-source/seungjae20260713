@@ -4,6 +4,16 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import { calculatePaperJournalAnalytics, createTradingReviewDataset } from '../services/paper-journal-analytics.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { createSupabaseTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
+import type { TradingPolicy } from '../services/trade-automation.types';
+import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { enforceMemberTradingPolicy } from '../services/trade-automation-policy-guard.service';
+import { automaticLiveExecutionEnabled } from '../services/trade-automation.service';
+import { getUserSupabase } from '../lib/supabase';
+import {
+  ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW, ADMIN_WALLET_CONFIRMATION,
+  adminPaperWalletId, buildAdminFourMarketPaperBootstrap,
+  inspectAdminFourMarketPaperWallets, isAdminPaperWalletId,
+} from '../services/admin-four-market-paper-capital.service';
 import type { TradingOrder, TradingPlan } from '../services/trade-automation.types';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
@@ -74,6 +84,12 @@ type PaperJournalDependencies = {
     orders: Awaited<ReturnType<TradingRepository['listOrders']>>;
     plans: Awaited<ReturnType<TradingRepository['listPlans']>>;
   }>;
+  adminPolicyReader: (request: AuthenticatedRequest, ownerId: string) => Promise<TradingPolicy>;
+  adminPolicyWriter: (request: AuthenticatedRequest, ownerId: string, policy: TradingPolicy) => Promise<void>;
+  adminFourMarketInsert: (
+    request: AuthenticatedRequest, ownerId: string,
+    records: ReturnType<typeof buildAdminFourMarketPaperBootstrap>,
+  ) => Promise<StoredPaperJournalRecord[]>;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -272,6 +288,87 @@ export function createPaperJournalRouter(
       return { orders, plans };
     });
 
+  const adminPolicyReader = dependencies.adminPolicyReader
+    ?? (async (request: AuthenticatedRequest, userId: string) => {
+      if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      return createSupabaseTradingRepository(request.accessToken, userId).getPolicy(userId);
+    });
+  const adminPolicyWriter = dependencies.adminPolicyWriter
+    ?? (async (request: AuthenticatedRequest, userId: string, policy: TradingPolicy) => {
+      if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      await createSupabaseTradingRepository(request.accessToken, userId).savePolicy(userId, policy);
+    });
+  const adminFourMarketInsert = dependencies.adminFourMarketInsert
+    ?? (async (request: AuthenticatedRequest, userId: string,
+      records: ReturnType<typeof buildAdminFourMarketPaperBootstrap>) => {
+      if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      // Four rows in ONE PostgreSQL INSERT statement: all-or-none, insert-only.
+      // Never use the generic paper journal upsert or a service-role bypass.
+      const { data, error } = await getUserSupabase(request.accessToken)
+        .from('paper_accounts').insert(records.map((row) => ({
+          user_id: userId, id: row.id, payload: row.payload,
+          version: 1, deleted_at: null, updated_at: now().toISOString(),
+        }))).select('id,payload,version,deleted_at,created_at,updated_at');
+      if (error?.code === '23505') {
+        throw new PaperJournalError('ADMIN_PAPER_WALLET_ALREADY_EXISTS',
+          '기존 시장별 모의계좌는 덮어쓸 수 없습니다.', 409);
+      }
+      if (error || !Array.isArray(data) || data.length !== ADMIN_FOUR_PAPER_MARKETS.length) {
+        throw new PaperJournalError('ADMIN_PAPER_ATOMIC_INSERT_UNVERIFIED',
+          '4시장 계좌를 한 번에 준비하지 못했습니다.', 503);
+      }
+      return data.map((r) => ({
+        kind: 'account' as const, id: r.id, payload: r.payload,
+        version: r.version, updatedAt: r.updated_at,
+        deletedAt: r.deleted_at, createdAt: r.created_at,
+        serverUpdatedAt: r.updated_at,
+      }));
+    });
+
+  function requireAdminPaperScope(request: AuthenticatedRequest) {
+    const userId = request.member?.id ?? '';
+    if (!userId || !request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+    if (!request.member || !hasCapability(request.member, 'canManageMembers')
+      || !hasCapability(request.member, 'canAccessJournalSync')) {
+      throw new PaperJournalError('CAPABILITY_REQUIRED', '관리자 모의자금 설정 권한이 없습니다.', 403);
+    }
+    return userId;
+  }
+  function adminAutomaticLiveGateOff() {
+    return (['toss', 'kiwoom', 'upbit', 'bitget'] as const).every(
+      (provider) => !automaticLiveExecutionEnabled(provider));
+  }
+  function adminWalletCreationDecision(
+    records: readonly StoredPaperJournalRecord[],
+    orders: Awaited<ReturnType<TradingRepository['listOrders']>>,
+    plans: Awaited<ReturnType<TradingRepository['listPlans']>>,
+    policy: TradingPolicy, timestampMs: number,
+  ) {
+    const current = inspectAdminFourMarketPaperWallets(records, timestampMs);
+    const walletRecords = records.filter((row) => row.kind === 'account' && isAdminPaperWalletId(row.id));
+    const legacyAccounts = records.filter((row) => row.kind === 'account' && !isAdminPaperWalletId(row.id));
+    const legacy = automaticPaperLegacyEpochIsolationReadiness(orders, plans, records, timestampMs);
+    const fresh = records.length === 0 && orders.length === 0 && plans.length === 0;
+    const blockers: string[] = [];
+    if (walletRecords.length) blockers.push(current.ready
+      ? 'ADMIN_PAPER_WALLETS_ALREADY_CREATED' : 'ADMIN_PAPER_PARTIAL_WALLET_SET_BLOCKED');
+    if (legacyAccounts.length) blockers.push('ADMIN_PAPER_EXISTING_ACCOUNT_REQUIRES_SEPARATE_RECONCILIATION');
+    if (!walletRecords.length && !fresh && !legacy.safeToIsolate) blockers.push(...legacy.blockers);
+    if (policy.totalCapitalKrw < ADMIN_MARKET_INITIAL_KRW) blockers.push('ADMIN_PAPER_POLICY_1M_REQUIRED');
+    if (!adminAutomaticLiveGateOff()) blockers.push('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF');
+    return {
+      ...current,
+      canCreate: blockers.length === 0,
+      creationBlockers: [...new Set(blockers)],
+      requiresLegacyHistoryConfirmation: !fresh && legacy.safeToIsolate,
+      historical: {
+        plans: plans.length, orders: orders.length,
+        journalRows: records.filter((row) => row.kind === 'journal').length,
+        historyPreserved: true,
+      },
+    };
+  }
+
   const accountHistoryProviders = (request: AuthenticatedRequest) => {
     if (!request.member) return [] as Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'>;
     const providers: Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'> = ['toss', 'kiwoom'];
@@ -301,6 +398,107 @@ export function createPaperJournalRouter(
     repositoryFactory,
     now,
     requirePortfolioAdvisor: requireAiReview,
+  });
+
+  router.get('/paper-journal/admin-four-market/status', async (request: AuthenticatedRequest, response) => {
+    try {
+      const owner = requireAdminPaperScope(request);
+      const [records, history, policy] = await Promise.all([
+        repositoryFactory(request).listSnapshot(owner),
+        automaticPaperHistoryReader(request, owner),
+        adminPolicyReader(request, owner),
+      ]);
+      return response.json({
+        ok: true, readOnlyProbe: true, ownerScope: 'SELF', administratorOnly: true,
+        ...adminWalletCreationDecision(records, history.orders, history.plans, policy, now().getTime()),
+        policy: {
+          totalCapitalKrw: policy.totalCapitalKrw,
+          maxOrderKrw: policy.maxOrderKrw,
+          bitgetLeverage: policy.bitgetLeverage,
+        },
+        financialMutationCount: 0, privateProviderRequests: 0, orderSubmitted: false,
+        exchangeRequestSent: false, liveTradingAuthorityGranted: false,
+      });
+    } catch (error) {
+      return handleError(response, error, 'ADMIN_PAPER_STATUS_UNAVAILABLE',
+        '관리자 모의계좌를 확인하지 못했습니다.', syncEnvelope);
+    }
+  });
+
+  router.post('/paper-journal/admin-four-market/prepare-policy', async (request: AuthenticatedRequest, response) => {
+    try {
+      if (requestSize(request) > MAX_REQUEST_BYTES) throw new PaperJournalError('REQUEST_TOO_LARGE','요청 크기 제한을 초과했습니다.',413);
+      const owner = requireAdminPaperScope(request);
+      if (request.body?.confirmation !== 'SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY') {
+        throw new PaperJournalError('ADMIN_PAPER_POLICY_CONFIRMATION_REQUIRED','관리자 전용 정책 변경 확인이 필요합니다.',409);
+      }
+      if (!adminAutomaticLiveGateOff()) {
+        throw new PaperJournalError('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF','실자동매매 상태에서는 자본 정책을 변경할 수 없습니다.',409);
+      }
+      const policyBefore = await adminPolicyReader(request, owner);
+      // Raise only the named Paper budgeting dimension. Never implicitly
+      // raise maxOrder, leverage, drawdown or other Live order ceilings.
+      const candidate = normalizeTradingPolicy({
+        ...policyBefore,
+        totalCapitalKrw: Math.max(ADMIN_MARKET_INITIAL_KRW, policyBefore.totalCapitalKrw),
+      });
+      const safe = enforceMemberTradingPolicy(candidate, policyBefore);
+      if (safe.totalCapitalKrw !== policyBefore.totalCapitalKrw) {
+        await adminPolicyWriter(request, owner, safe);
+      }
+      return response.json({
+        ok: true, ownerScope: 'SELF', administratorOnly: true,
+        savedPolicyCapitalKrw: safe.totalCapitalKrw,
+        perMarketVirtualInitialKrw: ADMIN_MARKET_INITIAL_KRW,
+        marketCount: ADMIN_FOUR_PAPER_MARKETS.length,
+        riskLimitsIncreasedByThisRequest: false,
+        automaticTradingEnabledByThisRequest: false,
+        liveTradingEnabledByThisRequest: false, orderSubmitted: false,
+        exchangeRequestSent: false, privateProviderRequests: 0,
+      });
+    } catch (error) {
+      return handleError(response, error, 'ADMIN_PAPER_POLICY_PREPARATION_FAILED',
+        '관리자 모의자본 정책을 준비하지 못했습니다.', syncEnvelope);
+    }
+  });
+
+  router.post('/paper-journal/admin-four-market/bootstrap', async (request: AuthenticatedRequest, response) => {
+    try {
+      if (requestSize(request) > MAX_REQUEST_BYTES) throw new PaperJournalError('REQUEST_TOO_LARGE','요청 크기 제한을 초과했습니다.',413);
+      const owner = requireAdminPaperScope(request);
+      if (request.body?.confirmation !== ADMIN_WALLET_CONFIRMATION) {
+        throw new PaperJournalError('ADMIN_FOUR_MARKET_CONFIRMATION_REQUIRED',
+          '기존 기록을 보존하며 4시장 모의계좌를 만드는 확인이 필요합니다.',409);
+      }
+      const [records, history, policy] = await Promise.all([
+        repositoryFactory(request).listSnapshot(owner),
+        automaticPaperHistoryReader(request, owner),
+        adminPolicyReader(request, owner),
+      ]);
+      const readiness = adminWalletCreationDecision(
+        records, history.orders, history.plans, policy, now().getTime());
+      if (!readiness.canCreate) {
+        throw new PaperJournalError(readiness.creationBlockers[0] ?? 'ADMIN_PAPER_BOOTSTRAP_BLOCKED',
+          '4시장 모의계좌 안전조건을 만족하지 않았습니다.',409);
+      }
+      const inserted = await adminFourMarketInsert(
+        request, owner, buildAdminFourMarketPaperBootstrap(now()));
+      const proof = inspectAdminFourMarketPaperWallets(
+        [...records, ...inserted], now().getTime());
+      if (!proof.ready) throw new PaperJournalError('ADMIN_PAPER_ATOMIC_INSERT_UNVERIFIED',
+        '시장별 모의계좌 저장 검증이 완료되지 않았습니다.',503);
+      return response.json({
+        ok: true, administratorOnly: true, ownerScope: 'SELF',
+        ...proof, preservedHistoricOrders: readiness.historical.orders,
+        preservedHistoricJournalRows: readiness.historical.journalRows,
+        orderSubmitted: false, exchangeRequestSent: false,
+        liveTradingAuthorityGranted: false, privateProviderRequests: 0,
+        automaticWithdrawalEnabled: false,
+      });
+    } catch (error) {
+      return handleError(response, error, 'ADMIN_FOUR_MARKET_BOOTSTRAP_FAILED',
+        '관리자 4시장 모의계좌를 생성하지 못했습니다.', syncEnvelope);
+    }
   });
 
   router.get('/paper-journal/automatic-wallet-readiness', async (request: AuthenticatedRequest, response) => {
@@ -346,8 +544,21 @@ export function createPaperJournalRouter(
       const repository = repositoryFactory(request);
       const body = isObject(request.body) ? request.body : null;
       const submitted = body && Array.isArray(body.records) ? body.records : [];
+      if (submitted.some((item) => isObject(item)
+        && item.kind === 'account'
+        && typeof item.id === 'string'
+        && (item.id.startsWith('automatic-paper-admin-v2:')
+          || isAdminPaperWalletId(item.id)))) {
+        throw new PaperJournalError('ADMIN_MARKET_WALLET_SERVER_ONLY',
+          '관리자 4시장 자본은 일반 동기화로 생성·변경할 수 없습니다.',403);
+      }
       const walletRecords = submitted.filter((item) => isObject(item)
         && item.kind === 'account' && item.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+      if (walletRecords.length && request.member
+        && hasCapability(request.member, 'canManageMembers')) {
+        throw new PaperJournalError('ADMIN_PAPER_USE_FOUR_MARKET_WALLETS',
+          '관리자는 4시장 독립 가상계좌 경로를 사용해야 합니다.',409);
+      }
       if (walletRecords.length > 0) {
         if (!userId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
         if (!request.member || !hasCapability(request.member, 'canAccessAutoTrading')) {
@@ -488,7 +699,13 @@ export function createPaperJournalRouter(
     }
     try {
       const confirmation = isObject(request.body) ? request.body.confirmation : null;
-      const result = await deleteAllPaperJournalData(repositoryFactory(request), request.member?.id ?? '', confirmation);
+      const userId = request.member?.id ?? '';
+      const current = await repositoryFactory(request).listSnapshot(userId);
+      if (current.some((row) => row.kind === 'account' && isAdminPaperWalletId(row.id))) {
+        throw new PaperJournalError('ADMIN_PAPER_CAMPAIGN_DELETE_FORBIDDEN',
+          '관리자 4시장 모의거래 계좌와 이력을 일괄 삭제할 수 없습니다.',409);
+      }
+      const result = await deleteAllPaperJournalData(repositoryFactory(request), userId, confirmation);
       return response.json(result);
     } catch (cause) {
       return handleError(response, cause, 'JOURNAL_DELETE_FAILED', '서버 거래일지를 삭제하지 못했습니다.', syncEnvelope);
