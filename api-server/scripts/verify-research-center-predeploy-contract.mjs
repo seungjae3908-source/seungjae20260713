@@ -128,10 +128,16 @@ requireText(routeIndex, "subpath.startsWith('/ai-review/')", 'paper journal AI r
 requireText(routeIndex, "return requireCapability('canAccessAiTradingReview')(req, res, next);", 'paper journal AI review capability');
 requireText(routeIndex, "return requireCapability('canAccessJournalSync')(req, res, next);", 'paper journal mutation capability fallback');
 requireText(routeIndex, "router.use('/', paperJournalRouter);", 'paper journal router mount');
-requireText(journalClient, "authorizedFetch('/api/paper-journal/unified-ledger?source=APP_PAPER&range=ALL'", 'journal client endpoint');
+requireText(journalClient, "authorizedFetch('/api/paper-journal/unified-ledger?range=ALL'", 'journal client endpoint');
+requireText(journalClient, "summary.source !== 'APP_AUTO_JOURNAL'", 'live feedback source validation');
+requireText(journalClient, 'summary.researchMutationAllowed !== false', 'live feedback Research mutation lock');
+requireText(journalClient, 'summary.promotionAuthority !== false', 'live feedback promotion lock');
+requireText(journalClient, "summary.executionAuthority !== 'NONE'", 'live feedback execution authority lock');
+requireText(journalClient, 'summary.profitabilityCredit !== 0', 'live feedback zero profitability credit');
 requireText(paperRoute, "router.get('/paper-journal/unified-ledger'", 'unified journal API');
 requireText(paperRoute, 'readCanonicalResearchOwnerStateForJournalBinding', 'journal research owner readback');
 requireText(paperRoute, 'bindCanonicalResearchToUnifiedJournal', 'journal canonical binding');
+requireText(paperRoute, 'buildLiveAutoResearchFeedback', 'live auto Research feedback readback');
 
 const expectedCostKeys = [
   'commission', 'tax', 'spread', 'slippage',

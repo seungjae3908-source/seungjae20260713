@@ -858,6 +858,12 @@ test('associate automatic policy creates exactly one Paper FILLED order through 
   assert.equal(plan?.exchange, 'upbit');
   assert.equal(plan?.market, 'KRW');
   assert.equal(plan?.signalId, 'signal-worker-1');
+  assert.equal(plan?.researchLineage?.candidateId, 'paper-candidate-v1:' + 'f'.repeat(64));
+  assert.equal(plan?.researchLineage?.market, 'CRYPTO_SPOT');
+  assert.equal(plan?.researchLineage?.symbol, 'BTC');
+  assert.equal(plan?.researchLineage?.researchCodeSha, 'a'.repeat(40));
+  assert.equal(plan?.researchLineage?.executionAuthority, 'NONE');
+  assert.equal(plan?.researchLineage?.profitabilityCredit, 0);
   assert.equal(orders[0].exchangeOrderId?.startsWith('paper-'), true);
   const lifecycleEvents = (await repository.listEvents(USER))
     .filter((event) => event.reason === 'PAPER_POSITION_LIFECYCLE_OPENED');
@@ -1792,6 +1798,11 @@ test('automatic Paper exit closes a tracked position even when the next handoff 
   const exitPlan = plans.find((plan) => plan.reduceOnly === true);
   assert.ok(exitPlan);
   assert.ok(exitPlan.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
+  const entryPlan = plans.find((plan) => plan.reduceOnly !== true);
+  assert.ok(entryPlan);
+  assert.deepEqual(exitPlan.researchLineage, entryPlan.researchLineage);
+  assert.equal(exitPlan.researchLineage?.executionAuthority, 'NONE');
+  assert.equal(exitPlan.researchLineage?.profitabilityCredit, 0);
   const orders = await repository.listOrders(USER);
   const exitOrder = orders.find((order) => order.planId === exitPlan!.id);
   assert.equal(exitOrder?.state, 'FILLED');

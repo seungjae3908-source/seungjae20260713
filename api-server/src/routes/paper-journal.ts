@@ -64,6 +64,9 @@ import {
   readCanonicalResearchOwnerStateForJournalBinding,
 } from '../services/unified-trade-journal-canonical-binding.service';
 import {
+  buildLiveAutoResearchFeedback,
+} from '../services/unified-trade-journal-live-research-feedback.service';
+import {
   PaperJournalSignalPerformanceRepository,
   buildSignalPerformanceReadModel,
   type PerformanceQuery,
@@ -874,10 +877,12 @@ export function createPaperJournalRouter(
         nowMs: observedAt.getTime(),
       });
       const bound = bindCanonicalResearchToUnifiedJournal(journal, ownerReadback, observedAt.getTime());
+      const liveResearchFeedback = buildLiveAutoResearchFeedback(bound);
       return response.json(analysisEnvelope({
         ok: true,
         result: {
           ...bound,
+          liveResearchFeedback,
           liveAccountHistory: historySummary(liveHistory),
           safety: {
             ...bound.safety,

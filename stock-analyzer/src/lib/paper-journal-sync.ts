@@ -92,6 +92,27 @@ export type UnifiedCanonicalResearchBindingSummary = {
   paperTradeCount:number; verifiedTradeCount:number; mismatchTradeCount:number; unavailableTradeCount:number;
   executionAuthority:'NONE'; profitabilityCredit:0;
 };
+export type UnifiedResearchLineage = {
+  schemaVersion:'trading-research-lineage-v1'; candidateId:string|null;
+  market:UnifiedTradeMarket; symbol:string; timeframe:string; direction:'BUY'|'LONG'|'SHORT';
+  strategyId:string; strategyVersion:string; parameterHash:string; researchCodeSha:string; costPolicyVersion:string; handoffId:string;
+  source:'MEMBER_AUTO_TRADING_PAPER_HANDOFF'; executionAuthority:'NONE'; profitabilityCredit:0;
+};
+export type UnifiedLiveResearchFeedbackRecord = {
+  schemaVersion:'unified-journal-live-research-feedback-v1'; tradeId:string;
+  status:'LINEAGE_VERIFIED'|'NOT_AVAILABLE'|'MISMATCH'|'NOT_APPLICABLE'; reason:string;
+  candidateId:string|null; strategyId:string|null; strategyVersion:string|null; parameterHash:string|null; researchCodeSha:string|null;
+  costPolicyVersion:string|null; handoffId:string|null; market:UnifiedTradeMarket; symbol:string; positionSide:'LONG'|'SHORT';
+  journalStatus:'OPEN'|'CLOSED'; grossPnlObserved:number; netPnlObserved:number|null; netReturnPercentObserved:number|null;
+  transactionCostEvidenceReady:boolean; observationOnly:true; researchMutationAllowed:false; promotionAuthority:false;
+  executionAuthority:'NONE'; profitabilityCredit:0;
+};
+export type UnifiedLiveResearchFeedback = {
+  schemaVersion:'unified-journal-live-research-feedback-v1'; status:'VERIFIED'|'PARTIAL'|'NOT_AVAILABLE'; source:'APP_AUTO_JOURNAL';
+  autoTradeCount:number; lineageVerifiedCount:number; mismatchTradeCount:number; unavailableTradeCount:number; closedObservedCount:number;
+  records:UnifiedLiveResearchFeedbackRecord[]; observationOnly:true; researchMutationAllowed:false; promotionAuthority:false;
+  executionAuthority:'NONE'; profitabilityCredit:0;
+};
 export type UnifiedTradeCycle = {
   id:string; source:UnifiedTradeSource; broker:string; accountIdMasked:string; market:UnifiedTradeMarket; symbol:string;
   positionSide:'LONG'|'SHORT'; currency:'KRW'|'USD'|'USDT'; status:'OPEN'|'CLOSED'; openedAt:string; closedAt:string|null;
@@ -111,6 +132,7 @@ export type UnifiedTradeCycle = {
     fillIds:string[];
   };
   canonicalResearchBinding?:UnifiedCanonicalResearchBinding;
+  researchLineage?:UnifiedResearchLineage|null;
 };
 export type UnifiedJournalAnalytics = {
   sampleSize:number; openTrades:number; closedTrades:number; winRate:number|null; profitFactor:number|null;
@@ -139,6 +161,7 @@ export type UnifiedTradeJournal = {
     safety:{orderRequests:0;cancelRequests:0;amendRequests:0;transferRequests:0;withdrawalRequests:0;credentialsReturned:false;liveTradingEnabled:false;autoTradingEnabled:false};
   };
   canonicalResearchBinding?:UnifiedCanonicalResearchBindingSummary;
+  liveResearchFeedback?:UnifiedLiveResearchFeedback;
 };
 export type UnifiedJournalFilters = {
   range?:UnifiedTradeRange; market?:UnifiedTradeMarket|'ALL'; source?:UnifiedTradeSource|'ALL';

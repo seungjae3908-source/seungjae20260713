@@ -30,6 +30,14 @@ export function JournalPaperLinkageSummary({ data }: { data: UnifiedTradeJournal
     .map((trade) => trade.canonicalResearchBinding?.candidateId)
     .filter((value): value is string => Boolean(value)))];
   const researchBindingReady = paperTrades.length > 0 && verifiedBindings.length === paperTrades.length;
+  const liveFeedback = data.liveResearchFeedback;
+  const liveFeedbackReady = liveFeedback?.status === 'VERIFIED'
+    && (liveFeedback.autoTradeCount ?? 0) > 0
+    && liveFeedback.lineageVerifiedCount === liveFeedback.autoTradeCount;
+  const liveCandidateIds = [...new Set((liveFeedback?.records ?? [])
+    .filter((record) => record.status === 'LINEAGE_VERIFIED')
+    .map((record) => record.candidateId)
+    .filter((value): value is string => Boolean(value)))];
 
   return (
     <section
@@ -112,6 +120,29 @@ export function JournalPaperLinkageSummary({ data }: { data: UnifiedTradeJournal
         ) : null}
         <p className="mt-1 text-[10px] text-muted-foreground">
           Settlement identity는 해당 trade의 canonicalResearchBinding.settlementBindingVerified=true일 때만 검증된 것으로 봅니다. 8개 Full Cost 수익성 증거와는 별도입니다.
+        </p>
+      </div>
+
+      <div className={`mt-3 rounded-xl border p-3 ${liveFeedbackReady
+        ? 'border-emerald-500/30 bg-emerald-500/10'
+        : 'border-border bg-muted/20'}`} data-testid="journal-live-research-feedback">
+        <p className={`text-xs font-black ${liveFeedbackReady
+          ? 'text-emerald-700 dark:text-emerald-300'
+          : 'text-foreground'}`}>
+          실자동매매 → Research 관찰 · {liveFeedbackReady ? 'lineage 검증됨' : '미관측/부분'}
+        </p>
+        <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">
+          자동매매 {liveFeedback?.autoTradeCount ?? 0}건 · lineage 검증 {liveFeedback?.lineageVerifiedCount ?? 0}건 ·
+          불일치 {liveFeedback?.mismatchTradeCount ?? 0}건 · 미확인 {liveFeedback?.unavailableTradeCount ?? 0}건 ·
+          종료 관찰 {liveFeedback?.closedObservedCount ?? 0}건.
+        </p>
+        {liveCandidateIds.length ? (
+          <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+            live candidateId · {liveCandidateIds.join(' · ')}
+          </p>
+        ) : null}
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          관찰 전용 · Research 변경 권한 없음 · 승격 권한 없음 · profitabilityCredit=0. 실자동매매 결과는 Paper/OOS 수익성 증거를 대체하지 않습니다.
         </p>
       </div>
 

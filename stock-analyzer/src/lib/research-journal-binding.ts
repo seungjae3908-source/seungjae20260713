@@ -18,6 +18,33 @@ export type ResearchJournalCandidateBinding = Readonly<{
   netPnlEvidenceDigest: string | null;
 }>;
 
+export type ResearchLiveFeedbackRecord = Readonly<{
+  status: 'LINEAGE_VERIFIED' | 'NOT_AVAILABLE' | 'MISMATCH';
+  reason: string;
+  candidateId: string | null;
+  strategyId: string | null;
+  researchCodeSha: string | null;
+  handoffId: string | null;
+  journalStatus: 'OPEN' | 'CLOSED';
+  netPnlObserved: number | null;
+  observationOnly: true;
+  researchMutationAllowed: false;
+  promotionAuthority: false;
+  executionAuthority: 'NONE';
+  profitabilityCredit: 0;
+}>;
+
+export type ResearchLiveFeedbackReadback = Readonly<{
+  status: 'VERIFIED' | 'PARTIAL' | 'NOT_AVAILABLE';
+  autoTradeCount: number;
+  lineageVerifiedCount: number;
+  mismatchTradeCount: number;
+  unavailableTradeCount: number;
+  closedObservedCount: number;
+  records: readonly ResearchLiveFeedbackRecord[];
+  reason: string;
+}>;
+
 export type ResearchJournalBindingReadback = Readonly<{
   status: 'VERIFIED' | 'PARTIAL' | 'NOT_AVAILABLE';
   source: 'AUTHENTICATED_PAPER_STATE' | null;
@@ -27,6 +54,7 @@ export type ResearchJournalBindingReadback = Readonly<{
   mismatchTradeCount: number;
   unavailableTradeCount: number;
   trades: readonly ResearchJournalCandidateBinding[];
+  liveFeedback: ResearchLiveFeedbackReadback;
   reason: string;
 }>;
 
@@ -46,6 +74,19 @@ function text(value: unknown, max = 160) {
   return typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null;
 }
 
+function emptyLive(reason: string): ResearchLiveFeedbackReadback {
+  return Object.freeze({
+    status: 'NOT_AVAILABLE',
+    autoTradeCount: 0,
+    lineageVerifiedCount: 0,
+    mismatchTradeCount: 0,
+    unavailableTradeCount: 0,
+    closedObservedCount: 0,
+    records: Object.freeze([]),
+    reason,
+  });
+}
+
 function empty(reason: string): ResearchJournalBindingReadback {
   return Object.freeze({
     status: 'NOT_AVAILABLE',
@@ -56,6 +97,7 @@ function empty(reason: string): ResearchJournalBindingReadback {
     mismatchTradeCount: 0,
     unavailableTradeCount: 0,
     trades: Object.freeze([]),
+    liveFeedback: emptyLive('LIVE_RESEARCH_FEEDBACK_NOT_AVAILABLE'),
     reason,
   });
 }
@@ -109,8 +151,61 @@ function parseTradeBinding(value: unknown): ResearchJournalCandidateBinding | nu
   });
 }
 
+function parseLiveFeedback(value: unknown): ResearchLiveFeedbackReadback {
+  const summary = record(value);
+  if (!summary
+    || summary.schemaVersion !== 'unified-journal-live-research-feedback-v1'
+    || !['VERIFIED', 'PARTIAL', 'NOT_AVAILABLE'].includes(String(summary.status))
+    || summary.source !== 'APP_AUTO_JOURNAL'
+    || summary.observationOnly !== true
+    || summary.researchMutationAllowed !== false
+    || summary.promotionAuthority !== false
+    || summary.executionAuthority !== 'NONE'
+    || summary.profitabilityCredit !== 0) {
+    return emptyLive('LIVE_RESEARCH_FEEDBACK_NOT_EXPOSED');
+  }
+  const records = Array.isArray(summary.records)
+    ? summary.records.flatMap((raw) => {
+      const row = record(raw);
+      if (!row
+        || !['LINEAGE_VERIFIED', 'NOT_AVAILABLE', 'MISMATCH'].includes(String(row.status))
+        || row.observationOnly !== true
+        || row.researchMutationAllowed !== false
+        || row.promotionAuthority !== false
+        || row.executionAuthority !== 'NONE'
+        || row.profitabilityCredit !== 0
+        || !['OPEN', 'CLOSED'].includes(String(row.journalStatus))) return [];
+      return [Object.freeze({
+        status: row.status as ResearchLiveFeedbackRecord['status'],
+        reason: text(row.reason) ?? 'LIVE_RESEARCH_FEEDBACK_REASON_UNAVAILABLE',
+        candidateId: text(row.candidateId, 200),
+        strategyId: text(row.strategyId, 200),
+        researchCodeSha: /^[0-9a-f]{40}$/u.test(String(row.researchCodeSha ?? '')) ? String(row.researchCodeSha) : null,
+        handoffId: text(row.handoffId, 240),
+        journalStatus: row.journalStatus as 'OPEN'|'CLOSED',
+        netPnlObserved: typeof row.netPnlObserved === 'number' && Number.isFinite(row.netPnlObserved) ? row.netPnlObserved : null,
+        observationOnly: true as const,
+        researchMutationAllowed: false as const,
+        promotionAuthority: false as const,
+        executionAuthority: 'NONE' as const,
+        profitabilityCredit: 0 as const,
+      })];
+    })
+    : [];
+  return Object.freeze({
+    status: summary.status as ResearchLiveFeedbackReadback['status'],
+    autoTradeCount: count(summary.autoTradeCount),
+    lineageVerifiedCount: count(summary.lineageVerifiedCount),
+    mismatchTradeCount: count(summary.mismatchTradeCount),
+    unavailableTradeCount: count(summary.unavailableTradeCount),
+    closedObservedCount: count(summary.closedObservedCount),
+    records: Object.freeze(records),
+    reason: 'APP_AUTO_JOURNAL_OBSERVATION_READBACK',
+  });
+}
+
 export async function fetchResearchJournalBinding(signal?: AbortSignal): Promise<ResearchJournalBindingReadback> {
-  const response = await authorizedFetch('/api/paper-journal/unified-ledger?source=APP_PAPER&range=ALL', {
+  const response = await authorizedFetch('/api/paper-journal/unified-ledger?range=ALL', {
     cache: 'no-store',
     signal,
   });
@@ -147,6 +242,7 @@ export async function fetchResearchJournalBinding(signal?: AbortSignal): Promise
     mismatchTradeCount: count(summary.mismatchTradeCount),
     unavailableTradeCount: count(summary.unavailableTradeCount),
     trades: Object.freeze(trades),
+    liveFeedback: parseLiveFeedback(result.liveResearchFeedback),
     reason: 'CANONICAL_JOURNAL_BINDING_READBACK',
   });
 }
