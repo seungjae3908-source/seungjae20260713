@@ -216,7 +216,7 @@ test("100만원 KRW virtual Paper wallet initializes without account/order or wi
 });
 
 test("virtual 1M Paper bootstrap refuses to reset an existing 500k account or a nonmatching restored seed", async () => {
-  const manager = new PaperCompoundingCapitalManager();
+  const manager = new PaperCompoundingCapitalManager({ admissionGateEnabled: true });
   await manager.applySettlement(settlement(1, 500_000), { nowMs: T0 + 10_000 });
   const before = manager.exportState();
   await assert.rejects(
