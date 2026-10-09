@@ -81,6 +81,7 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
   const shadow = plan.find((task) => task.id === 'shadow-forward');
   assert.deepEqual(plan.map((task) => task.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
   assert.equal(formulaQueue.env.FORMULA_BACKTEST_STATE_ROOT, resolve(stateRoot));
+  assert.deepEqual(formulaQueue.acceptedExitCodes, [0, 2]);
   assert.equal(formulaQueue.env.LIVE_TRADING, 'false');
   assert.equal(formulaQueue.env.PRIVATE_API_ENABLED, 'false');
   assert.equal(formulaQueue.env.ORDER_AUTHORITY, 'false');
