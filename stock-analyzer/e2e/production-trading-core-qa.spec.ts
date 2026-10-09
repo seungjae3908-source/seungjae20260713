@@ -177,6 +177,23 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(connection?.lastErrorCode ?? null, `${provider} must have no verification error`).toBeNull();
   }
 
+  // Collect separate, member-scoped Worker readiness BEFORE any temporary
+  // canary policy changes. A synthetic fill is not a real background tick.
+  const paperRuntime = await appApi<any>(page, '/api/trade-automation/paper-runtime-readiness');
+  expect(paperRuntime.ok, JSON.stringify(paperRuntime.body)).toBe(true);
+  expect(paperRuntime.body?.readOnlyProbe).toBe(true);
+  expect(paperRuntime.body?.memberScope).toBe('SELF');
+  expect(paperRuntime.body?.financialMutationCount).toBe(0);
+  expect(paperRuntime.body?.privateProviderRequests).toBe(0);
+  expect(paperRuntime.body?.orderSubmitted).toBe(false);
+  expect(paperRuntime.body?.exchangeRequestSent).toBe(false);
+  expect(paperRuntime.body?.realOrderAuthorityGranted).toBe(false);
+  const paperRuntimeBlockersBeforeQa: string[] = Array.isArray(paperRuntime.body?.blockers)
+    ? paperRuntime.body.blockers.filter((value: unknown): value is string => typeof value === 'string')
+    : [];
+  const paperRuntimeReadyBeforeQa = paperRuntime.body?.readyForPaperEvaluation === true;
+  expect(paperRuntimeReadyBeforeQa).toBe(paperRuntimeBlockersBeforeQa.length === 0);
+
   const originalPolicy = structuredClone(statusBefore.body.policy);
   // Protected Production QA must not clear a member's explicit safety stop.
   if (originalPolicy?.emergencyStopped !== false || originalPolicy?.newEntriesStopped !== false) {
@@ -527,6 +544,13 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     },
     paperAutomaticTriggered,
     paperFilled,
+    // Independent Production background Worker readiness, never inferred from
+    // the directly created and simulated one-order QA canary.
+    paperRuntimeReadOnlyVerified: true,
+    paperRuntimeReadyBeforeQa,
+    paperRuntimeBlockersBeforeQa,
+    paperRuntimeWalletReadyBeforeQa: paperRuntime.body?.paperWalletReady === true,
+    paperRuntimeWorkerFreshBeforeQa: paperRuntime.body?.workerTickFresh === true,
     journalVisible,
     executionSyncInserted: syncInserted,
     telegramActivationState,
