@@ -251,10 +251,18 @@ function pm2CommandEnv(runtime,override={}) {
       || key.startsWith('RUNNER_') || key.startsWith('SSH_')
       || key==='CI') delete allowed[key];
   }
+  const excludedMeta=new Set([
+    'name','namespace','cwd','args','status','exec_interpreter','exec_mode',
+    'pm_exec_path','pm_cwd','pm_out_log_path','pm_err_log_path','pm_pid_path',
+    'NODE_APP_INSTANCE','PORT','API_PORT',
+  ]);
   for(const [key,value] of Object.entries(runtime)) {
-    if(/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) && key!=='PROD_DATABASE_URL'
-      && !key.startsWith('PG') && value!=null && typeof value!=='object'
-      && !key.startsWith('pm_')&&!key.startsWith('axm_')) {
+    if(/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)
+      && !excludedMeta.has(key) && key!=='PROD_DATABASE_URL'
+      && !key.startsWith('PG') && !key.startsWith('TELEGRAM_BINDING_')
+      && !key.startsWith('GITHUB_') && !key.startsWith('RUNNER_')
+      && !key.startsWith('SSH_') && value!=null && typeof value!=='object'
+      && !key.startsWith('pm_') && !key.startsWith('axm_')) {
       allowed[key]=String(value);
     }
   }
