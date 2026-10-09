@@ -4,6 +4,7 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import { calculatePaperJournalAnalytics, createTradingReviewDataset } from '../services/paper-journal-analytics.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { createSupabaseTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
+import type { TradingOrder, TradingPlan } from '../services/trade-automation.types';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
@@ -22,6 +23,7 @@ import {
   PaperJournalError,
   type AiProviderCallState,
   type PaperJournalRepository,
+  type StoredPaperJournalRecord,
 } from '../services/paper-journal.types';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import {
@@ -76,6 +78,53 @@ type PaperJournalDependencies = {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Server-owned preflight for a one-time 500k automatic Paper wallet.
+ * The same evidence controls preview and write; no settlement history is
+ * rewritten, and a previously inserted/tombstoned wallet cannot be refilled.
+ */
+function automaticPaperWalletStartDecision(
+  records: readonly StoredPaperJournalRecord[],
+  orders: readonly TradingOrder[],
+  plans: readonly TradingPlan[],
+  nowMs: number,
+) {
+  const bootstrap = automaticPaperWalletBootstrapReadiness(orders, plans);
+  const walletPreviouslyRecorded = records.some((row) =>
+    row.kind === 'account' && row.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+  const freshReady = !walletPreviouslyRecorded
+    && records.length === 0 && bootstrap.safeToInitialize;
+  const isolation = automaticPaperLegacyEpochIsolationReadiness(orders, plans, records, nowMs);
+  const isolatedReady = !walletPreviouslyRecorded && !freshReady && isolation.safeToIsolate;
+  const state = walletPreviouslyRecorded
+    ? 'ALREADY_EXISTS' as const
+    : freshReady
+      ? 'READY_FRESH' as const
+      : isolatedReady
+        ? 'READY_ISOLATE_LEGACY' as const
+        : 'BLOCKED' as const;
+  const blockers = walletPreviouslyRecorded
+    ? ['AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS']
+    : freshReady || isolatedReady
+      ? [] as string[]
+      : [...new Set([...bootstrap.blockers, ...isolation.blockers])];
+  return {
+    state,
+    safeToPrepare: freshReady || isolatedReady,
+    requiresHistoryPreservationConfirmation: isolatedReady,
+    blockers,
+    historical: {
+      automaticPaperPlanCount: bootstrap.automaticPaperPlanCount,
+      executedAutomaticPaperOrderCount: bootstrap.executedAutomaticPaperOrderCount,
+      missingFilledQuantityEvidence: bootstrap.missingFilledQuantityEvidence,
+      missingFeeEvidence: bootstrap.missingFeeEvidence,
+      legacyPlanCount: isolation.legacyPlanCount,
+      legacyOrderCount: isolation.legacyOrderCount,
+      legacyJournalCount: isolation.legacyJournalCount,
+    },
+  };
 }
 
 function requestSize(request: Request) {
@@ -254,6 +303,40 @@ export function createPaperJournalRouter(
     requirePortfolioAdvisor: requireAiReview,
   });
 
+  router.get('/paper-journal/automatic-wallet-readiness', async (request: AuthenticatedRequest, response) => {
+    try {
+      const userId = request.member?.id ?? '';
+      if (!userId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      if (!request.member || !hasCapability(request.member, 'canAccessAutoTrading')
+        || !hasCapability(request.member, 'canAccessJournalSync')) {
+        throw new PaperJournalError('CAPABILITY_REQUIRED',
+          '자동모의매매 계좌 준비 권한이 없습니다.', 403);
+      }
+      const [records, canonical] = await Promise.all([
+        repositoryFactory(request).listSnapshot(userId),
+        automaticPaperHistoryReader(request, userId),
+      ]);
+      const decision = automaticPaperWalletStartDecision(
+        records, canonical.orders, canonical.plans, now().getTime(),
+      );
+      return response.json({
+        ok: true,
+        mode: 'paper-wallet-readiness-only',
+        readOnlyProbe: true,
+        walletId: AUTOMATIC_PAPER_ACCOUNT_ID,
+        initialCapitalKrw: AUTOMATIC_PAPER_INITIAL_KRW,
+        ...decision,
+        financialMutationCount: 0,
+        privateProviderRequests: 0,
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      });
+    } catch (cause) {
+      return handleError(response, cause, 'AUTOMATIC_PAPER_WALLET_READINESS_UNAVAILABLE',
+        '모의계좌 사전검증을 완료하지 못했습니다.', syncEnvelope);
+    }
+  });
+
   router.post('/paper-journal/sync', async (request: AuthenticatedRequest, response) => {
     if (requestSize(request) > MAX_REQUEST_BYTES) {
       return response.status(413).json(syncEnvelope({ ok: false, code: 'REQUEST_TOO_LARGE', message: '동기화 요청 크기가 제한을 초과했습니다.' }));
@@ -292,18 +375,20 @@ export function createPaperJournalRouter(
           repository.listSnapshot(userId),
           automaticPaperHistoryReader(request, userId),
         ]);
-        const bootstrap = automaticPaperWalletBootstrapReadiness(
-          canonical.orders, canonical.plans,
+        const decision = automaticPaperWalletStartDecision(
+          existingPaper, canonical.orders, canonical.plans, now().getTime(),
         );
-        // An explicit new campaign can isolate historic PAPER-ONLY QA fills,
-        // but never close, delete or fabricate those legacy records.
+        if (decision.state === 'ALREADY_EXISTS') {
+          throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS',
+            '자동모의매매 가상계좌는 다시 생성할 수 없습니다.', 409);
+        }
+        // The read-only preflight and this write share exact server-side
+        // evidence. A stale UI or reordered client request cannot waive it.
         const newEpochApproved = body?.legacyEpochConfirmation ===
           'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY';
-        const isolationSafe = newEpochApproved
-          && automaticPaperLegacyEpochIsolationReadiness(
-            canonical.orders, canonical.plans, existingPaper, now().getTime(),
-          ).safeToIsolate;
-        if ((existingPaper.length > 0 || !bootstrap.safeToInitialize) && !isolationSafe) {
+        if (!decision.safeToPrepare
+          || (decision.requiresHistoryPreservationConfirmation && !newEpochApproved)
+          || (!decision.requiresHistoryPreservationConfirmation && newEpochApproved)) {
           throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_HISTORY_RECONCILIATION_REQUIRED',
             '기존 모의거래 체결·일지·계좌를 보존하기 위해 새 원금 설정을 차단했습니다.', 409);
         }
