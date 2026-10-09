@@ -289,3 +289,74 @@ test('clock-skew tolerance never admits candles or periods occurring in the actu
   assert.equal(futureWindow.state, 'EXCLUDE');
   assert.equal(futureWindow.reason, 'FORMULA_QUEUE_PERIOD_INVALID_OR_FUTURE');
 });
+
+test('forged cached PASS and substituted item digest never become Paper candidates', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-cache-integrity-'));
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(inbox, { recursive: true }));
+  await writeFile(join(inbox, 'candidate.json'), JSON.stringify(queueItem()));
+  const researchCodeSha = '8'.repeat(40);
+  const first = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  assert.equal(first.paperRegisteredCount, 0);
+  const [resultFile] = (await readdir(join(root, 'formula-backtest', 'results'))).filter((name) => name.endsWith('.json'));
+  assert.ok(resultFile);
+  const resultPath = join(root, 'formula-backtest', 'results', resultFile);
+  const original = JSON.parse(await readFile(resultPath, 'utf8'));
+
+  for (const counterfeit of [
+    { ...original, state: 'PASS', researchSurvivorCount: 1 },
+    { ...original, itemDigest: 'f'.repeat(64) },
+    { ...original, executionAuthority: 'LIVE', liveTrading: true },
+  ]) {
+    await writeFile(resultPath, JSON.stringify(counterfeit));
+    await assert.rejects(
+      processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha }),
+      /FORMULA_QUEUE_CACHED_RESULT_UNSAFE/,
+    );
+    const registry = JSON.parse(await readFile(join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
+    assert.equal(registry.entryCount, 0);
+    assert.equal(registry.executionAuthority, 'NONE');
+  }
+  await writeFile(resultPath, JSON.stringify(original));
+  const repeated = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  assert.equal(repeated.counts.HOLD, 1);
+  assert.equal(repeated.paperRegisteredCount, 0);
+});
+
+test('cached registry cannot disable future signal and canonical Paper admission guards', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-registry-integrity-'));
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(inbox, { recursive: true }));
+  await writeFile(join(inbox, 'candidate.json'), JSON.stringify(queueItem()));
+  const researchCodeSha = '7'.repeat(40);
+  await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  const registryPath = join(root, 'latest', 'formula-paper-strategy-registry.json');
+  const original = JSON.parse(await readFile(registryPath, 'utf8'));
+  const manipulated = {
+    source: 'FORMULA_AUTO_BACKTEST_PASS',
+    registryId: 'a'.repeat(64),
+    itemDigest: 'b'.repeat(64),
+    researchCodeSha,
+    paperState: 'REGISTERED_WAITING_FUTURE_SIGNAL',
+    futureSignalRequired: false,
+    freshPublicEvidenceRequired: true,
+    canonicalPaperAdmissionRequired: true,
+    simulationAuthorityRequired: true,
+    enabledForPaperEvaluation: true,
+    retainedForAudit: true,
+    liveTrading: false,
+    autoTrading: false,
+    realOrder: false,
+    privateTradingApi: false,
+    directTradeOnBacktestPass: false,
+    executionAuthority: 'NONE',
+  };
+  await writeFile(registryPath, JSON.stringify({ ...original, entries: [manipulated], entryCount: 1 }));
+  await assert.rejects(
+    processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha }),
+    /FORMULA_QUEUE_PRIOR_REGISTRY_ENTRY_UNSAFE/,
+  );
+  await writeFile(registryPath, JSON.stringify(original));
+  const replay = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  assert.equal(replay.paperRegisteredCount, 0);
+});
