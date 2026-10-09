@@ -367,6 +367,7 @@ const automaticTradingDriftReviewed=[
 ];
 // Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
 const memberTelegramReviewed=[
+ '.github/tests/telegram-six-room-gate.test.mjs',
  'stock-analyzer/e2e/telegram-durable-personal-outbox.spec.ts',
  'api-server/src/services/member-holdings-telegram-producer.service.test.ts',
  'api-server/src/services/member-holdings-telegram-producer.service.ts',

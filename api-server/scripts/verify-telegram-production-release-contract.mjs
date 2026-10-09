@@ -253,6 +253,37 @@ if (telegramSmokeIndex < 0 || completionEvidenceIndex <= telegramSmokeIndex) {
   throw new Error('Telegram Production smoke verification block was not found');
 }
 const telegramSmokeBlock = source.slice(telegramSmokeIndex, completionEvidenceIndex);
+// No owner-approved Telegram release may silently collapse the six promised
+// member-facing destinations into shared legacy stock/crypto/default rooms.
+const isolatedRoomKeys = [
+  'TELEGRAM_KR_STOCK_CHAT_ID',
+  'TELEGRAM_US_STOCK_CHAT_ID',
+  'TELEGRAM_CRYPTO_SPOT_CHAT_ID',
+  'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+  'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID',
+  'TELEGRAM_AUTO_TRADING_CHAT_ID',
+];
+const readOnlyPreflight = source.slice(runtimePreflightIndex, storageMigrationIndex);
+for (const key of isolatedRoomKeys) {
+  if (!readOnlyPreflight.includes("'"+key+"'")) {
+    throw new Error('TELEGRAM_SIX_ROOM_READONLY_PREFLIGHT_KEY_MISSING:'+key);
+  }
+}
+const isolationDefinitions = source.match(/function requireIsolatedSixRooms\\(runtime\\) \\{/g) ?? [];
+if (isolationDefinitions.length !== 2) throw new Error('TELEGRAM_SIX_ROOM_GUARD_DUPLICATION_INVALID');
+const isolationCalls = source.match(/requireIsolatedSixRooms\\(env\\);/g) ?? [];
+if (isolationCalls.length < 3) throw new Error('TELEGRAM_SIX_ROOM_CHECK_BEFORE_AND_AFTER_RESTART_MISSING');
+for (const marker of [
+  "new Set(dedicatedIds).size !== dedicatedIds.length",
+  "TELEGRAM_SIX_ROOM_CONFIG_MISSING",
+  "TELEGRAM_SIX_ROOM_ROUTING_COLLISION",
+  "TELEGRAM_OWNER_MEMBER_ID",
+]) {
+  if (!readOnlyPreflight.includes(marker) || !telegramSmokeBlock.includes(marker)) {
+    throw new Error('TELEGRAM_SIX_ROOM_GUARD_MISSING:'+marker);
+  }
+}
+
 if (!telegramSmokeBlock.includes('NODE_OPTIONS=%q')
   || !telegramSmokeBlock.includes('"$TELEGRAM_REMOTE_NODE_OPTIONS"')) {
   throw new Error('Telegram Production smoke verification must inject the IPv4-first Node policy into the remote SSH process');
