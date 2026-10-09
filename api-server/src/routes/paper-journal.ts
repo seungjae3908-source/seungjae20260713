@@ -3,7 +3,13 @@ import { Router, type IRouter, type Request, type Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { calculatePaperJournalAnalytics, createTradingReviewDataset } from '../services/paper-journal-analytics.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
-import { createSupabaseTradingRepository } from '../services/trade-automation.repository';
+import { createSupabaseTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
+import {
+  AUTOMATIC_PAPER_ACCOUNT_ID,
+  AUTOMATIC_PAPER_INITIAL_KRW,
+  automaticPaperWalletBootstrapReadiness,
+  automaticPaperLegacyEpochIsolationReadiness,
+} from '../services/member-auto-trading-background-worker.service';
 import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
 import {
   deleteAllPaperJournalData,
@@ -60,6 +66,12 @@ type PaperJournalDependencies = {
   allowTossContractPreview: boolean;
   accountHistoryReader: typeof readAccountJournalHistory;
   automationJournalReader: (request: AuthenticatedRequest, ownerId: string) => Promise<Record<string, unknown>[]>;
+  automaticPaperHistoryReader: (
+    request: AuthenticatedRequest, ownerId: string,
+  ) => Promise<{
+    orders: Awaited<ReturnType<TradingRepository['listOrders']>>;
+    plans: Awaited<ReturnType<TradingRepository['listPlans']>>;
+  }>;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -201,6 +213,16 @@ export function createPaperJournalRouter(
       : []
   ));
 
+  const automaticPaperHistoryReader = dependencies.automaticPaperHistoryReader
+    ?? (async (request: AuthenticatedRequest, ownerId: string) => {
+      if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      const canonical = createSupabaseTradingRepository(request.accessToken, ownerId);
+      const [orders, plans] = await Promise.all([
+        canonical.listOrders(ownerId), canonical.listPlans(ownerId),
+      ]);
+      return { orders, plans };
+    });
+
   const accountHistoryProviders = (request: AuthenticatedRequest) => {
     if (!request.member) return [] as Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'>;
     const providers: Array<'toss' | 'kiwoom' | 'upbit' | 'bitget'> = ['toss', 'kiwoom'];
@@ -237,7 +259,56 @@ export function createPaperJournalRouter(
       return response.status(413).json(syncEnvelope({ ok: false, code: 'REQUEST_TOO_LARGE', message: '동기화 요청 크기가 제한을 초과했습니다.' }));
     }
     try {
-      const result = await syncPaperJournal(repositoryFactory(request), request.member?.id ?? '', request.body, now());
+      const userId = request.member?.id ?? '';
+      const repository = repositoryFactory(request);
+      const body = isObject(request.body) ? request.body : null;
+      const submitted = body && Array.isArray(body.records) ? body.records : [];
+      const walletRecords = submitted.filter((item) => isObject(item)
+        && item.kind === 'account' && item.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+      if (walletRecords.length > 0) {
+        if (!userId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+        if (!request.member || !hasCapability(request.member, 'canAccessAutoTrading')) {
+          throw new PaperJournalError('CAPABILITY_REQUIRED',
+            '자동모의매매 가상계좌 준비 권한이 없습니다.', 403);
+        }
+        const wallet = walletRecords[0] as Record<string, unknown>;
+        const payload = isObject(wallet.payload) ? wallet.payload : null;
+        // Client-owned local Paper accounts cannot set the baseline for the
+        // automatic worker. Only a fresh, exact 500k zero-exposure wallet is
+        // allowed, never a reset or a mixed-account sync request.
+        if (walletRecords.length !== 1 || submitted.length !== 1
+          || wallet.version !== 1 || wallet.deletedAt !== null
+          || payload?.id !== AUTOMATIC_PAPER_ACCOUNT_ID
+          || payload?.initialBalance !== AUTOMATIC_PAPER_INITIAL_KRW
+          || payload?.equity !== AUTOMATIC_PAPER_INITIAL_KRW
+          || payload?.cashBalance !== AUTOMATIC_PAPER_INITIAL_KRW
+          || payload?.availableMargin !== AUTOMATIC_PAPER_INITIAL_KRW
+          || payload?.usedMargin !== 0
+          || payload?.realizedPnl !== 0 || payload?.unrealizedPnl !== 0) {
+          throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_BASELINE_INVALID',
+            '자동모의매매 가상계좌는 50만원 초기 상태로 한 번만 준비할 수 있습니다.', 409);
+        }
+        const [existingPaper, canonical] = await Promise.all([
+          repository.listSnapshot(userId),
+          automaticPaperHistoryReader(request, userId),
+        ]);
+        const bootstrap = automaticPaperWalletBootstrapReadiness(
+          canonical.orders, canonical.plans,
+        );
+        // An explicit new campaign can isolate historic PAPER-ONLY QA fills,
+        // but never close, delete or fabricate those legacy records.
+        const newEpochApproved = body?.legacyEpochConfirmation ===
+          'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY';
+        const isolationSafe = newEpochApproved
+          && automaticPaperLegacyEpochIsolationReadiness(
+            canonical.orders, canonical.plans, existingPaper, now().getTime(),
+          ).safeToIsolate;
+        if ((existingPaper.length > 0 || !bootstrap.safeToInitialize) && !isolationSafe) {
+          throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_HISTORY_RECONCILIATION_REQUIRED',
+            '기존 모의거래 체결·일지·계좌를 보존하기 위해 새 원금 설정을 차단했습니다.', 409);
+        }
+      }
+      const result = await syncPaperJournal(repository, userId, request.body, now());
       return response.json(result);
     } catch (cause) {
       return handleError(response, cause, 'JOURNAL_SYNC_FAILED', '거래일지를 동기화하지 못했습니다.', syncEnvelope);
