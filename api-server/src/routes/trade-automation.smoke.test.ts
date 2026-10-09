@@ -1827,6 +1827,60 @@ test('member order baseline stays 500k while an administrator may save the 1M ba
   }
 });
 
+test('member Bitget leverage stops at 3x while an administrator can save exact 7x', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const policyBody = {
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+  };
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const rejected = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...policyBody, bitgetLeverage: 4 }),
+    });
+    assert.equal(rejected.status, 409);
+    const rejectedBody = await rejected.json() as Record<string, any>;
+    assert.equal(rejectedBody.error, 'BITGET_LEVERAGE_ROLE_LIMIT');
+    assert.equal(rejectedBody.maximumBitgetLeverage, 3);
+    assert.equal(rejectedBody.orderSubmitted, false);
+    assert.equal(rejectedBody.providerMutationRequests, 0);
+
+    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...policyBody, bitgetLeverage: 3 }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { bitgetLeverage: number } })
+      .policy.bitgetLeverage, 3);
+    const status = await fetch(`${regular.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as Record<string, any>;
+    assert.equal(statusBody.maximumBitgetLeverage, 3);
+    assert.equal(statusBody.administratorLeveragePolicy, false);
+  } finally { await close(regular.server); }
+
+  const administrator = await startServer(true, 'admin');
+  try {
+    const saved = await fetch(`${administrator.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...policyBody, bitgetLeverage: 7 }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { bitgetLeverage: number } })
+      .policy.bitgetLeverage, 7);
+    const status = await fetch(`${administrator.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as Record<string, any>;
+    assert.equal(statusBody.maximumBitgetLeverage, 7);
+    assert.equal(statusBody.administratorLeveragePolicy, true);
+  } finally {
+    await close(administrator.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
+});
+
 test('member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', async () => {
   const isolated = new InMemoryTradingRepository();
   await isolated.savePolicy(USER, normalizeTradingPolicy({
@@ -2777,7 +2831,7 @@ test('formula+AI rehearsal HTTP route proves four-market readiness and never cre
     });
   }
 
-  const { server, baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer(true, 'admin');
   const nativeFetch = globalThis.fetch;
   let outboundRequests = 0;
   try {
@@ -2834,6 +2888,7 @@ test('formula+AI rehearsal HTTP route proves four-market readiness and never cre
     assert.equal(body.telegram.ready, true);
     assert.equal(body.futures.marginMode, 'isolated');
     assert.equal(body.futures.maxLeverage, 7);
+    assert.equal(body.futures.maximumLeverageForRequester, 7);
     assert.equal(body.ai.positiveDecision, 'PASS');
     assert.equal(body.ai.vetoDecision, 'VETO');
     assert.equal(body.ai.vetoBlocked, true);
