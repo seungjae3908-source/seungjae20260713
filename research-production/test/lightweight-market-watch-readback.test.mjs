@@ -125,6 +125,55 @@ test('all public market feeds blocked is not mislabeled as successful observatio
   assert.equal(result.continuous24hProven, false);
 });
 
+
+test('raw PARTIAL, BLOCKED and all-four coverage are cross-validated', () => {
+  const allReady = evidence();
+  allReady.markets[0] = {
+    market: 'KR_STOCK', status: 'READY', source: 'KR_PUBLIC_QUOTES',
+    listedCount: 10, observedCount: 10, newCandidates: 0,
+    executionAuthority: 'NONE',
+  };
+  allReady.markets[1] = {
+    market: 'US_STOCK', status: 'READY', source: 'US_PUBLIC_QUOTES',
+    listedCount: 10, observedCount: 10, newCandidates: 0,
+    executionAuthority: 'NONE',
+  };
+  assert.equal(summarizeLightweightMarketWatch(allReady, NOW).status, 'INVALID');
+  allReady.status = 'OBSERVING_ALL_FOUR';
+  assert.equal(summarizeLightweightMarketWatch(allReady, NOW).status, 'OBSERVING');
+
+  const falseBlocked = evidence();
+  falseBlocked.status = 'BLOCKED_DATA';
+  assert.equal(summarizeLightweightMarketWatch(falseBlocked, NOW).status, 'INVALID');
+
+  const falsePartial = evidence();
+  falsePartial.markets = MARKETS.map((market) => ({
+    market, status: 'BLOCKED_NO_PUBLIC_DATA', source: 'NONE',
+    listedCount: 0, observedCount: 0, newCandidates: 0,
+    executionAuthority: 'NONE',
+  }));
+  falsePartial.newCandidateCount = 0;
+  assert.equal(summarizeLightweightMarketWatch(falsePartial, NOW).status, 'INVALID');
+});
+
+
+test('misleading budget and zero-symbol READY are INVALID, not operating proof', () => {
+  const underBudget = evidence();
+  underBudget.resourceBudget = { status: 'HOLD', reason: 'MEMORY_PRESSURE' };
+  assert.equal(summarizeLightweightMarketWatch(underBudget, NOW).status, 'INVALID');
+  const wrongThrottle = evidence();
+  wrongThrottle.resourceBudget = { status: 'THROTTLED', reason: 'HOST_PRESSURE' };
+  assert.equal(summarizeLightweightMarketWatch(wrongThrottle, NOW).status, 'INVALID');
+  const emptyReady = evidence();
+  emptyReady.markets[2] = {
+    market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC_TICKERS',
+    listedCount: 0, observedCount: 0, newCandidates: 0,
+    executionAuthority: 'NONE',
+  };
+  emptyReady.newCandidateCount = 1;
+  assert.equal(summarizeLightweightMarketWatch(emptyReady, NOW).status, 'INVALID');
+});
+
 test('local status CLI is missing-safe and does not read from the network', async () => {
   const root = await mkdtemp(join(tmpdir(), 'watch-status-'));
   const exec = new URL('../bin/lightweight-market-watch-status.mjs', import.meta.url).pathname;
