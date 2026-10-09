@@ -229,6 +229,7 @@ export function TradeAutomationSettings({
   const [loading, setLoading] = useState(!fixture);
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [safeOffBusy, setSafeOffBusy] = useState(false);
   const refreshInFlight = useRef(false);
 
   async function load({ syncDraft = true }: { syncDraft?: boolean } = {}) {
@@ -270,10 +271,8 @@ export function TradeAutomationSettings({
 
   function toggleAutomatic() {
     setDraft((current) => {
+      if (current.emergencyStopped || current.newEntriesStopped) return current;
       const nextEnabled = !current.automaticEnabled;
-      // A sticky emergency/new-entry stop forbids arming AUTO, but must
-      // never prevent a further risk-reducing switch from ON to OFF.
-      if ((current.emergencyStopped || current.newEntriesStopped) && nextEnabled) return current;
       return {
         ...current,
         mode: policyModeForAutomaticEnabled(nextEnabled),
@@ -342,6 +341,73 @@ export function TradeAutomationSettings({
       setConfirming(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '저장하지 못했습니다.');
+    }
+  }
+
+  // Strict stop gate keeps ordinary AUTO controls locked. Only this explicit,
+  // confirmed and freshly re-read request may make the policy more restrictive.
+  // It never calls resume, worker activation, or any provider/order endpoint.
+  async function saveSafeOffDuringStop() {
+    const stopped = draft.emergencyStopped || draft.newEntriesStopped
+      || status?.policy.emergencyStopped === true
+      || status?.policy.newEntriesStopped === true
+      || status?.emergencyStopped === true;
+    if (!stopped || safeOffBusy || !status
+      || (!draft.automaticEnabled && !status.policy.automaticEnabled)) return;
+    if (!window.confirm(
+      '비상정지는 유지하고 AUTO 정책만 OFF로 저장합니다. 기존 Live 자동포지션의 자동청산 감시가 중단될 수 있으므로 열린 포지션과 보호주문을 확인하세요. 계속할까요?',
+    )) return;
+    if (fixture) {
+      const off = normalizeUiPolicy({
+        ...status.policy, mode: 'approval', automaticEnabled: false,
+        marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
+        exchangeEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
+      });
+      setDraft(off);
+      setStatus((current) => current ? { ...current, policy: off } : current);
+      setMessage('테스트: 비상정지 유지 · AUTO OFF 저장 완료');
+      return;
+    }
+    setSafeOffBusy(true);
+    setMessage('');
+    try {
+      // Do not replay a possibly stale browser draft over the owner's policy.
+      const beforeResponse = await authorizedFetch('/api/trade-automation/status');
+      const before = await beforeResponse.json() as (Status & { ok?: boolean; error?: string }) | null;
+      if (!beforeResponse.ok || !before?.policy || before.ok === false) {
+        throw new Error(before?.error ?? 'AUTO OFF 전 정책 재조회 실패');
+      }
+      if (before.policy.mode === 'approval' && before.policy.automaticEnabled === false) {
+        setDraft(normalizeUiPolicy(before.policy));
+        setStatus(before);
+        setMessage('서버의 AUTO 정책이 이미 OFF입니다. 비상정지 상태는 유지됩니다.');
+        return;
+      }
+      const response = await authorizedFetch('/api/trade-automation/policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...before.policy, mode: 'approval', automaticEnabled: false,
+          confirmation: { acknowledged: true },
+        }),
+      });
+      const saved = await response.json() as { policy?: Policy; error?: string };
+      if (!response.ok || !saved.policy) throw new Error(saved.error ?? 'AUTO OFF 저장 실패');
+      if (saved.policy.mode !== 'approval' || saved.policy.automaticEnabled !== false
+        || Object.values(saved.policy.marketEnabled ?? {}).some(Boolean)
+        || Object.values(saved.policy.exchangeEnabled ?? {}).some(Boolean)
+        || ((before.policy.emergencyStopped || before.policy.newEntriesStopped)
+          && !(saved.policy.emergencyStopped || saved.policy.newEntriesStopped))) {
+        throw new Error('AUTO_OFF_STOP_PRESERVATION_READBACK_INVALID');
+      }
+      const off = normalizeUiPolicy(saved.policy);
+      setDraft(off);
+      setStatus((current) => current ? { ...current, policy: saved.policy! } : current);
+      setMessage('비상정지 유지 · AUTO OFF 저장 완료. 관리자 모의계좌 준비 전 서버 상태를 다시 확인하세요.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '안전한 AUTO OFF 저장 실패');
+    } finally {
+      setSafeOffBusy(false);
     }
   }
 
@@ -467,10 +533,6 @@ export function TradeAutomationSettings({
     || status?.policy.newEntriesStopped === true;
   const effectiveStopped = memberStopped || status?.emergencyStopped === true;
   const globalOnlyStopped = !memberStopped && status?.emergencyStopped === true;
-  // With a sticky stop, permit only the stricter AUTO-OFF transition.
-  // Never offer the AUTO-ON control until the dedicated resume gate is cleared.
-  const automaticToggleDisabled = effectiveStopped && !draft.automaticEnabled;
-  const policySaveDisabled = effectiveStopped && draft.automaticEnabled;
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -497,10 +559,10 @@ export function TradeAutomationSettings({
     <button
       type="button"
       onClick={toggleAutomatic}
-      disabled={automaticToggleDisabled}
+      disabled={effectiveStopped}
       className={cn(
         'mt-4 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background p-4',
-        automaticToggleDisabled && 'cursor-not-allowed opacity-60',
+        effectiveStopped && 'cursor-not-allowed opacity-60',
       )}
       data-testid="automatic-trading-master-toggle"
       aria-pressed={draft.automaticEnabled}
@@ -719,9 +781,9 @@ export function TradeAutomationSettings({
     </p>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-      <button type="button" onClick={() => setConfirming(true)} disabled={policySaveDisabled} className={cn(
+      <button type="button" onClick={() => setConfirming(true)} disabled={effectiveStopped} className={cn(
         'rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground',
-        policySaveDisabled && 'cursor-not-allowed opacity-50',
+        effectiveStopped && 'cursor-not-allowed opacity-50',
       )}>
         설정 저장
       </button>
@@ -737,6 +799,14 @@ export function TradeAutomationSettings({
               <Power className="h-4 w-4" />긴급정지
             </button>}
     </div>
+
+    {effectiveStopped && (draft.automaticEnabled || status?.policy.automaticEnabled === true) && (
+      <button type="button" onClick={() => void saveSafeOffDuringStop()}
+        disabled={safeOffBusy} data-testid="automatic-policy-safe-off-during-stop"
+        className="mt-3 w-full min-h-11 rounded-2xl border border-destructive/40 bg-secondary px-4 py-3 text-sm font-extrabold disabled:opacity-50">
+        {safeOffBusy ? '정책 재조회·OFF 확인 중' : '비상정지 유지 · AUTO만 안전하게 OFF'}
+      </button>
+    )}
 
     {message && <p role="status" className="mt-3 rounded-2xl bg-secondary p-3 text-xs font-bold">{message}</p>}
 
