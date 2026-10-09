@@ -201,3 +201,16 @@ test('Automatic settings never promise wildcard execution for an empty strategy 
   assert.equal(settings.includes('비우면 위험검사를 통과한 전략 전체'), false);
   assert.equal(settings.includes('Pilot 단계 설정됨 · 운영 준비도 별도 확인'), true);
 });
+
+test('admin 4-market portfolio display never treats a seed wallet as verified settled equity', () => {
+  const ui = read('stock-analyzer/src/components/admin-four-market-paper-panel.tsx');
+  const route = read('api-server/src/routes/paper-journal.ts');
+  const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  assert.ok(route.includes("marketCapitalComputedFrom: 'CANONICAL_CURRENT_EPOCH_SETTLEMENT_ONLY'"));
+  assert.ok(route.includes('adminFourMarketPaperCapitalReadback({'));
+  assert.ok(worker.includes('adminFourMarketPaperCapitalReadback({'));
+  assert.ok(ui.includes('실제')); // Narrow Korean confirmation is intentionally absent if not rendered.
+  assert.ok(ui.includes('현재 운용잔고/예비금 미확정'));
+  assert.ok(ui.includes('actual?.settlementReady'));
+  assert.ok(ui.includes('CANONICAL_CURRENT_EPOCH_SETTLEMENT_ONLY'));
+});
