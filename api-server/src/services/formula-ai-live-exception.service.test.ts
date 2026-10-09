@@ -312,7 +312,7 @@ test('formula+AI Paper exception cannot bypass spread, daily loss, stop, or liqu
   assert.ok(evaluateTradingPlan(stopped, prepared, {
     emergencyStopped: false, serverLiveEnabled: false,
   }).blockCodes.includes('DAILY_LOSS_LIMIT'));
-  const noStop = { ...paper, stopPrice: null };
+  const noStop = { ...paper, stopPrice: 0 };
   assert.ok(evaluateTradingPlan(noStop, prepared, {
     emergencyStopped: false, serverLiveEnabled: false,
   }).blockCodes.includes('EXIT_PLAN_REQUIRED'));
