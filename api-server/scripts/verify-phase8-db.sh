@@ -17,6 +17,7 @@ if (value.status !== 'passed') throw new Error('live staging bootstrap artifact 
 if (value.schema_version !== '20260805.1') throw new Error('live staging bootstrap schema version mismatch');
 if (value.atomic_transaction !== true) throw new Error('live staging bootstrap was not atomic');
 if (value.idempotency_passes !== 2) throw new Error('live staging bootstrap did not run twice');
+if (value.admin_v2_rls_verified !== true) throw new Error('live staging admin V2 RLS guard was not verified');
 if (value.production_export_used !== false) throw new Error('live staging bootstrap used a production export');
 if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.storage_objects_copied !== 0) {
   throw new Error('live staging bootstrap copied forbidden data');
