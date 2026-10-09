@@ -282,7 +282,9 @@ export function automaticPaperLegacyEpochIsolationReadiness(
 }
 
 export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
-export const AUTOMATIC_PAPER_INITIAL_KRW = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+// Preserve the existing member Paper wallet contract and history. The real
+// order policy and admin four-market Paper wallets use a separate 1M policy.
+export const AUTOMATIC_PAPER_INITIAL_KRW = 500_000 as const;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };

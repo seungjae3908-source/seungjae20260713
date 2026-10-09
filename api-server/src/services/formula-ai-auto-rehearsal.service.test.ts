@@ -31,7 +31,7 @@ test('six formula+AI strategy packs reach ACTIVE_REHEARSAL without OOS/promotion
   ] as const;
 
   assert.equal(evidenceBackedAutoStrategyCatalog().length, 6);
-  assert.equal(RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw, 500_000);
+  assert.equal(RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw, 1_000_000);
   assert.equal(RULE_PACK_PILOT_PROFILE.profitCompoundShare, 0.5);
   assert.equal(RULE_PACK_PILOT_PROFILE.profitReserveShare, 0.5);
   assert.equal(RULE_PACK_PILOT_PROFILE.futuresMaxLeverage, 7);
