@@ -92,3 +92,25 @@ test('read-only source audit reports only missing key NAMES present in fixed con
  assert.ok(workflow.includes('personalTelegramWorkerEnabled:false'));
  assert.ok(workflow.includes('Telegram sends / financial mutations: 0 / 0'));
 });
+
+
+test('read-only verdict does not confuse present room config with active Telegram delivery', () => {
+ const start=workflow.indexOf('if(!evidence.identityMatch)evidence.classification=');
+ const end=workflow.indexOf('\n            }\n          }catch', start);
+ assert.ok(start>0&&end>start,'production classification block');
+ const classify=vm.runInNewContext('(evidence,rooms)=>{\n'+workflow.slice(start,end)+'\nreturn evidence.classification;\n}');
+ const good={
+   classification:'OK',identityMatch:true,missingCore:[],backgroundWorkersEnabled:true,
+   telegramActivationApproved:true,telegramIntelligenceWorkerEnabled:true,personalTelegramWorkerEnabled:true
+ };
+ const check=(overrides={},rooms={missing:[],duplicates:[]})=>
+   classify({...good,...overrides},rooms);
+ assert.equal(check(),'OK');
+ assert.equal(check({telegramActivationApproved:false}),'TELEGRAM_ACTIVATION_DISABLED');
+ assert.equal(check({telegramIntelligenceWorkerEnabled:false}),'TELEGRAM_MARKET_WORKER_DISABLED');
+ assert.equal(check({personalTelegramWorkerEnabled:false}),'TELEGRAM_PERSONAL_WORKER_DISABLED');
+ assert.equal(check({backgroundWorkersEnabled:false}),'BACKGROUND_WORKERS_DISABLED');
+ assert.equal(check({}, {missing:['TELEGRAM_KR_STOCK_CHAT_ID'],duplicates:[]}), 'SIX_ROOM_CONFIG_MISSING');
+ assert.equal(check({}, {missing:[],duplicates:[['a','b']]}), 'SIX_ROOM_ROUTING_COLLISION');
+ assert.equal(check({identityMatch:false}), 'PRODUCTION_SHA_MISMATCH');
+});
