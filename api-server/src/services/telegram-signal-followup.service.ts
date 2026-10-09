@@ -406,7 +406,6 @@ function destinationFor(card: ScannerSignalCard): string | null {
   return telegramMarketRoomChatId(
     telegramMarketRoomForLane(lane),
     process.env,
-    { allowLegacyFallback: true },
   );
 }
 
