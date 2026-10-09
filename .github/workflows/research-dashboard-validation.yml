@@ -40,9 +40,12 @@ jobs:
         run: |
           npm run check
           npm test
-          python3 -m py_compile server.py video_research_readback.py
+          python3 -m py_compile server.py video_research_readback.py lightweight_market_watch_readback.py
           python3 test/test_server.py
           python3 test/test_video_research_readback.py
+          # Previously omitted from CI: exact Research release identity,
+          # stale/malformed market states and file-safety tests.
+          python3 test/test_lightweight_market_watch_readback.py
       - name: Validate exact Python server startup and read-only aggregation
         shell: bash
         run: |
