@@ -68,13 +68,38 @@ requireText(deploy, 'timeout-minutes: 150', 'PRODUCTION_INLINE_QA_TIMEOUT_NOT_EX
 requireText(deploy, 'postdeploy-evidence/production-postdeploy-context.json', 'PRODUCTION_INLINE_CONTEXT_MISSING');
 requireText(deploy, 'production-postdeploy-activation-ready-', 'PRODUCTION_ACTIVATION_READY_ARTIFACT_MISSING');
 
-const qaTail = deployJob.split('- name: Destroy deployment authority before read-only QA')[1] ?? '';
+const qaTailRaw = deployJob.split('- name: Destroy deployment authority before read-only QA')[1] ?? '';
+const qaTail = qaTailRaw.split('- name: Roll back application SHA after failed post-deploy QA when schema is compatible')[0] ?? '';
 for (const value of ['PROD_SSH_', 'PROD_DATABASE_URL', 'AGENT_HUB_GITHUB_TOKEN']) {
   forbidText(qaTail, value, `INLINE_QA_DEPLOY_AUTHORITY_FORBIDDEN:${value}`);
 }
 for (const mode of ['comprehensive', 'account', 'credential', 'member']) {
   requireText(qaTail, `run-production-readonly-qa.sh ${mode}`, `INLINE_QA_SHARED_RUNNER_MISSING:${mode}`);
 }
+
+const recoveryTail = deployJob.split('- name: Roll back application SHA after failed post-deploy QA when schema is compatible')[1] ?? '';
+requireText(recoveryTail, "failure() && steps.deploy_app.outcome == 'success'", 'POSTDEPLOY_FAILURE_ONLY_RECOVERY_MISSING');
+requireText(recoveryTail, "steps.rollback_target.outputs.schema_compatible == 'true'", 'POSTDEPLOY_ROLLBACK_SCHEMA_COMPATIBILITY_MISSING');
+requireText(recoveryTail, "steps.rollback_target.outputs.previous_sha", 'POSTDEPLOY_ROLLBACK_PREVIOUS_SHA_MISSING');
+requireText(recoveryTail, "POSTDEPLOY_ROLLBACK_IDENTITY_MISMATCH", 'POSTDEPLOY_ROLLBACK_HEALTH_IDENTITY_MISSING');
+requireText(recoveryTail, "POSTDEPLOY_ROLLBACK_TRADING_AUTHORITY_PRESENT", 'POSTDEPLOY_ROLLBACK_TRADING_AUTHORITY_GUARD_MISSING');
+requireText(deploy, 'PREDEPLOY_ROLLBACK_IDENTITY_NOT_VERIFIED', 'POSTDEPLOY_PREVIOUS_SHA_IDENTITY_GUARD_MISSING');
+requireText(deploy, 'api-server/supabase supabase database', 'POSTDEPLOY_SCHEMA_CHANGE_GUARD_MISSING');
+requireText(deploy, 'prior_deployer', 'POSTDEPLOY_PRIOR_DEPLOYER_GUARD_MISSING');
+requireText(recoveryTail, 'POSTDEPLOY_ROLLBACK_EXECUTION_AUTHORITY_PRESENT', 'POSTDEPLOY_ROLLBACK_EXECUTION_AUTHORITY_GUARD_MISSING');
+requireText(recoveryTail, 'POSTDEPLOY_FAILCLOSED_EXECUTION_AUTHORITY_PRESENT', 'POSTDEPLOY_FAILCLOSED_EXECUTION_AUTHORITY_GUARD_MISSING');
+requireText(recoveryTail, 'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED', 'POSTDEPLOY_PAPER_WORKER_AUTHORITY_GUARD_MISSING');
+requireText(deploy, 'Preserve fail-closed release if previous schema cannot safely be restored', 'POSTDEPLOY_INCOMPATIBLE_SCHEMA_PRESERVATION_MISSING');
+requireText(recoveryTail, 'POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT', 'POSTDEPLOY_INCOMPATIBLE_TRADING_AUTHORITY_GUARD_MISSING');
+forbidText(recoveryTail, 'PROD_DATABASE_URL', 'POSTDEPLOY_RECOVERY_DATABASE_MUTATION_AUTHORITY_FORBIDDEN');
+requireOrder(deploy, [
+  '- name: Capture exact predeploy rollback target and schema compatibility',
+  '- name: Deploy exact approved revision',
+  '- name: Destroy deployment authority before read-only QA',
+  '- name: Upload immutable ACTIVATION_READY evidence',
+  '- name: Roll back application SHA after failed post-deploy QA when schema is compatible',
+  '- name: Preserve fail-closed release if previous schema cannot safely be restored',
+], 'POSTDEPLOY_RECOVERY_SAFETY_ORDER_INVALID');
 
 const liveJobs = {
   comprehensive: comprehensive.split('\n  production-comprehensive-readonly:\n')[1] ?? '',

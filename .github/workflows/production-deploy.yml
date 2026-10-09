@@ -63,6 +63,7 @@ on:
       - api-server/src/features/account-readonly/account-readonly.contract.ts
       - api-server/src/features/account-readonly/providers/exchange-readonly.providers.ts
       - .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - .github/tests/production-postdeploy-rollback-contract.test.mjs
       - .github/workflows/futures-public-network-smoke.yml
       - .github/workflows/post-merge-release-provenance.yml
       - .github/workflows/staging-readiness.yml
@@ -133,6 +134,8 @@ jobs:
           node --test .github/tests/production-admin-four-paper-rls.test.mjs
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - name: Validate post-deploy failure recovery guards
+        run: node --test .github/tests/production-postdeploy-rollback-contract.test.mjs
 
   approval-gate:
     name: Validate immutable main revision, release provenance, and exact staging verdict
@@ -535,7 +538,46 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Capture exact predeploy rollback target and schema compatibility
+        id: rollback_target
+        env:
+          PRODUCTION_BASE_URL: https://lsj119.com
+        run: |
+          set -Eeuo pipefail
+          before="$RUNNER_TEMP/production-predeploy-identity.json"
+          curl --fail --silent --show-error --max-time 20 "$PRODUCTION_BASE_URL/api/health" -o "$before"
+          previous_sha="$(node - "$before" <<'NODE'
+          const fs = require('node:fs');
+          const v = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const sha = String(v?.deploySha ?? '').toLowerCase();
+          if (!/^[0-9a-f]{40}$/.test(sha)
+            || v?.processDeploySha !== sha || v?.deployMarkerSha !== sha
+            || v?.identityMatch !== true || v?.identityStatus !== 'match') {
+            throw new Error('PREDEPLOY_ROLLBACK_IDENTITY_NOT_VERIFIED');
+          }
+          process.stdout.write(sha);
+          NODE
+          )"
+          echo "previous_sha=$previous_sha" >> "$GITHUB_OUTPUT"
+          echo "PREVIOUS_PRODUCTION_SHA=$previous_sha" >> "$GITHUB_ENV"
+
+          # Unverified compatibility always means fail-closed preservation,
+          # never an automatic downgrade across forward-only schema changes.
+          git fetch --quiet --no-tags --depth 1 origin "$previous_sha"
+          git cat-file -e "$previous_sha^{commit}"
+          schema_compatible=false
+          if git diff --quiet "$previous_sha" "$TARGET_SHA" -- api-server/supabase supabase database; then
+            prior_admin="$(git show "$previous_sha:api-server/src/routes/admin.ts" 2>/dev/null || true)"
+            prior_deployer="$(git show "$previous_sha:ops/deploy-production.sh" 2>/dev/null || true)"
+            if [[ "$prior_admin" == *"apply_member_permission_change"*               && "$prior_admin" == *"p_expected_permissions_updated_at"*               && "$prior_admin" == *"permissions_updated_at"*               && "$prior_deployer" == *"application_runtime_ready()"*               && "$prior_deployer" == *"restart_application_preserving_telegram()"*               && "$prior_deployer" == *"MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false"*               && "$prior_deployer" == *"executionAuthority=NONE"* ]]; then
+              schema_compatible=true
+            fi
+          fi
+          echo "schema_compatible=$schema_compatible" >> "$GITHUB_OUTPUT"
+          echo "Rollback eligibility: schema_compatible=$schema_compatible; exact previous SHA recorded."
+
       - name: Deploy exact approved revision
+        id: deploy_app
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -847,6 +889,178 @@ jobs:
           path: postdeploy-evidence/production-postdeploy-activation-ready-${{ env.TARGET_SHA }}.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Roll back application SHA after failed post-deploy QA when schema is compatible
+        if: ${{ failure() && steps.deploy_app.outcome == 'success' && steps.rollback_target.outputs.schema_compatible == 'true' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+          PREVIOUS_SHA: ${{ steps.rollback_target.outputs.previous_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PREVIOUS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'POSTDEPLOY_ROLLBACK_TARGET_INVALID' >&2; exit 1; }
+          if [[ "$PREVIOUS_SHA" == "$TARGET_SHA" ]]; then
+            echo 'Post-deploy QA failed but the prior and target revision were identical; no revision rollback.'
+            exit 0
+          fi
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          trap 'rm -f "$HOME/.ssh/id_ed25519"' EXIT
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          # A newer operator deployment must never be overwritten by stale QA.
+          check_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$check_env node --input-type=module -" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const target = process.env.TARGET_SHA;
+          const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
+          if (marker !== target) throw new Error('POSTDEPLOY_ROLLBACK_NEWER_RELEASE_CONFLICT');
+          const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const app = rows.filter((row) => row?.name === 'stock-app');
+          if (app.length !== 1 || app[0]?.pm2_env?.status !== 'online') {
+            throw new Error('POSTDEPLOY_ROLLBACK_PM2_NOT_UNIQUE_OR_ONLINE');
+          }
+          const env = app[0].pm2_env;
+          for (const key of [
+            'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED',
+            'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
+            'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
+            'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED','MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+            'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
+            'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED','CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
+          ]) {
+            if (env[key] === true || env[key] === 'true') {
+              throw new Error('POSTDEPLOY_ROLLBACK_TRADING_AUTHORITY_PRESENT:' + key);
+            }
+          }
+          for (const key of [
+            'SPOT_LIVE_CAPABILITY_ALLOWLIST','SPOT_LIVE_MARKET_ALLOWLIST',
+            'FUTURES_LIVE_CAPABILITY_ALLOWLIST','FUTURES_LIVE_MARKET_ALLOWLIST',
+          ]) {
+            if (String(env[key] ?? '').trim() !== '') {
+              throw new Error('POSTDEPLOY_ROLLBACK_CAPABILITY_ALLOWLIST_PRESENT:' + key);
+            }
+          }
+          if (env.executionAuthority !== 'NONE'
+            || env.FUTURES_LIVE_EXECUTION_AUTHORITY !== 'NONE') {
+            throw new Error('POSTDEPLOY_ROLLBACK_EXECUTION_AUTHORITY_PRESENT');
+          }
+          NODE
+          # Use the signed prior commit in this repository only; the remote
+          # deploy script still has its own canary, identity and rollback gates.
+          remote_env="$(printf 'ROLLBACK_SHA=%q DATA_PROBE_PATH=%q PUBLIC_BASE_URL=%q REPOSITORY_URL=%q'             "$PREVIOUS_SHA" "$DATA_PROBE_PATH" "$PUBLIC_BASE_URL" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          source_dir="$(mktemp -d /tmp/stock-app-rollback-source.XXXXXX)"
+          cleanup() { rm -rf -- "$source_dir"; }
+          trap cleanup EXIT
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$source_dir"
+          git -C "$source_dir" fetch --quiet --depth 1 origin "$ROLLBACK_SHA"
+          actual="$(git -C "$source_dir" rev-parse FETCH_HEAD^{commit})"
+          [[ "$actual" == "$ROLLBACK_SHA" ]] || { echo 'POSTDEPLOY_ROLLBACK_RESOLUTION_MISMATCH' >&2; exit 1; }
+          git -C "$source_dir" checkout --quiet --detach "$ROLLBACK_SHA"
+          script="$source_dir/ops/deploy-production.sh"
+          diagnostics="$source_dir/ops/production-verification-diagnostics.sh"
+          [[ -f "$script" && -f "$diagnostics" ]] || { echo 'POSTDEPLOY_ROLLBACK_TOOLING_MISSING' >&2; exit 1; }
+          chmod 700 "$script"
+          BASH_ENV="$diagnostics" SOURCE_DIR="$source_dir" LIVE_DIR=/opt/stock-app PM2_NAME=stock-app             LIVE_PORT=8080 CANARY_PORT=18081 DATA_PROBE_PATH="$DATA_PROBE_PATH"             PUBLIC_BASE_URL="$PUBLIC_BASE_URL" "$script" "$ROLLBACK_SHA"
+          REMOTE
+          verify="$RUNNER_TEMP/postdeploy-restored-identity.json"
+          curl --fail --silent --show-error --max-time 20 "https://lsj119.com/api/health" -o "$verify"
+          node - "$verify" "$PREVIOUS_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, target] = process.argv.slice(2);
+          const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (v?.deploySha !== target || v?.processDeploySha !== target
+            || v?.deployMarkerSha !== target || v?.identityMatch !== true
+            || v?.identityStatus !== 'match') {
+            throw new Error('POSTDEPLOY_ROLLBACK_IDENTITY_MISMATCH');
+          }
+          NODE
+          echo "Post-deploy QA failed; restored the previous compatible application SHA $PREVIOUS_SHA."
+
+      - name: Preserve fail-closed release if previous schema cannot safely be restored
+        if: ${{ failure() && steps.deploy_app.outcome == 'success' && steps.rollback_target.outputs.schema_compatible != 'true' }}
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          trap 'rm -f "$HOME/.ssh/id_ed25519"' EXIT
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const sha = process.env.TARGET_SHA;
+          const marker = readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim();
+          if (marker !== sha) throw new Error('POSTDEPLOY_FAILCLOSED_TARGET_SHA_MISMATCH');
+          const apps = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }))
+            .filter((row) => row?.name === 'stock-app');
+          if (apps.length !== 1 || apps[0]?.pm2_env?.status !== 'online') {
+            throw new Error('POSTDEPLOY_FAILCLOSED_PM2_INVALID');
+          }
+          for (const key of [
+            'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED',
+            'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
+            'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
+            'MEMBER_AUTO_TRADING_BACKGROUND_ENABLED','MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED',
+            'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
+            'CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED','CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED',
+            'BITGET_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','UPBIT_LIVE_ORDER_ENABLED',
+          ]) {
+            const v = apps[0].pm2_env[key];
+            if (v === true || v === 'true') {
+              throw new Error('POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT:' + key);
+            }
+          }
+          for (const key of [
+            'SPOT_LIVE_CAPABILITY_ALLOWLIST','SPOT_LIVE_MARKET_ALLOWLIST',
+            'FUTURES_LIVE_CAPABILITY_ALLOWLIST','FUTURES_LIVE_MARKET_ALLOWLIST',
+          ]) {
+            if (String(apps[0].pm2_env[key] ?? '').trim() !== '') {
+              throw new Error('POSTDEPLOY_FAILCLOSED_CAPABILITY_ALLOWLIST_PRESENT:' + key);
+            }
+          }
+          if (apps[0].pm2_env.executionAuthority !== 'NONE'
+            || apps[0].pm2_env.FUTURES_LIVE_EXECUTION_AUTHORITY !== 'NONE') {
+            throw new Error('POSTDEPLOY_FAILCLOSED_EXECUTION_AUTHORITY_PRESENT');
+          }
+          process.stdout.write('POSTDEPLOY_FAILCLOSED_TARGET_PRESERVED_SCHEMA_BOUNDARY\n');
+          NODE
+          health="$RUNNER_TEMP/postdeploy-failclosed-health.json"
+          curl --fail --silent --show-error --max-time 20 "https://lsj119.com/api/health" -o "$health"
+          node - "$health" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const [file, expected] = process.argv.slice(2);
+          const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+          if (v?.deploySha !== expected || v?.processDeploySha !== expected
+            || v?.deployMarkerSha !== expected || v?.identityMatch !== true) {
+            throw new Error('POSTDEPLOY_FAILCLOSED_HEALTH_IDENTITY_INVALID');
+          }
+          NODE
+          echo 'Schema differs from the old revision: preserved the latest application with trading authority OFF. Manual incident review required.'
 
       - name: Deployment and post-deploy QA summary
         if: success()
