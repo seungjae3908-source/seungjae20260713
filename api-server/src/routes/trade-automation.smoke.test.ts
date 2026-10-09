@@ -2475,7 +2475,7 @@ test('automatic policy executes US-stock Paper without per-order approval or pri
         },
         exchangeEnabled: { bitget: true, upbit: true, kiwoom: true },
         enabledAssets: { bitget: [], upbit: [], kiwoom: [] },
-        enabledStrategies: [],
+        enabledStrategies: ['trend-breakout-v1'],
         confirmation: { acknowledged: true },
       }),
     });
