@@ -36,6 +36,26 @@ export function adminFourMarketPaperCapitalReadback(input: {
   const fullHistory = input.orders.length >= 500 || input.plans.length >= 200
     || input.records.length >= 500;
   const byPlan = new Map(input.plans.map(plan => [plan.id, plan]));
+  // A server-owned replay can attach a NEW fill to a pre-wallet plan.
+  // Dropping it from the new epoch's PnL, but reporting the market as
+  // settled, disagrees with the automatic Worker and hides a live exposure.
+  // Isolate the affected market, never quietly treat the fill as zero profit.
+  const lateLegacyRetryMarkets = new Set<AdminPaperMarket>();
+  const ownerScopeInvalid = input.plans.some(plan => plan.userId !== input.ownerId)
+    || input.orders.some(order => order.userId !== input.ownerId);
+  for (const order of input.orders) {
+    const plan = byPlan.get(order.planId);
+    if (!plan || plan.accountMode !== 'paper' || plan.executionMode !== 'automatic') continue;
+    const market = adminPaperMarketFromPlan(plan);
+    const openedAtMs = wallets.marketWallets[market].openedAtMs;
+    if (openedAtMs == null) continue;
+    const planTime = Date.parse(plan.createdAt);
+    const orderTime = Date.parse(order.createdAt);
+    if (!Number.isFinite(planTime) || !Number.isFinite(orderTime)
+      || (planTime < openedAtMs && orderTime >= openedAtMs)) {
+      lateLegacyRetryMarkets.add(market);
+    }
+  }
   // Unknown filled orders after a new epoch must not be hidden in an
   // unassigned market or silently priced at zero.
   const orphan = input.orders.some(order => {
@@ -53,9 +73,14 @@ export function adminFourMarketPaperCapitalReadback(input: {
     if (!wallets.ready || wallet.openedAtMs == null) {
       fallback('ADMIN_PAPER_WALLET_NOT_READY'); continue;
     }
-    if (fullHistory || orphan) {
-      fallback(fullHistory ? 'ADMIN_PAPER_LEDGER_HISTORY_TRUNCATED' : 'ADMIN_PAPER_ORPHAN_FILLED_ORDER');
+    if (fullHistory || orphan || ownerScopeInvalid) {
+      fallback(fullHistory ? 'ADMIN_PAPER_LEDGER_HISTORY_TRUNCATED'
+        : ownerScopeInvalid ? 'ADMIN_PAPER_OWNER_SCOPE_MISMATCH'
+          : 'ADMIN_PAPER_ORPHAN_FILLED_ORDER');
       continue;
+    }
+    if (lateLegacyRetryMarkets.has(market)) {
+      fallback('ADMIN_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH'); continue;
     }
     const scoped = adminMarketCurrentEpochSettlementScope({
       market, plans: input.plans, orders: input.orders,
