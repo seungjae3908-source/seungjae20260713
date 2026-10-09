@@ -245,3 +245,43 @@ to the app's DB. An audited backup/retention plan and real server 24-hour
 disk/CPU/RAM monitoring are still required before unattended operation. If
 a cap is hit, the watcher stops safely rather than discarding evidence to
 continue producing green status. Research status is not a trading gate.
+
+
+## 24-hour cadence witness: read-only local audit (Draft, NOT runtime proof)
+
+This Draft adds one small **watch/cadence/YYYY-MM-DD.jsonl** record after each
+successfully persisted market-watch cycle. Each entry contains only the
+pinned Research SHA, the cycle timestamp, resource protection state and four
+market status/count aggregates. It does not persist raw tickers, credentials,
+account IDs, trading directives or artificial earnings. It uses the same
+bounded, fsynced JSONL protection as events/outcomes. Daily source files are
+**not** automatically deleted or archived.
+
+The separate local CLI inspects only the previous/current UTC day, requiring
+private regular files, a 2 MiB/day read ceiling, at most 2,000 rows/day,
+consistent release identity, unique cycle times, and a trailing newline:
+
+~~~bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  RESEARCH_CODE_SHA=<EXACT_INSTALLED_RESEARCH_SHA> \
+  node /opt/investment-research/current/research-production/bin/lightweight-market-watch-cadence-status.mjs
+~~~
+
+A rolling window is diagnostically **PUBLIC_CADENCE_OBSERVED** only when there
+are at least **600 valid distinct cycles in 24 hours**, first and latest
+snapshots are within **6 minutes** of the window boundaries, no gap exceeds
+6 minutes, and the host has zero HOLD or THROTTLED cycles. It reports
+coverage gaps separately: partial/absent KR/US public sources cannot become
+full-market readiness. The clock-window threshold is not a guaranteed 2-minute
+SLA; the worker can adapt cadence to server pressure.
+
+**Critical safety boundary:** cadenceWindowObserved means a locally
+persisted *self-reported* cadence trace met simple thresholds. This is
+**not independently verified uptime**. Both continuous24hProven and
+completeFourMarketCoverageProven remain false even when the trace passes.
+A real 24h rollout additionally needs approved service activation,
+systemd/host logs, externally observed app latency and resource readings,
+an independently attested release SHA, and licensed/fresh KR/US data.
+This worker is still OFF in this Draft. Nothing enters the Formula PASS,
+OOS, fee-adjusted returns, Paper, Journal, Telegram or Live authority chain.
