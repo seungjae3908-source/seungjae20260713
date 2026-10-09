@@ -53,11 +53,13 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
     steps:
+      # Pin the immutable event revision: protected approval can outlive new main commits.
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
-      - name: Validate owner-command exact main and deployed revision
+      - name: Parse exact owner diagnostic request
         id: command
         env:
           COMMAND: ${{ github.event.comment.body }}
@@ -69,9 +71,18 @@ jobs:
           if (!v) { console.error('EXACT_CURRENT_MAIN_AND_DEPLOYED_SHA_REQUIRED'); process.exit(1); }
           fs.appendFileSync(process.env.GITHUB_OUTPUT,'main_sha='+v[1].toLowerCase()+'\ndeploy_sha='+v[2].toLowerCase()+'\n');
           NODE
+      - name: Verify immutable main ancestry after parsing
+        env:
+          EXPECTED_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'DIAGNOSTIC_MAIN_SHA_INVALID' >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA" || { echo 'DIAGNOSTIC_CHECKOUT_IDENTITY_MISMATCH' >&2; exit 1; }
           git fetch --no-tags origin main
-          test "$(git rev-parse HEAD)" = "${{ steps.command.outputs.main_sha }}"
-          test "$(git rev-parse origin/main)" = "${{ steps.command.outputs.main_sha }}"
+          git cat-file -e "$EXPECTED_MAIN_SHA^{commit}" || { echo 'DIAGNOSTIC_REQUESTED_SHA_MISSING' >&2; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo 'DIAGNOSTIC_EVENT_REVISION_NOT_ANCESTOR' >&2; exit 1; }
+          git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main || { echo 'DIAGNOSTIC_REQUESTED_SHA_NOT_ANCESTOR' >&2; exit 1; }
+          echo 'DIAGNOSTIC_IMMUTABLE_SHA_ANCESTRY_OK'
       - name: Configure Production SSH without exposing credentials
         run: |
           set -Eeuo pipefail
