@@ -273,3 +273,45 @@ test("disabled capital gate stays Paper-only and never grants live authority", a
   assert.equal(preview.capitalAdmission.executionAuthority, "NONE");
   assert.equal(preview.capitalAdmission.liveAuthorityGranted, false);
 });
+
+
+test("gateway creates 1,000,000 KRW virtual wallet but never grants unverified Paper order authority", async () => {
+  const { gateway, adapter, capitalManager } = build();
+  const seeded = await gateway.initializeVirtualPaperWallet();
+  assert.equal(seeded.walletMode, "PAPER_VIRTUAL_KRW_ONLY");
+  assert.equal(seeded.initialVirtualSeed.initialCapitalKrw, 1_000_000);
+  assert.equal(seeded.effectiveTradingCapitalKrw, 1_000_000);
+  assert.equal(seeded.paperOrderAuthorityGranted, false);
+  assert.equal(seeded.externalWithdrawalPerformed, false);
+  assert.equal(seeded.executionAuthority, "NONE");
+  assert.equal(adapter.submissionCount, 0);
+  assert.equal(capitalManager.getState().lastSettlement, null);
+  await assert.rejects(
+    gateway.placeOrder(krBuy("wallet-seed-before-settlement", 10_000)),
+    (error) => error.code === "CAPITAL_NOT_INITIALIZED",
+  );
+  assert.equal(adapter.submissionCount, 0);
+  const repeated = await gateway.initializeVirtualPaperWallet();
+  assert.equal(repeated.idempotentReplay, true);
+  assert.equal(repeated.initialVirtualSeed.seedId, seeded.initialVirtualSeed.seedId);
+});
+
+test("gateway cannot reset a 500k Paper account or bootstrap over existing OMS orders", async () => {
+  const populated = build();
+  await populated.gateway.applyCapitalSettlement(settlement(1, 500_000));
+  await assert.rejects(
+    populated.gateway.initializeVirtualPaperWallet(),
+    (error) => error.code === "CAPITAL_WALLET_ALREADY_INITIALIZED",
+  );
+  assert.equal(populated.capitalManager.getState().compoundBaseKrw, 500_000);
+
+  const { gateway, adapter } = build({ capitalGateEnabled: false });
+  await gateway.placeOrder(krBuy("paper-oms-existing-order", 50_000));
+  assert.equal(adapter.submissionCount, 1);
+  await assert.rejects(
+    gateway.initializeVirtualPaperWallet(),
+    (error) => error.code === "PAPER_VIRTUAL_SEED_EXISTING_OMS_ORDERS",
+  );
+  assert.equal(gateway.getCapitalHealth().initialized, false);
+  assert.equal(adapter.submissionCount, 1);
+});
