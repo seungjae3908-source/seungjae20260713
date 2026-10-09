@@ -1143,3 +1143,30 @@ test('malformed reduceOnly cash BUY fails closed before bypassing stop, new-entr
     assert.equal(decision.allowed, false);
   }
 });
+
+test('canonical trading risk never treats an empty automatic allowlist as unrestricted authority', () => {
+  const active = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    mode:'automatic', automaticEnabled:true,
+    marketEnabled:{domestic_stock:false,us_stock:false,crypto_spot:true,crypto_futures:false},
+    exchangeEnabled:{toss:false,kiwoom:false,upbit:true,bitget:false},
+    enabledStrategies:[],
+  });
+  const simulated = plan({
+    accountMode:'paper',exchange:'upbit',market:'KRW',side:'buy',
+    symbol:'BTC',strategyId:'unapproved-strategy',
+  });
+  const blocked = evaluateTradingPlan(simulated,active,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  });
+  assert.ok(blocked.blockCodes.includes('STRATEGY_NOT_ENABLED'));
+  assert.equal(blocked.allowed,false);
+
+  const allowedPolicy=normalizeTradingPolicy({
+    ...active,enabledStrategies:[simulated.strategyId],
+  });
+  const reviewed=evaluateTradingPlan(simulated,allowedPolicy,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  });
+  assert.equal(reviewed.blockCodes.includes('STRATEGY_NOT_ENABLED'),false);
+});
