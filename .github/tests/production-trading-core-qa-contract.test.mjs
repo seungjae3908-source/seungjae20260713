@@ -192,3 +192,12 @@ test('Admin four-market virtual Paper UI is self-scoped and never silently activ
   assert.ok(page.includes('<AdminFourMarketPaperPanel />'));
   assert.ok(page.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
 });
+
+test('Automatic settings never promise wildcard execution for an empty strategy list', () => {
+  const settings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
+  assert.ok(settings.includes('비우면 자동 신규진입 차단'));
+  assert.ok(settings.includes('data-testid="empty-strategy-blocks-automatic-entry"'));
+  assert.ok(settings.includes('없음 · 자동 신규진입 차단'));
+  assert.equal(settings.includes('비우면 위험검사를 통과한 전략 전체'), false);
+  assert.equal(settings.includes('Pilot 단계 설정됨 · 운영 준비도 별도 확인'), true);
+});
