@@ -7,6 +7,7 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   readMemberAutoTradingBackgroundRuntimeHealth,
 } from './member-auto-trading-background-worker.service';
+import { buildAdminFourMarketPaperBootstrap } from './admin-four-market-paper-capital.service';
 import {
   memberAutomaticPaperReadiness,
   type MemberAutomaticPaperReadinessInput,
@@ -165,4 +166,43 @@ test('shared Worker, explicit stop, stale tick and bad projections independently
     workerHealth: { ...baseline.workerHealth, liveModeRequested: true },
   }));
   assert.ok(liveRequested.blockers.includes('BACKGROUND_PAPER_ONLY_WORKER_REQUIRED'));
+});
+
+test('administrator Paper readiness requires four 1m wallets and all four routed markets', () => {
+  const before = memberAutomaticPaperReadiness(input({
+    administratorFourMarket: true, adminMarketWalletRecords: [],
+  }));
+  assert.equal(before.paperWalletReady, false);
+  assert.ok(before.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
+
+  const adminWallets = buildAdminFourMarketPaperBootstrap(new Date(NOW)).map((row) => ({
+    ...row, createdAt: new Date(NOW).toISOString(),
+    serverUpdatedAt: new Date(NOW).toISOString(),
+  }));
+  const allFour = normalizeTradingPolicy({
+    ...policy(), totalCapitalKrw: 1_000_000,
+    marketEnabled: {domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled: {toss:true,kiwoom:true,upbit:true,bitget:true},
+  });
+  const ready = memberAutomaticPaperReadiness(input({
+    administratorFourMarket: true, adminMarketWalletRecords: adminWallets,
+    policy: allFour,
+  }));
+  assert.equal(ready.paperWalletReady,true);
+  assert.equal(ready.paperCapitalPolicyReady,true);
+  assert.equal(ready.adminMarketWalletsReady,true);
+  assert.equal(ready.readyForPaperEvaluation,true);
+  assert.equal(ready.realOrderAuthorityGranted,false);
+
+  const underfunded = memberAutomaticPaperReadiness(input({
+    administratorFourMarket: true, adminMarketWalletRecords: adminWallets,
+    policy: normalizeTradingPolicy({...allFour,totalCapitalKrw:900_000}),
+  }));
+  assert.ok(underfunded.blockers.includes('BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED'));
+  const incomplete = memberAutomaticPaperReadiness(input({
+    administratorFourMarket: true, adminMarketWalletRecords: adminWallets.slice(0,3),
+    policy: allFour,
+  }));
+  assert.equal(incomplete.readyForPaperEvaluation,false);
+  assert.ok(incomplete.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
 });

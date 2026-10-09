@@ -71,6 +71,11 @@ const CANCEL_RECONCILIATION_STATES = new Set([
 let repositoryFactoryForTests: ((userId: string) => TradingRepository) | null = null;
 let paperRuntimeWalletReaderForTests:
   ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null = null;
+let paperRuntimeRecordsReaderForTests:
+  ((userId: string) => Promise<StoredPaperJournalRecord[]>) | null = null;
+export function setTradePaperRuntimeRecordsReaderForTests(
+  reader: ((userId: string) => Promise<StoredPaperJournalRecord[]>) | null,
+) { paperRuntimeRecordsReaderForTests = reader; }
 
 export function setTradePaperRuntimeWalletReaderForTests(
   reader: ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null,
@@ -1072,14 +1077,24 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
         ? createSupabasePaperJournalRepository(req.accessToken, userId)
           .getRecord(userId, 'account', AUTOMATIC_PAPER_ACCOUNT_ID)
         : Promise.reject(new Error('LOGIN_REQUIRED'));
-    const [policy, globalStopped, wallet] = await Promise.all([
+    const administratorFourMarket = Boolean(req.member && hasCapability(req.member, 'canManageMembers'));
+    const adminRecordsRead = administratorFourMarket
+      ? paperRuntimeRecordsReaderForTests
+        ? paperRuntimeRecordsReaderForTests(userId)
+        : req.accessToken
+          ? createSupabasePaperJournalRepository(req.accessToken, userId).listSnapshot(userId)
+          : Promise.reject(new Error('LOGIN_REQUIRED'))
+      : Promise.resolve([] as StoredPaperJournalRecord[]);
+    const [policy, globalStopped, wallet, adminMarketWalletRecords] = await Promise.all([
       repository.getPolicy(userId),
       repository.getGlobalEmergencyStop(),
-      walletRead,
+      walletRead, adminRecordsRead,
     ]);
     const readiness = memberAutomaticPaperReadiness({
       policy,
       wallet,
+      administratorFourMarket,
+      adminMarketWalletRecords,
       workerHealth: readMemberAutoTradingBackgroundRuntimeHealth(),
       workerMode: memberAutoTradingWorkerMode(),
       globalStopped: globalStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
