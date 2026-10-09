@@ -3,7 +3,6 @@ import type { StoredPaperJournalRecord } from './paper-journal.types';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   automaticPaperWalletServerEpochMs,
-  readMemberAutoTradingBackgroundRuntimeHealth,
   selectAutomaticPaperAccountEquity,
   type MemberAutoTradingBackgroundRuntimeHealth,
 } from './member-auto-trading-background-worker.service';
