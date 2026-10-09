@@ -1,4 +1,5 @@
 import type { TelegramTransport, TelegramTransportResult } from './user-broker-telegram.types';
+import { normalizeTelegramReadableText } from '../../services/telegram-readable-format.service';
 
 const TELEGRAM_API_BASE_URL = 'https://api.telegram.org';
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -17,7 +18,7 @@ export class HttpUserTelegramTransport implements TelegramTransport {
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text,
+          text: normalizeTelegramReadableText(text),
           disable_web_page_preview: true,
           protect_content: true,
         }),
