@@ -351,12 +351,31 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
     : temporal.status === 'INVALID'
       ? 'Temporal evidence 무결성 확인 필요'
       : `${temporal.results.length}개 심볼 · 실패 ${temporal.failedCount ?? 0}개`;
+  const formulaBacktest = overview.research.formulaBacktest;
+  const formulaStatus: ResearchProductStatus = formulaBacktest?.status === 'INVALID'
+    ? 'error'
+    : formulaBacktest?.status === 'TRAIN_ONLY'
+      ? 'attention'
+      : 'unmeasured';
+  const formulaValue = formulaBacktest?.status === 'TRAIN_ONLY'
+    ? `TRAIN ${formulaBacktest.scanned ?? '—'}건`
+    : formulaBacktest?.status === 'WAITING_INPUT'
+      ? '후보 대기'
+      : formulaBacktest?.status === 'INVALID'
+        ? '자료 오류'
+        : '미연결';
+  const formulaDetail = formulaBacktest?.status === 'TRAIN_ONLY'
+    ? `입력 ${formulaBacktest.inboxCount ?? '—'}건 · OOS·비용 미검증 · Paper 미연결`
+    : formulaBacktest?.status === 'INVALID'
+      ? '저장된 백테스터 결과 무결성 확인 필요'
+      : '공인된 후보 생산자·Paper 소비자 증거 없음';
   return (
     <section id="research-tab-overview" role="tabpanel" aria-labelledby="research-tab-overview-trigger" className="space-y-4" data-testid="research-overview-tab">
-      <section className="grid grid-cols-2 gap-2 lg:grid-cols-7" aria-label="연구 핵심 상태">
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4 xl:grid-cols-8" aria-label="연구 핵심 상태">
         <TopStatus label="연구 시스템" value={statusLabel(systemStatus)} status={systemStatus} detail={overview.state.present ? 'Canonical overview 연결됨' : 'Canonical evidence 미수집'} />
         <TopStatus label="데이터 팩토리" value={temporal.observationCount == null ? statusLabel(temporalStatus) : `${temporal.observationCount.toLocaleString('ko-KR')}건`} status={temporalStatus} detail={temporalDetail} />
         <TopStatus label="리서치 팩토리" value={factoryValue} status={factoryStatus} detail={factoryDetail} />
+        <div data-testid="research-formula-backtest-status"><TopStatus label="자동 백테스터" value={formulaValue} status={formulaStatus} detail={formulaDetail} /></div>
         <TopStatus label="실거래" value="비활성" status="inactive" detail="executionAuthority=NONE" />
         <TopStatus label="모의매매" value={statusLabel(paper.status)} status={paper.status} detail={blockerCopy(paper)} />
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />

@@ -6,6 +6,15 @@ const V3_INDEPENDENCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'PRESENT']);
 const CANDIDATE_PERFORMANCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'BLOCKED', 'PRESENT']);
 const TEMPORAL_COLLECTION_STATUS_SET = new Set(['MISSING', 'INVALID', 'complete', 'partial_failure']);
 const TEMPORAL_SYMBOL_STATUS_SET = new Set(['success', 'failed']);
+const FORMULA_READBACK_STATUS_SET = new Set(['MISSING', 'INVALID', 'WAITING_INPUT', 'TRAIN_ONLY']);
+const FORMULA_READBACK_COUNTS = ['PASS', 'HOLD', 'RESERVE', 'EXCLUDE'] as const;
+const FORMULA_BLOCKERS = Object.freeze({
+  MISSING: 'FORMULA_QUEUE_INPUT_MISSING',
+  INVALID: 'FORMULA_QUEUE_READBACK_INVALID',
+  WAITING_INPUT: 'FORMULA_QUEUE_INPUT_MISSING',
+  TRAIN_ONLY: 'FORMULA_QUEUE_PRODUCER_AND_OOS_UNATTESTED',
+});
+
 const FACTORY_RUNTIME_STATUS_SET = new Set([
   'MISSING',
   'INVALID',
@@ -642,6 +651,62 @@ function sanitizeShadowGroup(value: unknown) {
   return { name, total, settled, pending, collapsed, macroF1, balancedAccuracy, bullRecall, bearRecall, neutralRecall };
 }
 
+function emptyFormulaBacktestReadback(status: 'MISSING' | 'INVALID' = 'MISSING') {
+  return {
+    present: status === 'INVALID', status,
+    inboxCount: null, scanned: null,
+    counts: Object.fromEntries(FORMULA_READBACK_COUNTS.map((key) => [key, null])),
+    paperRegisteredCount: null,
+    producerBound: false, paperConsumerBound: false,
+    validationComplete: false, oosComplete: false, fullCostReady: false,
+    liveTrading: false, autoTrading: false, executionAuthority: 'NONE' as const,
+    firstBlocker: FORMULA_BLOCKERS[status],
+  };
+}
+
+function sanitizeFormulaBacktestReadback(value: unknown) {
+  const input = record(value);
+  if (!input) return emptyFormulaBacktestReadback();
+  const invalid = () => emptyFormulaBacktestReadback('INVALID');
+  const status = input.status;
+  if (typeof status !== 'string' || !FORMULA_READBACK_STATUS_SET.has(status)
+    || input.present !== (status !== 'MISSING')
+    || input.producerBound !== false || input.paperConsumerBound !== false
+    || input.validationComplete !== false || input.oosComplete !== false
+    || input.fullCostReady !== false
+    || input.liveTrading !== false || input.autoTrading !== false
+    || input.executionAuthority !== 'NONE'
+    || input.firstBlocker !== FORMULA_BLOCKERS[status as keyof typeof FORMULA_BLOCKERS]) return invalid();
+
+  const counts = record(input.counts);
+  if (!counts) return invalid();
+  if (status === 'MISSING' || status === 'INVALID') {
+    if (input.scanned !== null || input.inboxCount !== null
+      || input.paperRegisteredCount !== null
+      || FORMULA_READBACK_COUNTS.some((key) => counts[key] !== null)) return invalid();
+    return emptyFormulaBacktestReadback(status);
+  }
+  const scanned = countOrNull(input.scanned);
+  const inboxCount = countOrNull(input.inboxCount);
+  const registered = countOrNull(input.paperRegisteredCount);
+  const cleanCounts = Object.fromEntries(FORMULA_READBACK_COUNTS.map((key) => [key, countOrNull(counts[key])]));
+  if (scanned == null || scanned > 50 || inboxCount == null || scanned > inboxCount
+    || registered !== 0
+    || FORMULA_READBACK_COUNTS.some((key) => cleanCounts[key] == null)
+    || cleanCounts.PASS !== 0
+    || FORMULA_READBACK_COUNTS.reduce((sum, key) => sum + cleanCounts[key]!, 0) > scanned
+    || (status === 'WAITING_INPUT' && scanned !== 0)
+    || (status === 'TRAIN_ONLY' && scanned === 0)) return invalid();
+  return {
+    present: true, status,
+    inboxCount, scanned, counts: cleanCounts, paperRegisteredCount: 0,
+    producerBound: false, paperConsumerBound: false,
+    validationComplete: false, oosComplete: false, fullCostReady: false,
+    liveTrading: false, autoTrading: false, executionAuthority: 'NONE' as const,
+    firstBlocker: FORMULA_BLOCKERS[status as keyof typeof FORMULA_BLOCKERS],
+  };
+}
+
 /**
  * Builds the only browser-facing Research DTO from an explicit allowlist.
  * Unknown upstream fields are intentionally dropped so a future state-file,
@@ -664,6 +729,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const temporalCryptoFutures = sanitizeTemporalCryptoSummary(dataFactory?.temporalCryptoFutures);
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
+  const formulaBacktest = sanitizeFormulaBacktestReadback(research?.formulaBacktest);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
     || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
@@ -697,7 +763,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       authorityEvidenceComplete: safety.authorityEvidenceComplete,
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
-    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
+    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest },
     dataFactory: { temporalCryptoFutures },
     factory,
     paper: { runtime, ledger, candidatePerformance },
