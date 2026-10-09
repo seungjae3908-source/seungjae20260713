@@ -341,7 +341,9 @@ for (const token of [
   "throw new Error('BACKGROUND_MEMBER_ACCESS_PROFILE_MISSING');",
   "if (!memberAutoExecutionEnabled) {",
   "result.liveExitsSuppressedByPolicy += livePositions.length;",
-  "return [{ userId, policy }];",
+  "payload: (row.payload ?? {}) as Partial<TradingPolicy>",
+  'policy: normalizeTradingPolicy(row.payload, maximumSingleEntryKrw)',
+  'maximumSingleEntryKrwForProfile(profile)',
   'private memberBatchCursor: string | null = null;',
   ".order('user_id', { ascending: true })",
   '.limit(MAX_MEMBERS_PER_TICK + 1)',
@@ -510,6 +512,7 @@ for (const token of [
   requireText(pilotCapital, token, 'AUTO_PILOT_CAPITAL_BLOCKER_MISSING');
 }
 requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
+requireText(pilotCapitalTest, 'administrator pilot starts at 1M and verified 50% compounding raises the next cap to 1.025M', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -25_000", 'AUTO_PILOT_DAILY_LOSS_KRW_TEST_MISSING');
 requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');
