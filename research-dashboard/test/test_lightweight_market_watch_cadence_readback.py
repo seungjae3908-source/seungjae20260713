@@ -15,7 +15,7 @@ from lightweight_market_watch_cadence_readback import (  # noqa: E402
 
 SHA = 'a' * 40
 OTHER = 'b' * 40
-NOW = int(datetime(2026, 10, 10, 03, 30, tzinfo=timezone.utc).timestamp() * 1000)
+NOW = int(datetime(2026, 10, 10, 3, 30, tzinfo=timezone.utc).timestamp() * 1000)
 START = NOW - WINDOW_MS + 30_000
 MARKETS = ('KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES')
 
