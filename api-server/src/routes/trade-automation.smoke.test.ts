@@ -7,6 +7,7 @@ import router, {
   setTradeAutomationRepositoryFactoryForTests,
   setTradePaperRuntimeWalletReaderForTests,
   setTradePaperRuntimeRecordsReaderForTests,
+  setTradePaperRuntimeAdminGuardReaderForTests,
   setTradeExitPreviewReadersFactoryForTests,
   setTradeReadonlyCredentialRepositoryFactoryForTests,
 } from './trade-automation';
@@ -352,6 +353,7 @@ test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
   setTradePaperRuntimeWalletReaderForTests(null);
   setTradePaperRuntimeRecordsReaderForTests(null);
+  setTradePaperRuntimeAdminGuardReaderForTests(null);
   setTradeReadonlyCredentialRepositoryFactoryForTests(null);
   setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
@@ -2729,6 +2731,8 @@ test('administrator Paper readiness reads all four own-market wallets without pr
     assert.equal(body.ok,true);
     assert.equal(body.administratorFourMarket,true);
     assert.equal(body.adminMarketWalletsReady,false);
+    assert.equal(body.adminDatabaseGuardReady,false);
+    assert.ok(body.blockers.includes('BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED'));
     assert.ok(body.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
     assert.equal(body.orderSubmitted,false);
     assert.equal(body.privateProviderRequests,0);
@@ -2736,6 +2740,36 @@ test('administrator Paper readiness reads all four own-market wallets without pr
   } finally {
     setTradePaperRuntimeWalletReaderForTests(null);
     setTradePaperRuntimeRecordsReaderForTests(null);
+    await close(server);
+  }
+});
+
+test('administrator Paper readiness verifies database wallet guard against authenticated member scope', async () => {
+  let checkedOwner = '';
+  setTradePaperRuntimeWalletReaderForTests(async () => null);
+  setTradePaperRuntimeRecordsReaderForTests(async () => []);
+  setTradePaperRuntimeAdminGuardReaderForTests(async owner => {
+    checkedOwner = owner;
+    return true;
+  });
+  const {server,baseUrl}=await startServer(true,'admin');
+  try {
+    const response=await fetch(baseUrl+'/api/trade-automation/paper-runtime-readiness');
+    assert.equal(response.status,200);
+    const body=await response.json() as Record<string,any>;
+    assert.equal(checkedOwner,USER);
+    assert.equal(body.adminDatabaseGuardReady,true);
+    assert.equal(body.readyForPaperEvaluation,false); // wallet not created
+    assert.ok(body.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
+    assert.equal(body.blockers.includes('BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED'),false);
+    assert.equal(body.realOrderAuthorityGranted,false);
+    assert.equal(body.financialMutationCount,0);
+    assert.equal(body.privateProviderRequests,0);
+    assert.equal(body.orderSubmitted,false);
+  } finally {
+    setTradePaperRuntimeWalletReaderForTests(null);
+    setTradePaperRuntimeRecordsReaderForTests(null);
+    setTradePaperRuntimeAdminGuardReaderForTests(null);
     await close(server);
   }
 });
