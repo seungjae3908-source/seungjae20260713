@@ -208,6 +208,7 @@ test('Paper scheduled CLI shows exact registry readiness but never injects histo
   try {
     const output = await runPaperForwardScheduleCli({
       PAPER_FORWARD_SCHEDULE_ACTIVE: 'true',
+      PAPER_FORWARD_INITIAL_CAPITAL_KRW: '1000000',
       PAPER_FORWARD_RESEARCH_SHA: SHA,
       PAPER_FORWARD_ROOT: join(root, 'paper'),
       PAPER_FORWARD_ACTIVATION_AT_MS: '1',
@@ -231,6 +232,10 @@ test('Paper scheduled CLI shows exact registry readiness but never injects histo
     assert.equal(inputs.length, 1);
     assert.equal(Object.hasOwn(inputs[0], 'formulaPaperRegistryReadback'), false);
     assert.equal(Object.hasOwn(inputs[0], 'formulaStrategyRegistry'), false);
+    assert.equal(output.paperPilotCapital.targetInitialCapitalKrw, 1_000_000);
+    assert.equal(output.paperPilotCapital.policyConfiguredExact, true);
+    assert.equal(output.paperPilotCapital.canonicalPaperWalletSeedVerified, false);
+    assert.equal(output.paperPilotCapital.settlementCurrencyConversionVerified, false);
     assert.equal(output.formulaPaperRegistryReadback.status, 'WAITING_FUTURE_SIGNAL');
     assert.equal(output.formulaPaperRegistryReadback.entryCount, 1);
     mustNotAdmit(output.formulaPaperRegistryReadback);
@@ -240,5 +245,24 @@ test('Paper scheduled CLI shows exact registry readiness but never injects histo
   } finally {
     process.exitCode = priorExitCode;
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy 500k Paper capital configuration is blocked before any Paper runtime call', async () => {
+  const previousExitCode = process.exitCode;
+  let executed = false;
+  try {
+    const result = await runPaperForwardScheduleCli({
+      PAPER_FORWARD_SCHEDULE_ACTIVE: 'true',
+      PAPER_FORWARD_INITIAL_CAPITAL_KRW: '500000',
+      PAPER_FORWARD_RESEARCH_SHA: SHA,
+    }, {
+      runScheduledInvocation: async () => { executed = true; throw new Error('unexpected Paper execution'); },
+    });
+    assert.equal(result, undefined);
+    assert.equal(executed, false);
+    assert.equal(process.exitCode, 72);
+  } finally {
+    process.exitCode = previousExitCode;
   }
 });
