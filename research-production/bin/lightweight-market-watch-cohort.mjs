@@ -44,6 +44,7 @@ async function readLog(root, category, dayUtc, accumulator, ingest) {
     });
     const rows = createInterface({ input:stream, crlfDelay:Infinity });
     let seen = 0;
+    let completed = false;
     try {
       for await (const line of rows) {
         if (Buffer.byteLength(line, 'utf8') > MAX_LINE_BYTES
@@ -55,9 +56,13 @@ async function readLog(root, category, dayUtc, accumulator, ingest) {
         catch { throw new Error('WATCH_COHORT_BROKEN_JSONL'); }
         ingest(accumulator, v);
       }
+      completed = true;
     } finally {
       rows.close();
-      stream.destroy();
+      // Destroying a FileHandle stream after a normal EOF can close its fd
+      // even with autoClose:false (EBADF on the post-read integrity check).
+      // Force destruction only when the stream stopped abnormally.
+      if (!completed) stream.destroy();
     }
     const after = await handle.stat();
     if (after.ino !== before.ino || after.dev !== before.dev
