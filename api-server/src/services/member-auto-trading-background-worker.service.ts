@@ -28,6 +28,7 @@ import {
   adminPaperMarketFromPlan,
   adminMarketPaperRiskBudget,
   inspectAdminFourMarketPaperWallets,
+  projectAdminMarketCapital,
 } from './admin-four-market-paper-capital.service';
 import type {
   ExchangeConnection,
@@ -302,6 +303,7 @@ type MemberRuntimeState = Readonly<{
   consecutiveLosses: number;
   adminMarketWalletRows: readonly StoredPaperJournalRecord[] | null;
   adminMarketRisk: Record<AdminPaperMarket, ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>> | null;
+  adminMarketCapital: Record<AdminPaperMarket, ReturnType<typeof projectAdminMarketCapital>> | null;
   plans: readonly TradingPlan[];
   orders: readonly TradingOrder[];
 }>;
@@ -979,6 +981,7 @@ async function memberRuntimeState(
   });
   let risk = emptyRisk('BACKGROUND_PAPER_WALLET_REQUIRED');
   let adminMarketRisk: MemberRuntimeState['adminMarketRisk'] = null;
+  let adminMarketCapital: MemberRuntimeState['adminMarketCapital'] = null;
   if (fourMarketMode && marketWallets?.ready && paperWalletOpenedAtMs != null) {
     const byId = new Map(plans.map((plan) => [plan.id, plan]));
     // Unknown filled plan references can never be assigned to an innocent
@@ -988,6 +991,7 @@ async function memberRuntimeState(
         || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0));
     const truncated = orders.length >= 500 || plans.length >= 200;
     adminMarketRisk = {} as NonNullable<MemberRuntimeState['adminMarketRisk']>;
+    adminMarketCapital = {} as NonNullable<MemberRuntimeState['adminMarketCapital']>;
     for (const market of ADMIN_FOUR_PAPER_MARKETS) {
       const account = marketWallets.marketWallets[market];
       const scopedPlans = plans.filter((plan) => plan.accountMode === 'paper'
@@ -1002,6 +1006,42 @@ async function memberRuntimeState(
             account.equityKrw ?? 0, account.openedAtMs,
           );
         } catch { /* A malformed market lane must not borrow funds from its peers. */ }
+      }
+      // Only canonical CLOSED Paper events with full cost and close-time KRW
+      // settlement may increase compounding capital or reserved profits.
+      // Missing USD/USDT close-time FX evidence fails closed for that market.
+      let laneCapital = projectAdminMarketCapital(market, [], nowMs);
+      if (laneRisk.ready) {
+        try {
+          const payloads = tradeAutomationJournalPayloadsFromSnapshot(
+            userId, scopedOrders, scopedPlans);
+          const journal = buildUnifiedTradeJournal(
+            payloads, { source: 'APP_PAPER', range: 'ALL' }, new Date(nowMs));
+          if (journal.integrityIssues.length) throw new Error('ADMIN_PAPER_LEDGER_INTEGRITY_REQUIRED');
+          const closed = journal.trades.filter((row) => row.source === 'APP_PAPER'
+            && row.status === 'CLOSED');
+          laneCapital = projectAdminMarketCapital(market, closed.map((row) => ({
+            id: row.id, market, closedAt: row.closedAt ?? '',
+            netPnlKrw: row.netPnl ?? Number.NaN,
+            fullCostsVerified: row.costEvidence.status === 'READY'
+              && typeof row.fees === 'number' && Number.isFinite(row.fees)
+              && typeof row.tax === 'number' && Number.isFinite(row.tax),
+            closeTimeFxVerified: row.currency === 'KRW',
+          })), nowMs);
+        } catch {
+          laneCapital = Object.freeze({
+            ...laneCapital, settlementReady: false, newEntriesAllowed: false,
+            blockers: ['ADMIN_PAPER_LEDGER_INTEGRITY_REQUIRED'],
+          });
+        }
+      }
+      adminMarketCapital[market] = laneCapital;
+      if (laneRisk.ready && !laneCapital.newEntriesAllowed) {
+        laneRisk = {
+          ...laneRisk, ready: false,
+          blockers: laneCapital.blockers.length
+            ? laneCapital.blockers : ['ADMIN_PAPER_MARKET_SETTLED_LOSS_LIMIT'],
+        };
       }
       adminMarketRisk[market] = laneRisk;
     }
@@ -1030,7 +1070,7 @@ async function memberRuntimeState(
     weeklyPnlPercent: risk.weeklyPnlPercent,
     consecutiveLosses: risk.consecutiveLosses,
     adminMarketWalletRows: fourMarketMode ? records : null,
-    adminMarketRisk,
+    adminMarketRisk, adminMarketCapital,
     plans, orders,
   });
 }
@@ -1059,6 +1099,7 @@ function exposureState(
     ? adminMarketPaperRiskBudget({
         market: mapping.assetClass, records: runtime.adminMarketWalletRows ?? [],
         openPlans: active, nowMs,
+        verifiedCapital: runtime.adminMarketCapital?.[mapping.assetClass],
       }) : null;
   if (budget && !budget.ready) throw new Error('ADMIN_PAPER_MARKET_RISK_BUDGET_UNAVAILABLE');
   const accountExposureKrw = marketIsolated ? sum(sameClass) : sum(active);
