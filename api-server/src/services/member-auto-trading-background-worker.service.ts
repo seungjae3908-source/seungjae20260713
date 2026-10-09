@@ -1108,10 +1108,14 @@ function exposureState(
     assetExposurePercent: (marketIsolated ? sum(sameClass) : instrumentExposureKrw)
       / Math.max(1, budgetEquity) * 100,
     accountValueKrw: budgetEquity,
-    availableBalance: budget ? Math.min(
-      budget.availableToTradeKrw,
-      Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
-    ) : Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
+    // The admin V2 virtual account has its own verified, settled KRW equity.
+    // Do not clamp market cash back to the original member-wide 1m policy
+    // after legitimate 50% profit compounding. The canonical risk engine
+    // separately enforces the stored per-order and exposure policy ceilings;
+    // this value is NOT authority to expand those ceilings or place Live orders.
+    availableBalance: budget
+      ? budget.availableToTradeKrw
+      : Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
   };
 }
 
