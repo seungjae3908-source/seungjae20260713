@@ -235,6 +235,6 @@ test('Staging QA reports health runtime SHA separately from supervisor environme
   assert.ok(source.includes("const STAGING_PM2 = 'seungjae-staging'"));
   assert.ok(workflow.includes("'runtimeSha','healthMarkerSha','healthIdentityMatch'"));
   assert.ok(workflow.includes("Actual running Staging app SHA: "));
-  assert.ok(workflow.includes("STAGING_TELEGRAM_SCOPE_NOT_READY"));
+  assert.ok(workflow.includes("TELEGRAM_STAGING_SCOPE_NOT_READY"));
   assert.ok(!source.includes("http://0.0.0.0"));
 });
