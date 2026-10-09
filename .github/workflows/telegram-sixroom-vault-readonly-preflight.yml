@@ -132,6 +132,11 @@ jobs:
             || report.financialMutations !== 0 || report.tradingAuthorityModified === true
             || !['INITIAL','PM2','VAULT','BOT_GETME','BOT_SIXROOM','VERDICT'].includes(report.failureStage)
             || !/^(PASS|NOT_CHECKED|BOT_API_[A-Z_]+)$/u.test(String(report.botApiDiagnostic))
+            || !new Set([
+              'NOT_CHECKED', 'IPV4_DNS_READY', 'IPV4_DNS_FAILED',
+              'IPV4_DNS_TIMEOUT', 'IPV4_TLS_READY', 'IPV4_TLS_TIMEOUT',
+              'IPV4_TLS_CERT_FAILED', 'IPV4_TLS_CONNECT_FAILED',
+            ]).has(report.networkPathProbe)
             || !(report.runtimeNodeMajor === null ||
               (Number.isInteger(report.runtimeNodeMajor) &&
                report.runtimeNodeMajor >= 8 && report.runtimeNodeMajor <= 50))
@@ -166,6 +171,7 @@ jobs:
               '- Classification: ' + v.classification,
               '- Failure stage: ' + v.failureStage,
               '- Bot API GET diagnostic: ' + v.botApiDiagnostic,
+              '- Token-free IPv4 DNS/TLS path: ' + v.networkPathProbe,
               '- Production Node major: ' + String(v.runtimeNodeMajor ?? 'unverified'),
               '- Six-room Vault config valid: ' + String(v.vaultValid),
               '- Vault config reason: ' + (v.vaultReason || 'none'),
