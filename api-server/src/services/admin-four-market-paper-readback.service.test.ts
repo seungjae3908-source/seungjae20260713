@@ -122,36 +122,60 @@ function certifiedAutoPaperPair(input: {
 }) {
   const start = new Date(NOW - 90_000).toISOString();
   const close = new Date(NOW - 30_000).toISOString();
-  const mkPlan = (exit: boolean) => ({
-    id: input.id + (exit ? '-exit' : '-entry'),
-    userId: 'owner-only', executionMode: 'automatic',
-    accountMode: 'paper', exchange: input.exchange,
-    market: input.market, symbol: input.symbol,
-    side: exit ? input.exitSide : input.entrySide,
-    reduceOnly: exit, signalId: input.id + '-signal',
-    strategyId: 's-qualified-paper', stopPrice: 0, targetPrices: [],
-    createdAt: exit ? close : start,
-    updatedAt: exit ? close : start,
-    marketSnapshot: { observedAt: exit ? close : start, currentPrice: exit ? input.exitPrice : input.entryPrice },
-  }) as TradingPlan;
-  const makeOrder = (plan: TradingPlan, exit: boolean) => ({
-    id: plan.id + '-fill', planId: plan.id, userId: 'owner-only',
-    state: 'FILLED', exchange: input.exchange,
-    createdAt: exit ? close : start, updatedAt: exit ? close : start,
-    clientOrderId: plan.id + '-client', exchangeOrderId: plan.id + '-exchange',
-    filledQuantity: 1, requestedQuantity: 1,
-    averageFillPrice: exit ? input.exitPrice : input.entryPrice,
-    feeAmount: 0, feeCurrency: input.exchange === 'kiwoom' ? 'USD'
-      : input.exchange === 'bitget' ? 'USDT' : 'KRW',
-    ...(input.tax === null ? {} : { taxAmount: input.tax ?? 0,
-      taxCurrency: input.exchange === 'kiwoom' ? 'USD' :
-        input.exchange === 'bitget' ? 'USDT' : 'KRW' }),
-    settlementFxEvidence: {
-      krwPerQuoteCurrency: exit ? input.exitFx : input.entryFx,
-      source: input.fxSource, observedAt: exit ? close : start,
-    },
-    fills: [],
-  }) as TradingOrder;
+  // Build real contract-shaped fixtures rather than asserting sparse JSON as
+  // TradingPlan/TradingOrder. This keeps settlement regression tests bound to
+  // the same typed invariants as the Paper execution repository.
+  const mkPlan = (exit: boolean): TradingPlan => {
+    const stamp = exit ? close : start;
+    const price = exit ? input.exitPrice : input.entryPrice;
+    const id = input.id + (exit ? '-exit' : '-entry');
+    return {
+      id, userId: 'owner-only', idempotencyKey: 'idem-' + id,
+      state: 'SUBMITTED', version: 1, approvalExpiresAt: null,
+      approvedAt: stamp, createdAt: stamp, updatedAt: stamp,
+      executionMode: 'automatic', accountMode: 'paper',
+      exchange: input.exchange, market: input.market, symbol: input.symbol,
+      stockBroker: input.exchange === 'kiwoom' ? 'kiwoom' : null,
+      stockExchange: input.exchange === 'kiwoom' ? 'NASDAQ' : null,
+      side: exit ? input.exitSide : input.entrySide,
+      orderType: 'market', quantity: 1, quoteAmount: null, limitPrice: null,
+      estimatedKrw: price * (exit ? input.exitFx : input.entryFx),
+      reduceOnly: exit, signalId: input.id + '-signal',
+      strategyId: 's-qualified-paper', stopPrice: 0, targetPrices: [],
+      splitRatios: [100], leverage: input.exchange === 'bitget' ? 2 : null,
+      marginMode: input.exchange === 'bitget' ? 'isolated' : null,
+      invalidateAction: 'hold', signalReasons: [],
+      marketSnapshot: {
+        observedAt: stamp, currentPrice: price, dataDelayMs: 0,
+        oneMinuteMovePercent: 0, spreadPercent: 0, orderbookGapPercent: 0,
+        halted: false, availableBalance: 1_000_000, accountValueKrw: 1_000_000,
+        dailyPnlPercent: 0, assetExposurePercent: 0, openPositionCount: 0,
+        dailyOrderCount: 0, consecutiveLosses: 0,
+      },
+    };
+  };
+  const makeOrder = (plan: TradingPlan, exit: boolean): TradingOrder => {
+    const stamp = exit ? close : start;
+    const feeCurrency = input.exchange === 'kiwoom' ? 'USD'
+      : input.exchange === 'bitget' ? 'USDT' : 'KRW';
+    return {
+      id: plan.id + '-fill', planId: plan.id, userId: 'owner-only',
+      state: 'FILLED', version: 1, exchange: input.exchange,
+      createdAt: stamp, updatedAt: stamp,
+      clientOrderId: plan.id + '-client', exchangeOrderId: plan.id + '-exchange',
+      filledQuantity: 1, requestedQuantity: 1, remainingQuantity: 0,
+      currentLimitPrice: null,
+      averageFillPrice: exit ? input.exitPrice : input.entryPrice,
+      feeAmount: 0, feeCurrency,
+      taxAmount: input.tax === null ? null : input.tax ?? 0,
+      taxCurrency: input.tax === null ? null : feeCurrency,
+      settlementFxEvidence: {
+        krwPerQuoteCurrency: exit ? input.exitFx : input.entryFx,
+        source: input.fxSource, observedAt: stamp,
+      },
+      fills: [], retryCount: 0, nextRetryAt: null, lastErrorCode: null,
+    };
+  };
   const first = mkPlan(false), last = mkPlan(true);
   return {
     plans: [first, last], orders: [makeOrder(first, false), makeOrder(last, true)],
