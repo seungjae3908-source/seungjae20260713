@@ -116,29 +116,55 @@ export async function collectTelegramMarketBrief(): Promise<TelegramMarketBriefS
   }
 }
 
+function marketTone(response: MarketInformationResponse): string {
+  if (response.partial || response.sections.indices.status !== 'ready') return '자료 확인 중';
+  const moves = response.sections.indices.data.map((row) => row.changePercent)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (moves.length < 2) return '판정 보류 (지수 근거 부족)';
+  const positive = moves.filter((n) => n > 0).length;
+  const negative = moves.filter((n) => n < 0).length;
+  if (positive >= Math.ceil(moves.length * 0.7)) return '상승 우위';
+  if (negative >= Math.ceil(moves.length * 0.7)) return '하락 우위';
+  return '혼조';
+}
+
 function roomLines(room: BriefRoom): string[] {
-  if (!room.response) return [`[${roomLabel(room.room)}] 데이터 공급 지연`];
+  if (!room.response) return [
+    '[' + roomLabel(room.room) + '] 데이터 공급 지연',
+    '지수·종목·수급: N/A (검증된 자료 없음)',
+  ];
   const response = room.response;
-  const lines = [`[${roomLabel(room.room)}] ${response.partial ? '일부 데이터 확인 중' : '데이터 정상'}`];
+  const lines = [
+    '[' + roomLabel(room.room) + '] ' + (response.partial ? '일부 데이터 확인 중' : '데이터 정상'),
+    '시장 분위기: ' + marketTone(response) + ' (지수 등락 기준 · 매매 신호 아님)',
+  ];
   if (response.sections.indices.data.length) {
-    const indices = response.sections.indices.data.slice(0, 4)
-      .map((item) => `${item.label} ${number(item.value)} (${percent(item.changePercent)})`)
-      .join(' · ');
-    lines.push(`지수: ${indices}`);
+    lines.push('', '[주요 지수]');
+    response.sections.indices.data.slice(0, 4).forEach((item) => {
+      lines.push('• ' + item.label + ': ' + number(item.value) + ' (' + percent(item.changePercent) + ')');
+    });
   }
-  const leaders = response.sections.rankings.data.slice(0, 3)
-    .map((item) => `${item.name || item.symbol} ${percent(item.changePercent)}`)
-    .join(' · ');
-  if (leaders) lines.push(`거래대금/주요: ${leaders}`);
+  const leaders = response.sections.rankings.data.slice(0, 5);
+  if (leaders.length) {
+    lines.push('', '[시장 주목 종목 TOP 5 · 관찰용]');
+    leaders.forEach((item, index) => lines.push(
+      String(index + 1) + '. ' + (item.name || item.symbol) + ' (' + item.symbol + ') ' +
+      percent(item.changePercent) + ' · 매수 신호 아님',
+    ));
+  } else lines.push('', '[시장 주목 종목] N/A (확인된 순위 없음)');
+
   if (room.room === 'coins-futures' && response.sections.derivatives.data) {
     const derivatives = response.sections.derivatives.data;
     if (derivatives.longRatio != null || derivatives.shortRatio != null) {
-      lines.push(`선물 수급: LONG ${number(derivatives.longRatio)} · SHORT ${number(derivatives.shortRatio)} · L/S ${number(derivatives.longShortRatio)}`);
+      lines.push('', '[선물 수급]');
+      lines.push('LONG: ' + number(derivatives.longRatio));
+      lines.push('SHORT: ' + number(derivatives.shortRatio));
+      lines.push('LONG/SHORT 비율: ' + number(derivatives.longShortRatio));
     }
   }
-  const delayedSections = Object.values(response.sections)
+  const delayed = Object.values(response.sections)
     .filter((section) => ['error', 'unavailable', 'stale'].includes(section.status)).length;
-  if (delayedSections > 0) lines.push(`데이터 상태: ${delayedSections}개 항목 확인 지연`);
+  if (delayed) lines.push('', '⚠️ ' + delayed + '개 데이터 항목 확인 지연');
   return lines;
 }
 
@@ -162,7 +188,10 @@ function themeLines(label: string, data: SectorPopularResult | null): string[] {
 function newsRows(rooms: readonly BriefRoom[]) {
   const seen = new Set<string>();
   return rooms
-    .flatMap((room) => room.response?.sections.news.data ?? [])
+    .flatMap((room) => [
+      ...(room.response?.sections.news.data ?? []),
+      ...(room.response?.sections.disclosures.data ?? []),
+    ])
     .filter((item) => {
       const url = normalizeTelegramHttpUrl(item.url);
       if (!url || seen.has(url)) return false;
@@ -208,26 +237,35 @@ export function buildTelegramMarketBriefInput(input: {
   const news = newsRows(rooms);
   const warnings = scopedWarnings(input.snapshot, input.destination);
   const lines = [
-    `${reportLabel(input.kind)} · ${input.localDate}`,
+    reportLabel(input.kind) + ' · ' + input.localDate,
     destinationLabel(input.destination),
+    '',
     ...rooms.flatMap(roomLines),
   ];
-
   if (input.destination === 'KR_STOCK_ROOM') {
     lines.push('', '[오늘의 테마/주도주]', ...themeLines('KR', input.snapshot.krThemes));
   } else if (input.destination === 'US_STOCK_ROOM') {
     lines.push('', '[오늘의 테마/주도주]', ...themeLines('US', input.snapshot.usThemes));
   }
-
-  const newsScope = stockDestination(input.destination) ? '주식' : '코인';
-  if (news.length) {
-    lines.push('', `[뉴스 브리핑 · ${newsScope}]`);
-    news.forEach((item, index) => lines.push(`${index + 1}. ${item.provider} · ${item.symbol} · ${item.title}`));
-  } else {
-    lines.push('', `[뉴스 브리핑 · ${newsScope}] 검증된 최신 뉴스 N/A`);
+  if (input.kind === 'WEEKLY') {
+    lines.push('', '[주간 성과]', '1주 누적 수익률: N/A (검증된 기간별 시계열 미연결)');
   }
-  if (warnings.length) lines.push('', `⚠️ ${[...new Set(warnings.slice(0, 6).map(warningLabel))].join(' · ')}`);
-  lines.push('', '실제 데이터가 없는 값은 N/A로 유지하며 신호·수익률·목표가를 새로 만들지 않습니다.');
+  if (stockDestination(input.destination) && (input.kind === 'MORNING' || input.kind === 'US_PREMARKET')) {
+    lines.push('', '[주요 경제 일정]', '검증된 발표 일정: N/A (경제 일정 데이터 미연결)');
+  }
+  const newsScope = stockDestination(input.destination) ? '주식' : '코인';
+  lines.push('', '[주요 뉴스·공시 · ' + newsScope + ']');
+  if (news.length) {
+    for (const [index, item] of news.slice(0, 5).entries()) {
+      const kind = item.kind === 'disclosure' ? '공시' : '뉴스';
+      lines.push(String(index + 1) + '. [' + kind + '] ' + item.provider + ' · ' + item.symbol);
+      lines.push(item.title);
+      const summary = typeof item.summary === 'string' ? item.summary.trim() : '';
+      if (summary) lines.push('기사 요약: ' + summary.slice(0, 180));
+    }
+  } else lines.push('검증된 최신 뉴스 N/A · 확인된 공시 N/A');
+  if (warnings.length) lines.push('', '⚠️ ' + [...new Set(warnings.slice(0, 6).map(warningLabel))].join(' · '));
+  lines.push('', '※ 근거 없는 수익률·신호·목표가는 만들지 않습니다.');
 
   const buttons: TelegramUrlButton[][] = [];
   for (const [index, item] of news.slice(0, 3).entries()) {
