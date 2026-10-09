@@ -118,7 +118,7 @@ test('issue receipt and GitHub report only sanitized proof and room codes',()=>{
 
 test('Telegram GET transport failures are classified without ever exposing URL, token, or raw errors', async () => {
   const token = '123456:ABCDEF1234567890abcdefghijklmnop';
-  const e = new TypeError('fetch failed: https://api.telegram.org/bot' + token + '/getMe');
+  const e = new TypeError('HTTPS failed: https://api.telegram.org/bot' + token + '/getMe');
   e.cause = { code: 'ENOTFOUND' };
   assert.equal(classifyTelegramTransportError(e), 'BOT_API_DNS_FAILED');
   assert.equal(classifyTelegramTransportError({cause:{code:'EAI_AGAIN'}}), 'BOT_API_DNS_FAILED');
@@ -128,7 +128,7 @@ test('Telegram GET transport failures are classified without ever exposing URL, 
   assert.equal(classifyTelegramTransportError({name:'TimeoutError'}), 'BOT_API_TIMEOUT');
   assert.equal(classifyTelegramTransportError(new Error('secret')), 'BOT_API_TRANSPORT_FAILED');
   const denied = await readTelegram(token,'getMe',{},async () => ({
-    status:401, ok:false, json: async () => ({ok:false,description:'SECRET_RESPONSE'}),
+    status:401, ok:false, body: {ok:false,description:'SECRET_RESPONSE'},
   }));
   assert.deepEqual(denied,{status:'BOT_API_AUTH_REJECTED',data:null});
   const down = await readTelegram(token,'getMe',{},async () => {throw e});
@@ -136,9 +136,9 @@ test('Telegram GET transport failures are classified without ever exposing URL, 
   assert.equal(JSON.stringify(down).includes(token),false);
   assert.equal(JSON.stringify(down).includes('SECRET_RESPONSE'),false);
   assert.deepEqual(await readTelegram(token,'getMe',{},null),
-    {status:'BOT_API_RUNTIME_UNSUPPORTED',data:null});
+    {status:'BOT_API_TRANSPORT_FAILED',data:null});
   const working = await readTelegram(token,'getMe',{},async () => ({
-    status:200,ok:true,json:async()=>({ok:true,result:{is_bot:true,id:12345,username:'test_bot'}}),
+    status:200,ok:true,body:{ok:true,result:{is_bot:true,id:12345,username:'test_bot'}},
   }));
   assert.deepEqual(working,{status:'PASS',data:{is_bot:true,id:12345,username:'test_bot'}});
 });
@@ -152,5 +152,9 @@ test('a non-ready Production preflight cannot end as a green workflow',()=>{
   assert.ok(workflow.includes('Failure stage:'));
   assert.ok(workflow.includes('Bot API GET diagnostic:'));
   assert.ok(script.includes("result.failureStage = 'BOT_GETME'"));
+  assert.ok(script.includes("import { request as httpsRequest } from 'node:https'"));
+  assert.ok(script.includes("httpsRequest(url"));
+  assert.ok(script.includes("bytes > 131072"));
+  assert.ok(!script.includes("globalThis.fetch"));
   assert.ok(script.includes('result.botApiDiagnostic = botResponse.status'));
 });
