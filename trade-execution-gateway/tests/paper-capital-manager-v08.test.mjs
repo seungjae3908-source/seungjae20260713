@@ -245,3 +245,27 @@ test("virtual Paper bootstrap rolls back its in-memory state if durable persiste
   assert.equal(manager.getState().initialized, false);
   assert.equal(manager.getState().effectiveTradingCapitalKrw, 0);
 });
+
+
+test("failed durable Paper settlement does not acknowledge an unpersisted reserve or block its safe retry", async () => {
+  let calls = 0;
+  const manager = new PaperCompoundingCapitalManager({
+    persistState: async () => {
+      calls += 1;
+      if (calls === 2) throw new Error("STORAGE_DOWN");
+    },
+  });
+  await manager.applySettlement(settlement(1, 1_000_000), { nowMs: T0 + 10_000 });
+  const before = manager.exportState();
+  await assert.rejects(
+    manager.applySettlement(settlement(2, 1_100_000), { nowMs: T0 + 10_000 }),
+    (error) => error.code === "CAPITAL_STATE_PERSIST_FAILED",
+  );
+  assert.deepEqual(manager.exportState(), before);
+  const retried = await manager.applySettlement(settlement(2, 1_100_000), { nowMs: T0 + 10_000 });
+  assert.equal(retried.idempotentReplay, false);
+  assert.equal(retried.reserveStepsCreated, 1);
+  assert.equal(retried.profitReserveKrw, 50_000);
+  assert.equal(retried.compoundBaseKrw, 1_050_000);
+  assert.equal(retried.lastSettlement.sequence, 2);
+});
