@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { policyModeForAutomaticEnabled } from '../src/lib/trade-automation-policy-mode';
+import { automaticPolicyNeedsSafeOff, policyModeForAutomaticEnabled } from '../src/lib/trade-automation-policy-mode';
 
 function code(relative: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relative), 'utf8');
@@ -55,4 +55,30 @@ test('sticky stop preserves locked master/save while explicit OFF-only path re-r
   expect(server).toContain("if ((current.emergencyStopped || current.newEntriesStopped) && enablingAutomatic)");
   expect(server).toContain("if (candidate.mode !== 'automatic') {");
   expect(server).toContain('enforceMemberTradingPolicy(candidate, current)');
+});
+
+test('stale AUTO mode or orphaned market switches remain eligible for safe OFF during emergency stop', () => {
+  const inactive = {
+    mode: 'approval' as const, automaticEnabled: false,
+    marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
+    exchangeEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
+  };
+  expect(automaticPolicyNeedsSafeOff(inactive)).toBe(false);
+  expect(automaticPolicyNeedsSafeOff({ ...inactive, mode: 'automatic' })).toBe(true);
+  expect(automaticPolicyNeedsSafeOff({ ...inactive, automaticEnabled: true })).toBe(true);
+  expect(automaticPolicyNeedsSafeOff({
+    ...inactive, marketEnabled: { ...inactive.marketEnabled, crypto_spot: true },
+  })).toBe(true);
+  expect(automaticPolicyNeedsSafeOff({
+    ...inactive, exchangeEnabled: { ...inactive.exchangeEnabled, bitget: true },
+  })).toBe(true);
+
+  const component = code('src/components/trade-automation-settings.tsx');
+  expect(component).toContain('automaticPolicyNeedsSafeOff(draft)');
+  expect(component).toContain('automaticPolicyNeedsSafeOff(status.policy)');
+  expect(component).toContain('if (!automaticPolicyNeedsSafeOff(before.policy))');
+  expect(component).toContain("mode: 'approval', automaticEnabled: false");
+  const backend = code('../api-server/src/routes/trade-automation.ts');
+  expect(backend).toContain("if (candidate.mode !== 'automatic') {");
+  expect(backend).toContain('candidate.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };');
 });
