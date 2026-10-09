@@ -79,3 +79,22 @@ test('fresh mark identity allows a safe retry only after a prior automatic exit 
   assert.ok(first.signalReasons.includes('AUTO_EXIT_ENTRY_PLAN:'+entry.id));
   assert.ok(retry.signalReasons.includes('AUTO_EXIT_REASON:STOP_LOSS'));
 });
+
+
+test('automatic close captures a fresh settlement FX quote instead of reusing entry FX', () => {
+  const entry = plan('long','bitget');
+  entry.marketSnapshot.settlementFxKrwPerQuoteCurrency=999;
+  entry.marketSnapshot.settlementFxSource='UNTRUSTED_OLD_RATE';
+  entry.marketSnapshot.settlementFxObservedAt='2026-10-01T01:00:00Z';
+  const input=buildAutomaticExitPlanInput({
+    entryPlan:entry,entryOrder:order(entry),
+    mark:{market:'CRYPTO_FUTURES',symbol:'BTC',price:94,observedAt:NOW,source:'public'},
+    fx:{market:'CRYPTO_FUTURES',krwPerQuoteCurrency:1400,
+      source:'UPBIT:KRW-USDT',observedAt:NOW,stale:false},
+    reason:'TAKE_PROFIT',
+  });
+  assert.equal(input.marketSnapshot.settlementFxKrwPerQuoteCurrency,1400);
+  assert.equal(input.marketSnapshot.settlementFxSource,'UPBIT:KRW-USDT');
+  assert.equal(input.marketSnapshot.settlementFxObservedAt,NOW);
+  assert.equal(input.accountMode,'paper');
+});
