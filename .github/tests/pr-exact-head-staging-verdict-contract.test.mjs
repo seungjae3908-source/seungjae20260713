@@ -35,6 +35,7 @@ const currentRequiredChecks = [
   'runtime: PM2 process online',
   'runtime: PM2 restart count stable',
   'database migration and rollback assessment',
+  'administrator four-market Paper V2 RLS staging proof',
 ];
 
 const legacyAggregateMobileCheck =
