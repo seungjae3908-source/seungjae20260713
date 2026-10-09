@@ -260,6 +260,12 @@ test('keyboard, focus, Escape, Enter and Space operate anchored popovers', async
   await expect(assetsMenu).toBeVisible();
   await assetsTrigger.press('Space');
   await expect(assetsMenu).toBeHidden();
+
+  // Enter toggles an already-open menu without a keyboard-focus race.
+  await assetsTrigger.press('Enter');
+  await expect(assetsMenu).toBeVisible();
+  await assetsTrigger.press('Enter');
+  await expect(assetsMenu).toBeHidden();
   assertClean();
 });
 
