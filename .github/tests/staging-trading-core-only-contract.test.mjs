@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'no
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
+import { hasCapability, hasCanonicalMemberAccessState } from '../../packages/member-access/src/index.js';
 
 const workflow = readFileSync('.github/workflows/staging-trading-core-only.yml', 'utf8');
 const config = readFileSync('stock-analyzer/playwright.staging-trading-core-only.config.ts', 'utf8');
@@ -20,7 +21,12 @@ test('Staging browser restores the real isolated admin password session without 
     "new URL('/auth/v1/token?grant_type=password', supabase)",
     "new URL('/api/auth/profile', origin)",
     'STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH',
-    'STAGING_ADMIN_PROFILE_NOT_APPROVED',
+    'STAGING_ADMIN_MEMBERSHIP_SCHEMA_INCOMPLETE',
+    'STAGING_ADMIN_STATUS_NOT_APPROVED',
+    'STAGING_ADMIN_PROFILE_INACTIVE',
+    'STAGING_ADMIN_CAN_MANAGE_MEMBERS_DENIED',
+    "hasCapability(profile, 'canManageMembers')",
+    'hasCanonicalMemberAccessState(profile)',
     'STAGING_ADMIN_SESSION_CONTRACT_INVALID',
     'window.localStorage.setItem(storageKey, JSON.stringify(session))',
     "await page.reload({ waitUntil: 'domcontentloaded' })",
@@ -38,12 +44,48 @@ test('Staging auth identity/token are never printed or written into scoped QA re
   assert.ok(!/writeFileSync\([^,]+,\s*JSON\.stringify\(body\b/.test(spec));
   requireAll(spec, [
     "'STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH'",
-    "'STAGING_ADMIN_PROFILE_NOT_APPROVED'",
+    "'STAGING_ADMIN_MEMBERSHIP_SCHEMA_INCOMPLETE'",
+    "'STAGING_ADMIN_STATUS_NOT_APPROVED'",
+    "'STAGING_ADMIN_PROFILE_INACTIVE'",
+    "'STAGING_ADMIN_CAN_MANAGE_MEMBERS_DENIED'",
     "'STAGING_ADMIN_SESSION_CONTRACT_INVALID'",
   ]);
   assert.ok(!verdict.includes('adminEmail'));
   assert.ok(!verdict.includes('accessToken'));
 });
+test('Canonical Staging admin capability gate matches app policy and blocks unapproved or inactive profiles', () => {
+  const base = {
+    id: 'synthetic-staging-admin',
+    role: 'user',
+    membership_level: 'admin',
+    status: 'approved',
+    is_active: true,
+    permissions_updated_at: '2026-10-09T00:00:00.000Z',
+    membership_expires_at: null,
+  };
+  // Canonical tier is authoritative; role=user can still be a valid admin if
+  // membership_level=admin. A brittle role==='admin' would falsely reject it.
+  assert.equal(hasCanonicalMemberAccessState(base), true);
+  assert.equal(hasCapability(base, 'canManageMembers'), true);
+  assert.equal(hasCapability({ ...base, role: 'admin', membership_level: 'regular' }, 'canManageMembers'), false);
+  assert.equal(hasCapability({ ...base, status: 'pending' }, 'canManageMembers'), false);
+  assert.equal(hasCapability({ ...base, status: 'suspended' }, 'canManageMembers'), false);
+  assert.equal(hasCapability({ ...base, is_active: false }, 'canManageMembers'), false);
+  assert.equal(hasCapability({ ...base, is_active: null }, 'canManageMembers'), false);
+  assert.equal(hasCapability({ ...base, membership_expires_at: '2020-01-01T00:00:00.000Z' }, 'canManageMembers'), false);
+  assert.equal(hasCanonicalMemberAccessState({ ...base, permissions_updated_at: null }), false);
+  assert.ok(!spec.includes("profile?.role !== 'admin'"), 'Do not invent a second weaker/stricter admin role contract');
+  for (const marker of [
+    'profile?.id !== body.user.id',
+    "profile?.status !== 'approved'",
+    'profile?.is_active !== true',
+    "hasCapability(profile, 'canManageMembers')",
+    'hasCanonicalMemberAccessState(profile)',
+  ]) {
+    assert.ok(spec.includes(marker), 'missing admin scope check: ' + marker);
+  }
+});
+
 test('Hub command is owner-only and staging-only', () => {
   const markers = [
     '  issue_comment:', 'types: [created]',
