@@ -74,6 +74,8 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(page).toContain('liveEntriesArmed');
   expect(page).toContain('안전대기 · Arm 준비 중');
   expect(page).toContain('자동 실거래 작동 준비됨');
+  expect(page).toContain('실자동매매 전략 미등록');
+  expect(page).toContain('const liveStrategyConfigured = Array.isArray(policy?.enabledStrategies)');
   expect(page).toContain('runtimeHealthFresh');
   expect(page).toContain('360_000');
   expect(page).toContain('자동 워커 상태 지연');
@@ -114,4 +116,40 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(settings).toContain('자동매매는 아직 OFF입니다.');
   expect(settings).not.toContain('window.setInterval(() => { void load(); }, 15_000)');
   expect(settings).not.toContain("status?.liveExecutionServerEnabled?.[exchange] ? '서버게이트 ON'");
+});
+
+test('automatic Paper wallet requires explicit simulated-only setup and never triggers a provider order', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
+  expect(page).toContain('data-testid="automatic-paper-wallet-readiness"');
+  expect(page).toContain('data-testid="prepare-isolated-automatic-paper-epoch"');
+  expect(page).toContain('START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY');
+  expect(page).toContain('과거 기록 보존 후 신규 50만원 모의계좌 준비');
+  expect(page).toContain('data-testid="prepare-automatic-paper-account"');
+  expect(page).toContain('AUTO_PAPER_INITIAL_KRW = 500_000');
+  expect(page).toContain('await syncJournalRecords({');
+  expect(page).toContain('await inspectAutomaticPaperAccount()');
+  expect(page).toContain('result.orderSubmitted !== false || result.exchangeRequestSent !== false');
+  expect(page).not.toContain('createLiveOrderForPaperSetup');
+  expect(worker).toContain("AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'");
+  expect(worker).toContain('selectAutomaticPaperAccountEquity(paperResult.records)');
+});
+
+test('Paper wallet initialization is blocked by the current server-owned historical automatic fills', () => {
+  const page = source('src/pages/auto-trading.tsx');
+  const route = source('../api-server/src/routes/trade-automation.ts');
+  const worker = source('../api-server/src/services/member-auto-trading-background-worker.service.ts');
+  expect(page).toContain("authorizedFetch('/api/trade-automation/status', { signal })");
+  expect(page).toContain('body.automaticPaperWalletBootstrap?.safeToInitialize === true');
+  expect(page).toContain('data-testid="automatic-paper-history-audit"');
+  expect(page).toContain('walletAudit.missingFilledQuantityEvidence');
+  expect(page).toContain('walletAudit.missingFeeEvidence');
+  expect(page).toContain('data-testid="automatic-current-risk-policy"');
+  expect(page).toContain('policy.totalCapitalKrw.toLocaleString');
+  expect(page).toContain('policy.bitgetLeverage');
+  expect(page).toContain('이 화면에서 운용 한도를 변경하지 않습니다.');
+  expect(page).toContain("return anyRows || !historySafe ? 'blocked' : 'missing';");
+  expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED');
+  expect(worker).toContain('AUTOMATIC_PAPER_HISTORY_TRUNCATED');
+  expect(route).toContain('automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans)');
 });

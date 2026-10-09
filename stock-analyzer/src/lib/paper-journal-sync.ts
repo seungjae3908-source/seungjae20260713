@@ -173,7 +173,7 @@ function assertAnalysisEnvelope(body: Record<string, unknown> | null) {
 }
 
 async function syncSingleBatch(
-  input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] },
+  input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[]; legacyEpochConfirmation?: string },
   signal?: AbortSignal,
 ) {
   const response = await authorizedFetch('/api/paper-journal/sync', {
@@ -186,9 +186,12 @@ async function syncSingleBatch(
 }
 
 export async function syncJournalRecords(
-  input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] },
+  input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[]; legacyEpochConfirmation?: string },
   signal?: AbortSignal,
 ) {
+  if (input.legacyEpochConfirmation && input.records.length !== 1) {
+    throw new Error('신규 자동모의계좌는 단일 레코드로만 준비할 수 있습니다.');
+  }
   if (input.records.length <= JOURNAL_SYNC_BATCH_SIZE) return syncSingleBatch(input, signal);
 
   const results: JournalSyncResult[] = [];
