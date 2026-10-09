@@ -85,7 +85,7 @@ test('forward plan isolates state and orders natural Shadow before Paper', () =>
   assert.equal(formulaQueue.env.LIVE_TRADING, 'false');
   assert.equal(formulaQueue.env.PRIVATE_API_ENABLED, 'false');
   assert.equal(formulaQueue.env.ORDER_AUTHORITY, 'false');
-  assert.equal(formulaQueue.sharedPackages, undefined);
+  assert.deepEqual(formulaQueue.sharedPackages, ['strategy-hypothesis', 'external-research']);
   assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
   assert.equal(paper.env.PAPER_FORWARD_INITIAL_CAPITAL_KRW, '1000000');
   assert.equal(
@@ -203,6 +203,33 @@ test('Paper Forward shared-package validation fails closed when a required packa
     plan: historicalPlan,
   });
   assert.deepEqual(historical.requestedPackages, []);
+});
+
+test('isolated Formula TRAIN queue has both transitive dependencies it imports at runtime', async () => {
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: '/var/lib/investment-research-production',
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  const formula = plan[0];
+  assert.equal(formula.id, 'formula-backtest-queue');
+  assert.deepEqual(formula.sharedPackages, ['strategy-hypothesis', 'external-research']);
+  const generator = await readFile(new URL('../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js', import.meta.url), 'utf8');
+  const contract = await readFile(new URL('../../packages/strategy-hypothesis/src/contract.js', import.meta.url), 'utf8');
+  assert.ok(generator.includes('../../packages/strategy-hypothesis/src/index.js'));
+  assert.ok(contract.includes('../../external-research/src/index.js'));
+  const repoRoot = await fakeRepo();
+  const validation = await validateResearchTaskSharedPackages({ repoRoot, plan });
+  assert.deepEqual(validation.requestedPackages, ['strategy-hypothesis', 'external-research']);
+  const work = await prepareResearchTaskWorkspace({
+    labRoot: join(repoRoot, 'market-prediction-lab'),
+    taskDir: join(repoRoot, 'research-state', 'runs', 'formula-module-probe'),
+    sharedPackages: formula.sharedPackages,
+  });
+  await access(join(work.workspaceRoot, '..', 'packages', 'strategy-hypothesis', 'src', 'index.js'));
+  await access(join(work.workspaceRoot, '..', 'packages', 'external-research', 'src', 'index.js'));
 });
 
 test('task workspace copies only the bounded shared package set beside market-prediction-lab', async () => {
