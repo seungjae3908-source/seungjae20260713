@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { requestWithBrowserSession } from './support/browser-session-api';
+import { hasCanonicalMemberAccessState, hasCapability } from '../../packages/member-access/src/index.js';
 
 const activated = process.env.STAGING_TRADING_CORE_ONLY_QA === 'true';
 test.skip(!activated, 'Runs only in explicitly dispatched, protected Trading Core Staging QA.');
@@ -48,9 +49,20 @@ async function restoreStagingAdminSession(page: Page) {
   }
   const profile: any = await profileResponse.json().catch(() => null);
   if (profile?.id !== body.user.id) throw new Error('STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH');
-  if (profile?.role !== 'admin' || profile?.status !== 'approved'
-    || profile?.is_active === false) {
-    throw new Error('STAGING_ADMIN_PROFILE_NOT_APPROVED');
+  // Match the *same* canonical capability policy as the browser and
+  // backend requireAdmin; legacy role alone is not authoritative when the
+  // stored membership_level explicitly determines the effective tier.
+  if (!hasCanonicalMemberAccessState(profile)) {
+    throw new Error('STAGING_ADMIN_MEMBERSHIP_SCHEMA_INCOMPLETE');
+  }
+  if (profile?.status !== 'approved') {
+    throw new Error('STAGING_ADMIN_STATUS_NOT_APPROVED');
+  }
+  if (profile?.is_active !== true) {
+    throw new Error('STAGING_ADMIN_PROFILE_INACTIVE');
+  }
+  if (!hasCapability(profile, 'canManageMembers')) {
+    throw new Error('STAGING_ADMIN_CAN_MANAGE_MEMBERS_DENIED');
   }
   const session = {
     access_token: body.access_token,
