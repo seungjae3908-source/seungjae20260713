@@ -7,6 +7,7 @@ import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { preflightResearchProduction } from '../src/engine.mjs';
 import { advancePublicWatchProspectiveEvidence } from '../src/lightweight-market-watch-prospective.mjs';
+import { makePublicWatchCadenceRecord } from '../src/lightweight-market-watch-cadence.mjs';
 import {
   appendBoundedWatchEvents, atomicDurableWatchJson, WATCH_STORAGE_LIMITS,
 } from '../src/lightweight-market-watch-storage.mjs';
@@ -263,6 +264,10 @@ async function cycle(root, researchSha, previous, telemetry) {
   await atomicDurableWatchJson(join(root, 'watch', 'state-v1.json'), next);
   await atomicDurableWatchJson(join(root, 'latest', 'lightweight-market-watch.json'),
     state, WATCH_STORAGE_LIMITS.publicStatusJsonBytes);
+  // Only record this cadence trace after the local state and public status
+  // have been durably published. A missed heartbeat never becomes proof.
+  await appendBoundedWatchEvents(root, [makePublicWatchCadenceRecord(state)],
+    state.observedAt, 'cadence');
   process.stdout.write(JSON.stringify({
     observedAt: state.observedAt, status: state.status,
     budget: state.resourceBudget.status,
@@ -285,6 +290,7 @@ async function main() {
   });
   await mkdir(join(root, 'watch', 'events'), { recursive: true, mode: 0o700 });
   await mkdir(join(root, 'watch', 'outcomes'), { recursive: true, mode: 0o700 });
+  await mkdir(join(root, 'watch', 'cadence'), { recursive: true, mode: 0o700 });
   await mkdir(join(root, 'latest'), { recursive: true, mode: 0o700 });
   const lock = await acquire(root);
   try {
