@@ -286,6 +286,8 @@ test("gateway creates 1,000,000 KRW virtual wallet but never grants unverified P
   assert.equal(seeded.executionAuthority, "NONE");
   assert.equal(adapter.submissionCount, 0);
   assert.equal(capitalManager.getState().lastSettlement, null);
+  assert.equal(gateway.getCapitalHealth().availableNewExposureKrw, 0);
+  assert.equal(gateway.getCapitalHealth().virtualSeedAwaitingSettlement, true);
   await assert.rejects(
     gateway.placeOrder(krBuy("wallet-seed-before-settlement", 10_000)),
     (error) => error.code === "CAPITAL_NOT_INITIALIZED",
