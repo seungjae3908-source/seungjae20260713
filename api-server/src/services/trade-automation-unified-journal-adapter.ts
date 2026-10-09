@@ -99,8 +99,14 @@ export function tradeAutomationJournalPayloadsFromSnapshot(
       filledQuantity,
       remainingQuantity,
       averageFillPrice,
-      fees: feeForOrder(order),
-      tax: null,
+      fees: order.feeCurrency?.toUpperCase() === currencyForPlan(plan)
+        ? feeForOrder(order) : null,
+      // A missing synthetic tax receipt is never silently represented as
+      // zero. This is only a cost component, not a broker tax statement.
+      tax: order.taxCurrency?.toUpperCase() === currencyForPlan(plan)
+        && typeof order.taxAmount === 'number'
+        && Number.isFinite(order.taxAmount) && order.taxAmount >= 0
+        ? order.taxAmount : null,
       currency: currencyForPlan(plan),
       status: statusForOrder(order),
       strategy: plan.strategyId,
