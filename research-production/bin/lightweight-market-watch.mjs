@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { cpus, loadavg } from 'node:os';
 import {
-  lstat, mkdir, open, readFile, rename, rm, statfs, writeFile,
+  lstat, mkdir, open, readFile, rm, statfs,
 } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { preflightResearchProduction } from '../src/engine.mjs';
 import { advancePublicWatchProspectiveEvidence } from '../src/lightweight-market-watch-prospective.mjs';
+import {
+  appendBoundedWatchEvents, atomicDurableWatchJson, WATCH_STORAGE_LIMITS,
+} from '../src/lightweight-market-watch-storage.mjs';
 import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_MARKETS, WATCH_SAFETY,
   blockedSource, evaluateMarketOpportunities, evaluateWatchBudget,
@@ -100,31 +102,6 @@ async function readExisting(path) {
     if (error?.code === 'ENOENT') return null;
     throw new Error('WATCH_PREVIOUS_STATE_INVALID');
   }
-}
-async function atomicJson(path, obj) {
-  const temp = path + '.tmp-' + randomUUID();
-  try {
-    await writeFile(temp, JSON.stringify(obj) + '\n', { flag: 'wx', mode: 0o600 });
-    await rename(temp, path);
-  } finally { await rm(temp, { force: true }); }
-}
-async function appendEvents(root, events, observedAt, category = 'events') {
-  if (category !== 'events' && category !== 'outcomes')
-    throw new Error('WATCH_LOG_CATEGORY_INVALID');
-  if (events.length === 0) return;
-  const basename = observedAt.slice(0, 10);
-  const path = join(root, 'watch', category, basename + '.jsonl');
-  const data = events.map((entry) => JSON.stringify(entry)).join('\n') + '\n';
-  const handle = await open(
-    path,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW,
-    0o600,
-  );
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.nlink !== 1) throw new Error('UNSAFE_EVENT_LOG');
-    await handle.writeFile(data, 'utf8');
-  } finally { await handle.close(); }
 }
 async function resourceTelemetry(root) {
   const m = await readFile('/proc/meminfo', 'utf8');
@@ -281,10 +258,11 @@ async function cycle(root, researchSha, previous, telemetry) {
   // Emit observations before advancing the local cursor: a storage failure
   // must not silently discard a discovered candidate. Consumers must dedupe
   // eventId because a crash between these writes can replay the same event.
-  await appendEvents(root, prospective.outcomes, state.observedAt, 'outcomes');
-  await appendEvents(root, allCandidates, state.observedAt);
-  await atomicJson(join(root, 'watch', 'state-v1.json'), next);
-  await atomicJson(join(root, 'latest', 'lightweight-market-watch.json'), state);
+  await appendBoundedWatchEvents(root, prospective.outcomes, state.observedAt, 'outcomes');
+  await appendBoundedWatchEvents(root, allCandidates, state.observedAt, 'events');
+  await atomicDurableWatchJson(join(root, 'watch', 'state-v1.json'), next);
+  await atomicDurableWatchJson(join(root, 'latest', 'lightweight-market-watch.json'),
+    state, WATCH_STORAGE_LIMITS.publicStatusJsonBytes);
   process.stdout.write(JSON.stringify({
     observedAt: state.observedAt, status: state.status,
     budget: state.resourceBudget.status,

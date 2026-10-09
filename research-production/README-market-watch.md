@@ -219,3 +219,29 @@ sudo -u investment-research env \
   This local cohort diagnostic is not silently promoted to Formula PASS,
   AI/OOS evidence or browser-admin economics. No Paper/Journal/Telegram
   consumer has been added by this Draft.
+
+
+## Bounded durable local writes (Draft — worker remains OFF)
+
+The watch writer now enforces **64 MiB per UTC day and log category** for
+`watch/events` and `watch/outcomes`, with a 2 MiB append cap, a 16 KiB
+JSONL-row cap and a maximum of 1,024 rows per append. The existing UTC daily
+cohort reader uses the same daily file and per-line limits. Unsafe symbolic
+links, hard links, permissive file modes and oversized logs fail closed rather
+than silently growing until the Vultr app disk is exhausted.
+
+Event/outcome append data and the containing directory are synced before
+advancing the watcher cursor. State/status JSON is written to an isolated
+0600 temporary file, synced, atomically renamed and its parent directory
+synced. This narrows a crash/power-loss window but **does not claim that the
+underlying disk or provider is infallible**. A crash before cursor publication
+can still replay an event; all consumers must deduplicate `eventId` or
+`outcomeId`. Interrupted/truncated JSONL remains INVALID to the cohort
+diagnostic and requires an independently approved repair/archive workflow.
+
+These are safety caps, **not retention**: this Draft intentionally does not
+delete, rotate, compress, upload or archive old samples, and does not write
+to the app's DB. An audited backup/retention plan and real server 24-hour
+disk/CPU/RAM monitoring are still required before unattended operation. If
+a cap is hit, the watcher stops safely rather than discarding evidence to
+continue producing green status. Research status is not a trading gate.
