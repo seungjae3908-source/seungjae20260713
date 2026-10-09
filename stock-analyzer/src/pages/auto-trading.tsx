@@ -10,6 +10,7 @@ import { ScannerApprovalComposer } from '@/components/scanner-approval-composer'
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
+import { AdminFourMarketPaperPanel } from '@/components/admin-four-market-paper-panel';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
@@ -38,6 +39,11 @@ type AutomaticPaperRuntimeReadiness = {
 const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
   BACKGROUND_PAPER_WALLET_REQUIRED: '50만원 자동모의매매 전용 계좌가 없습니다.',
   BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW: '저장된 자동매매 운용자본이 50만원 기준보다 낮습니다.',
+  BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED: '관리자 4시장 독립 가상계좌 4개를 준비해야 합니다.',
+  BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED: '관리자 정책의 시장별 운용자본이 100만원 기준에 미달합니다.',
+  BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED: '관리자 4시장/Provider 설정이 모두 활성화되지 않았습니다.',
+  ADMIN_PAPER_MARKET_WALLET_MISSING: '시장별 가상계좌가 아직 준비되지 않았습니다.',
+  ADMIN_PAPER_WALLET_INVALID: '시장별 계좌 검증에 실패했습니다.',
   BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED: '허용된 자동매매 전략이 없습니다.',
   BACKGROUND_MEMBER_AUTO_POLICY_OFF: '회원 자동매매 설정이 꺼져 있습니다.',
   BACKGROUND_TRADING_STOP_ACTIVE: '비상정지 또는 신규진입 차단 상태입니다.',
@@ -340,6 +346,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       setAutoPaperStatus('fixture');
       return;
     }
+    if (canManagePilot) {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return; // Admin V2 uses its own four-market wallet inspection.
+    }
     if (!userId || !canAuto) return;
     // Associate members can view automatic/Paper trading but cannot read
     // journal snapshots. Do not produce an intentional 403 as a background
@@ -367,7 +378,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       }
     });
     return () => controller.abort();
-  }, [userId, canAuto, canJournalSync, fixture]);
+  }, [userId, canAuto, canJournalSync, fixture, canManagePilot]);
 
   useEffect(() => {
     if (fixture || !userId || !canAuto || !canJournalSync) {
@@ -612,6 +623,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
       </section>
 
+      {canManagePilot && !fixture ? (
+        <AdminFourMarketPaperPanel />
+      ) : (
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-wallet-readiness">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold">자동모의매매 가상계좌</h2>
@@ -678,6 +692,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </button>
         ) : null}
       </section>
+      )}
       {!fixture && canAuto && canJournalSync ? (
         <section className="rounded-2xl border border-card-border bg-card p-4"
           data-testid="automatic-paper-worker-readiness">
@@ -701,7 +716,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
               {autoPaperRuntimeError
                 ? '서버의 읽기 전용 운영 검사가 완료되지 않았습니다. 이 상태는 준비 완료로 처리하지 않습니다.'
                 : autoPaperRuntimeReadiness?.readyForPaperEvaluation
-                  ? '50만원 계좌·전략 허용목록·Paper Worker·신호와 매매일지 연결을 확인했습니다.'
+                  ? canManagePilot
+                    ? '관리자 4시장 독립계좌·전략·Paper Worker·신호·매매일지 연결을 확인했습니다.'
+                    : '50만원 계좌·전략 허용목록·Paper Worker·신호와 매매일지 연결을 확인했습니다.'
                   : '회원의 Paper Worker 운영 상태를 조회 중입니다.'}
             </p>
           )}
