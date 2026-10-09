@@ -169,6 +169,35 @@ export interface ResearchFactoryRuntimeSummary {
   controlPlaneDigest: string | null;
 }
 
+
+export interface ResearchLightweightMarketWatch {
+  contract: 'lightweight-market-watch-readback/v1';
+  status: 'MISSING' | 'INVALID' | 'STALE' | 'HOLD' | 'THROTTLED' |
+    'BLOCKED_DATA' | 'OBSERVING' | 'PARTIAL';
+  present: boolean;
+  researchSha: string | null;
+  observedAt: number | null;
+  ageMs: number | null;
+  marketCoverageCount: number | null;
+  markets: Array<{
+    market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+    source: string;
+    status: string;
+    listedCount: number;
+    observedCount: number;
+    newCandidates: number;
+  }>;
+  cyclesToday: number | null;
+  candidatesToday: number | null;
+  cyclesSinceRelease: number | null;
+  continuous24hProven: false;
+  formulaCandidateProduced: false;
+  oosProven: false;
+  paperExecutionProven: false;
+  profitabilityProven: false;
+  executionAuthority: 'NONE';
+}
+
 export interface ResearchCenterOverview {
   schemaVersion: 'research-dashboard-overview-v1';
   generatedAt: number;
@@ -216,6 +245,7 @@ export interface ResearchCenterOverview {
   };
   dataFactory?: {
     temporalCryptoFutures: ResearchTemporalCryptoSummary;
+    lightweightMarketWatch?: ResearchLightweightMarketWatch;
   };
   factory?: ResearchFactoryRuntimeSummary;
   paper: {
