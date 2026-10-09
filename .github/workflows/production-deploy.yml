@@ -464,31 +464,7 @@ jobs:
             printf 'member_access_artifact=%s\n' "$member_artifact" >> "$GITHUB_OUTPUT"
           )
 
-      - name: Upload sanitized Production paper journal privilege evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-paper-journal-privileges-${{ env.TARGET_SHA }}
-          path: ${{ steps.database-gates.outputs.paper_journal_artifact }}
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload sanitized Production member access hardening evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-member-access-hardening-${{ env.TARGET_SHA }}
-          path: ${{ steps.database-gates.outputs.member_access_artifact }}
-          if-no-files-found: error
-          retention-days: 30
-
-
-      - name: Apply approved administrator 4-market Paper RLS before app deployment
-        id: admin-paper-rls
-        env:
-          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
-          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
-        run: |
+          (
           set -Eeuo pipefail
           umask 077
           [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || {
@@ -529,13 +505,31 @@ jobs:
             exit 1
           fi
           node ops/verify-production-admin-four-paper-rls.mjs --artifact "$artifact"
-          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "admin_paper_rls_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          )
+
+      - name: Upload sanitized Production paper journal privilege evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-paper-journal-privileges-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.paper_journal_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload sanitized Production member access hardening evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-member-access-hardening-${{ env.TARGET_SHA }}
+          path: ${{ steps.database-gates.outputs.member_access_artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
 
       - name: Upload verified administrator Paper RLS migration attestation
         uses: actions/upload-artifact@v4
         with:
           name: production-admin-four-paper-rls-${{ env.TARGET_SHA }}
-          path: ${{ steps.admin-paper-rls.outputs.artifact }}
+          path: ${{ steps.database-gates.outputs.admin_paper_rls_artifact }}
           if-no-files-found: error
           retention-days: 30
 
