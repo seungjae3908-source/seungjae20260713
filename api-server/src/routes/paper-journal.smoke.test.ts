@@ -110,6 +110,52 @@ function automaticPaperWalletSetup() {
   };
 }
 
+test('automatic 500k wallet preflight is owner-scoped, read-only and consistent with fresh creation', async () => {
+  const { server, baseUrl, repository } = await startServer();
+  try {
+    const read = async () => {
+      const response = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+      assert.equal(response.status, 200);
+      return safeJson(response);
+    };
+    const before = await read();
+    assert.equal(before.ok, true);
+    assert.equal(before.readOnlyProbe, true);
+    assert.equal(before.mode, 'paper-wallet-readiness-only');
+    assert.equal(before.initialCapitalKrw, 500_000);
+    assert.equal(before.state, 'READY_FRESH');
+    assert.equal(before.safeToPrepare, true);
+    assert.equal(before.requiresHistoryPreservationConfirmation, false);
+    assert.deepEqual(before.blockers, []);
+    assert.equal(before.financialMutationCount, 0);
+    assert.equal(before.privateProviderRequests, 0);
+    assert.equal(before.orderSubmitted, false);
+    assert.equal(before.exchangeRequestSent, false);
+    assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
+    const created = await fetch(baseUrl + '/api/paper-journal/sync', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(automaticPaperWalletSetup()),
+    });
+    assert.equal(created.status, 200);
+    const after = await read();
+    assert.equal(after.state, 'ALREADY_EXISTS');
+    assert.equal(after.safeToPrepare, false);
+    assert.ok(after.blockers.includes('AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS'));
+    assert.equal((await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'))?.payload?.equity, 500_000);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('automatic wallet preflight rejects unauthorized members and never reads another user wallet', async () => {
+  const { server, baseUrl } = await startServer({ memberTier: 'associate' });
+  try {
+    const response = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    assert.equal(response.status, 403);
+    const body = await safeJson(response);
+    assert.equal(body.ok, false);
+    assert.equal(body.orderSubmitted, false);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
 test('server permits only a fresh exact 500k Paper wallet and refuses tampered reset', async () => {
   const { server, baseUrl, repository } = await startServer();
   try {
@@ -415,6 +461,16 @@ test('historic Paper-only QA data requires explicit new epoch acknowledgment and
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
+    const readinessResponse = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    assert.equal(readinessResponse.status, 200);
+    const preflight = await safeJson(readinessResponse);
+    assert.equal(preflight.state, 'READY_ISOLATE_LEGACY');
+    assert.equal(preflight.safeToPrepare, true);
+    assert.equal(preflight.requiresHistoryPreservationConfirmation, true);
+    assert.equal(preflight.historical.missingFilledQuantityEvidence, 1);
+    assert.equal(preflight.financialMutationCount, 0);
+    assert.equal(preflight.orderSubmitted, false);
+
     const blocked = await send(automaticPaperWalletSetup());
     assert.equal(blocked.status, 409);
     assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
@@ -433,5 +489,34 @@ test('historic Paper-only QA data requires explicit new epoch acknowledgment and
     const second = await send({ ...request, idempotencyKey: 'isolated-paper-campaign-02' });
     assert.equal(second.status, 409);
     assert.ok(await repository.getRecord(USER, 'journal', 'historic-qa-entry'));
+    const afterResponse = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    const after = await safeJson(afterResponse);
+    assert.equal(after.state, 'ALREADY_EXISTS');
+    assert.equal(after.safeToPrepare, false);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('automatic wallet preflight blocks manual journal contamination instead of mislabeling isolation as safe', async () => {
+  const repository = createRepository();
+  await repository.upsertRecord(USER, {
+    kind: 'journal', id: 'manual-history', version: 1, updatedAt: NOW.toISOString(),
+    deletedAt: null, payload: { source: 'MANUAL', status: 'FILLED' },
+  }, NOW.toISOString());
+  const { server, baseUrl } = await startServer({ repository });
+  try {
+    const preflightResponse = await fetch(baseUrl + '/api/paper-journal/automatic-wallet-readiness');
+    const preflight = await safeJson(preflightResponse);
+    assert.equal(preflight.state, 'BLOCKED');
+    assert.equal(preflight.safeToPrepare, false);
+    assert.ok(preflight.blockers.includes('AUTOMATIC_PAPER_EPOCH_HISTORY_REQUIRED'));
+    const attempted = await fetch(baseUrl + '/api/paper-journal/sync', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...automaticPaperWalletSetup(),
+        legacyEpochConfirmation: 'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY',
+      }),
+    });
+    assert.equal(attempted.status, 409);
+    assert.equal(await repository.getRecord(USER, 'account', 'automatic-paper-account-v1'), null);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
