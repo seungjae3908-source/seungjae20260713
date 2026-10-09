@@ -8,6 +8,7 @@ import {
   buildAdminFourMarketPaperBootstrap, inspectAdminFourMarketPaperWallets,
   projectAdminMarketCapital,
   adminMarketCurrentEpochSettlementScope,
+  adminMarketPaperAvailableBalance,
 } from './admin-four-market-paper-capital.service';
 
 const AT = new Date('2026-10-09T09:00:00Z');
@@ -249,4 +250,20 @@ test('one verified small loss reduces actual collateral but does not falsely tri
     })), now);
   assert.equal(stopped.dailyLosingTrades, 5);
   assert.equal(stopped.newEntriesAllowed, false);
+});
+
+test('verified 50/50 compound cash is market-local and cannot expand Live order policy', () => {
+  assert.equal(adminMarketPaperAvailableBalance(1_000_000, 0, {
+    ready: true, availableToTradeKrw: 1_050_000,
+  }), 1_050_000);
+  assert.equal(adminMarketPaperAvailableBalance(1_000_000, 100_000, {
+    ready: true, availableToTradeKrw: 950_000,
+  }), 950_000);
+  assert.equal(adminMarketPaperAvailableBalance(1_000_000, 0, {
+    ready: false, availableToTradeKrw: 1_050_000,
+  }), 0);
+  assert.equal(adminMarketPaperAvailableBalance(1_000_000, 0, {
+    ready: true, availableToTradeKrw: Number.NaN,
+  }), 0);
+  assert.equal(adminMarketPaperAvailableBalance(1_000_000, 200_000), 800_000);
 });

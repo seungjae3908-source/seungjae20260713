@@ -29,6 +29,7 @@ import {
   type AdminPaperMarket,
   adminPaperMarketFromPlan,
   adminMarketPaperRiskBudget,
+  adminMarketPaperAvailableBalance,
   inspectAdminFourMarketPaperWallets,
   projectAdminMarketCapital,
 } from './admin-four-market-paper-capital.service';
@@ -1113,9 +1114,9 @@ function exposureState(
     // after legitimate 50% profit compounding. The canonical risk engine
     // separately enforces the stored per-order and exposure policy ceilings;
     // this value is NOT authority to expand those ceilings or place Live orders.
-    availableBalance: budget
-      ? budget.availableToTradeKrw
-      : Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
+    availableBalance: adminMarketPaperAvailableBalance(
+      policy.totalCapitalKrw, accountExposureKrw, budget,
+    ),
   };
 }
 
