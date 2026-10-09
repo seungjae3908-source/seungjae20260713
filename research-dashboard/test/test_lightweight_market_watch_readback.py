@@ -48,6 +48,16 @@ def valid_snapshot():
             'cyclesToday': 100,
             'candidatesToday': 18,
             'cyclesSinceRelease': 101,
+            'observedCoarseToday': 4,
+            'blockedProspectiveToday': 2,
+        },
+        'prospectiveObservation': {
+            'status': 'PUBLIC_TICKER_SNAPSHOTS_ONLY',
+            'pendingCount': 3, 'newlyObservedCoarse': 1,
+            'newlyBlockedData': 1,
+            'notTrackedDueToCapacityOrSource': 0,
+            'economicEvidenceCredit': 0, 'paperCredit': 0,
+            'oosCredit': 0, 'executionAuthority': 'NONE',
         },
         'safety': {
             'researchOnly': True, 'orderAuthority': 'NONE',
@@ -69,6 +79,10 @@ class MarketWatchReadbackTest(unittest.TestCase):
         self.assertEqual(projection['marketCoverageCount'], 2)
         self.assertEqual(projection['cyclesToday'], 100)
         self.assertEqual(projection['candidatesToday'], 18)
+        self.assertEqual(projection['prospectiveSampleStudy']['pendingCount'], 3)
+        self.assertEqual(projection['prospectiveSampleStudy']['observedCoarseToday'], 4)
+        self.assertEqual(projection['prospectiveSampleStudy']['blockedToday'], 2)
+        self.assertEqual(projection['prospectiveSampleStudy']['economicEvidenceCredit'], 0)
         self.assertFalse(projection['continuous24hProven'])
         self.assertFalse(projection['formulaCandidateProduced'])
         self.assertFalse(projection['oosProven'])
@@ -77,6 +91,24 @@ class MarketWatchReadbackTest(unittest.TestCase):
         self.assertEqual(projection['executionAuthority'], 'NONE')
         self.assertNotIn('PRIVATE', json.dumps(projection))
         self.assertNotIn('/root', json.dumps(projection))
+
+
+    def test_coarse_public_samples_reject_forged_economic_credit(self):
+        for mutation in (
+            lambda x: x['prospectiveObservation'].update({'economicEvidenceCredit': 1}),
+            lambda x: x['prospectiveObservation'].update({'paperCredit': 1}),
+            lambda x: x['prospectiveObservation'].update({'pendingCount': 1025}),
+            lambda x: x['statistics'].update({'observedCoarseToday': 0}),
+            lambda x: x['prospectiveObservation'].update({'executionAuthority': 'LIVE'}),
+        ):
+            raw = valid_snapshot()
+            mutation(raw)
+            self.assertEqual(summarize_watch(raw, NOW_MS)['status'], 'INVALID')
+        legacy = valid_snapshot()
+        legacy.pop('prospectiveObservation')
+        legacy['statistics'].pop('observedCoarseToday')
+        legacy['statistics'].pop('blockedProspectiveToday')
+        self.assertIsNone(summarize_watch(legacy, NOW_MS)['prospectiveSampleStudy'])
 
     def test_forged_economic_authority_and_count_are_rejected(self):
         variants = []
