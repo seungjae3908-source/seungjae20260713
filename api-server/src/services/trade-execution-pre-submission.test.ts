@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { paperSimulatedCostAmount, TradeExecutionService } from './trade-execution.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -25,6 +25,17 @@ import {
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
+
+test('Paper synthetic costs require explicit finite rate: missing is not zero evidence', () => {
+  assert.equal(paperSimulatedCostAmount(100, 2, 0), 0);
+  assert.equal(paperSimulatedCostAmount(100, 2, 0.05), 0.1);
+  for (const missing of [null, undefined, NaN, Infinity, -0.01, 100.01]) {
+    assert.equal(paperSimulatedCostAmount(100, 2, missing), null);
+  }
+  assert.equal(paperSimulatedCostAmount(0, 2, 0), null);
+  assert.equal(paperSimulatedCostAmount(100, 0, 0), null);
+  assert.equal(paperSimulatedCostAmount(Number.MAX_VALUE, 2, 100), null);
+});
 
 function marketSnapshot(now: Date): TradingMarketSnapshot {
   return {
