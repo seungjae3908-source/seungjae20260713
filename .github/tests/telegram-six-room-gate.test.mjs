@@ -47,8 +47,8 @@ test('owner holdings require a configured owner member even with six chat IDs', 
   assert.throws(() => guard(value), /TELEGRAM_SIX_ROOM_CONFIG_MISSING/);
 });
 test('same guard is required before mutation, before activation, and after PM2 restart', () => {
-  assert.equal((release.match(/function requireIsolatedSixRooms\\(runtime\\) \\{/g) || []).length, 2);
-  assert.ok((release.match(/requireIsolatedSixRooms\\(env\\);/g) || []).length >= 3);
+  assert.equal((release.match(/function requireIsolatedSixRooms\(runtime\) \{/g) || []).length, 2);
+  assert.ok((release.match(/requireIsolatedSixRooms\(env\);/g) || []).length >= 3);
   assert.ok(release.indexOf('requireIsolatedSixRooms(env);') < release.indexOf('Apply and verify Production personal Telegram storage atomically'));
   assert.ok(release.lastIndexOf('requireIsolatedSixRooms(env);') > release.indexOf('TELEGRAM_POST_RESTART_IDENTITY_MISMATCH'));
 });
