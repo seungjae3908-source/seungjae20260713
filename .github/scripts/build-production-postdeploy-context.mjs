@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { verifyPostDeployMainLineage } = require('./production-postdeploy-qa-evidence.cjs');
+const { verifyPostDeployMainLineage, isActiveProductionTradingGateRun } = require('./production-postdeploy-qa-evidence.cjs');
 
 const [output, targetSha, productionDeployRunId, deploymentCompletedAt, qaStartedAt, mode = 'completed'] = process.argv.slice(2);
 const repository = String(process.env.GITHUB_REPOSITORY ?? '').trim();
@@ -70,7 +70,7 @@ const conflicts = [];
 for (const workflow of gateWorkflows) {
   const value = await api(`/actions/workflows/${workflow}/runs?per_page=100`);
   for (const run of value.workflow_runs ?? []) {
-    if (run.status !== 'completed') {
+    if (isActiveProductionTradingGateRun(run)) {
       conflicts.push({ id: run.id, name: run.name, status: run.status, headSha: run.head_sha });
     }
   }
