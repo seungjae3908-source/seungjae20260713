@@ -187,3 +187,37 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     rmSync(dir, { recursive:true, force:true });
   }
 });
+
+test('secret-masked publisher digest is generated only inside the protected deploy job', () => {
+  const owner = workflow.slice(workflow.indexOf('  owner-gate:'), workflow.indexOf('  stage-deploy:'));
+  const staging = workflow.slice(workflow.indexOf('  stage-deploy:'), workflow.indexOf('  scoped-qa:'));
+  requireAll(owner, [
+    'Require coherent post-merge release provenance',
+    'Verify Staging-only administrator password grant without exporting identity',
+    'run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs',
+  ]);
+  assert.ok(!owner.includes('--write-publisher-digest'), 'no secret-like cross-job output');
+  assert.ok(!owner.includes('publisher_digest:'), 'owner outputs contain no digest');
+  assert.ok(!workflow.includes('needs.owner-gate.outputs.publisher_digest'));
+  requireAll(staging, [
+    'Reverify Staging admin publisher within protected deploy job',
+    'SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}',
+    'SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}',
+    'ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}',
+    'ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}',
+    'runStagingAdminAuthPreflight();',
+    'appendFileSync(process.env.GITHUB_ENV,',
+    'STAGING_PUBLISHER_DIGEST=${binding.publisherDigest}',
+    'STAGING_CORE_LOCAL_PUBLISHER_DIGEST_INVALID',
+    'STAGING_CORE_LOCAL_PUBLISHER_DIGEST_MISSING',
+    'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q',
+  ]);
+  assert.ok(staging.indexOf('Reverify Staging admin publisher within protected deploy job')
+    < staging.indexOf('Recheck exact main before any Staging mutation'));
+  assert.ok(staging.indexOf('Recheck exact main before any Staging mutation')
+    < staging.indexOf('Configure protected Staging-only SSH'));
+  assert.ok(staging.indexOf('STAGING_CORE_LOCAL_PUBLISHER_DIGEST_MISSING')
+    < staging.indexOf('Deploy exact SHA using existing Staging rollback/canary isolation'));
+  assert.ok(!staging.includes('PUBLISHER_DIGEST: ${{ needs.owner-gate.outputs.publisher_digest }}'));
+  assert.ok(!staging.includes('::set-output'));
+});
