@@ -107,9 +107,21 @@ export function evaluateTradingOptimization(
   }
 
   const computedExpectedValueR = expectedValueR(economicsPlan);
+  // Automatic Paper research may rehearse a strategy before historical
+  // profitability exists. A Paper-only simulation does not grant Live
+  // execution authority, and its actual fees, spread, stop and liquidity
+  // guards are still mandatory. Formula AI stage stays stricter: it only
+  // bypasses historical research gates with signed canonical AI evidence.
+  const exploratoryPaperOnly = plan.accountMode === 'paper'
+    && policy.mode === 'automatic' && policy.pilotStage !== 'formula-ai-exception'
+    && plan.economics == null;
   const historicalEconomicsBypassed =
     (plan.accountMode === 'live' && formulaAiException?.allowed === true)
-    || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true);
+    || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true)
+    || exploratoryPaperOnly;
+  if (exploratoryPaperOnly) {
+    warnings.push('PAPER_RESEARCH_ONLY_NO_PROFITABILITY_EVIDENCE');
+  }
   if (liveOrAutomatic) {
     if (!historicalEconomicsBypassed) {
       if (!economics) {

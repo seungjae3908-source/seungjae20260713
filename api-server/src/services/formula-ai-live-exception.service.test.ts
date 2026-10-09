@@ -317,3 +317,31 @@ test('formula+AI Paper exception cannot bypass spread, daily loss, stop, or liqu
     emergencyStopped: false, serverLiveEnabled: false,
   }).blockCodes.includes('EXIT_PLAN_REQUIRED'));
 });
+
+test('Paper-only exploratory trading keeps required cost/risk checks without inventing profitability', () => {
+  const p = normalizeTradingPolicy({ ...policy(), pilotStage:'validated' });
+  const trade: TradingPlanInput = {
+    ...spotPlan(), accountMode:'paper', economics:null,
+    signalReasons:['CANONICAL_PAPER_HANDOFF'],
+  };
+  const simulated = evaluateTradingPlan(trade,p,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  });
+  assert.equal(simulated.blockCodes.includes('ECONOMICS_REQUIRED'),false);
+  assert.ok(simulated.warnings.includes('PAPER_RESEARCH_ONLY_NO_PROFITABILITY_EVIDENCE'));
+  assert.equal(simulated.allowed,true,simulated.blockCodes.join(','));
+
+  const spread = {
+    ...trade,averageSpreadPercent:null,
+  };
+  assert.ok(evaluateTradingPlan(spread,p,{
+    emergencyStopped:false,serverLiveEnabled:false,
+  }).blockCodes.includes('AVERAGE_SPREAD_REQUIRED'));
+
+  const live:TradingPlanInput = { ...trade,accountMode:'live' };
+  const notLive = evaluateTradingPlan(live,p,{
+    emergencyStopped:false,serverLiveEnabled:true,
+  });
+  assert.ok(notLive.blockCodes.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
+  assert.equal(notLive.warnings.includes('PAPER_RESEARCH_ONLY_NO_PROFITABILITY_EVIDENCE'),false);
+});
