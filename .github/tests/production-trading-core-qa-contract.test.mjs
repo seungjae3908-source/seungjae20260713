@@ -74,3 +74,15 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
   assert.ok(productionDeploy.includes("PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'"));
   assert.ok(productionDeploy.includes('Prepare safe member ALL4 policy and run Focused Trading Core Production QA'));
 });
+
+test('Trading Core Production QA restores member policy on early failures and independently of notification restore', () => {
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  assert.match(spec, /let integrationBefore: ApiResult<any>;\s+try \{\s+if \(prepareMemberAutoPolicy\)/);
+  assert.ok(spec.includes('PRODUCTION_TRADING_CORE_PREFLIGHT_RESTORE_FAILED'));
+  assert.ok(spec.includes('PRODUCTION_TRADING_CORE_RESTORE_FAILED'));
+  const finallyBlock = spec.slice(spec.indexOf('  } finally {'), spec.indexOf('  const statusAfter ='));
+  assert.ok(finallyBlock.includes('PREFERENCES_REQUEST_FAILED'));
+  assert.ok(finallyBlock.includes('POLICY_REQUEST_FAILED'));
+  assert.ok(finallyBlock.indexOf('PREFERENCES_REQUEST_FAILED') < finallyBlock.indexOf('POLICY_REQUEST_FAILED'));
+  assert.ok(finallyBlock.includes('if (restoreFailures.length > 0)'));
+});
