@@ -91,3 +91,41 @@ test('scanner and signal follow-ups reuse strict venue recognition, never "inclu
   assert.ok(holdings.includes('telegramSixRoomRoutingIsolated(env)'), 'owner holdings mirror must share six-room gate');
   assert.ok(auto.includes('telegramSixRoomRoutingIsolated({'), 'owner AUTO mirror must share six-room gate');
 });
+
+
+test('both protected Telegram preflights verify room types and bot posting rights read-only', () => {
+  const begin = 'function telegramDedicatedRoomGuard(label, chat, member) {';
+  const starts = [...release.matchAll(/function telegramDedicatedRoomGuard\(label, chat, member\) \{/g)].map(match => match.index);
+  assert.equal(starts.length, 2, 'must guard both pre-mutation and pre-activation checks');
+  const first = release.slice(starts[0], release.indexOf('const errors = [];', starts[0]));
+  const second = release.slice(starts[1], release.indexOf('const telegramPreflightErrors = [];', starts[1]));
+  const classify = vm.runInNewContext(first + '\ntelegramDedicatedRoomGuard;');
+  const classifyAgain = vm.runInNewContext(second + '\ntelegramDedicatedRoomGuard;');
+  const cases = [
+    ['KR_STOCK_CHAT', {type: 'group'}, {status:'member'}, null],
+    ['US_STOCK_CHAT', {type: 'supergroup'}, {status:'administrator'}, null],
+    ['AUTO_TRADING_CHAT', {type:'channel'}, {status:'administrator',can_post_messages:true}, null],
+    ['HOLDINGS_CHAT', {type:'channel'}, {status:'creator'}, null],
+    ['KR_STOCK_CHAT', {type:'private'}, {status:'member'}, 'KR_STOCK_CHAT_INVALID_ROOM_TYPE'],
+    ['US_STOCK_CHAT', {type:'channel'}, {status:'member'}, 'US_STOCK_CHAT_CHANNEL_POST_DENIED'],
+    ['AUTO_TRADING_CHAT', {type:'channel'}, {status:'administrator',can_post_messages:false}, 'AUTO_TRADING_CHAT_CHANNEL_POST_DENIED'],
+    ['HOLDINGS_CHAT', {type:'supergroup'}, {status:'restricted',can_send_messages:false}, 'HOLDINGS_CHAT_BOT_WRITE_DENIED'],
+    ['CRYPTO_SPOT_CHAT', {type:'supergroup'}, {status:'kicked'}, 'CRYPTO_SPOT_CHAT_BOT_MEMBERSHIP_INVALID'],
+    ['CRYPTO_FUTURES_CHAT', {type:'supergroup'}, null, 'CRYPTO_FUTURES_CHAT_BOT_MEMBERSHIP_INVALID'],
+    ['DEFAULT_CHAT', {type:'private'}, {status:'member'}, null],
+  ];
+  for (const [label, chat, member, expected] of cases) {
+    assert.equal(classify(label, chat, member), expected, label + ' first');
+    assert.equal(classifyAgain(label, chat, member), expected, label + ' second');
+  }
+  const beforeMutation = release.indexOf('Apply and verify Production personal Telegram storage atomically');
+  const activate = release.indexOf('const activationChanged = activateApprovedTelegram(');
+  assert.ok(starts[0] > 0 && starts[0] < beforeMutation, 'first read-only gate runs before DB migration');
+  assert.ok(starts[1] > beforeMutation && starts[1] < activate, 'second read-only gate runs before activation');
+  assert.equal((release.match(/getChatMember', \{ chat_id:/g) ?? []).length, 2,
+    'must read each dedicated bot membership twice across protected preflights');
+  assert.equal((release.match(/_INVALID_ROOM_TYPE/g) ?? []).length >= 4, true);
+  assert.equal(release.includes("console.log(chat.value?.result)"), false);
+  assert.equal(release.includes("console.log(membership.value?.result)"), false);
+  assert.equal(release.includes("console.log(room.value?.result)"), false);
+});
