@@ -127,3 +127,44 @@ test('market-specific high-water mark produces half compound/half reserve withou
   ], AT.getTime()+5_000);
   assert.equal(duplicate.settlementReady,false);
 });
+
+test('simultaneous net loss never mints a false 50% reserve from ordering', () => {
+  const at = new Date(AT.getTime()+1_000).toISOString();
+  const projected = projectAdminMarketCapital('us_stock', [
+    {id:'A',market:'us_stock',closedAt:at,netPnlKrw:100_000,fullCostsVerified:true,closeTimeFxVerified:true},
+    {id:'B',market:'us_stock',closedAt:at,netPnlKrw:-150_000,fullCostsVerified:true,closeTimeFxVerified:true},
+  ],AT.getTime()+5_000);
+  assert.equal(projected.operatingCapitalKrw,950_000);
+  assert.equal(projected.reserveKrw,0);
+  assert.equal(projected.newEntriesAllowed,false);
+});
+
+test('market budget admits only canonical settlement-backed compounding and never borrows from another market', () => {
+  const ready = wallets();
+  const result = projectAdminMarketCapital('us_stock', [{
+    id:'settled-us',market:'us_stock',closedAt:new Date(AT.getTime()+1_000).toISOString(),
+    netPnlKrw:100_000,fullCostsVerified:true,closeTimeFxVerified:true,
+  }],AT.getTime()+5_000);
+  const us = adminMarketPaperRiskBudget({
+    market:'us_stock',records:ready,openPlans:[],
+    verifiedCapital:result,nowMs:AT.getTime()+5_000,
+  });
+  const kr = adminMarketPaperRiskBudget({
+    market:'domestic_stock',records:ready,openPlans:[],
+    nowMs:AT.getTime()+5_000,
+  });
+  assert.equal(us.ready,true);
+  assert.equal(us.availableToTradeKrw,1_050_000);
+  assert.equal(us.reserveKrw,50_000);
+  assert.equal(kr.availableToTradeKrw,1_000_000);
+  const invalid = adminMarketPaperRiskBudget({
+    market:'us_stock',records:ready,openPlans:[],
+    verifiedCapital:projectAdminMarketCapital('us_stock',[{
+      id:'no-fx',market:'us_stock',
+      closedAt:new Date(AT.getTime()+1_000).toISOString(),
+      netPnlKrw:100_000,fullCostsVerified:true,closeTimeFxVerified:false,
+    }],AT.getTime()+5_000),nowMs:AT.getTime()+5_000,
+  });
+  assert.equal(invalid.ready,false);
+  assert.equal(invalid.availableToTradeKrw,0);
+});
