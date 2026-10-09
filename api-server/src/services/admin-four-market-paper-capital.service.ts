@@ -207,6 +207,12 @@ export function projectAdminMarketCapital(
   let reserveKrw = 0;
   let highWaterMarkKrw = ADMIN_MARKET_INITIAL_KRW;
   let totalNetPnlKrw = 0;
+  let dailyNetPnlKrw = 0;
+  let dailyLosingTrades = 0;
+  const kstDay = (at: number) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(at));
+  const today = Number.isFinite(nowMs) ? kstDay(nowMs) : '';
   const sorted = [...closings].filter((row) => row.market === market)
     .sort((a, b) => Date.parse(a.closedAt) - Date.parse(b.closedAt)
       || a.id.localeCompare(b.id));
@@ -242,6 +248,10 @@ export function projectAdminMarketCapital(
     if (batchTime == null) batchTime = at;
     seen.add(row.id);
     totalNetPnlKrw += row.netPnlKrw;
+    if (kstDay(at) === today) {
+      dailyNetPnlKrw += row.netPnlKrw;
+      if (row.netPnlKrw < 0) dailyLosingTrades += 1;
+    }
     batchNet += row.netPnlKrw;
   }
   settleBatch();
@@ -255,9 +265,14 @@ export function projectAdminMarketCapital(
     reserveKrw: rounded(reserveKrw),
     highWaterMarkKrw: rounded(highWaterMarkKrw),
     settledNetPnlKrw: rounded(totalNetPnlKrw),
+    dailyNetPnlKrw: rounded(dailyNetPnlKrw),
+    dailyLosingTrades,
     settledTrades: seen.size, blockers: Object.freeze([...new Set(errors)]),
     settlementReady: errors.length === 0,
-    newEntriesAllowed: errors.length === 0 && operatingCapitalKrw >= ADMIN_MARKET_INITIAL_KRW,
+    newEntriesAllowed: errors.length === 0
+      && operatingCapitalKrw >= ADMIN_MARKET_INITIAL_KRW
+      && dailyLosingTrades < 5
+      && dailyNetPnlKrw > -50_000,
     reserveWithdrawalAutomatic: false as const,
   });
 }
