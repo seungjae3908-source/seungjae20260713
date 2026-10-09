@@ -82,3 +82,19 @@ test('stale AUTO mode or orphaned market switches remain eligible for safe OFF d
   expect(backend).toContain("if (candidate.mode !== 'automatic') {");
   expect(backend).toContain('candidate.marketEnabled = { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false };');
 });
+
+test('stopped fixture exposes safe OFF despite mode-only AUTO and keeps the emergency stop on save', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e');
+  await page.getByTestId('trading-section-settings').click();
+  await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: '긴급정지' }).click();
+  await expect(page.getByTestId('automatic-trading-master-toggle')).toBeDisabled();
+  const safeOff = page.getByTestId('automatic-policy-safe-off-during-stop');
+  await expect(safeOff).toBeVisible();
+  page.once('dialog', async (dialog) => { await dialog.accept(); });
+  await safeOff.click();
+  await expect(page.getByRole('status')).toContainText('테스트: 비상정지 유지 · AUTO OFF 저장 완료');
+  await expect(page.getByTestId('automatic-trading-master-toggle')).toBeDisabled();
+  await expect(page.getByTestId('member-trading-resume')).toBeVisible();
+  await expect(safeOff).toHaveCount(0);
+});
