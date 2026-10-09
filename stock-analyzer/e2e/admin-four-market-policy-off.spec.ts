@@ -41,3 +41,17 @@ test('AUTO enable cannot be mapped to approval or treated as wallet creation aut
   expect(component).toContain("authorizedFetch('/api/trade-automation/policy'");
   expect(component).not.toContain("  async function save(confirmed: boolean) {\n    const outbound: UiPolicy = {\n      ...draft,\n      mode: 'automatic',");
 });
+
+test('sticky emergency stop allows stricter AUTO OFF, never a fresh AUTO ON', () => {
+  const component = code('src/components/trade-automation-settings.tsx');
+  const server = code('../api-server/src/routes/trade-automation.ts');
+  expect(component).toContain('const automaticToggleDisabled = effectiveStopped && !draft.automaticEnabled');
+  expect(component).toContain('const policySaveDisabled = effectiveStopped && draft.automaticEnabled');
+  expect(component).toContain('disabled={automaticToggleDisabled}');
+  expect(component).toContain('disabled={policySaveDisabled}');
+  expect(component).toContain('if ((current.emergencyStopped || current.newEntriesStopped) && nextEnabled) return current;');
+  expect(component).not.toContain('if (current.emergencyStopped || current.newEntriesStopped) return current;');
+  // The server always keeps sticky stop flags and refuses any new AUTO arm.
+  expect(server).toContain("if ((current.emergencyStopped || current.newEntriesStopped) && enablingAutomatic)");
+  expect(server).toContain("if (candidate.mode !== 'automatic') {");
+});
