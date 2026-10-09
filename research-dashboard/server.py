@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlsplit
 
 from v3_independence import read_v3_independence_summary
 from video_research_readback import read_video_research_readback
+from lightweight_market_watch_readback import read_watch_status
 
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
@@ -845,6 +846,8 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     candidate_performance = read_candidate_performance(root)
     temporal_crypto = read_temporal_crypto_summary(root)
     factory_runtime = read_factory_runtime_summary(root)
+    # The watch service may be absent; read-only status must never invent uptime.
+    market_watch_status = read_watch_status(root, expected_sha=os.environ.get('RESEARCH_CODE_SHA') or None)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -902,7 +905,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'cycles': cycles,
             'liquidityIndependence': liquidity_independence,
         },
-        'dataFactory': {'temporalCryptoFutures': temporal_crypto},
+        'dataFactory': {'temporalCryptoFutures': temporal_crypto, 'lightweightMarketWatch': market_watch_status},
         'factory': factory_runtime,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},

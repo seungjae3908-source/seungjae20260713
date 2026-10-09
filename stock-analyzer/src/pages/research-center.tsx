@@ -24,6 +24,7 @@ import {
 import { BottomNav } from '@/components/bottom-nav';
 import { PaperClosedLoopObserver } from '@/components/paper-closed-loop-observer';
 import { fetchResearchCenterOverview, type ResearchCandidatePerformance, type ResearchCenterOverview } from '@/lib/research-center';
+import { ResearchLightweightMarketWatchPanel } from '@/components/research-lightweight-market-watch-panel';
 import {
   answerCanonicalResearchQuestion,
   buildFullCostRows,
@@ -362,6 +363,8 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
         <TopStatus label="수익성 검증" value={overview.profitability.proven ? '충족' : '미검증'} status={overview.profitability.proven ? 'verified' : 'waiting'} detail="미검증은 수익성 없음과 다릅니다" />
         <TopStatus label="마지막 업데이트" value={formatDate(runtimeLiveness?.lastSuccessAt ?? overview.state.latestCycleAt)} status={updateStatus} detail={updateDetail} />
       </section>
+
+      <ResearchLightweightMarketWatchPanel watch={overview.dataFactory?.lightweightMarketWatch} />
 
       {!promotion ? (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs" role="status" data-testid="research-partial-state">

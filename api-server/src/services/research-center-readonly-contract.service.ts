@@ -647,6 +647,91 @@ function sanitizeShadowGroup(value: unknown) {
  * Unknown upstream fields are intentionally dropped so a future state-file,
  * account, credential, or filesystem field cannot leak through object spread.
  */
+
+const MARKET_WATCH_READBACK_CONTRACT = 'lightweight-market-watch-readback/v1';
+const MARKET_WATCH_STATES = new Set(['MISSING', 'INVALID', 'STALE', 'HOLD', 'THROTTLED', 'BLOCKED_DATA', 'OBSERVING', 'PARTIAL']);
+const WATCH_MARKETS = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
+const WATCH_HEALTHY_SOURCE = new Set(['READY', 'PARTIAL_TICKERS', 'PARTIAL_UNIVERSE']);
+const WATCH_BLOCKED_SOURCE = /^BLOCKED_[A-Z0-9_]{1,100}$/u;
+
+function emptyMarketWatch(status: 'MISSING' | 'INVALID' = 'MISSING', present = false) {
+  return {
+    contract: MARKET_WATCH_READBACK_CONTRACT,
+    status, present, researchSha: null, observedAt: null, ageMs: null,
+    marketCoverageCount: null, markets: [] as unknown[],
+    cyclesToday: null, candidatesToday: null, cyclesSinceRelease: null,
+    continuous24hProven: false, formulaCandidateProduced: false,
+    oosProven: false, paperExecutionProven: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  };
+}
+function watchSafeCount(value: unknown, upper: number) {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    && value >= 0 && value < upper ? value : null;
+}
+export function sanitizeMarketWatchReadback(value: unknown) {
+  if (value == null) return emptyMarketWatch();
+  const v = record(value);
+  if (!v || v.contract !== MARKET_WATCH_READBACK_CONTRACT
+    || typeof v.status !== 'string' || !MARKET_WATCH_STATES.has(v.status)
+    || typeof v.present !== 'boolean' || v.executionAuthority !== 'NONE'
+    || v.continuous24hProven !== false || v.formulaCandidateProduced !== false
+    || v.oosProven !== false || v.paperExecutionProven !== false
+    || v.profitabilityProven !== false) return emptyMarketWatch('INVALID', true);
+  if (v.status === 'MISSING') return v.present === false
+    ? emptyMarketWatch() : emptyMarketWatch('INVALID', true);
+  if (v.status === 'INVALID') return emptyMarketWatch('INVALID', true);
+  if (v.present !== true
+    || typeof v.researchSha !== 'string' || !SHA_PATTERN.test(v.researchSha)
+    || !Array.isArray(v.markets) || v.markets.length !== WATCH_MARKETS.length) {
+    return emptyMarketWatch('INVALID', true);
+  }
+  const observedAt = finiteOrNull(v.observedAt);
+  const ageMs = watchSafeCount(v.ageMs, 1_000_000_000);
+  const coverage = watchSafeCount(v.marketCoverageCount, 5);
+  const cyclesToday = watchSafeCount(v.cyclesToday, 1_000_000_000_000);
+  const candidatesToday = watchSafeCount(v.candidatesToday, 1_000_000_000_000);
+  const cyclesSinceRelease = watchSafeCount(v.cyclesSinceRelease, 1_000_000_000_000);
+  if (observedAt == null || observedAt <= 0 || ageMs == null || coverage == null
+    || cyclesToday == null || cyclesToday < 1 || candidatesToday == null
+    || cyclesSinceRelease == null || cyclesSinceRelease < cyclesToday) {
+    return emptyMarketWatch('INVALID', true);
+  }
+  const rows = v.markets.map((raw, index) => {
+    const row = record(raw);
+    const status = row?.status;
+    const source = row?.source;
+    const listedCount = watchSafeCount(row?.listedCount, 30_001);
+    const observedCount = watchSafeCount(row?.observedCount, 8_001);
+    const newCandidates = watchSafeCount(row?.newCandidates, 13);
+    const blocked = typeof status === 'string' && WATCH_BLOCKED_SOURCE.test(status);
+    const healthy = typeof status === 'string' && WATCH_HEALTHY_SOURCE.has(status);
+    if (!row || row.market !== WATCH_MARKETS[index]
+      || typeof source !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/u.test(source)
+      || !(blocked || healthy) || (blocked && source !== 'NONE')
+      || (healthy && source === 'NONE') || listedCount == null
+      || observedCount == null || newCandidates == null || observedCount > listedCount
+      || newCandidates > observedCount || row.executionAuthority !== 'NONE'
+      || (status === 'READY' && listedCount !== observedCount)
+      || (blocked && (newCandidates !== 0 || observedCount !== 0))) return null;
+    return { market: WATCH_MARKETS[index], status, source, listedCount, observedCount, newCandidates };
+  });
+  if (rows.some((row) => row == null)
+    || rows.filter((row) => row?.status === 'READY').length !== coverage
+    || (v.status === 'OBSERVING' && coverage !== 4)) {
+    return emptyMarketWatch('INVALID', true);
+  }
+  return {
+    contract: MARKET_WATCH_READBACK_CONTRACT,
+    status: v.status, present: true, researchSha: v.researchSha.toLowerCase(),
+    observedAt, ageMs, marketCoverageCount: coverage, markets: rows,
+    cyclesToday, candidatesToday, cyclesSinceRelease,
+    continuous24hProven: false, formulaCandidateProduced: false,
+    oosProven: false, paperExecutionProven: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  };
+}
+
 export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | null {
   const payload = record(value);
   const state = record(payload?.state);
@@ -662,6 +747,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const ledger = sanitizePaperLedger(paper?.ledger);
   const candidatePerformance = sanitizeCandidatePerformance(paper?.candidatePerformance);
   const temporalCryptoFutures = sanitizeTemporalCryptoSummary(dataFactory?.temporalCryptoFutures);
+  const lightweightMarketWatch = sanitizeMarketWatchReadback(dataFactory?.lightweightMarketWatch);
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
@@ -698,7 +784,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
     research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
-    dataFactory: { temporalCryptoFutures },
+    dataFactory: { temporalCryptoFutures, lightweightMarketWatch },
     factory,
     paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
