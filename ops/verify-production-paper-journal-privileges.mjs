@@ -56,6 +56,10 @@ function verifyStatic() {
     === 'psql_process_failed', 'process failure classification mismatch');
   assert(script.includes('PAPER_JOURNAL_ROWS_CHANGED'), 'row-invariance assertion missing');
   assert(script.includes('PAPER_JOURNAL_POLICY_CONTRACT_INVALID'), 'membership policy verification missing');
+  assert(script.includes('policy_count not in (24, 27)'),
+    'legacy Paper grant verification must accept only canonical 24-policy or protected 27-policy DB state');
+  assert(script.includes("execute 'select public.admin_four_paper_wallet_rls_guard_ready()'"),
+    '27-policy admin V2 rollout must attest exact wallet and canonical-order RLS before passing');
   assert(script.includes('PAPER_JOURNAL_COLUMN_CONTRACT_INVALID'), 'column verification missing');
   assert(script.includes('PAPER_JOURNAL_PRIMARY_KEY_INVALID'), 'primary key verification missing');
   assert(script.includes("'authenticated_crud_grants',24"), 'authenticated CRUD verification missing');
