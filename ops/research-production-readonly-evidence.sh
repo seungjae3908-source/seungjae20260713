@@ -186,7 +186,7 @@ emit_task_failure_signature() {
       const profile = String(process.argv[1] ?? "");
       const taskId = String(process.argv[2] ?? "");
       const signatures = new Set();
-      const domain = /\b(?:PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE|SHADOW|ETH_V6|RESEARCH)_[A-Z0-9_]{2,96}\b/gu;
+      const domain = /\b(?:FORMULA_QUEUE|FORMULA_INTAKE|PAPER_FORWARD|PAPER_STATE|AUTHORITATIVE|SHADOW|ETH_V6|RESEARCH)_[A-Z0-9_]{2,96}\b/gu;
       for (const match of raw.match(domain) ?? []) signatures.add(match);
       for (const code of [
         "ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNSUPPORTED_DIR_IMPORT",
@@ -202,7 +202,8 @@ emit_task_failure_signature() {
       const values = [...signatures].sort().slice(0, 24);
       const categories = new Set();
       for (const value of values) {
-        if (value.startsWith("PAPER_FORWARD_")) categories.add("PAPER_FORWARD_RUNTIME");
+        if (value.startsWith("FORMULA_QUEUE_") || value.startsWith("FORMULA_INTAKE_")) categories.add("FORMULA_TRAIN_RUNTIME");
+        else if (value.startsWith("PAPER_FORWARD_")) categories.add("PAPER_FORWARD_RUNTIME");
         else if (value.startsWith("PAPER_STATE_")) categories.add("PAPER_STATE");
         else if (value.startsWith("AUTHORITATIVE_")) categories.add("AUTHORITATIVE_RUNTIME");
         else if (value.startsWith("SHADOW_") || value.startsWith("ETH_V6_")) categories.add("SHADOW_RUNTIME");
@@ -230,6 +231,7 @@ emit_task_failure_signature() {
   fi
 }
 
+emit_task_failure_signature forward formula-backtest-queue
 emit_task_failure_signature forward shadow-forward
 emit_task_failure_signature forward paper-forward
 
