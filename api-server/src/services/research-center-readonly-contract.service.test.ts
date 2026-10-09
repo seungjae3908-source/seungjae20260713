@@ -228,6 +228,12 @@ function marketWatch() {
         executionAuthority: 'NONE' },
     ],
     cyclesToday: 110, candidatesToday: 12, cyclesSinceRelease: 210,
+    prospectiveSampleStudy: {
+      status: 'PUBLIC_PRICE_OBSERVATION_ONLY', pendingCount: 3,
+      observedCoarseToday: 4, blockedToday: 2, untrackedThisCycle: 1,
+      economicEvidenceCredit: 0, paperCredit: 0, oosCredit: 0,
+      privateRawSymbol: 'SECRET_SYMBOL',
+    },
     continuous24hProven: false, formulaCandidateProduced: false,
     oosProven: false, paperExecutionProven: false,
     profitabilityProven: false, executionAuthority: 'NONE',
@@ -246,9 +252,12 @@ test('market watch readback passes only bounded public aggregate counts', () => 
   assert.equal(actual.marketCoverageCount, 2);
   assert.equal(actual.markets.length, 4);
   assert.equal(actual.oosProven, false);
+  assert.equal(actual.prospectiveSampleStudy?.observedCoarseToday, 4);
+  assert.equal(actual.prospectiveSampleStudy?.pendingCount, 3);
   assert.equal(actual.executionAuthority, 'NONE');
   const encoded = JSON.stringify(actual);
   assert.equal(encoded.includes('rawAccount'), false);
+  assert.equal(encoded.includes('SECRET_SYMBOL'), false);
   assert.equal(encoded.includes('/root/research-private'), false);
   const full = validOverview();
   Object.assign(full.dataFactory, { lightweightMarketWatch: marketWatch() });
@@ -260,6 +269,22 @@ test('market watch readback passes only bounded public aggregate counts', () => 
   assert.equal(factory.lightweightMarketWatch.status, 'PARTIAL');
   assert.equal(factory.lightweightMarketWatch.marketCoverageCount, 2);
 });
+test('coarse sample study cannot claim economic success, infinite counts or orders', () => {
+  const base = marketWatch();
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, prospectiveSampleStudy: { ...base.prospectiveSampleStudy, economicEvidenceCredit: 1 },
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, prospectiveSampleStudy: { ...base.prospectiveSampleStudy, pendingCount: 1025 },
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, prospectiveSampleStudy: { ...base.prospectiveSampleStudy, paperCredit: 1 },
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, prospectiveSampleStudy: { ...base.prospectiveSampleStudy, status: 'OOS_PASS' },
+  }).status, 'INVALID');
+});
+
 test('market watch readback rejects forged orders, full coverage, counts and paths', () => {
   const x = marketWatch();
   assert.equal(sanitizeMarketWatchReadback({ ...x, executionAuthority: 'LIVE' }).status, 'INVALID');

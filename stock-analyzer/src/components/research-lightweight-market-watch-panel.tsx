@@ -44,6 +44,7 @@ export function ResearchLightweightMarketWatchPanel({
   const fresh = summary?.status === 'OBSERVING' || summary?.status === 'PARTIAL';
   const liveMarkets = summary?.marketCoverageCount ?? null;
   const markets = summary?.markets ?? [];
+  const prospective = summary?.prospectiveSampleStudy ?? null;
   return (
     <section
       aria-label="24시간 경량 시장 감시 상태"
@@ -88,6 +89,20 @@ export function ResearchLightweightMarketWatchPanel({
             </p>
           </div>
         ))}
+      </div>
+      <div className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
+        data-testid="research-market-watch-prospective">
+        <strong>20분 후속 공개시세 관찰 (UTC 당일 기준)</strong>
+        <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <p>추적 중 {number(prospective?.pendingCount ?? null)}건</p>
+          <p>시세 관찰 완료 {number(prospective?.observedCoarseToday ?? null)}건</p>
+          <p>자료 부족·차단 {number(prospective?.blockedToday ?? null)}건</p>
+          <p>이번 주기 미추적 {number(prospective?.untrackedThisCycle ?? null)}건</p>
+        </div>
+        <p className="mt-1 text-muted-foreground">
+          완료는 20분 공개시세 표본 조건 충족만 의미하며 체결·실현수익·수익성 증거가 아닙니다.
+          거래비용·OOS·Paper 검증 표본은 0건으로 별도 관리합니다.
+        </p>
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground" data-testid="research-market-watch-boundary">
         시세 감시 후보는 매수·매도 신호가 아닙니다. 24시간 연속 가동,

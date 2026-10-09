@@ -207,6 +207,16 @@ export interface ResearchLightweightMarketWatch {
   cyclesToday: number | null;
   candidatesToday: number | null;
   cyclesSinceRelease: number | null;
+  prospectiveSampleStudy?: {
+    status: 'PUBLIC_PRICE_OBSERVATION_ONLY';
+    pendingCount: number;
+    observedCoarseToday: number;
+    blockedToday: number;
+    untrackedThisCycle: number;
+    economicEvidenceCredit: 0;
+    paperCredit: 0;
+    oosCredit: 0;
+  } | null;
   continuous24hProven: false;
   formulaCandidateProduced: false;
   oosProven: false;

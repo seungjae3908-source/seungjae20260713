@@ -31,7 +31,7 @@ def blank(status='MISSING', present=False):
         'researchSha': None, 'observedAt': None, 'ageMs': None,
         'marketCoverageCount': None, 'markets': [],
         'cyclesToday': None, 'candidatesToday': None,
-        'cyclesSinceRelease': None,
+        'cyclesSinceRelease': None, 'prospectiveSampleStudy': None,
         'continuous24hProven': False, 'formulaCandidateProduced': False,
         'oosProven': False, 'paperExecutionProven': False,
         'profitabilityProven': False, 'executionAuthority': 'NONE',
@@ -53,6 +53,42 @@ def time_ms(value, now_ms):
         return n if 0 < n <= now_ms + 5000 else None
     except (OverflowError, ValueError, TypeError):
         return None
+
+
+
+def summarize_prospective_study(raw, stats):
+    """Expose bounded public-price observation counts, never trade samples."""
+    row = raw.get('prospectiveObservation')
+    keys = ('observedCoarseToday', 'blockedProspectiveToday')
+    if row is None and all(key not in stats for key in keys):
+        return None  # Compatibility with older status snapshots.
+    if not isinstance(row, dict) or row.get('status') != 'PUBLIC_TICKER_SNAPSHOTS_ONLY' \
+            or row.get('executionAuthority') != 'NONE':
+        return False
+    if any(type(row.get(key)) is not int or row[key] != 0
+           for key in ('economicEvidenceCredit', 'paperCredit', 'oosCredit')):
+        return False
+    bounds = (
+        ('pendingCount', 1025),
+        ('newlyObservedCoarse', 1025),
+        ('newlyBlockedData', 1025),
+        ('notTrackedDueToCapacityOrSource', 49),
+    )
+    if any(not bounded_count(row.get(key), cap) for key, cap in bounds):
+        return False
+    if any(not bounded_count(stats.get(key)) for key in keys):
+        return False
+    if stats['observedCoarseToday'] < row['newlyObservedCoarse'] \
+            or stats['blockedProspectiveToday'] < row['newlyBlockedData']:
+        return False
+    return {
+        'status': 'PUBLIC_PRICE_OBSERVATION_ONLY',
+        'pendingCount': row['pendingCount'],
+        'observedCoarseToday': stats['observedCoarseToday'],
+        'blockedToday': stats['blockedProspectiveToday'],
+        'untrackedThisCycle': row['notTrackedDueToCapacityOrSource'],
+        'economicEvidenceCredit': 0, 'paperCredit': 0, 'oosCredit': 0,
+    }
 
 
 def summarize_watch(raw, now_ms=None, expected_sha=None):
@@ -135,6 +171,9 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
             or not bounded_count(stats.get('cyclesSinceRelease')) \
             or stats['cyclesSinceRelease'] < stats['cyclesToday']:
         return blank('INVALID', True)
+    prospective_study = summarize_prospective_study(raw, stats)
+    if prospective_study is False:
+        return blank('INVALID', True)
     coverage = sum(m['status'] == 'READY' for m in markets)
     usable = sum(m['status'] in SOURCE_STATUSES for m in markets)
     if (raw['status'] == 'OBSERVING_ALL_FOUR' and coverage != 4) \
@@ -159,6 +198,7 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
         'cyclesToday': stats['cyclesToday'],
         'candidatesToday': stats['candidatesToday'],
         'cyclesSinceRelease': stats['cyclesSinceRelease'],
+        'prospectiveSampleStudy': prospective_study,
     }
 
 
