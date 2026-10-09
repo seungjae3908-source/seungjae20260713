@@ -1,0 +1,236 @@
+name: Telegram-Only Staging QA (Read-Only / No Deploy)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/telegram-only-staging-qa.yml
+      - .github/tests/telegram-only-staging-qa.test.mjs
+      - ops/telegram-only-staging-readonly.mjs
+      - ops/telegram-sixroom-vault-readonly-preflight.mjs
+      - api-server/test.mjs
+      - api-server/package.json
+      - 'api-server/src/**/*telegram*'
+      - 'api-server/src/features/user-broker-telegram/**'
+      - 'api-server/scripts/*telegram*'
+      - 'stock-analyzer/src/**/*telegram*'
+      - 'ops/*telegram*'
+      - '.github/workflows/*telegram*'
+      - '.github/tests/*telegram*'
+      - docs/telegram-only-staging-qa.md
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: telegram-only-staging-qa-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  telegram-contract:
+    name: Telegram-only mocked routing, delivery formatting, and safety tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Telegram-only service tests (no Browser, no network delivery)
+        run: pnpm --dir api-server test:telegram
+      - name: Telegram routing, Vault and Staging boundary contracts
+        run: |
+          node --test \
+            .github/tests/telegram-sixroom-vault-readonly-preflight.test.mjs \
+            .github/tests/telegram-sixroom-readonly-diagnostics.test.mjs \
+            .github/tests/telegram-six-room-gate.test.mjs \
+            .github/tests/telegram-database-evidence.test.mjs \
+            .github/tests/telegram-only-staging-qa.test.mjs
+
+  protected-staging-network:
+    name: Staging Telegram-only network and exact-SHA evidence, no send/deploy
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-staging-qa ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    permissions:
+      contents: read
+      issues: write
+    env:
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Parse owner command with immutable exact SHA
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const match = /^\/run-telegram-staging-qa ([0-9a-f]{40})$/u.exec(String(process.env.BODY ?? '').trim());
+          if (!match) {
+            console.error('TELEGRAM_STAGING_EXACT_SHA_REQUIRED');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\n');
+          NODE
+      - name: Require event checkout equals current immutable main
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$TARGET_SHA" = "$(git rev-parse origin/main)"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          echo 'TELEGRAM_STAGING_EXACT_MAIN_VERIFIED'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned workspace dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Run only Telegram mock/contract tests on exact merged main
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server test:telegram
+          node --test \
+            .github/tests/telegram-sixroom-vault-readonly-preflight.test.mjs \
+            .github/tests/telegram-sixroom-readonly-diagnostics.test.mjs \
+            .github/tests/telegram-six-room-gate.test.mjs \
+            .github/tests/telegram-database-evidence.test.mjs \
+            .github/tests/telegram-only-staging-qa.test.mjs
+      - name: Configure isolated Staging SSH, fail closed without known host pinning
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$STAGING_SSH_HOST" && -n "$STAGING_SSH_USER" ]]
+          [[ -n "$STAGING_SSH_PRIVATE_KEY" && -n "$STAGING_SSH_KNOWN_HOSTS" ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Inspect only Staging PM2 and Telegram IPv4/TLS network
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          report="$RUNNER_TEMP/telegram-only-staging-readonly.json"
+          printf 'STAGING_TELEGRAM_REPORT=%s\n' "$report" >> "$GITHUB_ENV"
+          # TARGET_SHA has already been restricted to a lowercase 40-char hex SHA.
+          if ! ssh -i "$HOME/.ssh/id_ed25519" -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            "TELEGRAM_STAGING_TARGET_SHA=$TARGET_SHA TELEGRAM_STAGING_READONLY_EXECUTE=true node --input-type=module -" \
+            < ops/telegram-only-staging-readonly.mjs > "$report" \
+            2> "$RUNNER_TEMP/telegram-staging-ssh-redacted.stderr"; then
+            echo 'TELEGRAM_STAGING_READONLY_TRANSPORT_FAILED' >&2
+            exit 1
+          fi
+          node - "$report" "$TARGET_SHA" <<'NODE'
+          const fs = require('node:fs');
+          const r = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expected = [
+            'schemaVersion','scope','targetSha','pm2Sha','markerSha','pm2Online',
+            'networkPath','classification','botIdentityVerified',
+            'roomPostingVerified','telegramSends','financialMutations',
+            'stagingDeployed','productionDeployed','secretValuesRecorded',
+          ];
+          const safe = [
+            'NOT_CHECKED','IPV4_DNS_FAILED','IPV4_DNS_TIMEOUT','IPV4_TLS_READY',
+            'IPV4_TLS_TIMEOUT','IPV4_TLS_CERT_FAILED','IPV4_TLS_CONNECT_FAILED',
+          ];
+          if (JSON.stringify(Object.keys(r).sort()) !== JSON.stringify(expected.sort())
+            || r.schemaVersion !== 'telegram-only-staging-readonly-v1'
+            || r.scope !== 'TELEGRAM_ONLY_STAGING_NETWORK'
+            || r.targetSha !== process.argv[3]
+            || ![r.pm2Sha,r.markerSha].every(x => x === null || /^[0-9a-f]{40}$/u.test(x))
+            || typeof r.pm2Online !== 'boolean'
+            || !safe.includes(r.networkPath)
+            || !/^[A-Z_]+$/u.test(String(r.classification))
+            || r.botIdentityVerified !== false || r.roomPostingVerified !== false
+            || r.telegramSends !== 0 || r.financialMutations !== 0
+            || r.stagingDeployed !== false || r.productionDeployed !== false
+            || r.secretValuesRecorded !== false) {
+            console.error('TELEGRAM_STAGING_UNSAFE_OR_INVALID_EVIDENCE');
+            process.exit(1);
+          }
+          console.log('TELEGRAM_STAGING_SANITIZED_EVIDENCE_VALID');
+          NODE
+      - name: Report exact Staging-only classification, never claim bot delivery
+        uses: actions/github-script@v7
+        env:
+          REPORT: ${{ env.STAGING_TELEGRAM_REPORT }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const v = JSON.parse(fs.readFileSync(process.env.REPORT, 'utf8'));
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 1555,
+              body: [
+                'TELEGRAM-ONLY STAGING QA (NO DEPLOY / NO SEND)',
+                '- Exact main: ' + v.targetSha,
+                '- Staging PM2 SHA: ' + (v.pm2Sha || 'unverified'),
+                '- Staging marker SHA: ' + (v.markerSha || 'unverified'),
+                '- Staging PM2 online: ' + String(v.pm2Online),
+                '- Token-free Telegram IPv4/TLS: ' + v.networkPath,
+                '- Network-only classification: ' + v.classification,
+                '- Actual bot identity / six-room posting verified: false / false',
+                '- Staging deployments / Production deployments: 0 / 0',
+                '- Telegram messages / financial mutations: 0 / 0',
+                '- Secret values or chat IDs recorded: false',
+                '- This scoped QA NEVER replaces required release-wide Staging/CI gates.',
+              ].join('\n'),
+            });
+      - name: Reject green result for stale Staging runtime or blocked network
+        env:
+          REPORT: ${{ env.STAGING_TELEGRAM_REPORT }}
+        run: |
+          set -Eeuo pipefail
+          node - "$REPORT" <<'NODE'
+          const fs = require('node:fs');
+          const r = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (r.classification !== 'STAGING_TELEGRAM_NETWORK_ONLY_PASS'
+            || r.networkPath !== 'IPV4_TLS_READY'
+            || r.pm2Online !== true
+            || r.targetSha !== r.pm2Sha || r.pm2Sha !== r.markerSha) {
+            console.error('TELEGRAM_STAGING_SCOPE_NOT_READY');
+            console.error('Safe classification: ' + r.classification);
+            console.error('Safe network code: ' + r.networkPath);
+            process.exit(1);
+          }
+          console.log('TELEGRAM_STAGING_NETWORK_ONLY_PASS');
+          NODE
