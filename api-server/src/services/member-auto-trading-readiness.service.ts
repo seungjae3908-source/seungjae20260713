@@ -29,11 +29,20 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   if (!paperWalletReady) blockers.push('BACKGROUND_PAPER_WALLET_REQUIRED');
 
   const enabledMarketCount = Object.values(policy.marketEnabled).filter((value) => value === true).length;
+  const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
+  const routableMarkets = [
+    policy.marketEnabled.domestic_stock && policy.exchangeEnabled[domesticBroker],
+    policy.marketEnabled.us_stock && policy.exchangeEnabled.kiwoom,
+    policy.marketEnabled.crypto_spot && policy.exchangeEnabled.upbit,
+    policy.marketEnabled.crypto_futures && policy.exchangeEnabled.bitget,
+  ];
+  const connectedPolicyMarketCount = routableMarkets.filter((value) => value === true).length;
   const strategyAllowlistReady = Array.isArray(policy.enabledStrategies)
     && policy.enabledStrategies.some((strategy) => typeof strategy === 'string' && strategy.trim().length > 0);
   if (policy.mode !== 'automatic' || policy.automaticEnabled !== true) blockers.push('BACKGROUND_MEMBER_AUTO_POLICY_OFF');
   if (policy.emergencyStopped || policy.newEntriesStopped || input.globalStopped) blockers.push('BACKGROUND_TRADING_STOP_ACTIVE');
   if (enabledMarketCount === 0) blockers.push('BACKGROUND_MEMBER_MARKETS_DISABLED');
+  if (connectedPolicyMarketCount === 0) blockers.push('BACKGROUND_MARKET_PROVIDER_POLICY_DISABLED');
   if (!strategyAllowlistReady) blockers.push('BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED');
 
   // A shared Worker might gain Live authority under separate environment
@@ -49,6 +58,7 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     && tickMs <= nowMs + 5_000
     && nowMs - tickMs <= 360_000;
   if (!workerTickFresh) blockers.push('BACKGROUND_WORKER_TICK_NOT_HEALTHY');
+  if (workerHealth.newEntriesFailClosed !== false) blockers.push('BACKGROUND_NEW_ENTRIES_FAIL_CLOSED');
 
   const handoffReady = workerTickFresh && workerHealth.handoffStatus === 'READY'
     && workerHealth.handoffReady === true;
@@ -67,6 +77,7 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     paperWalletReady,
     strategyAllowlistReady,
     enabledMarketCount,
+    connectedPolicyMarketCount,
     paperOnlyMode,
     workerTickFresh,
     handoffReady,
