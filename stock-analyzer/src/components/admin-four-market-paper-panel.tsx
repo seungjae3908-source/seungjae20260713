@@ -117,7 +117,10 @@ export function AdminFourMarketPaperPanel() {
     return () => { controller.abort(); window.clearInterval(id); };
   }, [revision]);
   async function prepare() {
-    if (!status || status.ready || busy || failed) return;
+    if (!status || status.ready || busy || failed
+      || status.creationBlockers.includes('ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED')
+      || status.creationBlockers.includes('ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF')
+      || status.creationBlockers.includes('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF')) return;
     // The current server's policy may still be 100k; the explicit action
     // changes the Paper budgeting floor without expanding maxOrder or leverage.
     if (!window.confirm(
@@ -156,6 +159,7 @@ export function AdminFourMarketPaperPanel() {
   const hasHistoricalConflict = status?.creationBlockers.some((code) =>
     code.includes('PARTIAL_WALLET') || code.includes('EXISTING_ACCOUNT')
     || code.includes('EPOCH_') || code.includes('WALLETS_ALREADY_CREATED')) === true;
+  const databaseGuardMissing = status?.creationBlockers.includes('ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED') === true;
   const memberAutoActive = status?.creationBlockers.includes('ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF') === true;
   const serverLiveAutoActive = status?.creationBlockers.includes('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF') === true;
   return (
@@ -200,12 +204,14 @@ export function AdminFourMarketPaperPanel() {
           {hasHistoricalConflict ? ' 기존 계좌·거래 이력 충돌을 먼저 확인해야 합니다.' : ''}
           {memberAutoActive || serverLiveAutoActive
             ? ' 자본 정책 변경 전 자동매매와 실자동매매 권한을 OFF로 해주세요.' : ''}
+          {databaseGuardMissing
+            ? ' 관리자 지갑 DB 접근 보호가 검증되지 않아 계좌 생성 버튼을 차단했습니다.' : ''}
         </p>
       ) : null}
       {message ? <p role="status" className="mt-2 text-xs">{message}</p> : null}
       {!status?.ready ? (
         <button type="button" onClick={() => void prepare()}
-          disabled={!status || failed || busy || hasHistoricalConflict || memberAutoActive || serverLiveAutoActive}
+          disabled={!status || failed || busy || hasHistoricalConflict || memberAutoActive || serverLiveAutoActive || databaseGuardMissing}
           className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold disabled:opacity-50"
           data-testid="admin-four-market-paper-prepare">
           {busy ? '서버 안전검증 및 계좌 준비 중' : '4시장 각각 100만원 계좌 준비'}
