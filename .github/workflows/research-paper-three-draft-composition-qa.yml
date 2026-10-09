@@ -77,7 +77,7 @@ jobs:
             "observer:$NATURAL_OBSERVER_SHA"; do
             source="${pair%%:*}"
             expected="${pair#*:}"
-            test "$(git -C "$(source)" rev-parse HEAD)" = "$(expected)"
+            test "$(git -C "$source" rev-parse HEAD)" = "$expected"
           done
           test "$LIVE_TRADING" = false
           test "$AUTO_TRADING" = false
@@ -208,10 +208,10 @@ jobs:
             src/services/trade-automation-unified-journal-adapter.test.ts \
             src/services/trade-execution-pre-submission.test.ts \
             src/routes/paper-journal.smoke.test.ts; do
-            id="$(basename "$(source)" .ts)"
-            pnpm exec esbuild "$(source)" --bundle --platform=node --format=cjs --target=node22 \
-              --outfile="$(RUNNER_TEMP)/composed-$(id).cjs"
-            node --test "$(RUNNER_TEMP)/composed-$(id).cjs"
+            id="$(basename "$source" .ts)"
+            pnpm exec esbuild "$source" --bundle --platform=node --format=cjs --target=node22 \
+              --outfile="$RUNNER_TEMP/composed-$id.cjs"
+            node --test "$RUNNER_TEMP/composed-$id.cjs"
           done
 
       - name: Install isolated Chromium
