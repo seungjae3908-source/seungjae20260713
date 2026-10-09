@@ -11,6 +11,7 @@
 \ir ../migrations/2026080202_release_candidate_permissions_phase8.sql
 \ir ../migrations/2026080203_phase8_paper_capability_rls.sql
 \ir ../migrations/2026080301_trade_automation_integration.sql
+\ir ../migrations/2026080502_trade_automation_safety_hardening.sql
 \ir ../migrations/2026080501_paper_journal_authenticated_privileges.sql
 \ir ../migrations/2026080502_member_permission_audit_authenticated_privileges.sql
 \ir ../migrations/2026081501_personal_telegram_storage.sql
@@ -18,5 +19,6 @@
 \ir ../migrations/2026082704_member_watchlist_items.sql
 \ir ../migrations/2026100601_member_access_s_ai_hardening.sql
 \ir ../migrations/2026100801_member_security_definer_lockdown.sql
+\ir ../migrations/2026100901_admin_four_paper_wallet_rls_guard.sql
 \ir staging-bootstrap-assert.sql
 \ir staging-audit-privilege-assert.sql
