@@ -3,6 +3,7 @@ name: Production PM2 Watch Normalization
 on:
   pull_request:
     paths:
+      - .github/tests/production-pm2-concurrency-scope.test.mjs
       - .github/workflows/production-pm2-watch-normalize.yml
       - ops/normalize-production-pm2-watch.sh
       - ops/deploy-production.sh
@@ -17,7 +18,14 @@ permissions:
   statuses: read
 
 concurrency:
-  group: stock-app-production-live
+  group: >-
+    ${{ github.event_name == 'issue_comment'
+        && github.event.issue.number == 23
+        && github.event.comment.user.login == 'seungjae3908-source'
+        && github.event.comment.author_association == 'OWNER'
+        && startsWith(github.event.comment.body, '/normalize-production-pm2-watch ')
+        && 'stock-app-production-live'
+        || format('production-pm2-watch-normalize-validation-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -39,6 +47,8 @@ jobs:
       - name: Verify Production watch-off contract
         working-directory: api-server
         run: node scripts/verify-production-verification-contract.mjs
+      - name: Verify PM2 concurrency command scope
+        run: node --test .github/tests/production-pm2-concurrency-scope.test.mjs
 
   normalize:
     name: Protected one-time Production PM2 watch normalization
