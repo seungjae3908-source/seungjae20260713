@@ -174,7 +174,8 @@ export function scannerTelegramRoomFor(
 }
 
 export function scannerTelegramRoomChatId(room: ScannerTelegramRoom): string | null {
-  return telegramMarketRoomChatId(room, process.env, { allowLegacyFallback: true });
+  // Dedicated rooms are mandatory: never send a market signal to a shared legacy room.
+  return telegramMarketRoomChatId(room, process.env);
 }
 
 export function scannerTelegramInput(
