@@ -92,6 +92,35 @@ Paper, Journal or Telegram closed loop. An authenticated Research Center UI
 readback is a separate review/implementation step (avoid copying raw files or
 creating an unauthenticated output route).
 
+## Prospective price-movement study — new Draft addition (NOT profitability)
+
+After a provisional 2-minute public ticker detection, the same bounded worker
+tracks real, independently timestamped **future public ticker snapshots** for
+a 20-minute target. It records sampled favorable/adverse price excursions,
+number of future observations, actual elapsed time, and explicit missing-data
+blockers. This is **not** a candle-high/low, trade fill, executable entry,
+market-neutral return, take-profit/stop-loss execution, net PnL, full-cost
+result, OOS/walk-forward PASS, or proof of monthly 20%-100% performance.
+
+- The first snapshot creates a **pending research observation only**.
+- Following quotes must come from the **same market and public data source**,
+  with strictly newer timestamps; no after-horizon price is counted.
+- At least four future snapshots and a final quote within the last three
+  minutes of the 20-minute target are required, with no sampled gap >6 min.
+  If missing or the source changes, outcome is `BLOCKED_DATA` with no economic credit.
+- Success is explicitly called `OBSERVED_COARSE` (not `PASS`/`SETTLED`); a
+  DOWN observation in stocks or spot never implies permission for SHORT.
+- Active future studies are limited to **1,024** per instance; excess discovery
+  observations are counted as untracked, **never counted as successful**.
+- Outcomes are appended to `watch/outcomes/YYYY-MM-DD.jsonl` with a
+  deterministic `outcomeId`. Storage semantics are **at-least-once**, so any later
+  research consumer MUST deduplicate by outcomeId across crash/restart.
+- The existing read-only Research Center continues to show only market feed
+  status and provisional discoveries; pending/complete ticker studies do not
+  implicitly qualify a FormulaCandidate, AI review, Paper order or trading signal.
+  This Draft does not create any queue consumer, change existing signal gates,
+  or activate the systemd worker.
+
 ## Safe preflight and required follow-on steps
 
 1. Confirm `nproc=2`, MemAvailable, disk floor >=5 GiB, swap activity,
