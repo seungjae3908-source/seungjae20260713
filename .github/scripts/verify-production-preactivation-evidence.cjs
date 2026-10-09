@@ -95,6 +95,8 @@ if ((!v3Full && !v4Scoped)
   || activation?.bitgetPositionMode !== 'one_way_mode'
   || activation?.bitgetMarginModePolicy !== 'isolated'
   || activation?.bitgetLeveragePolicy !== '2-7'
+  || activation?.bitgetAdministratorLeveragePolicy !== '2-7'
+  || activation?.bitgetMemberLeveragePolicy !== '2-3'
   || activation?.duplicateWorkerExecutionCount !== 0
   || activation?.pm2FlagDriftCount !== 0
   || activation?.legacyCryptoAutoAuthorityGranted !== false
