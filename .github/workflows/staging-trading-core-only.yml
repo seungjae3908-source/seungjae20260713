@@ -81,7 +81,6 @@ jobs:
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
       action: ${{ steps.target.outputs.action }}
-      publisher_digest: ${{ steps.publisher.outputs.publisher_sha256 }}
     env:
       STAGING_ACTION: ${{ inputs.action }}
       STAGING_RUN_FULL_VALIDATION: 'false'
@@ -179,15 +178,14 @@ jobs:
           if (db.hostname === 'bawcbkoyovbeajkrnduq.supabase.co')
             throw new Error('STAGING_CORE_PRODUCTION_DATABASE_FORBIDDEN');
           NODE
-      - name: Verify Staging-only administrator password grant and snapshot publisher digest
-        id: publisher
+      - name: Verify Staging-only administrator password grant without exporting identity
         if: steps.target.outputs.action == 'deploy'
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
           ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
-        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs --write-publisher-digest
+        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs
       - name: Preflight-only result (does not deploy or change any environment)
         if: steps.target.outputs.action == 'preflight'
         run: |
@@ -202,7 +200,6 @@ jobs:
     timeout-minutes: 75
     env:
       TARGET_SHA: ${{ needs.owner-gate.outputs.target_sha }}
-      PUBLISHER_DIGEST: ${{ needs.owner-gate.outputs.publisher_digest }}
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
@@ -219,13 +216,32 @@ jobs:
           ref: ${{ needs.owner-gate.outputs.target_sha }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Reverify Staging admin publisher within protected deploy job
+        env:
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { runStagingAdminAuthPreflight } from './api-server/scripts/verify-staging-admin-auth-preflight.mjs';
+          const binding = await runStagingAdminAuthPreflight();
+          if (!/^[0-9a-f]{64}$/.test(binding.publisherDigest)) {
+            throw new Error('STAGING_CORE_LOCAL_PUBLISHER_DIGEST_INVALID');
+          }
+          // Same-job GITHUB_ENV, never a job output: GH discards secret-like job outputs.
+          // The auth helper registers ::add-mask:: before the value is written.
+          appendFileSync(process.env.GITHUB_ENV, `STAGING_PUBLISHER_DIGEST=${binding.publisherDigest}\n`);
+          NODE
       - name: Recheck exact main before any Staging mutation
         run: |
           set -Eeuo pipefail
           git fetch --no-tags origin main
           [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]] || { echo 'STAGING_CORE_MAIN_MOVED_BEFORE_DEPLOY' >&2; exit 1; }
           [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
-          [[ "$PUBLISHER_DIGEST" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          [[ "${STAGING_PUBLISHER_DIGEST:-}" =~ ^[0-9a-f]{64}$ ]] || { echo 'STAGING_CORE_LOCAL_PUBLISHER_DIGEST_MISSING' >&2; exit 1; }
       - name: Configure protected Staging-only SSH
         run: |
           set -Eeuo pipefail
@@ -250,7 +266,7 @@ jobs:
             printf 'STAGING_SUPABASE_URL=%q\n' "$STAGING_SUPABASE_URL"
             printf 'STAGING_SUPABASE_ANON_KEY=%q\n' "$STAGING_SUPABASE_ANON_KEY"
             printf 'STAGING_SUPABASE_SECRET_KEY=%q\n' "$STAGING_SUPABASE_SECRET_KEY"
-            printf 'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_DIGEST"
+            printf 'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$STAGING_PUBLISHER_DIGEST"
           } > "$local_secret_file"
           chmod 600 "$local_secret_file"
           scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$local_secret_file" "$STAGING_SSH_USER@$STAGING_SSH_HOST:$REMOTE_SECRET_FILE"
