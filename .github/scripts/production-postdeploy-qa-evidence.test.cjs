@@ -121,6 +121,9 @@ test('only executing Trading Gate workflows block post-deploy QA; PR checks are 
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'waiting'}), true);
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'in_progress'}), true);
   assert.equal(isActiveProductionTradingGateRun({event:'workflow_dispatch', status:'queued'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'workflow_dispatch', status:'in_progress'}), true);
+  assert.equal(isActiveProductionTradingGateRun({event:'pull_request', status:'waiting'}), false);
+  assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed', conclusion:'failure'}), false);
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed'}), false);
 });
 test('postdeploy main movement requires proven fast-forward ancestry, not a forced or diverged SHA', () => {
