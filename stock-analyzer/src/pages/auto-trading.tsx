@@ -10,6 +10,7 @@ import { ScannerApprovalComposer } from '@/components/scanner-approval-composer'
 import { TradeAutomationSettings } from '@/components/trade-automation-settings';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import { UserBrokerTelegramPanel } from '@/components/user-broker-telegram-panel';
+import { AdminFourMarketPaperPanel } from '@/components/admin-four-market-paper-panel';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
@@ -22,6 +23,79 @@ type TradingMode = 'auto' | 'paper';
 type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' | 'failed' | 'restricted' | 'fixture';
 const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
 const AUTO_PAPER_INITIAL_KRW = 500_000;
+
+type AutomaticPaperRuntimeReadiness = {
+  readyForPaperEvaluation: boolean;
+  blockers: string[];
+  workerMode: 'DISABLED' | 'PAPER_ONLY' | 'SHARED_BACKGROUND';
+  paperWalletReady: boolean;
+  paperCapitalPolicyReady: boolean;
+  strategyAllowlistReady: boolean;
+  workerTickFresh: boolean;
+  handoffReady: boolean;
+  executionProjectionReady: boolean;
+};
+
+const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
+  BACKGROUND_PAPER_WALLET_REQUIRED: '50만원 자동모의매매 전용 계좌가 없습니다.',
+  BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW: '저장된 자동매매 운용자본이 50만원 기준보다 낮습니다.',
+  BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED: '관리자 4시장 독립 가상계좌 4개를 준비해야 합니다.',
+  BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED: '관리자 정책의 시장별 운용자본이 100만원 기준에 미달합니다.',
+  BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED: '관리자 4시장/Provider 설정이 모두 활성화되지 않았습니다.',
+  BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED: '관리자 가상계좌·주문원장 DB 보호가 검증되지 않았습니다.',
+  ADMIN_PAPER_MARKET_WALLET_MISSING: '시장별 가상계좌가 아직 준비되지 않았습니다.',
+  ADMIN_PAPER_WALLET_INVALID: '시장별 계좌 검증에 실패했습니다.',
+  BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED: '허용된 자동매매 전략이 없습니다.',
+  BACKGROUND_MEMBER_AUTO_POLICY_OFF: '회원 자동매매 설정이 꺼져 있습니다.',
+  BACKGROUND_TRADING_STOP_ACTIVE: '비상정지 또는 신규진입 차단 상태입니다.',
+  BACKGROUND_MEMBER_MARKETS_DISABLED: '자동매매에 허용된 시장이 없습니다.',
+  BACKGROUND_MARKET_PROVIDER_POLICY_DISABLED: '시장과 연결된 Provider의 자동매매 설정이 꺼져 있습니다.',
+  BACKGROUND_PAPER_ONLY_WORKER_REQUIRED: '서버가 Paper 전용 Worker 모드로 실행되지 않았습니다.',
+  BACKGROUND_WORKER_TICK_NOT_HEALTHY: '자동모의 Worker의 최근 정상 실행이 확인되지 않았습니다.',
+  BACKGROUND_NEW_ENTRIES_FAIL_CLOSED: '서버 안전 차단 때문에 신규 Paper 진입이 불가능합니다.',
+  BACKGROUND_CANONICAL_HANDOFF_NOT_READY: '서버의 최신 자동매매 신호 전달이 준비되지 않았습니다.',
+  BACKGROUND_EXECUTION_PROJECTION_NOT_HEALTHY: '체결·매매일지 동기화 상태의 검증이 필요합니다.',
+};
+
+async function readAutomaticPaperRuntimeReadiness(signal?: AbortSignal): Promise<AutomaticPaperRuntimeReadiness> {
+  const response = await authorizedFetch('/api/trade-automation/paper-runtime-readiness', { signal });
+  const data = await response.json().catch(() => null) as
+    (AutomaticPaperRuntimeReadiness & { ok?: boolean; readOnlyProbe?: boolean;
+      memberScope?: string; realOrderAuthorityGranted?: boolean;
+      privateProviderRequests?: number; financialMutationCount?: number;
+      orderSubmitted?: boolean; exchangeRequestSent?: boolean }) | null;
+  if (!response.ok || data?.ok !== true || data.readOnlyProbe !== true
+    || data.memberScope !== 'SELF' || data.realOrderAuthorityGranted !== false
+    || data.privateProviderRequests !== 0 || data.financialMutationCount !== 0
+    || data.orderSubmitted !== false || data.exchangeRequestSent !== false
+    || typeof data.readyForPaperEvaluation !== 'boolean'
+    || !Array.isArray(data.blockers) || data.blockers.some((code) => typeof code !== 'string')
+    || data.readyForPaperEvaluation !== (data.blockers.length === 0)) {
+    throw new Error('서버 Paper Worker 준비도 검증을 완료하지 못했습니다.');
+  }
+  return data;
+}
+
+type AutomaticPaperWalletPreflight = {
+  state: 'READY_FRESH' | 'READY_ISOLATE_LEGACY' | 'ALREADY_EXISTS' | 'BLOCKED';
+  safeToPrepare: boolean;
+  requiresHistoryPreservationConfirmation: boolean;
+  historical: { automaticPaperPlanCount: number; executedAutomaticPaperOrderCount: number;
+    missingFilledQuantityEvidence: number; missingFeeEvidence: number };
+};
+
+async function readAutomaticPaperWalletPreflight(signal?: AbortSignal): Promise<AutomaticPaperWalletPreflight> {
+  const response = await authorizedFetch('/api/paper-journal/automatic-wallet-readiness', { signal });
+  const data = await response.json().catch(() => null) as
+    (AutomaticPaperWalletPreflight & { ok?: boolean; readOnlyProbe?: boolean; initialCapitalKrw?: number }) | null;
+  if (!response.ok || data?.ok !== true || data?.readOnlyProbe !== true
+    || data?.initialCapitalKrw !== AUTO_PAPER_INITIAL_KRW
+    || !['READY_FRESH', 'READY_ISOLATE_LEGACY', 'ALREADY_EXISTS', 'BLOCKED'].includes(data?.state ?? '')
+    || typeof data?.safeToPrepare !== 'boolean') {
+    throw new Error('가상계좌 사전 안전검증을 확인하지 못했습니다.');
+  }
+  return data;
+}
 
 async function automaticPaperHistoryAllowsNewWallet(signal?: AbortSignal): Promise<boolean> {
   const response = await authorizedFetch('/api/trade-automation/status', { signal });
@@ -204,6 +278,10 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   );
   const [autoPaperMessage, setAutoPaperMessage] = useState('');
   const [autoPaperBusy, setAutoPaperBusy] = useState(false);
+  const [autoPaperPreflight, setAutoPaperPreflight] = useState<AutomaticPaperWalletPreflight | null>(null);
+  const [autoPaperRuntimeReadiness, setAutoPaperRuntimeReadiness] = useState<AutomaticPaperRuntimeReadiness | null>(null);
+  const [autoPaperRuntimeError, setAutoPaperRuntimeError] = useState(false);
+  const [autoPaperRuntimeRefresh, setAutoPaperRuntimeRefresh] = useState(0);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
@@ -265,24 +343,74 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   useEffect(() => {
     if (fixture) {
+      setAutoPaperPreflight(null);
       setAutoPaperStatus('fixture');
       return;
+    }
+    if (canManagePilot) {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return; // Admin V2 uses its own four-market wallet inspection.
     }
     if (!userId || !canAuto) return;
     // Associate members can view automatic/Paper trading but cannot read
     // journal snapshots. Do not produce an intentional 403 as a background
     // browser request; keep the backend capability/RLS restriction intact.
     if (!canJournalSync) {
+      setAutoPaperPreflight(null);
       setAutoPaperStatus('restricted');
       return;
     }
     const controller = new AbortController();
     setAutoPaperStatus('checking');
-    void inspectAutomaticPaperAccount(controller.signal)
-      .then((status) => { if (!controller.signal.aborted) setAutoPaperStatus(status); })
-      .catch(() => { if (!controller.signal.aborted) setAutoPaperStatus('failed'); });
+    setAutoPaperPreflight(null);
+    void (async () => {
+      const status = await inspectAutomaticPaperAccount(controller.signal);
+      const preflight = status === 'blocked' || status === 'missing'
+        ? await readAutomaticPaperWalletPreflight(controller.signal)
+        : null;
+      if (controller.signal.aborted) return;
+      setAutoPaperPreflight(preflight);
+      setAutoPaperStatus(status);
+    })().catch(() => {
+      if (!controller.signal.aborted) {
+        setAutoPaperPreflight(null);
+        setAutoPaperStatus('failed');
+      }
+    });
     return () => controller.abort();
-  }, [userId, canAuto, canJournalSync, fixture]);
+  }, [userId, canAuto, canJournalSync, fixture, canManagePilot]);
+
+  useEffect(() => {
+    if (fixture || !userId || !canAuto || !canJournalSync) {
+      setAutoPaperRuntimeReadiness(null);
+      setAutoPaperRuntimeError(false);
+      return;
+    }
+    const controller = new AbortController();
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const readiness = await readAutomaticPaperRuntimeReadiness(controller.signal);
+        if (!controller.signal.aborted) {
+          setAutoPaperRuntimeReadiness(readiness);
+          setAutoPaperRuntimeError(false);
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setAutoPaperRuntimeReadiness(null);
+          setAutoPaperRuntimeError(true);
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => { window.clearInterval(timer); controller.abort(); };
+  }, [userId, canAuto, canJournalSync, fixture, autoPaperRuntimeRefresh]);
 
   async function prepareAutomaticPaperAccount(isolateLegacy = false) {
     const expectedStatus = isolateLegacy ? 'blocked' : 'missing';
@@ -297,6 +425,15 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       if (before !== expectedStatus) {
         setAutoPaperStatus(before);
         setAutoPaperMessage('계좌 상태가 변경되어 다시 확인이 필요합니다.');
+        return;
+      }
+      // Re-evaluate the server-owned preflight immediately before any write.
+      const latest = await readAutomaticPaperWalletPreflight();
+      setAutoPaperPreflight(latest);
+      const expectedPreflightState = isolateLegacy ? 'READY_ISOLATE_LEGACY' : 'READY_FRESH';
+      if (!latest.safeToPrepare || latest.state !== expectedPreflightState
+        || latest.requiresHistoryPreservationConfirmation !== isolateLegacy) {
+        setAutoPaperMessage('서버 사전 안전검증에서 계좌 준비가 차단되었습니다. 기존 기록은 보존됩니다.');
         return;
       }
       const at = new Date().toISOString();
@@ -326,6 +463,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       const after = await inspectAutomaticPaperAccount();
       setAutoPaperStatus(after);
       if (after !== 'ready') throw new Error('서버 모의계좌 저장·조회 검증이 완료되지 않았습니다.');
+      setAutoPaperPreflight(null);
+      setAutoPaperRuntimeRefresh((current) => current + 1);
       setAutoPaperMessage('50만원 가상계좌 저장·조회를 확인했습니다. 실제 주문은 활성화되지 않습니다.');
     } catch (error) {
       setAutoPaperStatus('failed');
@@ -485,13 +624,18 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
       </section>
 
+      {canManagePilot && !fixture ? (
+        <AdminFourMarketPaperPanel />
+      ) : (
       <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-wallet-readiness">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-bold">자동모의매매 가상계좌</h2>
           <span className="text-xs font-semibold">
             {autoPaperStatus === 'ready' ? '서버 계좌 확인됨'
               : autoPaperStatus === 'missing' ? '계좌 준비 필요'
-                : autoPaperStatus === 'blocked' ? '기존 기록 확인 필요'
+                : autoPaperStatus === 'blocked'
+                  ? autoPaperPreflight?.state === 'READY_ISOLATE_LEGACY'
+                    ? '기존 이력 보존 후 준비 가능' : '기존 기록 확인 필요'
                   : autoPaperStatus === 'restricted' ? '모의계좌 관리 권한 없음'
                   : autoPaperStatus === 'failed' ? '계좌 점검 실패'
                     : autoPaperStatus === 'fixture' ? '테스트 화면' : '확인 중'}
@@ -507,7 +651,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             과거 자동모의 계획 {walletAudit.automaticPaperPlanCount}건 · 체결 이력 {walletAudit.executedAutomaticPaperOrderCount}건
             {walletAudit.missingFilledQuantityEvidence > 0 ? ` · 수량 증거 누락 ${walletAudit.missingFilledQuantityEvidence}건` : ''}
             {walletAudit.missingFeeEvidence > 0 ? ` · 비용 증거 누락 ${walletAudit.missingFeeEvidence}건` : ''}
-            . 과거 기록은 보존되며 50만원 가상계좌 재설정은 차단됩니다.
+            . 과거 기록은 보존하며 서버 사전검증이 승인한 경우에만 새 계좌를 분리 생성할 수 있습니다.
           </p>
         ) : null}
         {autoPaperStatus === 'blocked' && policy ? (
@@ -517,8 +661,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             코인선물 레버리지 {policy.bitgetLeverage}배. 이 화면에서 운용 한도를 변경하지 않습니다.
           </p>
         ) : null}
+        {autoPaperStatus === 'blocked' && autoPaperPreflight?.state === 'BLOCKED' ? (
+          <p className="mt-2 text-xs text-amber-700" data-testid="automatic-paper-legacy-preflight-blocked">
+            기존 거래 이력의 안전 분리 조건이 충족되지 않아 계좌 준비를 차단했습니다.
+          </p>
+        ) : null}
         {autoPaperStatus === 'blocked'
-          && (walletAudit?.automaticPaperPlanCount ?? 0) > 0 ? (
+          && autoPaperPreflight?.safeToPrepare === true
+          && autoPaperPreflight.state === 'READY_ISOLATE_LEGACY' ? (
           <button
             type="button"
             className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
@@ -529,7 +679,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             과거 기록 보존 후 신규 50만원 모의계좌 준비
           </button>
         ) : null}
-        {autoPaperStatus === 'missing' ? (
+        {autoPaperStatus === 'missing'
+          && autoPaperPreflight?.state === 'READY_FRESH'
+          && autoPaperPreflight.safeToPrepare === true ? (
           <button
             type="button"
             className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
@@ -541,6 +693,41 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </button>
         ) : null}
       </section>
+      )}
+      {!fixture && canAuto && canJournalSync ? (
+        <section className="rounded-2xl border border-card-border bg-card p-4"
+          data-testid="automatic-paper-worker-readiness">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold">자동모의매매 서버 실행 점검</h2>
+            <span className="text-xs font-semibold">
+              {autoPaperRuntimeError ? '확인 실패'
+                : autoPaperRuntimeReadiness?.readyForPaperEvaluation === true ? '준비 완료'
+                  : autoPaperRuntimeReadiness ? '추가 설정 필요' : '확인 중'}
+            </span>
+          </div>
+          {autoPaperRuntimeReadiness && !autoPaperRuntimeReadiness.readyForPaperEvaluation ? (
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-amber-700"
+              data-testid="automatic-paper-worker-blockers">
+              {autoPaperRuntimeReadiness.blockers.map((code) => (
+                <li key={code}>{PAPER_RUNTIME_BLOCKER_LABELS[code] ?? '서버 운영 준비도 점검이 필요합니다.'}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              {autoPaperRuntimeError
+                ? '서버의 읽기 전용 운영 검사가 완료되지 않았습니다. 이 상태는 준비 완료로 처리하지 않습니다.'
+                : autoPaperRuntimeReadiness?.readyForPaperEvaluation
+                  ? canManagePilot
+                    ? '관리자 4시장 독립계좌·전략·Paper Worker·신호·매매일지 연결을 확인했습니다.'
+                    : '50만원 계좌·전략 허용목록·Paper Worker·신호와 매매일지 연결을 확인했습니다.'
+                  : '회원의 Paper Worker 운영 상태를 조회 중입니다.'}
+            </p>
+          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            이 검사는 실거래 권한을 부여하거나 실주문을 실행하지 않습니다.
+          </p>
+        </section>
+      ) : null}
     </div>
   ) : (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">

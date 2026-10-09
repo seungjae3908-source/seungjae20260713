@@ -256,6 +256,43 @@ test('owner AUTO_POLICY events mirror only to the dedicated auto-trading room', 
   assert.match(transport.sent[1].text, /🤖 자동매매 · 매수 신호/);
 });
 
+test('owner AUTO mirror skips a colliding holdings room while personal receipt succeeds', async () => {
+  const originalHoldings = process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID;
+  try {
+    process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID = 'owner-auto-room';
+    const repository = new InMemoryUserBrokerTelegramRepository();
+    repository.setMemberProfile('user-a', APPROVED_ASSOCIATE);
+    const transport = new FakeTelegramTransport();
+    const service = new UserBrokerTelegramService(
+      repository, transport, new FakePortfolioSink(), 'ci_test_bot',
+      undefined, 'user-a', 'owner-auto-room',
+    );
+    await link(service, 'user-a', 'chat-a');
+    const event: UserExecutionEvent = {
+      ...manualPortfolioEvent({
+        id: 'owner-auto-collision',
+        userId: 'user-a',
+        symbol: '005930',
+        market: 'KR',
+        side: 'buy',
+        quantity: 1,
+        price: 72000,
+      }),
+      type: 'ORDER_FILLED',
+      source: 'PAPER_EXECUTION',
+      executionMethod: 'AUTO_POLICY',
+    };
+    const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
+    assert.ok(queued.deliveryId);
+    const sent = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:03:00.000Z'));
+    assert.equal(sent.state, 'SENT');
+    assert.deepEqual(transport.sent.map(item => item.chatId), ['chat-a']);
+  } finally {
+    if (originalHoldings == null) delete process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID;
+    else process.env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID = originalHoldings;
+  }
+});
+
 test('member revoked after queueing is dead-lettered before Telegram transport', async () => {
   const { service, repository, transport } = fixture();
   await link(service, 'user-a', 'chat-a');

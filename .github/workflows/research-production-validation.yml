@@ -63,6 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           systemd-analyze verify             research-production/deploy/research-production@.service             research-production/deploy/research-production-fast-historical.timer             research-production/deploy/research-production-long-history.timer             research-production/deploy/research-production-forward.timer             research-production/deploy/research-production-temporal-evidence.service             research-production/deploy/research-production-temporal-evidence.timer             research-production/deploy/research-production-factory-status.service             research-production/deploy/research-production-factory-status.timer
+          systemd-analyze verify research-production/deploy/research-production-market-watch.service
           systemd-analyze calendar '*-*-* 02:17:00 UTC' >/dev/null
           systemd-analyze calendar 'Sun *-*-* 03:43:00 UTC' >/dev/null
           systemd-analyze calendar '*-*-* *:11:00 UTC' >/dev/null
@@ -71,6 +72,8 @@ jobs:
           node --check research-production/bin/collect-temporal-evidence.mjs
           node --check research-production/bin/research-factory-plan.mjs
           node --check research-production/bin/research-factory-status.mjs
+          node --check research-production/bin/lightweight-market-watch.mjs
+          node --check research-production/src/lightweight-market-watch.mjs
 
       - name: Unit tests
         working-directory: research-production
