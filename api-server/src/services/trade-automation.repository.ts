@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type ExchangeConnection,
   type TradingExchange,
   type TradingOrder,
@@ -286,6 +287,7 @@ function createScopedTradingRepository(
   client: SupabaseClient,
   secureClient: () => SupabaseClient,
   authenticatedUserId: string,
+  maximumSingleEntryKrw: number,
 ): TradingRepository {
   const owned = (userId: string) => assertOwner(userId, authenticatedUserId);
 
@@ -328,7 +330,10 @@ function createScopedTradingRepository(
       const { data, error } = await client.from('trade_automation_profiles').select('payload')
         .eq('user_id', userId).maybeSingle();
       if (error) throw databaseError();
-      return normalizeTradingPolicy((data?.payload ?? DEFAULT_TRADING_POLICY) as Partial<TradingPolicy>);
+      return normalizeTradingPolicy(
+        (data?.payload ?? DEFAULT_TRADING_POLICY) as Partial<TradingPolicy>,
+        maximumSingleEntryKrw,
+      );
     },
     async savePolicy(userId, policy) {
       owned(userId);
@@ -510,6 +515,7 @@ function createScopedTradingRepository(
 export function createSupabaseTradingRepository(
   accessToken: string,
   authenticatedUserId: string,
+  maximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): TradingRepository {
   if (!accessToken || !authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   const client = getUserSupabase(accessToken);
@@ -517,19 +523,20 @@ export function createSupabaseTradingRepository(
     if (!hasSupabaseServerKey()) throw new Error('TRADE_CREDENTIAL_STORAGE_UNAVAILABLE');
     return getSupabase();
   };
-  return createScopedTradingRepository(client, secureClient, authenticatedUserId);
+  return createScopedTradingRepository(client, secureClient, authenticatedUserId, maximumSingleEntryKrw);
 }
 
 export function createServiceRoleTradingRepository(
   authenticatedUserId: string,
   injectedClient?: SupabaseClient,
+  maximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): TradingRepository {
   if (!authenticatedUserId) throw new Error('LOGIN_REQUIRED');
   if (!injectedClient && !hasSupabaseServerKey()) {
     throw new Error('TRADE_AUTOMATION_SERVICE_ROLE_REQUIRED');
   }
   const client = injectedClient ?? getSupabase();
-  return createScopedTradingRepository(client, () => client, authenticatedUserId);
+  return createScopedTradingRepository(client, () => client, authenticatedUserId, maximumSingleEntryKrw);
 }
 
 function toConnection(row: Record<string, unknown>): ExchangeConnection {
