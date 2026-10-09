@@ -1,0 +1,196 @@
+name: Telegram Six-Room One-Shot Test Delivery (Owner Protected)
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-sixroom-test-delivery.mjs
+      - .github/workflows/telegram-sixroom-test-delivery.yml
+      - .github/tests/telegram-sixroom-test-delivery.test.mjs
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: telegram-sixroom-test-delivery-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  safety-contract:
+    name: Test six-room one-shot send, zero financial authority, and secret hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test .github/tests/telegram-sixroom-test-delivery.test.mjs
+
+  sixroom-test:
+    name: Owner-protected one TEST message per verified Production Vault room
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-sixroom-test-send ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Parse owner-only exact-main one-shot command
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          # A GitHub manual retry MUST NOT send messages a second time.
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          node <<'NODE'
+          const fs=require('node:fs');
+          const m=/^\/run-telegram-sixroom-test-send ([0-9a-f]{40})$/u.exec(String(process.env.BODY||'').trim());
+          if(!m){console.error('TEST_SEND_EXACT_MAIN_COMMAND_REQUIRED');process.exit(1);}
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'sha='+m[1]+'\n');
+          NODE
+      - name: Require immutable current main and event checkout
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          echo 'TELEGRAM_TEST_EXACT_MAIN_VERIFIED'
+      - name: Configure pinned Production SSH without exposing secrets
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
+          [[ -n "$SSH_KNOWN_HOSTS" && -n "$PROD_DATABASE_URL" ]]
+          [[ "$PROD_DATABASE_URL" != *$'\n'* ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Run single guarded six-room preflight then at most six sends
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          evidence="$RUNNER_TEMP/telegram-sixroom-test-sanitized.json"
+          echo "TEST_RECEIPT_PATH=$evidence" >> "$GITHUB_ENV"
+          remote_command="$(printf 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; TELEGRAM_TEST_MAIN_SHA=%q TELEGRAM_TEST_RUN_ID=%q TELEGRAM_SIXROOM_TEST_SEND_EXECUTE=true node --input-type=module -' "$TARGET_SHA" "$GITHUB_RUN_ID")"
+          {
+            printf '%s\n' "$PROD_DATABASE_URL"
+            cat ops/telegram-sixroom-test-delivery.mjs
+          } | ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$evidence" \
+            2> "$RUNNER_TEMP/telegram-test-transport-redacted.stderr"
+          node - "$evidence" "$TARGET_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const labels=['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES','HOLDINGS','AUTO_TRADING'];
+          const statuses=new Set(['NOT_CHECKED','PREFLIGHT_PASS','ROOM_API_UNREACHABLE',
+            'POST_PERMISSION_BLOCKED','SEND_UNCONFIRMED','SENT_CONFIRMED']);
+          const expected=[
+            'schemaVersion','mainSha','pm2Sha','markerSha','pm2Online','activationApproved',
+            'vaultValid','botIdentityVerified','roomsVerified','roomResults','telegramSends',
+            'telegramAccepted','dbWrites','financialMutations','webhookMutations',
+            'tradingAuthorityModified','secretValuesRecorded','classification',
+          ];
+          if(JSON.stringify(Object.keys(r).sort())!==JSON.stringify(expected.sort())
+            ||r.schemaVersion!=='telegram-sixroom-owner-test-send-v1'
+            ||r.mainSha!==process.argv[3]
+            ||![r.pm2Sha,r.markerSha].every(x=>x===null||/^[0-9a-f]{40}$/u.test(x))
+            ||Object.keys(r.roomResults??{}).sort().join()!==labels.sort().join()
+            ||Object.values(r.roomResults).some(x=>!statuses.has(x))
+            ||!Number.isInteger(r.telegramSends)||r.telegramSends<0||r.telegramSends>6
+            ||!Number.isInteger(r.telegramAccepted)||r.telegramAccepted<0
+            ||r.telegramAccepted>r.telegramSends
+            ||!['pm2Online','activationApproved','vaultValid','botIdentityVerified',
+              'roomsVerified'].every(k=>typeof r[k]==='boolean')
+            ||![r.dbWrites,r.financialMutations,r.webhookMutations].every(x=>x===0)
+            ||r.tradingAuthorityModified!==false||r.secretValuesRecorded!==false
+            ||!/^[A-Z_]+$/u.test(r.classification)) {
+            console.error('TELEGRAM_TEST_UNSAFE_OR_INVALID_RECEIPT');
+            process.exit(1);
+          }
+          console.log('TELEGRAM_TEST_SANITIZED_EVIDENCE_VALID');
+          NODE
+      - name: Report room-by-room sanitized test result
+        env:
+          REPORT: ${{ env.TEST_RECEIPT_PATH }}
+          SOURCE_COMMENT: ${{ github.event.comment.id }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const r=JSON.parse(fs.readFileSync(process.env.REPORT,'utf8'));
+            const rows=Object.entries(r.roomResults).map(([label,status])=>'- '+label+': '+status);
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                'ONE-SHOT TELEGRAM SIX-ROOM TEST DELIVERY — OWNER APPROVED',
+                '- Main SHA: '+r.mainSha,
+                '- Deployed PM2 / marker: '+(r.pm2Sha||'unknown')+' / '+(r.markerSha||'unknown'),
+                '- Telegram bot identity verified: '+String(r.botIdentityVerified),
+                '- Vault and owner valid: '+String(r.vaultValid),
+                '- All room permissions checked: '+String(r.roomsVerified),
+                '- Classification: '+r.classification,
+                ...rows,
+                '- One-shot API attempts / confirmed messages: '+r.telegramSends+' / '+r.telegramAccepted,
+                '- Database/webhook/financial mutations: 0 / 0 / 0',
+                '- Secret values, UUIDs, raw Telegram IDs logged: false',
+                '- Source owner comment ID: '+process.env.SOURCE_COMMENT,
+                '- GitHub Run ID: '+String(context.runId),
+                '- Delivery proof is Bot API acceptance, not user read receipts.',
+              ].join('\n')
+            });
+      - name: Fail closed unless exactly six Telegram TEST messages were acknowledged
+        env:
+          REPORT: ${{ env.TEST_RECEIPT_PATH }}
+        run: |
+          set -Eeuo pipefail
+          node - "$REPORT" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(r.classification!=='SIX_ROOM_DELIVERY_CONFIRMED'
+            ||r.telegramSends!==6||r.telegramAccepted!==6
+            ||Object.values(r.roomResults??{}).length!==6
+            ||Object.values(r.roomResults).some(v=>v!=='SENT_CONFIRMED')) {
+            console.error('TELEGRAM_TEST_SIX_ROOM_DELIVERY_UNCONFIRMED');
+            console.error('Safe classification: '+r.classification);
+            console.error('Send attempts: '+r.telegramSends+'; confirmed: '+r.telegramAccepted);
+            process.exit(1);
+          }
+          console.log('TELEGRAM_TEST_SIX_ROOM_DELIVERY_CONFIRMED');
+          NODE
