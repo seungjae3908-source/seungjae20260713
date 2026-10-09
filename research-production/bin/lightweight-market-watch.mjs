@@ -7,6 +7,7 @@ import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { preflightResearchProduction } from '../src/engine.mjs';
+import { advancePublicWatchProspectiveEvidence } from '../src/lightweight-market-watch-prospective.mjs';
 import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_MARKETS, WATCH_SAFETY,
   blockedSource, evaluateMarketOpportunities, evaluateWatchBudget,
@@ -107,10 +108,12 @@ async function atomicJson(path, obj) {
     await rename(temp, path);
   } finally { await rm(temp, { force: true }); }
 }
-async function appendEvents(root, events, observedAt) {
+async function appendEvents(root, events, observedAt, category = 'events') {
+  if (category !== 'events' && category !== 'outcomes')
+    throw new Error('WATCH_LOG_CATEGORY_INVALID');
   if (events.length === 0) return;
   const basename = observedAt.slice(0, 10);
-  const path = join(root, 'watch', 'events', basename + '.jsonl');
+  const path = join(root, 'watch', category, basename + '.jsonl');
   const data = events.map((entry) => JSON.stringify(entry)).join('\n') + '\n';
   const handle = await open(
     path,
@@ -210,6 +213,12 @@ async function cycle(root, researchSha, previous, telemetry) {
       savedAlerts[market + ':' + found.symbol + ':' + found.direction] = nowMs;
     }
   }
+  // Research-only prospective evidence from public ticker snapshots. Real
+  // future quotations are mandatory: no simulated fills, backfill or OOS PASS.
+  const prospective = advancePublicWatchProspectiveEvidence({
+    previousPending: previous?.prospectivePending ?? [],
+    sources, discovered: allCandidates, nowMs,
+  });
   const good = marketSummaries.filter((m) => m.status === 'READY').length;
   const partial = marketSummaries.filter((m) => m.status === 'PARTIAL_UNIVERSE'
     || m.status === 'PARTIAL_TICKERS').length;
@@ -221,6 +230,17 @@ async function cycle(root, researchSha, previous, telemetry) {
     resourceBudget: budget,
     markets: marketSummaries,
     newCandidateCount: allCandidates.length,
+    prospectiveObservation: {
+      pendingCount: prospective.pendingCount,
+      newlyObservedCoarse: prospective.completedCoarse,
+      newlyBlockedData: prospective.blockedData,
+      notTrackedDueToCapacityOrSource: prospective.notTrackedCount,
+      status: 'PUBLIC_TICKER_SNAPSHOTS_ONLY',
+      economicEvidenceCredit: 0,
+      paperCredit: 0,
+      oosCredit: 0,
+      executionAuthority: 'NONE',
+    },
     notes: [
       'Discovery evidence only; no formula PASS, ML, OOS, Paper admission or profitability.',
       'A missing/partial KR/US feed is not a full-universe market scan.',
@@ -239,6 +259,10 @@ async function cycle(root, researchSha, previous, telemetry) {
     cyclesToday: (sameDay ? previousCount(oldStats.cyclesToday) : 0) + 1,
     candidatesToday: (sameDay ? previousCount(oldStats.candidatesToday) : 0)
       + allCandidates.length,
+    observedCoarseToday: (sameDay ? previousCount(oldStats.observedCoarseToday) : 0)
+      + prospective.completedCoarse,
+    blockedProspectiveToday: (sameDay ? previousCount(oldStats.blockedProspectiveToday) : 0)
+      + prospective.blockedData,
     daysInService: previousCount(oldStats.daysInService)
       + (oldStats.dayUtc === dayUtc ? 0 : 1),
     lastCollectedAt: good + partial > 0 ? state.observedAt
@@ -252,10 +276,12 @@ async function cycle(root, researchSha, previous, telemetry) {
   // independent economic samples.
   state.statistics = stats;
   const next = { schemaVersion: WATCH_CONTRACT, researchSha,
-    marketStates, lastAlerts: savedAlerts, stats };
+    marketStates, lastAlerts: savedAlerts,
+    prospectivePending: prospective.pending, stats };
   // Emit observations before advancing the local cursor: a storage failure
   // must not silently discard a discovered candidate. Consumers must dedupe
   // eventId because a crash between these writes can replay the same event.
+  await appendEvents(root, prospective.outcomes, state.observedAt, 'outcomes');
   await appendEvents(root, allCandidates, state.observedAt);
   await atomicJson(join(root, 'watch', 'state-v1.json'), next);
   await atomicJson(join(root, 'latest', 'lightweight-market-watch.json'), state);
@@ -280,6 +306,7 @@ async function main() {
     env: process.env, verifyGitHead: true,
   });
   await mkdir(join(root, 'watch', 'events'), { recursive: true, mode: 0o700 });
+  await mkdir(join(root, 'watch', 'outcomes'), { recursive: true, mode: 0o700 });
   await mkdir(join(root, 'latest'), { recursive: true, mode: 0o700 });
   const lock = await acquire(root);
   try {
