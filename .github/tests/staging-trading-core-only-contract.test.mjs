@@ -37,10 +37,28 @@ test('Staging auth identity/token are never printed or written into scoped QA re
   assert.ok(!verdict.includes('adminEmail'));
   assert.ok(!verdict.includes('accessToken'));
 });
+test('Hub command is owner-only and staging-only', () => {
+  const markers = [
+    '  issue_comment:', 'types: [created]',
+    'github.event.issue.number == 1102',
+    "github.event.comment.user.login == 'seungjae3908-source'",
+    "github.event.comment.author_association == 'OWNER'",
+    "startsWith(github.event.comment.body, '/run-trading-core-staging ')",
+    'STAGING_CORE_HUB_EXACT_COMMAND_REQUIRED',
+    'STAGING_CORE_ACTION_INVALID',
+    "needs.owner-gate.outputs.action == 'deploy'",
+    'action: ${{ steps.target.outputs.action }}',
+  ];
+  requireAll(workflow, markers);
+  assert.ok(workflow.includes('([0-9a-f]{40}) (--preflight|--deploy)$/u.exec(process.env.OWNER_BODY'));
+  assert.ok(!workflow.includes('actions: write'));
+  assert.ok(!workflow.includes('environment: production'));
+});
+
 test('PR validation never requests Staging secrets, deploy, private provider or production authority', () => {
   requireAll(workflow, [
-    '  pull_request:', '  workflow_dispatch:', "group: ${{ github.event_name == 'workflow_dispatch'",
-    'stock-app-staging-readiness', 'if: github.event_name == \'workflow_dispatch\'',
+    '  pull_request:', '  issue_comment:', '  workflow_dispatch:', "group: ${{ (github.event_name == 'workflow_dispatch'",
+    'stock-app-staging-readiness', "github.event_name == 'workflow_dispatch' ||",
     'environment: staging', 'STAGING_CORE_OWNER_REQUIRED',
     'STAGING_CORE_CURRENT_MAIN_SHA_MISMATCH',
     'inspectPostMergeStatusEvidence', 'evaluatePostMergeStatusProvenance',
@@ -59,7 +77,7 @@ test('PR validation never requests Staging secrets, deploy, private provider or 
 });
 test('protected Stage deploy is exact-main, isolated, serialized with official full Staging and cleans SSH credentials', () => {
   requireAll(workflow, [
-    "if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'",
+    "needs.owner-gate.outputs.action == 'deploy'",
     'stage-deploy:',
     'STAGING_CORE_MAIN_MOVED_BEFORE_DEPLOY',
     '/srv/seungjae-staging',
