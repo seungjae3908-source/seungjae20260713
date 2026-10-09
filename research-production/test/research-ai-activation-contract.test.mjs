@@ -193,6 +193,12 @@ test('AI review business failures are visible to systemd instead of exiting succ
   assert.doesNotMatch(service, /SuccessExitStatus=.*75/);
 });
 
+test('PR validation concurrency is isolated from Production activation waiting', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  assert.ok(workflow.includes('group: research-ai-production-activation-${{ github.event_name }}'));
+  assert.match(workflow, /research-production\/test\/research-approved-job-intake\.test\.mjs/);
+});
+
 test('activation workflow preserves sanitized diagnostics and failed-closed Hub receipt', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
   assert.match(workflow, /id: activate_ai/);
@@ -200,6 +206,7 @@ test('activation workflow preserves sanitized diagnostics and failed-closed Hub 
   assert.match(workflow, /AI_RESEARCH_ACTIVATION_PROOF_INVALID/);
   assert.match(workflow, /AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED=/);
   assert.ok(workflow.includes("grep -Ev '^AI_RESEARCH_ACTIVATION_FAILED_SAFE_DISABLED='"));
+  assert.ok(workflow.includes("grep -Eo 'AI_RESEARCH_[-A-Za-z0-9_.:=]+'"));
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /research-ai-activation-\$\{\{ github\.run_id \}\}/);
   assert.match(workflow, /status: failed_closed/);
