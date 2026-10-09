@@ -333,9 +333,12 @@ export class CapitalManagedPaperGateway {
       ...state,
       currentCommittedExposureKrw: current.exposureKrw,
       valuationBlockers: current.blockers,
-      availableNewExposureKrw: state.initialized
+      // A simulated 1M capital target is not spendable Paper exposure until
+      // the independent simulated settlement owner supplies its receipt.
+      availableNewExposureKrw: state.initialized && state.lastSettlement != null
         ? Math.max(0, state.effectiveTradingCapitalKrw - current.exposureKrw)
         : 0,
+      virtualSeedAwaitingSettlement: state.initialVirtualSeed != null && state.lastSettlement == null,
       filledExposureReleasedOnlyAfterFreshSettlement: true,
       settlementOrderWatermarkRuntimeOnly: true,
       ambiguousSameMillisecondOrderAfterRestartCountsAsUnsettled: true,
