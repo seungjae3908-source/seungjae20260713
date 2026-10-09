@@ -1,0 +1,56 @@
+name: Research Upbit Overnight Intraday Replay V2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-upbit-overnight-intraday-replay-v2.mjs
+      - .github/workflows/research-upbit-overnight-intraday-replay-v2.yml
+      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
+      - market-prediction-lab/src/adaptive-multi-evidence-point-in-time-v2.js
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify public research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-upbit-overnight-intraday-replay-v2.mjs
+          ! grep -Eiq 'UPBIT_ACCESS_KEY|UPBIT_SECRET_KEY|LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-upbit-overnight-intraday-replay-v2.mjs
+      - name: Run Upbit cross-symbol holdout replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-overnight-intraday-replay-v2.mjs docs/upbit-overnight-intraday-replay-v2.json
+      - name: Assert holdout chronology and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/upbit-overnight-intraday-replay-v2.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.selectionContract.testUsedForSelection!==false||r.selectionContract.holdoutSymbolsUsedForSelection!==false) throw new Error('SELECTION_LEAK');
+          if(r.selectionContract.actualHistoricalLlmCalled!==false) throw new Error('HISTORICAL_LLM_FABRICATION');
+          if(r.holdoutPolicy.crossSymbolHoldout!==true||r.holdoutPolicy.holdoutSymbolsUsedForFamilySelection!==false) throw new Error('HOLDOUT');
+          if(!r.lookahead.guardPassed||!r.lookahead.D1UsesPriorCompletedDailyCandle||!r.lookahead.dailyWaveUsesOnlyConfirmedPriorData||!r.lookahead.intradayUsesCompleted15mAnd1hOnly||!r.lookahead.entryNext15mOpen) throw new Error('LOOKAHEAD');
+          if(r.universe.discovery.length!==10||r.universe.holdout.length!==10) throw new Error('COHORT_SIZE');
+          if(r.safety.researchOnly!==true||r.safety.publicDataOnly!==true||r.safety.executionAuthority!=='NONE'||r.safety.profitabilityPromotionAllowed!==false) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-overnight-intraday-replay-v2-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/upbit-overnight-intraday-replay-v2.json
+          if-no-files-found: error
+          retention-days: 30
