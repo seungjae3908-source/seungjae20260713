@@ -78,6 +78,7 @@ test('Paper-only worker readiness is member-scoped and never grants real order a
   assert.deepEqual(result.blockers, []);
   assert.equal(result.workerMode, 'PAPER_ONLY');
   assert.equal(result.paperWalletReady, true);
+  assert.equal(result.paperCapitalPolicyReady, true);
   assert.equal(result.strategyAllowlistReady, true);
   assert.equal(result.workerTickFresh, true);
   assert.equal(result.handoffReady, true);
@@ -85,6 +86,21 @@ test('Paper-only worker readiness is member-scoped and never grants real order a
   assert.equal(result.realOrderAuthorityGranted, false);
   assert.equal('userId' in result, false);
   assert.equal('balance' in result, false);
+});
+
+test('500k wallet readiness must not authorize a member policy still capped at 100k', () => {
+  const underfunded = normalizeTradingPolicy({ ...policy(), totalCapitalKrw: 100_000 });
+  const result = memberAutomaticPaperReadiness(input({ policy: underfunded }));
+  assert.equal(result.paperWalletReady, true);
+  assert.equal(result.paperCapitalPolicyReady, false);
+  assert.equal(result.readyForPaperEvaluation, false);
+  assert.ok(result.blockers.includes('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW'));
+  assert.equal(result.realOrderAuthorityGranted, false);
+  const exactlyFunded = memberAutomaticPaperReadiness(input({
+    policy: normalizeTradingPolicy({ ...policy(), totalCapitalKrw: 500_000 }),
+  }));
+  assert.equal(exactlyFunded.paperCapitalPolicyReady, true);
+  assert.equal(exactlyFunded.readyForPaperEvaluation, true);
 });
 
 test('missing or tampered Paper wallet and empty allowlist fail closed', () => {

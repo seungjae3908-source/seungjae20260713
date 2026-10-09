@@ -2,6 +2,7 @@ import type { TradingPolicy } from './trade-automation.types';
 import type { StoredPaperJournalRecord } from './paper-journal.types';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
+  AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletServerEpochMs,
   selectAutomaticPaperAccountEquity,
   type MemberAutoTradingBackgroundRuntimeHealth,
@@ -27,6 +28,12 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   const epoch = automaticPaperWalletServerEpochMs(account, nowMs);
   const paperWalletReady = equity !== null && epoch !== null;
   if (!paperWalletReady) blockers.push('BACKGROUND_PAPER_WALLET_REQUIRED');
+  // A 500k dedicated virtual wallet cannot honestly be called ready when
+  // the stored member policy still budgets only 100k for automatic trading.
+  // Allow growth from the agreed 500k floor; never change the policy here.
+  const paperCapitalPolicyReady = Number.isFinite(policy.totalCapitalKrw)
+    && policy.totalCapitalKrw >= AUTOMATIC_PAPER_INITIAL_KRW;
+  if (!paperCapitalPolicyReady) blockers.push('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW');
 
   const enabledMarketCount = Object.values(policy.marketEnabled).filter((value) => value === true).length;
   const domesticBroker = policy.stockBrokerByMarket?.domestic_stock === 'toss' ? 'toss' : 'kiwoom';
@@ -75,6 +82,7 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     blockers: uniqueBlockers,
     workerMode,
     paperWalletReady,
+    paperCapitalPolicyReady,
     strategyAllowlistReady,
     enabledMarketCount,
     connectedPolicyMarketCount,
