@@ -2,7 +2,7 @@ import type { TradingPolicy } from './trade-automation.types';
 import type { StoredPaperJournalRecord } from './paper-journal.types';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
-  AUTOMATIC_PAPER_INITIAL_KRW,
+  automaticPaperCapitalPolicyReady,
   automaticPaperWalletServerEpochMs,
   selectAutomaticPaperAccountEquity,
   type MemberAutoTradingBackgroundRuntimeHealth,
@@ -31,8 +31,7 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   // A 500k dedicated virtual wallet cannot honestly be called ready when
   // the stored member policy still budgets only 100k for automatic trading.
   // Allow growth from the agreed 500k floor; never change the policy here.
-  const paperCapitalPolicyReady = Number.isFinite(policy.totalCapitalKrw)
-    && policy.totalCapitalKrw >= AUTOMATIC_PAPER_INITIAL_KRW;
+  const paperCapitalPolicyReady = automaticPaperCapitalPolicyReady(policy);
   if (!paperCapitalPolicyReady) blockers.push('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW');
 
   const enabledMarketCount = Object.values(policy.marketEnabled).filter((value) => value === true).length;
