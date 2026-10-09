@@ -36,10 +36,44 @@ async function resolveStagingAdminLoginName() {
     throw new Error('STAGING_ADMIN_LOGIN_NAME_DISCOVERY_HTTP_' + response.status);
   }
   const body: any = await response.json().catch(() => null);
-  const loginName = String(body?.user?.user_metadata?.login_name ?? '').trim();
-  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
-    throw new Error('STAGING_ADMIN_LOGIN_ID_METADATA_MISSING');
+  const authenticatedUserId = String(body?.user?.id ?? '').trim();
+  const accessToken = String(body?.access_token ?? '').trim();
+  if (!authenticatedUserId || !accessToken) {
+    throw new Error('STAGING_ADMIN_AUTH_SESSION_IDENTITY_MISSING');
   }
+
+  // Legacy Staging admins may lack user_metadata.login_name even when their
+  // canonical profile has the account login ID. The application resolves its
+  // own profile through this same-origin, token-verified, RLS-scoped route.
+  // Never guess a login ID, use a service-role key, or mint a browser session.
+  const profileResponse = await fetch(
+    new URL('/api/auth/profile', required('STAGING_BASE_URL')), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json',
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  if (!profileResponse.ok) {
+    throw new Error('STAGING_ADMIN_CANONICAL_PROFILE_HTTP_' + profileResponse.status);
+  }
+  const profile: any = await profileResponse.json().catch(() => null);
+  if (!profile || profile.id !== authenticatedUserId) {
+    throw new Error('STAGING_ADMIN_CANONICAL_PROFILE_ID_MISMATCH');
+  }
+  if (profile.role !== 'admin' || profile.status !== 'approved'
+    || profile.is_active !== true) {
+    throw new Error('STAGING_ADMIN_CANONICAL_PROFILE_NOT_ACTIVE_ADMIN');
+  }
+  const loginName = String(profile.login_name ?? '').trim();
+  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
+    throw new Error('STAGING_ADMIN_CANONICAL_LOGIN_NAME_MISSING');
+  }
+  // A valid admin profile is insufficient if the app's deterministic login
+  // email differs from the protected Staging password-grant identity.
   const internalEmail = createHash('sha256')
     .update('seungjae-stock-account:' + loginName.normalize('NFKC').toLowerCase(), 'utf8')
     .digest('hex').slice(0, 40) + '@accounts.seungjae-stock.com';
