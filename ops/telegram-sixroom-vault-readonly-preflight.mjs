@@ -7,6 +7,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
+import { lookup as dnsLookup } from 'node:dns';
+import { connect as tlsConnect } from 'node:tls';
 
 export const ROOM_NAMES = Object.freeze({
   TELEGRAM_KR_STOCK_CHAT_ID: 'KR_STOCK',
@@ -138,8 +140,8 @@ function readVault(databaseUrl, runtime) {
   return proof;
 }
 
-/** Map transport failures to a finite, public-safe code. Never print raw errors:
- * Node's fetch exception can contain the token-bearing Bot API URL.
+/** Map transport failures to public-safe codes. Never print raw errors:
+ * HTTPS exceptions can contain the token-bearing Bot API URL.
  */
 export function classifyTelegramTransportError(error) {
   const name = String(error?.name ?? '');
@@ -160,7 +162,10 @@ export function classifyTelegramTransportError(error) {
 async function nativeTelegramGet(url) {
   return await new Promise((resolve, reject) => {
     const req = httpsRequest(url, {
-      method: 'GET', headers: { accept: 'application/json' }, timeout: 10000,
+      method: 'GET', headers: { accept: 'application/json' },
+      // Match existing protected Telegram release's IPv4-first/no auto-family option.
+      // Explicit family=4 isolates this read-only request from broken IPv6 routes.
+      family: 4, autoSelectFamily: false, timeout: 15000,
     }, response => {
       const chunks = [];
       let bytes = 0;
@@ -207,6 +212,69 @@ export async function readTelegram(token, method, params = {}, requestImpl = nat
   }
 }
 
+
+/**
+ * Token-free, read-only, phase-specific transport probe, run only if Bot API
+ * getMe cannot be reached. It never returns a resolved address or exception,
+ * only a bounded status from a closed whitelist.
+ */
+export async function probeTelegramIpv4Tls({
+  lookupImpl = dnsLookup,
+  connectImpl = tlsConnect,
+} = {}) {
+  const dnsStatus = await new Promise(resolve => {
+    let settled = false;
+    const finish = code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(code);
+    };
+    const timer = setTimeout(() => finish('IPV4_DNS_TIMEOUT'), 4500);
+    try {
+      lookupImpl('api.telegram.org', { family: 4 }, (error, address, family) => {
+        finish(!error && typeof address === 'string' && address.length > 0 && family === 4
+          ? 'IPV4_DNS_READY' : 'IPV4_DNS_FAILED');
+      });
+    } catch {
+      finish('IPV4_DNS_FAILED');
+    }
+  });
+  if (dnsStatus !== 'IPV4_DNS_READY') return dnsStatus;
+  return await new Promise(resolve => {
+    let settled = false;
+    let socket = null;
+    const finish = code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (socket && !socket.destroyed) socket.destroy();
+      resolve(code);
+    };
+    const timer = setTimeout(() => finish('IPV4_TLS_TIMEOUT'), 6500);
+    try {
+      socket = connectImpl({
+        host: 'api.telegram.org', port: 443, servername: 'api.telegram.org',
+        family: 4, autoSelectFamily: false, rejectUnauthorized: true,
+        timeout: 6000,
+      });
+      socket.once('secureConnect', () => {
+        finish(socket.authorized === true ? 'IPV4_TLS_READY' : 'IPV4_TLS_CERT_FAILED');
+      });
+      socket.once('timeout', () => finish('IPV4_TLS_TIMEOUT'));
+      socket.once('error', error => {
+        const code = classifyTelegramTransportError(error);
+        if (code === 'BOT_API_TLS_FAILED') finish('IPV4_TLS_CERT_FAILED');
+        else if (code === 'BOT_API_DNS_FAILED') finish('IPV4_DNS_FAILED');
+        else if (code === 'BOT_API_TIMEOUT') finish('IPV4_TLS_TIMEOUT');
+        else finish('IPV4_TLS_CONNECT_FAILED');
+      });
+    } catch {
+      finish('IPV4_TLS_CONNECT_FAILED');
+    }
+  });
+}
+
 export async function runPreflight() {
   const result = {
     schemaVersion: 'telegram-sixroom-vault-readonly-v1',
@@ -214,6 +282,7 @@ export async function runPreflight() {
     runtimeNodeMajor: Number.parseInt(process.versions.node.split('.')[0], 10) || null,
     failureStage: 'INITIAL',
     botApiDiagnostic: 'NOT_CHECKED',
+    networkPathProbe: 'NOT_CHECKED',
     mainSha: sanitizedSha(process.env.EXPECTED_MAIN_SHA),
     pm2Sha: null, markerSha: null, pm2Online: false,
     vaultValid: false, vaultReason: null, botIdentityVerified: false,
@@ -258,7 +327,14 @@ export async function runPreflight() {
     result.failureStage = 'BOT_GETME';
     const botResponse = await readTelegram(botToken, 'getMe');
     result.botApiDiagnostic = botResponse.status;
-    if (botResponse.status !== 'PASS') throw new Error(botResponse.status);
+    if (botResponse.status !== 'PASS') {
+      if (['BOT_API_TIMEOUT', 'BOT_API_DNS_FAILED',
+        'BOT_API_NETWORK_UNREACHABLE', 'BOT_API_CONNECTION_RESET',
+        'BOT_API_TLS_FAILED', 'BOT_API_TRANSPORT_FAILED'].includes(botResponse.status)) {
+        result.networkPathProbe = await probeTelegramIpv4Tls();
+      }
+      throw new Error(botResponse.status);
+    }
     const bot = botResponse.data;
     const actualName = String(bot?.username ?? '').trim().toLowerCase();
     const expectedName = String(runtime.TELEGRAM_BOT_USERNAME ?? '').trim().replace(/^@/u, '').toLowerCase();
