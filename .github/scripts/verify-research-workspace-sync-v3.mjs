@@ -224,6 +224,7 @@ const memberAccessReviewed=[
  '.github/scripts/verify-research-workspace-sync-v3.mjs',
  '.github/workflows/production-deploy.yml',
  '.github/workflows/production-postdeploy-qa.yml',
+ '.github/workflows/post-merge-release-provenance.yml',
  '.github/workflows/research-center-predeploy-validation.yml',
  '.github/scripts/run-production-readonly-qa.sh',
  '.github/scripts/production-postdeploy-qa-evidence.cjs',
@@ -567,10 +568,15 @@ if(memberAccessRouteContractChanged){
  const canonicalJournalGate="router.use('/paper-journal', requireCapability('canAccessJournalSync'));";
  if(!current.includes(aiChartFuturesGate))throw new Error('MEMBER_AI_CHART_FUTURES_GATE_MISSING');
  if(!current.includes(journalSplitGate))throw new Error('MEMBER_JOURNAL_CAPABILITY_SPLIT_MISSING');
- current=current
-  .replace(aiChartFuturesGate,canonicalFuturesGate)
-  .replace(journalSplitGate,canonicalJournalGate)
-  .replace("    membership_expires_at: profile.membership_expires_at ?? null,\n",'');
+ const mainAlreadyOwnsMemberAccess = mainRoute.includes(aiChartFuturesGate)
+  && mainRoute.includes(journalSplitGate)
+  && mainRoute.includes("    membership_expires_at: profile.membership_expires_at ?? null,\n");
+ if(!mainAlreadyOwnsMemberAccess){
+  current=current
+   .replace(aiChartFuturesGate,canonicalFuturesGate)
+   .replace(journalSplitGate,canonicalJournalGate)
+   .replace("    membership_expires_at: profile.membership_expires_at ?? null,\n",'');
+ }
 }
 // Older owner history may not be an ancestor after squash/integration merges. Only
 // normalize away the legacy video mount when the exact current main itself does
