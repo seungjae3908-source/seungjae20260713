@@ -562,7 +562,7 @@ test('four independent admin 1m wallets are protected from non-admin and direct 
 
 test('admin Paper-only 4x1m setup: explicit policy step + single four-row insert, no live authority', async () => {
   let current = normalizeTradingPolicy({
-    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+    ...DEFAULT_TRADING_POLICY, mode: 'approval', automaticEnabled: false,
     totalCapitalKrw: 100_000, maxOrderKrw: 30_000,
     maxInstrumentKrw: 100_000,
     maxAssetClassKrw: {
@@ -680,4 +680,35 @@ test('legacy Paper historical fills cannot be replaced by admin wallet start', a
     assert.ok(await repository.getRecord(USER,'journal','historic-admin-paper'));
     assert.equal((await repository.listSnapshot(USER)).filter((r)=>r.kind==='account').length,4);
   } finally { await new Promise<void>((resolve)=>fixture.server.close(()=>resolve())); }
+});
+
+test('admin 1m setup rejects AUTO-on policies before any capital mutation', async () => {
+  let policyWrites = 0;
+  const sourcePolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY, mode: 'automatic', automaticEnabled: true,
+    totalCapitalKrw: 100_000,
+  });
+  const fixture = await startServer({
+    memberTier:'admin',
+    adminPolicyReader: async () => sourcePolicy,
+    adminPolicyWriter: async () => { policyWrites += 1; },
+  });
+  try {
+    const prefix = fixture.baseUrl + '/api/paper-journal/admin-four-market';
+    const preview = await safeJson(await fetch(prefix + '/status'));
+    assert.equal(preview.canCreate, false);
+    assert.ok(preview.creationBlockers.includes('ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF'));
+    const policyPrepare = await fetch(prefix+'/prepare-policy', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body:JSON.stringify({confirmation:'SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY'}),
+    });
+    assert.equal(policyPrepare.status,409);
+    assert.equal((await safeJson(policyPrepare)).code, 'ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF');
+    assert.equal(policyWrites,0);
+    const create = await fetch(prefix+'/bootstrap', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body:JSON.stringify({confirmation:ADMIN_WALLET_CONFIRMATION}),
+    });
+    assert.equal(create.status,409);
+  } finally { await new Promise<void>(resolve=>fixture.server.close(()=>resolve())); }
 });

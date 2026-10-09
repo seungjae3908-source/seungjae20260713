@@ -136,6 +136,8 @@ export function AdminFourMarketPaperPanel() {
   const hasHistoricalConflict = status?.creationBlockers.some((code) =>
     code.includes('PARTIAL_WALLET') || code.includes('EXISTING_ACCOUNT')
     || code.includes('EPOCH_') || code.includes('WALLETS_ALREADY_CREATED')) === true;
+  const memberAutoActive = status?.creationBlockers.includes('ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF') === true;
+  const serverLiveAutoActive = status?.creationBlockers.includes('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF') === true;
   return (
     <section className="rounded-2xl border border-card-border bg-card p-4"
       data-testid="admin-four-market-paper-panel">
@@ -171,12 +173,14 @@ export function AdminFourMarketPaperPanel() {
         <p className="mt-2 text-xs text-muted-foreground">
           기존 모의 주문 {status.historical.orders}건과 일지 {status.historical.journalRows}건은 보존합니다.
           {hasHistoricalConflict ? ' 기존 계좌·거래 이력 충돌을 먼저 확인해야 합니다.' : ''}
+          {memberAutoActive || serverLiveAutoActive
+            ? ' 자본 정책 변경 전 자동매매와 실자동매매 권한을 OFF로 해주세요.' : ''}
         </p>
       ) : null}
       {message ? <p role="status" className="mt-2 text-xs">{message}</p> : null}
       {!status?.ready ? (
         <button type="button" onClick={() => void prepare()}
-          disabled={!status || failed || busy || hasHistoricalConflict}
+          disabled={!status || failed || busy || hasHistoricalConflict || memberAutoActive || serverLiveAutoActive}
           className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold disabled:opacity-50"
           data-testid="admin-four-market-paper-prepare">
           {busy ? '서버 안전검증 및 계좌 준비 중' : '4시장 각각 100만원 계좌 준비'}
