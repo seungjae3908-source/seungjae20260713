@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { hasCapability } from '../../packages/member-access/src/index.js';
 import { requestWithBrowserSession } from './support/browser-session-api';
 
 const activated = process.env.STAGING_TRADING_CORE_ONLY_QA === 'true';
@@ -48,8 +49,11 @@ async function restoreStagingAdminSession(page: Page) {
   }
   const profile: any = await profileResponse.json().catch(() => null);
   if (profile?.id !== body.user.id) throw new Error('STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH');
-  if (profile?.role !== 'admin' || profile?.status !== 'approved'
-    || profile?.is_active === false) {
+  // Match the real API middleware (canManageMembers + canAccessJournalSync),
+  // not the stricter, incorrect 'role === admin' shortcut.
+  if (profile?.status !== 'approved' || profile?.is_active !== true
+    || !hasCapability(profile, 'canManageMembers')
+    || !hasCapability(profile, 'canAccessJournalSync')) {
     throw new Error('STAGING_ADMIN_PROFILE_NOT_APPROVED');
   }
   const session = {
