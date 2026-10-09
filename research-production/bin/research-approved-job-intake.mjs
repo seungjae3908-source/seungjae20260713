@@ -7,12 +7,18 @@ import { fileURLToPath } from 'node:url';
 import { createResearchWorkerQueue } from '../../packages/external-research/src/research-workspace-worker-v9.js';
 
 const fail=code=>{throw Object.assign(new Error(code),{code});};
-async function secureDir(path,{create=false}={}){
+async function secureDir(path,{create=false,allowSharedRoot=false}={}){
   if(create)await mkdir(path,{recursive:true,mode:0o700});
   const h=await open(path,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
   try{
     const st=await h.stat();
-    if(!st.isDirectory()||(typeof process.getuid==='function'&&st.uid!==process.getuid())||(st.mode&0o077)||await realpath(path)!==path)
+    const ownerSafe=typeof process.getuid!=='function'||st.uid===process.getuid();
+    const privateMode=(st.mode&0o077)===0;
+    const sharedRootMode=allowSharedRoot
+      && typeof process.getgid==='function'
+      && st.gid===process.getgid()
+      && (st.mode&0o027)===0;
+    if(!st.isDirectory()||!ownerSafe||(!privateMode&&!sharedRootMode)||await realpath(path)!==path)
       fail('APPROVED_JOB_INTAKE_DIR_UNSAFE');
   }finally{await h.close();}
   return path;
@@ -32,7 +38,7 @@ async function readJob(path){
 export async function intakeApprovedResearchJobs({stateRoot=process.env.RESEARCH_STATE_ROOT}={}){
   const root=resolve(String(stateRoot??'/var/lib/investment-research-production'));
   if(!isAbsolute(root))fail('APPROVED_JOB_STATE_ROOT_INVALID');
-  await secureDir(root);
+  await secureDir(root,{allowSharedRoot:true});
   const inbox=await secureDir(join(root,'video-research','approved-jobs'),{create:true});
   const accepted=await secureDir(join(root,'video-research','accepted-jobs'),{create:true});
   const queue=createResearchWorkerQueue(join(root,'workspace-worker'));
