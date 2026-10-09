@@ -361,6 +361,10 @@ export function TradeAutomationSettings({
     if (fixture) {
       const off = normalizeUiPolicy({
         ...status.policy, mode: 'approval', automaticEnabled: false,
+        // The fixture can have a newer local emergency stop than its original
+        // read-only status. Safe OFF must never release a sticky stop.
+        emergencyStopped: draft.emergencyStopped || status.policy.emergencyStopped,
+        newEntriesStopped: draft.newEntriesStopped || status.policy.newEntriesStopped,
         marketEnabled: { domestic_stock: false, us_stock: false, crypto_spot: false, crypto_futures: false },
         exchangeEnabled: { toss: false, kiwoom: false, upbit: false, bitget: false },
       });
