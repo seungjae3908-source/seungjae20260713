@@ -125,7 +125,10 @@ test('Trading Core ACTIVE_VERIFIED requires same-fill SENT receipt and started T
   assert.ok(bridge.includes("event.type === 'ORDER_FILLED'"));
   assert.ok(bridge.includes('filledDeliveryIds.push(queuedId)'));
   assert.ok(bridge.includes('scopedToOrder: true as const, filledDeliveryIds'));
-  assert.ok(route.includes('readUserTelegramDeliveryWorkerHealth().enabled === true'));
+  assert.ok(route.includes('const personalWorkerHealth = readUserTelegramDeliveryWorkerHealth()'));
+  assert.ok(route.includes('personalWorkerHealth.enabled === true'));
+  assert.ok(route.includes("Date.parse(personalWorkerHealth.lastTickAt ?? '')"));
+  assert.ok(route.includes('Date.now() - personalTickAt <= 360_000'));
   assert.ok(route.includes("workerActivationApproved: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'"));
   assert.ok(spec.includes('delivery?.id === id'));
   assert.ok(spec.includes("delivery?.state === 'SENT'"));
