@@ -178,6 +178,9 @@ jobs:
               else if(rooms.missing.length)evidence.classification='SIX_ROOM_CONFIG_MISSING';
               else if(rooms.duplicates.length)evidence.classification='SIX_ROOM_ROUTING_COLLISION';
               else if(!evidence.backgroundWorkersEnabled)evidence.classification='BACKGROUND_WORKERS_DISABLED';
+              else if(!evidence.telegramActivationApproved)evidence.classification='TELEGRAM_ACTIVATION_DISABLED';
+              else if(!evidence.telegramIntelligenceWorkerEnabled)evidence.classification='TELEGRAM_MARKET_WORKER_DISABLED';
+              else if(!evidence.personalTelegramWorkerEnabled)evidence.classification='TELEGRAM_PERSONAL_WORKER_DISABLED';
             }
           }catch{evidence.classification='PM2_INSPECTION_FAILED';}
           process.stdout.write(JSON.stringify(evidence)+'\n');
