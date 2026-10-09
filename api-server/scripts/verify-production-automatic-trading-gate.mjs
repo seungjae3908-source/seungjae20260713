@@ -8,7 +8,11 @@ const postdeployEvidence = read('.github/scripts/production-postdeploy-qa-eviden
 const manualSpotGate = read('.github/workflows/production-live-trading-gate.yml');
 const manualFuturesGate = read('.github/workflows/production-futures-live-trading-gate.yml');
 const tradeService = read('api-server/src/services/trade-automation.service.ts');
+const tradeIntegrationTest = read('api-server/src/services/trade-automation-integration.test.ts');
 const tradeAutomationRoute = read('api-server/src/routes/trade-automation.ts');
+const paperJournalRoute = read('api-server/src/routes/paper-journal.ts');
+const paperJournalRepo = read('api-server/src/services/paper-journal-supabase.repository.ts');
+const paperJournalSmoke = read('api-server/src/routes/paper-journal.smoke.test.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
 const handoffContract = read('api-server/src/services/member-auto-trading-ai-review-evidence.service.ts');
 const liveEntryArm = read('api-server/src/services/member-auto-trading-live-arm.service.ts');
@@ -40,6 +44,55 @@ const requireText = (source, token, code) => {
 const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
+
+// A fresh 500k automatic Paper wallet is a separate virtual ledger. Existing
+// automatic Paper fills, manual wallets and incomplete history must never be
+// replaced or interpreted as proof of an empty account.
+for (const [input, token, code] of [
+  [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'", 'AUTO_PAPER_WALLET_ID_MISSING'],
+  [paperWorker, 'selectAutomaticPaperAccountEquity(paperResult.records)', 'AUTO_PAPER_DEDICATED_EQUITY_MISSING'],
+  [paperWorker, "if (accounts.length !== 1 || accounts[0]!.deletedAt != null) return null;", 'AUTO_PAPER_INVALID_WALLET_BLOCK_MISSING'],
+  [tradeAutomationRoute, 'automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans)', 'AUTO_PAPER_READONLY_BOOTSTRAP_MISSING'],
+  [paperWorker, 'AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED', 'AUTO_PAPER_HISTORY_BLOCK_MISSING'],
+  [paperWorker, 'AUTOMATIC_PAPER_HISTORY_TRUNCATED', 'AUTO_PAPER_HISTORY_PAGE_BOUND_MISSING'],
+  [paperWorker, 'AUTOMATIC_PAPER_FILLED_QUANTITY_EVIDENCE_MISSING', 'AUTO_PAPER_FILL_QUANTITY_RECONCILIATION_GUARD_MISSING'],
+  [paperWorker, 'AUTOMATIC_PAPER_FEE_EVIDENCE_MISSING', 'AUTO_PAPER_MISSING_FEE_RECONCILIATION_GUARD_MISSING'],
+  [tradeAutomationSmoke, 'automaticPaperWalletBootstrap.safeToInitialize, false', 'AUTO_PAPER_HISTORY_SMOKE_MISSING'],
+  [autoTradingPage, 'data-testid="automatic-paper-wallet-readiness"', 'AUTO_PAPER_READY_UI_MISSING'],
+  [autoTradingPage, 'body.automaticPaperWalletBootstrap?.safeToInitialize === true', 'AUTO_PAPER_SERVER_EVIDENCE_MISSING'],
+  [autoTradingPage, 'result.orderSubmitted !== false || result.exchangeRequestSent !== false', 'AUTO_PAPER_ZERO_BROKER_IO_MISSING'],
+]) requireText(input, token, code);
+
+for (const [input, token, code] of [
+  [paperJournalRoute, "walletRecords.length !== 1 || submitted.length !== 1", 'AUTO_PAPER_SERVER_SINGLE_INITIALIZATION_REQUIRED'],
+  [paperJournalRoute, 'AUTOMATIC_PAPER_WALLET_HISTORY_RECONCILIATION_REQUIRED', 'AUTO_PAPER_SERVER_HISTORY_BLOCK_MISSING'],
+  [paperJournalRoute, 'repository.listSnapshot(userId)', 'AUTO_PAPER_EXISTING_JOURNAL_CHECK_MISSING'],
+  [paperJournalRoute, 'automaticPaperWalletBootstrapReadiness(', 'AUTO_PAPER_SERVER_CANONICAL_CHECK_MISSING'],
+  [paperJournalSmoke, 'historical FILLED automatic Paper orders cannot be overwritten', 'AUTO_PAPER_BROKER_HISTORY_REGRESSION_MISSING'],
+  [paperJournalSmoke, 'manual synced Paper history prevents automatic Paper wallet refilling', 'AUTO_PAPER_MANUAL_HISTORY_REGRESSION_MISSING'],
+]) requireText(input, token, code);
+
+requireText(paperWorker, 'automaticPaperLegacyEpochIsolationReadiness(', 'AUTO_GATE_LEGACY_EPOCH_AUDIT_MISSING');
+requireText(paperWorker, 'automaticPaperOrderWithinWalletEpoch(', 'AUTO_GATE_ISOLATED_ORDER_SCOPE_MISSING');
+requireText(paperWorker, 'BACKGROUND_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH', 'AUTO_GATE_LEGACY_RETRY_FAIL_CLOSED_MISSING');
+requireText(paperWorker, 'automaticLiveStrategyAllowlisted(member.policy, entry.identity.strategyId)', 'AUTO_GATE_LIVE_STRATEGY_ALLOWLIST_REQUIRED');
+requireText(paperWorkerTest, 'blank live strategy allowlist is never wildcard authorization', 'AUTO_GATE_EMPTY_STRATEGY_REGRESSION_MISSING');
+requireText(paperJournalRoute, "legacyEpochConfirmation ===", 'AUTO_GATE_EXPLICIT_EPOCH_CONFIRMATION_MISSING');
+requireText(paperJournalRepo, "AUTOMATIC_PAPER_WALLET_ALREADY_EXISTS", 'AUTO_GATE_WALLET_INSERT_ONCE_REQUIRED');
+
+requireText(tradeService, 'TRADE_FILLED_EXECUTION_EVIDENCE_REQUIRED', 'AUTO_GATE_FILLED_QTY_PRICE_EVIDENCE_REQUIRED');
+requireText(tradeIntegrationTest, 'FILLED state transition rejects missing execution evidence', 'AUTO_GATE_FALSE_FILLED_REGRESSION_MISSING');
+
+// Canonical automatic Paper risk must be independent from member-imported
+// manual journals. Missing costs and close-time FX block new exposure.
+for (const [scope, proof, code] of [
+  [paperWorker, 'automaticPaperRiskEvidenceFromCanonicalLedger(', 'AUTO_GATE_PAPER_CANONICAL_RISK_MISSING'],
+  [paperWorker, 'tradeAutomationJournalPayloadsFromSnapshot(userId, automatic, scopedPlans)', 'AUTO_GATE_PAPER_CANONICAL_ORDER_LEDGER_MISSING'],
+  [paperWorker, 'paperFinancialRiskReady: paperAccountReady && risk.ready', 'AUTO_GATE_PAPER_RISK_READINESS_MISSING'],
+  [paperWorker, 'BACKGROUND_PAPER_SETTLEMENT_FULL_COST_REQUIRED', 'AUTO_GATE_PAPER_FULL_COST_FAIL_CLOSED_MISSING'],
+  [paperWorker, 'BACKGROUND_PAPER_CLOSE_TIME_FX_REQUIRED', 'AUTO_GATE_PAPER_FX_FAIL_CLOSED_MISSING'],
+  [paperWorkerTest, 'automatic Paper risk excludes user-imported manual loss journals', 'AUTO_GATE_PAPER_MANUAL_JOURNAL_ISOLATION_TEST_MISSING'],
+]) requireText(scope, proof, code);
 
 requireText(workflow, 'name: Production Automatic Trading Gate', 'AUTO_GATE_NAME_MISSING');
 requireText(workflow, '/activate-production-auto-trading ', 'AUTO_GATE_ACTIVATE_COMMAND_MISSING');

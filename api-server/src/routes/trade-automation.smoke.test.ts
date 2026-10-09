@@ -17,6 +17,7 @@ import {
 } from '../services/trade-market-intelligence.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from '../services/trade-automation.types';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
+import { automaticPaperWalletBootstrapReadiness } from '../services/member-auto-trading-background-worker.service';
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
@@ -1509,6 +1510,65 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.ok(body.liveAutomaticReadinessByMarket.domestic_stock.blockers.includes('AUTOMATIC_POLICY_OFF'));
     assert.equal(body.actualOrderSubmittedByStatusRequest, false);
   } finally { await close(authenticated.server); }
+});
+
+
+test('Paper wallet bootstrap status is read-only and blocks existing FILLED automatic Paper history', async () => {
+  const fresh = automaticPaperWalletBootstrapReadiness([], []);
+  assert.equal(fresh.safeToInitialize, true);
+  assert.equal(fresh.orderSubmitted, false);
+  assert.equal(fresh.privateTradingRequests, 0);
+
+  const isolated = new InMemoryTradingRepository();
+  const at = new Date().toISOString();
+  await isolated.savePlan({
+    id: 'historical-auto-paper-plan', userId: USER,
+    idempotencyKey: 'historical-auto-paper-plan', state: 'SUBMITTED',
+    exchange: 'upbit', accountMode: 'paper', executionMode: 'automatic',
+    strategyId: 'rule-pack', signalId: 'historical-auto-paper-signal',
+    symbol: 'BTC', market: 'KRW', side: 'buy', orderType: 'market',
+    estimatedKrw: 50_000, stopPrice: 90, targetPrices: [110],
+    splitRatios: [100], signalReasons: ['PAPER'], marketSnapshot: {},
+    version: 1, approvedAt: at, approvalExpiresAt: null,
+    createdAt: at, updatedAt: at,
+  } as any);
+  await isolated.saveOrder({
+    id: 'historical-auto-paper-order', userId: USER,
+    planId: 'historical-auto-paper-plan', exchange: 'upbit',
+    clientOrderId: 'historical-auto-paper-order', exchangeOrderId: 'paper-fill',
+    state: 'FILLED', requestedQuantity: 1, filledQuantity: 1,
+    averageFillPrice: 100, feeAmount: 0, feeCurrency: 'KRW',
+    retryCount: 0, lastErrorCode: null,
+    createdAt: at, updatedAt: at,
+  } as any);
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const server = await startServer();
+  try {
+    const response = await fetch(`${server.baseUrl}/api/trade-automation/status`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      automaticPaperWalletBootstrap: {
+        safeToInitialize: boolean; automaticPaperPlanCount: number;
+        executedAutomaticPaperOrderCount: number; blockers: string[];
+        missingFilledQuantityEvidence: number; missingFeeEvidence: number;
+        privateTradingRequests: number; orderSubmitted: boolean;
+      };
+      actualOrderSubmittedByStatusRequest: boolean;
+    };
+    assert.equal(body.automaticPaperWalletBootstrap.safeToInitialize, false);
+    assert.equal(body.automaticPaperWalletBootstrap.automaticPaperPlanCount, 1);
+    assert.equal(body.automaticPaperWalletBootstrap.executedAutomaticPaperOrderCount, 1);
+    assert.equal(body.automaticPaperWalletBootstrap.missingFilledQuantityEvidence, 0);
+    assert.equal(body.automaticPaperWalletBootstrap.missingFeeEvidence, 0);
+    assert.deepEqual(body.automaticPaperWalletBootstrap.blockers,
+      ['AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED']);
+    assert.equal(body.automaticPaperWalletBootstrap.privateTradingRequests, 0);
+    assert.equal(body.automaticPaperWalletBootstrap.orderSubmitted, false);
+    assert.equal(body.actualOrderSubmittedByStatusRequest, false);
+  } finally {
+    await close(server.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
 });
 
 test('status partitions recent canonical orders by all four trading markets', async () => {
