@@ -1,0 +1,193 @@
+name: Telegram Six-Room Read-Only Diagnostics
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    paths:
+      - .github/workflows/telegram-sixroom-readonly-diagnostics.yml
+      - .github/tests/telegram-sixroom-readonly-diagnostics.test.mjs
+      - .github/workflows/telegram-production-release.yml
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: telegram-sixroom-diagnostics-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test .github/tests/telegram-sixroom-readonly-diagnostics.test.mjs
+
+  inspect:
+    name: Inspect six existing Production room bindings (read-only)
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-sixroom-diagnostic ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate owner-command exact main and deployed revision
+        id: command
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const v = /^\/run-telegram-sixroom-diagnostic ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40})$/.exec(String(process.env.COMMAND || '').trim());
+          if (!v) { console.error('EXACT_CURRENT_MAIN_AND_DEPLOYED_SHA_REQUIRED'); process.exit(1); }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'main_sha='+v[1].toLowerCase()+'\ndeploy_sha='+v[2].toLowerCase()+'\n');
+          NODE
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "${{ steps.command.outputs.main_sha }}"
+          test "$(git rev-parse origin/main)" = "${{ steps.command.outputs.main_sha }}"
+      - name: Configure Production SSH without exposing credentials
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_PRIVATE_KEY"
+          umask 077; mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+      - name: Inspect PM2 and six room key names without Telegram sends or server mutations
+        id: inspect
+        env:
+          DEPLOY_SHA: ${{ steps.command.outputs.deploy_sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          output="$RUNNER_TEMP/telegram-sixroom-readonly-evidence.json"
+          printf 'EVIDENCE=%s\n' "$output" >> "$GITHUB_ENV"
+          remote_command="$(printf 'EXPECTED_DEPLOY_SHA=%q node -' "$DEPLOY_SHA")"
+          ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$output" <<'NODE'
+          const fs=require('node:fs');
+          const {execFileSync}=require('node:child_process');
+          const sixRoomKeys=[
+            'TELEGRAM_KR_STOCK_CHAT_ID','TELEGRAM_US_STOCK_CHAT_ID',
+            'TELEGRAM_CRYPTO_SPOT_CHAT_ID','TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+            'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID','TELEGRAM_AUTO_TRADING_CHAT_ID'
+          ];
+          const coreKeys=[
+            'TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','TELEGRAM_STOCK_CHAT_ID',
+            'TELEGRAM_CRYPTO_CHAT_ID','TELEGRAM_AUTO_TRADING_CHAT_ID',
+            'TELEGRAM_BOT_USERNAME','TELEGRAM_WEBHOOK_SECRET'
+          ];
+          function inspectSixRoomBindings(runtime) {
+            const missing=sixRoomKeys.filter(k=>!String(runtime[k]||'').trim());
+            if(!String(runtime.TELEGRAM_OWNER_MEMBER_ID||'').trim())missing.push('TELEGRAM_OWNER_MEMBER_ID');
+            const duplicates=[];
+            for(let i=0;i<sixRoomKeys.length;i++)for(let j=i+1;j<sixRoomKeys.length;j++){
+              const a=String(runtime[sixRoomKeys[i]]||'').trim();
+              const b=String(runtime[sixRoomKeys[j]]||'').trim();
+              if(a&&a===b)duplicates.push([sixRoomKeys[i],sixRoomKeys[j]]);
+            }
+            return {missing,duplicates};
+          }
+          const evidence={schemaVersion:'telegram-sixroom-readonly-v1',readOnly:true,
+            pm2Online:false,identityMatch:false,missingCore:[],missingSixRooms:[],
+            duplicateKeyPairs:[],backgroundWorkersEnabled:false,classification:'OK',
+            secretValuesRecorded:false,telegramSends:0,financialMutationCount:0};
+          try{
+            const list=JSON.parse(execFileSync('pm2',['jlist'],{encoding:'utf8',maxBuffer:20000000}));
+            const found=Array.isArray(list)?list.filter(p=>p&&p.name==='stock-app'):[];
+            if(found.length!==1)evidence.classification='PM2_PROCESS_AMBIGUOUS';
+            else{
+              const runtime=found[0].pm2_env||{};
+              evidence.pm2Online=runtime.status==='online';
+              let marker='';
+              try{marker=fs.readFileSync('/opt/stock-app/.deploy/current-sha','utf8').trim();}catch{}
+              evidence.identityMatch=evidence.pm2Online&&String(runtime.DEPLOY_SHA||'')===process.env.EXPECTED_DEPLOY_SHA&&marker===process.env.EXPECTED_DEPLOY_SHA;
+              evidence.missingCore=coreKeys.filter(k=>!String(runtime[k]||'').trim());
+              const rooms=inspectSixRoomBindings(runtime);
+              evidence.missingSixRooms=rooms.missing;
+              evidence.duplicateKeyPairs=rooms.duplicates;
+              evidence.backgroundWorkersEnabled=String(runtime.BACKGROUND_WORKERS_ENABLED||'true')!=='false';
+              if(!evidence.identityMatch)evidence.classification='PRODUCTION_SHA_MISMATCH';
+              else if(evidence.missingCore.length)evidence.classification='CORE_CONFIG_MISSING';
+              else if(rooms.missing.length)evidence.classification='SIX_ROOM_CONFIG_MISSING';
+              else if(rooms.duplicates.length)evidence.classification='SIX_ROOM_ROUTING_COLLISION';
+              else if(!evidence.backgroundWorkersEnabled)evidence.classification='BACKGROUND_WORKERS_DISABLED';
+            }
+          }catch{evidence.classification='PM2_INSPECTION_FAILED';}
+          process.stdout.write(JSON.stringify(evidence)+'\n');
+          NODE
+          node - "$output" <<'NODE'
+          const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(v.schemaVersion!=='telegram-sixroom-readonly-v1'||v.readOnly!==true||
+             v.secretValuesRecorded!==false||v.telegramSends!==0||v.financialMutationCount!==0||
+             !Array.isArray(v.missingCore)||!Array.isArray(v.missingSixRooms)||
+             !Array.isArray(v.duplicateKeyPairs)){
+             console.error('UNSAFE_OR_INVALID_DIAGNOSTIC_EVIDENCE');process.exit(1);
+          }
+          console.log('READ_ONLY_DIAGNOSTIC_EVIDENCE_VALID');
+          NODE
+      - name: Upload sanitized classification only
+        if: steps.inspect.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-sixroom-readonly-${{ steps.command.outputs.deploy_sha }}
+          path: ${{ env.EVIDENCE }}
+          retention-days: 14
+          if-no-files-found: error
+      - name: Report exact missing KEY NAMES, not sensitive values
+        if: steps.inspect.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          EVIDENCE: ${{ env.EVIDENCE }}
+          DEPLOY_SHA: ${{ steps.command.outputs.deploy_sha }}
+        with:
+          script: |
+            const fs=require('node:fs');
+            const v=JSON.parse(fs.readFileSync(process.env.EVIDENCE,'utf8'));
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                'Telegram six-room READ-ONLY Production preflight diagnosis',
+                '- Deployed SHA: '+process.env.DEPLOY_SHA,
+                '- PM2 online: '+String(v.pm2Online),
+                '- Exact deployed identity: '+String(v.identityMatch),
+                '- Classification: '+v.classification,
+                '- Missing core KEY NAMES: '+(v.missingCore.join(', ')||'none'),
+                '- Missing dedicated room KEY NAMES: '+(v.missingSixRooms.join(', ')||'none'),
+                '- Duplicate room KEY PAIRS: '+(v.duplicateKeyPairs.map(x=>x.join(' ↔ ')).join(', ')||'none'),
+                '- Background workers enabled: '+String(v.backgroundWorkersEnabled),
+                '- Telegram sends / financial mutations: 0 / 0',
+                '- Chat ID values, bot tokens, and other secrets recorded: false'
+              ].join('\n')
+            });
