@@ -28,6 +28,12 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'telegramConnectedBefore',
     'telegramRuntimeReady',
     'telegramTestDelivered',
+    'telegramFillDeliveryConfirmed',
+    'filledDeliveryIds',
+    "'SENT'",
+    'personalWorkerStarted',
+    'workerActivationApproved',
+    'PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY',
     'memberAutoPolicyReadiness',
     'preparedMemberAutoPolicy',
     'memberAutoPolicyPrepared',
@@ -109,4 +115,21 @@ test('Canary QA never bypasses member stops or changes irreversible risk guardra
   assert.ok(spec.includes('POLICY_RESTORE_STATE_MISMATCH'));
   assert.ok(spec.includes('POLICY_STATE_MISMATCH'));
   assert.ok(spec.includes('isDeepStrictEqual(statusAfter.body?.policy, originalPolicy)'));
+});
+
+test('Trading Core ACTIVE_VERIFIED requires same-fill SENT receipt and started Telegram worker', () => {
+  const bridge = read('api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.ts');
+  const route = read('api-server/src/routes/user-broker-telegram.ts');
+  const workflow = read('.github/workflows/production-trading-core-qa.yml');
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  assert.ok(bridge.includes("event.type === 'ORDER_FILLED'"));
+  assert.ok(bridge.includes('filledDeliveryIds.push(queuedId)'));
+  assert.ok(bridge.includes('scopedToOrder: true as const, filledDeliveryIds'));
+  assert.ok(route.includes('readUserTelegramDeliveryWorkerHealth().enabled === true'));
+  assert.ok(route.includes("workerActivationApproved: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true'"));
+  assert.ok(spec.includes('delivery?.id === id'));
+  assert.ok(spec.includes("delivery?.state === 'SENT'"));
+  assert.ok(spec.includes('telegramFillDeliveryConfirmed = true'));
+  assert.ok(workflow.includes("value?.telegramFillDeliveryConfirmed === true"));
+  assert.ok(workflow.includes("value?.telegramFillDeliveryConfirmed === false"));
 });
