@@ -6,6 +6,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
 
 export const ROOM_NAMES = Object.freeze({
   TELEGRAM_KR_STOCK_CHAT_ID: 'KR_STOCK',
@@ -153,24 +154,50 @@ export function classifyTelegramTransportError(error) {
   return 'BOT_API_TRANSPORT_FAILED';
 }
 
-export async function readTelegram(token, method, params = {}, fetchImpl = globalThis.fetch) {
-  if (typeof fetchImpl !== 'function' || typeof globalThis.AbortSignal?.timeout !== 'function') {
-    return { status: 'BOT_API_RUNTIME_UNSUPPORTED', data: null };
-  }
+/** Native HTTPS avoids dependence on Node 18+ global fetch/AbortSignal.timeout.
+ * GET only; no shell arguments, logs, redirects, or mutation endpoints.
+ */
+async function nativeTelegramGet(url) {
+  return await new Promise((resolve, reject) => {
+    const req = httpsRequest(url, {
+      method: 'GET', headers: { accept: 'application/json' }, timeout: 10000,
+    }, response => {
+      const chunks = [];
+      let bytes = 0;
+      response.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > 131072) {
+          response.destroy(new Error('telegram_response_too_large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('error', reject);
+      response.on('end', () => {
+        let body = null;
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* invalid JSON */ }
+        const status = Number(response.statusCode) || 0;
+        resolve({ status, ok: status >= 200 && status < 300, body });
+      });
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+export async function readTelegram(token, method, params = {}, requestImpl = nativeTelegramGet) {
   const url = new URL('https://api.telegram.org/bot' + token + '/' + method);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
   try {
-    const response = await fetchImpl(url, {
-      method: 'GET', headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    });
-    const body = await response.json().catch(() => null);
-    if (!response.ok || body?.ok !== true) {
-      if (response.status === 401 || response.status === 403) {
+    const response = await requestImpl(url);
+    const body = response?.body;
+    if (!response?.ok || body?.ok !== true) {
+      if (response?.status === 401 || response?.status === 403) {
         return { status: 'BOT_API_AUTH_REJECTED', data: null };
       }
-      if (response.status === 429) return { status: 'BOT_API_RATE_LIMITED', data: null };
-      if (response.status >= 500) return { status: 'BOT_API_SERVER_ERROR', data: null };
+      if (response?.status === 429) return { status: 'BOT_API_RATE_LIMITED', data: null };
+      if (response?.status >= 500) return { status: 'BOT_API_SERVER_ERROR', data: null };
       if (!body) return { status: 'BOT_API_INVALID_RESPONSE', data: null };
       return { status: 'BOT_API_HTTP_REJECTED', data: null };
     }
