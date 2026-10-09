@@ -44,3 +44,21 @@ test('the release failure logger emits only bounded diagnostic codes',()=>{
  assert.ok(release.includes("['TELEGRAM_SIX_ROOM_CONFIG_MISSING', 'TELEGRAM_SIX_ROOM_ROUTING_COLLISION'].includes(reason)"));
  assert.ok(release.includes('console.error(safeReason);'));
 });
+
+test('protected approval never reads same-step outputs and accepts only main-lineage immutable SHAs',()=>{
+ const checkout='- uses: actions/checkout@v4\n        with:\n          ref: ${{ github.sha }}\n          fetch-depth: 0';
+ assert.ok(workflow.includes(checkout),'immutable checkout with full ancestry');
+ const parsed=workflow.indexOf('- name: Parse exact owner diagnostic request');
+ const verified=workflow.indexOf('- name: Verify immutable main ancestry after parsing');
+ const ssh=workflow.indexOf('- name: Configure Production SSH without exposing credentials');
+ assert.ok(parsed>0 && verified>parsed && ssh>verified);
+ const parseStep=workflow.slice(parsed,verified);
+ const verifyStep=workflow.slice(verified,ssh);
+ assert.ok(parseStep.includes('fs.appendFileSync(process.env.GITHUB_OUTPUT'));
+ assert.ok(!parseStep.includes('steps.command.outputs.main_sha'),'no same-step output reference');
+ assert.ok(verifyStep.includes('EXPECTED_MAIN_SHA: ${{ steps.command.outputs.main_sha }}'));
+ assert.ok(verifyStep.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'));
+ assert.ok(verifyStep.includes('git merge-base --is-ancestor "$GITHUB_SHA" origin/main'));
+ assert.ok(verifyStep.includes('git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main'));
+ assert.ok(!verifyStep.includes('test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"'), 'new main commits may not invalidate read-only inspection');
+});
