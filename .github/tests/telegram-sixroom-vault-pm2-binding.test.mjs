@@ -215,3 +215,40 @@ test('source never writes Vault or issues trading/Telegram requests',()=>{
   assert.ok(script.includes("key.startsWith('GITHUB_')"));
   assert.ok(!script.includes("console.log(runtime)"));
 });
+
+test('protected GitHub workflow separates read-only PLAN from risky APPLY approval',()=>{
+  const workflow=fs.readFileSync(
+    '.github/workflows/telegram-sixroom-vault-pm2-binding.yml','utf8');
+  for(const marker of [
+    "github.event.issue.number == 1555",
+    "github.event.comment.user.login == 'seungjae3908-source'",
+    "github.event.comment.author_association == 'OWNER'",
+    "environment: production",
+    '/run-telegram-sixroom-binding-plan ',
+    '/run-telegram-sixroom-binding-apply ',
+    "test \"$GITHUB_SHA\" = \"$TARGET_SHA\"",
+    'git merge-base --is-ancestor "$DEPLOYED_SHA" origin/main',
+    'TELEGRAM_BINDING_APPLY_RETRY_FORBIDDEN',
+    'TELEGRAM_BINDING_REQUIRED_CI_6_OF_6_VERIFIED',
+    'TELEGRAM_BINDING_STAGING_NOT_READY',
+    'STAGING_TELEGRAM_NETWORK_ONLY_PASS',
+    'TELEGRAM_BINDING_UNSAFE_RECEIPT',
+    'TELEGRAM_BINDING_NOT_READY',
+    'TELEGRAM_BINDING_EXECUTE=true',
+    "mode === 'apply'",
+  ].filter(x=>x!=="mode === 'apply'")){
+    assert.ok(workflow.includes(marker),marker);
+  }
+  for(const forbidden of [
+    'sendMessage','setWebhook','pm2 restart','pm2 reload',
+    'ops/deploy-production.sh','LIVE_TRADING=true',
+    'AUTO_TRADING=true','Replit',
+  ]){
+    assert.ok(!workflow.includes(forbidden),forbidden);
+  }
+  assert.ok(workflow.includes("if: steps.command.outputs.mode == 'apply'"));
+  assert.ok(workflow.includes("r.mode!==process.argv[5].toUpperCase()"));
+  assert.ok(workflow.includes("r.restartAttempts!==0||r.rollbackAttempts!==0"));
+  assert.ok(workflow.includes("r.secretValuesRecorded!==false"));
+  assert.ok(workflow.includes("Report sanitized binding classification"));
+});
