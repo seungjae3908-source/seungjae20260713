@@ -107,6 +107,19 @@ test('missing or tampered Paper wallet and empty allowlist fail closed', () => {
   }
 });
 
+test('Paper readiness requires at least one market with its matching provider enabled', () => {
+  const policySnapshot = policy();
+  const disconnectedPolicy = normalizeTradingPolicy({
+    ...policySnapshot,
+    exchangeEnabled: { bitget: false, upbit: false, kiwoom: false, toss: false },
+  });
+  const blocked = memberAutomaticPaperReadiness(input({ policy: disconnectedPolicy }));
+  assert.equal(blocked.enabledMarketCount, 1);
+  assert.equal(blocked.connectedPolicyMarketCount, 0);
+  assert.ok(blocked.blockers.includes('BACKGROUND_MARKET_PROVIDER_POLICY_DISABLED'));
+  assert.equal(blocked.readyForPaperEvaluation, false);
+});
+
 test('shared Worker, explicit stop, stale tick and bad projections independently block Paper evaluation', () => {
   const baseline = input();
   const shared = memberAutomaticPaperReadiness(input({ workerMode: 'SHARED_BACKGROUND' }));
@@ -127,6 +140,11 @@ test('shared Worker, explicit stop, stale tick and bad projections independently
     },
   }));
   assert.ok(failure.blockers.includes('BACKGROUND_EXECUTION_PROJECTION_NOT_HEALTHY'));
+  const failClosedWorker = memberAutomaticPaperReadiness(input({
+    workerHealth: { ...baseline.workerHealth, newEntriesFailClosed: true },
+  }));
+  assert.ok(failClosedWorker.blockers.includes('BACKGROUND_NEW_ENTRIES_FAIL_CLOSED'));
+  assert.equal(failClosedWorker.readyForPaperEvaluation, false);
   const liveRequested = memberAutomaticPaperReadiness(input({
     workerHealth: { ...baseline.workerHealth, liveModeRequested: true },
   }));
