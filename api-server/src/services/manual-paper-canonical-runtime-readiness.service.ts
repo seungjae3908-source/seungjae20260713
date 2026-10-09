@@ -34,6 +34,28 @@ const ENTRY_COMPONENTS = Object.freeze([
 const ENTRY_COMPONENT_QUALITIES = Object.freeze(['OBSERVED', 'DOCUMENTED', 'ESTIMATED', 'NOT_APPLICABLE'] as const);
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 
+type EntryCostComponentName = (typeof ENTRY_COMPONENTS)[number];
+type EntryCostComponentFailureReason =
+  | 'POSITION_CONTEXT_NOT_READY'
+  | 'COMPONENT_MISSING'
+  | 'VALUE_INVALID'
+  | 'SOURCE_MISSING'
+  | 'QUALITY_INVALID'
+  | 'OBSERVED_AT_INVALID'
+  | 'OBSERVED_AFTER_ENTRY'
+  | 'STALE';
+
+const ENTRY_COMPONENT_BLOCKERS: Readonly<Record<EntryCostComponentName, string>> = Object.freeze({
+  commission: 'PAPER_CANONICAL_FULL_COST_COMPONENT_COMMISSION_NOT_READY',
+  tax: 'PAPER_CANONICAL_FULL_COST_COMPONENT_TAX_NOT_READY',
+  spread: 'PAPER_CANONICAL_FULL_COST_COMPONENT_SPREAD_NOT_READY',
+  slippage: 'PAPER_CANONICAL_FULL_COST_COMPONENT_SLIPPAGE_NOT_READY',
+  funding: 'PAPER_CANONICAL_FULL_COST_COMPONENT_FUNDING_NOT_READY',
+  latency: 'PAPER_CANONICAL_FULL_COST_COMPONENT_LATENCY_NOT_READY',
+  liquidityImpact: 'PAPER_CANONICAL_FULL_COST_COMPONENT_LIQUIDITY_IMPACT_NOT_READY',
+  partialFillImpact: 'PAPER_CANONICAL_FULL_COST_COMPONENT_PARTIAL_FILL_IMPACT_NOT_READY',
+});
+
 type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
 type RuntimeReadinessDependencies = Readonly<{
@@ -61,6 +83,10 @@ export type ManualPaperCanonicalRuntimeReadinessResult = Readonly<{
   paperStateSnapshotReady: boolean;
   naturalPaperStateReady: boolean;
   fullCostComponentsReady: boolean;
+  fullCostComponentEvidenceCounts: Readonly<Record<EntryCostComponentName, number>>;
+  fullCostComponentFailureReasons: Readonly<
+    Record<EntryCostComponentName, readonly EntryCostComponentFailureReason[]>
+  >;
   settlementDurablePacketReady: boolean;
   closePositionCanonicalRebindReady: boolean;
   forwardObserverArtifactsReady: boolean;
@@ -114,7 +140,14 @@ function positiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-function fullCostPositionReady(position: Record<string, any>, expectedMainSha: string): boolean {
+function fullCostPositionContext(
+  position: Record<string, any>,
+  expectedMainSha: string,
+): Readonly<{
+  provenance: Record<string, any>;
+  maximumAgeMs: number;
+  entryTimestampMs: number;
+}> | null {
   const candidate = position?.entryCandidate;
   const provenance = position?.entryCostProvenance;
   const maximumAgeMs = candidate?.execution?.dataEvidence?.maxAgeMs;
@@ -127,20 +160,72 @@ function fullCostPositionReady(position: Record<string, any>, expectedMainSha: s
     || !nonEmpty(provenance.providerProvenance)
     || !positiveInteger(maximumAgeMs)
     || !positiveInteger(entryTimestampMs)) {
-    return false;
+    return null;
   }
-  return ENTRY_COMPONENTS.every((name) => {
-    const component = provenance?.components?.[name];
-    return record(component)
-      && typeof component.valuePercent === 'number'
-      && Number.isFinite(component.valuePercent)
-      && component.valuePercent >= 0
-      && nonEmpty(component.source)
-      && ENTRY_COMPONENT_QUALITIES.includes(component.quality)
-      && positiveInteger(component.observedAtMs)
-      && component.observedAtMs <= entryTimestampMs
-      && entryTimestampMs - component.observedAtMs <= maximumAgeMs;
-  });
+  return Object.freeze({ provenance, maximumAgeMs, entryTimestampMs });
+}
+
+function fullCostComponentFailureReason(
+  position: Record<string, any>,
+  expectedMainSha: string,
+  name: EntryCostComponentName,
+): EntryCostComponentFailureReason | null {
+  const context = fullCostPositionContext(position, expectedMainSha);
+  if (!context) return 'POSITION_CONTEXT_NOT_READY';
+  const component = context.provenance?.components?.[name];
+  if (!record(component)) return 'COMPONENT_MISSING';
+  if (typeof component.valuePercent !== 'number'
+    || !Number.isFinite(component.valuePercent)
+    || component.valuePercent < 0) {
+    return 'VALUE_INVALID';
+  }
+  if (!nonEmpty(component.source)) return 'SOURCE_MISSING';
+  if (!ENTRY_COMPONENT_QUALITIES.includes(component.quality)) return 'QUALITY_INVALID';
+  if (!positiveInteger(component.observedAtMs)) return 'OBSERVED_AT_INVALID';
+  if (component.observedAtMs > context.entryTimestampMs) return 'OBSERVED_AFTER_ENTRY';
+  if (context.entryTimestampMs - component.observedAtMs > context.maximumAgeMs) return 'STALE';
+  return null;
+}
+
+function fullCostComponentReady(
+  position: Record<string, any>,
+  expectedMainSha: string,
+  name: EntryCostComponentName,
+): boolean {
+  return fullCostComponentFailureReason(position, expectedMainSha, name) === null;
+}
+
+function fullCostPositionReady(position: Record<string, any>, expectedMainSha: string): boolean {
+  return ENTRY_COMPONENTS.every((name) => (
+    fullCostComponentReady(position, expectedMainSha, name)
+  ));
+}
+
+function fullCostPositionIdentity(position: Record<string, any>): string | null {
+  if (!nonEmpty(position?.positionId)
+    || !nonEmpty(position?.paperSampleId)
+    || !nonEmpty(position?.candidateId)) {
+    return null;
+  }
+  return `${position.positionId}|${position.paperSampleId}|${position.candidateId}`;
+}
+
+function countUniquePositionEvidence(
+  positions: readonly Record<string, any>[],
+  predicate: (position: Record<string, any>) => boolean,
+): number {
+  const identities = new Set<string>();
+  let anonymousCount = 0;
+  for (const position of positions) {
+    if (!predicate(position)) continue;
+    const identity = fullCostPositionIdentity(position);
+    if (identity) {
+      identities.add(identity);
+    } else {
+      anonymousCount += 1;
+    }
+  }
+  return identities.size + anonymousCount;
 }
 
 function ownerPacketPayload(packet: Record<string, any>) {
@@ -464,15 +549,43 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
           : []),
       ]
     : [];
-  const fullCostReadyPositions = durablePositions.filter((position: any) => (
-    fullCostPositionReady(position, expectedMainSha)
-  )).length;
+  const fullCostReadyPositions = countUniquePositionEvidence(
+    durablePositions,
+    (position) => fullCostPositionReady(position, expectedMainSha),
+  );
+  const fullCostComponentEvidenceCounts = Object.freeze(Object.fromEntries(
+    ENTRY_COMPONENTS.map((name) => [
+      name,
+      countUniquePositionEvidence(
+        durablePositions,
+        (position) => fullCostComponentReady(position, expectedMainSha, name),
+      ),
+    ]),
+  ) as Record<EntryCostComponentName, number>);
+  const fullCostComponentFailureReasons = Object.freeze(Object.fromEntries(
+    ENTRY_COMPONENTS.map((name) => {
+      if (fullCostComponentEvidenceCounts[name] > 0) return [name, Object.freeze([])];
+      const reasons = new Set<EntryCostComponentFailureReason>();
+      for (const position of durablePositions) {
+        const reason = fullCostComponentFailureReason(position, expectedMainSha, name);
+        if (reason) reasons.add(reason);
+      }
+      return [name, Object.freeze([...reasons])];
+    }),
+  ) as Record<EntryCostComponentName, readonly EntryCostComponentFailureReason[]>);
   const fullCostComponentsReady = fullCostReadyPositions > 0;
   check(
     'FULL_COST_EIGHT_COMPONENT_DURABLE_READBACK',
     fullCostComponentsReady,
     'PAPER_CANONICAL_FULL_COST_EIGHT_COMPONENTS_NOT_READY',
   );
+  if (recurringReady && durablePositions.length > 0) {
+    for (const name of ENTRY_COMPONENTS) {
+      if (fullCostComponentEvidenceCounts[name] === 0) {
+        pushUnique(blockers, ENTRY_COMPONENT_BLOCKERS[name]);
+      }
+    }
+  }
 
   const settlementReadiness = recurringReady
     ? durableSettlementReadiness(
@@ -597,6 +710,8 @@ export async function probeManualPaperCanonicalRuntimeReadiness(
     paperStateSnapshotReady: snapshotReady,
     naturalPaperStateReady: recurringReady,
     fullCostComponentsReady,
+    fullCostComponentEvidenceCounts,
+    fullCostComponentFailureReasons,
     settlementDurablePacketReady: settlementReadiness.packetReady,
     closePositionCanonicalRebindReady: settlementReadiness.rebindReady,
     forwardObserverArtifactsReady: artifactsReady,
