@@ -41,7 +41,7 @@ test('Hub command is owner-only and staging-only', () => {
   const markers = [
     '  issue_comment:', 'types: [created]',
     'github.event.issue.number == 1102',
-    "github.event.comment.user.login == 'seungja3908-source'",
+    "github.event.comment.user.login == 'seungjae3908-source'",
     "github.event.comment.author_association == 'OWNER'",
     "startsWith(github.event.comment.body, '/run-trading-core-staging ')",
     'STAGING_CORE_HUB_EXACT_COMMAND_REQUIRED',
