@@ -134,7 +134,16 @@ export function BottomNav() {
     event: ReactKeyboardEvent<HTMLButtonElement>,
     groupId: NavigationGroupId,
     itemCount: number,
+    isOpen: boolean,
   ) {
+    // Space produces a native click on keyup. Async menu-item focus can
+    // steal focus between keydown/keyup, leaving the expanded menu stuck.
+    // While open, handle keyboard close on keydown and suppress native click.
+    if (isOpen && (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter')) {
+      event.preventDefault();
+      closeGroupMenu(groupId);
+      return;
+    }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       openGroupMenu(groupId, 0);
@@ -261,7 +270,7 @@ export function BottomNav() {
                       openGroupMenu(group.id, 0);
                     }
                   }}
-                  onKeyDown={(event) => handleTriggerKeyDown(event, group.id, visibleMenuItems.length)}
+                  onKeyDown={(event) => handleTriggerKeyDown(event, group.id, visibleMenuItems.length, menuOpen)}
                   className={cn(
                     'flex min-h-11 w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-xs font-semibold transition',
                     active || menuOpen ? 'text-primary' : 'text-muted-foreground active:text-foreground',
