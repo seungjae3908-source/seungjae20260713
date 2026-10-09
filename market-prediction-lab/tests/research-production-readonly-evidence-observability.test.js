@@ -319,12 +319,15 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     liveTrading: false,
     orderAuthority: false,
   }), "utf8").toString("base64url");
+  const currentMs = Date.now();
+  const triggerTime = new Date(currentMs - 40 * 60_000).toISOString();
+  const cycleTime = new Date(currentMs - 30 * 60_000).toISOString();
   const evidence = [
     "current_release_match=true",
-    "TIMER profile=forward enabled=enabled active=active last_trigger=2026-08-27T00:00:00Z",
+    `TIMER profile=forward enabled=enabled active=active last_trigger=${triggerTime}`,
     "TIMER profile=fast-historical enabled=enabled active=active last_trigger=2026-08-27T00:00:00Z",
     "TIMER profile=long-history enabled=enabled active=active last_trigger=2026-08-27T00:00:00Z",
-    `CYCLE profile=forward present=true research_sha=${sha} failed_count=0`,
+    `CYCLE profile=forward present=true research_sha=${sha} generated_at=${cycleTime} failed_count=0`,
     `CYCLE profile=fast-historical present=true research_sha=${sha} failed_count=0`,
     `CYCLE profile=long-history present=true research_sha=${sha} failed_count=0`,
     "TASK profile=forward id=formula-backtest-queue status=success",
@@ -357,6 +360,7 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(fields.status, "blocked_data");
     assert.equal(fields.release_match, "true");
     assert.equal(fields.forward_proven, "true");
+    assert.equal(fields.forward_clock_fresh, "true");
     assert.equal(fields.shadow_failure_details, "crypto-futures-15m:fail:Error:public_feed_unavailable");
     assert.equal(fields.natural_trace_status, "BLOCKED");
     assert.equal(fields.natural_trace_error, "none");
@@ -390,6 +394,18 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     const staleFields = outputFields(await readFile(outputPath, "utf8"));
     assert.equal(staleFields.status, "stale_release");
     assert.equal(staleFields.release_match, "false");
+    // A long-ago green cycle cannot pass as recent 24h forward research.
+    await writeFile(evidencePath, `${evidence.replace(`last_trigger=${triggerTime}`, "last_trigger=2026-01-01T00:00:00Z")}\n`);
+    await writeFile(outputPath, "");
+    const oldTimer = spawnSync(process.execPath, ["--input-type=module", "-e", classifier], {
+      cwd: REPO_ROOT, encoding: "utf8",
+      env: { ...process.env, EVIDENCE_FILE: evidencePath, GITHUB_OUTPUT: outputPath, RESEARCH_SHA: sha },
+    });
+    assert.equal(oldTimer.status, 1, oldTimer.stderr);
+    const oldFields = outputFields(await readFile(outputPath, "utf8"));
+    assert.equal(oldFields.status, "stale_cycle");
+    assert.equal(oldFields.forward_clock_fresh, "false");
+    assert.equal(oldFields.forward_proven, "false");
     const stageTrace = JSON.parse(Buffer.from(fields.natural_stage_trace_base64, "base64url").toString("utf8"));
     assert.equal(stageTrace.length, 12);
     assert.deepEqual(stageTrace.find((row) => row.stage === "PAPER_ENTRY"), {

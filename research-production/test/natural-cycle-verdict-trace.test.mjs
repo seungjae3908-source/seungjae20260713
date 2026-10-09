@@ -477,13 +477,14 @@ test('runtime adapter exposes the canonical trace without changing the legacy ve
 // Isolated observer regression suite; never simulates actual Production authority.
 {
 const SHA = 'a'.repeat(40);
-const timer = { last_trigger: '2026-10-09T09:00:00Z' };
-const cycle = { present: 'true', research_sha: SHA, failed_count: '0' };
+const NOW_MS = Date.parse('2026-10-09T09:40:00Z');
+const timer = { last_trigger: 'Fri_2026-10-09_09:11:00_UTC' };
+const cycle = { present: 'true', research_sha: SHA, generated_at: '2026-10-09T09:22:00Z', failed_count: '0' };
 const tasks = EXPECTED_FORWARD_TASK_IDS.map((id) => ({
   profile: 'forward', id, status: 'success',
 }));
 const observe = (patch = {}) => assessForwardCycleEvidence({
-  expectedSha: SHA, timer, cycle, tasks, ...patch,
+  expectedSha: SHA, timer, cycle, tasks, nowMs: NOW_MS, ...patch,
 });
 const classify = (forward, patch = {}) => classifyNaturalCycleEvidence({
   releaseMatch: true, timersHealthy: true, forward, paperSafe: true,
@@ -496,7 +497,7 @@ test('a natural forward cycle requires all THREE actual production tasks', () =>
   ]);
   assert.deepEqual(observe(), {
     observed: true, sourceExact: true, exactTasks: true,
-    hasBlockedData: false, allSucceeded: true,
+    clockFresh: true, hasBlockedData: false, allSucceeded: true,
   });
   assert.equal(observe({ tasks: tasks.slice(1) }).observed, false);
   assert.equal(observe({ tasks: [...tasks, tasks[0]] }).observed, false);
@@ -512,6 +513,25 @@ test('wrong cycle SHA and untrusted last-trigger never count as observed', () =>
   assert.equal(observe({ tasks: tasks.map(row => ({...row, status:'skipped'})) }).observed, false);
 });
 
+test('hourly forward cycle needs a fresh systemd trigger and matching cycle epoch', () => {
+  assert.equal(observe().clockFresh, true);
+  assert.equal(observe({ timer: { last_trigger: 'Fri_2026-10-09_18:11:00_KST' } }).clockFresh, true);
+  for (const stale of [
+    { timer: { last_trigger: '2026-10-09T06:00:00Z' } },
+    { timer: { last_trigger: 'Fri_2026-10-09_06:00:00_UTC' } },
+    { cycle: { ...cycle, generated_at: '2026-10-09T06:00:00Z' } },
+    { cycle: { ...cycle, generated_at: '2026-10-09T09:00:00Z' } },
+    { timer: { last_trigger: '2030-10-09T09:11:00Z' } },
+    { timer: { last_trigger: 'Fri_2026-10-09_09:11:00_UNKNOWN' } },
+    { cycle: { ...cycle, generated_at: undefined } },
+  ]) {
+    const result = observe(stale);
+    assert.equal(result.clockFresh, false);
+    assert.equal(result.observed, false);
+    assert.equal(classify(result), 'stale_cycle');
+  }
+  assert.equal(classify(observe(), { releaseMatch: false }), 'stale_release');
+});
 test('blocked_data tasks are observed but never promoted to operational PASS', () => {
   const blocked = observe({ tasks: [
     { ...tasks[0], status: 'blocked_data' },
