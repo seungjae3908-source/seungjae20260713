@@ -179,7 +179,8 @@ jobs:
             && value?.telegramUserConnectionRequired === !telegramConnected
             && value?.telegramPersonalActivationRequired === true
             && value?.telegramDeliveryQueued === 0
-            && value?.telegramTestDelivered === false;
+            && value?.telegramTestDelivered === false
+            && value?.telegramFillDeliveryConfirmed === false;
           const telegramVerified = value?.telegramActivationState === 'ACTIVE_VERIFIED'
             && value?.telegramActivationReady === true
             && telegramConnected === true
@@ -187,7 +188,8 @@ jobs:
             && value?.telegramUserConnectionRequired === false
             && value?.telegramPersonalActivationRequired === false
             && Number(value?.telegramDeliveryQueued) >= 1
-            && value?.telegramTestDelivered === true;
+            && value?.telegramTestDelivered === true
+            && value?.telegramFillDeliveryConfirmed === true;
           const memberAutoPilotStage = String(value?.memberAutoPilotStage ?? '');
           const expectedLivePilotReady = ['limited-50', 'validated', 'formula-ai-exception'].includes(memberAutoPilotStage);
           const memberAutoPolicyReady = value?.memberAutoPolicyReady === true
@@ -248,5 +250,5 @@ jobs:
             echo '- Research/AI Chart/Backtester/other UI: not evaluated'
             echo '- real orders/cancels/amends/transfers/withdrawals: 0/0/0/0/0'
             echo '- Paper canary: one bounded QA trade'
-            echo '- Telegram: explicit READY_FOR_ACTIVATION or ACTIVE_VERIFIED receipt; [TEST] delivery required only for ACTIVE_VERIFIED'
+            echo '- Telegram: ACTIVE_VERIFIED requires exact canary ORDER_FILLED SENT receipt and an independent [TEST] delivery; otherwise readiness only'
           } >> "$GITHUB_STEP_SUMMARY"
