@@ -2,7 +2,9 @@ import { evaluateTradingOptimization } from './trade-automation-optimization.ser
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
   type TradingAssetClass,
   type TradingMarketSnapshot,
@@ -78,6 +80,9 @@ export function normalizeTradingPolicy(
   const maximumSingleEntryKrw = requestedMaximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const maximumBitgetLeverage = maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
   const leverage = input.bitgetLeverage == null
     ? DEFAULT_TRADING_POLICY.bitgetLeverage
     : Number(input.bitgetLeverage);
@@ -146,7 +151,10 @@ export function normalizeTradingPolicy(
     maxOpenPositions: Math.round(clampNumber(input.maxOpenPositions, 1, 50, DEFAULT_TRADING_POLICY.maxOpenPositions)),
     maxDailyOrders: Math.round(clampNumber(input.maxDailyOrders, 1, 100, DEFAULT_TRADING_POLICY.maxDailyOrders)),
     maxConsecutiveLosses: Math.round(clampNumber(input.maxConsecutiveLosses, 1, 20, DEFAULT_TRADING_POLICY.maxConsecutiveLosses)),
-    bitgetLeverage: leverage as 2 | 3 | 4 | 5 | 6 | 7,
+    // Stored policies from before role-scoped leverage are read fail-closed.
+    // Administrator 4x-7x values remain exact; member values above 3x are
+    // reduced to the member ceiling before any Paper or Live worker sees them.
+    bitgetLeverage: Math.min(leverage, maximumBitgetLeverage) as 2 | 3 | 4 | 5 | 6 | 7,
     riskOptimizationEnabled: input.riskOptimizationEnabled !== false,
     pilotStage,
     riskPerTradePercent: {
