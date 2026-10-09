@@ -245,7 +245,7 @@ export function buildSuccessorScheduleAuthorityEvidence({
   requiredMainCiRunId,
   requiredCandidateCiRunId = null,
 }) {
-  if (issueNumber !== 23 || issueTitle !== 'Staging Readiness Control') {
+  if (issueNumber !== 1555 || issueTitle !== 'Staging Readiness Control — Rollover 2026-10-02') {
     fail('SUCCESSOR_AUTHORITY_WRONG_RELEASE_CONTROL_ISSUE');
   }
   if (approvedBy !== 'seungjae3908-source' || authorAssociation !== 'OWNER') {
@@ -261,7 +261,7 @@ export function buildSuccessorScheduleAuthorityEvidence({
   if (!Number.isSafeInteger(Number(commentId)) || Number(commentId) <= 0) {
     fail('SUCCESSOR_AUTHORITY_COMMENT_ID_INVALID');
   }
-  if (!String(commentUrl ?? '').includes('/issues/23#issuecomment-')) {
+  if (!String(commentUrl ?? '').includes('/issues/1555#issuecomment-')) {
     fail('SUCCESSOR_AUTHORITY_COMMENT_URL_INVALID');
   }
   if (!Number.isFinite(Date.parse(String(commandCreatedAt ?? '')))) {
@@ -277,8 +277,8 @@ export function buildSuccessorScheduleAuthorityEvidence({
     action: command.action,
     authorityStatus: command.action === 'AUTHORIZE' ? 'HUMAN_AUTHORITY_FROZEN' : 'HUMAN_AUTHORITY_REVOKED',
     repository: 'seungjae3908-source/seungjae20260713',
-    releaseControlIssue: 23,
-    releaseControlIssueTitle: 'Staging Readiness Control',
+    releaseControlIssue: 1555,
+    releaseControlIssueTitle: 'Staging Readiness Control — Rollover 2026-10-02',
     canonicalHubIssue: 838,
     approvalCommentId: Number(commentId),
     approvalCommentUrl: commentUrl,
