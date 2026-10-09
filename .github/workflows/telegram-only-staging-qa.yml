@@ -9,10 +9,14 @@ on:
       - ops/telegram-sixroom-vault-readonly-preflight.mjs
       - api-server/test.mjs
       - api-server/package.json
-      - api-server/src/services/telegram-*.ts
-      - api-server/src/services/scanner-telegram-*.ts
-      - api-server/src/services/member-holdings-telegram-*.ts
-      - api-server/src/features/user-broker-telegram/**
+      - 'api-server/src/**/*telegram*'
+      - 'api-server/src/features/user-broker-telegram/**'
+      - 'api-server/scripts/*telegram*'
+      - 'stock-analyzer/src/**/*telegram*'
+      - 'ops/*telegram*'
+      - '.github/workflows/*telegram*'
+      - '.github/tests/*telegram*'
+      - docs/telegram-only-staging-qa.md
   issue_comment:
     types: [created]
 
