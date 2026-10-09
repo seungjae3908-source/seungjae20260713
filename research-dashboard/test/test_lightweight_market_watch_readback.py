@@ -166,7 +166,9 @@ class MarketWatchReadbackTest(unittest.TestCase):
             self.assertEqual(read_watch_status(root, NOW_MS, SHA)['status'], 'PARTIAL')
             readback = build_research_overview(root)
             self.assertEqual(readback['dataFactory']['lightweightMarketWatch']['status'], 'INVALID')
-            with patch('server.read_active_research_sha', return_value=SHA):
+            with patch('server.read_active_research_sha', return_value=SHA), \
+                    patch('lightweight_market_watch_readback.time.time',
+                          return_value=NOW_MS / 1000):
                 verified = build_research_overview(root)
             self.assertEqual(verified['dataFactory']['lightweightMarketWatch']['status'], 'PARTIAL')
             self.assertEqual(read_watch_status(root, NOW_MS, require_exact_sha=True)['status'], 'INVALID')
