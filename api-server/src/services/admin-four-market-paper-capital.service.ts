@@ -193,19 +193,21 @@ export function adminMarketPaperRiskBudget(input: {
   if (!finiteNonnegative(exposureKrw)) return { ready: false as const,
     blockers: ['ADMIN_PAPER_EXPOSURE_INVALID'],
     availableToTradeKrw: 0, exposureKrw: 0, accountValueKrw: 0 };
+  // Wallet seed is not collateral proof: the full canonical execution ledger
+  // must be reviewed, even when no filled trades are known yet.
   const capital = input.verifiedCapital;
-  if (capital && (!capital.settlementReady || !capital.newEntriesAllowed
-    || capital.market !== input.market)) {
+  if (!capital || !capital.settlementReady || !capital.newEntriesAllowed
+    || capital.market !== input.market) {
     return { ready: false as const,
-      blockers: capital.blockers.length ? capital.blockers
-        : ['ADMIN_PAPER_VERIFIED_CAPITAL_UNDERFUNDED'],
+      blockers: !capital ? ['ADMIN_PAPER_CANONICAL_SETTLEMENT_REQUIRED']
+        : capital.blockers.length ? capital.blockers
+          : ['ADMIN_PAPER_VERIFIED_CAPITAL_UNDERFUNDED'],
       availableToTradeKrw: 0, exposureKrw: 0, accountValueKrw: 0 };
   }
-  const equity = capital?.operatingCapitalKrw ?? wallet.equityKrw!;
+  const equity = capital.operatingCapitalKrw;
   // Only settlement-verified growth may increase a frozen 1m seed wallet.
   // Any independently recorded loss or margin restriction remains binding.
-  const verifiedGrowth = capital
-    ? Math.max(0, capital.operatingCapitalKrw - ADMIN_MARKET_INITIAL_KRW) : 0;
+  const verifiedGrowth = Math.max(0, equity - ADMIN_MARKET_INITIAL_KRW);
   const collateral = Math.min(equity,
     wallet.equityKrw! + verifiedGrowth,
     wallet.cashKrw! + verifiedGrowth,
@@ -213,7 +215,7 @@ export function adminMarketPaperRiskBudget(input: {
   return {
     ready: true as const, blockers: [] as string[],
     accountValueKrw: equity, exposureKrw,
-    reserveKrw: capital?.reserveKrw ?? wallet.reserveKrw ?? 0,
+    reserveKrw: capital.reserveKrw,
     availableToTradeKrw: Math.max(0, collateral - exposureKrw),
   };
 }
