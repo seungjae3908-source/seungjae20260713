@@ -233,3 +233,22 @@ test('Admin V2 database RLS requires restrictive row-write policies and denies c
   assert.ok(ui.includes('databaseGuardMissing'));
   assert.ok(ui.includes('|| databaseGuardMissing'));
 });
+
+test('Admin V2 DB readiness verifies role, deny operator and immutable 1m seed', () => {
+  const migration = read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
+  const staging = read('api-server/supabase/test/admin_four_paper_wallet_rls_guard_integration.sql');
+  const checks = [
+    'admin_four_market_paper_seed_contract',
+    "'authenticated'::name = any(roles)",
+    "with_check ~* '(!~~|not[[:space:]]+like)'",
+    'with_check (id not like',
+    'revoke truncate, references, trigger',
+    'reserveWithdrawalAutomatic',
+    'market',
+  ];
+  for (const proof of checks) assert.ok(migration.includes(proof), proof);
+  assert.ok(staging.includes('ADMIN_PAPER_DB_OWNER_FALSE_SEED_ALLOWED'));
+  assert.ok(staging.includes('ADMIN_PAPER_RLS_RENAME_ALLOWED'));
+  assert.ok(staging.includes('ADMIN_PAPER_RLS_UPSERT_ALLOWED'));
+  assert.ok(staging.includes('ADMIN_PAPER_CLIENT_TRUNCATE_ALLOWED'));
+});
