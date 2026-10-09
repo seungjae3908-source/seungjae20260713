@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { automaticLiveExecutionEnabled } from './trade-automation.service';
-import { DEFAULT_TRADING_POLICY, type ExchangeConnection, type TradingPlan, type TradingPolicy } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type ExchangeConnection,
+  type TradingPlan,
+  type TradingPolicy,
+} from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
@@ -584,7 +590,7 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
-test('Bitget futures worker preserves every validated 4x-7x policy and evidence into the plan', async () => {
+test('Bitget futures worker preserves administrator 4x-7x and blocks the same evidence for members', async () => {
   for (const expectedLeverage of [4, 5, 6, 7] as const) {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
@@ -598,7 +604,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
     },
     exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
     bitgetLeverage: expectedLeverage,
-  });
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
   await repository.savePolicy(USER, futuresPolicy);
 
   const futuresHandoff = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
@@ -640,7 +646,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
       return [{
         userId: USER,
         policy: futuresPolicy,
-        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
       }];
     },
     async resolveFx() {
@@ -662,6 +668,33 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
   assert.equal(plans[0]?.exchange, 'bitget');
   assert.equal(plans[0]?.leverage, expectedLeverage);
   assert.equal(plans[0]?.marginMode, 'isolated');
+
+  const memberRepository = new InMemoryTradingRepository();
+  await memberRepository.savePolicy(USER, futuresPolicy);
+  const memberBase = source(memberRepository, nowMs);
+  const memberWorker = new MemberAutoTradingBackgroundWorker({
+    ...memberBase,
+    async readHandoff() { return futuresHandoff as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: futuresPolicy,
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+      }];
+    },
+    async resolveFx() {
+      return {
+        market: 'CRYPTO_FUTURES',
+        krwPerQuoteCurrency: 1_400,
+        source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(nowMs).toISOString(),
+        stale: false,
+      };
+    },
+  });
+  const memberResult = await withFetchMock(() => memberWorker.runOnce(new Date(nowMs)));
+  assert.equal(memberResult.createdPlans, 0);
+  assert.equal((await memberRepository.listPlans(USER)).length, 0);
   }
 });
 

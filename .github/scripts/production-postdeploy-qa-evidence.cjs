@@ -424,6 +424,8 @@ function buildProductionPostdeployQaEvidence({
     bitgetPositionMode: account.bitgetPositionMode,
     bitgetMarginModePolicy: 'isolated',
     bitgetLeveragePolicy: '2-7',
+    bitgetAdministratorLeveragePolicy: '2-7',
+    bitgetMemberLeveragePolicy: '2-3',
     duplicateWorkerExecutionCount: 0,
     pm2FlagDriftCount: 0,
     legacyCryptoAutoAuthorityGranted: false,

@@ -40,6 +40,8 @@ type Status = {
   policy: Policy;
   initialMaxOrderKrw?: number;
   administratorOrderBaseline?: boolean;
+  maximumBitgetLeverage?: 3 | 7;
+  administratorLeveragePolicy?: boolean;
   connections: Array<{
     exchange: Exchange; accountMode: 'paper' | 'mock' | 'live'; configured: boolean;
     lastVerifiedAt: string | null; lastErrorCode: string | null; credentialsExposed: false;
@@ -138,8 +140,10 @@ const MARKET_DESCRIPTIONS: Record<Market, string> = {
   domestic_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
   us_stock: 'Kiwoom 고정 · LONG only',
   crypto_spot: 'Upbit 고정 · 모의매매 지원',
-  crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated 2~7배',
+  crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated · 역할별 레버리지 상한',
 };
+
+const BITGET_LEVERAGE_OPTIONS = [2, 3, 4, 5, 6, 7] as const;
 
 const DEFAULT_MARKETS: MarketSwitches = {
   domestic_stock: true,
@@ -230,6 +234,8 @@ export function TradeAutomationSettings({
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
   const refreshInFlight = useRef(false);
+  const maximumBitgetLeverage = status?.maximumBitgetLeverage
+    ?? (canManagePilot ? 7 : 3);
 
   async function load({ syncDraft = true }: { syncDraft?: boolean } = {}) {
     if (fixture || refreshInFlight.current) return;
@@ -309,6 +315,7 @@ export function TradeAutomationSettings({
     const outbound: UiPolicy = {
       ...draft,
       mode: 'automatic',
+      bitgetLeverage: Math.min(draft.bitgetLeverage, maximumBitgetLeverage) as Policy['bitgetLeverage'],
       exchangeEnabled: exchangesForMarkets(draft.marketEnabled, draft.stockBrokerByMarket),
     };
     if (fixture) {
@@ -661,20 +668,26 @@ export function TradeAutomationSettings({
       Bitget 레버리지
       <select
         aria-label="Bitget 레버리지"
-        value={draft.bitgetLeverage}
+        value={Math.min(draft.bitgetLeverage, maximumBitgetLeverage)}
         onChange={(event) => setDraft((value) => ({
           ...value,
-          bitgetLeverage: Math.min(7, Math.max(2, Number(event.target.value))) as 2 | 3 | 4 | 5 | 6 | 7,
+          bitgetLeverage: Math.min(
+            maximumBitgetLeverage, Math.max(2, Number(event.target.value)),
+          ) as Policy['bitgetLeverage'],
         }))}
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3"
       >
-        <option value="2">2배 (기본)</option>
-        <option value="3">3배</option>
-        <option value="4">4배</option>
-        <option value="5">5배</option>
-        <option value="6">6배</option>
-        <option value="7">7배 (최대)</option>
+        {BITGET_LEVERAGE_OPTIONS
+          .filter((leverage) => leverage <= maximumBitgetLeverage)
+          .map((leverage) => (
+            <option key={leverage} value={leverage}>
+              {leverage}배{leverage === 2 ? ' (기본)' : leverage === maximumBitgetLeverage ? ' (최대)' : ''}
+            </option>
+          ))}
       </select>
+      <span className="mt-2 block text-[11px] font-semibold text-muted-foreground">
+        {maximumBitgetLeverage === 7 ? '관리자 최대 7배' : '회원 최대 3배'} · isolated만 허용
+      </span>
     </label> : null}
 
     {canManagePilot ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="formula-ai-pilot-control">
@@ -756,7 +769,7 @@ export function TradeAutomationSettings({
           <dt className="font-bold">활성 시장</dt><dd>{activeMarkets.map((market) => MARKET_LABELS[market]).join(', ') || '없음'}</dd>
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
-          <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
+          <dt className="font-bold">레버리지</dt><dd>Bitget {Math.min(draft.bitgetLeverage, maximumBitgetLeverage)}배 · 역할 상한 {maximumBitgetLeverage}배 · isolated</dd>
           <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '없음 · 자동 신규진입 차단'}</dd>
           <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>

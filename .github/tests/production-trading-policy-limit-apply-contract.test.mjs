@@ -37,7 +37,14 @@ test('administrator Production 1M policy apply stays inside the one-approval exa
   assert.ok(route.includes("executionAuthority: 'NONE'"));
   assert.ok(types.includes('PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW = 500_000'));
   assert.ok(types.includes('PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW = 1_000_000'));
+  assert.ok(types.includes('PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3'));
+  assert.ok(types.includes('PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7'));
   assert.ok(risk.includes('requestedMaximumSingleEntryKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW'));
+  assert.ok(risk.includes('Math.min(leverage, maximumBitgetLeverage)'));
+  assert.ok(route.includes("error: 'BITGET_LEVERAGE_ROLE_LIMIT'"));
+  assert.ok(route.includes('maximumBitgetLeverage: maximumBitgetLeverage(req)'));
+  assert.ok(ui.includes("maximumBitgetLeverage === 7 ? '관리자 최대 7배' : '회원 최대 3배'"));
+  assert.ok(ui.includes('.filter((leverage) => leverage <= maximumBitgetLeverage)'));
   assert.ok(pilotCatalog.includes('initialOperatingCapitalKrw: 500_000'));
   assert.ok(pilotCapital.includes('policyMaxOrder + growth'));
   assert.ok(pilotCapital.includes('rulePackPilotInitialCapitalForPolicy'));
