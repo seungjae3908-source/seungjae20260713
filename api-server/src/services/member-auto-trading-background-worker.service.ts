@@ -22,6 +22,13 @@ import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
 import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal.types';
+import {
+  ADMIN_FOUR_PAPER_MARKETS,
+  type AdminPaperMarket,
+  adminPaperMarketFromPlan,
+  adminMarketPaperRiskBudget,
+  inspectAdminFourMarketPaperWallets,
+} from './admin-four-market-paper-capital.service';
 import type {
   ExchangeConnection,
   TradingAssetClass,
@@ -293,6 +300,8 @@ type MemberRuntimeState = Readonly<{
   dailyPnlPercent: number;
   weeklyPnlPercent: number;
   consecutiveLosses: number;
+  adminMarketWalletRows: readonly StoredPaperJournalRecord[] | null;
+  adminMarketRisk: Record<AdminPaperMarket, ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>> | null;
   plans: readonly TradingPlan[];
   orders: readonly TradingOrder[];
 }>;
@@ -932,52 +941,97 @@ async function memberRuntimeState(
   repository: TradingRepository,
   paper: PaperJournalRepository,
   nowMs: number,
+  adminMember = false,
 ): Promise<MemberRuntimeState> {
-  // A missing/broken Paper account must quarantine *new* entries but must
-  // not hide already-filled real broker positions from guarded exit tracking.
+  // A missing/broken Paper wallet quarantines new entries; it must never
+  // hide pre-existing Live positions from their guarded read-only supervisor.
   const [paperResult, plans, orders] = await Promise.all([
     paper.listSnapshot(userId)
       .then((records) => ({ records, validRead: true }))
-      .catch(() => ({ records: [] as Awaited<ReturnType<PaperJournalRepository['listSnapshot']>>, validRead: false })),
-    repository.listPlans(userId),
-    repository.listOrders(userId),
+      .catch(() => ({
+        records: [] as Awaited<ReturnType<PaperJournalRepository['listSnapshot']>>,
+        validRead: false,
+      })),
+    repository.listPlans(userId), repository.listOrders(userId),
   ]);
-  const automaticEquity = paperResult.validRead
-    ? selectAutomaticPaperAccountEquity(paperResult.records) : null;
-  const paperWalletOpenedAtMs = paperResult.validRead
-    ? automaticPaperWalletServerEpochMs(paperResult.records, nowMs) : null;
-  // No epoch means new orders cannot safely be distinguished from old QA fills.
-  const paperAccountReady = automaticEquity != null && paperWalletOpenedAtMs !== null;
-  const equity = automaticEquity ?? 0;
-  // Invalid historical Paper order dates, incompatible partial fills, or
-  // malformed canonical projections must quarantine NEW exposure without
-  // aborting the member tick: existing risk-reducing exits still need tracking.
-  let risk: ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>;
-  try {
-    risk = automaticPaperRiskEvidenceFromCanonicalLedger(
-      userId, orders, plans, nowMs, equity, paperWalletOpenedAtMs,
-    );
-  } catch {
-    risk = {
-      ready: false,
-      blockers: ['BACKGROUND_PAPER_RISK_EVIDENCE_UNAVAILABLE'],
-      dailyPnlPercent: 0, weeklyPnlPercent: 0,
-      consecutiveLosses: 0, closedTrades: 0,
-    };
+  const records = paperResult.records;
+  // Admin V2 is opt-in on a durable wallet row, not inferred from role.
+  // Existing admin/regular V1 tests and journals remain backward compatible.
+  const fourMarketMode = adminMember && records.some((row) =>
+    row.kind === 'account' && row.id.startsWith('automatic-paper-admin-v2:'));
+  const marketWallets = fourMarketMode && paperResult.validRead
+    ? inspectAdminFourMarketPaperWallets(records, nowMs) : null;
+  const automaticEquity = !fourMarketMode && paperResult.validRead
+    ? selectAutomaticPaperAccountEquity(records) : null;
+  const paperWalletOpenedAtMs = fourMarketMode
+    ? marketWallets?.walletOpenedAtMs ?? null
+    : paperResult.validRead ? automaticPaperWalletServerEpochMs(records, nowMs) : null;
+  const paperAccountReady = fourMarketMode
+    ? marketWallets?.ready === true && paperWalletOpenedAtMs != null
+    : automaticEquity != null && paperWalletOpenedAtMs != null;
+  const equity = fourMarketMode && marketWallets?.ready
+    ? ADMIN_FOUR_PAPER_MARKETS.reduce(
+        (sum, market) => sum + (marketWallets.marketWallets[market].equityKrw ?? 0), 0)
+    : automaticEquity ?? 0;
+  const emptyRisk = (code: string): ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger> => ({
+    ready: false, blockers: [code], dailyPnlPercent: 0, weeklyPnlPercent: 0,
+    consecutiveLosses: 0, closedTrades: 0,
+  });
+  let risk = emptyRisk('BACKGROUND_PAPER_WALLET_REQUIRED');
+  let adminMarketRisk: MemberRuntimeState['adminMarketRisk'] = null;
+  if (fourMarketMode && marketWallets?.ready && paperWalletOpenedAtMs != null) {
+    const byId = new Map(plans.map((plan) => [plan.id, plan]));
+    // Unknown filled plan references can never be assigned to an innocent
+    // market. Fail-close all new entries, without touching exit supervision.
+    const orphan = orders.some((order) => !byId.has(order.planId)
+      && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
+        || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0));
+    const truncated = orders.length >= 500 || plans.length >= 200;
+    adminMarketRisk = {} as NonNullable<MemberRuntimeState['adminMarketRisk']>;
+    for (const market of ADMIN_FOUR_PAPER_MARKETS) {
+      const account = marketWallets.marketWallets[market];
+      const scopedPlans = plans.filter((plan) => plan.accountMode === 'paper'
+        && adminPaperMarketFromPlan(plan) === market);
+      const allowedPlans = new Set(scopedPlans.map((plan) => plan.id));
+      const scopedOrders = orders.filter((order) => allowedPlans.has(order.planId));
+      let laneRisk = emptyRisk('BACKGROUND_PAPER_RISK_EVIDENCE_UNAVAILABLE');
+      if (!orphan && !truncated && account.openedAtMs != null) {
+        try {
+          laneRisk = automaticPaperRiskEvidenceFromCanonicalLedger(
+            userId, scopedOrders, scopedPlans, nowMs,
+            account.equityKrw ?? 0, account.openedAtMs,
+          );
+        } catch { /* A malformed market lane must not borrow funds from its peers. */ }
+      }
+      adminMarketRisk[market] = laneRisk;
+    }
+    const allReady = ADMIN_FOUR_PAPER_MARKETS.every((market) => adminMarketRisk![market].ready);
+    risk = allReady ? { ready: true, blockers: [],
+      dailyPnlPercent: Math.min(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
+        adminMarketRisk![market].dailyPnlPercent)),
+      weeklyPnlPercent: Math.min(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
+        adminMarketRisk![market].weeklyPnlPercent)),
+      consecutiveLosses: Math.max(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
+        adminMarketRisk![market].consecutiveLosses)),
+      closedTrades: ADMIN_FOUR_PAPER_MARKETS.reduce((sum, market) =>
+        sum + adminMarketRisk![market].closedTrades, 0),
+    } : emptyRisk('ADMIN_PAPER_MARKET_RISK_EVIDENCE_REQUIRED');
+  } else if (!fourMarketMode) {
+    try {
+      risk = automaticPaperRiskEvidenceFromCanonicalLedger(
+        userId, orders, plans, nowMs, equity, paperWalletOpenedAtMs,
+      );
+    } catch { risk = emptyRisk('BACKGROUND_PAPER_RISK_EVIDENCE_UNAVAILABLE'); }
   }
   return Object.freeze({
-    paperAccountReady,
-    paperWalletOpenedAtMs,
-    snapshotObservedAtMs: nowMs,
-    paperFinancialRiskReady: paperAccountReady && risk.ready,
-    accountEquity: equity,
-    // Only canonical automatic Paper close evidence can affect risk limits.
-    // User-imported journals and missing settlement components earn no credit.
+    paperAccountReady, paperWalletOpenedAtMs, snapshotObservedAtMs: nowMs,
+    paperFinancialRiskReady: paperAccountReady && risk.ready, accountEquity: equity,
     dailyPnlPercent: risk.dailyPnlPercent,
     weeklyPnlPercent: risk.weeklyPnlPercent,
     consecutiveLosses: risk.consecutiveLosses,
-    plans,
-    orders,
+    adminMarketWalletRows: fourMarketMode ? records : null,
+    adminMarketRisk,
+    plans, orders,
   });
 }
 
@@ -991,33 +1045,50 @@ function exposureState(
   const active = openAutomaticPlans(runtime, accountMode === 'live' ? 'live' : 'paper');
   const mapping = marketMapping(entry.identity.market, policy);
   const side = sideFor(entry.identity.direction);
-  const sameInstrument = active.filter((plan) => plan.exchange === mapping.exchange
+  const sameClass = active.filter((plan) =>
+    marketMappingForPlan(plan).assetClass === mapping.assetClass);
+  const sameInstrument = sameClass.filter((plan) => plan.exchange === mapping.exchange
     && plan.symbol.toUpperCase() === entry.identity.symbol.toUpperCase());
-  const sameStrategy = active.filter((plan) => plan.strategyId === entry.identity.strategyId);
-  const sameClass = active.filter((plan) => marketMappingForPlan(plan).assetClass === mapping.assetClass);
-  const sum = (plans: readonly TradingPlan[]) => plans.reduce((total, plan) => total + Math.max(0, Number(plan.estimatedKrw) || 0), 0);
-  const accountExposureKrw = sum(active);
+  const sameStrategy = runtime.adminMarketRisk && accountMode === 'paper'
+    ? sameClass.filter((plan) => plan.strategyId === entry.identity.strategyId)
+    : active.filter((plan) => plan.strategyId === entry.identity.strategyId);
+  const sum = (rows: readonly TradingPlan[]) =>
+    rows.reduce((total, plan) => total + Math.max(0, Number(plan.estimatedKrw) || 0), 0);
+  const marketIsolated = runtime.adminMarketRisk != null && accountMode === 'paper';
+  const budget = marketIsolated
+    ? adminMarketPaperRiskBudget({
+        market: mapping.assetClass, records: runtime.adminMarketWalletRows ?? [],
+        openPlans: active, nowMs,
+      }) : null;
+  if (budget && !budget.ready) throw new Error('ADMIN_PAPER_MARKET_RISK_BUDGET_UNAVAILABLE');
+  const accountExposureKrw = marketIsolated ? sum(sameClass) : sum(active);
   const instrumentExposureKrw = sum(sameInstrument);
+  const budgetEquity = budget?.accountValueKrw ?? policy.totalCapitalKrw;
   return {
-    accountExposureKrw,
-    instrumentExposureKrw,
+    accountExposureKrw, instrumentExposureKrw,
     strategyExposureKrw: sum(sameStrategy),
     assetClassExposureKrw: sum(sameClass),
-    openRiskKrw: active.reduce((total, plan) => total + plannedRiskKrw(plan), 0),
-    openPositionCount: active.length,
+    openRiskKrw: (marketIsolated ? sameClass : active)
+      .reduce((total, plan) => total + plannedRiskKrw(plan), 0),
+    openPositionCount: marketIsolated ? sameClass.length : active.length,
     dailyOrderCount: runtime.orders.filter((order) => {
       const plan = runtime.plans.find((candidate) => candidate.id === order.planId);
       const at = Date.parse(order.createdAt);
       return plan?.accountMode === accountMode
+        && (!marketIsolated || marketMappingForPlan(plan).assetClass === mapping.assetClass)
         && (accountMode !== 'paper' || automaticPaperOrderWithinWalletEpoch(
           plan, order, runtime.paperWalletOpenedAtMs, nowMs))
         && Number.isFinite(at) && at >= nowMs - 24 * 60 * 60_000;
     }).length,
     existingPositionSide: sameInstrument.find((plan) => plan.side === side)?.side
-      ?? sameInstrument[0]?.side
-      ?? null,
-    assetExposurePercent: instrumentExposureKrw / Math.max(1, policy.totalCapitalKrw) * 100,
-    availableBalance: Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
+      ?? sameInstrument[0]?.side ?? null,
+    assetExposurePercent: (marketIsolated ? sum(sameClass) : instrumentExposureKrw)
+      / Math.max(1, budgetEquity) * 100,
+    accountValueKrw: budgetEquity,
+    availableBalance: budget ? Math.min(
+      budget.availableToTradeKrw,
+      Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
+    ) : Math.max(0, policy.totalCapitalKrw - accountExposureKrw),
   };
 }
 
@@ -1071,6 +1142,7 @@ function buildPlanInput(
   if (!positive(estimatedKrw)) throw new Error('BACKGROUND_ORDER_KRW_INVALID');
 
   const exposure = exposureState(runtime, member.policy, entry, nowMs);
+  const marketRisk = runtime.adminMarketRisk?.[mapping.assetClass] ?? null;
   const slippage = costPercent(entry, 'slippageRate');
   const fee = costPercent(entry, 'commissionRate');
   const averageSpread = costPercent(entry, 'spreadRate');
@@ -1152,9 +1224,9 @@ function buildPlanInput(
       orderbookGapPercent: quote.spreadPercent,
       halted: marketStatus !== 'OPEN',
       availableBalance: exposure.availableBalance,
-      accountValueKrw: member.policy.totalCapitalKrw,
-      dailyPnlPercent: runtime.dailyPnlPercent,
-      weeklyPnlPercent: runtime.weeklyPnlPercent,
+      accountValueKrw: exposure.accountValueKrw,
+      dailyPnlPercent: marketRisk?.dailyPnlPercent ?? runtime.dailyPnlPercent,
+      weeklyPnlPercent: marketRisk?.weeklyPnlPercent ?? runtime.weeklyPnlPercent,
       assetExposurePercent: exposure.assetExposurePercent,
       accountExposureKrw: exposure.accountExposureKrw,
       instrumentExposureKrw: exposure.instrumentExposureKrw,
@@ -1163,7 +1235,7 @@ function buildPlanInput(
       openRiskKrw: exposure.openRiskKrw,
       openPositionCount: exposure.openPositionCount,
       dailyOrderCount: exposure.dailyOrderCount,
-      consecutiveLosses: runtime.consecutiveLosses,
+      consecutiveLosses: marketRisk?.consecutiveLosses ?? runtime.consecutiveLosses,
       existingPositionSide: exposure.existingPositionSide,
       liquidationDistancePercent: mapping.exchange === 'bitget'
         ? Number(evidence?.liquidationDistancePct)
@@ -1701,7 +1773,8 @@ export class MemberAutoTradingBackgroundWorker {
         let persistentGlobalStop = false;
         try {
           [runtime, persistentGlobalStop] = await Promise.all([
-            memberRuntimeState(member.userId, repository, paper, nowMs),
+            memberRuntimeState(member.userId, repository, paper, nowMs,
+              hasCapability(member.profile, 'canManageMembers')),
             repository.getGlobalEmergencyStop(),
           ]);
         } catch {
@@ -1743,7 +1816,8 @@ export class MemberAutoTradingBackgroundWorker {
         }
 
         const refreshRuntime = async () => {
-          runtime = await memberRuntimeState(member.userId, repository, paper, nowMs);
+          runtime = await memberRuntimeState(member.userId, repository, paper, nowMs,
+            hasCapability(member.profile, 'canManageMembers'));
           result.runtimeRefreshes += 1;
         };
         const syncExecutionProjection = async (requiredOrderId?: string) => {
@@ -1887,7 +1961,8 @@ export class MemberAutoTradingBackgroundWorker {
         }
         // Maintain eligible Live exits above even when Paper storage is
         // absent. Do not create Paper or Live entries using placeholder equity.
-        if (!runtime.paperAccountReady || !runtime.paperFinancialRiskReady) {
+        if (!runtime.paperAccountReady
+          || (!runtime.adminMarketRisk && !runtime.paperFinancialRiskReady)) {
           // A paper-ledger block and a simultaneous Telegram outage are two
           // independent reasons not to admit Live entry. Surface both in
           // health without letting either bypass the other.
@@ -1910,7 +1985,10 @@ export class MemberAutoTradingBackgroundWorker {
             // covers a prior entry that mutated an order and then failed during
             // lifecycle/projection post-processing before its normal refresh.
             await refreshRuntime();
-            if (!runtime.paperAccountReady || !runtime.paperFinancialRiskReady) {
+            const candidateMarket = marketMapping(entry.identity.market, member.policy).assetClass;
+            if (!runtime.paperAccountReady || (runtime.adminMarketRisk
+              ? runtime.adminMarketRisk[candidateMarket].ready !== true
+              : !runtime.paperFinancialRiskReady)) {
               result.newEntriesFailClosed = true;
               result.blocked += 1;
               continue;
@@ -2353,7 +2431,8 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const [persistentGlobalStop, connections, runtime] = await Promise.all([
       repository.getGlobalEmergencyStop(),
       repository.getConnections(userId),
-      memberRuntimeState(userId, repository, paperRepository, nowMs),
+      memberRuntimeState(userId, repository, paperRepository, nowMs,
+        hasCapability(profile, 'canManageMembers')),
     ]);
     const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
     const liveSnapshots = await Promise.all(
