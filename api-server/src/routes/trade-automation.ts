@@ -74,6 +74,11 @@ let paperRuntimeWalletReaderForTests:
   ((userId: string) => Promise<StoredPaperJournalRecord | null>) | null = null;
 let paperRuntimeRecordsReaderForTests:
   ((userId: string) => Promise<StoredPaperJournalRecord[]>) | null = null;
+let paperRuntimeAdminGuardReaderForTests:
+  ((userId: string) => Promise<boolean>) | null = null;
+export function setTradePaperRuntimeAdminGuardReaderForTests(
+  reader: ((userId: string) => Promise<boolean>) | null,
+) { paperRuntimeAdminGuardReaderForTests = reader; }
 export function setTradePaperRuntimeRecordsReaderForTests(
   reader: ((userId: string) => Promise<StoredPaperJournalRecord[]>) | null,
 ) { paperRuntimeRecordsReaderForTests = reader; }
@@ -1089,6 +1094,9 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
     const adminGuardRead = administratorFourMarket
       ? (async () => {
         try {
+          if (paperRuntimeAdminGuardReaderForTests) {
+            return await paperRuntimeAdminGuardReaderForTests(userId) === true;
+          }
           if (!req.accessToken) return false;
           const { data, error } = await getUserSupabase(req.accessToken)
             .rpc('admin_four_paper_wallet_rls_guard_ready');
