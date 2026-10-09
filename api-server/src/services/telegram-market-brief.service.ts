@@ -263,7 +263,7 @@ export function buildTelegramMarketBriefInput(input: {
       const summary = typeof item.summary === 'string' ? item.summary.trim() : '';
       if (summary) lines.push('기사 요약: ' + summary.slice(0, 180));
     }
-  } else lines.push('검증된 최신 뉴스·공시 N/A');
+  } else lines.push('검증된 최신 뉴스 N/A · 확인된 공시 N/A');
   if (warnings.length) lines.push('', '⚠️ ' + [...new Set(warnings.slice(0, 6).map(warningLabel))].join(' · '));
   lines.push('', '※ 근거 없는 수익률·신호·목표가는 만들지 않습니다.');
 
