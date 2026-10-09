@@ -186,7 +186,7 @@ test('CLI reads only daily bounded JSONL, including next-day 20m horizon, with n
     const e=event(at);
     await t.put('events',DAY,[e,e]);
     await t.put('outcomes','2026-10-09',[outcome(e)]);
-    const a=t.run();assert.equal(a.status,0,a.stderr);
+    const a=t.run();assert.equal(a.status,0,a.stdout + '\n' + a.stderr);
     const report=JSON.parse(a.stdout);
     assert.equal(report.discoveryCount,1);
     assert.equal(report.observedCoarseCount,1);
