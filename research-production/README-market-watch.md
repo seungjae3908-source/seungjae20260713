@@ -113,3 +113,39 @@ creating an unauthenticated output route).
 
 GitHub Actions stays for CI, expensive historical tests and release approvals.
 Do not simultaneously run duplicate scheduled research publishers.
+
+
+## Fail-closed local readback (no watch activation)
+
+With the exact, separately approved Research Production checkout installed, the
+local read-only status CLI can inspect the last saved observation. It does **not**
+start the market watch, query trading providers, place orders, or mutate the DB:
+
+```bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  RESEARCH_CODE_SHA=<EXACT_DEPLOYED_40_CHAR_SHA> \
+  node /opt/investment-research/current/research-production/bin/lightweight-market-watch-status.mjs
+```
+
+
+The diagnostic reads only
+`latest/lightweight-market-watch.json` (≤64 KiB, no symlink, no
+group/world writes), validates source identity, time freshness, all four market
+statuses, counts and explicit no-order/no-Paper authority. It returns only
+sanitized status/counts; no raw symbols, API response, private account,
+secret, filesystem path or provider credentials.
+
+Outcomes: `MISSING` (no saved record), `INVALID` (bad identity,
+unsafe file or forged safety), `STALE` (>6 minutes old),
+`PARTIAL` (only some markets ready), `OBSERVING` (four fresh data feeds),
+`THROTTLED` / `HOLD` (server resource protection). None indicates
+24-hour uptime, TRAIN/Validation/OOS/Full Cost, successful Paper execution or
+proven profitability. Stocks remain explicitly unavailable without an
+independent authenticated/verified public market-data producer.
+
+Because Research Center is an authenticated admin UI, adding this readback
+to the app must separately route through its canonical loopback Research
+Dashboard and the existing admin sanitizer. This PR only prepares the
+**local** safe readback; it does not expose a new unauthenticated public HTTP
+endpoint or edit member authorization.
