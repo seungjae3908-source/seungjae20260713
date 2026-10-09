@@ -13,6 +13,23 @@ export type TelegramMarketLane =
   | 'CRYPTO_SPOT'
   | 'CRYPTO_FUTURES';
 
+const US_STOCK_MARKET_CODES = new Set([
+  'US', 'USA', 'US_STOCK', 'STOCK_US', 'US_EQUITY',
+  'NASDAQ', 'NYSE', 'AMEX', 'NYSE_AMERICAN', 'NYSE_ARCA', 'BATS', 'IEX', 'CBOE',
+  'NASDAQ_CM', 'NASDAQ_GM', 'NASDAQ_GS',
+]);
+const KR_STOCK_MARKET_CODES = new Set([
+  'KR', 'KOREA', 'KR_STOCK', 'STOCK_KR', 'KRX', 'KOSPI', 'KOSDAQ', 'KONEX', 'KS', 'KQ',
+]);
+
+/** Never default an unknown stock venue to the Korean public Telegram room. */
+export function telegramStockLaneForMarket(market: string): 'KR_STOCK' | 'US_STOCK' | null {
+  const value = market.trim().toUpperCase().replace(/[\s-]+/gu, '_');
+  if (US_STOCK_MARKET_CODES.has(value)) return 'US_STOCK';
+  if (KR_STOCK_MARKET_CODES.has(value)) return 'KR_STOCK';
+  return null;
+}
+
 export function telegramMarketRoomForLane(lane: TelegramMarketLane): TelegramMarketRoom {
   switch (lane) {
     case 'KR_STOCK': return 'KR_STOCK_ROOM';
@@ -27,6 +44,15 @@ export function telegramMarketRoomChatId(
   env: NodeJS.ProcessEnv = process.env,
   options: { allowLegacyFallback?: boolean } = {},
 ): string | null {
+  // Keep public markets isolated from other markets, holdings and AUTO.
+  // Fail closed if any two configured dedicated destinations collide.
+  const dedicatedIds = [
+    env.TELEGRAM_KR_STOCK_CHAT_ID, env.TELEGRAM_US_STOCK_CHAT_ID,
+    env.TELEGRAM_CRYPTO_SPOT_CHAT_ID, env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID,
+    env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID, env.TELEGRAM_AUTO_TRADING_CHAT_ID,
+  ].map(value => value?.trim()).filter((value): value is string => Boolean(value));
+  if (new Set(dedicatedIds).size !== dedicatedIds.length) return null;
+
   const exact = (() => {
     switch (room) {
       case 'KR_STOCK_ROOM': return env.TELEGRAM_KR_STOCK_CHAT_ID;
