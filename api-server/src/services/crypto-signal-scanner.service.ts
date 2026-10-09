@@ -7,6 +7,11 @@ import {
   scannerStrategyForTimeframe,
   type ScannerStrategyMode,
 } from './scanner-quant-strategy.service';
+import {
+  evaluateOwnerSelectedCryptoStrategy,
+  isOwnerSelectedStrategyId,
+  type OwnerSelectedFlowEvidence,
+} from './owner-selected-live-strategy.service';
 import type {
   ScannerEvidence,
   ScannerFailure,
@@ -69,6 +74,8 @@ export interface CryptoSignalScanRequest {
   minimumScore?: number;
   maximumRiskScore?: number;
   strategyMode?: ScannerStrategyMode;
+  /** Internal production worker hint for exact owner-selected formulas. */
+  ownerSelectedStrategyId?: string;
   signal?: AbortSignal;
 }
 
@@ -85,6 +92,11 @@ export interface CryptoScannerProviders {
     ticker: CryptoTicker,
     signal: AbortSignal,
   ): Promise<{ bid: number | null; ask: number | null }>;
+  getOrderFlow?(
+    market: CryptoMarket,
+    ticker: CryptoTicker,
+    signal: AbortSignal,
+  ): Promise<OwnerSelectedFlowEvidence | null>;
   now(): number;
 }
 
@@ -125,6 +137,28 @@ interface UpbitCandleRow {
 interface UpbitOrderbookUnit {
   bid_price?: unknown;
   ask_price?: unknown;
+  bid_size?: unknown;
+  ask_size?: unknown;
+}
+
+interface UpbitTradeTickRow {
+  timestamp?: unknown;
+  trade_price?: unknown;
+  trade_volume?: unknown;
+  ask_bid?: unknown;
+}
+
+interface BitgetPublicFillRow {
+  price?: unknown;
+  size?: unknown;
+  side?: unknown;
+  ts?: unknown;
+}
+
+interface BitgetDepthRow {
+  asks?: unknown;
+  bids?: unknown;
+  ts?: unknown;
 }
 
 interface UpbitOrderbookRow {
@@ -170,6 +204,54 @@ function text(value: unknown): string {
 
 function average(values: number[]): number | null {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+const previousOpenInterest = new Map<string, { value: number; observedAtMs: number }>();
+
+function depthQuantity(rows: unknown): number {
+  if (!Array.isArray(rows)) return 0;
+  return rows.reduce((sum, row) => {
+    if (!Array.isArray(row) || row.length < 2) return sum;
+    const quantity = finite(row[1]);
+    return sum + (quantity != null && quantity > 0 ? quantity : 0);
+  }, 0);
+}
+
+function signedFlow(
+  rows: readonly { side: string; size: number; ts: number }[],
+) {
+  const ordered = [...rows].filter((row) => row.size > 0 && Number.isFinite(row.ts))
+    .sort((left, right) => left.ts - right.ts);
+  let buyVolume = 0;
+  let sellVolume = 0;
+  const signed: number[] = [];
+  for (const row of ordered) {
+    const buy = row.side === 'buy';
+    if (buy) buyVolume += row.size;
+    else sellVolume += row.size;
+    signed.push(buy ? row.size : -row.size);
+  }
+  const half = Math.max(1, Math.floor(signed.length / 2));
+  const older = signed.slice(0, half).reduce((sum, value) => sum + value, 0);
+  const newer = signed.slice(half).reduce((sum, value) => sum + value, 0);
+  const total = buyVolume + sellVolume;
+  return {
+    buyVolume,
+    sellVolume,
+    cvd: buyVolume - sellVolume,
+    cvdSlope: newer - older,
+    takerBuyRatio: total > 0 ? buyVolume / total : 0.5,
+  };
+}
+
+function openInterestChange(symbol: string, value: number | null, nowMs: number) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return null;
+  const previous = previousOpenInterest.get(symbol);
+  previousOpenInterest.set(symbol, { value, observedAtMs: nowMs });
+  if (!previous || previous.value <= 0 || nowMs <= previous.observedAtMs || nowMs - previous.observedAtMs > 15 * 60_000) {
+    return null;
+  }
+  return (value - previous.value) / previous.value * 100;
 }
 
 function linkedSignal(parent: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; clear(): void } {
@@ -384,6 +466,83 @@ const defaultProviders: CryptoScannerProviders = {
     const unit = rows[0]?.orderbook_units?.[0];
     return { bid: finite(unit?.bid_price), ask: finite(unit?.ask_price) };
   },
+  async getOrderFlow(market, ticker, signal) {
+    const nowMs = Date.now();
+    if (market === 'spot') {
+      const marketCode = `KRW-${ticker.symbol}`;
+      const [trades, books] = await Promise.all([
+        fetchJson<UpbitTradeTickRow[]>(
+          `${UPBIT_BASE}/v1/trades/ticks?market=${encodeURIComponent(marketCode)}&count=200`,
+          signal,
+        ),
+        fetchJson<UpbitOrderbookRow[]>(
+          `${UPBIT_BASE}/v1/orderbook?markets=${encodeURIComponent(marketCode)}&count=15`,
+          signal,
+        ),
+      ]);
+      const normalized = trades.flatMap((row) => {
+        const size = finite(row.trade_volume);
+        const ts = finite(row.timestamp);
+        const side = text(row.ask_bid).toUpperCase() === 'BID' ? 'buy'
+          : text(row.ask_bid).toUpperCase() === 'ASK' ? 'sell' : '';
+        return size != null && size > 0 && ts != null && ts > 0 && side
+          ? [{ side, size, ts }]
+          : [];
+      });
+      const flow = signedFlow(normalized);
+      const units = books[0]?.orderbook_units ?? [];
+      const bidDepth = units.reduce((sum, unit) => sum + Math.max(0, finite(unit.bid_size) ?? 0), 0);
+      const askDepth = units.reduce((sum, unit) => sum + Math.max(0, finite(unit.ask_size) ?? 0), 0);
+      const totalDepth = bidDepth + askDepth;
+      const bookTs = finite((books[0] as Record<string, unknown> | undefined)?.timestamp) ?? nowMs;
+      return Object.freeze({
+        observedAtMs: Math.min(nowMs, bookTs),
+        ...flow,
+        bidDepth,
+        askDepth,
+        orderbookImbalance: totalDepth > 0 ? (bidDepth - askDepth) / totalDepth : 0,
+        openInterestChangePercent: null,
+        provenance: 'upbit-public-trades+orderbook',
+      });
+    }
+    const [fills, depth] = await Promise.all([
+      fetchJson<BitgetEnvelope<BitgetPublicFillRow[]>>(
+        `${BITGET_BASE}/api/v2/mix/market/fills?symbol=${encodeURIComponent(ticker.symbol)}&productType=${BITGET_PRODUCT_TYPE}&limit=100`,
+        signal,
+      ),
+      fetchJson<BitgetEnvelope<BitgetDepthRow>>(
+        `${BITGET_BASE}/api/v2/mix/market/merge-depth?symbol=${encodeURIComponent(ticker.symbol)}&productType=${BITGET_PRODUCT_TYPE}&precision=scale0&limit=15`,
+        signal,
+      ),
+    ]);
+    if (text(fills.code) !== '00000' || !Array.isArray(fills.data)
+      || text(depth.code) !== '00000' || !depth.data) {
+      throw new Error('BITGET_PUBLIC_FLOW_UNAVAILABLE');
+    }
+    const normalized = fills.data.flatMap((row) => {
+      const size = finite(row.size);
+      const ts = finite(row.ts);
+      const rawSide = text(row.side).toLowerCase();
+      const side = rawSide === 'buy' ? 'buy' : rawSide === 'sell' ? 'sell' : '';
+      return size != null && size > 0 && ts != null && ts > 0 && side
+        ? [{ side, size, ts }]
+        : [];
+    });
+    const flow = signedFlow(normalized);
+    const bidDepth = depthQuantity(depth.data.bids);
+    const askDepth = depthQuantity(depth.data.asks);
+    const totalDepth = bidDepth + askDepth;
+    const depthTs = finite(depth.data.ts) ?? nowMs;
+    return Object.freeze({
+      observedAtMs: Math.min(nowMs, depthTs),
+      ...flow,
+      bidDepth,
+      askDepth,
+      orderbookImbalance: totalDepth > 0 ? (bidDepth - askDepth) / totalDepth : 0,
+      openInterestChangePercent: openInterestChange(ticker.symbol, ticker.openInterest, nowMs),
+      provenance: 'bitget-public-fills+merge-depth+ticker-open-interest',
+    });
+  },
   now: Date.now,
 };
 
@@ -519,6 +678,9 @@ function analyze(
   request: CryptoSignalScanRequest,
   ticker: CryptoTicker,
   candles: CryptoCandle[],
+  context15m: CryptoCandle[],
+  context60m: CryptoCandle[],
+  flow: OwnerSelectedFlowEvidence | null,
   spread: { bid: number | null; ask: number | null },
   now: number,
 ): ScannerSignalCard | null {
@@ -654,6 +816,28 @@ function analyze(
         : 'complete' as const;
   const observedTimestamp = Math.max(latest.time, ticker.timestamp ?? 0);
   const observedAt = new Date(observedTimestamp).toISOString();
+  const selectedStrategy = isOwnerSelectedStrategyId(request.ownerSelectedStrategyId)
+    ? evaluateOwnerSelectedCryptoStrategy({
+      market: request.market === 'spot' ? 'CRYPTO_SPOT' : 'CRYPTO_FUTURES',
+      card: {
+        observedAt,
+        dataState,
+        riskScore,
+        price: ticker.price,
+        tradingValue: ticker.tradingValue,
+        liquidity: ticker.tradingValue,
+      } as ScannerSignalCard,
+      candles,
+      context15m,
+      context60m,
+      flow,
+      fundingRate: ticker.fundingRate,
+      nowMs: now,
+    })
+    : null;
+  if (selectedStrategy?.status === 'READY' && selectedStrategy.strategyId === request.ownerSelectedStrategyId) {
+    direction = selectedStrategy.direction === 'SHORT' ? 'SHORT' : 'LONG';
+  }
   const conditionLabel = request.condition === 'volume'
     ? '거래량 증가'
     : request.condition === 'breakout'
@@ -717,10 +901,12 @@ function analyze(
     });
   }
   const technicalPlan = pricePlan(ticker, candles, direction, request.market);
+  const selectedStrategyReady = selectedStrategy?.status === 'READY'
+    && selectedStrategy.strategyId === request.ownerSelectedStrategyId;
   const strongSignalEligible = direction !== 'NEUTRAL'
-    && conditionMatched
-    && score >= 75
-    && confidence >= 70
+    && (selectedStrategyReady || conditionMatched)
+    && (selectedStrategyReady || score >= 75)
+    && (selectedStrategyReady || confidence >= 70)
     && dataCompleteness >= 80
     && riskScore <= 45
     && dataState === 'complete'
@@ -766,13 +952,19 @@ function analyze(
       : item),
     pricePlan: technicalPlan.pricePlan,
     dataState,
-    dataSources: request.market === 'spot'
-      ? ['upbit-public-market', 'upbit-public-ticker', 'upbit-public-candles', 'upbit-public-orderbook']
-      : ['bitget-public-ticker', 'bitget-public-candles'],
+    dataSources: [
+      ...(request.market === 'spot'
+        ? ['upbit-public-market', 'upbit-public-ticker', 'upbit-public-candles', 'upbit-public-orderbook']
+        : ['bitget-public-ticker', 'bitget-public-candles']),
+      ...(flow ? [flow.provenance] : []),
+    ],
     observedAt,
     expiresAt: expiry(request.timeframe, observedTimestamp),
     strongSignalEligible,
-    warnings,
+    ownerSelectedStrategy: selectedStrategy ?? undefined,
+    warnings: selectedStrategy && selectedStrategy.status !== 'READY'
+      ? [...new Set([...warnings, ...selectedStrategy.reasons.map((reason) => `전략 대기: ${reason}`)])]
+      : warnings,
   };
 }
 
@@ -882,17 +1074,27 @@ export function createCryptoSignalScannerService(
       const work = await runBoundedWorkPool(
         batch,
         async (ticker, _index, signal) => {
-          const [candles, contextCandles, spread] = await Promise.all([
+          const selectedRequested = isOwnerSelectedStrategyId(request.ownerSelectedStrategyId);
+          const [candles, contextCandles, context60m, spread, flow] = await Promise.all([
             providers.getCandles(request.market, ticker.symbol, request.timeframe, signal),
             request.timeframe === contextTimeframe
               ? Promise.resolve<CryptoCandle[] | null>(null)
               : providers.getCandles(request.market, ticker.symbol, contextTimeframe, signal).catch(() => []),
+            selectedRequested && request.timeframe !== '60m'
+              ? providers.getCandles(request.market, ticker.symbol, '60m', signal).catch(() => [])
+              : Promise.resolve<CryptoCandle[] | null>(null),
             providers.getSpread(request.market, ticker, signal),
+            selectedRequested && providers.getOrderFlow
+              ? providers.getOrderFlow(request.market, ticker, signal).catch(() => null)
+              : Promise.resolve<OwnerSelectedFlowEvidence | null>(null),
           ]);
           const candidate = analyze(
             { ...request, strategyMode },
             { ...ticker, ...spread },
             candles,
+            contextCandles ?? candles,
+            context60m ?? (request.timeframe === '60m' ? candles : []),
+            flow,
             spread,
             providers.now(),
           );
