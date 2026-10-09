@@ -139,6 +139,7 @@ export function adminMarketPaperRiskBudget(input: {
   records: readonly StoredPaperJournalRecord[];
   openPlans: readonly TradingPlan[];
   nowMs?: number;
+  verifiedCapital?: ReturnType<typeof projectAdminMarketCapital>;
 }) {
   const summary = inspectAdminFourMarketPaperWallets(input.records, input.nowMs);
   const wallet = summary.marketWallets[input.market];
@@ -158,11 +159,27 @@ export function adminMarketPaperRiskBudget(input: {
   if (!finiteNonnegative(exposureKrw)) return { ready: false as const,
     blockers: ['ADMIN_PAPER_EXPOSURE_INVALID'],
     availableToTradeKrw: 0, exposureKrw: 0, accountValueKrw: 0 };
-  const equity = wallet.equityKrw!;
-  const collateral = Math.min(equity, wallet.cashKrw!, wallet.availableMarginKrw!);
+  const capital = input.verifiedCapital;
+  if (capital && (!capital.settlementReady || !capital.newEntriesAllowed
+    || capital.market !== input.market)) {
+    return { ready: false as const,
+      blockers: capital.blockers.length ? capital.blockers
+        : ['ADMIN_PAPER_VERIFIED_CAPITAL_UNDERFUNDED'],
+      availableToTradeKrw: 0, exposureKrw: 0, accountValueKrw: 0 };
+  }
+  const equity = capital?.operatingCapitalKrw ?? wallet.equityKrw!;
+  // Only settlement-verified growth may increase a frozen 1m seed wallet.
+  // Any independently recorded loss or margin restriction remains binding.
+  const verifiedGrowth = capital
+    ? Math.max(0, capital.operatingCapitalKrw - ADMIN_MARKET_INITIAL_KRW) : 0;
+  const collateral = Math.min(equity,
+    wallet.equityKrw! + verifiedGrowth,
+    wallet.cashKrw! + verifiedGrowth,
+    wallet.availableMarginKrw! + verifiedGrowth);
   return {
     ready: true as const, blockers: [] as string[],
     accountValueKrw: equity, exposureKrw,
+    reserveKrw: capital?.reserveKrw ?? wallet.reserveKrw ?? 0,
     availableToTradeKrw: Math.max(0, collateral - exposureKrw),
   };
 }
@@ -193,6 +210,26 @@ export function projectAdminMarketCapital(
   const sorted = [...closings].filter((row) => row.market === market)
     .sort((a, b) => Date.parse(a.closedAt) - Date.parse(b.closedAt)
       || a.id.localeCompare(b.id));
+  // A win and loss with the same close-time millisecond have no reliable
+  // ordering. Settle the whole timestamp batch at net PnL, never grant 50%
+  // reserve from an arbitrary event ID order before an offsetting loss.
+  let batchTime: number | null = null;
+  let batchNet = 0;
+  const settleBatch = () => {
+    if (batchTime == null) return;
+    if (batchNet <= 0) {
+      operatingCapitalKrw = Math.max(0, operatingCapitalKrw + batchNet);
+    } else {
+      const newProfit = Math.max(0,
+        operatingCapitalKrw + reserveKrw + batchNet - highWaterMarkKrw);
+      const recovered = batchNet - newProfit;
+      operatingCapitalKrw += recovered + newProfit * 0.5;
+      reserveKrw += newProfit * 0.5;
+      highWaterMarkKrw += newProfit;
+    }
+    batchTime = null;
+    batchNet = 0;
+  };
   for (const row of sorted) {
     const at = Date.parse(row.closedAt);
     if (!row.id || seen.has(row.id) || !Number.isFinite(at)
@@ -201,16 +238,13 @@ export function projectAdminMarketCapital(
       errors.push('ADMIN_PAPER_SETTLEMENT_EVIDENCE_INVALID');
       continue;
     }
+    if (batchTime !== null && at !== batchTime) settleBatch();
+    if (batchTime == null) batchTime = at;
     seen.add(row.id);
-    const pnl = row.netPnlKrw;
-    totalNetPnlKrw += pnl;
-    if (pnl <= 0) { operatingCapitalKrw = Math.max(0, operatingCapitalKrw + pnl); continue; }
-    const newlyEarned = Math.max(0, operatingCapitalKrw + reserveKrw + pnl - highWaterMarkKrw);
-    const recovered = pnl - newlyEarned;
-    operatingCapitalKrw += recovered + newlyEarned / 2;
-    reserveKrw += newlyEarned / 2;
-    highWaterMarkKrw += newlyEarned;
+    totalNetPnlKrw += row.netPnlKrw;
+    batchNet += row.netPnlKrw;
   }
+  settleBatch();
   if (![operatingCapitalKrw,reserveKrw,highWaterMarkKrw,totalNetPnlKrw].every(Number.isFinite)) {
     errors.push('ADMIN_PAPER_CAPITAL_OVERFLOW');
   }
