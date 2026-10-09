@@ -19,6 +19,12 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     "accountMode: 'paper'",
     'TRADING_CORE_QA_CANARY',
     'paperAutomaticTriggered',
+    '/api/trade-automation/paper-runtime-readiness',
+    'paperRuntimeReadOnlyVerified',
+    'paperRuntimeReadyBeforeQa',
+    'paperRuntimeBlockersBeforeQa',
+    'paperRuntimeWalletReadyBeforeQa',
+    'paperRuntimeWorkerFreshBeforeQa',
     'journalVisible',
     "'READY_FOR_ACTIVATION'",
     "'ACTIVE_VERIFIED'",
@@ -142,4 +148,17 @@ test('Trading Core Telegram receipt polling spans at least two default worker ti
   assert.ok(spec.includes('test.setTimeout(4 * 60_000)'));
   assert.ok(spec.includes('timeout: 90_000'));
   assert.ok(spec.includes('telegramFillDeliveryConfirmed = true'));
+});
+
+test('Trading Core QA records real Worker preflight independently of one synthetic Paper fill', () => {
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  const workflow = read('.github/workflows/production-trading-core-qa.yml');
+  const preflight = spec.indexOf("appApi<any>(page, '/api/trade-automation/paper-runtime-readiness')");
+  const mutation = spec.indexOf("appApi<any>(page, '/api/trade-automation/policy', 'PUT'");
+  assert.ok(preflight >= 0 && mutation > preflight, 'read-only preflight must precede canary mutation');
+  assert.ok(spec.includes('paperRuntimeReadyBeforeQa = paperRuntime.body?.readyForPaperEvaluation === true'));
+  assert.ok(spec.includes('paperRuntime.body?.realOrderAuthorityGranted'));
+  assert.ok(workflow.includes('const backgroundPaperEvidenceValid'));
+  assert.ok(workflow.includes('|| !backgroundPaperEvidenceValid'));
+  assert.ok(workflow.includes('recorded independently, not implied'));
 });
