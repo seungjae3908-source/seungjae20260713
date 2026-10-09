@@ -4,7 +4,7 @@ import type {
   ScannerSignalCard,
   ScannerSignalState,
 } from './scanner-signal.types';
-import { telegramMarketRoomChatId, telegramMarketRoomForLane } from './telegram-market-room.service';
+import { telegramMarketRoomChatId, telegramMarketRoomForLane, telegramStockLaneForMarket } from './telegram-market-room.service';
 import { buildTelegramSignalAppButtons } from './telegram-investment-intelligence.service';
 import {
   createTelegramSignalFollowupRepository,
@@ -400,9 +400,10 @@ function destinationFor(card: ScannerSignalCard): string | null {
     ? 'CRYPTO_SPOT'
     : card.assetClass === 'coin_futures'
       ? 'CRYPTO_FUTURES'
-      : card.market.trim().toUpperCase().includes('US')
-        ? 'US_STOCK'
-        : 'KR_STOCK';
+      : card.assetClass === 'stock'
+        ? telegramStockLaneForMarket(card.market)
+        : null;
+  if (!lane) return null;
   return telegramMarketRoomChatId(
     telegramMarketRoomForLane(lane),
     process.env,
