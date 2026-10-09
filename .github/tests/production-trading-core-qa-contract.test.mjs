@@ -260,3 +260,15 @@ test('Admin 1m Paper admission requires certified canonical settlement, never on
   assert.ok(budget.includes('if (!capital || !capital.settlementReady || !capital.newEntriesAllowed'));
   assert.ok(worker.includes('verifiedCapital: runtime.adminMarketCapital?.[mapping.assetClass]'));
 });
+
+test('Admin V2 financial evidence hardening revokes RLS-bypassing TRUNCATE on canonical trade records', () => {
+  const migration=read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
+  const staging=read('api-server/supabase/test/admin_four_paper_wallet_rls_guard_integration.sql');
+  assert.ok(migration.includes('$canonical_trade_truncate_guard$'));
+  assert.ok(staging.includes('CANONICAL_TRADE_CLIENT_TRUNCATE_ALLOWED'));
+  for(const table of ['trade_order_plans','trade_orders','trade_order_events','trade_automation_profiles','trade_exchange_connections']){
+    assert.ok(migration.includes("'"+table+"'"),table);
+    assert.ok(staging.includes("'"+table+"'"),table);
+  }
+  assert.ok(migration.includes("'revoke truncate, references, trigger on table public.%I from public, anon, authenticated'"));
+});
