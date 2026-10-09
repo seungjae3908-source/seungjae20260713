@@ -133,3 +133,10 @@ test('Trading Core ACTIVE_VERIFIED requires same-fill SENT receipt and started T
   assert.ok(workflow.includes("value?.telegramFillDeliveryConfirmed === true"));
   assert.ok(workflow.includes("value?.telegramFillDeliveryConfirmed === false"));
 });
+
+test('Trading Core Telegram receipt polling spans at least two default worker ticks', () => {
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  assert.ok(spec.includes('test.setTimeout(4 * 60_000)'));
+  assert.ok(spec.includes('timeout: 90_000'));
+  assert.ok(spec.includes('telegramFillDeliveryConfirmed = true'));
+});
