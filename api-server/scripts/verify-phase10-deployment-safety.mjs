@@ -245,6 +245,7 @@ try {
     profile_rows_copied: 0,
     storage_objects_copied: 0,
     credentials_recorded: false,
+    admin_v2_rls_verified: true,
   }));
   const browserSpecTitles = [
     'desktop: login, refresh session retention, responsive layout, and logout',
@@ -311,6 +312,30 @@ try {
     env: { ...process.env, TARGET_SHA: sha },
   });
   assert(verified.status === 0, `release-ready verdict should verify: ${verified.stderr}`);
+  // An attestation is only trustworthy if the staging bootstrap explicitly
+  // emitted it. A forged release_ready field cannot substitute for this proof.
+  const forgedBootstrap = JSON.parse(await readFile(path.join(temp, 'staging-bootstrap-verification.json'), 'utf8'));
+  delete forgedBootstrap.admin_v2_rls_verified;
+  await writeFile(path.join(temp, 'staging-bootstrap-verification.json'), JSON.stringify(forgedBootstrap));
+  const forgedVerdict = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/build-staging-verdict.mjs')], {
+    cwd: root, encoding: 'utf8',
+    env: {
+      ...process.env, TARGET_SHA: sha, STAGING_RUN_FULL_VALIDATION: 'true',
+      STAGING_ARTIFACT_DIR: temp, GITHUB_RUN_ID: '123456789', GITHUB_RUN_ATTEMPT: '1',
+    },
+  });
+  assert(forgedVerdict.status !== 0, 'missing staging admin V2 RLS proof must fail closed');
+  await writeFile(path.join(temp, 'staging-bootstrap-verification.json'), JSON.stringify({
+    ...forgedBootstrap, admin_v2_rls_verified: true,
+  }));
+  const restored = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/build-staging-verdict.mjs')], {
+    cwd: root, encoding: 'utf8',
+    env: {
+      ...process.env, TARGET_SHA: sha, STAGING_RUN_FULL_VALIDATION: 'true',
+      STAGING_ARTIFACT_DIR: temp, GITHUB_RUN_ID: '123456789', GITHUB_RUN_ATTEMPT: '1',
+    },
+  });
+  assert(restored.status === 0, 'verified staging proof restoration should pass');
   // The positive fixture must track the real viewport contract, not relax it.
   const verdictFile = path.join(temp, 'staging-verdict.json');
   const completeVerdict = JSON.parse(await readFile(verdictFile, 'utf8'));
