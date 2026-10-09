@@ -246,7 +246,10 @@ function pm2CommandEnv(runtime,override={}) {
   // Production DB connection exists ONLY in this one-shot remote CLI; do not
   // accidentally inherit it in a restarted public API process.
   for(const key of Object.keys(allowed)) {
-    if (key==='PROD_DATABASE_URL'||key.startsWith('PG')) delete allowed[key];
+    if (key==='PROD_DATABASE_URL' || key.startsWith('PG')
+      || key.startsWith('TELEGRAM_BINDING_') || key.startsWith('GITHUB_')
+      || key.startsWith('RUNNER_') || key.startsWith('SSH_')
+      || key==='CI') delete allowed[key];
   }
   for(const [key,value] of Object.entries(runtime)) {
     if(/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) && key!=='PROD_DATABASE_URL'
