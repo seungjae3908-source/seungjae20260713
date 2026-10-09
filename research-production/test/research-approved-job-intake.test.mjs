@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,5 +29,36 @@ test('approved intake enqueues only a pre-reviewed durable worker job without pr
     assert.equal(status.counts.queued,1);
     assert.equal(status.counts.running,0);
     assert.equal(status.authority.executionAuthority,'NONE');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+test('approved intake accepts the Production 0750 shared state root while keeping owned stores private',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'research-approved-intake-shared-'));
+  try{
+    await chmod(root,0o750);
+    const result=await intakeApprovedResearchJobs({stateRoot:root});
+    assert.equal(result.status,'COMPLETE');
+    assert.equal(result.queued,0);
+    assert.equal(result.existing,0);
+    for(const path of [
+      join(root,'video-research','approved-jobs'),
+      join(root,'video-research','accepted-jobs'),
+      join(root,'workspace-worker'),
+    ]){
+      const st=await stat(path);
+      assert.equal(st.mode&0o777,0o700);
+    }
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('approved intake still rejects a group-writable shared state root',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'research-approved-intake-unsafe-'));
+  try{
+    await chmod(root,0o770);
+    await assert.rejects(
+      intakeApprovedResearchJobs({stateRoot:root}),
+      /APPROVED_JOB_INTAKE_DIR_UNSAFE/,
+    );
   }finally{await rm(root,{recursive:true,force:true});}
 });
