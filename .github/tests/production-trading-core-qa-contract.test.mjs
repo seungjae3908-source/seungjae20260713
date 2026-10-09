@@ -272,3 +272,19 @@ test('Admin V2 financial evidence hardening revokes RLS-bypassing TRUNCATE on ca
   }
   assert.ok(migration.includes("'revoke truncate, references, trigger on table public.%I from public, anon, authenticated'"));
 });
+
+test('Admin V2 canonical Paper order evidence rejects direct browser forgery, preserves manual trades', () => {
+  const migration=read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
+  const staging=read('api-server/supabase/test/admin_four_paper_wallet_rls_guard_integration.sql');
+  assert.ok(migration.includes('$admin_v2_canonical_auto_paper_write_guard$'));
+  for (const state of ['insert','update','delete']) {
+    assert.ok(migration.includes('admin_v2_auto_paper_'+state+'_guard'));
+  }
+  for (const marker of ['ADMIN_V2_CLIENT_FORGED_PLAN_ALLOWED',
+    'ADMIN_V2_CLIENT_PLAN_UPDATE_ALLOWED','ADMIN_V2_CLIENT_FORGED_ORDER_ALLOWED',
+    'ADMIN_V2_CLIENT_ORDER_UPDATE_ALLOWED','ADMIN_V2_CLIENT_FORGED_EVENT_ALLOWED',
+    'ADMIN_V2_CLIENT_EVENT_UPDATE_ALLOWED','MANUAL_PAPER_CLIENT_WRITE_REGRESSION']) {
+    assert.ok(staging.includes(marker),marker);
+  }
+  assert.ok(migration.includes("coalesce(plan.payload->>'executionMode','') = 'automatic'"));
+});

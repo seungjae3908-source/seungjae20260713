@@ -62,6 +62,34 @@ begin
 end
 $seed_invariant$;
 
+-- DB-owned fixtures represent a genuine V2 automatic Paper fill.
+-- Ordinary browser roles must not be allowed to amend these canonical rows.
+insert into public.trade_order_plans (
+  user_id,id,idempotency_key,state,payload,version
+) values (
+  '99999999-9999-4999-8999-999999999999',
+  '77777777-7777-4777-8777-777777777701',
+  'v2-auto-paper-owner-fixture','SUBMITTED',
+  '{"accountMode":"paper","executionMode":"automatic"}'::jsonb,0
+);
+insert into public.trade_orders (
+  user_id,id,plan_id,exchange,client_order_id,state,payload,version
+) values (
+  '99999999-9999-4999-8999-999999999999',
+  '77777777-7777-4777-8777-777777777702',
+  '77777777-7777-4777-8777-777777777701',
+  'upbit','v2-auto-paper-order-fixture','FILLED',
+  '{"filledQuantity":1,"averageFillPrice":100}'::jsonb,0
+);
+insert into public.trade_order_events (
+  user_id,id,order_id,to_state,payload
+) values (
+  '99999999-9999-4999-8999-999999999999',
+  '77777777-7777-4777-8777-777777777703',
+  '77777777-7777-4777-8777-777777777702',
+  'FILLED','{}'::jsonb
+);
+
 set role authenticated;
 select set_config('request.jwt.claim.sub','99999999-9999-4999-8999-999999999999',true);
 do $client_guard$
@@ -154,5 +182,87 @@ begin
   end loop;
 end
 $canonical_no_truncate$;
+do $admin_v2_protect_canonical_auto_paper$
+declare
+  mutated integer;
+  was_denied boolean;
+begin
+  if public.admin_four_paper_wallet_rls_guard_ready() is not true then
+    raise exception 'ADMIN_V2_CANONICAL_RLS_NOT_VERIFIED';
+  end if;
+
+  was_denied := false;
+  begin
+    insert into public.trade_order_plans (
+      user_id,id,idempotency_key,state,payload,version
+    ) values (
+      auth.uid(),'77777777-7777-4777-8777-777777777711',
+      'direct-forged-v2-plan','SUBMITTED',
+      '{"accountMode":"paper","executionMode":"automatic"}'::jsonb,0
+    );
+  exception when insufficient_privilege then was_denied := true;
+  end;
+  if not was_denied then raise exception 'ADMIN_V2_CLIENT_FORGED_PLAN_ALLOWED'; end if;
+
+  update public.trade_order_plans
+    set payload = '{"executionMode":"manual","accountMode":"paper"}'
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777701';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_PLAN_UPDATE_ALLOWED'; end if;
+
+  was_denied := false;
+  begin
+    insert into public.trade_orders (
+      user_id,id,plan_id,exchange,client_order_id,state,payload,version
+    ) values (
+      auth.uid(),'77777777-7777-4777-8777-777777777712',
+      '77777777-7777-4777-8777-777777777701',
+      'upbit','direct-forged-v2-order','FILLED',
+      '{"filledQuantity":200,"averageFillPrice":500}'::jsonb,0
+    );
+  exception when insufficient_privilege then was_denied := true;
+  end;
+  if not was_denied then raise exception 'ADMIN_V2_CLIENT_FORGED_ORDER_ALLOWED'; end if;
+
+  update public.trade_orders
+    set payload='{"filledQuantity":1000000,"averageFillPrice":1000}'
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777702';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_ORDER_UPDATE_ALLOWED'; end if;
+
+  was_denied := false;
+  begin
+    insert into public.trade_order_events (
+      user_id,id,order_id,to_state,payload
+    ) values (
+      auth.uid(),'77777777-7777-4777-8777-777777777713',
+      '77777777-7777-4777-8777-777777777702',
+      'FILLED','{"forgedProfit":100000000}'::jsonb
+    );
+  exception when insufficient_privilege then was_denied := true;
+  end;
+  if not was_denied then raise exception 'ADMIN_V2_CLIENT_FORGED_EVENT_ALLOWED'; end if;
+
+  update public.trade_order_events
+    set payload='{"forgedProfit":100000000}'
+    where user_id=auth.uid() and id='77777777-7777-4777-8777-777777777703';
+  get diagnostics mutated = row_count;
+  if mutated <> 0 then raise exception 'ADMIN_V2_CLIENT_EVENT_UPDATE_ALLOWED'; end if;
+
+  -- Existing manual Paper workflows must retain their authenticated CRUD.
+  insert into public.trade_order_plans (
+    user_id,id,idempotency_key,state,payload,version
+  ) values (
+    auth.uid(),'77777777-7777-4777-8777-777777777714',
+    'manual-paper-unaffected','APPROVAL_PENDING',
+    '{"accountMode":"paper","executionMode":"manual"}'::jsonb,0
+  );
+  if (select count(*) from public.trade_order_plans
+    where id='77777777-7777-4777-8777-777777777714') <> 1 then
+    raise exception 'MANUAL_PAPER_CLIENT_WRITE_REGRESSION';
+  end if;
+end
+$admin_v2_protect_canonical_auto_paper$;
+
 reset role;
 rollback;

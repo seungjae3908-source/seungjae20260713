@@ -98,6 +98,75 @@ begin
 end
 $canonical_trade_truncate_guard$;
 
+-- New-epoch admin V2 AUTOMATIC Paper fills must be written only by the
+-- server Worker (service role), never by an authenticated browser using
+-- direct table REST. Keep manual Paper/Live order CRUD unaffected.
+-- A user could otherwise forge canonical FILLED rows and mint 50/50 profit
+-- despite the immutable V2 seed-wallet protections above.
+do $admin_v2_canonical_auto_paper_write_guard$
+declare
+  rule record;
+  p_name text;
+begin
+  for rule in select *
+    from (values
+      ('trade_order_plans', $plan_guard$
+        not (
+          coalesce(payload->>'accountMode','') = 'paper'
+          and coalesce(payload->>'executionMode','') = 'automatic'
+          and exists (select 1 from public.paper_accounts wallet
+            where wallet.user_id = trade_order_plans.user_id
+              and wallet.id like 'automatic-paper-admin-v2:%')
+        )
+      $plan_guard$),
+      ('trade_orders', $order_guard$
+        not exists (
+          select 1 from public.trade_order_plans plan
+          join public.paper_accounts wallet on wallet.user_id = plan.user_id
+          where plan.user_id = trade_orders.user_id
+            and plan.id = trade_orders.plan_id
+            and coalesce(plan.payload->>'accountMode','') = 'paper'
+            and coalesce(plan.payload->>'executionMode','') = 'automatic'
+            and wallet.id like 'automatic-paper-admin-v2:%'
+        )
+      $order_guard$),
+      ('trade_order_events', $event_guard$
+        not exists (
+          select 1 from public.trade_orders ord
+          join public.trade_order_plans plan
+            on plan.id = ord.plan_id and plan.user_id = ord.user_id
+          join public.paper_accounts wallet on wallet.user_id = plan.user_id
+          where ord.id = trade_order_events.order_id
+            and ord.user_id = trade_order_events.user_id
+            and coalesce(plan.payload->>'accountMode','') = 'paper'
+            and coalesce(plan.payload->>'executionMode','') = 'automatic'
+            and wallet.id like 'automatic-paper-admin-v2:%'
+        )
+      $event_guard$)
+    ) as guards(table_name, predicate)
+  loop
+    p_name := 'admin_v2_auto_paper_insert_guard';
+    execute format('drop policy if exists %I on public.%I', p_name, rule.table_name);
+    execute format(
+      'create policy %I on public.%I as restrictive for insert to authenticated with check (%s)',
+      p_name, rule.table_name, rule.predicate
+    );
+    p_name := 'admin_v2_auto_paper_update_guard';
+    execute format('drop policy if exists %I on public.%I', p_name, rule.table_name);
+    execute format(
+      'create policy %I on public.%I as restrictive for update to authenticated using (%s) with check (%s)',
+      p_name, rule.table_name, rule.predicate, rule.predicate
+    );
+    p_name := 'admin_v2_auto_paper_delete_guard';
+    execute format('drop policy if exists %I on public.%I', p_name, rule.table_name);
+    execute format(
+      'create policy %I on public.%I as restrictive for delete to authenticated using (%s)',
+      p_name, rule.table_name, rule.predicate
+    );
+  end loop;
+end
+$admin_v2_canonical_auto_paper_write_guard$;
+
 -- An ordinary authenticated client can inspect whether its DB rollout is
 -- protected; the RPC is SECURITY INVOKER and returns only a boolean, not rows.
 create or replace function public.admin_four_paper_wallet_rls_guard_ready()
@@ -135,6 +204,17 @@ as $readiness$
       and conname = 'admin_four_market_paper_seed_contract'
       and contype = 'c'
   )
+  and (
+    select count(*) from pg_catalog.pg_policies
+    where schemaname = 'public'
+      and tablename in ('trade_order_plans','trade_orders','trade_order_events')
+      and policyname in ('admin_v2_auto_paper_insert_guard',
+        'admin_v2_auto_paper_update_guard','admin_v2_auto_paper_delete_guard')
+      and permissive = 'RESTRICTIVE'
+      and 'authenticated'::name = any(roles)
+      and (coalesce(qual,'') like '%automatic-paper-admin-v2:%'
+        or coalesce(with_check,'') like '%automatic-paper-admin-v2:%')
+  ) = 9
   and not exists (
     select 1 from information_schema.role_table_grants
     where table_schema = 'public'
