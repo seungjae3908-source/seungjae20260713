@@ -9,6 +9,7 @@ import { normalizeTradingPolicy } from '../services/trade-automation-risk.servic
 import { enforceMemberTradingPolicy } from '../services/trade-automation-policy-guard.service';
 import { automaticLiveExecutionEnabled } from '../services/trade-automation.service';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
+import { adminFourMarketPaperCapitalReadback } from '../services/admin-four-market-paper-readback.service';
 import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW, ADMIN_WALLET_CONFIRMATION,
   adminPaperWalletId, buildAdminFourMarketPaperBootstrap,
@@ -442,12 +443,18 @@ export function createPaperJournalRouter(
       ]);
       const assessment = adminWalletCreationDecision(
         records, history.orders, history.plans, policy, now().getTime());
+      const capitalReadback = adminFourMarketPaperCapitalReadback({
+        ownerId: owner, records, plans: history.plans, orders: history.orders,
+        nowMs: now().getTime(),
+      });
       const creationBlockers = rlsGuardReady ? assessment.creationBlockers
         : [...new Set([...assessment.creationBlockers, 'ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED'])];
       return response.json({
         ok: true, readOnlyProbe: true, ownerScope: 'SELF', administratorOnly: true,
         ...assessment, rlsGuardReady, canCreate: assessment.canCreate && rlsGuardReady,
         creationBlockers,
+        marketCapital: capitalReadback.marketReadback,
+        marketCapitalComputedFrom: 'CANONICAL_CURRENT_EPOCH_SETTLEMENT_ONLY',
         policy: {
           totalCapitalKrw: policy.totalCapitalKrw,
           maxOrderKrw: policy.maxOrderKrw,
