@@ -17,8 +17,8 @@ on:
         required: false
         default: false
         type: boolean
-      apply_trading_policy_limit_1m:
-        description: One-time migration of the saved Production order baseline from 500,000 to 1,000,000 KRW
+      apply_admin_trading_policy_limit_1m:
+        description: One-time administrator-only migration of the saved Production order baseline to 1,000,000 KRW
         required: false
         default: false
         type: boolean
@@ -630,8 +630,8 @@ jobs:
         working-directory: stock-analyzer
         run: pnpm exec playwright install chromium
 
-      - name: Require exact Production identity before the one-time 1M policy migration
-        if: ${{ inputs.apply_trading_policy_limit_1m }}
+      - name: Require exact Production identity before the one-time administrator 1M policy migration
+        if: ${{ inputs.apply_admin_trading_policy_limit_1m }}
         env:
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
         run: |
@@ -649,8 +649,8 @@ jobs:
           }
           NODE
 
-      - name: Apply and verify the one-time 1M Production order policy
-        if: ${{ inputs.apply_trading_policy_limit_1m }}
+      - name: Apply and verify the one-time administrator 1M Production order policy
+        if: ${{ inputs.apply_admin_trading_policy_limit_1m }}
         working-directory: stock-analyzer
         env:
           PRODUCTION_BASE_URL: https://lsj119.com
@@ -663,11 +663,11 @@ jobs:
           PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
         run: pnpm exec playwright test --config=playwright.production-trading-policy-limit.config.ts
 
-      - name: Upload sanitized one-time 1M Production policy evidence
-        if: ${{ always() && inputs.apply_trading_policy_limit_1m }}
+      - name: Upload sanitized one-time administrator 1M Production policy evidence
+        if: ${{ always() && inputs.apply_admin_trading_policy_limit_1m }}
         uses: actions/upload-artifact@v4
         with:
-          name: production-trading-policy-limit-${{ env.TARGET_SHA }}
+          name: production-admin-trading-policy-limit-${{ env.TARGET_SHA }}
           path: |
             stock-analyzer/production-trading-policy-artifacts
             stock-analyzer/production-login-diagnostics/trading-policy-limit

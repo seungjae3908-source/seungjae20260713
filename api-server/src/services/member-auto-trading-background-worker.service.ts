@@ -44,6 +44,10 @@ import type {
   TradingSide,
 } from './trade-automation.types';
 import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+} from './trade-automation.types';
+import {
   resolveMemberAutoTradingKrwRate,
   type MemberAutoTradingFxQuote,
 } from './member-auto-trading-fx.service';
@@ -74,6 +78,7 @@ import {
   deriveRulePackPilotExecutionPolicy,
   issueRulePackPilotDynamicCapReceipt,
   readRulePackPilotCapitalState,
+  rulePackPilotInitialCapitalForPolicy,
   type RulePackPilotCapitalState,
 } from './trade-rule-pack-pilot-capital.service';
 import {
@@ -88,6 +93,11 @@ const DEFAULT_HANDOFF_PATH =
   '/opt/stock-app-data/paper-forward-v1/runtime-state/handoff/member-auto-trading-latest.json';
 const MAX_MEMBERS_PER_TICK = 200;
 const MAX_ENTRIES_PER_TICK = 40;
+function maximumSingleEntryKrwForProfile(profile: MemberAccessProfile) {
+  return hasCapability(profile, 'canManageMembers')
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
 // A READY handoff without entries otherwise has no per-entry freshness clock.
 // Keep a bounded publisher heartbeat even during quiet market periods.
 const MAX_READY_HANDOFF_AGE_MS = 30 * 60_000;
@@ -2083,6 +2093,7 @@ export class MemberAutoTradingBackgroundWorker {
               formulaAiReviewReasonsForLive(entry, nowMs);
               formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
                 repository, member.userId, now,
+                rulePackPilotInitialCapitalForPolicy(member.policy),
               );
               validateFormulaAiPilotEntry(
                 member, entry, runtime, formulaAiPilotCapital, paperInput.estimatedKrw, nowMs,
@@ -2165,7 +2176,10 @@ export class MemberAutoTradingBackgroundWorker {
               let liveMember = member;
               if (member.policy.pilotStage === 'formula-ai-exception') {
                 formulaAiReviewReasonsForLive(entry, nowMs);
-                formulaAiPilotCapital ??= await readRulePackPilotCapitalState(repository, member.userId, now);
+                formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
+                  repository, member.userId, now,
+                  rulePackPilotInitialCapitalForPolicy(member.policy),
+                );
                 validateFormulaAiPilotEntry(
                   member,
                   entry,
@@ -2393,6 +2407,7 @@ export function memberTelegramProofMatchesCurrentBinding(
 
 export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTradingBackgroundSource {
   private readonly accountReaders = createVaultBackedAccountReaders();
+  private readonly maximumSingleEntryKrwByUserId = new Map<string, number>();
   private memberBatchCursor: string | null = null;
   private lastMemberBatchCompletedCycle = true;
 
@@ -2434,8 +2449,7 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const rows = batch.flatMap((row) => {
       const userId = String(row.user_id ?? '').trim();
       if (!userId) return [];
-      const policy = normalizeTradingPolicy((row.payload ?? {}) as Partial<TradingPolicy>);
-      return [{ userId, policy }];
+      return [{ userId, payload: (row.payload ?? {}) as Partial<TradingPolicy> }];
     });
     if (rows.length === 0) return [];
     const { data: profiles, error: profileError } = await this.client.from('profiles')
@@ -2447,11 +2461,16 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     if (rows.some((row) => !byId.has(row.userId))) {
       throw new Error('BACKGROUND_MEMBER_ACCESS_PROFILE_MISSING');
     }
-    return rows.map((row) => Object.freeze({
-      userId: row.userId,
-      policy: row.policy,
-      profile: byId.get(row.userId)!,
-    }));
+    return rows.map((row) => {
+      const profile = byId.get(row.userId)!;
+      const maximumSingleEntryKrw = maximumSingleEntryKrwForProfile(profile);
+      this.maximumSingleEntryKrwByUserId.set(row.userId, maximumSingleEntryKrw);
+      return Object.freeze({
+        userId: row.userId,
+        policy: normalizeTradingPolicy(row.payload, maximumSingleEntryKrw),
+        profile,
+      });
+    });
   }
 
   memberBatchCycleCompleted() {
@@ -2507,9 +2526,15 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     const profile = profileRows?.[0] as (MemberAccessProfile & { id: string }) | undefined;
     if (!profile) return false;
 
-    const policy = normalizeTradingPolicy(policyRow.payload as Partial<TradingPolicy>);
     const nowMs = Date.now();
-    const repository = createServiceRoleTradingRepository(userId, this.client);
+    const maximumSingleEntryKrw = maximumSingleEntryKrwForProfile(profile);
+    this.maximumSingleEntryKrwByUserId.set(userId, maximumSingleEntryKrw);
+    const policy = normalizeTradingPolicy(
+      policyRow.payload as Partial<TradingPolicy>, maximumSingleEntryKrw,
+    );
+    const repository = createServiceRoleTradingRepository(
+      userId, this.client, maximumSingleEntryKrw,
+    );
     const paperRepository = createServiceRolePaperJournalRepository(userId, this.client);
     const [persistentGlobalStop, connections, runtime] = await Promise.all([
       repository.getGlobalEmergencyStop(),
@@ -2539,7 +2564,11 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
   }
 
   tradingRepositoryFor(userId: string) {
-    return createServiceRoleTradingRepository(userId, this.client);
+    return createServiceRoleTradingRepository(
+      userId,
+      this.client,
+      this.maximumSingleEntryKrwByUserId.get(userId) ?? PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+    );
   }
 
   paperJournalRepositoryFor(userId: string) {

@@ -38,6 +38,8 @@ type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
 
 type Status = {
   policy: Policy;
+  initialMaxOrderKrw?: number;
+  administratorOrderBaseline?: boolean;
   connections: Array<{
     exchange: Exchange; accountMode: 'paper' | 'mock' | 'live'; configured: boolean;
     lastVerifiedAt: string | null; lastErrorCode: string | null; credentialsExposed: false;
@@ -157,7 +159,7 @@ const DEFAULT_POLICY: UiPolicy = {
   enabledAssets: { bitget: [], upbit: [], kiwoom: [], toss: [] },
   enabledStrategies: [],
   totalCapitalKrw: 1_000_000,
-  maxOrderKrw: 1_000_000,
+  maxOrderKrw: 500_000,
   dailyLossLimitPercent: 5,
   maxAssetPercent: 30,
   maxOpenPositions: 5,
@@ -458,6 +460,9 @@ export function TradeAutomationSettings({
     || status?.policy.newEntriesStopped === true;
   const effectiveStopped = memberStopped || status?.emergencyStopped === true;
   const globalOnlyStopped = !memberStopped && status?.emergencyStopped === true;
+  const initialMaxOrderKrw = status?.initialMaxOrderKrw
+    ?? (canManagePilot ? 1_000_000 : 500_000);
+  const initialMaxOrderLabel = initialMaxOrderKrw === 1_000_000 ? '100만원' : '50만원';
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -615,11 +620,11 @@ export function TradeAutomationSettings({
     <div className="mt-4 grid grid-cols-2 gap-2">
       <NumberField label="총 운용금액" value={draft.totalCapitalKrw} onChange={(value) => updateNumber('totalCapitalKrw', value)} suffix="원" />
       <NumberField
-        label="1회 기준 주문금액 (초기 최대 100만원)"
+        label={`1회 기준 주문금액 (초기 최대 ${initialMaxOrderLabel})`}
         value={draft.maxOrderKrw}
         onChange={(value) => updateNumber('maxOrderKrw', value)}
         suffix="원"
-        max={1_000_000}
+        max={initialMaxOrderKrw}
       />
       <NumberField label="최대 보유비중" value={draft.maxAssetPercent} onChange={(value) => updateNumber('maxAssetPercent', value)} suffix="%" />
       <NumberField label="일일 손실한도" value={draft.dailyLossLimitPercent} onChange={(value) => updateNumber('dailyLossLimitPercent', value)} suffix="%" />
@@ -628,7 +633,8 @@ export function TradeAutomationSettings({
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
     <p className="mt-2 text-[11px] font-semibold text-muted-foreground">
-      초기 기준은 100만원이며, 확정 순수익의 50%만 재투자되어 다음 주문 가능액이 증가합니다. 미확정 손익은 반영하지 않습니다.
+      {initialMaxOrderKrw === 1_000_000 ? '관리자' : '회원'} 초기 기준은 {initialMaxOrderLabel}이며,
+      확정 순수익의 50%만 재투자되어 다음 주문 가능액이 증가합니다. 미확정 손익은 반영하지 않습니다.
     </p>
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">

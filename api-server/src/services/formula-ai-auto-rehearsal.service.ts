@@ -3,6 +3,10 @@ import {
   isEvidenceBackedAutoStrategyId,
   evidenceBackedAutoStrategyCatalog,
 } from './evidence-backed-auto-strategy-catalog.service';
+import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+} from './trade-automation.types';
 
 export const FORMULA_AI_REHEARSAL_POLICY_VERSION = 'formula-ai-rehearsal-v1' as const;
 
@@ -23,6 +27,7 @@ export type FormulaAiRehearsalInput = Readonly<{
 }>;
 
 export type FormulaAiPaperRehearsalProbe = Readonly<{
+  initialCapitalKrw: number;
   paperAutoReady: boolean;
   paperFillReady: boolean;
   journalReady: boolean;
@@ -37,11 +42,17 @@ export type FormulaAiPaperRehearsalProbe = Readonly<{
   productionMutationAllowed: false;
 }>;
 
-export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPaperRehearsalProbe {
+export function runFormulaAiPaperRehearsalProbe(
+  now = new Date(),
+  requestedInitialCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+): FormulaAiPaperRehearsalProbe {
+  const initialCapitalKrw = requestedInitialCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
   const at = new Date(now);
   if (!Number.isFinite(at.getTime())) throw new Error('FORMULA_AI_REHEARSAL_INVALID_TIME');
   const observedAt = at.toISOString();
-  const state = createPaperTradingState(1_000_000, at);
+  const state = createPaperTradingState(initialCapitalKrw, at);
   const entryResult = applyPaperTradingAction(state, {
     type: 'place_order',
     eventId: `formula-ai-rehearsal-${at.getTime()}`,
@@ -86,7 +97,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
       market: 'crypto-futures',
       symbol: 'BTCUSDT',
       side: 'long',
-      accountBalance: 1_000_000,
+      accountBalance: initialCapitalKrw,
       entryPrice: 100,
       stopLossPrice: 98,
       targetPrice1: 105,
@@ -140,6 +151,7 @@ export function runFormulaAiPaperRehearsalProbe(now = new Date()): FormulaAiPape
   const journalEntryCount = closeResult?.state.journal.length ?? entryResult.state.journal.length;
 
   return Object.freeze({
+    initialCapitalKrw,
     paperAutoReady,
     paperFillReady,
     journalReady,

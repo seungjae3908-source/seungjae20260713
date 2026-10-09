@@ -1562,6 +1562,8 @@ test('status is authenticated, automatic execution defaults off, and never retur
     assert.doesNotMatch(text, /encryptedCredentials|accessKey|secretKey|passphrase/);
     const body = JSON.parse(text) as {
       policy: { mode: string; automaticEnabled: boolean };
+      initialMaxOrderKrw: number;
+      administratorOrderBaseline: boolean;
       liveExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticExecutionServerEnabled: Record<string, boolean>;
       liveAutomaticReadinessByMarket: Record<string, {
@@ -1572,6 +1574,8 @@ test('status is authenticated, automatic execution defaults off, and never retur
     };
     assert.equal(body.policy.mode, 'approval');
     assert.equal(body.policy.automaticEnabled, false);
+    assert.equal(body.initialMaxOrderKrw, 500_000);
+    assert.equal(body.administratorOrderBaseline, false);
     assert.deepEqual(body.liveExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.deepEqual(body.liveAutomaticExecutionServerEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
     assert.equal(body.liveAutomaticReadinessByMarket.domestic_stock.readyForAutomaticOrderEvaluation, false);
@@ -1772,6 +1776,55 @@ test('automatic policy cannot be enabled without explicit final confirmation', a
     const body = await response.json() as { error: string };
     assert.equal(body.error, 'AUTOMATIC_TRADING_CONFIRMATION_REQUIRED');
   } finally { await close(server); }
+});
+
+test('member order baseline stays 500k while an administrator may save the 1M baseline', async () => {
+  const isolated = new InMemoryTradingRepository();
+  setTradeAutomationRepositoryFactoryForTests(() => isolated);
+  const requestBody = {
+    ...DEFAULT_TRADING_POLICY,
+    mode: 'approval',
+    automaticEnabled: false,
+    totalCapitalKrw: 1_000_000,
+    maxOrderKrw: 1_000_000,
+  };
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const saved = await fetch(`${regular.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { maxOrderKrw: number } })
+      .policy.maxOrderKrw, 500_000);
+    const status = await fetch(`${regular.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as {
+      initialMaxOrderKrw: number; administratorOrderBaseline: boolean;
+    };
+    assert.equal(statusBody.initialMaxOrderKrw, 500_000);
+    assert.equal(statusBody.administratorOrderBaseline, false);
+  } finally { await close(regular.server); }
+
+  const administrator = await startServer(true, 'admin');
+  try {
+    const saved = await fetch(`${administrator.baseUrl}/api/trade-automation/policy`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { policy: { maxOrderKrw: number } })
+      .policy.maxOrderKrw, 1_000_000);
+    const status = await fetch(`${administrator.baseUrl}/api/trade-automation/status`);
+    const statusBody = await status.json() as {
+      initialMaxOrderKrw: number; administratorOrderBaseline: boolean;
+    };
+    assert.equal(statusBody.initialMaxOrderKrw, 1_000_000);
+    assert.equal(statusBody.administratorOrderBaseline, true);
+  } finally {
+    await close(administrator.server);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+  }
 });
 
 test('member emergency stop is sticky and only exact confirmed resume clears it without enabling automatic trading', async () => {
