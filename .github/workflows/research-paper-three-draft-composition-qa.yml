@@ -20,9 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PAPER_COST_SHA: 'c90635a73f883df3a66e45abce0f0842e0d0038e'
+  PAPER_COST_SHA: 'a9554c956dc925614f0083e04c1246f68267c681'
   ADMIN_QA_SHA: ${{ github.event.pull_request.head.sha }}
-  NATURAL_OBSERVER_SHA: '16b281f46a72c7f3a9b2c4f980083f44b78262a9'
+  NATURAL_OBSERVER_SHA: 'f7300c8f84b192885d98ae065c796b5dd7a4fa8a'
   LIVE_TRADING: 'false'
   AUTO_TRADING: 'false'
   REAL_ORDER_ENABLED: 'false'
