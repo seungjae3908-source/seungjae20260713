@@ -768,13 +768,24 @@ export async function processFormulaAutoBacktestQueueV1({
   for (const entry of newRegistry.entries) registered.set(entry.registryId, entry);
   const entries = [...registered.values()].sort((a, b) => a.registryId.localeCompare(b.registryId));
   const paperRegistry = Object.freeze({ ...newRegistry, entryCount: entries.length, entries: Object.freeze(entries) });
+  // Successful timer execution alone is not evidence of a Paper-ready strategy.
+  const automationReadiness = allFiles.length === 0
+    ? 'BLOCKED_DATA_NO_TRAIN_INPUT'
+    : paperRegistry.entryCount === 0
+      ? 'BLOCKED_DATA_OOS_NOT_ATTESTED'
+      : 'WAITING_PROSPECTIVE_SIGNAL_AND_PAPER_ADMISSION';
   const summary = {
     schemaVersion: 1,
     contract: FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1,
+    automationReadiness,
+    paperOrderAuthorityGranted: false,
+    canonicalFutureSignalVerified: false,
+    oosAndSettlementVerified: false,
     generatedAt: new Date().toISOString(),
     scanned: files.length,
     inboxCount: allFiles.length,
     stagedIntake,
+    genuineResearchProducerVerified: false,
     lastProcessedFileName: files.at(-1) ?? previousCursor,
     counts,
     paperRegisteredCount: paperRegistry.entryCount,
