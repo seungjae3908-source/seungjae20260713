@@ -250,9 +250,9 @@ test('long signal updates preserve Telegram HTML tags, entities, and stale-butto
     const body = calls.at(-1)!;
     const rendered = String(item.kind === 'PHOTO' ? body.caption : body.text);
     assert.ok(rendered.length <= item.limit);
-    assert.match(rendered, /^<b>.+…<\\/b>$/u);
+    assert.match(rendered, /^<b>.+…<\/b>$/u);
     assert.equal(rendered.includes('&am…'), false);
-    assert.equal((rendered.match(/<b>/gu) ?? []).length, (rendered.match(/<\\/b>/gu) ?? []).length);
+    assert.equal((rendered.match(/<b>/gu) ?? []).length, (rendered.match(/<\/b>/gu) ?? []).length);
     assert.deepEqual(body.reply_markup, { inline_keyboard: [] });
     assert.equal(body.parse_mode, 'HTML');
   }
