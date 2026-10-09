@@ -135,6 +135,7 @@ test('AI veto, cash-market short, missing provider chain, and unknown strategy f
 
 test('rehearsal executes the real Paper engine through fill and journal projection with zero live authority', () => {
   const probe = runFormulaAiPaperRehearsalProbe(new Date('2026-10-07T01:00:00.000Z'));
+  assert.equal(probe.initialCapitalKrw, 500_000);
   assert.equal(probe.paperAutoReady, true);
   assert.equal(probe.paperFillReady, true);
   assert.equal(probe.journalReady, true);
@@ -147,4 +148,12 @@ test('rehearsal executes the real Paper engine through fill and journal projecti
   assert.equal(probe.exchangeRequestSent, false);
   assert.equal(probe.providerMutationRequests, 0);
   assert.equal(probe.productionMutationAllowed, false);
+
+  const administratorProbe = runFormulaAiPaperRehearsalProbe(
+    new Date('2026-10-07T01:00:00.000Z'),
+    1_000_000,
+  );
+  assert.equal(administratorProbe.initialCapitalKrw, 1_000_000);
+  assert.equal(administratorProbe.riskReady, true);
+  assert.equal(administratorProbe.realOrderSubmitted, false);
 });
