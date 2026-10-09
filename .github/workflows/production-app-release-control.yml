@@ -277,7 +277,7 @@ jobs:
                 `- PostgreSQL Auth Gate Run ID: \`${process.env.POSTGRES_RUN_ID}\``,
                 `- Staging Readiness Run ID: \`${process.env.STAGING_RUN_ID}\``,
                 '- Staging verdict: `release_ready=true`',
-                `- Production QA scope: \`\${process.env.QA_SCOPE}\``,
+                `- Production QA scope: \`${process.env.QA_SCOPE}\``,
                 `- Production Deploy Run ID: \`${process.env.PRODUCTION_RUN_ID}\``,
                 '- Production environment protection bypassed: `false`',
                 '- Production DB mutation by this bridge: `false`',
