@@ -232,7 +232,7 @@ $readiness$;
 revoke all on function public.admin_four_paper_wallet_rls_guard_ready()
 from public, anon, authenticated;
 grant execute on function public.admin_four_paper_wallet_rls_guard_ready()
-to authenticated;
+to authenticated, service_role;
 
 do $verify$
 begin

@@ -364,6 +364,7 @@ function source(
     syncMissingReferences?: number;
     adminFourWallets?: boolean;
     adminWalletsPartial?: boolean;
+    adminRlsGuardReady?: boolean;
     policyOverride?: TradingPolicy;
   } = {},
 ): MemberAutoTradingBackgroundSource {
@@ -408,6 +409,9 @@ function source(
       };
     },
     telegramDeliveryHealthy() { return true; },
+    async adminPaperDatabaseGuardReady() {
+      return options.adminRlsGuardReady !== false;
+    },
     async readLiveAccountSnapshot() {
       throw new Error('LIVE_ACCOUNT_READ_MUST_NOT_RUN_WHEN_DISABLED');
     },
@@ -2619,6 +2623,43 @@ test('admin four-market Paper worker isolates the 1m capital floor without creat
   assert.equal(denied.createdPlans,0);
   assert.equal(denied.liveOrders,0);
 });
+test('admin V2 Worker blocks new Paper evaluation and projection when database RLS guard is unavailable', async () => {
+  const nowMs = Date.now();
+  const current = normalizeTradingPolicy({
+    ...policy(), totalCapitalKrw: ADMIN_MARKET_INITIAL_KRW,
+    marketEnabled: {domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled: {bitget:true,upbit:true,kiwoom:true,toss:true},
+  });
+  const setup = async (probe: boolean | undefined) => {
+    const repository = new InMemoryTradingRepository();
+    await repository.savePolicy(USER,current);
+    const count={count:0};
+    const base=source(repository,nowMs,{
+      tier:'admin',adminFourWallets:true,
+      policyOverride:current,adminRlsGuardReady:probe,
+      syncCalls:count,
+    });
+    const worker=new MemberAutoTradingBackgroundWorker(
+      probe === undefined ? {...base,adminPaperDatabaseGuardReady:undefined} : base
+    );
+    const result=await withFetchMock(()=>worker.runOnce(new Date(nowMs)));
+    return {result,plans:await repository.listPlans(USER),count:count.count};
+  };
+  for(const probe of [false,undefined]) {
+    const blocked=await setup(probe);
+    assert.equal(blocked.result.createdPlans,0);
+    assert.equal(blocked.result.liveOrders,0);
+    assert.equal(blocked.result.privateTradingRequests,0);
+    assert.equal(blocked.result.newEntriesFailClosed,true);
+    assert.equal(blocked.plans.length,0);
+    assert.equal(blocked.count,0, 'unsafe canonical events must not be projected');
+  }
+  const ready=await setup(true);
+  assert.equal(ready.result.failures,0);
+  assert.equal(ready.result.createdPlans,1);
+  assert.ok(ready.count>0,'valid V2 guard permits Paper projection');
+});
+
 test('automatic Paper background uses the same explicit member strategy allowlist as Live', () => {
   const noStrategies = normalizeTradingPolicy({ ...policy(), enabledStrategies: [] });
   assert.equal(automaticLiveStrategyAllowlisted(noStrategies, 'trend-breakout-v1'), false);
