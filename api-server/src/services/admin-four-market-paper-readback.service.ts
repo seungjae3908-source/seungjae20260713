@@ -2,6 +2,7 @@ import type { StoredPaperJournalRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import {
   ADMIN_FOUR_PAPER_MARKETS,
+  adminPaperMarketFromPlan,
   adminMarketCurrentEpochSettlementScope,
   inspectAdminFourMarketPaperWallets,
   projectAdminMarketCapital,
