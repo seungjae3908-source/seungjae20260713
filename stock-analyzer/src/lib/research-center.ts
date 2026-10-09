@@ -169,6 +169,23 @@ export interface ResearchFactoryRuntimeSummary {
   controlPlaneDigest: string | null;
 }
 
+export interface ResearchFormulaBacktestReadback {
+  present: boolean;
+  status: 'MISSING' | 'INVALID' | 'WAITING_INPUT' | 'TRAIN_ONLY';
+  inboxCount: number | null;
+  scanned: number | null;
+  counts: Record<'PASS' | 'HOLD' | 'RESERVE' | 'EXCLUDE', number | null>;
+  paperRegisteredCount: number | null;
+  producerBound: false;
+  paperConsumerBound: false;
+  validationComplete: false;
+  oosComplete: false;
+  fullCostReady: false;
+  liveTrading: false;
+  autoTrading: false;
+  executionAuthority: 'NONE';
+  firstBlocker: string;
+}
 
 export interface ResearchLightweightMarketWatch {
   contract: 'lightweight-market-watch-readback/v1';
@@ -227,6 +244,7 @@ export interface ResearchCenterOverview {
     failedTasks: number | null;
     blockedDataTasks: number | null;
     cycles: ResearchCycleSummary[];
+    formulaBacktest?: ResearchFormulaBacktestReadback;
     liquidityIndependence?: {
       present: boolean;
       status: 'MISSING' | 'INVALID' | 'PRESENT';
