@@ -52,3 +52,19 @@ test('same guard is required before mutation, before activation, and after PM2 r
   assert.ok(release.indexOf('requireIsolatedSixRooms(env);') < release.indexOf('Apply and verify Production personal Telegram storage atomically'));
   assert.ok(release.lastIndexOf('requireIsolatedSixRooms(env);') > release.indexOf('TELEGRAM_POST_RESTART_IDENTITY_MISMATCH'));
 });
+
+
+test('market signal, follow-up and intelligence subscriber never fall back to shared legacy rooms', () => {
+  const marketSources = [
+    'api-server/src/services/scanner-telegram-delivery.service.ts',
+    'api-server/src/services/telegram-signal-followup.service.ts',
+    'api-server/src/services/signal-intelligence-telegram-subscriber.service.ts',
+  ];
+  for (const filename of marketSources) {
+    const source = fs.readFileSync(filename, 'utf8');
+    assert.ok(source.includes('telegramMarketRoomChatId('), `${filename}: dedicated market router required`);
+    assert.ok(!source.includes('allowLegacyFallback: true'), `${filename}: legacy market room fallback is unsafe`);
+  }
+  const router = fs.readFileSync('api-server/src/services/telegram-market-room.service.ts', 'utf8');
+  assert.ok(router.includes('if (options.allowLegacyFallback !== true) return null;'), 'missing dedicated IDs fail closed');
+});
