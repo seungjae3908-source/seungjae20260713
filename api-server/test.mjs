@@ -160,6 +160,21 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/backup-sync-lifecycle.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts'),
   ],
+  // Scope-only Telegram QA. Keep full app, market, chart and provider tests
+  // in their existing required CI; never use this lane as a CI bypass.
+  telegram: [
+    path.join(root, 'src/services/telegram-notification.service.test.ts'),
+    path.join(root, 'src/services/telegram-test-message.service.test.ts'),
+    path.join(root, 'src/services/telegram-market-brief.service.test.ts'),
+    path.join(root, 'src/services/telegram-readable-format.service.test.ts'),
+    path.join(root, 'src/services/telegram-investment-intelligence.service.test.ts'),
+    path.join(root, 'src/services/scanner-telegram-plan-format.service.test.ts'),
+    path.join(root, 'src/services/member-holdings-telegram-alert.contract.test.ts'),
+    path.join(root, 'src/services/member-holdings-telegram-producer.service.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts'),
+    path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
+  ],
   search: [
     path.join(root, 'src/services/unified-asset-search.service.test.ts'),
     path.join(root, 'src/services/unified-asset-search-fallback.test.ts'),
@@ -202,7 +217,7 @@ groups.unit = [
   groups.search[1],
   groups.search[2],
 ];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke', 'telegram'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];
