@@ -208,6 +208,7 @@ declare
   grant_count integer := 0;
   column_count integer;
   primary_key_columns text;
+  admin_v2_guard_ready boolean := false;
 begin
   for item in select name from (values ${tableValues}) as required(name)
   loop
@@ -285,8 +286,24 @@ begin
   where schemaname = 'public' and tablename in (${tableNames});
   select count(*)::integer into safe_policy_count
   ${policyContractFromSql};
-  if policy_count <> 24 or safe_policy_count <> 24 then
+  -- The 24 owner-scoped permissive policies must remain intact. A fully
+  -- protected administrator V2 rollout adds exactly three RESTRICTIVE wallet
+  -- policies; never treat those as corruption and never run the legacy policy
+  -- repair (which could otherwise discard the administrator write barriers).
+  if policy_count not in (24, 27) or safe_policy_count <> 24 then
     raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
+  end if;
+  if policy_count = 27 then
+    if to_regprocedure('public.admin_four_paper_wallet_rls_guard_ready()') is null then
+      raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
+    end if;
+    -- Dynamic invocation allows older pre-V2 schemas to keep the original
+    -- 24-policy contract without resolving a function they do not possess.
+    execute 'select public.admin_four_paper_wallet_rls_guard_ready()'
+      into admin_v2_guard_ready;
+    if admin_v2_guard_ready is distinct from true then
+      raise exception 'PAPER_JOURNAL_POLICY_CONTRACT_INVALID:%:%', policy_count, safe_policy_count;
+    end if;
   end if;
   if grant_count <> 24 then raise exception 'PAPER_JOURNAL_GRANT_COUNT_INVALID'; end if;
 end
