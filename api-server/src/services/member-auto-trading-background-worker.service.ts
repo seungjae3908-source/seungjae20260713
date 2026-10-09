@@ -1018,8 +1018,24 @@ async function memberRuntimeState(
       let laneCapital = projectAdminMarketCapital(market, [], nowMs);
       if (laneRisk.ready) {
         try {
+          // Legacy Paper rows remain immutable and observable, but can
+          // NEVER be credited as profit or loss in a new admin V2 campaign.
+          // Reuse the exact server-owned account epoch boundary required
+          // by the canonical order-event outbox and position supervisor.
+          const epochPlans = scopedPlans.filter((plan) => {
+            const created = Date.parse(plan.createdAt);
+            return Number.isFinite(created) && created >= account.openedAtMs!
+              && created <= nowMs + 5_000;
+          });
+          const byEpochPlan = new Map(epochPlans.map((plan) => [plan.id, plan]));
+          const epochOrders = scopedOrders.filter((order) => {
+            const plan = byEpochPlan.get(order.planId);
+            return Boolean(plan && automaticPaperOrderWithinWalletEpoch(
+              plan, order, account.openedAtMs, nowMs,
+            ));
+          });
           const payloads = tradeAutomationJournalPayloadsFromSnapshot(
-            userId, scopedOrders, scopedPlans);
+            userId, epochOrders, epochPlans);
           const journal = buildUnifiedTradeJournal(
             payloads, { source: 'APP_PAPER', range: 'ALL' }, new Date(nowMs));
           if (journal.integrityIssues.length) throw new Error('ADMIN_PAPER_LEDGER_INTEGRITY_REQUIRED');
