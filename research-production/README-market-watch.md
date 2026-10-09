@@ -178,3 +178,44 @@ to the app must separately route through its canonical loopback Research
 Dashboard and the existing admin sanitizer. This PR only prepares the
 **local** safe readback; it does not expose a new unauthenticated public HTTP
 endpoint or edit member authorization.
+
+
+## Read-only UTC daily sample cohort diagnostic (Draft, not scheduled)
+
+A discovery JSONL file is **at-least-once** and may contain the same
+`eventId` multiple times after a crash. Prospective outcome JSONL may repeat
+`outcomeId`. Treating each log row as a new success would inflate sample size.
+
+The read-only diagnostic below scans **one UTC event day** and that UTC day
+plus the following day of outcome records, performs independent identity
+checks and deduplicates stable event/outcome IDs:
+
+```bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  RESEARCH_CODE_SHA=<EXACT_RESEARCH_RELEASE_SHA> \
+  node /opt/investment-research/current/research-production/bin/lightweight-market-watch-cohort.mjs --day=2026-10-09
+```
+
+- **No write, scheduler, API request or activation.** Missing/invalid/unsafe
+  files fail closed. Input JSONL is read sequentially, with 64 MiB/file,
+  16 KiB/line, 45,000 lines/file and regular non-link file safety limits.
+- For same-day release changes, discovery entries from a different valid
+  Research SHA are kept out of the selected release's cohort. Outcome records
+  without a matching selected discovery are never counted as successes.
+- The output distinguishes unique discoveries, duplicate rows,
+  `OBSERVED_COARSE` ticker observations, `BLOCKED_DATA`, and missing
+  future outcomes. If a file is torn, tampered or changed during read, the
+  report is `INVALID`, and the validated cohort counts are **null**.
+- Outputs are aggregate only. Raw ticker symbols, prices, provider credentials,
+  account data and paths are never projected. `economicEvidenceCredit`,
+  `oosCredit`, `paperCredit` are always zero and no study result becomes
+  a strategy approval or execution command.
+- This is **not a retention/archival implementation**: logs remain on the
+  dedicated research state root, disk protections still apply, and a
+  separately approved retention/archive procedure is needed for long-term
+  unattended operation. It is also not proof of 24-hour service uptime.
+- The Research Center still displays live status plus preliminary counters.
+  This local cohort diagnostic is not silently promoted to Formula PASS,
+  AI/OOS evidence or browser-admin economics. No Paper/Journal/Telegram
+  consumer has been added by this Draft.
