@@ -24,6 +24,7 @@ import {
 import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal.types';
 import {
   ADMIN_FOUR_PAPER_MARKETS,
+  ADMIN_MARKET_INITIAL_KRW,
   type AdminPaperMarket,
   adminPaperMarketFromPlan,
   adminMarketPaperRiskBudget,
@@ -678,12 +679,16 @@ export function automaticPaperCapitalPolicyReady(
     && policy.totalCapitalKrw >= AUTOMATIC_PAPER_INITIAL_KRW;
 }
 
-function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
+function policyAllowsEntry(
+  member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry, adminFourWallets = false,
+) {
   const policy = member.policy;
   const mapping = marketMapping(entry.identity.market, policy);
   if (mapping.assetClass === 'crypto_futures' && !hasCapability(member.profile, 'canAccessFutures')) return false;
   if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) return false;
   if (!automaticPaperCapitalPolicyReady(policy)) return false;
+  if (adminFourWallets && (!Number.isFinite(policy.totalCapitalKrw)
+    || policy.totalCapitalKrw < ADMIN_MARKET_INITIAL_KRW)) return false;
   if (!policy.marketEnabled[mapping.assetClass] || !policy.exchangeEnabled[mapping.exchange]) return false;
   const symbol = mapping.exchange === 'upbit'
     ? entry.identity.symbol.toUpperCase().replace(/^KRW-/u, '')
@@ -2027,7 +2032,7 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
         for (const entry of entries) {
-          if (!policyAllowsEntry(member, entry)) {
+          if (!policyAllowsEntry(member, entry, runtime.adminMarketRisk != null)) {
             result.skipped += 1;
             continue;
           }
