@@ -93,6 +93,7 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   expect(forbiddenMutationRequests).toBe(0);
   const status = await readOwned(page, '/api/trade-automation/status');
   expect(status.policy?.marketEnabled).toBeTruthy();
+  expect(Array.isArray(status.connections)).toBe(true);
   for (const market of MARKETS) {
     expect(typeof status.policy.marketEnabled[market]).toBe('boolean');
     expect(status.liveAutomaticReadinessByMarket?.[market]?.orderSubmissionPerformedByStatusRequest).toBe(false);
@@ -124,7 +125,12 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   expect(journal.orderSubmitted).toBe(false);
   expect(journal.exchangeRequestSent).toBe(false);
   const integrations = await readOwned(page, '/api/user-integrations');
-  expect(integrations).toBeTruthy();
+  expect(Array.isArray(integrations.brokerConnections)).toBe(true);
+  expect(integrations.brokerConnectionsAvailable).toBe(true);
+  expect(integrations.privateApiRequests).toBe(0);
+  expect(integrations.ordersSubmitted).toBe(0);
+  expect(integrations.ordersCancelled).toBe(0);
+  expect(integrations.telegramRuntime).toBeTruthy();
   expect(forbiddenMutationRequests).toBe(0);
 
   const roomCodes = wallets.creationBlockers?.filter((v: unknown) => failCodeOnly(v) !== 'UNCLASSIFIED')
