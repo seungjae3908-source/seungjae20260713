@@ -276,6 +276,7 @@ jobs:
           fs.appendFileSync(out, `release_match=${releaseMatch}\n`);
           fs.appendFileSync(out, `timers_healthy=${timersHealthy}\n`);
           fs.appendFileSync(out, `forward_proven=${forwardProven}\n`);
+          fs.appendFileSync(out, `forward_clock_fresh=${forward.clockFresh}\n`);
           fs.appendFileSync(out, `paper_safe=${paperSafe}\n`);
           fs.appendFileSync(out, `historical_complete=${historicalComplete}\n`);
           fs.appendFileSync(out, `historical_running=${historicalRunning}\n`);
@@ -322,7 +323,7 @@ jobs:
           writeOutput('risk_policy_record_transport', evidenceTransport.risk_policy_record);
           writeOutput('supplemental_cost_transport', evidenceTransport.supplemental_cost);
           writeOutput('authoritative_source_blockers', evidenceTransport.source_blockers);
-          if (['failed', 'stale_release', 'blocked_data'].includes(status)) process.exitCode = 1;
+          if (['failed', 'stale_release', 'stale_cycle', 'blocked_data'].includes(status)) process.exitCode = 1;
           NODE
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
@@ -349,6 +350,7 @@ jobs:
           RELEASE_MATCH: ${{ steps.verdict.outputs.release_match }}
           TIMERS_HEALTHY: ${{ steps.verdict.outputs.timers_healthy }}
           FORWARD_PROVEN: ${{ steps.verdict.outputs.forward_proven }}
+          FORWARD_CLOCK_FRESH: ${{ steps.verdict.outputs.forward_clock_fresh }}
           PAPER_SAFE: ${{ steps.verdict.outputs.paper_safe }}
           HISTORICAL_COMPLETE: ${{ steps.verdict.outputs.historical_complete }}
           HISTORICAL_RUNNING: ${{ steps.verdict.outputs.historical_running }}
@@ -414,6 +416,7 @@ jobs:
               `verdict_outcome: ${process.env.VERDICT_OUTCOME}`,
               `timers_healthy: ${observed(process.env.TIMERS_HEALTHY)}`,
               `first_natural_forward_proven: ${observed(process.env.FORWARD_PROVEN)}`,
+              `forward_cycle_clock_fresh: ${observed(process.env.FORWARD_CLOCK_FRESH)}`,
               `paper_safety_proven: ${observed(process.env.PAPER_SAFE)}`,
               `fast_historical_complete: ${observed(process.env.HISTORICAL_COMPLETE)}`,
               `fast_historical_running: ${observed(process.env.HISTORICAL_RUNNING)}`,
