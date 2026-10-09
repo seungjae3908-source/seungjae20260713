@@ -1,5 +1,7 @@
 import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
-import { evaluateFormulaAiLiveException } from './formula-ai-live-exception.service';
+import {
+  evaluateFormulaAiLiveException, evaluateFormulaAiPaperException,
+} from './formula-ai-live-exception.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -68,6 +70,9 @@ export function evaluateTradingOptimization(
   const formulaAiException = plan.accountMode === 'live'
     ? evaluateFormulaAiLiveException(plan, now)
     : null;
+  const paperFormulaException = plan.accountMode === 'paper'
+    && policy.mode === 'automatic' && policy.pilotStage === 'formula-ai-exception'
+    ? evaluateFormulaAiPaperException(plan, now) : null;
   const profitabilityAttestation = formulaAiException?.allowed
     ? null
     : attestLiveTradingProfitability(plan, undefined, {
@@ -84,6 +89,9 @@ export function evaluateTradingOptimization(
   if (formulaAiException?.allowed) {
     warnings.push('FORMULA_AI_LIVE_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
   }
+  if (paperFormulaException?.allowed) {
+    warnings.push('FORMULA_AI_PAPER_EXCEPTION_V1:RESEARCH_PROMOTION_BYPASSED');
+  }
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
     add(blockCodes, 'ENTRY_ZONE_INVALID');
@@ -99,7 +107,9 @@ export function evaluateTradingOptimization(
   }
 
   const computedExpectedValueR = expectedValueR(economicsPlan);
-  const historicalEconomicsBypassed = plan.accountMode === 'live' && formulaAiException?.allowed === true;
+  const historicalEconomicsBypassed =
+    (plan.accountMode === 'live' && formulaAiException?.allowed === true)
+    || (plan.accountMode === 'paper' && paperFormulaException?.allowed === true);
   if (liveOrAutomatic) {
     if (!historicalEconomicsBypassed) {
       if (!economics) {
