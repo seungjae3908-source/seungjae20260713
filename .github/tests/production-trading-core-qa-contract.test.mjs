@@ -252,3 +252,11 @@ test('Admin V2 DB readiness verifies role, deny operator and immutable 1m seed',
   assert.ok(staging.includes('ADMIN_PAPER_RLS_UPSERT_ALLOWED'));
   assert.ok(staging.includes('ADMIN_PAPER_CLIENT_TRUNCATE_ALLOWED'));
 });
+
+test('Admin 1m Paper admission requires certified canonical settlement, never only the wallet seed', () => {
+  const budget=read('api-server/src/services/admin-four-market-paper-capital.service.ts');
+  const worker=read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  assert.ok(budget.includes('ADMIN_PAPER_CANONICAL_SETTLEMENT_REQUIRED'));
+  assert.ok(budget.includes('if (!capital || !capital.settlementReady || !capital.newEntriesAllowed'));
+  assert.ok(worker.includes('verifiedCapital: runtime.adminMarketCapital?.[mapping.assetClass]'));
+});
