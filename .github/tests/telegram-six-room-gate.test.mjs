@@ -84,5 +84,10 @@ test('scanner and signal follow-ups reuse strict venue recognition, never "inclu
     'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID']) {
     assert.ok(router.includes('env.' + id), 'six-room collision guard must check ' + id);
   }
-  assert.ok(router.includes('new Set(dedicatedIds).size !== dedicatedIds.length'));
+  assert.ok(router.includes('return new Set(dedicatedIds).size === dedicatedIds.length;'));
+  assert.ok(router.includes('if (!telegramSixRoomRoutingIsolated(env)) return null;'));
+  const holdings = fs.readFileSync('api-server/src/services/member-holdings-telegram-alert.service.ts','utf8');
+  const auto = fs.readFileSync('api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts','utf8');
+  assert.ok(holdings.includes('telegramSixRoomRoutingIsolated(env)'), 'owner holdings mirror must share six-room gate');
+  assert.ok(auto.includes('telegramSixRoomRoutingIsolated({'), 'owner AUTO mirror must share six-room gate');
 });
