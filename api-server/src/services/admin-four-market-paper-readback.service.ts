@@ -189,6 +189,24 @@ export function adminFourMarketPaperCapitalReadback(input: {
     // If a new-epoch order has only an unknown plan ID the global guard
     // above quarantines every market before this projection is attempted.
     try {
+      // The journal's TradeLeg.orderId is the canonical broker-facing order
+      // identity (exchangeOrderId ?? id), not the private database row UUID.
+      // Key the same way as tradeAutomationJournalPayloadsFromSnapshot and
+      // reject duplicate aliases before one order can certify another fill.
+      const ordersByJournalId = new Map<string, TradingOrder>();
+      let journalIdCollision = false;
+      for (const order of scoped.orders) {
+        const journalId = order.exchangeOrderId ?? order.id;
+        if (!journalId || ordersByJournalId.has(journalId)) {
+          journalIdCollision = true;
+          break;
+        }
+        ordersByJournalId.set(journalId, order);
+      }
+      if (journalIdCollision) {
+        fallback('ADMIN_PAPER_CANONICAL_ORDER_IDENTITY_COLLISION');
+        continue;
+      }
       const raw = tradeAutomationJournalPayloadsFromSnapshot(
         input.ownerId, scoped.orders, scoped.plans,
       );
@@ -199,7 +217,7 @@ export function adminFourMarketPaperCapitalReadback(input: {
       }
       const closed = journal.trades.filter(trade => trade.source === 'APP_PAPER'
         && trade.status === 'CLOSED');
-      const ordersById = new Map(scoped.orders.map(order => [order.id, order] as const));
+      const ordersById = ordersByJournalId;
       capital[market] = projectAdminMarketCapital(market, closed.map(trade => ({
         id: trade.id, market, closedAt: trade.closedAt ?? '',
         ...verifiedClosedPaperPnlKrw(trade, market, ordersById, input.nowMs),
