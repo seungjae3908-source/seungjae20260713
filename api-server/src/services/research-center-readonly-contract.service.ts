@@ -823,6 +823,79 @@ export function sanitizeMarketWatchReadback(value: unknown) {
   };
 }
 
+
+const WATCH_CADENCE_CONTRACT = 'public-watch-cadence-admin-readback-v1';
+const WATCH_CADENCE_STATES = new Set([
+  'MISSING', 'INVALID', 'INCOMPLETE_OR_INTERRUPTED', 'PUBLIC_CADENCE_OBSERVED',
+]);
+
+function emptyWatchCadence(status: 'MISSING' | 'INVALID' = 'MISSING', present = false) {
+  return {
+    contract: WATCH_CADENCE_CONTRACT, status, present,
+    sampleCount: null, duplicateRows: null, maxGapMs: null,
+    latestAgeMs: null, hostHoldCycles: null,
+    hostThrottledCycles: null, blockedDataCycles: null,
+    allFourMarketReadyCycles: null, filesRead: null,
+    cadenceWindowObserved: false, continuous24hProven: false,
+    completeFourMarketCoverageProven: false,
+    economicEvidenceCredit: 0, oosCredit: 0, paperCredit: 0,
+    profitabilityProven: false, formulaCandidateProduced: false,
+    executionAuthority: 'NONE',
+  };
+}
+
+export function sanitizeMarketWatchCadenceReadback(value: unknown) {
+  if (value == null) return emptyWatchCadence();
+  const v = record(value);
+  if (!v || v.contract !== WATCH_CADENCE_CONTRACT
+    || typeof v.status !== 'string' || !WATCH_CADENCE_STATES.has(v.status)
+    || typeof v.present !== 'boolean' || v.executionAuthority !== 'NONE'
+    || v.continuous24hProven !== false
+    || v.completeFourMarketCoverageProven !== false
+    || v.profitabilityProven !== false || v.formulaCandidateProduced !== false
+    || v.economicEvidenceCredit !== 0 || v.oosCredit !== 0
+    || v.paperCredit !== 0 || typeof v.cadenceWindowObserved !== 'boolean') {
+    return emptyWatchCadence('INVALID', true);
+  }
+  if (v.status === 'MISSING') return v.present === false && v.cadenceWindowObserved === false
+    ? emptyWatchCadence() : emptyWatchCadence('INVALID', true);
+  if (v.status === 'INVALID') return v.cadenceWindowObserved === false
+    ? emptyWatchCadence('INVALID', true) : emptyWatchCadence('INVALID', true);
+  if (v.present !== true) return emptyWatchCadence('INVALID', true);
+  const sampleCount = watchSafeCount(v.sampleCount, 4_001);
+  const duplicateRows = watchSafeCount(v.duplicateRows, 4_001);
+  const maxGapMs = watchSafeCount(v.maxGapMs, 86_400_001);
+  const latestAgeMs = watchSafeCount(v.latestAgeMs, 86_400_001);
+  const hostHoldCycles = watchSafeCount(v.hostHoldCycles, 4_001);
+  const hostThrottledCycles = watchSafeCount(v.hostThrottledCycles, 4_001);
+  const blockedDataCycles = watchSafeCount(v.blockedDataCycles, 4_001);
+  const allFourMarketReadyCycles = watchSafeCount(v.allFourMarketReadyCycles, 4_001);
+  const filesRead = watchSafeCount(v.filesRead, 3);
+  if (sampleCount == null || sampleCount < 1 || duplicateRows == null
+    || maxGapMs == null || latestAgeMs == null
+    || hostHoldCycles == null || hostThrottledCycles == null
+    || blockedDataCycles == null || allFourMarketReadyCycles == null
+    || filesRead == null || filesRead < 1
+    || hostHoldCycles + hostThrottledCycles > sampleCount
+    || blockedDataCycles > sampleCount || allFourMarketReadyCycles > sampleCount
+    || v.cadenceWindowObserved !== (v.status === 'PUBLIC_CADENCE_OBSERVED')
+    || (v.cadenceWindowObserved && (
+      sampleCount < 600 || maxGapMs > 360_000 || latestAgeMs > 360_000
+      || hostHoldCycles !== 0 || hostThrottledCycles !== 0
+    ))) return emptyWatchCadence('INVALID', true);
+  return {
+    contract: WATCH_CADENCE_CONTRACT, status: v.status, present: true,
+    sampleCount, duplicateRows, maxGapMs, latestAgeMs,
+    hostHoldCycles, hostThrottledCycles, blockedDataCycles,
+    allFourMarketReadyCycles, filesRead,
+    cadenceWindowObserved: v.cadenceWindowObserved,
+    continuous24hProven: false, completeFourMarketCoverageProven: false,
+    economicEvidenceCredit: 0, oosCredit: 0, paperCredit: 0,
+    profitabilityProven: false, formulaCandidateProduced: false,
+    executionAuthority: 'NONE',
+  };
+}
+
 export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | null {
   const payload = record(value);
   const state = record(payload?.state);
@@ -842,6 +915,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   const formulaBacktest = sanitizeFormulaBacktestReadback(research?.formulaBacktest);
   const lightweightMarketWatch = sanitizeMarketWatchReadback(dataFactory?.lightweightMarketWatch);
+  const lightweightMarketWatchCadence = sanitizeMarketWatchCadenceReadback(dataFactory?.lightweightMarketWatchCadence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
     || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
@@ -876,7 +950,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
     research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest },
-    dataFactory: { temporalCryptoFutures, lightweightMarketWatch },
+    dataFactory: { temporalCryptoFutures, lightweightMarketWatch, lightweightMarketWatchCadence },
     factory,
     paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },

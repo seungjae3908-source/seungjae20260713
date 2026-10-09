@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlsplit
 from v3_independence import read_v3_independence_summary
 from video_research_readback import read_video_research_readback
 from lightweight_market_watch_readback import read_active_research_sha, read_watch_status
+from lightweight_market_watch_cadence_readback import read_watch_cadence
 
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
@@ -952,8 +953,12 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     formula_backtest = read_formula_queue_readback(root)
     # A persisted SHA is untrusted until independently matched to the exact
     # root-managed detached Research release currently installed on the host.
+    exact_research_sha = read_active_research_sha()
     market_watch_status = read_watch_status(
-        root, expected_sha=read_active_research_sha(), require_exact_sha=True,
+        root, expected_sha=exact_research_sha, require_exact_sha=True,
+    )
+    market_watch_cadence = read_watch_cadence(
+        root, expected_sha=exact_research_sha, require_exact_sha=True,
     )
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
@@ -1014,7 +1019,8 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'formulaBacktest': formula_backtest,
             'liquidityIndependence': liquidity_independence,
         },
-        'dataFactory': {'temporalCryptoFutures': temporal_crypto, 'lightweightMarketWatch': market_watch_status},
+        'dataFactory': {'temporalCryptoFutures': temporal_crypto, 'lightweightMarketWatch': market_watch_status,
+                        'lightweightMarketWatchCadence': market_watch_cadence},
         'factory': factory_runtime,
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger, 'candidatePerformance': candidate_performance},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},

@@ -4,6 +4,7 @@ import {
   RESEARCH_CENTER_READONLY_CONTRACT,
   sanitizeResearchCenterOverview,
   sanitizeMarketWatchReadback,
+  sanitizeMarketWatchCadenceReadback,
 } from './research-center-readonly-contract.service.ts';
 
 const SHA = '1111111111111111111111111111111111111111';
@@ -283,6 +284,74 @@ test('coarse sample study cannot claim economic success, infinite counts or orde
   assert.equal(sanitizeMarketWatchReadback({
     ...base, prospectiveSampleStudy: { ...base.prospectiveSampleStudy, status: 'OOS_PASS' },
   }).status, 'INVALID');
+});
+
+function watchCadence() {
+  return {
+    contract: 'public-watch-cadence-admin-readback-v1',
+    status: 'PUBLIC_CADENCE_OBSERVED', present: true,
+    sampleCount: 720, duplicateRows: 1, maxGapMs: 120000,
+    latestAgeMs: 90000, hostHoldCycles: 0, hostThrottledCycles: 0,
+    blockedDataCycles: 0, allFourMarketReadyCycles: 0, filesRead: 2,
+    cadenceWindowObserved: true,
+    continuous24hProven: false, completeFourMarketCoverageProven: false,
+    economicEvidenceCredit: 0, oosCredit: 0, paperCredit: 0,
+    profitabilityProven: false, formulaCandidateProduced: false,
+    executionAuthority: 'NONE', rawPath: '/private/research/cadence',
+  };
+}
+
+test('market watch cadence is read-only, aggregate-only and never a 24h SLA claim', () => {
+  assert.equal(sanitizeMarketWatchCadenceReadback(null).status, 'MISSING');
+  const actual = sanitizeMarketWatchCadenceReadback(watchCadence());
+  assert.equal(actual.status, 'PUBLIC_CADENCE_OBSERVED');
+  assert.equal(actual.sampleCount, 720);
+  assert.equal(actual.maxGapMs, 120000);
+  assert.equal(actual.allFourMarketReadyCycles, 0);
+  assert.equal(actual.cadenceWindowObserved, true);
+  assert.equal(actual.continuous24hProven, false);
+  assert.equal(actual.completeFourMarketCoverageProven, false);
+  assert.equal(actual.executionAuthority, 'NONE');
+  assert.equal(actual.economicEvidenceCredit, 0);
+  assert.equal(JSON.stringify(actual).includes('rawPath'), false);
+  assert.equal(JSON.stringify(actual).includes('/private/'), false);
+
+  const overview = validOverview();
+  Object.assign(overview.dataFactory, { lightweightMarketWatchCadence: watchCadence() });
+  const result = sanitizeResearchCenterOverview(overview);
+  assert.ok(result);
+  const dto = result.dataFactory as { lightweightMarketWatchCadence: { status: string; sampleCount: number } };
+  assert.equal(dto.lightweightMarketWatchCadence.status, 'PUBLIC_CADENCE_OBSERVED');
+  assert.equal(dto.lightweightMarketWatchCadence.sampleCount, 720);
+});
+
+test('market watch cadence rejects forged uptime, profits, orders and impossible counters', () => {
+  for (const item of [
+    { continuous24hProven: true },
+    { completeFourMarketCoverageProven: true },
+    { paperCredit: 1 },
+    { oosCredit: 1 },
+    { economicEvidenceCredit: 1 },
+    { executionAuthority: 'LIVE' },
+    { profitabilityProven: true },
+    { sampleCount: -1 },
+    { sampleCount: 60 },
+    { maxGapMs: 800000 },
+    { hostHoldCycles: 1 },
+    { status: 'OOS_PASS' },
+    { cadenceWindowObserved: false },
+  ]) {
+    const x = sanitizeMarketWatchCadenceReadback({ ...watchCadence(), ...item });
+    assert.equal(x.status, 'INVALID');
+    assert.equal(x.continuous24hProven, false);
+    assert.equal(x.executionAuthority, 'NONE');
+  }
+  const interrupted = sanitizeMarketWatchCadenceReadback({
+    ...watchCadence(), status: 'INCOMPLETE_OR_INTERRUPTED',
+    cadenceWindowObserved: false, sampleCount: 15, hostHoldCycles: 1,
+  });
+  assert.equal(interrupted.status, 'INCOMPLETE_OR_INTERRUPTED');
+  assert.equal(interrupted.cadenceWindowObserved, false);
 });
 
 test('market watch readback rejects forged orders, full coverage, counts and paths', () => {

@@ -1,4 +1,4 @@
-import type { ResearchLightweightMarketWatch } from '@/lib/research-center';
+import type { ResearchLightweightMarketWatch, ResearchLightweightMarketWatchCadence } from '@/lib/research-center';
 
 const MARKET_NAMES: Record<string, string> = {
   KR_STOCK: '국내주식', US_STOCK: '미국주식',
@@ -35,9 +35,10 @@ function displayTime(ms: number | null) {
 }
 
 export function ResearchLightweightMarketWatchPanel({
-  watch,
+  watch, cadence,
 }: {
   watch?: ResearchLightweightMarketWatch | null;
+  cadence?: ResearchLightweightMarketWatchCadence | null;
 }) {
   const summary = watch ?? null;
   const label = summary ? WATCH_LABEL[summary.status] : WATCH_LABEL.MISSING;
@@ -102,6 +103,28 @@ export function ResearchLightweightMarketWatchPanel({
         <p className="mt-1 text-muted-foreground">
           완료는 20분 공개시세 표본 조건 충족만 의미하며 체결·실현수익·수익성 증거가 아닙니다.
           거래비용·OOS·Paper 검증 표본은 0건으로 별도 관리합니다.
+        </p>
+      </div>
+      <div className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
+        data-testid="research-market-watch-cadence">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <strong>최근 24시간 공개시세 수집주기 · 자체 기록</strong>
+          <span className="text-muted-foreground" data-testid="research-market-watch-cadence-status">
+            {cadence?.status === 'PUBLIC_CADENCE_OBSERVED' ? '자체 기록 충족'
+              : cadence?.status === 'INCOMPLETE_OR_INTERRUPTED' ? '주기 누락 또는 중단'
+                : cadence?.status === 'INVALID' ? '진단 자료 오류' : '진단 자료 없음'}
+          </span>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <p>유효 주기 {number(cadence?.sampleCount ?? null)}회</p>
+          <p>최대 수집 공백 {cadence?.maxGapMs == null ? '미측정' : (cadence.maxGapMs / 60_000).toFixed(1) + '분'}</p>
+          <p>서버 보호 정지·감속 {cadence?.hostHoldCycles == null || cadence.hostThrottledCycles == null
+            ? '미측정' : number(cadence.hostHoldCycles + cadence.hostThrottledCycles) + '회'}</p>
+          <p>4시장 전체 시세 수집 주기 {number(cadence?.allFourMarketReadyCycles ?? null)}회</p>
+        </div>
+        <p className="mt-1 text-muted-foreground" data-testid="research-market-watch-cadence-warning">
+          내부 파일의 연속 수집 기록만 진단합니다. 서버·서비스의 실제 24시간 가동과 4시장 전체 데이터는 독립 검증되지 않았습니다.
+          신호 PASS·실거래·Paper 체결·수익성 증거로 인정하지 않습니다.
         </p>
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground" data-testid="research-market-watch-boundary">
