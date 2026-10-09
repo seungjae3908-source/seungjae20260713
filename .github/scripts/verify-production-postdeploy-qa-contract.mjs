@@ -163,6 +163,7 @@ requireText(memberQaConfig, "screenshot: 'off'", 'MEMBER_QA_SCREENSHOT_RETENTION
 requireText(runner, "comprehensive|account|credential|member", 'MEMBER_QA_RUNNER_MODE_MISSING');
 requireText(contextBuilder, 'activeConflictingTradingGates: conflicts', 'POSTDEPLOY_GATE_CONFLICT_CONTEXT_MISSING');
 requireText(contextBuilder, 'verifyPostDeployMainLineage', 'POSTDEPLOY_MAIN_LINEAGE_HELPER_MISSING');
+requireText(contextBuilder, 'isActiveProductionTradingGateRun', 'POSTDEPLOY_EXECUTING_GATE_FILTER_MISSING');
 requireText(contextBuilder, '/compare/${normalizedTarget}...${currentMainSha}', 'POSTDEPLOY_GITHUB_ANCESTRY_VERIFICATION_MISSING');
 requireText(evidenceBuilder, 'POSTDEPLOY_QA_MAIN_LINEAGE_UNVERIFIED', 'POSTDEPLOY_UNVERIFIED_MAIN_GUARD_MISSING');
 requireText(contextBuilder, "mode === 'inline'", 'INLINE_DEPLOY_CONTEXT_MODE_MISSING');
