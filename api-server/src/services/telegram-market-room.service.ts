@@ -39,19 +39,24 @@ export function telegramMarketRoomForLane(lane: TelegramMarketLane): TelegramMar
   }
 }
 
-export function telegramMarketRoomChatId(
-  room: TelegramMarketRoom,
-  env: NodeJS.ProcessEnv = process.env,
-  options: { allowLegacyFallback?: boolean } = {},
-): string | null {
-  // Keep public markets isolated from other markets, holdings and AUTO.
-  // Fail closed if any two configured dedicated destinations collide.
+/** Shared six-room collision gate. Missing rooms are checked by each
+ * destination's own readiness contract; duplicate configured rooms are never
+ * permitted to cross market, holdings, or AUTO boundaries. */
+export function telegramSixRoomRoutingIsolated(env: NodeJS.ProcessEnv = process.env): boolean {
   const dedicatedIds = [
     env.TELEGRAM_KR_STOCK_CHAT_ID, env.TELEGRAM_US_STOCK_CHAT_ID,
     env.TELEGRAM_CRYPTO_SPOT_CHAT_ID, env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID,
     env.TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID, env.TELEGRAM_AUTO_TRADING_CHAT_ID,
   ].map(value => value?.trim()).filter((value): value is string => Boolean(value));
-  if (new Set(dedicatedIds).size !== dedicatedIds.length) return null;
+  return new Set(dedicatedIds).size === dedicatedIds.length;
+}
+
+export function telegramMarketRoomChatId(
+  room: TelegramMarketRoom,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { allowLegacyFallback?: boolean } = {},
+): string | null {
+  if (!telegramSixRoomRoutingIsolated(env)) return null;
 
   const exact = (() => {
     switch (room) {
