@@ -214,7 +214,9 @@ export function adminMarketPaperRiskBudget(input: {
     wallet.availableMarginKrw! + verifiedGrowth);
   return {
     ready: true as const, blockers: [] as string[],
-    accountValueKrw: equity, exposureKrw,
+    // Never report or use more account value than the lower wallet cash / equity /
+    // margin collateral, even when the canonical settlement book remains at 1m.
+    accountValueKrw: collateral, exposureKrw,
     reserveKrw: capital.reserveKrw,
     availableToTradeKrw: Math.max(0, collateral - exposureKrw),
   };
