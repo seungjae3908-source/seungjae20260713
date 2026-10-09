@@ -29,6 +29,7 @@ import {
   AUTOMATIC_PAPER_INITIAL_KRW,
   automaticPaperWalletBootstrapReadiness,
   automaticLiveStrategyAllowlisted,
+  automaticPaperCapitalPolicyReady,
   automaticPaperLegacyEpochIsolationReadiness,
   automaticExecutionProjectionOrderIds,
   automaticPaperOrderWithinWalletEpoch,
@@ -2545,6 +2546,15 @@ test('new wallet calculates only scoped Paper risk, still blocking new invalid f
   );
   assert.equal(blocked.ready, false);
   assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
+});
+
+test('automatic Paper worker shares the 500k minimum capital policy admission guard with readiness', () => {
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 500_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 525_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.NaN }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.POSITIVE_INFINITY }), false);
 });
 
 test('automatic Paper background uses the same explicit member strategy allowlist as Live', () => {
