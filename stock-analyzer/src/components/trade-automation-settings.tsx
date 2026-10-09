@@ -94,6 +94,15 @@ type Status = {
     globalEmergencyStopActive: boolean;
     errorCode: string | null;
   } | null;
+  /** Only read-only historical bootstrap evidence; never grants wallet reset or LIVE authority. */
+  automaticPaperWalletBootstrap?: {
+    safeToInitialize: boolean;
+    automaticPaperPlanCount: number;
+    executedAutomaticPaperOrderCount: number;
+    missingFilledQuantityEvidence: number;
+    missingFeeEvidence: number;
+    blockers: string[];
+  };
   userTelegramDelivery?: {
     enabled: boolean;
     lastTickAt: string | null;
