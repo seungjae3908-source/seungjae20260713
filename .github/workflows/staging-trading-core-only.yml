@@ -1,0 +1,310 @@
+name: Trading Core Only Staging QA
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/staging-trading-core-only.yml'
+      - '.github/tests/staging-trading-core-only-contract.test.mjs'
+      - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
+      - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
+      - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Immutable exact-current-main 40-char SHA
+        required: true
+        type: string
+      action:
+        description: Run owner preflight only or deploy isolated Staging and run Trading Core scoped QA
+        type: choice
+        options:
+          - preflight
+          - deploy
+        required: true
+        default: preflight
+
+permissions:
+  contents: read
+  statuses: read
+  actions: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'stock-app-staging-readiness' || format('trading-core-staging-pr-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    name: Validate focused Staging source and zero-Production boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate scoped Staging contract and release-verdict non-substitution
+        run: |
+          set -Eeuo pipefail
+          node --check .github/scripts/build-staging-trading-core-only-verdict.mjs
+          node --test .github/tests/staging-trading-core-only-contract.test.mjs
+
+  owner-gate:
+    name: Owner exact-main provenance and Staging-only credentials
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: staging
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
+      publisher_digest: ${{ steps.publisher.outputs.publisher_sha256 }}
+    env:
+      STAGING_ACTION: ${{ inputs.action }}
+      STAGING_RUN_FULL_VALIDATION: 'false'
+      STAGING_RUN_DESTRUCTIVE_RECOVERY_DRILL: 'false'
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+      STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require exact SHA, owner dispatch and unchanged current main
+        id: target
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'STAGING_CORE_REQUIRES_MAIN_REF' >&2; exit 1; }
+          [[ "$GITHUB_ACTOR" == 'seungjae3908-source' ]] || { echo 'STAGING_CORE_OWNER_REQUIRED' >&2; exit 1; }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'STAGING_CORE_IMMUTABLE_SHA_REQUIRED' >&2; exit 1; }
+          target="$(printf %s "$REQUESTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          git fetch --no-tags origin main "$target"
+          main="$(git rev-parse FETCH_HEAD^{commit})"
+          current="$(git rev-parse origin/main^{commit})"
+          [[ "$target" == "$current" ]] || { echo 'STAGING_CORE_CURRENT_MAIN_SHA_MISMATCH' >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$target" ]] || { echo 'STAGING_CORE_CHECKOUT_MISMATCH' >&2; exit 1; }
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+      - name: Require coherent post-merge release provenance
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const {
+              evaluatePostMergeStatusProvenance,
+              inspectPostMergeStatusEvidence,
+            } = require(process.env.GITHUB_WORKSPACE + '/api-server/scripts/release-candidate-provenance.cjs');
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main'
+            });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100
+            });
+            const proof = inspectPostMergeStatusEvidence(statuses);
+            if (!proof.ok) { core.setFailed('STAGING_CORE_POSTMERGE_PROOF_MISSING:' + proof.reason); return; }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: proof.runId
+            })).data;
+            const accepted = evaluatePostMergeStatusProvenance({
+              targetSha: target, currentMainSha: main.data.commit.sha, statuses, run
+            });
+            if (!accepted.ok) core.setFailed('STAGING_CORE_POSTMERGE_REJECTED:' + accepted.reason);
+      - name: Fail closed on Production project, origins or missing scoped Staging credentials
+        run: |
+          set -Eeuo pipefail
+          node api-server/scripts/verify-phase10-staging-readiness.mjs --preflight
+          [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]] || { echo 'STAGING_CORE_PINNED_SSH_HOST_REQUIRED' >&2; exit 1; }
+          [[ -n "$STAGING_SUPABASE_ANON_KEY" && -n "$STAGING_SUPABASE_SECRET_KEY" ]] || { echo 'STAGING_CORE_ISOLATED_DB_KEYS_REQUIRED' >&2; exit 1; }
+          [[ -n "$STAGING_ADMIN_EMAIL" && -n "$STAGING_ADMIN_PASSWORD" ]] || { echo 'STAGING_CORE_ADMIN_AUTH_REQUIRED' >&2; exit 1; }
+          node --input-type=module <<'NODE'
+          const base = new URL(process.env.STAGING_BASE_URL);
+          if (base.protocol !== 'https:' || base.hostname === 'lsj119.com'
+            || base.hostname.endsWith('.supabase.co')) throw new Error('STAGING_CORE_PRODUCTION_ORIGIN_FORBIDDEN');
+          const db = new URL(process.env.STAGING_SUPABASE_URL);
+          if (db.hostname === 'bawcbkoyovbeajkrnduq.supabase.co')
+            throw new Error('STAGING_CORE_PRODUCTION_DATABASE_FORBIDDEN');
+          NODE
+      - name: Verify Staging-only administrator password grant and snapshot publisher digest
+        id: publisher
+        if: inputs.action == 'deploy'
+        env:
+          SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
+          ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
+        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs --write-publisher-digest
+      - name: Preflight-only result (does not deploy or change any environment)
+        if: inputs.action == 'preflight'
+        run: |
+          echo 'Staging Trading Core scoped configuration preflight PASS (no deployment, no member mutation)' >> "$GITHUB_STEP_SUMMARY"
+
+  stage-deploy:
+    name: Deploy exact revision only to isolated Staging
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+    needs: owner-gate
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      TARGET_SHA: ${{ needs.owner-gate.outputs.target_sha }}
+      PUBLISHER_DIGEST: ${{ needs.owner-gate.outputs.publisher_digest }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.owner-gate.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Recheck exact main before any Staging mutation
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]] || { echo 'STAGING_CORE_MAIN_MOVED_BEFORE_DEPLOY' >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
+          [[ "$PUBLISHER_DIGEST" =~ ^[0-9a-f]{64}$ ]] || exit 1
+      - name: Configure protected Staging-only SSH
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy exact SHA using existing Staging rollback/canary isolation
+        env:
+          REMOTE_SECRET_FILE: /tmp/seungjae-staging-core-${{ github.run_id }}-${{ github.run_attempt }}.env
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          local_secret_file="$(mktemp)"
+          cleanup() {
+            rm -f "$local_secret_file"
+            ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15               "$STAGING_SSH_USER@$STAGING_SSH_HOST" "rm -f -- $(printf '%q' "$REMOTE_SECRET_FILE")" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          {
+            printf 'STAGING_BASE_URL=%q\n' "$STAGING_BASE_URL"
+            printf 'STAGING_SUPABASE_URL=%q\n' "$STAGING_SUPABASE_URL"
+            printf 'STAGING_SUPABASE_ANON_KEY=%q\n' "$STAGING_SUPABASE_ANON_KEY"
+            printf 'STAGING_SUPABASE_SECRET_KEY=%q\n' "$STAGING_SUPABASE_SECRET_KEY"
+            printf 'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_DIGEST"
+          } > "$local_secret_file"
+          chmod 600 "$local_secret_file"
+          scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$local_secret_file" "$STAGING_SSH_USER@$STAGING_SSH_HOST:$REMOTE_SECRET_FILE"
+          remote_command="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q STAGING_SECRET_FILE=%q bash -s'             "$TARGET_SHA" "$REPOSITORY_URL" "$REMOTE_SECRET_FILE")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" <<'REMOTE'
+          set -Eeuo pipefail
+          chmod 600 "$STAGING_SECRET_FILE"
+          source "$STAGING_SECRET_FILE"
+          SOURCE_DIR="$(mktemp -d /tmp/seungjae-staging-core-source.XXXXXX)"
+          cleanup_remote() {
+            rm -rf -- "$SOURCE_DIR"
+            rm -f -- "$STAGING_SECRET_FILE"
+          }
+          trap cleanup_remote EXIT
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          RESOLVED_SHA="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
+          [[ "$RESOLVED_SHA" == "$TARGET_SHA" ]] || { echo 'STAGING_CORE_SHA_RESOLUTION_MISMATCH' >&2; exit 1; }
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+          chmod 700 "$SOURCE_DIR/ops/deploy-staging.sh"
+          SOURCE_DIR="$SOURCE_DIR" STAGING_DIR=/srv/seungjae-staging           STAGING_PM2_NAME=seungjae-staging STAGING_PORT=18083 STAGING_CANARY_PORT=18084           STAGING_BASE_URL="$STAGING_BASE_URL" STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL"           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY"           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY"           STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+          REMOTE
+      - name: Destroy Staging SSH deployment authority
+        if: always()
+        run: |
+          rm -f -- "$HOME/.ssh/id_ed25519"
+          test ! -e "$HOME/.ssh/id_ed25519"
+
+  scoped-qa:
+    name: Trading Core only — Staging desktop/mobile and read-only API
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+    needs: [owner-gate, stage-deploy]
+    environment: staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      STAGING_TRADING_CORE_ONLY_QA: 'true'
+      STAGING_TARGET_SHA: ${{ needs.owner-gate.outputs.target_sha }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+      STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.owner-gate.outputs.target_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Require deployed public Staging health SHA (no Production credential)
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          const url = new URL(process.env.STAGING_BASE_URL);
+          if (url.protocol !== 'https:' || url.hostname === 'lsj119.com')
+            throw new Error('STAGING_TRADING_CORE_PRODUCTION_ORIGIN_FORBIDDEN');
+          const res = await fetch(new URL('/api/health', url), { signal: AbortSignal.timeout(15000) });
+          if (!res.ok) throw new Error('STAGING_TRADING_CORE_HEALTH_HTTP_' + res.status);
+          const v = await res.json();
+          if (v?.ok !== true || v?.deploySha !== process.env.STAGING_TARGET_SHA)
+            throw new Error('STAGING_TRADING_CORE_PUBLIC_SHA_MISMATCH');
+          console.log('STAGING_TRADING_CORE_EXACT_SHA_VERIFIED');
+          NODE
+      - name: Install isolated Chromium
+        run: pnpm --dir stock-analyzer exec playwright install chromium
+      - name: Run ONLY Trading Core scoped Staging UI/API tests (never place an order)
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test -c playwright.staging-trading-core-only.config.ts
+      - name: Verify exact-SHA scoped-only receipt; NEVER publish full-release approval
+        run: >-
+          node .github/scripts/build-staging-trading-core-only-verdict.mjs
+          stock-analyzer/staging-trading-core-artifacts "$STAGING_TARGET_SHA"
+      - name: Upload scoped Staging evidence (not a staging-verdict release artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-core-scoped-staging-${{ needs.owner-gate.outputs.target_sha }}
+          path: stock-analyzer/staging-trading-core-artifacts
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Explain narrow verdict and activation exclusion
+        if: success()
+        run: |
+          echo '## Trading Core Only Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Production release_ready: NOT_EVALUATED' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Full Staging browser suite: NOT_RUN' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Production order/provider private calls: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Real Paper Worker fill/Journal/Telegram SENT: NOT_PROVEN' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Production deployment/activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
