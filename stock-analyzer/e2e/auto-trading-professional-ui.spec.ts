@@ -105,7 +105,8 @@ test('trading shell exposes selected-market read-only activity without creating 
   expect(settings).toContain("confirmation: 'RESUME_MEMBER_TRADING'");
   expect(settings).toContain('data-testid="member-trading-resume"');
   expect(settings).toContain('재개 준비 완료: 자동매매는 OFF입니다.');
-  expect(settings).toContain('disabled={effectiveStopped}');
+  expect(settings).toContain('disabled={automaticToggleDisabled}');
+  expect(settings).toContain('disabled={policySaveDisabled}');
   expect(settings).toContain('data-testid="global-trading-stop"');
   expect(settings).toContain('서버 전체 비상정지 · 관리자 해제 필요');
   expect(page).toContain("auth.can('canManageMembers')");

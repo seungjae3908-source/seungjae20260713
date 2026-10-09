@@ -270,8 +270,10 @@ export function TradeAutomationSettings({
 
   function toggleAutomatic() {
     setDraft((current) => {
-      if (current.emergencyStopped || current.newEntriesStopped) return current;
       const nextEnabled = !current.automaticEnabled;
+      // A sticky emergency/new-entry stop forbids arming AUTO, but must
+      // never prevent a further risk-reducing switch from ON to OFF.
+      if ((current.emergencyStopped || current.newEntriesStopped) && nextEnabled) return current;
       return {
         ...current,
         mode: policyModeForAutomaticEnabled(nextEnabled),
@@ -465,6 +467,10 @@ export function TradeAutomationSettings({
     || status?.policy.newEntriesStopped === true;
   const effectiveStopped = memberStopped || status?.emergencyStopped === true;
   const globalOnlyStopped = !memberStopped && status?.emergencyStopped === true;
+  // With a sticky stop, permit only the stricter AUTO-OFF transition.
+  // Never offer the AUTO-ON control until the dedicated resume gate is cleared.
+  const automaticToggleDisabled = effectiveStopped && !draft.automaticEnabled;
+  const policySaveDisabled = effectiveStopped && draft.automaticEnabled;
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -491,10 +497,10 @@ export function TradeAutomationSettings({
     <button
       type="button"
       onClick={toggleAutomatic}
-      disabled={effectiveStopped}
+      disabled={automaticToggleDisabled}
       className={cn(
         'mt-4 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background p-4',
-        effectiveStopped && 'cursor-not-allowed opacity-60',
+        automaticToggleDisabled && 'cursor-not-allowed opacity-60',
       )}
       data-testid="automatic-trading-master-toggle"
       aria-pressed={draft.automaticEnabled}
@@ -713,9 +719,9 @@ export function TradeAutomationSettings({
     </p>
 
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-      <button type="button" onClick={() => setConfirming(true)} disabled={effectiveStopped} className={cn(
+      <button type="button" onClick={() => setConfirming(true)} disabled={policySaveDisabled} className={cn(
         'rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground',
-        effectiveStopped && 'cursor-not-allowed opacity-50',
+        policySaveDisabled && 'cursor-not-allowed opacity-50',
       )}>
         설정 저장
       </button>
