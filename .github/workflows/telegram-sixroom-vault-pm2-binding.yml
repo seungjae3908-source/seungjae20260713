@@ -179,7 +179,7 @@ jobs:
           echo "BINDING_RECEIPT=$report" >> "$GITHUB_ENV"
           approved=false
           if [[ "$MODE" == apply ]]; then approved=true; fi
-          command="$(printf 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; TELEGRAM_BINDING_EXECUTE=true TELEGRAM_BINDING_MAIN_SHA=%q TELEGRAM_BINDING_DEPLOYED_SHA=%q TELEGRAM_BINDING_RUN_ID=%q TELEGRAM_BINDING_MODE=%q TELEGRAM_BINDING_APPLY_APPROVED=%q GITHUB_RUN_ATTEMPT=%q node --input-type=module -' "$TARGET_SHA" "$DEPLOYED_SHA" "$GITHUB_RUN_ID" "$MODE" "$approved" "$GITHUB_RUN_ATTEMPT")"
+          command="$(printf 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; TELEGRAM_BINDING_EXECUTE=true TELEGRAM_BINDING_MAIN_SHA=%q TELEGRAM_BINDING_DEPLOYED_SHA=%q TELEGRAM_BINDING_RUN_ID=%q TELEGRAM_BINDING_MODE=%q TELEGRAM_BINDING_APPLY_APPROVED=%q GITHUB_RUN_ATTEMPT=%q flock -n /var/lock/stock-app-deploy.lock node --input-type=module -' "$TARGET_SHA" "$DEPLOYED_SHA" "$GITHUB_RUN_ID" "$MODE" "$approved" "$GITHUB_RUN_ATTEMPT")"
           {
             printf '%s\n' "$PROD_DATABASE_URL"
             cat ops/telegram-sixroom-vault-pm2-binding.mjs
