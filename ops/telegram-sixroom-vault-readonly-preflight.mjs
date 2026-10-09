@@ -6,6 +6,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { request as httpsRequest } from 'node:https';
 
 export const ROOM_NAMES = Object.freeze({
   TELEGRAM_KR_STOCK_CHAT_ID: 'KR_STOCK',
@@ -137,21 +138,82 @@ function readVault(databaseUrl, runtime) {
   return proof;
 }
 
-async function readTelegram(token, method, params = {}) {
+/** Map transport failures to a finite, public-safe code. Never print raw errors:
+ * Node's fetch exception can contain the token-bearing Bot API URL.
+ */
+export function classifyTelegramTransportError(error) {
+  const name = String(error?.name ?? '');
+  if (name === 'TimeoutError' || name === 'AbortError') return 'BOT_API_TIMEOUT';
+  const code = String(error?.cause?.code ?? error?.code ?? '');
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'BOT_API_DNS_FAILED';
+  if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) return 'BOT_API_TIMEOUT';
+  if (['ENETUNREACH', 'EHOSTUNREACH', 'ECONNREFUSED'].includes(code)) return 'BOT_API_NETWORK_UNREACHABLE';
+  if (['ECONNRESET', 'UND_ERR_SOCKET'].includes(code)) return 'BOT_API_CONNECTION_RESET';
+  if (['CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'DEPTH_ZERO_SELF_SIGNED_CERT'].includes(code)) return 'BOT_API_TLS_FAILED';
+  return 'BOT_API_TRANSPORT_FAILED';
+}
+
+/** Native HTTPS avoids dependence on Node 18+ global fetch/AbortSignal.timeout.
+ * GET only; no shell arguments, logs, redirects, or mutation endpoints.
+ */
+async function nativeTelegramGet(url) {
+  return await new Promise((resolve, reject) => {
+    const req = httpsRequest(url, {
+      method: 'GET', headers: { accept: 'application/json' }, timeout: 10000,
+    }, response => {
+      const chunks = [];
+      let bytes = 0;
+      response.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > 131072) {
+          response.destroy(new Error('telegram_response_too_large'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('error', reject);
+      response.on('end', () => {
+        let body = null;
+        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* invalid JSON */ }
+        const status = Number(response.statusCode) || 0;
+        resolve({ status, ok: status >= 200 && status < 300, body });
+      });
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+export async function readTelegram(token, method, params = {}, requestImpl = nativeTelegramGet) {
   const url = new URL('https://api.telegram.org/bot' + token + '/' + method);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
-  const response = await fetch(url, {
-    method: 'GET', headers: { accept: 'application/json' },
-    signal: AbortSignal.timeout(10000),
-  });
-  const body = await response.json().catch(() => null);
-  return response.ok && body?.ok === true ? body.result ?? null : null;
+  try {
+    const response = await requestImpl(url);
+    const body = response?.body;
+    if (!response?.ok || body?.ok !== true) {
+      if (response?.status === 401 || response?.status === 403) {
+        return { status: 'BOT_API_AUTH_REJECTED', data: null };
+      }
+      if (response?.status === 429) return { status: 'BOT_API_RATE_LIMITED', data: null };
+      if (response?.status >= 500) return { status: 'BOT_API_SERVER_ERROR', data: null };
+      if (!body) return { status: 'BOT_API_INVALID_RESPONSE', data: null };
+      return { status: 'BOT_API_HTTP_REJECTED', data: null };
+    }
+    return { status: 'PASS', data: body.result ?? null };
+  } catch (error) {
+    return { status: classifyTelegramTransportError(error), data: null };
+  }
 }
 
 export async function runPreflight() {
   const result = {
     schemaVersion: 'telegram-sixroom-vault-readonly-v1',
     readOnly: true,
+    runtimeNodeMajor: Number.parseInt(process.versions.node.split('.')[0], 10) || null,
+    failureStage: 'INITIAL',
+    botApiDiagnostic: 'NOT_CHECKED',
     mainSha: sanitizedSha(process.env.EXPECTED_MAIN_SHA),
     pm2Sha: null, markerSha: null, pm2Online: false,
     vaultValid: false, vaultReason: null, botIdentityVerified: false,
@@ -162,6 +224,7 @@ export async function runPreflight() {
   };
   try {
     if (!result.mainSha) throw new Error('INVALID_EXPECTED_MAIN');
+    result.failureStage = 'PM2';
     const processes = JSON.parse(execFileSync('pm2', ['jlist'], {
       encoding: 'utf8', timeout: 10000, maxBuffer: 20000000,
     }));
@@ -178,6 +241,7 @@ export async function runPreflight() {
     result.telegramActivationEnabled = String(runtime.LIVE_TELEGRAM_ACTIVATION_APPROVED) === 'true';
     if (!result.pm2Online) throw new Error('PRODUCTION_PM2_OFFLINE');
 
+    result.failureStage = 'VAULT';
     const proof = readVault(process.env.PROD_DATABASE_URL, runtime);
     const config = checkSixRoomConfig(proof.rooms, proof.owner, proof.ownerVerified);
     result.vaultValid = config.valid;
@@ -191,31 +255,44 @@ export async function runPreflight() {
     if (!/^[0-9]{6,20}:[A-Za-z0-9_-]{20,}$/u.test(botToken)) {
       throw new Error('BOT_TOKEN_NOT_CONFIGURED');
     }
-    const bot = await readTelegram(botToken, 'getMe');
+    result.failureStage = 'BOT_GETME';
+    const botResponse = await readTelegram(botToken, 'getMe');
+    result.botApiDiagnostic = botResponse.status;
+    if (botResponse.status !== 'PASS') throw new Error(botResponse.status);
+    const bot = botResponse.data;
     const actualName = String(bot?.username ?? '').trim().toLowerCase();
     const expectedName = String(runtime.TELEGRAM_BOT_USERNAME ?? '').trim().replace(/^@/u, '').toLowerCase();
     result.botIdentityVerified = bot?.is_bot === true && Number.isSafeInteger(bot.id)
       && bot.id > 0 && actualName.length > 0 && actualName === expectedName;
     if (!result.botIdentityVerified) throw new Error('BOT_IDENTITY_NOT_VERIFIED');
 
+    result.failureStage = 'BOT_SIXROOM';
     for (const [key, label] of Object.entries(ROOM_NAMES)) {
       try {
         const roomId = proof.rooms[key];
-        const chat = await readTelegram(botToken, 'getChat', { chat_id: roomId });
-        if (!chat) { result.roomResults[label] = 'ROOM_UNREACHABLE'; continue; }
+        const chatResponse = await readTelegram(botToken, 'getChat', { chat_id: roomId });
+        const chat = chatResponse.data;
+        if (!chat) {
+          result.roomResults[label] = chatResponse.status === 'PASS'
+            ? 'ROOM_UNREACHABLE' : chatResponse.status;
+          continue;
+        }
         if (!['group', 'supergroup', 'channel'].includes(String(chat.type))) {
           result.roomResults[label] = 'INVALID_ROOM_TYPE';
           continue;
         }
-        const member = await readTelegram(botToken, 'getChatMember', {
+        const memberResponse = await readTelegram(botToken, 'getChatMember', {
           chat_id: roomId, user_id: bot.id,
         });
-        result.roomResults[label] = member
-          ? botPermissionVerdict(chat, member) : 'BOT_MEMBERSHIP_UNREACHABLE';
+        result.roomResults[label] = memberResponse.data
+          ? botPermissionVerdict(chat, memberResponse.data)
+          : (memberResponse.status === 'PASS'
+            ? 'BOT_MEMBERSHIP_UNREACHABLE' : memberResponse.status);
       } catch {
         result.roomResults[label] = 'READ_ONLY_BOT_CHECK_FAILED';
       }
     }
+    result.failureStage = 'VERDICT';
     result.classification = classifyPreflight(result);
   } catch (error) {
     const code = error instanceof Error ? error.message : '';
@@ -226,6 +303,10 @@ export async function runPreflight() {
       'VAULT_RECORD_NOT_UNIQUE', 'VAULT_ROOMS_ABSENT', 'VAULT_ROOMS_KEYS_INVALID',
       'VAULT_ROOM_ID_FORMAT_INVALID', 'VAULT_ROOM_IDS_DUPLICATED',
       'OWNER_DB_PROOF_INVALID', 'BOT_TOKEN_NOT_CONFIGURED', 'BOT_IDENTITY_NOT_VERIFIED',
+      'BOT_API_DNS_FAILED', 'BOT_API_TIMEOUT', 'BOT_API_NETWORK_UNREACHABLE',
+      'BOT_API_CONNECTION_RESET', 'BOT_API_TLS_FAILED', 'BOT_API_TRANSPORT_FAILED',
+      'BOT_API_RUNTIME_UNSUPPORTED', 'BOT_API_AUTH_REJECTED', 'BOT_API_RATE_LIMITED',
+      'BOT_API_SERVER_ERROR', 'BOT_API_INVALID_RESPONSE', 'BOT_API_HTTP_REJECTED',
     ]);
     result.classification = allowed.has(code) ? code : 'PREFLIGHT_INTERNAL_FAILED';
   }
