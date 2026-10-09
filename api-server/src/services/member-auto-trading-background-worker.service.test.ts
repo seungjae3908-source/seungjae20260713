@@ -38,6 +38,10 @@ import {
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import {
+  buildAdminFourMarketPaperBootstrap,
+  ADMIN_MARKET_INITIAL_KRW,
+} from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 
@@ -358,6 +362,9 @@ function source(
     syncCalls?: { count: number };
     syncFailure?: boolean;
     syncMissingReferences?: number;
+    adminFourWallets?: boolean;
+    adminWalletsPartial?: boolean;
+    policyOverride?: TradingPolicy;
   } = {},
 ): MemberAutoTradingBackgroundSource {
   return {
@@ -367,7 +374,7 @@ function source(
     async listEligibleMembers() {
       return [{
         userId: USER,
-        policy: policy(),
+        policy: options.policyOverride ?? policy(),
         profile: {
           membership_level: options.tier ?? 'associate',
           role: options.tier === 'admin' ? 'admin' : 'user',
@@ -379,6 +386,16 @@ function source(
     },
     tradingRepositoryFor() { return repository; },
     paperJournalRepositoryFor() {
+      if (options.adminFourWallets) {
+        const at = new Date(nowMs - 60_000);
+        const records = buildAdminFourMarketPaperBootstrap(at)
+          .map((row) => ({
+            ...row, createdAt: at.toISOString(), serverUpdatedAt: at.toISOString(),
+          }));
+        return { async listSnapshot() {
+          return options.adminWalletsPartial ? records.slice(0,3) : records;
+        } } as unknown as PaperJournalRepository;
+      }
       return paperRepository(nowMs, options.walletCreatedAtMs ?? nowMs);
     },
     async resolveFx() {
@@ -2557,6 +2574,48 @@ test('automatic Paper worker shares the 500k minimum capital policy admission gu
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.POSITIVE_INFINITY }), false);
 });
 
+test('admin four-market Paper worker isolates the 1m capital floor without creating private orders', async () => {
+  const nowMs = Date.now();
+  const makePolicy = (capital: number) => normalizeTradingPolicy({
+    ...policy(), totalCapitalKrw: capital,
+    marketEnabled: {domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled: {bitget:true,upbit:true,kiwoom:true,toss:true},
+    stockBrokerByMarket: {domestic_stock:'kiwoom',us_stock:'kiwoom'},
+  });
+  const underfundedRepo = new InMemoryTradingRepository();
+  const underfunded = new MemberAutoTradingBackgroundWorker(source(underfundedRepo, nowMs, {
+    adminFourWallets:true,tier:'admin',policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW-1),
+  }));
+  const skipped = await withFetchMock(() => underfunded.runOnce(new Date(nowMs)));
+  assert.equal(skipped.createdPlans,0);
+  assert.equal(skipped.liveOrders,0);
+  assert.equal(skipped.privateTradingRequests,0);
+  assert.equal((await underfundedRepo.listPlans(USER)).length,0);
+
+  const fundedRepo = new InMemoryTradingRepository();
+  const funded = new MemberAutoTradingBackgroundWorker(source(fundedRepo, nowMs, {
+    adminFourWallets:true,tier:'admin',policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW),
+  }));
+  const admitted = await withFetchMock(() => funded.runOnce(new Date(nowMs)));
+  assert.equal(admitted.failures,0);
+  assert.equal(admitted.createdPlans,1);
+  assert.equal(admitted.liveOrders,0);
+  assert.equal(admitted.privateTradingRequests,0);
+  const plans = await fundedRepo.listPlans(USER);
+  assert.equal(plans.length,1);
+  assert.equal(plans[0]!.accountMode,'paper');
+  assert.equal(plans[0]!.exchange,'upbit');
+  assert.equal(plans[0]!.marketSnapshot.accountValueKrw,ADMIN_MARKET_INITIAL_KRW);
+
+  const missingRepo = new InMemoryTradingRepository();
+  const incomplete = new MemberAutoTradingBackgroundWorker(source(missingRepo,nowMs,{
+    adminFourWallets:true,adminWalletsPartial:true,tier:'admin',
+    policyOverride:makePolicy(ADMIN_MARKET_INITIAL_KRW),
+  }));
+  const denied=await withFetchMock(() => incomplete.runOnce(new Date(nowMs)));
+  assert.equal(denied.createdPlans,0);
+  assert.equal(denied.liveOrders,0);
+});
 test('automatic Paper background uses the same explicit member strategy allowlist as Live', () => {
   const noStrategies = normalizeTradingPolicy({ ...policy(), enabledStrategies: [] });
   assert.equal(automaticLiveStrategyAllowlisted(noStrategies, 'trend-breakout-v1'), false);
