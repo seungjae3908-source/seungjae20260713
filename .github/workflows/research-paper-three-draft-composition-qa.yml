@@ -20,7 +20,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BASE_MAIN_SHA: ${{ github.event.pull_request.base.sha }}
   PAPER_COST_SHA: 'c90635a73f883df3a66e45abce0f0842e0d0038e'
   ADMIN_QA_SHA: ${{ github.event.pull_request.head.sha }}
   NATURAL_OBSERVER_SHA: '16b281f46a72c7f3a9b2c4f980083f44b78262a9'
@@ -37,13 +36,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Checkout immutable current-main source
+      - name: Checkout latest main and freeze the exact code snapshot
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.BASE_MAIN_SHA }}
+          ref: main
           path: combined
           persist-credentials: false
           fetch-depth: 1
+      - name: Freeze checked-out main SHA for immutable composition receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "BASE_MAIN_SHA=$(git -C combined rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Checkout immutable prospective cost and close-FX patch
         uses: actions/checkout@v4
         with:
