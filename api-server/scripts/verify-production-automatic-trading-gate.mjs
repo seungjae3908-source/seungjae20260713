@@ -45,6 +45,13 @@ const forbid = (source, pattern, code) => {
   if (pattern.test(source)) throw new Error(code + ':' + pattern);
 };
 
+requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
+requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
+requireText(tradeRisk, 'Math.min(leverage, maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_NORMALIZATION_MISSING');
+requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
+requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
+requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
+
 // A fresh 500k automatic Paper wallet is a separate virtual ledger. Existing
 // automatic Paper fills, manual wallets and incomplete history must never be
 // replaced or interpreted as proof of an empty account.
