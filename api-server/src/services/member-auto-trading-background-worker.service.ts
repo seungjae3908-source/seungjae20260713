@@ -568,7 +568,9 @@ function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
 
 function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
-  const rate = Number(cost?.[key]);
+  // Number(null) === 0; an absent tax/commission rate is NOT zero-tax evidence.
+  if (cost?.[key] == null || cost[key] === '') return null;
+  const rate = Number(cost[key]);
   return finite(rate) && rate >= 0 ? rate * 100 : null;
 }
 
@@ -1175,8 +1177,9 @@ function buildPlanInput(
   const marketRisk = runtime.adminMarketRisk?.[mapping.assetClass] ?? null;
   const slippage = costPercent(entry, 'slippageRate');
   const fee = costPercent(entry, 'commissionRate');
+  const tax = costPercent(entry, 'taxRate');
   const averageSpread = costPercent(entry, 'spreadRate');
-  if (slippage == null || fee == null || averageSpread == null) {
+  if (slippage == null || fee == null || tax == null || averageSpread == null) {
     throw new Error('BACKGROUND_COST_EVIDENCE_REQUIRED');
   }
   // Conservative worst-case correlation: treat every existing same-market
@@ -1290,6 +1293,12 @@ function buildPlanInput(
       availableLiquidityKrw: null,
       estimatedSlippagePercent: slippage,
       estimatedFeePercent: fee,
+      estimatedTaxPercent: tax,
+      // Source and observation time come from a fresh public resolver, not
+      // from a client-submitted order or a current-rate backfill.
+      settlementFxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency,
+      settlementFxSource: fx.source,
+      settlementFxObservedAt: fx.observedAt,
       correlatedExposurePercent,
       signalState: 'entry_ready',
       signalObservedAt,
