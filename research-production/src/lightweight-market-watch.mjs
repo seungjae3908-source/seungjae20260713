@@ -68,6 +68,48 @@ export function blockedSource(market, reason) {
   if (!WATCH_MARKETS.includes(market)) throw new Error('UNKNOWN_MARKET');
   return sourceResult(market, 'NONE', reason, 0, []);
 }
+
+// Enforce a hard post-decompression byte ceiling. Content-Length alone is not
+// enough: provider responses may be chunked, compressed, or misconfigured.
+// A small server must never buffer an unbounded public HTTP payload.
+export async function parseBoundedPublicJson(response, maxBytes = 4_000_000) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 4_000_000)
+    throw new Error('PUBLIC_RESPONSE_LIMIT_INVALID');
+  if (!response?.ok) {
+    const status = Number.isInteger(response?.status) ? response.status : 0;
+    throw new Error('PUBLIC_HTTP_' + status);
+  }
+  const declared = response.headers?.get?.('content-length');
+  if (declared != null && declared !== '') {
+    const size = Number(declared);
+    if (Number.isFinite(size) && size > maxBytes)
+      throw new Error('PUBLIC_RESPONSE_OVERSIZE');
+  }
+  if (!response.body || typeof response.body.getReader !== 'function')
+    throw new Error('PUBLIC_RESPONSE_BODY_MISSING');
+  const reader = response.body.getReader();
+  let length = 0;
+  const chunks = [];
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value?.byteLength ?? 0;
+      if (length > maxBytes) {
+        await reader.cancel();
+        throw new Error('PUBLIC_RESPONSE_OVERSIZE');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks, length).toString('utf8'));
+  } catch {
+    throw new Error('PUBLIC_RESPONSE_JSON_INVALID');
+  }
+}
 export function normalizeUpbitSnapshot(marketRows, tickerRows, nowMs) {
   if (!Array.isArray(marketRows) || !Array.isArray(tickerRows))
     throw new Error('UPBIT_PUBLIC_SHAPE_INVALID');
@@ -119,8 +161,13 @@ export function normalizeBitgetSnapshot(payload, nowMs) {
     }));
   }
   if (!quotes.length) throw new Error('BITGET_PUBLIC_QUOTES_UNAVAILABLE');
+  // Public APIs can return a partially usable market list. A subset must
+  // never be displayed to Research as verified full-universe coverage.
+  const quoteSymbols = new Set(quotes.map((row) => row.symbol));
+  const complete = quoteSymbols.size === payload.data.length;
   return sourceResult(
-    'CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS', 'READY',
+    'CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS',
+    complete ? 'READY' : 'PARTIAL_TICKERS',
     payload.data.length, quotes,
   );
 }
@@ -157,6 +204,8 @@ export function normalizeStockFeed(raw, market, nowMs) {
   return sourceResult(
     market, raw.source,
     raw.completeUniverse && quotes.length === raw.quotes.length
+      && new Set(quotes.map((row) => row.symbol)).size === quotes.length
+      && quotes.length <= WATCH_LIMITS.maxSymbolsPerMarket
       ? 'READY' : 'PARTIAL_UNIVERSE',
     raw.quotes.length, quotes,
   );
@@ -189,6 +238,9 @@ export function evaluateMarketOpportunities(input) {
   // Baselines from another provider, or without known source identity, are
   // never comparable even if their ticker string happens to match.
   const comparable = elapsed != null
+    && (source.status === 'READY'
+      || source.status === 'PARTIAL_UNIVERSE'
+      || source.status === 'PARTIAL_TICKERS')
     && typeof previous?.source === 'string'
     && previous.source === source.source
     && elapsed >= WATCH_LIMITS.minComparisonAgeMs
