@@ -230,6 +230,14 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(integrationBefore.ok).toBe(true);
     expect(integrationBefore.body?.ok).toBe(true);
     expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
+    if (integrationBefore.body?.telegram?.connected === true) {
+      const worker = integrationBefore.body?.telegramRuntime ?? {};
+      if (worker.deliveryReady !== true || worker.backgroundWorkersEnabled !== true
+        || worker.personalWorkerEnabled !== true || worker.personalWorkerStarted !== true
+        || worker.workerActivationApproved !== true) {
+        throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY');
+      }
+    }
   } catch (preflightError) {
     // Member policy preparation may have resumed STOP before later assertions fail.
     // Restore the exact captured policy even when the main canary never starts.
@@ -259,7 +267,9 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   const telegramConnectedBefore = integrationBefore.body?.telegram?.connected === true;
   const telegramRuntimeReady = integrationBefore.body?.telegramRuntime?.deliveryReady === true
     && integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled === true
-    && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true;
+    && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true
+    && integrationBefore.body?.telegramRuntime?.personalWorkerStarted === true
+    && integrationBefore.body?.telegramRuntime?.workerActivationApproved === true;
   const telegramActivationState = telegramConnectedBefore && telegramRuntimeReady
     ? 'ACTIVE_VERIFIED' as const
     : 'READY_FOR_ACTIVATION' as const;
@@ -272,6 +282,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let journalVisible = false;
   let deliveryQueued = 0;
   let telegramDelivered = false;
+  let telegramFillDeliveryConfirmed = false;
   let syncInserted = 0;
 
   try {
@@ -413,9 +424,14 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(synced.body?.ordersCancelled).toBe(0);
     syncInserted = Number(synced.body?.inserted ?? 0);
     deliveryQueued = Number(synced.body?.deliveryQueued ?? 0);
+    const filledDeliveryIds: string[] = Array.isArray(synced.body?.filledDeliveryIds)
+      ? synced.body.filledDeliveryIds.filter((id: unknown) =>
+        typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+      : [];
     expect(syncInserted).toBeGreaterThanOrEqual(1);
     if (telegramActivationState === 'ACTIVE_VERIFIED') {
       expect(deliveryQueued).toBeGreaterThanOrEqual(1);
+      expect(filledDeliveryIds.length).toBeGreaterThanOrEqual(1);
     } else {
       expect(deliveryQueued).toBe(0);
     }
@@ -431,6 +447,16 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     journalVisible = true;
 
     if (telegramActivationState === 'ACTIVE_VERIFIED') {
+      // Poll authenticated user-owned delivery receipts for the exact fresh fill.
+      // A separate [TEST] bot message is not proof that this fill was delivered.
+      await expect.poll(async () => {
+        const current = await appApi<any>(page, '/api/user-integrations');
+        if (!current.ok || current.body?.ok !== true || !Array.isArray(current.body?.deliveries)) return false;
+        return filledDeliveryIds.some((id) => current.body.deliveries.some((delivery: any) =>
+          delivery?.id === id && delivery?.state === 'SENT'
+          && (delivery?.kind ?? 'EXECUTION_EVENT') === 'EXECUTION_EVENT'));
+      }, { timeout: 30_000, intervals: [1_000, 2_000, 3_000] }).toBe(true);
+      telegramFillDeliveryConfirmed = true;
       const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
       expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
       expect(telegram.body?.status).toBe('DELIVERED');
@@ -508,6 +534,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     telegramRuntimeReady,
     telegramDeliveryQueued: deliveryQueued,
     telegramTestDelivered: telegramDelivered,
+    telegramFillDeliveryConfirmed,
     policyRestored: isDeepStrictEqual(statusAfter.body?.policy, originalPolicy),
     memberAutoPolicyPrepared,
     memberAutoResumePrepared,
