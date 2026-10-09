@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_TRADING_POLICY } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+} from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
@@ -154,6 +157,24 @@ test('confirmed 500k + 10% net profit yields 525k operating / 25k reserve; next 
   assert.equal(eligible.effectiveMaxEntryKrw, 525_000);
   const larger = decision(snapshot, { estimatedKrw: 525_000.01 });
   assert.ok(larger.blockers.includes('BACKGROUND_PILOT_ENTRY_LIMIT'));
+});
+
+test('administrator pilot starts at 1M and verified 50% compounding raises the next cap to 1.025M', () => {
+  const snapshot = deriveRulePackPilotCapitalFromTrades(
+    [closed('admin-profit', '005930', 50_000)],
+    new Date(NOW),
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  );
+  assert.equal(snapshot.initialOperatingCapitalKrw, 1_000_000);
+  assert.equal(snapshot.operatingCapitalKrw, 1_025_000);
+  assert.equal(snapshot.reserveKrw, 25_000);
+  const eligible = decision(snapshot, {
+    estimatedKrw: 1_025_000,
+    policyMaxOrderKrw: 1_000_000,
+    policyTotalCapitalKrw: 1_000_000,
+  });
+  assert.equal(eligible.allowed, true);
+  assert.equal(eligible.effectiveMaxEntryKrw, 1_025_000);
 });
 
 test('four-market settlements share a single 500k ledger and compound only new highs after loss recovery', () => {

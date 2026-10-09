@@ -17,6 +17,11 @@ on:
         required: false
         default: false
         type: boolean
+      apply_admin_trading_policy_limit_1m:
+        description: One-time administrator-only migration of the saved Production order baseline to 1,000,000 KRW
+        required: false
+        default: false
+        type: boolean
       qa_scope:
         description: Post-deploy QA scope
         required: true
@@ -35,6 +40,9 @@ on:
       - .github/tests/production-trading-core-qa-contract.test.mjs
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
       - stock-analyzer/playwright.production-trading-core.config.ts
+      - stock-analyzer/e2e/production-trading-policy-limit-apply.spec.ts
+      - stock-analyzer/playwright.production-trading-policy-limit.config.ts
+      - .github/tests/production-trading-policy-limit-apply-contract.test.mjs
       - stock-analyzer/e2e/production-member-readonly-qa.spec.ts
       - stock-analyzer/playwright.production-member.config.ts
       - .github/scripts/run-production-readonly-qa.sh
@@ -133,6 +141,8 @@ jobs:
           node --test .github/tests/production-admin-four-paper-rls.test.mjs
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - name: Verify one-approval 1M Production trading-policy migration contract
+        run: node --test .github/tests/production-trading-policy-limit-apply-contract.test.mjs
 
   approval-gate:
     name: Validate immutable main revision, release provenance, and exact staging verdict
@@ -619,6 +629,50 @@ jobs:
       - name: Install isolated Chromium runtime
         working-directory: stock-analyzer
         run: pnpm exec playwright install chromium
+
+      - name: Require exact Production identity before the one-time administrator 1M policy migration
+        if: ${{ inputs.apply_admin_trading_policy_limit_1m }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+        run: |
+          set -Eeuo pipefail
+          health="$RUNNER_TEMP/production-trading-policy-health.json"
+          curl --fail --silent --show-error --max-time 15 "$PUBLIC_BASE_URL/api/health" -o "$health"
+          node - "$health" <<'NODE'
+          const fs = require('node:fs');
+          const { assertProductionRuntimeIdentity } = require('./.github/scripts/production-deploy-provenance.cjs');
+          const health = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          assertProductionRuntimeIdentity(health, process.env.EXPECTED_DEPLOY_SHA);
+          if (health?.autoTradingBackground?.liveEntriesArmed !== false
+            || health?.autoTradingBackground?.liveModeRequested !== false) {
+            throw new Error('PRODUCTION_TRADING_POLICY_LIVE_BACKGROUND_MUST_BE_OFF');
+          }
+          NODE
+
+      - name: Apply and verify the one-time administrator 1M Production order policy
+        if: ${{ inputs.apply_admin_trading_policy_limit_1m }}
+        working-directory: stock-analyzer
+        env:
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_TRADING_POLICY_LIMIT_APPLY: 'true'
+          PRODUCTION_TRADING_POLICY_ARTIFACT_DIR: production-trading-policy-artifacts
+          PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/trading-policy-limit
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+        run: pnpm exec playwright test --config=playwright.production-trading-policy-limit.config.ts
+
+      - name: Upload sanitized one-time administrator 1M Production policy evidence
+        if: ${{ always() && inputs.apply_admin_trading_policy_limit_1m }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-admin-trading-policy-limit-${{ env.TARGET_SHA }}
+          path: |
+            stock-analyzer/production-trading-policy-artifacts
+            stock-analyzer/production-login-diagnostics/trading-policy-limit
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Pre-QA identity, authority, and gate-conflict check
         env:
