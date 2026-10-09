@@ -194,7 +194,13 @@ jobs:
             id="$(basename "$source" .ts)"
             pnpm exec esbuild "$source" --bundle --platform=node --format=cjs --target=node22 \
               --outfile="$RUNNER_TEMP/$id.cjs"
-            node --test "$RUNNER_TEMP/$id.cjs"
+            # This Paper route test imports the ESM runtime bundle relative to
+            # repository root; the other bundled service tests are cwd-agnostic.
+            if [[ "$id" == 'paper-trading.smoke.test' ]]; then
+              (cd "$GITHUB_WORKSPACE" && node --test "$RUNNER_TEMP/$id.cjs")
+            else
+              node --test "$RUNNER_TEMP/$id.cjs"
+            fi
           done
 
   browser:
