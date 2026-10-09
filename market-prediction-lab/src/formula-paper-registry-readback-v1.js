@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
-import { basename, isAbsolute, resolve } from 'node:path';
+import { constants } from 'node:fs';
+import { lstat, open, realpath } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 
 import { FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1 } from './formula-auto-backtest-queue-v1.js';
+import { createEvidenceBackedFormulaSignalEvaluatorV1 } from './evidence-backed-formula-entry-evaluator-v1.js';
 
 /**
  * Observation boundary only. A historical PASS is never an entry signal,
@@ -77,6 +79,32 @@ function validEntry(entry, researchCodeSha) {
     && entry.formulaCandidate?.candidateId === entry.formulaCandidateId
     && entry.generatedCandidate?.generatedCandidateId === entry.generatedCandidateId;
   if (!safe) return false;
+  // Identity-only registryId is not evidence that the embedded DSL, market,
+  // leverage side, or selected parameters are authentic. Validate the same
+  // canonical formula evaluator contract used by the historical backtester.
+  const formula = entry.formulaCandidate;
+  const generated = entry.generatedCandidate;
+  if (entry.market !== formula?.market
+    || entry.direction !== formula?.direction
+    || entry.timeframe !== formula?.timeframe
+    || entry.strategyHash !== formula?.formulaHash
+    || entry.strategyFamily !== formula?.strategyFamily
+    || entry.formulaCandidateId !== formula?.candidateId
+    || generated?.formulaCandidateId !== formula?.candidateId
+    || generated?.generatedCandidateId !== entry.generatedCandidateId
+    || generated?.formulaHash !== formula?.formulaHash
+    || generated?.parameterIdentity !== entry.parameterIdentity
+    || generated?.safety?.executionAuthority !== 'NONE') return false;
+  try {
+    const verified = createEvidenceBackedFormulaSignalEvaluatorV1({
+      formulaCandidate: formula,
+      generatedCandidate: generated,
+    });
+    if (verified?.evaluatorContract?.executionAuthority !== 'NONE'
+      || verified?.evaluatorContract?.closedCandleSignalOnly !== true) return false;
+  } catch {
+    return false;
+  }
   return digest({
     itemDigest: entry.itemDigest,
     formulaCandidateId: entry.formulaCandidateId,
@@ -101,16 +129,39 @@ export async function readFormulaPaperRegistryReadbackV1({
   }
   let value;
   try {
-    const info = await lstat(registryPath);
-    if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_BYTES
-      || info.size === 0 || (info.mode & 0o077) !== 0) {
-      return report('INVALID', 'FORMULA_PAPER_REGISTRY_FILE_UNSAFE', null, false);
+    const parentPath = dirname(registryPath);
+    const parent = await lstat(parentPath);
+    if (!parent.isDirectory() || parent.isSymbolicLink()
+      || (parent.mode & 0o077) !== 0
+      || (typeof process.getuid === 'function' && parent.uid !== process.getuid())
+      || await realpath(parentPath) !== parentPath) {
+      return report('INVALID', 'FORMULA_PAPER_REGISTRY_PARENT_UNSAFE', null, false);
     }
-    const content = await readFile(registryPath, 'utf8');
-    if (Buffer.byteLength(content, 'utf8') > MAX_BYTES) {
-      return report('INVALID', 'FORMULA_PAPER_REGISTRY_FILE_UNSAFE', null, false);
+    // Use one no-follow descriptor for metadata and bytes: lstat then
+    // readFile(path) would allow symlink substitution between the two calls.
+    const handle = await open(
+      registryPath,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.nlink !== 1
+        || before.size > MAX_BYTES || before.size === 0
+        || (before.mode & 0o077) !== 0
+        || (typeof process.getuid === 'function' && before.uid !== process.getuid())) {
+        return report('INVALID', 'FORMULA_PAPER_REGISTRY_FILE_UNSAFE', null, false);
+      }
+      const content = await handle.readFile('utf8');
+      const after = await handle.stat();
+      if (Buffer.byteLength(content, 'utf8') !== before.size
+        || before.ino !== after.ino || before.size !== after.size
+        || before.mtimeMs !== after.mtimeMs || after.nlink !== 1) {
+        return report('INVALID', 'FORMULA_PAPER_REGISTRY_FILE_CHANGED', null, false);
+      }
+      value = JSON.parse(content);
+    } finally {
+      await handle.close();
     }
-    value = JSON.parse(content);
   } catch (error) {
     return error?.code === 'ENOENT'
       ? report('MISSING', 'FORMULA_PAPER_REGISTRY_FILE_MISSING')
@@ -120,6 +171,9 @@ export async function readFormulaPaperRegistryReadbackV1({
     || value.schemaVersion !== 1
     || value.contract !== FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1
     || value.researchCodeSha !== researchCodeSha
+    || value.acceptedSourceState !== 'PASS'
+    || !Array.isArray(value.rejectedSourceStates)
+    || value.rejectedSourceStates.join(',') !== 'HOLD,RESERVE,EXCLUDE'
     || value.directTradeOnBacktestPass !== false
     || value.futureSignalRequired !== true
     || value.canonicalPaperAdmissionRequired !== true
