@@ -8,6 +8,8 @@ on:
       - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
       - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
       - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
+      - 'api-server/scripts/staging-trading-core-admin-profile.mjs'
+      - '.github/tests/staging-trading-core-admin-profile.test.mjs'
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -60,7 +62,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           node --check .github/scripts/build-staging-trading-core-only-verdict.mjs
-          node --test .github/tests/staging-trading-core-only-contract.test.mjs
+          node --check api-server/scripts/staging-trading-core-admin-profile.mjs
+          node --test .github/tests/staging-trading-core-only-contract.test.mjs .github/tests/staging-trading-core-admin-profile.test.mjs
 
   owner-gate:
     name: Owner exact-main provenance and Staging-only credentials
@@ -178,18 +181,18 @@ jobs:
           if (db.hostname === 'bawcbkoyovbeajkrnduq.supabase.co')
             throw new Error('STAGING_CORE_PRODUCTION_DATABASE_FORBIDDEN');
           NODE
-      - name: Verify Staging-only administrator password grant
-        if: steps.target.outputs.action == 'deploy'
+      - name: Verify Staging admin DB authorization and owner-scoped Paper GET before deployment
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
           ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
-        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs
+          STAGING_BASE_URL: ${{ env.STAGING_BASE_URL }}
+        run: node api-server/scripts/staging-trading-core-admin-profile.mjs
       - name: Preflight-only result (does not deploy or change any environment)
         if: steps.target.outputs.action == 'preflight'
         run: |
-          echo 'Staging Trading Core scoped configuration preflight PASS (no deployment, no member mutation)' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Staging Trading Core admin authorization + Paper GET preflight PASS (no deployment, no member mutation)' >> "$GITHUB_STEP_SUMMARY"
 
   stage-deploy:
     name: Deploy exact revision only to isolated Staging
