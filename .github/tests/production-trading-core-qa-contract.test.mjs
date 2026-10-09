@@ -214,3 +214,22 @@ test('admin 4-market portfolio display never treats a seed wallet as verified se
   assert.ok(ui.includes('actual?.settlementReady'));
   assert.ok(ui.includes('CANONICAL_CURRENT_EPOCH_SETTLEMENT_ONLY'));
 });
+
+test('Admin V2 database RLS requires restrictive row-write policies and denies client TRUNCATE', () => {
+  const migration = read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
+  const sqlTest = read('api-server/supabase/test/admin_four_paper_wallet_rls_guard_integration.sql');
+  const route = read('api-server/src/routes/paper-journal.ts');
+  const ui = read('stock-analyzer/src/components/admin-four-market-paper-panel.tsx');
+  for(const operation of ['insert','update','delete']) {
+    assert.ok(migration.includes('as restrictive for '+operation+' to authenticated'), operation);
+    assert.ok(migration.includes('admin_v2_paper_wallet_'+operation+'_guard'), operation);
+    assert.ok(sqlTest.includes('ADMIN_PAPER_RLS_CLIENT_'+operation.toUpperCase()+'_ALLOWED'), operation);
+  }
+  assert.ok(migration.includes('revoke truncate, references, trigger'));
+  assert.ok(migration.includes('admin_four_paper_wallet_rls_guard_ready'));
+  assert.ok(route.includes('hasSupabaseServerKey()'));
+  assert.ok(route.includes('await requireAdminRlsGuard(request)'));
+  assert.ok(route.includes('getSupabase()'));
+  assert.ok(ui.includes('databaseGuardMissing'));
+  assert.ok(ui.includes('|| databaseGuardMissing'));
+});
