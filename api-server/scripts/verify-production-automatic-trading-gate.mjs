@@ -50,7 +50,10 @@ const forbid = (source, pattern, code) => {
 // replaced or interpreted as proof of an empty account.
 for (const [input, token, code] of [
   [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'", 'AUTO_PAPER_WALLET_ID_MISSING'],
-  [paperWorker, 'selectAutomaticPaperAccountEquity(paperResult.records)', 'AUTO_PAPER_DEDICATED_EQUITY_MISSING'],
+  [paperWorker, 'selectAutomaticPaperAccountEquity(records)', 'AUTO_PAPER_DEDICATED_EQUITY_MISSING'],
+  [paperWorker, 'inspectAdminFourMarketPaperWallets(records, nowMs)', 'ADMIN_FOUR_MARKET_PAPER_WALLET_INTEGRITY_MISSING'],
+  [paperWorker, 'adminMarketPaperRiskBudget({', 'ADMIN_FOUR_MARKET_PAPER_MARKET_BUDGET_MISSING'],
+  [paperWorker, 'marketWallets.marketWallets[market].equityKrw', 'ADMIN_MARKET_EQUITY_SEPARATION_MISSING'],
   [paperWorker, "if (accounts.length !== 1 || accounts[0]!.deletedAt != null) return null;", 'AUTO_PAPER_INVALID_WALLET_BLOCK_MISSING'],
   [tradeAutomationRoute, 'automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans)', 'AUTO_PAPER_READONLY_BOOTSTRAP_MISSING'],
   [paperWorker, 'AUTOMATIC_PAPER_HISTORY_RECONCILIATION_REQUIRED', 'AUTO_PAPER_HISTORY_BLOCK_MISSING'],
