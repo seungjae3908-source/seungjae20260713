@@ -93,6 +93,10 @@ export function buildAutomaticExitPlanInput(input: {
       dataDelayMs: delay,
       providerTimeOffsetMs: delay,
       source: mark.source,
+      // Never inherit an entry-time FX rate for a prospective close.
+      settlementFxKrwPerQuoteCurrency: fx.krwPerQuoteCurrency,
+      settlementFxSource: fx.source,
+      settlementFxObservedAt: fx.observedAt,
       currentPrice: mark.price,
       plannedPrice: mark.price,
       marketStatus: 'OPEN',
