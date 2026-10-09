@@ -335,8 +335,13 @@ export function createPaperJournalRouter(
     return userId;
   }
   function adminAutomaticLiveGateOff() {
-    return (['toss', 'kiwoom', 'upbit', 'bitget'] as const).every(
-      (provider) => !automaticLiveExecutionEnabled(provider));
+    // A provider capability disabled today is NOT proof that the shared
+    // background worker cannot arm later using the stored AUTO flags.
+    return process.env.AUTO_TRADING !== 'true'
+      && process.env.LIVE_AUTOMATIC_TRADING_ENABLED !== 'true'
+      && process.env.MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED !== 'true'
+      && (['toss', 'kiwoom', 'upbit', 'bitget'] as const).every(
+        (provider) => !automaticLiveExecutionEnabled(provider));
   }
   function adminWalletCreationDecision(
     records: readonly StoredPaperJournalRecord[],
@@ -355,6 +360,9 @@ export function createPaperJournalRouter(
     if (legacyAccounts.length) blockers.push('ADMIN_PAPER_EXISTING_ACCOUNT_REQUIRES_SEPARATE_RECONCILIATION');
     if (!walletRecords.length && !fresh && !legacy.safeToIsolate) blockers.push(...legacy.blockers);
     if (policy.totalCapitalKrw < ADMIN_MARKET_INITIAL_KRW) blockers.push('ADMIN_PAPER_POLICY_1M_REQUIRED');
+    if (policy.automaticEnabled || policy.mode === 'automatic') {
+      blockers.push('ADMIN_PAPER_MEMBER_AUTO_MUST_BE_OFF');
+    }
     if (!adminAutomaticLiveGateOff()) blockers.push('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF');
     return {
       ...current,
@@ -435,7 +443,20 @@ export function createPaperJournalRouter(
       if (!adminAutomaticLiveGateOff()) {
         throw new PaperJournalError('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF','실자동매매 상태에서는 자본 정책을 변경할 수 없습니다.',409);
       }
-      const policyBefore = await adminPolicyReader(request, owner);
+      const [records, history, policyBefore] = await Promise.all([
+        repositoryFactory(request).listSnapshot(owner),
+        automaticPaperHistoryReader(request, owner),
+        adminPolicyReader(request, owner),
+      ]);
+      const preflight = adminWalletCreationDecision(
+        records, history.orders, history.plans, policyBefore, now().getTime(),
+      );
+      const unsafe = preflight.creationBlockers.filter(
+        (code) => code !== 'ADMIN_PAPER_POLICY_1M_REQUIRED');
+      if (unsafe.length) {
+        throw new PaperJournalError(unsafe[0]!, 
+          '기존 자동매매를 중지하고 이력·계좌 상태를 확인한 후 자본을 변경할 수 있습니다.', 409);
+      }
       // Raise only the named Paper budgeting dimension. Never implicitly
       // raise maxOrder, leverage, drawdown or other Live order ceilings.
       const candidate = normalizeTradingPolicy({
