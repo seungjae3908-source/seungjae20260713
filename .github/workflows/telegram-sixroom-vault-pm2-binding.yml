@@ -44,7 +44,7 @@ jobs:
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
       github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
-      github.event.comment.user.login == 'seungja3908-source' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
       github.event.comment.author_association == 'OWNER' &&
       (startsWith(github.event.comment.body, '/run-telegram-sixroom-binding-plan ') ||
        startsWith(github.event.comment.body, '/run-telegram-sixroom-binding-apply '))
