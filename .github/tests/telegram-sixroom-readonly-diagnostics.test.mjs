@@ -62,3 +62,33 @@ test('protected approval never reads same-step outputs and accepts only main-lin
  assert.ok(verifyStep.includes('git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main'));
  assert.ok(!verifyStep.includes('test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"'), 'new main commits may not invalidate read-only inspection');
 });
+
+
+test('read-only source audit reports only missing key NAMES present in fixed config files', () => {
+ const start=workflow.indexOf('function findMissingKeysInAlternateEnvFiles(');
+ const end=workflow.indexOf('const evidence={',start);
+ assert.ok(start>0&&end>start);
+ const sourceAudit=vm.runInNewContext(workflow.slice(start,end)+'\nfindMissingKeysInAlternateEnvFiles;', {
+   fs: {readFileSync: () => {throw new Error('injected read only');}}
+ });
+ const missing=[
+   'TELEGRAM_KR_STOCK_CHAT_ID','TELEGRAM_US_STOCK_CHAT_ID',
+   'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID','TELEGRAM_OWNER_MEMBER_ID'
+ ];
+ const read=(file)=>{
+   if(file==='/opt/stock-app/.env')return [
+     '# TELEGRAM_KR_STOCK_CHAT_ID=-100900',
+     'export TELEGRAM_US_STOCK_CHAT_ID="-100901"',
+     'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID=',
+     'TELEGRAM_OWNER_MEMBER_ID="member-fixture"'
+   ].join('\n');
+   throw new Error('not found');
+ };
+ const found=Array.from(sourceAudit(missing,read));
+ assert.deepEqual(found,['TELEGRAM_US_STOCK_CHAT_ID','TELEGRAM_OWNER_MEMBER_ID']);
+ assert.ok(!JSON.stringify(found).includes('-100901'),'chat values must never enter evidence');
+ assert.ok(workflow.includes('missingKeyFoundInEnvFiles:[]'));
+ assert.ok(workflow.includes('telegramActivationApproved:false'));
+ assert.ok(workflow.includes('personalTelegramWorkerEnabled:false'));
+ assert.ok(workflow.includes('Telegram sends / financial mutations: 0 / 0'));
+});
