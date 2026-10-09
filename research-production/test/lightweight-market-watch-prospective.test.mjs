@@ -58,7 +58,13 @@ test('UP follow-up uses only future public 2-minute ticker samples', () => {
     assert.equal(result.outcomes.length,0);
     pending = result.pending;
   }
-  const finished = step(pending,20,102);
+  // Evaluate at 20m using the last independently observed 19m ticker.
+  // No 20m quote is synthesized merely because the wall clock advanced.
+  const finished = advancePublicWatchProspectiveEvidence({
+    previousPending: pending, nowMs: START + 20 * 60_000,
+    sources: { CRYPTO_FUTURES: source(101.5, 19) },
+    discovered: [],
+  });
   assert.equal(finished.pendingCount,0);
   assert.equal(finished.completedCoarse,1);
   assert.equal(finished.blockedData,0);
