@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import {
   ROOM_NAMES, sanitizedSha, checkSixRoomConfig,
   botPermissionVerdict, classifyPreflight, parseDatabaseTarget,
-  classifyTelegramTransportError, readTelegram,
+  classifyTelegramTransportError, readTelegram, probeTelegramIpv4Tls,
 } from '../../ops/telegram-sixroom-vault-readonly-preflight.mjs';
 
 const rooms = {
@@ -157,4 +158,71 @@ test('a non-ready Production preflight cannot end as a green workflow',()=>{
   assert.ok(script.includes("bytes > 131072"));
   assert.ok(!script.includes("globalThis.fetch"));
   assert.ok(script.includes('result.botApiDiagnostic = botResponse.status'));
+});
+
+test('IPv4 TLS probe identifies network stage using no tokens or IP values', async () => {
+  const goodLookup = (host, options, callback) => {
+    assert.equal(host, 'api.telegram.org');
+    assert.equal(options.family, 4);
+    callback(null, '192.0.2.50', 4);
+  };
+  const neverConnect = () => { throw new Error('TLS should not be invoked'); };
+  assert.equal(await probeTelegramIpv4Tls({
+    lookupImpl: (_host,_options, callback) => callback(Object.assign(new Error('secret'), { code: 'ENOTFOUND' })),
+    connectImpl: neverConnect,
+  }), 'IPV4_DNS_FAILED');
+
+  const ready = await probeTelegramIpv4Tls({
+    lookupImpl: goodLookup,
+    connectImpl: options => {
+      assert.equal(options.host, 'api.telegram.org');
+      assert.equal(options.servername, 'api.telegram.org');
+      assert.equal(options.port, 443);
+      assert.equal(options.family, 4);
+      assert.equal(options.autoSelectFamily, false);
+      assert.equal(options.rejectUnauthorized, true);
+      const socket = new EventEmitter();
+      socket.authorized = true;
+      socket.destroyed = false;
+      socket.destroy = () => { socket.destroyed = true; };
+      queueMicrotask(() => socket.emit('secureConnect'));
+      return socket;
+    },
+  });
+  assert.equal(ready, 'IPV4_TLS_READY');
+  assert.equal(JSON.stringify(ready).includes('192.0.2.50'), false);
+
+  const timeout = await probeTelegramIpv4Tls({
+    lookupImpl: goodLookup,
+    connectImpl: () => {
+      const socket = new EventEmitter();
+      socket.destroy = () => {};
+      queueMicrotask(() => socket.emit('timeout'));
+      return socket;
+    },
+  });
+  assert.equal(timeout, 'IPV4_TLS_TIMEOUT');
+
+  const certFailure = await probeTelegramIpv4Tls({
+    lookupImpl: goodLookup,
+    connectImpl: () => {
+      const socket = new EventEmitter();
+      socket.destroy = () => {};
+      queueMicrotask(() => socket.emit('error', Object.assign(new Error('private'), {code:'CERT_HAS_EXPIRED'})));
+      return socket;
+    },
+  });
+  assert.equal(certFailure, 'IPV4_TLS_CERT_FAILED');
+});
+
+test('preflight reuses Production IPv4 workaround and reports blocked path without widening access',()=>{
+  assert.ok(script.includes("import { lookup as dnsLookup } from 'node:dns'"));
+  assert.ok(script.includes("import { connect as tlsConnect } from 'node:tls'"));
+  assert.ok(script.includes("family: 4, autoSelectFamily: false, timeout: 15000"));
+  assert.ok(script.includes("result.networkPathProbe = await probeTelegramIpv4Tls()"));
+  assert.ok(script.includes("'BOT_API_TIMEOUT'"));
+  assert.ok(workflow.includes("Token-free IPv4 DNS/TLS path:"));
+  assert.ok(workflow.includes("'IPV4_TLS_READY'"));
+  assert.ok(workflow.includes("VAULT_PREFLIGHT_OPERATIONAL_NOT_READY"));
+  assert.ok(!script.includes('console.log(botToken)'));
 });
