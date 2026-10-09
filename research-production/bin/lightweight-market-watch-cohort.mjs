@@ -84,12 +84,15 @@ async function main() {
   process.stdout.write(JSON.stringify(result) + '\n');
   if (result.status === 'INVALID') process.exitCode = 2;
 }
-main().catch(() => {
-  // Fail closed; neither state paths nor possibly private record bodies leak.
+main().catch((error) => {
+  // Only fixed-code identifiers are disclosed, never a provider value or path.
+  const diagnostic = typeof error?.message === 'string'
+    && /^WATCH_COHORT_[A-Z0-9_]{3,60}$/u.test(error.message)
+    ? error.message : 'WATCH_COHORT_READ_FAILED';
   process.stdout.write(JSON.stringify({
     contract:'public-watch-cohort-diagnostic-v1', status:'INVALID',
     discoveryCount:null, observedCoarseCount:null, blockedDataCount:null,
-    missingOutcomeCount:null, errorCodes:['WATCH_COHORT_READ_FAILED'],
+    missingOutcomeCount:null, errorCodes:[diagnostic],
     economicEvidenceCredit:0, oosCredit:0, paperCredit:0,
     fullCostReady:false, profitabilityProven:false,
     continuous24hProven:false, formulaCandidateProduced:false,
