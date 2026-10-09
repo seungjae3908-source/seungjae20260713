@@ -665,7 +665,9 @@ function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaper
     : entry.identity.symbol.toUpperCase();
   const assets = policy.enabledAssets[mapping.exchange];
   if (assets.length > 0 && !assets.includes(symbol)) return false;
-  if (policy.enabledStrategies.length > 0 && !policy.enabledStrategies.includes(entry.identity.strategyId)) return false;
+  // Never interpret an empty member allowlist as permission to process all
+  // handoff strategies. This covers Paper entries as well as Live entries.
+  if (!automaticLiveStrategyAllowlisted(policy, entry.identity.strategyId)) return false;
   return true;
 }
 
