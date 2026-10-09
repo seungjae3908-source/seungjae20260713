@@ -172,6 +172,9 @@ jobs:
           api-server/src/services/paper-trading.types.ts
           market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js
           market-prediction-lab/src/formula-auto-backtest-queue-v1.js
+          market-prediction-lab/src/formula-paper-registry-readback-v1.js
+          market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
+          market-prediction-lab/scripts/run-paper-forward-schedule.js
           market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
           market-prediction-lab/tests/research-bundle-formula-fixture.js
           packages/strategy-hypothesis/src/backtest-paper-handoff.d.ts
