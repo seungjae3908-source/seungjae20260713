@@ -64,6 +64,8 @@ jobs:
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
           grep -q 'research-production-forward.timer' research-production/deploy/activate-server.sh
+          grep -Fq 'RESEARCH_PRODUCTION_FORMULA_FORWARD_PLAN_INVALID' .github/workflows/research-production-activation.yml
+          grep -Fq 'formula-backtest-queue' .github/workflows/research-production-activation.yml
           grep -q 'PAPER_FORWARD_RISK_POLICY_DECISION_PATH' research-production/deploy/activate-server.sh
           grep -q 'natural-paper-btcusdt-v1.json' .github/workflows/research-production-activation.yml
 
@@ -370,8 +372,24 @@ jobs:
             --repo-root "$GITHUB_WORKSPACE" \
             --state-root "$RUNNER_TEMP/research-production-preflight" \
             --research-sha "$TARGET_SHA" > "$RUNNER_TEMP/research-plan.json"
-          node -e "const p=require(process.argv[1]);if(p.taskCount!==10||p.stepCount!==21||p.liveTrading||p.privateApi||p.orderAuthority)process.exit(1)" \
-            "$RUNNER_TEMP/research-plan.json"
+          # Forward Research now runs an immutable TRAIN-only formula queue
+          # before Shadow/Paper. Exact task provenance must match the plan,
+          # not just its total size, and no order authority is granted.
+          node - "$RUNNER_TEMP/research-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expectedForward = ['formula-backtest-queue', 'shadow-forward', 'paper-forward'];
+          const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+          const forward = tasks.slice(-3);
+          if (plan.taskCount !== 11 || plan.stepCount !== 22
+            || forward.map((row) => row.id).join(',') !== expectedForward.join(',')
+            || forward[0]?.kind !== 'formula-backtest'
+            || forward[0]?.steps?.[0]?.args?.[0] !== 'scripts/run-formula-auto-backtest-queue-v1.js'
+            || plan.liveTrading !== false || plan.privateApi !== false
+            || plan.orderAuthority !== false) {
+            throw new Error('RESEARCH_PRODUCTION_FORMULA_FORWARD_PLAN_INVALID');
+          }
+          NODE
 
   activate:
     needs: authorize
