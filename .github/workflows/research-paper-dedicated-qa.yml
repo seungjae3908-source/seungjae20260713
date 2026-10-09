@@ -22,6 +22,11 @@ on:
       - 'api-server/scripts/verify-research-center-predeploy-contract.mjs'
       - 'api-server/scripts/verify-production-automatic-trading-gate.mjs'
       - 'stock-analyzer/e2e/research-*.spec.ts'
+      - 'stock-analyzer/e2e/admin-four-market-policy-off.spec.ts'
+      - 'stock-analyzer/src/components/admin-four-market-paper-panel.tsx'
+      - 'stock-analyzer/src/components/trade-automation-settings.tsx'
+      - 'stock-analyzer/src/lib/trade-automation-policy-mode.ts'
+      - 'api-server/src/routes/trade-automation.ts'
       - 'stock-analyzer/e2e/phase6-paper-trading.spec.ts'
       - 'stock-analyzer/e2e/auto-trading-closed-outcome-failclosed.spec.ts'
       - 'stock-analyzer/e2e/admin-four-market-policy-off.spec.ts'
@@ -239,6 +244,7 @@ jobs:
             e2e/research-evidence-maturity.spec.ts \
             e2e/research-reload-abort-contract.spec.ts \
             e2e/phase6-paper-trading.spec.ts \
+            e2e/admin-four-market-policy-off.spec.ts \
             e2e/paper-trading-risk-copy-truth.spec.ts \
             e2e/auto-trading-closed-outcome-failclosed.spec.ts \
             e2e/admin-four-market-policy-off.spec.ts
