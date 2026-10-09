@@ -183,3 +183,65 @@ test("disabled admission gate never grants execution authority", () => {
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.liveAuthorityGranted, false);
 });
+
+
+test("100만원 KRW virtual Paper wallet initializes without account/order or withdrawal authority", async () => {
+  const manager = new PaperCompoundingCapitalManager({ admissionGateEnabled: true });
+  const seeded = await manager.initializeVirtualPaperWallet({ nowMs: T0 });
+  assert.equal(seeded.initialized, true);
+  assert.equal(seeded.initialVirtualSeed.initialCapitalKrw, 1_000_000);
+  assert.equal(seeded.effectiveTradingCapitalKrw, 1_000_000);
+  assert.equal(seeded.compoundBaseKrw, 1_000_000);
+  assert.equal(seeded.nextProfitTriggerKrw, 1_100_000);
+  assert.equal(seeded.lastSettlement, null);
+  assert.equal(seeded.canonicalSettlementVerified, false);
+  assert.equal(seeded.paperOrderAuthorityGranted, false);
+  assert.equal(seeded.financialMutationCount, 0);
+  assert.equal(seeded.externalWithdrawalPerformed, false);
+  assert.equal(seeded.liveAuthorityGranted, false);
+  const replay = await manager.initializeVirtualPaperWallet({ nowMs: T0 + 1_000 });
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.initialVirtualSeed.createdAt, seeded.initialVirtualSeed.createdAt);
+  assert.throws(() => manager.assessAdmission({
+    settlementId: "not-a-real-settlement",
+    settlementSequence: 1,
+    currentManagedExposureKrw: 0,
+    requestedNewExposureKrw: 1,
+  }), (error) => error.code === "CAPITAL_NOT_INITIALIZED");
+  const restored = new PaperCompoundingCapitalManager({ initialState: manager.exportState(), admissionGateEnabled: true });
+  assert.equal(restored.getState().initialVirtualSeed.initialCapitalKrw, 1_000_000);
+  await restored.applySettlement(settlement(1, 1_000_000), { nowMs: T0 + 10_000 });
+  assert.equal(restored.getState().initialVirtualSeed.initialCapitalKrw, 1_000_000);
+  assert.equal(restored.getState().lastSettlement.sequence, 1);
+});
+
+test("virtual 1M Paper bootstrap refuses to reset an existing 500k account or a nonmatching restored seed", async () => {
+  const manager = new PaperCompoundingCapitalManager();
+  await manager.applySettlement(settlement(1, 500_000), { nowMs: T0 + 10_000 });
+  const before = manager.exportState();
+  await assert.rejects(
+    () => manager.initializeVirtualPaperWallet({ nowMs: T0 + 20_000 }),
+    (error) => error.code === "CAPITAL_WALLET_ALREADY_INITIALIZED",
+  );
+  assert.deepEqual(manager.exportState(), before);
+  const virtual = new PaperCompoundingCapitalManager();
+  await virtual.initializeVirtualPaperWallet({ nowMs: T0 });
+  const tampered = structuredClone(virtual.exportState());
+  tampered.initialVirtualSeed.initialCapitalKrw = 500_000;
+  assert.throws(
+    () => new PaperCompoundingCapitalManager({ initialState: tampered }),
+    (error) => error.code === "CAPITAL_VIRTUAL_SEED_INVALID",
+  );
+});
+
+test("virtual Paper bootstrap rolls back its in-memory state if durable persistence fails", async () => {
+  const manager = new PaperCompoundingCapitalManager({
+    persistState: async () => { throw new Error("DISK_UNAVAILABLE"); },
+  });
+  await assert.rejects(
+    () => manager.initializeVirtualPaperWallet({ nowMs: T0 }),
+    (error) => error.code === "CAPITAL_STATE_PERSIST_FAILED",
+  );
+  assert.equal(manager.getState().initialized, false);
+  assert.equal(manager.getState().effectiveTradingCapitalKrw, 0);
+});
