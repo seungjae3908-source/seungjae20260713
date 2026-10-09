@@ -15,6 +15,10 @@ if (!/^[0-9a-f]{40}$/u.test(researchCodeSha)) {
 try {
   const summary = await processFormulaAutoBacktestQueueV1({ stateRoot, researchCodeSha });
   process.stdout.write(JSON.stringify(summary) + '\n');
+  if (summary.automationReadiness.startsWith('BLOCKED_DATA_')) {
+    // Isolated forward timer treats exit 2 as blocked evidence, not an outage.
+    process.exitCode = 2;
+  }
 } catch (error) {
   console.error(String(error?.stack ?? error));
   process.exit(1);
