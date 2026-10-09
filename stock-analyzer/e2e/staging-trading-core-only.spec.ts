@@ -118,6 +118,9 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   const health = await healthResponse.json();
   expect(health?.ok).toBe(true);
   expect(String(health.deploySha ?? '').toLowerCase()).toBe(sha);
+  expect(String(health.deployMarkerSha ?? '').toLowerCase()).toBe(sha);
+  expect(health.identityMatch).toBe(true);
+  expect(health.backgroundWorkersEnabled).toBe(false);
 
   await signInAdmin(page);
   await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });

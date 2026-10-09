@@ -59,6 +59,7 @@ test('protected Stage deploy is exact-main, isolated, serialized with official f
     'Destroy Staging SSH deployment authority',
     'test ! -e "$HOME/.ssh/id_ed25519"',
     'STAGING_TRADING_CORE_EXACT_SHA_VERIFIED',
+    'v?.deployMarkerSha', 'v?.backgroundWorkersEnabled',
   ]);
   assert.ok(workflow.indexOf('Recheck exact main before any Staging mutation')
     < workflow.indexOf('Deploy exact SHA using existing Staging rollback/canary isolation'));
@@ -82,6 +83,7 @@ test('only Trading Core browser + own Paper DB reads; no provider-private reques
     "'/api/paper-journal/snapshot'",
     "'/api/user-integrations'",
     'liveExecutionServerEnabled',
+    'health.deployMarkerSha', 'health.identityMatch', 'health.backgroundWorkersEnabled',
     'orderSubmissionPerformedByStatusRequest',
     'financialMutationCount',
     'privateProviderRequests',
