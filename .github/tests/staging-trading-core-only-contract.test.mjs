@@ -14,6 +14,18 @@ const SHA = 'a'.repeat(40);
 const requireAll = (text, markers) => {
   for (const marker of markers) assert.ok(text.includes(marker), 'missing contract marker: ' + marker);
 };
+test('Staging admin login maps protected email to the actual app login ID without storing a token', () => {
+  requireAll(spec, [
+    'resolveStagingAdminLoginName',
+    'STAGING_SUPABASE_ANON_KEY',
+    'user_metadata?.login_name',
+    'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING',
+    'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH',
+    'await username.fill(loginName)',
+  ]);
+  assert.ok(!spec.includes("username.fill(required('STAGING_ADMIN_EMAIL'))"));
+  assert.ok(workflow.includes('STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}'));
+});
 test('PR validation never requests Staging secrets, deploy, private provider or production authority', () => {
   requireAll(workflow, [
     '  pull_request:', '  workflow_dispatch:', "group: ${{ github.event_name == 'workflow_dispatch'",
@@ -114,7 +126,14 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     assert.equal(receipt.scopedStagingQa, 'PASS');
     assert.equal(receipt.productionReleaseReady, false);
     assert.equal(receipt.automaticTradingActivated, false);
+    assert.equal(receipt.operationalReadiness, 'BLOCKED');
     assert.equal(receipt.canaryPaperFillObserved, false);
+    write('trading-core-desktop', { stagingWalletReady: true, paperWorkerReady: true, walletCount: 4, walletBlockers: [], workerBlockers: [] });
+    write('trading-core-mobile', { stagingWalletReady: true, paperWorkerReady: true, walletCount: 4, walletBlockers: [], workerBlockers: [] });
+    result = exec();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(readFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), 'utf8')).operationalReadiness, 'PREREQUISITES_PRESENT');
+    write('trading-core-desktop');
     write('trading-core-mobile', { productionReleaseReady: true });
     result = exec();
     assert.notEqual(result.status, 0);
