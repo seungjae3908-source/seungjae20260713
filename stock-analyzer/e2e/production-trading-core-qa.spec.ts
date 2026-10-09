@@ -158,6 +158,9 @@ function preparedMemberAutoPolicy(policy: any) {
 }
 
 test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with zero real order authority', async ({ page }) => {
+  // The authorized Telegram worker ticks every 30s by default; its delivery
+  // cadence must not race against the 30s poll boundary during Production QA.
+  test.setTimeout(4 * 60_000);
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
   let statusBefore = await appApi<any>(page, '/api/trade-automation/status');
@@ -455,7 +458,7 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
         return filledDeliveryIds.some((id) => current.body.deliveries.some((delivery: any) =>
           delivery?.id === id && delivery?.state === 'SENT'
           && (delivery?.kind ?? 'EXECUTION_EVENT') === 'EXECUTION_EVENT'));
-      }, { timeout: 30_000, intervals: [1_000, 2_000, 3_000] }).toBe(true);
+      }, { timeout: 90_000, intervals: [1_000, 2_000, 3_000, 5_000] }).toBe(true);
       telegramFillDeliveryConfirmed = true;
       const telegram = await appApi<any>(page, '/api/user-integrations/telegram/test', 'POST', {});
       expect(telegram.ok, JSON.stringify(telegram.body)).toBe(true);
