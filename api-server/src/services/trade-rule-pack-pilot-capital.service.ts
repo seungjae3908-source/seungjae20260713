@@ -1,6 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
 import type { TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy } from './trade-automation.types';
+import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+} from './trade-automation.types';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
@@ -40,6 +44,20 @@ function finite(value: unknown): value is number {
 function roundKrw(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
+function supportedPilotInitialCapital(value: unknown) {
+  return value === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
+export function rulePackPilotInitialCapitalForPolicy(
+  policy: Pick<TradingPolicy, 'totalCapitalKrw' | 'maxOrderKrw'>,
+) {
+  return policy.totalCapitalKrw >= PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    && policy.maxOrderKrw >= PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
 function kstDay(value: string | Date) {
   const date = typeof value === 'string' ? new Date(value) : value;
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -63,10 +81,12 @@ export function rulePackPilotLedgerHistoryComplete(orderCount: number, planCount
 export function deriveRulePackPilotCapitalFromTrades(
   trades: readonly RulePackPilotRealizedTrade[],
   now = new Date(),
+  requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): RulePackPilotCapitalState {
-  let operatingCapitalKrw = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+  const initialOperatingCapitalKrw = supportedPilotInitialCapital(requestedInitialOperatingCapitalKrw);
+  let operatingCapitalKrw: number = initialOperatingCapitalKrw;
   let reserveKrw = 0;
-  let highWaterMarkKrw = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+  let highWaterMarkKrw: number = initialOperatingCapitalKrw;
   let realizedNetPnlKrw = 0;
   let compoundedProfitKrw = 0;
   let consecutiveLosses = 0;
@@ -160,7 +180,7 @@ export function deriveRulePackPilotCapitalFromTrades(
   }
 
   return Object.freeze({
-    initialOperatingCapitalKrw: RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw,
+    initialOperatingCapitalKrw,
     operatingCapitalKrw: roundKrw(operatingCapitalKrw),
     reserveKrw: roundKrw(reserveKrw),
     highWaterMarkKrw: roundKrw(highWaterMarkKrw),
@@ -211,10 +231,11 @@ export function evaluateRulePackPilotEntryGuard(
   const policyMaxOrder = finite(input.policyMaxOrderKrw)
     ? Math.max(0, input.policyMaxOrderKrw)
     : 0;
-  // The 1M ceiling tracks verified profit: 1M -> 1.025M after 50k net profit
-  // (25k compound / 25k reserve). A deliberately stricter policy (e.g. 30k)
-  // must NOT be silently elevated to 1M.
-  const initial = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+  // The role-scoped baseline tracks verified profit: 500k -> 525k for members,
+  // or 1M -> 1.025M for administrators, after 50k net profit. A deliberately
+  // stricter policy (e.g. 30k) must never be silently elevated.
+  const initial = supportedPilotInitialCapital(input.pilot.initialOperatingCapitalKrw);
+  if (input.pilot.initialOperatingCapitalKrw !== initial) add('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
   const growth = Math.max(0, operatingCapital - initial);
   const dynamicPolicyCap = policyMaxOrder >= initial ? policyMaxOrder + growth : policyMaxOrder;
   const effectiveMaxEntryKrw = Math.min(operatingCapital, pilotMaxEntry, dynamicPolicyCap);
@@ -222,7 +243,7 @@ export function evaluateRulePackPilotEntryGuard(
   if (!finite(input.policyTotalCapitalKrw) || input.policyTotalCapitalKrw < initial) {
     add('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED');
   }
-  // 1M is a risk floor, NOT a fabricated deposit or an instruction to
+  // The role-scoped baseline is a risk floor, NOT a fabricated deposit or an instruction to
   // draw from the separately earmarked reserve after a loss.
   if (operatingCapital < initial) add('BACKGROUND_PILOT_BASE_CAPITAL_UNDERFUNDED');
 
@@ -265,14 +286,17 @@ export function evaluateRulePackPilotEntryGuard(
 
 /**
  * A verified, settlement-backed capital snapshot is the only source allowed
- * to grow the 1M risk ceiling. This is a POLICY PROJECTION ONLY: it does not
+ * to grow the role-scoped risk ceiling. This is a POLICY PROJECTION ONLY: it does not
  * deposit/withdraw funds, change stored member policy or grant Live authority.
  */
 export function deriveRulePackPilotExecutionPolicy(
   policy: TradingPolicy,
   pilot: RulePackPilotCapitalState,
 ): TradingPolicy {
-  const initial = RULE_PACK_PILOT_PROFILE.initialOperatingCapitalKrw;
+  const initial = supportedPilotInitialCapital(pilot.initialOperatingCapitalKrw);
+  if (pilot.initialOperatingCapitalKrw !== initial) {
+    throw new Error('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
+  }
   const operating = pilot.operatingCapitalKrw;
   if (!pilot.settlementReady || pilot.blockers.length > 0
     || !finite(operating) || operating < initial
@@ -458,7 +482,9 @@ export async function resolveRulePackPilotDynamicCapPolicy(
   if (!verifyRulePackPilotDynamicCapReceipt(userId, plan, now.getTime())) {
     throw new Error('BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED');
   }
-  const pilot = await readRulePackPilotCapitalState(repository, userId, now);
+  const pilot = await readRulePackPilotCapitalState(
+    repository, userId, now, rulePackPilotInitialCapitalForPolicy(policy),
+  );
   const decision = evaluateRulePackPilotEntryGuard({
     pilot,
     strategyId: plan.strategyId,
@@ -518,6 +544,7 @@ export async function readRulePackPilotCapitalState(
   repository: TradingRepository,
   userId: string,
   now = new Date(),
+  requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 ): Promise<RulePackPilotCapitalState> {
   // One immutable order/plan read per ledger derivation. A second independent
   // journal query could race a closing loss and construct a phantom profit HWM
@@ -561,7 +588,7 @@ export async function readRulePackPilotCapitalState(
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
   // An unjoined fill is not "no profit"; its missing plan may hide a loss.
-  // Protect shared 1M HWM accounting from incomplete ledger projections.
+  // Protect role-scoped HWM accounting from incomplete ledger projections.
   for (const order of orders) {
     const plan = plansById.get(order.planId);
     const apparentlyFilled = order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
@@ -577,7 +604,7 @@ export async function readRulePackPilotCapitalState(
       blockers.push('PILOT_CAPITAL_AUTO_LIVE_ORDER_RECONCILIATION_REQUIRED');
     }
     // The journal adapter omits records without positive average price / fill
-    // quantity. A LIVE automatic fill must never disappear from the 1M
+    // quantity. A LIVE automatic fill must never disappear from the role-scoped
     // high-water ledger simply because that execution evidence is incomplete.
     if (plan?.accountMode === 'live' && plan.executionMode === 'automatic'
       && apparentlyFilled
@@ -638,7 +665,9 @@ export async function readRulePackPilotCapitalState(
     }));
   }
 
-  const derived = deriveRulePackPilotCapitalFromTrades(trades, now);
+  const derived = deriveRulePackPilotCapitalFromTrades(
+    trades, now, requestedInitialOperatingCapitalKrw,
+  );
   const uniqueBlockers = [...new Set([...blockers, ...derived.blockers])].sort();
   return Object.freeze({
     ...derived,

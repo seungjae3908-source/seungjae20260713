@@ -12,7 +12,11 @@ import {
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
-import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type TradingPlanInput,
+} from './trade-automation.types';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
@@ -92,27 +96,44 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
   assert.equal(policy.totalCapitalKrw, 1_000_000);
-  assert.equal(policy.maxOrderKrw, 1_000_000);
+  assert.equal(policy.maxOrderKrw, 500_000);
 });
 
-test('single-entry limit accepts exactly 1M KRW and fails closed above 1M', () => {
-  const policy = normalizeTradingPolicy({
+test('member entry is capped at 500k while administrator entry accepts 1M and both fail closed above tier', () => {
+  const memberPolicy = normalizeTradingPolicy({
     ...DEFAULT_TRADING_POLICY,
     totalCapitalKrw: 5_000_000,
     maxOrderKrw: 5_000_000,
   });
-  assert.equal(policy.maxOrderKrw, 1_000_000);
+  assert.equal(memberPolicy.maxOrderKrw, 500_000);
+  assert.equal(evaluateTradingPlan(plan({
+    quoteAmount: 500_000,
+    estimatedKrw: 500_000,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+  assert.ok(evaluateTradingPlan(plan({
+    quoteAmount: 500_001,
+    estimatedKrw: 500_001,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'));
+
+  const administratorPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  assert.equal(administratorPolicy.maxOrderKrw, 1_000_000);
 
   const exact = evaluateTradingPlan(plan({
     quoteAmount: 1_000_000,
     estimatedKrw: 1_000_000,
-  }), policy, { emergencyStopped: false, serverLiveEnabled: false });
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
   assert.equal(exact.blockCodes.includes('MAX_ORDER_AMOUNT'), false);
 
   const exceeded = evaluateTradingPlan(plan({
     quoteAmount: 1_000_001,
     estimatedKrw: 1_000_001,
-  }), policy, { emergencyStopped: false, serverLiveEnabled: false });
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
   assert.ok(exceeded.blockCodes.includes('MAX_ORDER_AMOUNT'));
 });
 
