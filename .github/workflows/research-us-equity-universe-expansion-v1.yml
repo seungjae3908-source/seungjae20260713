@@ -1,0 +1,59 @@
+name: Research US Equity Universe Expansion V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-equity-universe-expansion-v1.mjs
+      - .github/workflows/research-us-equity-universe-expansion-v1.yml
+      - market-prediction-lab/src/stock-pullback-optimizer.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-equity-universe-expansion-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify research-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-equity-universe-expansion-v1.mjs
+          ! grep -Eiq 'LIVE_TRADING|REAL_ORDER_ENABLED|PRIVATE_TRADING_API_ALLOWED|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)|(^|[^A-Za-z])orderSubmitted([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-equity-universe-expansion-v1.mjs
+      - name: Scan broad public universe and replay fixed V1
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-equity-universe-expansion-v1.mjs docs/us-equity-universe-expansion-v1.json
+      - name: Assert broad-universe and safety invariants
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/us-equity-universe-expansion-v1.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS_NOT_PASS');
+          if(!(r.universe.rawRows>=1000)) throw new Error('UNIVERSE_TOO_SMALL');
+          if(!(r.universe.historySuccesses>=150)) throw new Error('HISTORY_COVERAGE_TOO_SMALL');
+          if(r.fixedStrategy.retuned!==false) throw new Error('RETUNING_FORBIDDEN');
+          if(r.safety.researchOnly!==true||r.safety.liveExecutionAllowed!==false||r.safety.executionAuthority!=='NONE') throw new Error('SAFETY_BOUNDARY');
+          for(const k of ['LARGE','MID','SMALL']) if(!r.buckets[k]) throw new Error('BUCKET_MISSING_'+k);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: us-equity-universe-expansion-v1-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-equity-universe-expansion-v1.json
+          if-no-files-found: error
+          retention-days: 30
