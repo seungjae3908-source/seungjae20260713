@@ -27,11 +27,17 @@ const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
   }
   return receipt;
 });
+// A read-only structural QA PASS must not imply a seeded Paper wallet,
+ // a running background worker, a fill, or a sent Telegram message.
+const operationalReadiness = proofs.every(v =>
+  v.stagingWalletReady === true && v.walletCount === 4 && v.paperWorkerReady === true)
+  ? 'PREREQUISITES_PRESENT' : 'BLOCKED';
 const verdict = {
   schemaVersion: 'staging-trading-core-only-verdict-v1',
   targetSha: sha,
   scope: 'TRADING_CORE_ONLY',
   scopedStagingQa: 'PASS',
+  operationalReadiness,
   desktop: 'PASS',
   mobile: 'PASS',
   markets: 4,
@@ -49,4 +55,4 @@ const verdict = {
   realOrders: 0, providerPrivateRequests: 0, productionDbMutations: 0,
 };
 fs.writeFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), JSON.stringify(verdict, null, 2), { encoding:'utf8', mode:0o600 });
-console.log(JSON.stringify({ok:true,scope:verdict.scope,stagingQa:verdict.scopedStagingQa,targetSha:sha,productionReleaseReady:false,automaticTradingActivated:false}));
+console.log(JSON.stringify({ok:true,scope:verdict.scope,stagingQa:verdict.scopedStagingQa,operationalReadiness:verdict.operationalReadiness,targetSha:sha,productionReleaseReady:false,automaticTradingActivated:false}));
