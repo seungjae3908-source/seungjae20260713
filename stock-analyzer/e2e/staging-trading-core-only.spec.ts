@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { requestWithBrowserSession } from './support/browser-session-api';
 
@@ -16,12 +15,11 @@ function required(name: string) {
   if (!value) throw new Error('STAGING_TRADING_CORE_REQUIRED_CONFIGURATION:' + name);
   return value;
 }
-// The protected Staging credential is a Supabase *email*, but the app login
-// accepts a login_name and hashes it into an internal email. Resolve and
-// verify that mapping using staging-only Auth; never log the token or identity.
-async function resolveStagingAdminLoginName() {
+// Isolated Staging admin may have no login_name in Auth metadata.
+// Use the actual Staging password-grant session without inventing a username.
+// This verifies browser session restoration, NOT the interactive login form.
+async function restoreStagingAdminSession(page: Page) {
   const email = required('STAGING_ADMIN_EMAIL').toLowerCase();
-  const password = required('STAGING_ADMIN_PASSWORD');
   const supabase = new URL(required('STAGING_SUPABASE_URL'));
   const response = await fetch(new URL('/auth/v1/token?grant_type=password', supabase), {
     method: 'POST',
@@ -29,24 +27,51 @@ async function resolveStagingAdminLoginName() {
       apikey: required('STAGING_SUPABASE_ANON_KEY'),
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password: required('STAGING_ADMIN_PASSWORD') }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) {
-    throw new Error('STAGING_ADMIN_LOGIN_NAME_DISCOVERY_HTTP_' + response.status);
-  }
+  if (!response.ok) throw new Error('STAGING_ADMIN_PASSWORD_GRANT_HTTP_' + response.status);
   const body: any = await response.json().catch(() => null);
-  const loginName = String(body?.user?.user_metadata?.login_name ?? '').trim();
-  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
-    throw new Error('STAGING_ADMIN_LOGIN_ID_METADATA_MISSING');
+  if (typeof body?.access_token !== 'string' || body.access_token.length < 20
+    || typeof body?.refresh_token !== 'string' || body.refresh_token.length < 10
+    || !Number.isSafeInteger(body?.expires_in) || body.expires_in < 60
+    || typeof body?.user?.id !== 'string'
+    || String(body?.user?.email ?? '').toLowerCase() !== email) {
+    throw new Error('STAGING_ADMIN_SESSION_CONTRACT_INVALID');
   }
-  const internalEmail = createHash('sha256')
-    .update('seungjae-stock-account:' + loginName.normalize('NFKC').toLowerCase(), 'utf8')
-    .digest('hex').slice(0, 40) + '@accounts.seungjae-stock.com';
-  if (email !== internalEmail) {
-    throw new Error('STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH');
+  const origin = new URL(required('STAGING_BASE_URL')).origin;
+  const profileResponse = await page.request.get(new URL('/api/auth/profile', origin).toString(), {
+    headers: { Authorization: 'Bearer ' + body.access_token },
+  });
+  if (profileResponse.status() !== 200) {
+    throw new Error('STAGING_ADMIN_PROFILE_HTTP_' + profileResponse.status());
   }
-  return loginName;
+  const profile: any = await profileResponse.json().catch(() => null);
+  if (profile?.id !== body.user.id) throw new Error('STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH');
+  if (profile?.role !== 'admin' || profile?.status !== 'approved'
+    || profile?.is_active === false) {
+    throw new Error('STAGING_ADMIN_PROFILE_NOT_APPROVED');
+  }
+  const session = {
+    access_token: body.access_token,
+    refresh_token: body.refresh_token,
+    token_type: 'bearer',
+    expires_in: body.expires_in,
+    expires_at: Math.floor(Date.now() / 1000) + body.expires_in,
+    user: body.user,
+  };
+  const storageKey = 'sb-' + supabase.hostname.split('.')[0] + '-auth-token';
+  // The session stays only in Playwright's isolated browser context.
+  // No credential, identity, storageState, trace, screenshot or video artifact.
+  await page.goto('/login', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(({ origin, storageKey, session }) => {
+    if (window.location.origin !== origin) throw new Error('STAGING_AUTH_STORAGE_ORIGIN_MISMATCH');
+    window.localStorage.setItem(storageKey, JSON.stringify(session));
+  }, { origin, storageKey, session });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: /로그아웃|sign out/i }).first())
+    .toBeVisible({ timeout: 30_000 });
 }
 function validateIsolation() {
   const target = required('STAGING_TARGET_SHA').toLowerCase();
@@ -60,17 +85,6 @@ function validateIsolation() {
   expect(supabase.hostname).toMatch(/^[a-z0-9]+\.supabase\.co$/);
   expect(supabase.hostname).not.toBe('bawcbkoyovbeajkrnduq.supabase.co');
   return target;
-}
-async function signInAdmin(page: Page) {
-  const loginName = await resolveStagingAdminLoginName();
-  await page.goto('/login', { waitUntil: 'domcontentloaded' });
-  const username = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
-  const password = page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]').first();
-  await expect(username).toBeVisible();
-  await username.fill(loginName);
-  await password.fill(required('STAGING_ADMIN_PASSWORD'));
-  await page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i }).click();
-  await expect(page.getByRole('button', { name: /로그아웃|sign out/i }).first()).toBeVisible({ timeout: 30_000 });
 }
 function failCodeOnly(code: unknown) {
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,90}$/.test(code) ? code : 'UNCLASSIFIED';
@@ -122,7 +136,7 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   expect(health.identityMatch).toBe(true);
   expect(health.backgroundWorkersEnabled).toBe(false);
 
-  await signInAdmin(page);
+  await restoreStagingAdminSession(page);
   await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('body')).not.toBeEmpty();
   await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
@@ -180,6 +194,8 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
     targetSha: sha,
     project: testInfo.project.name,
     stagingScopedQa: 'PASS',
+    browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
+    interactiveLoginFormTested: false,
     stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','telegram-config'],
     fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true,
