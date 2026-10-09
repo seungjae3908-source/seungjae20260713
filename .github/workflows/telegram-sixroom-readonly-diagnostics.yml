@@ -140,11 +140,11 @@ jobs:
             return missing.filter(key=>paths.some(path=>{
               let source='';try{source=read(path);}catch{return false;}
               if(typeof source!=='string'||source.length>1_000_000)return false;
-              return source.split(/\\r?\\n/).some(line=>{
-                const match=/^\\s*(?:export\\s+)?([A-Z0-9_]+)\\s*=\\s*(.*)$/.exec(line);
+              return source.split(/\r?\n/).some(line=>{
+                const match=/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
                 if(!match||match[1]!==key)return false;
                 const value=match[2].trim();
-                return Boolean(value&&value!=='\\\"\\\"'&&value!==\"''\"&&!value.startsWith('#'));
+                return Boolean(value&&value!=='""'&&value!==\"''\"&&!value.startsWith('#'));
               });
             }));
           }
