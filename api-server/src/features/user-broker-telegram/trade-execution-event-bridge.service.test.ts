@@ -239,9 +239,14 @@ test('owned Paper order sync skips unrelated historical method conflict without 
     ?.executionMethod, 'USER_APPROVED');
 
   const scoped = await bridge.syncUser('user-a', 'associate', { orderId: newOrder.id });
+  const freshExecution = await integrationRepository.getExecutionEventBySource('user-a', freshTransition.id);
+  assert.ok(freshExecution);
+  const freshDelivery = (await integrationRepository.listDeliveries('user-a'))
+    .find((delivery) => delivery.eventId === freshExecution.id && delivery.kind === 'EXECUTION_EVENT');
+  assert.ok(freshDelivery);
   assert.deepEqual(scoped, {
     scanned: 1, mapped: 1, inserted: 1, deliveryQueued: 1,
-    missingReferences: 0, scopedToOrder: true,
+    missingReferences: 0, scopedToOrder: true, filledDeliveryIds: [freshDelivery.id],
     privateApiRequests: 0, ordersSubmitted: 0, ordersCancelled: 0,
   });
   assert.equal((await integrationRepository.getExecutionEventBySource('user-a', historicalTransition.id))
@@ -253,6 +258,7 @@ test('owned Paper order sync skips unrelated historical method conflict without 
   const repeated = await bridge.syncUser('user-a', 'associate', { orderId: newOrder.id });
   assert.equal(repeated.inserted, 0);
   assert.equal(repeated.deliveryQueued, 0);
+  assert.deepEqual(repeated.filledDeliveryIds, []);
   await assert.rejects(
     () => bridge.syncUser('user-a', 'associate', { orderId: historicalOrder.id }),
     /EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT/,
