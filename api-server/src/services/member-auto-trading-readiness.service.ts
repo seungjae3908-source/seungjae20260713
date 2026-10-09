@@ -19,6 +19,7 @@ export type MemberAutomaticPaperReadinessInput = Readonly<{
   wallet: StoredPaperJournalRecord | null;
   administratorFourMarket?: boolean;
   adminMarketWalletRecords?: readonly StoredPaperJournalRecord[];
+  adminDatabaseGuardReady?: boolean;
   workerHealth: MemberAutoTradingBackgroundRuntimeHealth;
   workerMode: AutomaticPaperRuntimeMode;
   globalStopped: boolean;
@@ -40,6 +41,9 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
   if (!paperWalletReady) blockers.push(adminWallets
     ? 'BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED' : 'BACKGROUND_PAPER_WALLET_REQUIRED');
   if (adminWallets && !adminWallets.ready) blockers.push(...adminWallets.blockers);
+  if (adminWallets && input.adminDatabaseGuardReady !== true) {
+    blockers.push('BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED');
+  }
   const paperCapitalPolicyReady = adminWallets
     ? Number.isFinite(policy.totalCapitalKrw)
       && policy.totalCapitalKrw >= ADMIN_MARKET_INITIAL_KRW
@@ -99,6 +103,7 @@ export function memberAutomaticPaperReadiness(input: MemberAutomaticPaperReadine
     paperWalletReady,
     administratorFourMarket: adminWallets != null,
     adminMarketWalletsReady: adminWallets?.ready ?? null,
+    adminDatabaseGuardReady: adminWallets != null ? input.adminDatabaseGuardReady === true : null,
     paperCapitalPolicyReady,
     strategyAllowlistReady,
     enabledMarketCount,
