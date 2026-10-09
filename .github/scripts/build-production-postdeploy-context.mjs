@@ -1,5 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const { verifyPostDeployMainLineage } = require('./production-postdeploy-qa-evidence.cjs');
 
 const [output, targetSha, productionDeployRunId, deploymentCompletedAt, qaStartedAt, mode = 'completed'] = process.argv.slice(2);
 const repository = String(process.env.GITHUB_REPOSITORY ?? '').trim();
@@ -27,6 +31,13 @@ const api = async (path) => {
 const normalizedTarget = targetSha.toLowerCase();
 const deployRunId = Number(productionDeployRunId);
 const main = await api('/branches/main');
+const currentMainSha = String(main?.commit?.sha ?? '').trim().toLowerCase();
+// Compare pinned commits, not the moving 'main' branch name.
+const comparison = currentMainSha === normalizedTarget ? null
+  : await api(`/compare/${normalizedTarget}...${currentMainSha}`);
+const mainLineage = verifyPostDeployMainLineage({
+  targetSha: normalizedTarget, currentMainSha, comparison,
+});
 const deployRun = await api(`/actions/runs/${deployRunId}`);
 if (deployRun.name !== 'Production Deploy'
   || deployRun.path !== '.github/workflows/production-deploy.yml'
@@ -79,7 +90,9 @@ if (mode === 'completed') {
 const value = {
   schemaVersion: 'production-postdeploy-context-v2',
   deploymentVerificationMode: mode === 'inline' ? 'inline-approved-job' : 'completed-successful-run',
-  mainSha: String(main?.commit?.sha ?? '').toLowerCase(),
+  mainSha: mainLineage.mainSha,
+  mainAncestorVerified: mainLineage.mainAncestorVerified,
+  mainAdvancedAfterDeployment: mainLineage.mainAdvancedAfterDeployment,
   productionDeploySha: String(health?.deploySha ?? '').toLowerCase(),
   processDeploySha: String(health?.processDeploySha ?? '').toLowerCase(),
   deployMarkerSha: String(health?.deployMarkerSha ?? '').toLowerCase(),
@@ -97,7 +110,7 @@ const value = {
   activeConflictingTradingGates: conflicts,
 };
 
-for (const key of ['mainSha', 'productionDeploySha', 'processDeploySha', 'deployMarkerSha', 'productionDeployHeadSha']) {
+for (const key of ['productionDeploySha', 'processDeploySha', 'deployMarkerSha', 'productionDeployHeadSha']) {
   if (value[key] !== normalizedTarget) throw new Error(`POSTDEPLOY_CONTEXT_${key.toUpperCase()}_MISMATCH`);
 }
 if (!value.identityMatch || conflicts.length !== 0) throw new Error('POSTDEPLOY_CONTEXT_IDENTITY_OR_GATE_CONFLICT');
@@ -109,4 +122,4 @@ if (!Number.isFinite(completedMs) || !Number.isFinite(startedMs) || startedMs < 
 
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-console.log(JSON.stringify({ ok: true, mode, targetSha: normalizedTarget, activeConflictingTradingGates: 0 }));
+console.log(JSON.stringify({ ok: true, mode, targetSha: normalizedTarget, mainAdvancedAfterDeployment: mainLineage.mainAdvancedAfterDeployment, activeConflictingTradingGates: 0 }));
