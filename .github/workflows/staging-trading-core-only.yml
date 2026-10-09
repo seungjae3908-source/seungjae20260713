@@ -279,7 +279,9 @@ jobs:
           const res = await fetch(new URL('/api/health', url), { signal: AbortSignal.timeout(15000) });
           if (!res.ok) throw new Error('STAGING_TRADING_CORE_HEALTH_HTTP_' + res.status);
           const v = await res.json();
-          if (v?.ok !== true || v?.deploySha !== process.env.STAGING_TARGET_SHA)
+          if (v?.ok !== true || v?.deploySha !== process.env.STAGING_TARGET_SHA
+            || v?.deployMarkerSha !== process.env.STAGING_TARGET_SHA
+            || v?.identityMatch !== true || v?.backgroundWorkersEnabled !== false)
             throw new Error('STAGING_TRADING_CORE_PUBLIC_SHA_MISMATCH');
           console.log('STAGING_TRADING_CORE_EXACT_SHA_VERIFIED');
           NODE
