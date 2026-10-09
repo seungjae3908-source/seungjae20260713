@@ -24,7 +24,10 @@ function policy() {
     stockBrokerByMarket: { domestic_stock: 'kiwoom', us_stock: 'kiwoom' },
     exchangeEnabled: { bitget: true, upbit: true, kiwoom: true, toss: true },
     enabledAssets: { bitget: [], upbit: [], kiwoom: [], toss: [] },
-    enabledStrategies: [],
+    enabledStrategies: [
+      'KR_PRESSURE_BREAKOUT_V1', 'US_STOCKS_IN_PLAY_ORB_RETEST_V1',
+      'CRYPTO_SPOT_ORDER_FLOW_ML_LONG_V1', 'CRYPTO_FUTURES_FLOW_TREND_WAVE_V1',
+    ],
     totalCapitalKrw: 500_000,
     maxOrderKrw: 50_000,
     maxInstrumentKrw: 500_000,
