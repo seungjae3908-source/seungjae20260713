@@ -4,7 +4,9 @@ import {
   evidenceBackedAutoStrategyCatalog,
 } from './evidence-backed-auto-strategy-catalog.service';
 import {
+  PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from './trade-automation.types';
 
@@ -24,6 +26,7 @@ export type FormulaAiRehearsalInput = Readonly<{
   telegramReady: boolean;
   futuresMarginMode?: 'isolated' | 'crossed' | null;
   futuresLeverage?: number | null;
+  futuresMaximumLeverage?: number | null;
 }>;
 
 export type FormulaAiPaperRehearsalProbe = Readonly<{
@@ -45,10 +48,14 @@ export type FormulaAiPaperRehearsalProbe = Readonly<{
 export function runFormulaAiPaperRehearsalProbe(
   now = new Date(),
   requestedInitialCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  requestedMaximumLeverage: number = PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE,
 ): FormulaAiPaperRehearsalProbe {
   const initialCapitalKrw = requestedInitialCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+  const maximumLeverage = requestedMaximumLeverage === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+    : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
   const at = new Date(now);
   if (!Number.isFinite(at.getTime())) throw new Error('FORMULA_AI_REHEARSAL_INVALID_TIME');
   const observedAt = at.toISOString();
@@ -87,7 +94,7 @@ export function runFormulaAiPaperRehearsalProbe(
       quantityPrecision: 3,
       minimumQuantity: 0.001,
       minimumNotional: 5,
-      maximumLeverage: 7,
+      maximumLeverage,
       maintenanceMarginRate: 0.005,
       status: 'live',
       updatedAt: observedAt,
@@ -113,8 +120,8 @@ export function runFormulaAiPaperRehearsalProbe(
       minimumQuantity: 0.001,
       minimumNotional: 5,
       maintenanceMarginRate: 0.005,
-      maximumLeverage: 7,
-      appMaximumLeverage: 7,
+      maximumLeverage,
+      appMaximumLeverage: maximumLeverage,
       contractRulesStatus: 'live',
       dataStatus: 'live',
     },
@@ -215,7 +222,10 @@ export function evaluateFormulaAiAutoRehearsal(input: FormulaAiRehearsalInput): 
   if (input.market === 'CRYPTO_FUTURES') {
     if (input.futuresMarginMode !== 'isolated') add(blockers, 'FORMULA_AI_FUTURES_ISOLATED_REQUIRED');
     const leverage = Number(input.futuresLeverage);
-    if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) {
+    const maximumLeverage = input.futuresMaximumLeverage === PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
+      : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
+    if (!Number.isInteger(leverage) || leverage < 2 || leverage > maximumLeverage) {
       add(blockers, 'FORMULA_AI_FUTURES_LEVERAGE_LIMIT');
     }
   }
