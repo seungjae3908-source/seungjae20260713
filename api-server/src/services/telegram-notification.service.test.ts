@@ -225,6 +225,40 @@ test('editing a Telegram signal explicitly clears a stale order keyboard', async
   assert.deepEqual(calls[0].reply_markup, { inline_keyboard: [] });
 });
 
+test('long signal updates preserve Telegram HTML tags, entities, and stale-button revocation', async () => {
+  setFakeConfig();
+  const calls: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return okResponse();
+  };
+
+  const cases: Array<{ kind: 'PHOTO' | 'TEXT'; limit: number; prefix: number }> = [
+    { kind: 'PHOTO', limit: 1_024, prefix: 1_005 },
+    { kind: 'TEXT', limit: 4_096, prefix: 4_080 },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const text = '<b>' + '가'.repeat(item.prefix) + '&amp;' + '나'.repeat(80) + '</b>';
+    const answer = await editTelegramMessage({
+      destinationChatId: 'ci-chat-id-sentinel',
+      messageId: 201 + index,
+      messageKind: item.kind,
+      text,
+      buttons: [],
+    });
+    assert.deepEqual(answer, { ok: true, attempts: 1 });
+    const body = calls.at(-1)!;
+    const rendered = String(item.kind === 'PHOTO' ? body.caption : body.text);
+    assert.ok(rendered.length <= item.limit);
+    assert.match(rendered, /^<b>.+…<\\/b>$/u);
+    assert.equal(rendered.includes('&am…'), false);
+    assert.equal((rendered.match(/<b>/gu) ?? []).length, (rendered.match(/<\\/b>/gu) ?? []).length);
+    assert.deepEqual(body.reply_markup, { inline_keyboard: [] });
+    assert.equal(body.parse_mode, 'HTML');
+  }
+  assert.equal(calls.length, 2);
+});
+
 test('suppresses exact duplicates and applies per-subject cooldown', async () => {
   setFakeConfig();
   let calls = 0;
