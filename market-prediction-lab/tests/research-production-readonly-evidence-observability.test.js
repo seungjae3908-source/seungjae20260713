@@ -320,12 +320,14 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     orderAuthority: false,
   }), "utf8").toString("base64url");
   const evidence = [
+    "current_release_match=true",
     "TIMER profile=forward enabled=enabled active=active last_trigger=2026-08-27T00:00:00Z",
     "TIMER profile=fast-historical enabled=enabled active=active last_trigger=2026-08-27T00:00:00Z",
     "TIMER profile=long-history enabled=enabled active=active last_trigger=2026-08-27T00:00:00Z",
     `CYCLE profile=forward present=true research_sha=${sha} failed_count=0`,
     `CYCLE profile=fast-historical present=true research_sha=${sha} failed_count=0`,
     `CYCLE profile=long-history present=true research_sha=${sha} failed_count=0`,
+    "TASK profile=forward id=formula-backtest-queue status=success",
     "TASK profile=forward id=shadow-forward status=success",
     "TASK profile=forward id=paper-forward status=blocked_data",
     "SHADOW_GROUP_FAILURE name=crypto-futures-15m status=fail error_name=Error error_message=public_feed_unavailable raw_log_included=false",
@@ -350,9 +352,11 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
       encoding: "utf8",
       env: { ...process.env, EVIDENCE_FILE: evidencePath, GITHUB_OUTPUT: outputPath, RESEARCH_SHA: sha },
     });
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 1, result.stderr);
     const fields = outputFields(await readFile(outputPath, "utf8"));
-    assert.equal(fields.status, "passed");
+    assert.equal(fields.status, "blocked_data");
+    assert.equal(fields.release_match, "true");
+    assert.equal(fields.forward_proven, "true");
     assert.equal(fields.shadow_failure_details, "crypto-futures-15m:fail:Error:public_feed_unavailable");
     assert.equal(fields.natural_trace_status, "BLOCKED");
     assert.equal(fields.natural_trace_error, "none");
@@ -373,6 +377,19 @@ test("workflow recomputes FIRST_ZERO from the extracted v5 counts and exact rele
     assert.equal(fields.authoritative_source_blockers, "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE");
     assert.equal(fields.natural_evidence_source_trace,
       "CONTRACT_RULES=CONNECTED_NOT_OBSERVED,EXECUTION_OBSERVATION=CONNECTED_NOT_OBSERVED,LEARNING_SNAPSHOT=CONNECTED_NOT_OBSERVED,PAPER_STATE=CONNECTED_NOT_OBSERVED,SUPPLEMENTAL_COST_EVIDENCE=CONNECTED_NOT_OBSERVED");
+    // A stale deployment should retain its diagnostic fields but MUST be
+    // classified as an incompatible release, never as a successful cycle.
+    await writeFile(evidencePath, `${evidence.replace("current_release_match=true", "current_release_match=false")}\n`);
+    await writeFile(outputPath, "");
+    const stale = spawnSync(process.execPath, ["--input-type=module", "-e", classifier], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, EVIDENCE_FILE: evidencePath, GITHUB_OUTPUT: outputPath, RESEARCH_SHA: sha },
+    });
+    assert.equal(stale.status, 1, stale.stderr);
+    const staleFields = outputFields(await readFile(outputPath, "utf8"));
+    assert.equal(staleFields.status, "stale_release");
+    assert.equal(staleFields.release_match, "false");
     const stageTrace = JSON.parse(Buffer.from(fields.natural_stage_trace_base64, "base64url").toString("utf8"));
     assert.equal(stageTrace.length, 12);
     assert.deepEqual(stageTrace.find((row) => row.stage === "PAPER_ENTRY"), {
