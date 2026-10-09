@@ -5,6 +5,7 @@ import {
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { hasCanonicalMemberAccessState } from '../../../packages/member-access/src/index.js';
 
 export type InitialMemberProfile = {
   id: string;
@@ -51,7 +52,11 @@ export function primeInitialAuthBootstrap(): Promise<InitialAuthBootstrap> | nul
           .abortSignal(controller.signal)
           .maybeSingle();
         if (profileError) throw profileError;
-        return (profileData as InitialMemberProfile | null) ?? null;
+        const nextProfile = (profileData as InitialMemberProfile | null) ?? null;
+        if (nextProfile && !hasCanonicalMemberAccessState(nextProfile)) {
+          throw new Error('MEMBER_SCHEMA_NOT_READY');
+        }
+        return nextProfile;
       })(),
       AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
       'AUTH_PROFILE_TIMEOUT',

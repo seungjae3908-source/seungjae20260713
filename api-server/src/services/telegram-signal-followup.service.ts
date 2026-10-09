@@ -5,6 +5,7 @@ import type {
   ScannerSignalState,
 } from './scanner-signal.types';
 import { telegramMarketRoomChatId, telegramMarketRoomForLane } from './telegram-market-room.service';
+import { buildTelegramSignalAppButtons } from './telegram-investment-intelligence.service';
 import {
   createTelegramSignalFollowupRepository,
   validateStoredTelegramSignalFollowupState,
@@ -25,6 +26,14 @@ export type TelegramSignalFollowupKind =
   | 'ENTRY_ZONE_LEFT'
   | 'TARGET_REACHED'
   | 'STOP_THRESHOLD_REACHED'
+  | 'APPROVED'
+  | 'EXECUTING'
+  | 'PARTIALLY_FILLED'
+  | 'FILLED'
+  | 'MANAGING'
+  | 'CLOSED'
+  | 'CANCELLED'
+  | 'REJECTED'
   | 'INVALIDATED'
   | 'EXPIRED';
 
@@ -194,10 +203,29 @@ function stateEvent(
   if (current === 'EXPIRED') {
     return { kind: 'EXPIRED', details: '⌛ 신호 유효시간이 만료되었습니다. 새 신호 없이는 재사용하지 않습니다.' };
   }
-  if (current === 'ARMED' && ['ENTRY_ZONE', 'APPROVAL_PENDING'].includes(previous)) {
+  // A filled/closed/cancelled signal must update the original Telegram card
+  // even when its price has not changed. Otherwise an old order button survives.
+  const terminal: Partial<Record<ScannerSignalState, { kind: TelegramSignalFollowupKind; details: string }>> = {
+    APPROVED: { kind: 'APPROVED', details: '✅ 주문 승인됨 · 신규 진입 버튼 비활성' },
+    EXECUTING: { kind: 'EXECUTING', details: '🟦 주문 처리 중 · 중복 주문 방지' },
+    PARTIALLY_FILLED: { kind: 'PARTIALLY_FILLED', details: '🔵 부분 체결 · 중복 주문 방지' },
+    FILLED: { kind: 'FILLED', details: '✅ 체결 상태 · 기존 진입 버튼 비활성' },
+    MANAGING: { kind: 'MANAGING', details: '✅ 포지션 관리 중 · 기존 진입 버튼 비활성' },
+    CLOSED: { kind: 'CLOSED', details: '🏁 포지션 종료 · 기존 진입 버튼 비활성' },
+    CANCELLED: { kind: 'CANCELLED', details: '⛔ 취소됨 · 진입 버튼 비활성' },
+    REJECTED: { kind: 'REJECTED', details: '⛔ 신호 거절 · 진입 버튼 비활성' },
+  };
+  if (terminal[current]) return terminal[current]!;
+  if (
+    ['ARMED', 'WEAKENED', 'WATCHING', 'CANDIDATE', 'CONFIRMED', 'DETECTED'].includes(current)
+    && ['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(previous)
+  ) {
     return { kind: 'ENTRY_ZONE_LEFT', details: '⚠️ 진입구간을 벗어나 재관찰 상태로 전환되었습니다.' };
   }
-  if ((current === 'ENTRY_ZONE' || current === 'APPROVAL_PENDING') && previous === 'ARMED') {
+  if (
+    ['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(current)
+    && ['ARMED', 'WEAKENED', 'WATCHING', 'CANDIDATE', 'CONFIRMED', 'DETECTED'].includes(previous)
+  ) {
     return { kind: 'REARMED', details: '✅ 조건이 회복되어 진입구간 감시 상태로 다시 전환되었습니다.' };
   }
   return null;
@@ -215,7 +243,12 @@ export function buildTelegramSignalFollowups(
     if (!state) continue;
     state.lastSeenAt = now;
 
-    if (finite(card.price)) {
+    const expiryMs = Date.parse(state.expiresAt);
+    const entryAlreadyExpired = Number.isFinite(expiryMs) && expiryMs <= now
+      && ['CANDIDATE', 'CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING',
+        'DETECTED', 'WATCHING', 'READY_FOR_APPROVAL', 'WEAKENED'].includes(card.signalState);
+
+    if (!entryAlreadyExpired && finite(card.price)) {
       const targets = card.pricePlan.targets.filter((target) => finite(target) && target > 0);
       targets.forEach((target, index) => {
         if (state.reachedTargets.has(index)) return;
@@ -246,18 +279,34 @@ export function buildTelegramSignalFollowups(
       state.lastPrice = card.price;
     }
 
-    const lifecycle = stateEvent(card, state.lastState);
-    if (lifecycle) {
-      updates.push({
-        kind: lifecycle.kind,
-        signalId: card.signalId,
-        symbol: card.symbol,
-        market: card.market,
-        details: lifecycle.details,
-        dedupeKey: `signal-followup:${card.signalId}:state:${card.signalState}`,
-      });
+    if (entryAlreadyExpired) {
+      // The original entry expiry is authoritative even if Scanner has not
+      // yet emitted EXPIRED. Revoke the old order keyboard exactly once.
+      if (state.lastState !== 'EXPIRED') {
+        updates.push({
+          kind: 'EXPIRED',
+          signalId: card.signalId,
+          symbol: card.symbol,
+          market: card.market,
+          details: '⌛ 원래 신호 유효시간이 만료되어 기존 주문 버튼을 제거합니다.',
+          dedupeKey: `signal-followup:${card.signalId}:entry-expired`,
+        });
+      }
+      state.lastState = 'EXPIRED';
+    } else {
+      const lifecycle = stateEvent(card, state.lastState);
+      if (lifecycle) {
+        updates.push({
+          kind: lifecycle.kind,
+          signalId: card.signalId,
+          symbol: card.symbol,
+          market: card.market,
+          details: lifecycle.details,
+          dedupeKey: `signal-followup:${card.signalId}:state:${card.signalState}`,
+        });
+      }
+      if (card.signalState) state.lastState = card.signalState;
     }
-    if (card.signalState) state.lastState = card.signalState;
     announced.set(card.signalId, state);
   }
   return updates;
@@ -271,19 +320,25 @@ function publicStatusLabel(
   if (state.stopReached || updates.some((update) => update.kind === 'STOP_THRESHOLD_REACHED')) return '🛑 손절 기준 도달';
   if (card.signalState === 'INVALIDATED' || updates.some((update) => update.kind === 'INVALIDATED')) return '⛔ 신호 무효';
   if (card.signalState === 'EXPIRED' || updates.some((update) => update.kind === 'EXPIRED')) return '⌛ 신호 종료';
+  if (card.signalState === 'CANCELLED' || card.signalState === 'REJECTED') return '⛔ 진입 불가 · 주문 비활성';
+  if (card.signalState === 'APPROVED' || card.signalState === 'EXECUTING' || card.signalState === 'PARTIALLY_FILLED') {
+    return '🟦 주문 진행 중 · 중복 주문 비활성';
+  }
+  if (card.signalState === 'FILLED' || card.signalState === 'MANAGING') return '✅ 체결/보유 중 · 진입 버튼 비활성';
+  if (card.signalState === 'CLOSED') return '🏁 포지션 종료 · 진입 버튼 비활성';
   const reached = [...state.reachedTargets].sort((left, right) => left - right);
   if (reached.length) return `🎯 TP${reached.at(-1)! + 1} 도달`;
-  if (card.signalState === 'FILLED' || card.signalState === 'MANAGING') return '✅ 보유중';
   if (card.signalState === 'ENTRY_ZONE' || card.signalState === 'APPROVAL_PENDING' || card.signalState === 'READY_FOR_APPROVAL') {
     return '🚨 진입가능';
   }
-  return '👀 관찰중';
+  return '🟡 관망 · 주문 비활성';
 }
 
 function editedSignalMessage(
   card: ScannerSignalCard,
   state: AnnouncedSignal,
   updates: readonly TelegramSignalFollowup[],
+  now: number,
 ): string {
   const reachedTargets = new Set(state.reachedTargets);
   const targetLine = card.pricePlan.targets.slice(0, 3).map((target, index) => (
@@ -305,14 +360,37 @@ function editedSignalMessage(
   ].join('\n');
 
   const limit = state.telegramMessageKind === 'PHOTO' ? 1_024 : 4_096;
-  const base = state.baseMessageText ?? '';
-  if (base.length + dynamic.length + 1 <= limit) return `${base}\n${dynamic}`;
+  const rawBase = state.baseMessageText ?? '';
+  const base = lifecycleOrderEnabled(card, state, now)
+    ? rawBase
+    : rawBase.replace(/🟢 신호:/gu, '🔴 이전 신호:')
+      .replace(/🚨 진입가능/gu, '⛔ 이전 진입 신호')
+      .replace(/🛒 주문하기를 누르면[^\n]*/gu, '⛔ 이전 진입 버튼 비활성');
+  if (base.length + dynamic.length + 2 <= limit) return `${dynamic}\n\n${base}`;
 
   return [
     `<b>${escapeTelegramHtml(card.symbol)} · 신호 업데이트</b>`,
     `시장 ${escapeTelegramHtml(card.market)}`,
     dynamic.trimStart(),
   ].join('\n').slice(0, limit);
+}
+
+function lifecycleOrderEnabled(card: ScannerSignalCard, state: AnnouncedSignal, now: number): boolean {
+  if (!['ENTRY_ZONE', 'APPROVAL_PENDING', 'READY_FOR_APPROVAL'].includes(card.signalState)) return false;
+  if (state.stopReached || state.reachedTargets.size > 0) return false;
+  if (card.dataState !== 'complete' || card.strongSignalEligible !== true) return false;
+  if (card.direction !== 'LONG' && (card.direction !== 'SHORT' || card.assetClass !== 'coin_futures')) return false;
+  const expiresAt = Date.parse(card.expiresAt);
+  const originalExpiry = Date.parse(state.expiresAt);
+  if (!Number.isFinite(expiresAt) || !Number.isFinite(originalExpiry) || expiresAt <= now || originalExpiry <= now) return false;
+  const zone = card.pricePlan.entryZone;
+  if (!zone || !finite(card.price)) return false;
+  return card.price >= Math.min(zone.from, zone.to) && card.price <= Math.max(zone.from, zone.to);
+}
+
+function lifecycleTimeframe(state: AnnouncedSignal): string {
+  const match = (state.baseMessageText ?? '').match(/(?:신호:[^\n]*·\s*)(1m|3m|5m|15m|30m|60m|1H|4H|6H|12H|1D|1W|1M)\b/u);
+  return match?.[1] ?? '1D';
 }
 
 function destinationFor(card: ScannerSignalCard): string | null {
@@ -401,7 +479,12 @@ export async function deliverScannerTelegramFollowups(
           destinationChatId,
           messageId: state.telegramMessageId,
           messageKind: state.telegramMessageKind,
-          text: editedSignalMessage(card, state, signalUpdates),
+          text: editedSignalMessage(card, state, signalUpdates, now),
+          buttons: buildTelegramSignalAppButtons(card, {
+            timeframe: lifecycleTimeframe(state),
+            strategyMode: card.strategyMode ?? 'swing',
+          }, { orderEnabled: lifecycleOrderEnabled(card, state, now) }),
+          linkPreview: false,
         });
         if (!result.ok) failedSignals.add(signalId);
       } catch (error) {

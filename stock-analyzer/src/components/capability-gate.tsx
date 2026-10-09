@@ -26,6 +26,24 @@ export function CapabilityGate({ capability, children }: { capability: MemberCap
   const [, navigate] = useLocation();
 
   if (auth.loading) return null;
+  if (auth.bootstrapError) {
+    return (
+      <main className="flex h-full min-h-0 items-center justify-center overflow-y-auto bg-background p-5" data-testid="capability-bootstrap-error">
+        <section className="w-full max-w-sm rounded-3xl border border-card-border bg-card p-6 text-center shadow-sm">
+          <ShieldAlert className="mx-auto h-11 w-11 text-warning" />
+          <h1 className="mt-4 text-xl font-black">회원 권한 상태를 확인할 수 없습니다.</h1>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">{auth.bootstrapError}</p>
+          <button
+            type="button"
+            onClick={() => navigate('/account', { replace: true })}
+            className="mt-5 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-extrabold text-primary-foreground"
+          >
+            계정 상태 확인
+          </button>
+        </section>
+      </main>
+    );
+  }
   if (auth.can(capability)) return <>{children}</>;
 
   return (

@@ -23,6 +23,7 @@ import {
 } from './telegram-intelligence-worker.service';
 import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
 import {
+  addTelegramSignalFreshness,
   deliverScannerTelegramAlerts,
   scannerInAppNotificationInput,
   scannerTelegramInput,
@@ -203,6 +204,25 @@ test('tracked Telegram delivery captures message id and lifecycle updates edit t
     text: tracked.receipt.renderedText + '\nTP1 도달',
   }), { ok: true, attempts: 1 });
   assert.equal(endpoints.length, 2);
+});
+
+test('editing a Telegram signal explicitly clears a stale order keyboard', async () => {
+  setFakeConfig();
+  const calls: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return okResponse();
+  };
+  const result = await editTelegramMessage({
+    destinationChatId: 'ci-chat-id-sentinel',
+    messageId: 77,
+    messageKind: 'TEXT',
+    text: '기존 신호 무효',
+    buttons: [],
+  });
+  assert.deepEqual(result, { ok: true, attempts: 1 });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].reply_markup, { inline_keyboard: [] });
 });
 
 test('suppresses exact duplicates and applies per-subject cooldown', async () => {
@@ -455,6 +475,33 @@ test('scanner Telegram delivery is fail-open and uses the lifecycle idempotency 
   assert.equal(delivered[0].dedupeKey, 'scanner-alert:test');
   assert.equal(delivered[0].type, 'strong_buy');
   assert.equal(delivered[0].destinationChatId, 'kr-stock-room');
+});
+
+test('expired or partial Scanner evidence revokes Telegram order review while preserving chart/news links', () => {
+  const entry = scannerAlert({ expiresAt: '2026-08-10T14:00:00.000Z' });
+  const initial: TelegramAlertInput = {
+    type: 'strong_buy',
+    details: 'initial signal',
+    buttons: [
+      [{ text: '주문하기', url: 'https://ci.example.test/telegram-order?symbol=005930' },
+       { text: 'AI차트', url: 'https://ci.example.test/ai-chart?symbol=005930' }],
+      [{ text: '뉴스', url: 'https://ci.example.test/stock-info?symbol=005930' }],
+    ],
+  };
+  const partial = addTelegramSignalFreshness(initial, entry, {
+    generatedAt: '2026-08-10T11:59:00.000Z',
+  }, null, Date.parse('2026-08-10T12:00:00.000Z'));
+  const expired = addTelegramSignalFreshness(initial, entry, {
+    generatedAt: '2026-08-10T11:59:00.000Z',
+  }, null, Date.parse('2026-08-10T14:00:01.000Z'));
+  for (const result of [partial, expired]) {
+    const links = JSON.stringify(result.buttons);
+    assert.ok(!links.includes('/telegram-order'));
+    assert.ok(links.includes('/ai-chart'));
+    assert.ok(links.includes('/stock-info'));
+  }
+  assert.match(partial.details ?? '', /일부 Evidence/);
+  assert.match(expired.details ?? '', /재검증 전 실시간 신호로 사용 금지/);
 });
 
 test('Telegram intelligence audience follows membership and portfolio priority', () => {

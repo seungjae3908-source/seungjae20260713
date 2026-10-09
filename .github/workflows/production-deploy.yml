@@ -48,6 +48,7 @@ on:
       - ops/apply-production-member-access-hardening.mjs
       - ops/verify-production-member-access-hardening.mjs
       - api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
+      - api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql
       - api-server/supabase/migrations/2026080201_journal_sync_analytics_phase7.sql
       - api-server/supabase/migrations/2026080203_phase8_paper_capability_rls.sql
       - api-server/supabase/migrations/2026080501_paper_journal_authenticated_privileges.sql
@@ -437,7 +438,8 @@ jobs:
             trap cleanup_member_gate EXIT
             tar -czf "$member_archive" \
               ops/apply-production-member-access-hardening.mjs \
-              api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql
+              api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql \
+              api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql
             scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
               "$member_archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
             member_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL && APPROVED_TARGET_SHA=%q node ops/apply-production-member-access-hardening.mjs' \

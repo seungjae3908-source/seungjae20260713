@@ -343,6 +343,8 @@ function memberProfile(row: Record<string, unknown>): MemberAccessProfile {
     membership_level: typeof row.membership_level === 'string' ? row.membership_level : null,
     is_active: typeof row.is_active === 'boolean' ? row.is_active : null,
     role: typeof row.role === 'string' ? row.role : null,
+    membership_expires_at: typeof row.membership_expires_at === 'string' ? row.membership_expires_at : null,
+    permissions_updated_at: typeof row.permissions_updated_at === 'string' ? row.permissions_updated_at : null,
   };
 }
 
@@ -373,7 +375,7 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
 
     async getPersonalTelegramMemberProfile(userId) {
       const { data, error } = await secureClient().from('profiles')
-        .select('status,membership_level,is_active,role')
+        .select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')
         .eq('id', userId)
         .maybeSingle();
       if (error) throw databaseError();

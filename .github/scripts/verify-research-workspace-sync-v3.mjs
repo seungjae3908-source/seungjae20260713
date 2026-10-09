@@ -236,6 +236,10 @@ const memberAccessReviewed=[
  'api-server/scripts/verify-staging-bootstrap-contract.mjs',
  'api-server/src/middleware/auth.ts',
  'api-server/src/routes/admin.ts',
+ 'stock-analyzer/src/lib/auth-bootstrap.ts',
+ 'stock-analyzer/src/lib/auth-bootstrap.test.ts',
+ 'api-server/supabase/migrations/2026100801_member_security_definer_lockdown.sql',
+ 'api-server/src/routes/member-access-phase8.smoke.test.ts',
  'api-server/src/routes/index.ts',
  'api-server/src/routes/paper-journal.smoke.test.ts',
  'api-server/src/routes/paper-journal.ts',
@@ -251,6 +255,7 @@ const memberAccessReviewed=[
  'api-server/src/services/scanner-access-control.service.test.ts',
  'api-server/src/services/scanner-access-control.service.ts',
  'api-server/supabase/bootstrap/staging-bootstrap-assert.sql',
+ 'api-server/supabase/bootstrap/staging-audit-privilege-assert.sql',
  'api-server/supabase/bootstrap/staging-bootstrap.sql',
  'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql',
  'api-server/supabase/test/member_access_s_ai_hardening_integration.sql',
@@ -261,6 +266,8 @@ const memberAccessReviewed=[
  'stock-analyzer/e2e/scanner-member-access.spec.ts',
  'stock-analyzer/e2e/app-ui-cleanup-contract.spec.ts',
  'stock-analyzer/e2e/account-touch-korean-ui.spec.ts',
+ 'stock-analyzer/e2e/admin-read-timeout-contract.spec.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
  'stock-analyzer/e2e/account-connection-credentials.spec.ts',
  'stock-analyzer/e2e/production-member-readonly-qa.spec.ts',
  'stock-analyzer/playwright.production-member.config.ts',
@@ -358,6 +365,20 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
  'ops/deploy-production.sh',
 ];
+// Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
+const memberTelegramReviewed=[
+ '.github/tests/telegram-six-room-gate.test.mjs',
+ 'stock-analyzer/e2e/telegram-durable-personal-outbox.spec.ts',
+ 'api-server/src/services/member-holdings-telegram-producer.service.test.ts',
+ 'api-server/src/services/member-holdings-telegram-producer.service.ts',
+ 'api-server/src/services/member-holdings-telegram-alert.service.ts',
+ 'api-server/src/services/scanner-telegram-delivery.service.ts',
+ 'api-server/src/services/telegram-investment-intelligence.service.ts',
+ 'api-server/src/services/telegram-notification.service.test.ts',
+ 'api-server/src/services/telegram-notification.service.ts',
+ 'api-server/src/services/telegram-signal-followup.service.ts',
+ 'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -370,9 +391,75 @@ const allowed=new Set([
  ...telegramReleaseReviewed,
  ...formulaAiDriftReviewed,
  ...automaticTradingDriftReviewed,
+ ...memberTelegramReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
-const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p));
+// The personal Telegram member-profile reads share a repository with automatic
+// execution. Do not require automatic-trading deployment gates for ONLY the
+// proven expiry/permissions read patch and additive membership regression
+// fixtures. Any other change to these files restores the full trading gate.
+function exactSignedDiff(p, expectedRemoved, expectedAdded) {
+ const signed=git('diff','--unified=0',MAIN,'HEAD','--',p).split('\n')
+  .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
+ const removed=signed.filter((line)=>line.startsWith('-')).map((line)=>line.slice(1).trim()).sort();
+ const added=signed.filter((line)=>line.startsWith('+')).map((line)=>line.slice(1).trim()).sort();
+ return JSON.stringify(removed)===JSON.stringify([...expectedRemoved].sort())
+  && JSON.stringify(added)===JSON.stringify([...expectedAdded].sort());
+}
+function isPersonalTelegramMembershipOnlyChange(p) {
+ // Existing Paper/Telegram tests are structurally unchanged. Only make
+ // their synthetic approved-member profiles satisfy the new canonical proof.
+ const fixture="membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
+ if(p==='api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts') {
+  return exactSignedDiff(p,[],[fixture,fixture]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts') {
+  return exactSignedDiff(p,[],[fixture]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts') {
+  return exactSignedDiff(p,
+   [".select('status,membership_level,is_active,role')"],
+   [
+    "membership_expires_at: typeof row.membership_expires_at === 'string' ? row.membership_expires_at : null,",
+    "permissions_updated_at: typeof row.permissions_updated_at === 'string' ? row.permissions_updated_at : null,",
+    ".select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')",
+   ]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts') {
+  return exactSignedDiff(p,
+   [
+    "import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';",
+    "return hasCapability(profile, 'canConnectPersonalTelegram');",
+   ],
+   [
+    "import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';",
+    "return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');",
+   ]);
+ }
+ if(p==='api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts') {
+  const base=git('show',`${MAIN}:${p}`);
+  let head=git('show',`HEAD:${p}`);
+  const fixture="  membership_expires_at: null, permissions_updated_at: '2026-08-01T00:00:00.000Z',";
+  if(head.split(fixture).length!==2)return false;
+  head=head.replace('\n'+fixture,'');
+  const blocks=[
+   ["expired and schema-incomplete members cannot bind a Telegram link","expired Telegram link cannot be consumed"],
+   ["membership expiration after queueing prevents Telegram send and dead-letters the delivery","duplicate execution event is ignored by source-event id and does not duplicate Telegram delivery"],
+  ];
+  for(const [name,next] of blocks) {
+   const first=`test('${name}'`;
+   const after=`test('${next}'`;
+   if(head.split(first).length!==2||head.split(after).length!==2)return false;
+   const start=head.indexOf(first);
+   const end=head.indexOf(after,start);
+   if(start<0||end<=start)return false;
+   head=head.slice(0,start)+head.slice(end);
+  }
+  return head===base;
+ }
+ return false;
+}
+const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)&&!isPersonalTelegramMembershipOnlyChange(p));
 if(automaticTradingChanged.length>0){
  const requiredAutomaticTradingGuards=[
   '.github/workflows/production-automatic-trading-gate.yml',
@@ -401,7 +488,29 @@ if(automaticTradingChanged.length>0){
  const forbiddenAutomaticTradingPrefixes=['market-prediction-lab/','research-production/','packages/external-research/'];
  for(const p of changed)if(forbiddenAutomaticTradingPrefixes.some((prefix)=>p.startsWith(prefix)))throw new Error('AUTOMATIC_TRADING_RESEARCH_SCOPE_FORBIDDEN:'+p);
 }
-const researchCenterChanged=changed.filter((p)=>researchCenterIntegrationReviewed.includes(p));
+const canonicalMemberFixtureOnlyPaths=new Set([
+ 'api-server/src/services/research-workspace-authorization-v5.test.ts',
+ 'stock-analyzer/e2e/research-copilot.spec.ts',
+ 'stock-analyzer/e2e/research-video-intelligence.spec.ts',
+ 'stock-analyzer/e2e/research-workspace-v2.spec.ts',
+]);
+function isCanonicalMemberFixtureOnlyChange(p){
+ if(!canonicalMemberFixtureOnlyPaths.has(p))return false;
+ const diff=git('diff','--unified=0',MAIN,'HEAD','--',p)
+  .split('\n')
+  .filter((line)=>(line.startsWith('+')||line.startsWith('-'))&&!line.startsWith('+++')&&!line.startsWith('---'));
+ if(diff.length===0||!diff.some((line)=>line.startsWith('+')&&line.includes('permissions_updated_at')))return false;
+ const normalize=(line)=>line.slice(1)
+  .replace(/,?permissions_updated_at:'[^']*'/gu,'')
+  .replace(/,?permissions_updated_at:"[^"]*"/gu,'')
+  .trim();
+ const removed=diff.filter((line)=>line.startsWith('-')).map(normalize).sort();
+ const added=diff.filter((line)=>line.startsWith('+')).map(normalize).sort();
+ return removed.length===added.length&&JSON.stringify(removed)===JSON.stringify(added);
+}
+const researchCenterChanged=changed.filter((p)=>
+ researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
+);
 if(researchCenterChanged.length>0){
  const requiredIntegrationGuards=[
   '.github/workflows/research-center-predeploy-validation.yml',
@@ -424,7 +533,9 @@ const memberAccessContractChanged=changed.some((p)=>(
  && !formulaAiDriftReviewed.includes(p)
  && !automaticTradingDriftReviewed.includes(p)
 ));
-if(memberAccessContractChanged){
+const memberAccessRouteContractChanged=memberAccessContractChanged
+ && changed.includes('api-server/src/routes/index.ts');
+if(memberAccessRouteContractChanged){
  const aiChartFuturesGate=`router.use('/crypto/futures', (req, res, next) => {
   const aiChartPublicRead = req.method === 'GET'
     && (

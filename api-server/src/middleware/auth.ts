@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { getSupabase, getUserSupabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   deriveMemberTier,
+  hasCanonicalMemberAccessState,
   hasCapability,
   type MemberCapability,
   type MemberTier,
@@ -86,6 +87,14 @@ function applyAuthenticatedProfile(
   }
 
   const member = profile as MemberProfile;
+  // Approved/suspended profiles are authorization-bearing rows. If the
+  // canonical membership columns have not been migrated yet, returning a
+  // synthetic pending tier hides the real schema drift and can lock out every
+  // approved member. Fail closed with an explicit service-state error instead.
+  if (!hasCanonicalMemberAccessState(member)) {
+    res.status(503).json({ error: 'MEMBER_SCHEMA_NOT_READY' });
+    return false;
+  }
   if (isDisabledMemberSession(member)) {
     res.status(403).json({ error: 'MEMBER_SESSION_DISABLED' });
     return false;
