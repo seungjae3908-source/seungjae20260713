@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Power, RefreshCw, ShieldAlert } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { cn } from '@/lib/utils';
+import { policyModeForAutomaticEnabled } from '@/lib/trade-automation-policy-mode';
 
 type Exchange = 'bitget' | 'upbit' | 'kiwoom' | 'toss';
 type Market = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
@@ -147,7 +148,7 @@ const DEFAULT_MARKETS: MarketSwitches = {
 };
 
 const DEFAULT_POLICY: UiPolicy = {
-  mode: 'automatic',
+  mode: 'approval',
   automaticEnabled: false,
   emergencyStopped: false,
   newEntriesStopped: false,
@@ -181,7 +182,8 @@ function normalizeUiPolicy(policy?: Policy | null): UiPolicy {
   };
   return {
     ...policy,
-    mode: 'automatic',
+    // Do not invent AUTO mode when the server has persisted an approval/off state.
+    mode: policy.mode,
     marketEnabled,
     stockBrokerByMarket,
     exchangeEnabled: {
@@ -269,10 +271,11 @@ export function TradeAutomationSettings({
   function toggleAutomatic() {
     setDraft((current) => {
       if (current.emergencyStopped || current.newEntriesStopped) return current;
+      const nextEnabled = !current.automaticEnabled;
       return {
         ...current,
-        mode: 'automatic',
-        automaticEnabled: !current.automaticEnabled,
+        mode: policyModeForAutomaticEnabled(nextEnabled),
+        automaticEnabled: nextEnabled,
       };
     });
   }
@@ -282,7 +285,8 @@ export function TradeAutomationSettings({
       const marketEnabled = { ...current.marketEnabled, [market]: !current.marketEnabled[market] };
       return {
         ...current,
-        mode: 'automatic',
+        // Editing market preferences while OFF does not secretly re-arm AUTO.
+        mode: policyModeForAutomaticEnabled(current.automaticEnabled),
         marketEnabled,
         exchangeEnabled: exchangesForMarkets(marketEnabled, current.stockBrokerByMarket),
       };
@@ -306,7 +310,10 @@ export function TradeAutomationSettings({
   async function save(confirmed: boolean) {
     const outbound: UiPolicy = {
       ...draft,
-      mode: 'automatic',
+      // Admin Paper bootstrap requires BOTH mode=approval and automaticEnabled=false.
+      // Saving only automaticEnabled=false while leaving mode=automatic is unsafe
+      // and would permanently block the one-time four-market virtual-wallet flow.
+      mode: policyModeForAutomaticEnabled(draft.automaticEnabled),
       exchangeEnabled: exchangesForMarkets(draft.marketEnabled, draft.stockBrokerByMarket),
     };
     if (fixture) {
@@ -329,7 +336,7 @@ export function TradeAutomationSettings({
       setStatus((current) => current ? { ...current, policy: payload.policy! } : current);
       setMessage(normalized.automaticEnabled
         ? '자동매매가 켜졌습니다. 활성 시장의 새 신호는 주문별 승인 없이 위험검사를 통과하면 자동 처리됩니다.'
-        : '자동매매 설정을 저장했습니다. 현재 자동 실행은 꺼져 있습니다.');
+        : '자동매매 OFF · 승인 대기 모드로 저장했습니다. 신규 자동진입을 차단하고 시장별 AUTO 설정을 OFF로 초기화했습니다. 재활성화 전에 시장 설정을 다시 확인하세요.');
       setConfirming(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '저장하지 못했습니다.');
@@ -736,6 +743,13 @@ export function TradeAutomationSettings({
         <p className="mt-3 text-xs leading-5 text-muted-foreground">
           이 확인은 주문마다 묻는 승인이 아닙니다. 저장 후에는 자동매매가 켜진 시장에서 적격 신호가 발생할 때마다 시장·비용·위험·손실한도를 다시 검사한 뒤 자동 처리합니다.
         </p>
+        {!draft.automaticEnabled && (
+          <p className="mt-3 text-xs leading-5 text-muted-foreground" data-testid="automatic-policy-approval-off-warning">
+            OFF 저장 시 서버 정책을 승인 대기 모드로 변경하고 모든 시장의 자동진입 설정을 해제합니다.
+            관리자 4시장 가상계좌 준비 전 필요한 안전조건이며, 재활성화 시 시장을 다시 선택해야 합니다.
+            기존 Live 포지션의 자동청산 감시도 중지될 수 있으므로 열린 포지션과 보호주문을 확인하세요.
+          </p>
+        )}
         <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-sm">
           <dt className="font-bold">자동 실행</dt><dd>{draft.automaticEnabled ? '켜짐' : '꺼짐'}</dd>
           <dt className="font-bold">활성 시장</dt><dd>{activeMarkets.map((market) => MARKET_LABELS[market]).join(', ') || '없음'}</dd>
