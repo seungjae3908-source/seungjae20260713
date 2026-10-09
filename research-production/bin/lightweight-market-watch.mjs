@@ -11,7 +11,7 @@ import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_MARKETS, WATCH_SAFETY,
   blockedSource, evaluateMarketOpportunities, evaluateWatchBudget,
   normalizeBitgetSnapshot, normalizeStockFeed, normalizeUpbitSnapshot,
-  watchCycleDigest,
+  parseBoundedPublicJson, watchCycleDigest,
 } from '../src/lightweight-market-watch.mjs';
 
 const UPBIT = 'https://api.upbit.com';
@@ -41,12 +41,7 @@ async function publicJson(url) {
     headers: { Accept: 'application/json', 'User-Agent': 'research-market-watch-v1' },
     signal: AbortSignal.timeout(8_000),
   });
-  if (!res.ok) throw new Error('PUBLIC_HTTP_' + res.status);
-  if (Number(res.headers.get('content-length') ?? 0) > 4_000_000)
-    throw new Error('PUBLIC_RESPONSE_OVERSIZE');
-  const body = await res.text();
-  if (body.length > 4_000_000) throw new Error('PUBLIC_RESPONSE_OVERSIZE');
-  return JSON.parse(body);
+  return parseBoundedPublicJson(res);
 }
 async function spotSnapshot(nowMs) {
   if (!spotMarkets || nowMs - spotMarketFetchedAt >= 60 * 60_000) {
@@ -164,19 +159,19 @@ async function acquire(root) {
   }
 }
 async function cycle(root, researchSha, previous, telemetry) {
-  const nowMs = Date.now();
+  const pollStartedAtMs = Date.now();
   const budget = evaluateWatchBudget(telemetry);
   const marketSummaries = [];
   const marketStates = {};
   const allCandidates = [];
   const savedAlerts = Object.fromEntries(Object.entries(previous?.lastAlerts ?? {})
-    .filter(([, at]) => Number.isFinite(at) && nowMs - at < 24 * 60 * 60_000));
+    .filter(([, at]) => Number.isFinite(at) && pollStartedAtMs - at < 24 * 60 * 60_000));
   const sources = {};
   if (budget.status === 'RUN') {
     for (const market of WATCH_MARKETS) {
       try {
         sources[market] = market === 'CRYPTO_SPOT'
-          ? await spotSnapshot(nowMs)
+          ? await spotSnapshot(pollStartedAtMs)
           : market === 'CRYPTO_FUTURES'
             ? await futuresSnapshot()
             : await stockSnapshot(root, market);
@@ -186,6 +181,10 @@ async function cycle(root, researchSha, previous, telemetry) {
       if (stopping) break;
     }
   }
+  // The snapshot timestamp belongs to the completed public collection, not
+  // the beginning of HTTP requests. Otherwise the first quote in the next
+  // cycle can appear to be from the future when collection took >5 seconds.
+  const nowMs = Date.now();
   for (const market of WATCH_MARKETS) {
     const source = sources[market] ?? blockedSource(
       market, budget.status === 'RUN' ? 'BLOCKED_STOPPED' : 'BLOCKED_HOST_' + budget.status,
@@ -228,8 +227,32 @@ async function cycle(root, researchSha, previous, telemetry) {
     ],
     safety: WATCH_SAFETY,
   };
+  const oldStats = previous?.stats && typeof previous.stats === 'object'
+    ? previous.stats : {};
+  const dayUtc = state.observedAt.slice(0, 10);
+  const sameDay = oldStats.dayUtc === dayUtc;
+  const previousCount = (v) => Number.isSafeInteger(v) && v >= 0 && v <= 10_000_000_000
+    ? v : 0;
+  const stats = Object.freeze({
+    dayUtc,
+    cyclesSinceRelease: previousCount(oldStats.cyclesSinceRelease) + 1,
+    cyclesToday: (sameDay ? previousCount(oldStats.cyclesToday) : 0) + 1,
+    candidatesToday: (sameDay ? previousCount(oldStats.candidatesToday) : 0)
+      + allCandidates.length,
+    daysInService: previousCount(oldStats.daysInService)
+      + (oldStats.dayUtc === dayUtc ? 0 : 1),
+    lastCollectedAt: good + partial > 0 ? state.observedAt
+      : typeof oldStats.lastCollectedAt === 'string'
+        ? oldStats.lastCollectedAt : null,
+    lastCandidateAt: allCandidates.length ? state.observedAt
+      : typeof oldStats.lastCandidateAt === 'string'
+        ? oldStats.lastCandidateAt : null,
+  });
+  // These counters report observed cycles, not proven 24-hour uptime or
+  // independent economic samples.
+  state.statistics = stats;
   const next = { schemaVersion: WATCH_CONTRACT, researchSha,
-    marketStates, lastAlerts: savedAlerts };
+    marketStates, lastAlerts: savedAlerts, stats };
   // Emit observations before advancing the local cursor: a storage failure
   // must not silently discard a discovered candidate. Consumers must dedupe
   // eventId because a crash between these writes can replay the same event.
