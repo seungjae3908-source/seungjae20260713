@@ -186,6 +186,7 @@ test('administrator Paper readiness requires four 1m wallets and all four routed
   });
   const ready = memberAutomaticPaperReadiness(input({
     administratorFourMarket: true, adminMarketWalletRecords: adminWallets,
+    adminDatabaseGuardReady: true,
     policy: allFour,
   }));
   assert.equal(ready.paperWalletReady,true);
@@ -196,13 +197,38 @@ test('administrator Paper readiness requires four 1m wallets and all four routed
 
   const underfunded = memberAutomaticPaperReadiness(input({
     administratorFourMarket: true, adminMarketWalletRecords: adminWallets,
+    adminDatabaseGuardReady: true,
     policy: normalizeTradingPolicy({...allFour,totalCapitalKrw:900_000}),
   }));
   assert.ok(underfunded.blockers.includes('BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED'));
   const incomplete = memberAutomaticPaperReadiness(input({
     administratorFourMarket: true, adminMarketWalletRecords: adminWallets.slice(0,3),
+    adminDatabaseGuardReady: true,
     policy: allFour,
   }));
   assert.equal(incomplete.readyForPaperEvaluation,false);
   assert.ok(incomplete.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
+});
+
+test('admin readiness never reports READY after DB RLS guard rollback', () => {
+  const rows = buildAdminFourMarketPaperBootstrap(new Date(NOW)).map(row => ({
+    ...row, createdAt:new Date(NOW).toISOString(),
+    serverUpdatedAt:new Date(NOW).toISOString(),
+  }));
+  const all = normalizeTradingPolicy({
+    ...policy(), totalCapitalKrw:1_000_000,
+    marketEnabled:{domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled:{toss:true,kiwoom:true,upbit:true,bitget:true},
+  });
+  for(const flag of [undefined,false]){
+    const result=memberAutomaticPaperReadiness(input({
+      policy:all,administratorFourMarket:true,
+      adminMarketWalletRecords:rows,adminDatabaseGuardReady:flag,
+    }));
+    assert.equal(result.paperWalletReady,true);
+    assert.equal(result.adminDatabaseGuardReady,false);
+    assert.equal(result.readyForPaperEvaluation,false);
+    assert.ok(result.blockers.includes('BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED'));
+    assert.equal(result.realOrderAuthorityGranted,false);
+  }
 });

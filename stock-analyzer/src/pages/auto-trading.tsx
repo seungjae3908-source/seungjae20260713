@@ -42,6 +42,7 @@ const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
   BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED: '관리자 4시장 독립 가상계좌 4개를 준비해야 합니다.',
   BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED: '관리자 정책의 시장별 운용자본이 100만원 기준에 미달합니다.',
   BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED: '관리자 4시장/Provider 설정이 모두 활성화되지 않았습니다.',
+  BACKGROUND_ADMIN_DATABASE_GUARD_REQUIRED: '관리자 가상계좌·주문원장 DB 보호가 검증되지 않았습니다.',
   ADMIN_PAPER_MARKET_WALLET_MISSING: '시장별 가상계좌가 아직 준비되지 않았습니다.',
   ADMIN_PAPER_WALLET_INVALID: '시장별 계좌 검증에 실패했습니다.',
   BACKGROUND_STRATEGY_ALLOWLIST_REQUIRED: '허용된 자동매매 전략이 없습니다.',

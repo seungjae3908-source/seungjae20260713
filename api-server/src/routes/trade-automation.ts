@@ -15,6 +15,7 @@ import {
   memberAutoTradingWorkerMode,
 } from '../services/member-auto-trading-background-worker.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
+import { getUserSupabase } from '../lib/supabase';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import { memberAutomaticPaperReadiness } from '../services/member-auto-trading-readiness.service';
 import { readUserTelegramDeliveryWorkerHealth } from '../features/user-broker-telegram/user-broker-telegram.worker';
@@ -1085,16 +1086,29 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
           ? createSupabasePaperJournalRepository(req.accessToken, userId).listSnapshot(userId)
           : Promise.reject(new Error('LOGIN_REQUIRED'))
       : Promise.resolve([] as StoredPaperJournalRecord[]);
-    const [policy, globalStopped, wallet, adminMarketWalletRecords] = await Promise.all([
+    const adminGuardRead = administratorFourMarket
+      ? (async () => {
+        try {
+          if (!req.accessToken) return false;
+          const { data, error } = await getUserSupabase(req.accessToken)
+            .rpc('admin_four_paper_wallet_rls_guard_ready');
+          return !error && data === true;
+        } catch {
+          return false;
+        }
+      })()
+      : Promise.resolve(true);
+    const [policy, globalStopped, wallet, adminMarketWalletRecords, adminDatabaseGuardReady] = await Promise.all([
       repository.getPolicy(userId),
       repository.getGlobalEmergencyStop(),
-      walletRead, adminRecordsRead,
+      walletRead, adminRecordsRead, adminGuardRead,
     ]);
     const readiness = memberAutomaticPaperReadiness({
       policy,
       wallet,
       administratorFourMarket,
       adminMarketWalletRecords,
+      adminDatabaseGuardReady,
       workerHealth: readMemberAutoTradingBackgroundRuntimeHealth(),
       workerMode: memberAutoTradingWorkerMode(),
       globalStopped: globalStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
