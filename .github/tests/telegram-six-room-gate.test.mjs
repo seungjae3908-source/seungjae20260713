@@ -68,3 +68,21 @@ test('market signal, follow-up and intelligence subscriber never fall back to sh
   const router = fs.readFileSync('api-server/src/services/telegram-market-room.service.ts', 'utf8');
   assert.ok(router.includes('if (options.allowLegacyFallback !== true) return null;'), 'missing dedicated IDs fail closed');
 });
+
+
+test('scanner and signal follow-ups reuse strict venue recognition, never "includes US" defaults', () => {
+  const scanner = fs.readFileSync('api-server/src/services/scanner-telegram-delivery.service.ts', 'utf8');
+  const followup = fs.readFileSync('api-server/src/services/telegram-signal-followup.service.ts', 'utf8');
+  const router = fs.readFileSync('api-server/src/services/telegram-market-room.service.ts', 'utf8');
+  for (const source of [scanner, followup]) {
+    assert.ok(source.includes('telegramStockLaneForMarket('), 'shared stock venue classifier required');
+    assert.ok(!source.includes("market.trim().toUpperCase().includes('US')"), 'legacy ambiguous US substring detection forbidden');
+  }
+  assert.ok(router.includes('telegramStockLaneForMarket(market: string)'));
+  for (const id of ['TELEGRAM_KR_STOCK_CHAT_ID', 'TELEGRAM_US_STOCK_CHAT_ID',
+    'TELEGRAM_CRYPTO_SPOT_CHAT_ID', 'TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+    'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID', 'TELEGRAM_AUTO_TRADING_CHAT_ID']) {
+    assert.ok(router.includes('env.' + id), 'six-room collision guard must check ' + id);
+  }
+  assert.ok(router.includes('new Set(dedicatedIds).size !== dedicatedIds.length'));
+});
