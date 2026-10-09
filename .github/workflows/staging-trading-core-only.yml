@@ -81,7 +81,6 @@ jobs:
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
       action: ${{ steps.target.outputs.action }}
-      publisher_digest: ${{ steps.publisher.outputs.publisher_sha256 }}
     env:
       STAGING_ACTION: ${{ inputs.action }}
       STAGING_RUN_FULL_VALIDATION: 'false'
@@ -179,15 +178,14 @@ jobs:
           if (db.hostname === 'bawcbkoyovbeajkrnduq.supabase.co')
             throw new Error('STAGING_CORE_PRODUCTION_DATABASE_FORBIDDEN');
           NODE
-      - name: Verify Staging-only administrator password grant and snapshot publisher digest
-        id: publisher
+      - name: Verify Staging-only administrator password grant
         if: steps.target.outputs.action == 'deploy'
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
           ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
-        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs --write-publisher-digest
+        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs
       - name: Preflight-only result (does not deploy or change any environment)
         if: steps.target.outputs.action == 'preflight'
         run: |
@@ -202,7 +200,6 @@ jobs:
     timeout-minutes: 75
     env:
       TARGET_SHA: ${{ needs.owner-gate.outputs.target_sha }}
-      PUBLISHER_DIGEST: ${{ needs.owner-gate.outputs.publisher_digest }}
       STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
       STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
       STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
@@ -212,6 +209,8 @@ jobs:
       STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
       STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+      STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
       - uses: actions/checkout@v4
@@ -225,7 +224,23 @@ jobs:
           git fetch --no-tags origin main
           [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]] || { echo 'STAGING_CORE_MAIN_MOVED_BEFORE_DEPLOY' >&2; exit 1; }
           [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
-          [[ "$PUBLISHER_DIGEST" =~ ^[0-9a-f]{64}$ ]] || exit 1
+      - name: Resolve Staging admin publisher binding inside same protected deploy job
+        env:
+          SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
+          ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          STAGING_BINDING_FILE="$RUNNER_TEMP/staging-core-publisher-binding" node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          import { runStagingAdminAuthPreflight } from './api-server/scripts/verify-staging-admin-auth-preflight.mjs';
+          const result = await runStagingAdminAuthPreflight();
+          if (!/^[0-9a-f]{64}$/.test(result.publisherDigest)) throw new Error('STAGING_CORE_LOCAL_PUBLISHER_BINDING_INVALID');
+          writeFileSync(process.env.STAGING_BINDING_FILE, result.publisherDigest + '\n', { mode: 0o600 });
+          NODE
+          test -s "$RUNNER_TEMP/staging-core-publisher-binding"
       - name: Configure protected Staging-only SSH
         run: |
           set -Eeuo pipefail
@@ -239,6 +254,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
+          PUBLISHER_DIGEST="$(tr -d '[:space:]' < "$RUNNER_TEMP/staging-core-publisher-binding")"
+          [[ "$PUBLISHER_DIGEST" =~ ^[0-9a-f]{64}$ ]] || { echo 'STAGING_CORE_LOCAL_PUBLISHER_BINDING_INVALID' >&2; exit 1; }
           local_secret_file="$(mktemp)"
           cleanup() {
             rm -f "$local_secret_file"
@@ -273,9 +290,10 @@ jobs:
           chmod 700 "$SOURCE_DIR/ops/deploy-staging.sh"
           SOURCE_DIR="$SOURCE_DIR" STAGING_DIR=/srv/seungjae-staging           STAGING_PM2_NAME=seungjae-staging STAGING_PORT=18083 STAGING_CANARY_PORT=18084           STAGING_BASE_URL="$STAGING_BASE_URL" STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL"           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY"           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY"           STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
           REMOTE
-      - name: Destroy Staging SSH deployment authority
+      - name: Destroy Staging SSH deployment authority and publisher binding
         if: always()
         run: |
+          rm -f -- "$RUNNER_TEMP/staging-core-publisher-binding"
           rm -f -- "$HOME/.ssh/id_ed25519"
           test ! -e "$HOME/.ssh/id_ed25519"
 
