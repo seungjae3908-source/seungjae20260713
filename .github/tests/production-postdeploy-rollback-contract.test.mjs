@@ -21,7 +21,9 @@ test('release job keeps exact approved deploy and only invokes recovery after a 
 test('rollbacks are prevented across changed migrations, invalid original identity or old membership RPC contracts', () => {
   assert.ok(before.includes('PREDEPLOY_ROLLBACK_IDENTITY_NOT_VERIFIED'));
   assert.ok(before.includes('git diff --quiet "$previous_sha" "$TARGET_SHA"'));
-  assert.ok(before.includes('api-server/supabase/migrations supabase/migrations database/migrations'));
+  assert.ok(before.includes('api-server/supabase supabase database'));
+  assert.ok(before.includes('prior_deployer'));
+  assert.ok(before.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false'));
   assert.ok(before.includes('p_expected_permissions_updated_at'));
   assert.ok(before.includes('schema_compatible=false'));
   assert.ok(rollback.includes('ROLLBACK_SHA'));
@@ -31,6 +33,10 @@ test('incompatible rollback preserves latest target only when all live trading a
   assert.ok(preserve.includes('POSTDEPLOY_FAILCLOSED_TRADING_AUTHORITY_PRESENT'));
   assert.ok(preserve.includes('POSTDEPLOY_FAILCLOSED_TARGET_SHA_MISMATCH'));
   assert.ok(preserve.includes('POSTDEPLOY_FAILCLOSED_HEALTH_IDENTITY_INVALID'));
+  assert.ok(preserve.includes('POSTDEPLOY_FAILCLOSED_EXECUTION_AUTHORITY_PRESENT'));
+  assert.ok(rollback.includes('POSTDEPLOY_ROLLBACK_EXECUTION_AUTHORITY_PRESENT'));
+  assert.ok(rollback.includes('MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED'));
+  assert.ok(rollback.includes('POSTDEPLOY_ROLLBACK_CAPABILITY_ALLOWLIST_PRESENT'));
   assert.ok(preserve.includes("manual incident review".replace('manual', 'Manual')));
   for(const forbidden of ['PROD_DATABASE_URL','production-readonly-qa']) {
     assert.ok(!rollback.includes(forbidden));
