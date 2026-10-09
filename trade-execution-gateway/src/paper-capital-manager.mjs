@@ -263,6 +263,13 @@ export class PaperCompoundingCapitalManager {
    * snapshot has been bound independently.
    */
   async initializeVirtualPaperWallet({ nowMs = Date.now() } = {}) {
+    if (!this.#admissionGateEnabled) {
+      throw new GatewayError(
+        "PAPER_VIRTUAL_SEED_ADMISSION_GATE_REQUIRED",
+        "virtual Paper funding must not be initialized while the admission gate is disabled",
+        403,
+      );
+    }
     if (!Number.isSafeInteger(nowMs) || nowMs <= 0) {
       throw new GatewayError("CAPITAL_VIRTUAL_SEED_TIME_INVALID", "virtual seed timestamp must be a positive integer", 400);
     }
