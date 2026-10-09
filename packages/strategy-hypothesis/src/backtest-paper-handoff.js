@@ -16,13 +16,18 @@ export function parseBacktestPaperHandoff(value) {
     if (value[field] !== null && !knownString(value[field])) return null;
     result[field] = value[field];
   }
-  if (result.market !== null && result.market !== 'CRYPTO_FUTURES') return null;
-  if (result.symbol !== null && !/^[A-Z0-9]{2,16}USDT$/u.test(result.symbol)) return null;
-  if (result.side !== null && !['LONG', 'SHORT'].includes(result.side)) return null;
+  if (result.market !== null && !['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].includes(result.market)) return null;
+  if (result.market === 'KR_STOCK' && result.symbol !== null && !/^\d{6}$/u.test(result.symbol)) return null;
+  if (result.market === 'US_STOCK' && result.symbol !== null && !/^[A-Z0-9.-]{1,16}$/u.test(result.symbol)) return null;
+  if (result.market === 'CRYPTO_SPOT' && result.symbol !== null && !/^(?:KRW-)?[A-Z0-9]{1,20}$/u.test(result.symbol)) return null;
+  if (result.market === 'CRYPTO_FUTURES' && result.symbol !== null && !/^[A-Z0-9]{2,16}USDT$/u.test(result.symbol)) return null;
+  if (result.side !== null && !['BUY', 'LONG', 'SHORT'].includes(result.side)) return null;
+  if (result.market && result.market !== 'CRYPTO_FUTURES' && result.side !== 'BUY') return null;
+  if (result.market === 'CRYPTO_FUTURES' && result.side !== null && !['LONG', 'SHORT'].includes(result.side)) return null;
   if (result.parameterHash !== null && !HASH.test(result.parameterHash)) return null;
   if (result.candidateId !== null && !/^paper-candidate-v1:[0-9a-f]{64}$/u.test(result.candidateId)) return null;
   if (value.leverage !== null && !(typeof value.leverage === 'number' && Number.isFinite(value.leverage)
-    && value.leverage >= 1 && value.leverage <= 10)) return null;
+    && value.leverage >= 1 && value.leverage <= 10 && (result.market === 'CRYPTO_FUTURES' || value.leverage === 1))) return null;
   if (!Array.isArray(value.blockers) || value.blockers.length > 30
     || !value.blockers.every(knownString)) return null;
   return Object.freeze({

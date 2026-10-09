@@ -225,6 +225,40 @@ test('editing a Telegram signal explicitly clears a stale order keyboard', async
   assert.deepEqual(calls[0].reply_markup, { inline_keyboard: [] });
 });
 
+test('long signal updates preserve Telegram HTML tags, entities, and stale-button revocation', async () => {
+  setFakeConfig();
+  const calls: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_url, init) => {
+    calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return okResponse();
+  };
+
+  const cases: Array<{ kind: 'PHOTO' | 'TEXT'; limit: number; prefix: number }> = [
+    { kind: 'PHOTO', limit: 1_024, prefix: 1_005 },
+    { kind: 'TEXT', limit: 4_096, prefix: 4_080 },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const text = '<b>' + '가'.repeat(item.prefix) + '&amp;' + '나'.repeat(80) + '</b>';
+    const answer = await editTelegramMessage({
+      destinationChatId: 'ci-chat-id-sentinel',
+      messageId: 201 + index,
+      messageKind: item.kind,
+      text,
+      buttons: [],
+    });
+    assert.deepEqual(answer, { ok: true, attempts: 1 });
+    const body = calls.at(-1)!;
+    const rendered = String(item.kind === 'PHOTO' ? body.caption : body.text);
+    assert.ok(rendered.length <= item.limit);
+    assert.match(rendered, /^<b>.+…<\/b>$/u);
+    assert.equal(rendered.includes('&am…'), false);
+    assert.equal((rendered.match(/<b>/gu) ?? []).length, (rendered.match(/<\/b>/gu) ?? []).length);
+    assert.deepEqual(body.reply_markup, { inline_keyboard: [] });
+    assert.equal(body.parse_mode, 'HTML');
+  }
+  assert.equal(calls.length, 2);
+});
+
 test('suppresses exact duplicates and applies per-subject cooldown', async () => {
   setFakeConfig();
   let calls = 0;
@@ -629,4 +663,46 @@ test('Telegram intelligence worker collapses four market destinations sharing on
   assert.equal(result.attempted, 2);
   assert.equal(result.delivered, 2);
   assert.equal(calls, 2);
+});
+
+
+test('readable six-room Telegram alert has paragraph spacing and safe HTML', () => {
+  const text=renderTelegramAlert({
+    type:'strong_buy',title:'국내주식 <005930>',
+    details:'진입: 100\\n목표가: 110\n[AI 판단]\n• 거래량 <증가> & 뉴스'
+  });
+  assert.match(text,/<b>국내주식 &lt;005930&gt;<\/b>\n\n/u);
+  assert.match(text,/진입: 100\n목표가: 110\n\n<b>\[AI 판단\]<\/b>/u);
+  assert.match(text,/거래량 &lt;증가&gt; &amp; 뉴스/u);
+});
+
+test('long rich signal never clips to photo caption: sends complete text', async () => {
+  setFakeConfig();
+  let endpoint='';
+  let payload:Record<string,unknown>={};
+  globalThis.fetch=async (url,init)=>{
+    endpoint=String(url);
+    payload=JSON.parse(String(init?.body)) as Record<string,unknown>;
+    return new Response(JSON.stringify({ok:true,result:{message_id:88}}),{status:200,headers:{'Content-Type':'application/json'}});
+  };
+  const details='[AI 분석]\n'+Array.from({length:35},(_,i)=>'• 근거 '+i+': '+'시황자료 '.repeat(7)).join('\n');
+  const delivered=await sendTelegramAlertWithReceipt({
+    type:'strong_buy',symbol:'AAPL',market:'US',details,
+    photo:{bytes:new Uint8Array([137,80,78,71,0,1])},
+    cooldownMs:0,duplicateWindowMs:0,
+  });
+  assert.equal(delivered.ok,true);
+  if(!delivered.ok)return;
+  assert.equal(delivered.receipt.messageKind,'TEXT');
+  assert.ok(delivered.receipt.renderedText.length>1024);
+  assert.ok(delivered.receipt.renderedText.length<=4096);
+  assert.match(endpoint,/\/sendMessage$/u);
+  assert.match(String(payload.text),/<b>\[AI 분석\]<\/b>/u);
+});
+
+test('max-length escaping never truncates inside Telegram HTML tag/entity',()=>{
+  const output=renderTelegramAlert({type:'intelligence_report',details:'[뉴스]\n'+('<tag> & '.repeat(1600))});
+  assert.ok(output.length<=4096);
+  assert.equal((output.match(/<b>/gu)||[]).length,(output.match(/<\/b>/gu)||[]).length);
+  assert.doesNotMatch(output,/&(?:a|am|amp|l|lt|g|gt|quo|quot|#|#3|#39)$/u);
 });

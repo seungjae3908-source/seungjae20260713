@@ -5,6 +5,7 @@ import { cp, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from '
 import { cpus } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
+export const PAPER_FORWARD_PILOT_INITIAL_CAPITAL_KRW = 1_000_000;
 const TRUTHY = new Set(['1', 'true', 'yes', 'on', 'enabled']);
 const FORBIDDEN_ACTIVATION_KEYS = Object.freeze([
   'LIVE_TRADING',
@@ -48,6 +49,7 @@ const REQUIRED_LAB_FILES = Object.freeze([
   'scripts/run-v6-history.js',
   'scripts/run-paper-forward-schedule.js',
   'scripts/run-shadow-cycle.js',
+  'scripts/run-formula-auto-backtest-queue-v1.js',
 ]);
 
 const SHARED_PACKAGE_REQUIREMENTS = Object.freeze({
@@ -82,6 +84,13 @@ export const PROFILES = Object.freeze({
     Object.freeze({ id: 'long-v6', args: ['scripts/run-v6-history.js'], timeoutMs: 90 * 60_000 }),
   ]),
   forward: Object.freeze([
+    Object.freeze({
+      id: 'formula-backtest-queue',
+      kind: 'formula-backtest',
+      args: ['scripts/run-formula-auto-backtest-queue-v1.js'],
+      timeoutMs: 10 * 60_000,
+      acceptedExitCodes: [0, 2],
+    }),
     Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000, acceptedExitCodes: [0, 2] }),
     Object.freeze({
       id: 'paper-forward',
@@ -223,9 +232,15 @@ export function buildTaskPlan({
       ORDER_AUTHORITY: 'false',
     };
     const args = [...task.args];
+    if (task.kind === 'formula-backtest') {
+      env.FORMULA_BACKTEST_STATE_ROOT = resolve(stateRoot);
+    }
     if (task.kind === 'paper') {
+      // Four-market Paper KRW target only; not a USDT balance and never a live funding instruction.
+      env.PAPER_FORWARD_INITIAL_CAPITAL_KRW = String(PAPER_FORWARD_PILOT_INITIAL_CAPITAL_KRW);
       env.PAPER_FORWARD_SCHEDULE_ACTIVE = 'true';
       env.PAPER_FORWARD_ROOT = join(stateRoot, 'forward', 'paper');
+      env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH = join(resolve(stateRoot), 'latest', 'formula-paper-strategy-registry.json');
       env.PAPER_FORWARD_RESEARCH_SHA = pinnedSha;
       env.PAPER_FORWARD_ACTIVATION_AT_MS = String(Number.isFinite(activationAtMs) ? activationAtMs : Date.now());
       env.PAPER_FORWARD_TRIGGER_SOURCE = 'cron';

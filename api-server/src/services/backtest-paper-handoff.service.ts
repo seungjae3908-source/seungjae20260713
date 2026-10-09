@@ -51,13 +51,21 @@ export function buildBacktestPaperHandoffBundle(
     open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: candle.volume,
     source: candle.source, isClosed: candle.isClosed,
   })));
-  const sides: readonly ('LONG' | 'SHORT')[] = request.side === 'both' ? ['LONG', 'SHORT']
-    : request.side === 'long' ? ['LONG'] : ['SHORT'];
+  const canonicalMarket = request.market === 'kr-stock' ? 'KR_STOCK'
+    : request.market === 'us-stock' ? 'US_STOCK'
+      : request.market === 'crypto-spot' ? 'CRYPTO_SPOT'
+        : 'CRYPTO_FUTURES';
+  const assetClass: 'STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES' = request.market === 'kr-stock' || request.market === 'us-stock'
+    ? 'STOCK'
+    : request.market === 'crypto-spot' ? 'CRYPTO_SPOT' : 'CRYPTO_FUTURES';
+  const sides: readonly ('BUY' | 'LONG' | 'SHORT')[] = request.market === 'crypto-futures'
+    ? (request.side === 'both' ? ['LONG', 'SHORT'] : request.side === 'long' ? ['LONG'] : ['SHORT'])
+    : ['BUY'];
   const strategyIdentityInputs: Record<string, BacktestPaperCanonicalStrategyInput> = {};
   const handoffs = Object.freeze(sides.map((side) => {
     const strategyIdentityInput = Object.freeze({
       strategyId, strategyFamily: 'BACKTEST_ENGINE', strategyVersion: 'phase5-backtest-v1',
-      market: 'CRYPTO_FUTURES', direction: side, timeframe: request.timeframe, parameterHash,
+      market: canonicalMarket, direction: side, timeframe: request.timeframe, parameterHash,
       researchCodeSha, formulaIdentity: { strategy: request.strategy, parameters: request.parameters },
       datasetId: `backtest-candles:${datasetDigest}`, datasetDigest,
       datasetStart: new Date(request.startTime).toISOString(), datasetEnd: new Date(request.endTime).toISOString(),
@@ -69,7 +77,7 @@ export function buildBacktestPaperHandoffBundle(
       && candle.timeframe === request.timeframe && candle.market === request.market);
     const candidateId = datasetMatches && resolution.status === 'IDENTITY_COMPLETE' ? strategyCandidateId({
       strategyFamily: 'BACKTEST_ENGINE', strategyId, strategyVersion: 'phase5-backtest-v1', parameterHash,
-      market: 'CRYPTO_FUTURES', assetClass: 'CRYPTO_FUTURES', symbol: request.symbol, universe: request.symbol,
+      market: canonicalMarket, assetClass, symbol: request.symbol, universe: request.symbol,
       timeframe: request.timeframe, strategyHorizon: null, direction: side, researchCodeSha,
       costPolicyVersion: costPolicyRef, riskPolicyVersion: riskPolicyRef,
     }) : null;
@@ -78,7 +86,7 @@ export function buildBacktestPaperHandoffBundle(
     }
     return Object.freeze({
       schemaVersion: BACKTEST_PAPER_HANDOFF_VERSION, source: 'backtest-result' as const, status: 'REFERENCE_ONLY' as const,
-      candidateId, strategyId, parameterHash, market: 'CRYPTO_FUTURES' as const, symbol: request.symbol,
+      candidateId, strategyId, parameterHash, market: canonicalMarket, symbol: request.symbol,
       timeframe: request.timeframe, side, leverage: request.leverage, riskPolicyRef, costPolicyRef, exitPolicyRef,
       blockers: Object.freeze([
         ...resolution.blockers, ...resolution.missingFields.map((field) => `MISSING:${field}`),

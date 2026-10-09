@@ -44,6 +44,15 @@ on:
       - 'stock-analyzer/src/App.tsx'
       - 'stock-analyzer/src/lib/app-navigation.ts'
       - 'stock-analyzer/src/lib/research-center.ts'
+      - 'stock-analyzer/src/lib/excel-export.ts'
+      - 'stock-analyzer/src/lib/backtest.ts'
+      - 'stock-analyzer/src/components/backtest-research-panel.tsx'
+      - 'research-production/test/research-engine.test.mjs'
+      - 'research-production/src/engine.mjs'
+      - 'market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js'
+      - 'market-prediction-lab/scripts/run-formula-auto-backtest-queue-v1.js'
+      - 'market-prediction-lab/src/formula-auto-backtest-queue-v1.js'
+      - 'stock-analyzer/src/components/paper-closed-loop-observer.tsx'
       - 'stock-analyzer/src/lib/research-center-product.ts'
       - 'stock-analyzer/src/lib/research-journal-binding.ts'
       - 'stock-analyzer/src/lib/strategy-promotion.ts'
@@ -211,6 +220,8 @@ jobs:
           done
 
           npm --prefix research-production test
+          # New safe formula queue: historical-only, no provider secrets, no Live/Auto.
+          node --test market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js
 
           state="$RUNNER_TEMP/research-predeploy-state"
           rm -rf "$state"
@@ -229,7 +240,7 @@ jobs:
           node - "$RUNNER_TEMP/research-predeploy-plan.json" <<'NODE'
           const fs = require('node:fs');
           const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (plan.taskCount !== 10 || plan.stepCount !== 21) {
+          if (plan.taskCount !== 11 || plan.stepCount !== 22) {
             throw new Error('RESEARCH_PREDEPLOY_PLAN_SHAPE_DRIFT');
           }
           if (plan.liveTrading !== false || plan.privateApi !== false || plan.orderAuthority !== false) {

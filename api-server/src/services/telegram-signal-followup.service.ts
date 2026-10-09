@@ -368,11 +368,13 @@ function editedSignalMessage(
       .replace(/🛒 주문하기를 누르면[^\n]*/gu, '⛔ 이전 진입 버튼 비활성');
   if (base.length + dynamic.length + 2 <= limit) return `${dynamic}\n\n${base}`;
 
+  // Leave rich HTML intact here. editTelegramMessage applies one final
+  // token-aware bound so closing <b> tags and HTML entities cannot be sliced.
   return [
     `<b>${escapeTelegramHtml(card.symbol)} · 신호 업데이트</b>`,
     `시장 ${escapeTelegramHtml(card.market)}`,
     dynamic.trimStart(),
-  ].join('\n').slice(0, limit);
+  ].join('\n');
 }
 
 function lifecycleOrderEnabled(card: ScannerSignalCard, state: AnnouncedSignal, now: number): boolean {

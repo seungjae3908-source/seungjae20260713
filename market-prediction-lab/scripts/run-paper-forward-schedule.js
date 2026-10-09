@@ -18,6 +18,7 @@ import {
   validateAuthoritativeNaturalPaperLedger,
 } from "../src/authoritative-natural-paper-accounting-v1.js";
 import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
+import { readFormulaPaperRegistryReadbackV1 } from "../src/formula-paper-registry-readback-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 import {
   runPaperForwardScheduledInvocation,
@@ -38,6 +39,7 @@ const forbiddenActivationKeys = [
   "PRIVATE_ACCOUNT_ACCESS",
   "PRIVATE_TRADING_API_ALLOWED",
 ];
+const PAPER_FORWARD_KRW_INITIAL_CAPITAL = 1_000_000;
 const PAPER_STATE_BINDING_VERSION = "paper-state-publisher-runtime-binding-v1";
 const PAPER_STATE_SNAPSHOT_VERSION = "paper-trading-state-snapshot-v2";
 
@@ -849,6 +851,13 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     return;
   }
 
+  // Never interpret KRW 1,000,000 as USDT 1,000,000. Existing USDT
+  // Paper account currency conversion and actual seed remain unverified.
+  if (env.PAPER_FORWARD_INITIAL_CAPITAL_KRW != null
+    && String(env.PAPER_FORWARD_INITIAL_CAPITAL_KRW).trim() !== String(PAPER_FORWARD_KRW_INITIAL_CAPITAL)) {
+    fail("PAPER_FORWARD_KRW_INITIAL_CAPITAL_MISMATCH", 72);
+    return;
+  }
   const rootDirectory = env.PAPER_FORWARD_ROOT ?? "/opt/stock-app-data/paper-forward-v1/runtime-state";
   const researchCodeSha = String(env.PAPER_FORWARD_RESEARCH_SHA ?? "").trim().toLowerCase();
   const activationAtMs = Number(env.PAPER_FORWARD_ACTIVATION_AT_MS);
@@ -859,6 +868,10 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   const authoritativeAccountRequired = researchProduction && explicitOutcomeAccumulation;
 
   try {
+    const formulaPaperRegistryReadback = await readFormulaPaperRegistryReadbackV1({
+      registryPath: env.PAPER_FORWARD_FORMULA_STRATEGY_REGISTRY_PATH ?? null,
+      researchCodeSha,
+    });
     let authoritativeSourceWiringAudit = null;
     let authoritativeRuntimePackageAudit = null;
     let paperStateOwnerAudit = null;
@@ -1212,6 +1225,21 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       scheduleActive: true,
       researchProduction,
       authoritativeAccountRequired,
+      paperPilotCapital: Object.freeze({
+        targetInitialCapitalKrw: PAPER_FORWARD_KRW_INITIAL_CAPITAL,
+        baseCurrency: "KRW",
+        policyConfiguredExact: String(env.PAPER_FORWARD_INITIAL_CAPITAL_KRW ?? "").trim() === String(PAPER_FORWARD_KRW_INITIAL_CAPITAL),
+        canonicalPaperWalletSeedVerified: false,
+        settlementCurrencyConversionVerified: false,
+        observedSeedBalanceKrw: null,
+        automaticResetAllowed: false,
+        withdrawalAuthority: false,
+        liveTrading: false,
+        executionAuthority: "NONE",
+      }),
+      // READ ONLY: even a verified registry PASS is not a fresh Paper signal.
+      // Never inject this object into canonical admission or order execution.
+      formulaPaperRegistryReadback,
       authoritativeAccount: result.invocation?.authoritativeAccount ?? null,
       identityCutover: cutover.identityCutover === true,
       archivedResearchSha: cutover.archivedResearchSha ?? null,

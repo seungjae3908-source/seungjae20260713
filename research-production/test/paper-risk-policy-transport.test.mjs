@@ -126,8 +126,9 @@ test('T07 actual child transport reads no record and preserves direct-spawn path
 
 test('T08 existing forward invocation, schedule and canonical Swing identity stay fixed', async () => {
   const tasks = plan({ [KEY]: EXPLICIT_PATH });
-  assert.deepEqual(tasks.map((task) => task.id), ['shadow-forward', 'paper-forward']);
-  const task = tasks[1];
+  assert.deepEqual(tasks.map((task) => task.id), ['formula-backtest-queue', 'shadow-forward', 'paper-forward']);
+  const task = tasks.find((row) => row.id === 'paper-forward');
+  assert.ok(task);
   assert.deepEqual(task.args, ['scripts/run-paper-forward-schedule.js']);
   assert.equal(task.env.PAPER_FORWARD_SCHEDULE_ACTIVE, 'true');
   assert.equal(task.env.PAPER_FORWARD_TRIGGER_SOURCE, 'cron');
