@@ -144,7 +144,7 @@ jobs:
                 const match=/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
                 if(!match||match[1]!==key)return false;
                 const value=match[2].trim();
-                return Boolean(value&&value!=='""'&&value!==\"''\"&&!value.startsWith('#'));
+                return Boolean(value&&value!=='""'&&value!=="''"&&!value.startsWith('#'));
               });
             }));
           }
