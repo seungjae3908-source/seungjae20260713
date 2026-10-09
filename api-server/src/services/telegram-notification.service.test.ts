@@ -332,7 +332,8 @@ test('supports all requested alert templates', () => {
 });
 
 test('signal intelligence Telegram turns internal state codes into a concise Korean user message', () => {
-  process.env.TELEGRAM_CRYPTO_CHAT_ID = 'crypto-spot-room';
+  process.env.TELEGRAM_CRYPTO_CHAT_ID = 'legacy-shared-crypto-room';
+  process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID = 'crypto-spot-room';
   const input = buildSignalIntelligenceTelegramInput({
     type: 'STATE_CHANGED',
     id: 'ada-position-1d',
@@ -353,6 +354,7 @@ test('signal intelligence Telegram turns internal state codes into a concise Kor
   }, 'a'.repeat(40), new Date('2026-09-28T02:46:13.197Z'));
 
   assert.ok(input);
+  assert.equal(input!.destinationChatId, 'crypto-spot-room');
   const rendered = renderTelegramAlert(input!);
   assert.match(rendered, /📊 ADA · 코인현물/);
   assert.match(rendered, /🟡 현재 판단: 관망/);
