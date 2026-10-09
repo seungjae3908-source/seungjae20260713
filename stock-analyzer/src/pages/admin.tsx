@@ -8,6 +8,7 @@ import { MEMBER_TIER_LABELS, type MemberTier } from '../../../packages/member-ac
 type AdminMember = MemberProfile & {
   created_at?: string;
   approved_at?: string | null;
+  approved_by?: string | null;
   permissions_updated_at?: string | null;
 };
 
@@ -235,6 +236,8 @@ function MemberCard({ member, mutationEnabled, onApprove, onSubmit, onPasswordRe
   });
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const approvalProvenanceMissing = member.status === 'approved'
+    && (!member.approved_at || !member.approved_by);
 
   async function run(action: () => Promise<void>) {
     if (!mutationEnabled) return;
@@ -244,6 +247,7 @@ function MemberCard({ member, mutationEnabled, onApprove, onSubmit, onPasswordRe
 
   return <article className="rounded-3xl border border-card-border bg-card p-4">
     <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate font-black">{member.display_name}</p><p className="truncate text-xs text-muted-foreground">{member.login_name}</p><p className="mt-1 break-all text-[10px] text-muted-foreground">{member.id}</p></div><span className="shrink-0 rounded-full bg-secondary px-3 py-1 text-xs font-bold">{MEMBER_TIER_LABELS[initialTier]}</span></div>
+    {approvalProvenanceMissing && <p data-testid="member-approval-provenance-missing" className="mt-3 rounded-xl bg-warning/10 p-3 text-xs font-bold text-warning">과거 승인 정보 일부가 확인되지 않습니다. 임의로 승인자나 승인시각을 보정하지 않습니다.</p>}
     <dl className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-secondary/40 p-3 text-xs"><div><dt className="text-muted-foreground">상태</dt><dd className="font-bold">{member.status}</dd></div><div><dt className="text-muted-foreground">활성</dt><dd className="font-bold">{member.is_active !== false ? '활성' : '비활성'}</dd></div><div><dt className="text-muted-foreground">가입</dt><dd>{member.created_at ? new Date(member.created_at).toLocaleDateString() : '미확인'}</dd></div><div><dt className="text-muted-foreground">권한 갱신</dt><dd>{member.permissions_updated_at ? new Date(member.permissions_updated_at).toLocaleString() : '미확인'}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">회원 만료</dt><dd>{member.membership_expires_at ? new Date(member.membership_expires_at).toLocaleString() : '기간 제한 없음'}</dd></div></dl>
     <div className="mt-4 grid grid-cols-2 gap-2">
       <label className="text-xs font-bold">등급<select disabled={!mutationEnabled || busy} aria-label={`${member.display_name} 등급`} value={tier} onChange={(event) => { const next = event.target.value as MemberTier; setTier(next); if (next === 'pending') setActive(false); if (next === 'admin' || next === 'pending') setExpiresAt(''); }} className="mt-1 h-11 w-full rounded-xl border border-card-border bg-background px-2 text-sm disabled:opacity-50"><option value="pending">일반회원 · 승인대기</option><option value="associate">준회원</option><option value="regular">정회원</option><option value="admin">관리자</option></select></label>

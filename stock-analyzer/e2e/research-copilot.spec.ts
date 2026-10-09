@@ -74,7 +74,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
   page.on('response', response => { if (response.status() >= 400 && !((options.failure || options.refreshFailure) && response.url().endsWith('/copilot'))) unexpectedHttp.push(`${response.status()} ${response.url()}`); });
   await page.route('**/__e2e-supabase/**', route => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/profiles')) return fulfill(route, { id: USER, login_name: 'fixture', display_name: '테스트 관리자', role: options.regular ? 'user' : 'admin', membership_level: options.regular ? 'regular' : 'admin', status: 'approved', is_active: true });
+    if (path.endsWith('/profiles')) return fulfill(route, { id: USER, login_name: 'fixture', display_name: '테스트 관리자', role: options.regular ? 'user' : 'admin', membership_level: options.regular ? 'regular' : 'admin', status: 'approved', is_active: true, permissions_updated_at: '2026-10-08T00:00:00.000Z' });
     if (path.endsWith('/user')) return fulfill(route, { id: USER, aud: 'authenticated', role: 'authenticated', email: 'fixture@accounts.invalid', app_metadata: {}, user_metadata: {} });
     return fulfill(route, { ok: true });
   });
