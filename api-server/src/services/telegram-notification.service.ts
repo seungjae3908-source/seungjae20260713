@@ -492,13 +492,13 @@ export async function sendTelegramAlert(
  */
 function boundedTelegramEditHtml(text: string, limit: number): string {
   if (text.length <= limit) return text;
-  const tokens = text.match(/<[^<>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);|[\\s\\S]/giu) ?? [];
+  const tokens = text.match(/<[^<>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);|[\s\S]/giu) ?? [];
   const openTags: string[] = [];
   let result = '';
 
   for (const token of tokens) {
-    const opening = /^<(b|strong|i|em|u|s|strike|code|pre|a)(?:\\s[^<>]*)?>$/iu.exec(token);
-    const closing = /^<\\/(b|strong|i|em|u|s|strike|code|pre|a)>$/iu.exec(token);
+    const opening = /^<(b|strong|i|em|u|s|strike|code|pre|a)(?:\s[^<>]*)?>$/iu.exec(token);
+    const closing = /^<\/(b|strong|i|em|u|s|strike|code|pre|a)>$/iu.exec(token);
     const nextOpen = [...openTags];
     if (opening) nextOpen.push(opening[1].toLowerCase());
     else if (closing && nextOpen.at(-1) === closing[1].toLowerCase()) nextOpen.pop();
