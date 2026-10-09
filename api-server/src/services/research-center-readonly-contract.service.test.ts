@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   RESEARCH_CENTER_READONLY_CONTRACT,
   sanitizeResearchCenterOverview,
+  sanitizeMarketWatchReadback,
 } from './research-center-readonly-contract.service.ts';
 
 const SHA = '1111111111111111111111111111111111111111';
@@ -205,6 +206,71 @@ function validOverview() {
     profitability: { proven: false, status: 'evidence_collection', note: 'Evidence only.' },
   };
 }
+
+
+function marketWatch() {
+  return {
+    contract: 'lightweight-market-watch-readback/v1',
+    status: 'PARTIAL', present: true, researchSha: SHA,
+    observedAt: 1_800_000_000_000, ageMs: 30000,
+    marketCoverageCount: 2,
+    markets: [
+      { market: 'KR_STOCK', status: 'BLOCKED_PUBLIC_STOCK_FEED_MISSING',
+        source: 'NONE', listedCount: 0, observedCount: 0, newCandidates: 0,
+        executionAuthority: 'NONE' },
+      { market: 'US_STOCK', status: 'BLOCKED_PUBLIC_STOCK_FEED_MISSING',
+        source: 'NONE', listedCount: 0, observedCount: 0, newCandidates: 0,
+        executionAuthority: 'NONE' },
+      { market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC_TICKERS',
+        listedCount: 15, observedCount: 15, newCandidates: 2,
+        executionAuthority: 'NONE', rawAccount: 'secret' },
+      { market: 'CRYPTO_FUTURES', status: 'READY', source: 'BITGET_PUBLIC_TICKERS',
+        listedCount: 15, observedCount: 15, newCandidates: 1,
+        executionAuthority: 'NONE' },
+    ],
+    cyclesToday: 110, candidatesToday: 12, cyclesSinceRelease: 210,
+    continuous24hProven: false, formulaCandidateProduced: false,
+    oosProven: false, paperExecutionProven: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+    filesystemPath: '/root/research-private',
+  };
+}
+test('market watch readback is explicitly MISSING and never invents real 24h uptime', () => {
+  const v = sanitizeMarketWatchReadback(null);
+  assert.equal(v.status, 'MISSING');
+  assert.equal(v.continuous24hProven, false);
+  assert.equal(v.paperExecutionProven, false);
+});
+test('market watch readback passes only bounded public aggregate counts', () => {
+  const actual = sanitizeMarketWatchReadback(marketWatch());
+  assert.equal(actual.status, 'PARTIAL');
+  assert.equal(actual.marketCoverageCount, 2);
+  assert.equal(actual.markets.length, 4);
+  assert.equal(actual.oosProven, false);
+  assert.equal(actual.executionAuthority, 'NONE');
+  const encoded = JSON.stringify(actual);
+  assert.equal(encoded.includes('rawAccount'), false);
+  assert.equal(encoded.includes('/root/research-private'), false);
+  const full = validOverview();
+  Object.assign(full.dataFactory, { lightweightMarketWatch: marketWatch() });
+  const sanitized = sanitizeResearchCenterOverview(full);
+  assert.ok(sanitized);
+  const factory = sanitized.dataFactory as {
+    lightweightMarketWatch: { status: string; marketCoverageCount: number },
+  };
+  assert.equal(factory.lightweightMarketWatch.status, 'PARTIAL');
+  assert.equal(factory.lightweightMarketWatch.marketCoverageCount, 2);
+});
+test('market watch readback rejects forged orders, full coverage, counts and paths', () => {
+  const x = marketWatch();
+  assert.equal(sanitizeMarketWatchReadback({ ...x, executionAuthority: 'LIVE' }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({ ...x, continuous24hProven: true }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({ ...x, marketCoverageCount: 4, status: 'OBSERVING' }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({ ...x, markets: x.markets.map((m, i) =>
+    i === 2 ? { ...m, status: 'READY', source: '/etc/secret' } : m) }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({ ...x, markets: x.markets.map((m, i) =>
+    i === 3 ? { ...m, market: 'US_STOCK' } : m) }).status, 'INVALID');
+});
 
 test('Research Center contract publishes a GET-only, authority-free allowlisted DTO', () => {
   const input = validOverview();
