@@ -14,29 +14,68 @@ const SHA = 'a'.repeat(40);
 const requireAll = (text, markers) => {
   for (const marker of markers) assert.ok(text.includes(marker), 'missing contract marker: ' + marker);
 };
-test('Staging admin login maps protected email to the actual app login ID without storing a token', () => {
+test('Staging admin login derives ID from verified same-user canonical profile, never untrusted Auth metadata', () => {
+  const app = readFileSync('api-server/src/app.ts', 'utf8');
+  requireAll(app, [
+    "app.get('/api/auth/profile', requireAuthenticatedProfileBootstrap",
+    'id: profile.id',
+    'login_name: profile.login_name',
+    'role: profile.role',
+    'is_active: profile.is_active',
+  ]);
   requireAll(spec, [
     'resolveStagingAdminLoginName',
     'STAGING_SUPABASE_ANON_KEY',
-    'user_metadata?.login_name',
-    'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING',
+    "new URL('/api/auth/profile', required('STAGING_BASE_URL'))",
+    "method: 'GET'",
+    'Authorization: `Bearer ${accessToken}`',
+    "redirect: 'error'",
+    'authenticatedUserId',
+    'profile.id !== authenticatedUserId',
+    "profile.role !== 'admin'",
+    "profile.status !== 'approved'",
+    'profile.is_active !== true',
+    'String(profile.login_name ??',
+    'STAGING_ADMIN_AUTH_SESSION_IDENTITY_MISSING',
+    'STAGING_ADMIN_CANONICAL_PROFILE_ID_MISMATCH',
+    'STAGING_ADMIN_CANONICAL_PROFILE_NOT_ACTIVE_ADMIN',
+    'STAGING_ADMIN_CANONICAL_LOGIN_NAME_MISSING',
     'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH',
     'await username.fill(loginName)',
   ]);
+  assert.ok(!spec.includes('body?.user?.user_metadata?.login_name'),
+    'Auth metadata may be absent and may never determine login ID');
   assert.ok(!spec.includes("username.fill(required('STAGING_ADMIN_EMAIL'))"));
-  assert.ok(workflow.includes('STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}'));
 });
-test('Staging auth identity/token are never printed or written into scoped QA receipts', () => {
-  assert.ok(!/console\.(?:log|info|warn|error)\(\s*(?:body|loginName|email|password)\b/.test(spec));
+
+test('Staging authentication evidence remains read-only and cannot expose login identity or tokens', () => {
+  const resolver = spec.slice(
+    spec.indexOf('async function resolveStagingAdminLoginName()'),
+    spec.indexOf('function validateIsolation()'),
+  );
+  assert.ok(resolver.length > 100);
+  assert.equal((resolver.match(/method: 'POST'/g) ?? []).length, 1,
+    'Only Staging Supabase Auth password grant may POST');
+  assert.equal((resolver.match(/method: 'GET'/g) ?? []).length, 1,
+    'Only canonical own-profile lookup may GET');
+  assert.ok(!resolver.includes('STAGING_SUPABASE_SECRET_KEY'));
+  assert.ok(!resolver.includes('service_role'));
+  assert.ok(!resolver.includes('admin.listUsers'));
+  assert.ok(!resolver.includes('page.evaluate'));
+  assert.ok(!resolver.includes('page.addInitScript'));
+  assert.ok(!/console\.(?:log|info|warn|error)\(/.test(resolver));
+  assert.ok(!/writeFileSync\(/.test(resolver));
+  assert.ok(!/console\.(?:log|info|warn|error)\(\s*(?:body|profile|loginName|email|password|accessToken)\b/.test(spec));
   assert.ok(!/writeFileSync\([^,]+,\s*JSON\.stringify\(body\b/.test(spec));
-  requireAll(spec, [
-    "'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING'",
-    "'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH'",
-    "return loginName;",
-  ]);
   assert.ok(!verdict.includes('adminEmail'));
   assert.ok(!verdict.includes('accessToken'));
+  requireAll(spec, [
+    "'STAGING_ADMIN_CANONICAL_PROFILE_ID_MISMATCH'",
+    "'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH'",
+    'return loginName;',
+  ]);
 });
+
 test('Hub command is owner-only and staging-only', () => {
   const markers = [
     '  issue_comment:', 'types: [created]',
