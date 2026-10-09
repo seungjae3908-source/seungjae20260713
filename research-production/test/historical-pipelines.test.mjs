@@ -23,7 +23,7 @@ async function fakeRepo() {
     if (relative.endsWith('run-stock-pnl-suite.js')) body = `import {existsSync} from 'node:fs'; if(!existsSync('docs/stock-seed')) process.exit(8);\n`;
     await writeFile(target, body);
   }
-  for (const name of ['run-long-history-v1-with-retry.js','run-v3-history.js','run-v4-history.js','run-v5-history.js','run-v6-history.js','run-paper-forward-schedule.js','run-shadow-cycle.js']) await writeFile(join(lab, 'scripts', name), 'console.log("ok")\n');
+  for (const name of ['run-long-history-v1-with-retry.js','run-v3-history.js','run-v4-history.js','run-v5-history.js','run-v6-history.js','run-formula-auto-backtest-queue-v1.js','run-paper-forward-schedule.js','run-shadow-cycle.js']) await writeFile(join(lab, 'scripts', name), 'console.log("ok")\n');
   await writeFile(join(lab, 'src/automated-research-orchestrator.js'), `export function buildAutomatedResearchContract({researchCodeSha}){return{researchCodeSha,candidateSearch:{method:'bounded_coarse_narrow_fine',cartesianProductAllowed:false},artifactSafety:{liveOrderAllowed:false,privateAccountRequestAllowed:false}}} export function generateParameterCandidates({maxCandidates}){return Array.from({length:Math.min(16,maxCandidates)},(_,i)=>({i}))}\n`);
   await writeFile(join(lab, 'src/automated-v1-research.js'), 'export function runAutomatedV1Research(){}\n');
   return root;
