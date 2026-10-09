@@ -88,7 +88,13 @@ test('only Trading Core browser + own Paper DB reads; no provider-private reques
     'telegramSentReceiptObserved: false',
   ]);
   assert.ok(!spec.includes('/api/paper-journal/unified-ledger'));
-  assert.ok(!spec.includes("method: 'POST'"));
+  // Supabase password grant resolves the staging login ID; app/trading API
+  // actions remain GET-only and may not use private broker or order mutations.
+  assert.equal((spec.match(/method: 'POST'/g) ?? []).length, 1,
+    'Only the isolated Staging Supabase Auth password grant may POST');
+  assert.ok(spec.includes("new URL('/auth/v1/token?grant_type=password', supabase)"));
+  assert.ok(!spec.includes('page.request.post('));
+  assert.ok(!spec.includes("requestWithBrowserSession(page, endpoint, { method: 'POST' }"));
   assert.ok(!spec.includes('admin-four-market/bootstrap'));
   assert.ok(!spec.includes('telegram/test'));
   for (const marker of ["trace: 'off'", "video: 'off'", "screenshot: 'off'", 'workers: 1', 'retries: 0']) {
