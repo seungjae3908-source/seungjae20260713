@@ -364,6 +364,27 @@ export class TradeAutomationService {
     if (typeof metadata.averageFillPrice === 'number') next.averageFillPrice = metadata.averageFillPrice;
     if (typeof metadata.feeAmount === 'number' && Number.isFinite(metadata.feeAmount) && metadata.feeAmount >= 0) next.feeAmount = metadata.feeAmount;
     if (typeof metadata.feeCurrency === 'string' && metadata.feeCurrency.trim()) next.feeCurrency = metadata.feeCurrency.trim().toUpperCase();
+    if (typeof metadata.taxAmount === 'number' && Number.isFinite(metadata.taxAmount) && metadata.taxAmount >= 0) {
+      next.taxAmount = metadata.taxAmount;
+    }
+    if (typeof metadata.taxCurrency === 'string' && metadata.taxCurrency.trim()) {
+      next.taxCurrency = metadata.taxCurrency.trim().toUpperCase();
+    }
+    // Preserve only the canonical Paper executor's bounded market quote.
+    const fxEvidence = metadata.settlementFxEvidence;
+    if (fxEvidence && typeof fxEvidence === 'object' && !Array.isArray(fxEvidence)) {
+      const fx = fxEvidence as Record<string, unknown>;
+      if (typeof fx.krwPerQuoteCurrency === 'number'
+        && Number.isFinite(fx.krwPerQuoteCurrency) && fx.krwPerQuoteCurrency > 0
+        && typeof fx.source === 'string' && fx.source.length < 90
+        && typeof fx.observedAt === 'string' && Number.isFinite(Date.parse(fx.observedAt))) {
+        next.settlementFxEvidence = {
+          krwPerQuoteCurrency: fx.krwPerQuoteCurrency,
+          source: fx.source,
+          observedAt: fx.observedAt,
+        };
+      }
+    }
     // A state of FILLED is not evidence of an execution. Never persist the
     // terminal state with zero/missing quantity or price in any market.
     // A provider acknowledgement alone cannot reconstruct an actual fill.
