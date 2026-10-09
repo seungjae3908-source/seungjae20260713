@@ -8,6 +8,8 @@ on:
       - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
       - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
       - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       sha:
@@ -29,12 +31,21 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && 'stock-app-staging-readiness' || format('trading-core-staging-pr-{0}', github.event.pull_request.number || github.run_id) }}
+  group: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && github.event.issue.number == 1102 && startsWith(github.event.comment.body, '/run-trading-core-staging '))) && 'stock-app-staging-readiness' || format('trading-core-staging-pr-{0}', github.event.pull_request.number || github.run_id) }}
   cancel-in-progress: false
 
 jobs:
   validate-contract:
     name: Validate focused Staging source and zero-Production boundary
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (      github.event.action == 'created' &&
+      github.event.issue.number == 1102 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-trading-core-staging '))
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -53,13 +64,23 @@ jobs:
 
   owner-gate:
     name: Owner exact-main provenance and Staging-only credentials
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1102 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-trading-core-staging '))
     needs: validate-contract
     runs-on: ubuntu-latest
     timeout-minutes: 12
     environment: staging
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
+      action: ${{ steps.target.outputs.action }}
       publisher_digest: ${{ steps.publisher.outputs.publisher_sha256 }}
     env:
       STAGING_ACTION: ${{ inputs.action }}
@@ -85,14 +106,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify exact owner-issued Hub command
+        if: github.event_name == 'issue_comment'
+        id: owner-command
+        env:
+          OWNER_BODY: ${{ github.event.comment.body }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const match = /^\/run-trading-core-staging ([0-9a-f]{40}) (--preflight|--deploy)$/u.exec(process.env.OWNER_BODY ?? '');
+          if (!match) throw new Error('STAGING_CORE_HUB_EXACT_COMMAND_REQUIRED');
+          appendFileSync(process.env.GITHUB_OUTPUT, 'sha=' + match[1] + '\naction=' + match[2].slice(2) + '\n');
+          NODE
       - name: Require exact SHA, owner dispatch and unchanged current main
         id: target
         env:
-          REQUESTED_SHA: ${{ inputs.sha }}
+          REQUESTED_SHA: ${{ github.event_name == 'issue_comment' && steps.owner-command.outputs.sha || inputs.sha }}
+          REQUESTED_ACTION: ${{ github.event_name == 'issue_comment' && steps.owner-command.outputs.action || inputs.action }}
         run: |
           set -Eeuo pipefail
           [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'STAGING_CORE_REQUIRES_MAIN_REF' >&2; exit 1; }
           [[ "$GITHUB_ACTOR" == 'seungjae3908-source' ]] || { echo 'STAGING_CORE_OWNER_REQUIRED' >&2; exit 1; }
+          [[ "$REQUESTED_ACTION" == preflight || "$REQUESTED_ACTION" == deploy ]] || { echo 'STAGING_CORE_ACTION_INVALID' >&2; exit 1; }
           [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'STAGING_CORE_IMMUTABLE_SHA_REQUIRED' >&2; exit 1; }
           target="$(printf %s "$REQUESTED_SHA" | tr '[:upper:]' '[:lower:]')"
           git fetch --no-tags origin main "$target"
@@ -101,6 +136,8 @@ jobs:
           [[ "$target" == "$current" ]] || { echo 'STAGING_CORE_CURRENT_MAIN_SHA_MISMATCH' >&2; exit 1; }
           [[ "$(git rev-parse HEAD)" == "$target" ]] || { echo 'STAGING_CORE_CHECKOUT_MISMATCH' >&2; exit 1; }
           echo "sha=$target" >> "$GITHUB_OUTPUT"
+          echo "action=$REQUESTED_ACTION" >> "$GITHUB_OUTPUT"
+          echo "STAGING_ACTION=$REQUESTED_ACTION" >> "$GITHUB_ENV"
       - name: Require coherent post-merge release provenance
         uses: actions/github-script@v7
         env:
@@ -144,7 +181,7 @@ jobs:
           NODE
       - name: Verify Staging-only administrator password grant and snapshot publisher digest
         id: publisher
-        if: inputs.action == 'deploy'
+        if: steps.target.outputs.action == 'deploy'
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
@@ -152,13 +189,13 @@ jobs:
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
         run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs --write-publisher-digest
       - name: Preflight-only result (does not deploy or change any environment)
-        if: inputs.action == 'preflight'
+        if: steps.target.outputs.action == 'preflight'
         run: |
           echo 'Staging Trading Core scoped configuration preflight PASS (no deployment, no member mutation)' >> "$GITHUB_STEP_SUMMARY"
 
   stage-deploy:
     name: Deploy exact revision only to isolated Staging
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment') && needs.owner-gate.outputs.action == 'deploy'
     needs: owner-gate
     environment: staging
     runs-on: ubuntu-latest
@@ -244,7 +281,7 @@ jobs:
 
   scoped-qa:
     name: Trading Core only — Staging desktop/mobile and read-only API
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'deploy'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment') && needs.owner-gate.outputs.action == 'deploy'
     needs: [owner-gate, stage-deploy]
     environment: staging
     runs-on: ubuntu-latest
