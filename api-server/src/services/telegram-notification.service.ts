@@ -485,6 +485,33 @@ export async function sendTelegramAlert(
     : result;
 }
 
+/**
+ * Keep Telegram HTML entities and formatting tags whole when editing a long
+ * signal. A raw slice can end inside <b>, </b>, or &amp; and reject the edit,
+ * leaving obsolete order buttons on the old Telegram message.
+ */
+function boundedTelegramEditHtml(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const tokens = text.match(/<[^<>]*>|&(?:[a-z]+|#[0-9]+|#x[0-9a-f]+);|[\\s\\S]/giu) ?? [];
+  const openTags: string[] = [];
+  let result = '';
+
+  for (const token of tokens) {
+    const opening = /^<(b|strong|i|em|u|s|strike|code|pre|a)(?:\\s[^<>]*)?>$/iu.exec(token);
+    const closing = /^<\\/(b|strong|i|em|u|s|strike|code|pre|a)>$/iu.exec(token);
+    const nextOpen = [...openTags];
+    if (opening) nextOpen.push(opening[1].toLowerCase());
+    else if (closing && nextOpen.at(-1) === closing[1].toLowerCase()) nextOpen.pop();
+
+    const closingCost = nextOpen.reduce((n, tag) => n + tag.length + 3, 0);
+    if (result.length + token.length + closingCost + 1 > limit) break;
+    result += token;
+    openTags.splice(0, openTags.length, ...nextOpen);
+  }
+  const closings = [...openTags].reverse().map((tag) => '</' + tag + '>').join('');
+  return result.trimEnd() + '…' + closings;
+}
+
 export async function editTelegramMessage(input: {
   destinationChatId: string;
   messageId: number;
@@ -499,8 +526,8 @@ export async function editTelegramMessage(input: {
     return { ok: false, attempts: 0, skipped: 'NOT_CONFIGURED' };
   }
 
-  const renderedText = input.text.slice(
-    0,
+  const renderedText = boundedTelegramEditHtml(
+    input.text,
     input.messageKind === 'PHOTO' ? TELEGRAM_CAPTION_LIMIT : TELEGRAM_TEXT_LIMIT,
   );
 
