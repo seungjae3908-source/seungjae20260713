@@ -51,6 +51,8 @@ export interface TradingRepository {
   listOrders(userId: string): Promise<TradingOrder[]>;
   appendEvent(event: TradingOrderEvent): Promise<void>;
   listEvents(userId: string): Promise<TradingOrderEvent[]>;
+  /** Account-owned scoped replay, without a user-wide 1,000-event truncation. */
+  listEventsForOrder?(userId: string, orderId: string): Promise<TradingOrderEvent[]>;
 }
 
 function copy<T>(value: T): T {
@@ -214,6 +216,9 @@ export class InMemoryTradingRepository implements TradingRepository {
   }
   async appendEvent(event: TradingOrderEvent) { this.events.push(copy(event)); }
   async listEvents(userId: string) { return this.events.filter((item) => item.userId === userId).map(copy); }
+  async listEventsForOrder(userId: string, orderId: string) {
+    return this.events.filter((item) => item.userId === userId && item.orderId === orderId).map(copy);
+  }
 }
 
 function databaseError() {
@@ -486,6 +491,17 @@ function createScopedTradingRepository(
       const { data, error } = await client.from('trade_order_events').select('payload')
         .eq('user_id', userId).order('created_at', { ascending: false }).limit(1_000);
       if (error) throw databaseError();
+      return (data ?? []).map((row) => row.payload as TradingOrderEvent);
+    },
+    async listEventsForOrder(userId, orderId) {
+      owned(userId);
+      if (!orderId) throw new Error('EXECUTION_SYNC_ORDER_ID_INVALID');
+      // Do not let other members or older, unrelated events consume this limit.
+      const { data, error } = await client.from('trade_order_events').select('payload')
+        .eq('user_id', userId).eq('order_id', orderId)
+        .order('created_at', { ascending: true }).limit(1_001);
+      if (error) throw databaseError();
+      if ((data ?? []).length > 1_000) throw new Error('EXECUTION_SYNC_ORDER_EVENT_LIMIT_REACHED');
       return (data ?? []).map((row) => row.payload as TradingOrderEvent);
     },
   };
