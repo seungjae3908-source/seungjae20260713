@@ -21,7 +21,7 @@ concurrency:
 
 env:
   BASE_MAIN_SHA: '92adcec9b5a3dc210e3f92c271d9263ecf5023ce'
-  PAPER_COST_SHA: '5eebbb839a20595ba073b066f2e715d9b14970fa'
+  PAPER_COST_SHA: '0bb496235302690cc8c7bab0b8e7063b675ca500'
   ADMIN_QA_SHA: ${{ github.event.pull_request.head.sha }}
   NATURAL_OBSERVER_SHA: '16b281f46a72c7f3a9b2c4f980083f44b78262a9'
   LIVE_TRADING: 'false'
