@@ -1,0 +1,255 @@
+name: Research + Four-Market Paper Three-Draft Composition QA
+run-name: Combined Code QA (Paper Cost + Admin Wallet + Research) ${{ github.event.pull_request.head.sha }}
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/research-paper-three-draft-composition-qa.yml'
+      - 'api-server/src/services/admin-four-market-paper-capital.service.ts'
+      - 'api-server/src/routes/paper-journal.smoke.test.ts'
+      - 'stock-analyzer/src/components/trade-automation-settings.tsx'
+      - 'stock-analyzer/src/lib/trade-automation-policy-mode.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-paper-three-drafts-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PAPER_COST_SHA: 'a9554c956dc925614f0083e04c1246f68267c681'
+  ADMIN_QA_SHA: ${{ github.event.pull_request.head.sha }}
+  NATURAL_OBSERVER_SHA: 'f7300c8f84b192885d98ae065c796b5dd7a4fa8a'
+  LIVE_TRADING: 'false'
+  AUTO_TRADING: 'false'
+  REAL_ORDER_ENABLED: 'false'
+  PRIVATE_TRADING_API_ALLOWED: 'false'
+  MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'
+
+jobs:
+  virtual-composition:
+    name: Three pinned Draft sources — isolated integration only
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout latest main and freeze the exact code snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: combined
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Freeze checked-out main SHA for immutable composition receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "BASE_MAIN_SHA=$(git -C combined rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Checkout immutable prospective cost and close-FX patch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PAPER_COST_SHA }}
+          path: cost
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout exact Admin wallet and dedicated-QA Draft
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ADMIN_QA_SHA }}
+          path: admin
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout immutable read-only natural-cycle observer Draft
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NATURAL_OBSERVER_SHA }}
+          path: observer
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify repository SHAs and overlay disjoint reviewed file lists
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for pair in \
+            "combined:$BASE_MAIN_SHA" \
+            "cost:$PAPER_COST_SHA" \
+            "admin:$ADMIN_QA_SHA" \
+            "observer:$NATURAL_OBSERVER_SHA"; do
+            source="${pair%%:*}"
+            expected="${pair#*:}"
+            test "$(git -C "$source" rev-parse HEAD)" = "$expected"
+          done
+          test "$LIVE_TRADING" = false
+          test "$AUTO_TRADING" = false
+          test "$REAL_ORDER_ENABLED" = false
+          test "$PRIVATE_TRADING_API_ALLOWED" = false
+          node --input-type=module <<'NODE'
+          import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { dirname, join } from 'node:path';
+          const manifest = {
+            cost: [
+              'api-server/src/services/admin-four-market-paper-readback.service.test.ts',
+              'api-server/src/services/admin-four-market-paper-readback.service.ts',
+              'api-server/src/services/member-auto-trading-background-worker.service.ts',
+              'api-server/src/services/member-auto-trading-exit-plan.service.test.ts',
+              'api-server/src/services/member-auto-trading-exit-plan.service.ts',
+              'api-server/src/services/trade-automation-unified-journal-adapter.test.ts',
+              'api-server/src/services/trade-automation-unified-journal-adapter.ts',
+              'api-server/src/services/trade-automation.repository.ts',
+              'api-server/src/services/trade-automation.service.ts',
+              'api-server/src/services/trade-automation.types.ts',
+              'api-server/src/services/trade-execution-pre-submission.test.ts',
+              'api-server/src/services/trade-execution.service.ts',
+            ],
+            admin: [
+              '.github/workflows/research-paper-dedicated-qa.yml',
+              'api-server/src/routes/paper-journal.smoke.test.ts',
+              'api-server/src/services/admin-four-market-paper-capital.service.ts',
+              'stock-analyzer/e2e/admin-four-market-policy-off.spec.ts',
+              'stock-analyzer/src/components/trade-automation-settings.tsx',
+              'stock-analyzer/src/lib/trade-automation-policy-mode.ts',
+            ],
+            observer: [
+              '.github/workflows/research-production-natural-cycle-evidence.yml',
+              'market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js',
+              'research-production/src/natural-cycle-verdict-trace.mjs',
+              'research-production/test/natural-cycle-verdict-trace.test.mjs',
+            ],
+          };
+          const seen = new Set();
+          const digest = (content) => createHash('sha256').update(content).digest('hex');
+          const files = [];
+          for (const [source, paths] of Object.entries(manifest)) {
+            for (const path of paths) {
+              if (seen.has(path)) throw new Error('COMPOSITION_OVERLAPPING_FILE:' + path);
+              seen.add(path);
+              const from = join(source, path);
+              const to = join('combined', path);
+              if (!existsSync(from)) throw new Error('COMPOSITION_REQUIRED_FILE_MISSING:' + path);
+              mkdirSync(dirname(to), { recursive: true });
+              copyFileSync(from, to);
+              const sourceHash = digest(readFileSync(from));
+              if (digest(readFileSync(to)) !== sourceHash) throw new Error('COMPOSITION_BLOB_MISMATCH:' + path);
+              files.push({ path, source, sha256: sourceHash });
+            }
+          }
+          if (files.length !== 22) throw new Error('COMPOSITION_FILE_COUNT_MISMATCH');
+          const receipt = {
+            schemaVersion: 'research-paper-three-draft-composition-v1',
+            inputShas: {
+              main: process.env.BASE_MAIN_SHA,
+              paperCost: process.env.PAPER_COST_SHA,
+              admin: process.env.ADMIN_QA_SHA,
+              naturalObserver: process.env.NATURAL_OBSERVER_SHA,
+            },
+            files,
+            filePathsDisjoint: true,
+            status: 'COMPOSED_NOT_YET_TESTED',
+            productionDeployed: false,
+            productionDatabaseMutated: false,
+            productionWalletsCreated: false,
+            productionWorkerVerified: false,
+            telegramDeliveryVerified: false,
+            strategyProfitabilityProven: false,
+            liveTradingEnabled: false,
+            privateProviderRequests: 0,
+            realOrders: 0,
+            withdrawals: 0,
+          };
+          writeFileSync('combined/research-paper-composition-receipt.json',
+            JSON.stringify(receipt, null, 2) + '\n');
+          console.log('Overlay verified: 12 cost + 6 admin + 4 Research files, source hashes intact');
+          NODE
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: combined/pnpm-lock.yaml
+      - name: Install exact workspace dependencies without lifecycle scripts
+        working-directory: combined
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck the composed backend and UI
+        working-directory: combined
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server typecheck
+          pnpm --dir stock-analyzer typecheck
+
+      - name: Validate the combined three-draft Research and Paper interfaces
+        working-directory: combined
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node api-server/scripts/verify-research-center-predeploy-contract.mjs
+          npm --prefix research-production test
+          node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+          node --test \
+            market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js \
+            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js \
+            market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
+
+      - name: Verify real backend Paper type and settlement contracts against composed code
+        working-directory: combined/api-server
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for source in \
+            src/services/admin-four-market-paper-capital.service.test.ts \
+            src/services/admin-four-market-paper-readback.service.test.ts \
+            src/services/member-auto-trading-background-worker.service.test.ts \
+            src/services/member-auto-trading-exit-plan.service.test.ts \
+            src/services/trade-automation-unified-journal-adapter.test.ts \
+            src/services/trade-execution-pre-submission.test.ts \
+            src/routes/paper-journal.smoke.test.ts; do
+            id="$(basename "$source" .ts)"
+            pnpm exec esbuild "$source" --bundle --platform=node --format=cjs --target=node22 \
+              --outfile="$RUNNER_TEMP/composed-$id.cjs"
+            node --test "$RUNNER_TEMP/composed-$id.cjs"
+          done
+
+      - name: Install isolated Chromium
+        working-directory: combined
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Browser-test administrator safe OFF and Research-to-Paper observation
+        working-directory: combined
+        run: |
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts \
+            e2e/admin-four-market-policy-off.spec.ts \
+            e2e/research-paper-closed-loop-observer.spec.ts
+
+      - name: Mark successful combined code QA without claiming Production operation
+        working-directory: combined
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'research-paper-composition-receipt.json';
+          const proof = JSON.parse(readFileSync(path, 'utf8'));
+          if (!proof.filePathsDisjoint || proof.files?.length !== 22) {
+            throw new Error('COMPOSITION_PROOF_INVALID');
+          }
+          proof.status = 'COMBINED_CODE_QA_PASSED_ONLY';
+          proof.composedCodeQaPassed = true;
+          proof.isolatedTestEnvironment = true;
+          writeFileSync(path, JSON.stringify(proof, null, 2) + '\n');
+          NODE
+
+      - name: Upload immutable-source composition evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-paper-composition-${{ github.event.pull_request.head.sha }}
+          path: combined/research-paper-composition-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30

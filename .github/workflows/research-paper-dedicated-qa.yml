@@ -1,0 +1,309 @@
+name: Research Center and Paper Auto Dedicated QA
+run-name: Research-Paper Only QA ${{ github.event.pull_request.head.sha || inputs.target_sha || github.sha }}
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/research-paper-dedicated-qa.yml'
+      - 'research-production/**'
+      - 'research-dashboard/**'
+      - 'api-server/src/services/research-center-*.ts'
+      - 'api-server/src/services/research-adoption-*.ts'
+      - 'api-server/src/services/strategy-promotion-research-*.ts'
+      - 'api-server/src/services/backtest-paper-*.ts'
+      - 'api-server/src/services/admin-four-market-paper-*.ts'
+      - 'api-server/src/services/member-auto-trading-*.ts'
+      - 'api-server/src/services/trade-automation-unified-journal-*.ts'
+      - 'api-server/src/services/paper-journal-*.ts'
+      - 'api-server/src/routes/paper-journal*.ts'
+      - 'api-server/src/routes/paper-trading*.ts'
+      - 'api-server/scripts/verify-research-center-predeploy-contract.mjs'
+      - 'api-server/scripts/verify-production-automatic-trading-gate.mjs'
+      - 'stock-analyzer/e2e/research-*.spec.ts'
+      - 'stock-analyzer/e2e/admin-four-market-policy-off.spec.ts'
+      - 'stock-analyzer/src/components/admin-four-market-paper-panel.tsx'
+      - 'stock-analyzer/src/components/trade-automation-settings.tsx'
+      - 'stock-analyzer/src/lib/trade-automation-policy-mode.ts'
+      - 'api-server/src/routes/trade-automation.ts'
+      - 'stock-analyzer/e2e/phase6-paper-trading.spec.ts'
+      - 'stock-analyzer/e2e/auto-trading-closed-outcome-failclosed.spec.ts'
+      - 'stock-analyzer/e2e/paper-trading-risk-copy-truth.spec.ts'
+      - 'market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js'
+      - 'market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js'
+      - 'market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js'
+      - 'market-prediction-lab/tests/four-market-paper-*.test.js'
+      - '.github/tests/trading-ops-consolidated-preflight.test.mjs'
+      - '.github/tests/production-trading-core-qa-contract.test.mjs'
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Immutable Git commit SHA to validate without deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-paper-qa-${{ github.event.pull_request.number || inputs.target_sha || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  QA_HEAD_SHA: ${{ github.event.pull_request.head.sha || inputs.target_sha || github.sha }}
+  LIVE_TRADING: 'false'
+  AUTO_TRADING: 'false'
+  REAL_ORDER_ENABLED: 'false'
+  PRIVATE_TRADING_API_ALLOWED: 'false'
+
+jobs:
+  research:
+    name: Research Center — Research to OOS to Paper evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout immutable source without authority
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.QA_HEAD_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact commit and zero execution authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$QA_HEAD_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+          test "$LIVE_TRADING" = false
+          test "$AUTO_TRADING" = false
+          test "$REAL_ORDER_ENABLED" = false
+          test "$PRIVATE_TRADING_API_ALLOWED" = false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install pinned dependencies (no lifecycle scripts)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Check Research Center source-to-Paper contracts
+        run: |
+          set -Eeuo pipefail
+          node api-server/scripts/verify-research-center-predeploy-contract.mjs
+          node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
+          node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
+          node --test market-prediction-lab/tests/formula-auto-backtest-queue-v1.test.js market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
+
+      - name: Research server unit tests, evidence maturity and fail-closed cycles
+        run: |
+          set -Eeuo pipefail
+          npm --prefix research-production test
+          state="$RUNNER_TEMP/research-paper-scoped"
+          mkdir -p "$state"
+          node research-production/bin/research-cycle.mjs preflight \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$QA_HEAD_SHA"
+          node research-production/bin/research-cycle.mjs plan \
+            --profile all \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$state" \
+            --research-sha "$QA_HEAD_SHA" > "$RUNNER_TEMP/research-paper-plan.json"
+          node - "$RUNNER_TEMP/research-paper-plan.json" <<'NODE'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (p.taskCount !== 11 || p.stepCount !== 22
+              || p.liveTrading !== false || p.privateApi !== false || p.orderAuthority !== false) {
+            throw new Error('RESEARCH_PAPER_PLAN_NOT_SAFE_OR_INCOMPLETE');
+          }
+          NODE
+
+      - name: Focused Research/Paper integration route contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd api-server
+          for source in \
+            src/services/research-center-readonly-contract.service.test.ts \
+            src/services/research-adoption-review-gate.service.test.ts \
+            src/services/strategy-promotion-research-bridge.service.test.ts \
+            src/services/backtest-paper-handoff.service.test.ts
+          do
+            id="$(basename "$source" .ts)"
+            pnpm exec esbuild "$source" --bundle --platform=node --format=cjs --target=node22 \
+              --outfile="$RUNNER_TEMP/$id.cjs"
+            node --test "$RUNNER_TEMP/$id.cjs"
+          done
+
+  paper:
+    name: Four-market Paper Auto — Wallet, Worker, Fill, Journal and safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.QA_HEAD_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$QA_HEAD_SHA"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Four-market execution, sampler and full-cost settlement tests
+        run: |
+          set -Eeuo pipefail
+          node --test \
+            market-prediction-lab/tests/four-market-execution-v2.test.js \
+            market-prediction-lab/tests/four-market-paper-sampler-v1.test.js \
+            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js \
+            market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
+
+      - name: Paper-only, production order denial, journal and Telegram contracts
+        run: |
+          set -Eeuo pipefail
+          node --test .github/tests/trading-ops-consolidated-preflight.test.mjs \
+            .github/tests/production-trading-core-qa-contract.test.mjs
+          node api-server/scripts/verify-production-automatic-trading-gate.mjs
+
+      - name: Real backend Paper closure and four-market account unit tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd api-server
+          for source in \
+            src/services/admin-four-market-paper-capital.service.test.ts \
+            src/services/admin-four-market-paper-readback.service.test.ts \
+            src/services/member-auto-trading-background-worker.service.test.ts \
+            src/services/member-auto-trading-paper-position-bridge.service.test.ts \
+            src/services/paper-journal-sync.service.test.ts \
+            src/services/trade-automation-unified-journal-adapter.test.ts \
+            src/routes/paper-journal.smoke.test.ts \
+            src/routes/paper-trading.smoke.test.ts
+          do
+            id="$(basename "$source" .ts)"
+            pnpm exec esbuild "$source" --bundle --platform=node --format=cjs --target=node22 \
+              --outfile="$RUNNER_TEMP/$id.cjs"
+            # This Paper route test imports the ESM runtime bundle relative to
+            # repository root; the other bundled service tests are cwd-agnostic.
+            if [[ "$id" == 'paper-trading.smoke.test' ]]; then
+              (cd "$GITHUB_WORKSPACE" && node --test "$RUNNER_TEMP/$id.cjs")
+            else
+              node --test "$RUNNER_TEMP/$id.cjs"
+            fi
+          done
+
+  browser:
+    name: Only Research Center and Paper Auto Browser QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.QA_HEAD_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify exact source
+        run: |
+          set -Eeuo pipefail
+          [[ "$QA_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$QA_HEAD_SHA"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install isolated Chromium
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+      - name: Run scoped Research + Paper UI regressions only
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts \
+            e2e/research-paper-closed-loop-observer.spec.ts \
+            e2e/research-evidence-maturity.spec.ts \
+            e2e/research-reload-abort-contract.spec.ts \
+            e2e/phase6-paper-trading.spec.ts \
+            e2e/paper-trading-risk-copy-truth.spec.ts \
+            e2e/auto-trading-closed-outcome-failclosed.spec.ts \
+            e2e/admin-four-market-policy-off.spec.ts
+      - name: Attach scoped browser failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-paper-only-browser-${{ github.run_id }}
+          path: |
+            stock-analyzer/test-results
+            stock-analyzer/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+  verdict:
+    name: Exact-HEAD scoped QA verdict (not Production activation)
+    needs: [research, paper, browser]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Classify component outcomes without inventing runtime success
+        env:
+          RESEARCH_RESULT: ${{ needs.research.result }}
+          PAPER_RESULT: ${{ needs.paper.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const statuses = {
+            research: process.env.RESEARCH_RESULT,
+            paperAuto: process.env.PAPER_RESULT,
+            browser: process.env.BROWSER_RESULT,
+          };
+          const pass = Object.values(statuses).every((value) => value === 'success');
+          const receipt = {
+            schemaVersion: 'research-paper-dedicated-qa-v1',
+            headSha: process.env.QA_HEAD_SHA,
+            qaScope: 'RESEARCH_CENTER_AND_FOUR_MARKET_AUTO_PAPER_ONLY',
+            componentStatuses: statuses,
+            scopedCodeQaPassed: pass,
+            isolatedSimulationOnly: true,
+            deployedToProduction: false,
+            productionWorkerCycleVerified: false,
+            fourProductionWalletsVerified: false,
+            realProductionPaperFillVerified: false,
+            realProductionJournalSyncVerified: false,
+            telegramSentVerified: false,
+            candidateProfitabilityProven: false,
+            liveTradingEnabled: false,
+            realOrderSubmitted: false,
+            exchangePrivateRequestSent: false,
+            withdrawalRequested: false,
+          };
+          fs.writeFileSync('research-paper-dedicated-qa.json', JSON.stringify(receipt, null, 2) + '\n');
+          console.log(JSON.stringify({ scopedCodeQaPassed: pass, componentStatuses: statuses }));
+          if (!pass) process.exitCode = 1;
+          NODE
+      - name: Upload safe scoped QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-paper-only-qa-${{ env.QA_HEAD_SHA }}
+          path: research-paper-dedicated-qa.json
+          if-no-files-found: error
+          retention-days: 30
