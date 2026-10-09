@@ -19,7 +19,7 @@ import { getJournalSnapshot, syncJournalRecords } from '@/lib/paper-journal-sync
 type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fixture'];
 
 type TradingMode = 'auto' | 'paper';
-type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' | 'failed' | 'fixture';
+type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' | 'failed' | 'restricted' | 'fixture';
 const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
 const AUTO_PAPER_INITIAL_KRW = 500_000;
 
@@ -185,6 +185,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const testFixtureAccess = Boolean(fixture);
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
   const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
+  const canJournalSync = testFixtureAccess || auth.can('canAccessJournalSync');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
   const canPlaceOrders = testFixtureAccess || auth.can('canPlaceOrders');
   const canManagePilot = testFixtureAccess || auth.can('canManageMembers');
@@ -268,17 +269,24 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       return;
     }
     if (!userId || !canAuto) return;
+    // Associate members can view automatic/Paper trading but cannot read
+    // journal snapshots. Do not produce an intentional 403 as a background
+    // browser request; keep the backend capability/RLS restriction intact.
+    if (!canJournalSync) {
+      setAutoPaperStatus('restricted');
+      return;
+    }
     const controller = new AbortController();
     setAutoPaperStatus('checking');
     void inspectAutomaticPaperAccount(controller.signal)
       .then((status) => { if (!controller.signal.aborted) setAutoPaperStatus(status); })
       .catch(() => { if (!controller.signal.aborted) setAutoPaperStatus('failed'); });
     return () => controller.abort();
-  }, [userId, canAuto, fixture]);
+  }, [userId, canAuto, canJournalSync, fixture]);
 
   async function prepareAutomaticPaperAccount(isolateLegacy = false) {
     const expectedStatus = isolateLegacy ? 'blocked' : 'missing';
-    if (autoPaperBusy || !userId || !canAuto || fixture || autoPaperStatus !== expectedStatus) return;
+    if (autoPaperBusy || !userId || !canAuto || !canJournalSync || fixture || autoPaperStatus !== expectedStatus) return;
     if (isolateLegacy && !window.confirm(
       '과거 자동모의 거래와 미청산 연구용 포지션은 그대로 보존합니다. 새 50만원 계좌와는 분리하며 과거 손익을 0원이나 청산 완료로 변경하지 않습니다. 계속할까요?',
     )) return;
@@ -484,6 +492,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             {autoPaperStatus === 'ready' ? '서버 계좌 확인됨'
               : autoPaperStatus === 'missing' ? '계좌 준비 필요'
                 : autoPaperStatus === 'blocked' ? '기존 기록 확인 필요'
+                  : autoPaperStatus === 'restricted' ? '모의계좌 관리 권한 없음'
                   : autoPaperStatus === 'failed' ? '계좌 점검 실패'
                     : autoPaperStatus === 'fixture' ? '테스트 화면' : '확인 중'}
           </span>
@@ -513,7 +522,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <button
             type="button"
             className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
-            disabled={autoPaperBusy || !canAuto || Boolean(fixture)}
+            disabled={autoPaperBusy || !canAuto || !canJournalSync || Boolean(fixture)}
             onClick={() => void prepareAutomaticPaperAccount(true)}
             data-testid="prepare-isolated-automatic-paper-epoch"
           >
@@ -524,7 +533,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <button
             type="button"
             className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
-            disabled={autoPaperBusy || !canAuto || Boolean(fixture)}
+            disabled={autoPaperBusy || !canAuto || !canJournalSync || Boolean(fixture)}
             onClick={() => void prepareAutomaticPaperAccount()}
             data-testid="prepare-automatic-paper-account"
           >
