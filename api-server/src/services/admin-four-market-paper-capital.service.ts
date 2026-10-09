@@ -9,7 +9,6 @@ export const ADMIN_MARKET_INITIAL_KRW = 1_000_000;
 export const ADMIN_TOTAL_INITIAL_KRW = 4 * ADMIN_MARKET_INITIAL_KRW;
 export const ADMIN_MARKET_WALLET_VERSION = 'admin-four-market-paper-v2' as const;
 export const ADMIN_WALLET_CONFIRMATION = 'START_ADMIN_FOUR_1M_PAPER_WALLETS_PRESERVE_HISTORY' as const;
-const MARKET_SET = new Set<string>(ADMIN_FOUR_PAPER_MARKETS);
 const INVALID_WALLET = 'ADMIN_PAPER_WALLET_INVALID';
 
 export function adminPaperMarketFromPlan(
