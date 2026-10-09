@@ -1,0 +1,173 @@
+name: Telegram Six-Room Vault Read-Only Preflight
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-sixroom-vault-readonly-preflight.mjs
+      - .github/workflows/telegram-sixroom-vault-readonly-preflight.yml
+      - .github/tests/telegram-sixroom-vault-readonly-preflight.test.mjs
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: telegram-sixroom-vault-preflight-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Verify Vault preflight is secret-safe and mutation-free
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test .github/tests/telegram-sixroom-vault-readonly-preflight.test.mjs
+
+  inspect:
+    name: Read-only Production Vault and bot rights check
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-sixroom-vault-preflight ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse exact owner preflight request
+        id: command
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const m = /^\/run-telegram-sixroom-vault-preflight ([0-9a-f]{40})$/u.exec(String(process.env.COMMAND || '').trim());
+          if (!m) { console.error('VAULT_PREFLIGHT_EXACT_SHA_REQUIRED'); process.exit(1); }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'main_sha='+m[1]+'\n');
+          NODE
+
+      - name: Verify immutable checkout and main ancestry
+        env:
+          EXPECTED_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          git cat-file -e "$EXPECTED_MAIN_SHA^{commit}"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main
+          echo 'VAULT_PREFLIGHT_IMMUTABLE_MAIN_ANCESTRY_OK'
+
+      - name: Prepare protected Production SSH (no secret logging)
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$PROD_DATABASE_URL" ]]
+          [[ "$PROD_DATABASE_URL" != *$'\n'* ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+
+      - name: Read-only Vault, PM2 identity and bot-room verification
+        id: inspection
+        env:
+          EXPECTED_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          output="$RUNNER_TEMP/telegram-sixroom-vault-sanitized.json"
+          printf 'SANITIZED_REPORT=%s\n' "$output" >> "$GITHUB_ENV"
+          remote_command="$(printf 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; EXPECTED_MAIN_SHA=%q TELEGRAM_SIXROOM_VAULT_PREFLIGHT_EXECUTE=true node --input-type=module -' "$EXPECTED_MAIN_SHA")"
+          {
+            printf '%s\n' "$PROD_DATABASE_URL"
+            cat ops/telegram-sixroom-vault-readonly-preflight.mjs
+          } | ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$output"
+          node - "$output" <<'NODE'
+          const fs = require('node:fs');
+          const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expected = ['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES','HOLDINGS','AUTO_TRADING'];
+          if (report.schemaVersion !== 'telegram-sixroom-vault-readonly-v1'
+            || report.readOnly !== true || report.secretValuesRecorded !== false
+            || report.serverMutations !== 0 || report.telegramSends !== 0
+            || report.financialMutations !== 0 || report.tradingAuthorityModified === true
+            || Object.keys(report.roomResults ?? {}).sort().join() !== expected.sort().join()
+            || !/^[A-Z_]+$/u.test(String(report.classification ?? ''))
+            || Object.values(report.roomResults).some(v => !/^[A-Z_]+$/u.test(String(v)))) {
+            console.error('VAULT_PREFLIGHT_UNSAFE_EVIDENCE'); process.exit(1);
+          }
+          for (const sha of [report.mainSha, report.pm2Sha, report.markerSha]) {
+            if (sha !== null && !/^[0-9a-f]{40}$/u.test(sha)) {
+              console.error('VAULT_PREFLIGHT_SHA_INVALID'); process.exit(1);
+            }
+          }
+          console.log('VAULT_PREFLIGHT_SANITIZED_EVIDENCE_VALID');
+          NODE
+
+      - name: Report safe classification (no IDs, UUIDs or tokens)
+        env:
+          REPORT: ${{ env.SANITIZED_REPORT }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const v = JSON.parse(fs.readFileSync(process.env.REPORT, 'utf8'));
+            const statuses = Object.entries(v.roomResults).map(([k, code]) => '- ' + k + ': ' + code);
+            const body = [
+              'Telegram six-room Vault READ-ONLY Production preflight',
+              '- Expected main SHA: ' + (v.mainSha || 'invalid'),
+              '- Actual Production PM2 SHA: ' + (v.pm2Sha || 'unverified'),
+              '- Actual deploy marker SHA: ' + (v.markerSha || 'unverified'),
+              '- Production PM2 online: ' + String(v.pm2Online),
+              '- Classification: ' + v.classification,
+              '- Six-room Vault config valid: ' + String(v.vaultValid),
+              '- Vault config reason: ' + (v.vaultReason || 'none'),
+              '- Owner membership proof / config validated: ' + String(v.vaultValid),
+              '- Bot identity verified: ' + String(v.botIdentityVerified),
+              '- Existing AUTO room differs from Vault: ' + String(v.autoRoomMismatch),
+              '- Pre-existing Telegram activation flag: ' + String(v.telegramActivationEnabled),
+              ...statuses,
+              '- Server mutations / Telegram sends / financial mutations: 0 / 0 / 0',
+              '- Chat IDs, owner UUID, bot token and DB credentials published: false',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: 1555, body,
+            });
