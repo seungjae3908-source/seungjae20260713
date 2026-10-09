@@ -56,6 +56,8 @@ export function summarizeLightweightMarketWatch(
     || (v.status === 'THROTTLED' && budget.status !== 'THROTTLED')
     || (v.status === 'HOLD' && budget.status !== 'HOLD')
     || (budget.status === 'RUN' && ['HOLD', 'THROTTLED'].includes(v.status))
+    || (budget.status === 'HOLD' && v.status !== 'HOLD')
+    || (budget.status === 'THROTTLED' && v.status !== 'THROTTLED')
     || !SAFE_SOURCE.test(String(budget.reason ?? ''))) return empty('INVALID', true);
   const safety = object(v.safety);
   if (!safety || safety.researchOnly !== true || safety.orderAuthority !== 'NONE'
@@ -78,7 +80,8 @@ export function summarizeLightweightMarketWatch(
       || row.observedCount > row.listedCount
       || !safeCount(row.newCandidates) || row.newCandidates > 12
       || row.newCandidates > row.observedCount
-      || (row.status === 'READY' && row.observedCount !== row.listedCount)
+      || (row.status === 'READY'
+        && (row.observedCount === 0 || row.observedCount !== row.listedCount))
       || (BLOCKED.test(row.status) && (row.observedCount !== 0 || row.newCandidates !== 0))
       || row.executionAuthority !== 'NONE') return empty('INVALID', true);
     markets.push(Object.freeze({
@@ -95,12 +98,17 @@ export function summarizeLightweightMarketWatch(
     || !safeCount(stats.candidatesToday)
     || !safeCount(stats.cyclesSinceRelease) || stats.cyclesSinceRelease < stats.cyclesToday)
     return empty('INVALID', true);
-  if (v.status === 'OBSERVING_ALL_FOUR' && markets.some((x) => x.status !== 'READY'))
-    return empty('INVALID', true);
-  if (budget.status !== 'RUN' && markets.some((x) => !BLOCKED.test(x.status)))
+  const coverage = markets.filter((x) => x.status === 'READY').length;
+  const usable = markets.filter((x) => HEALTHY_SOURCE.has(x.status)).length;
+  // Raw watch status must agree with the measured four-market source map.
+  // A forged PARTIAL snapshot with four complete feeds cannot become OBSERVING.
+  if ((v.status === 'OBSERVING_ALL_FOUR' && coverage !== MARKETS.length)
+    || (v.status === 'PARTIAL_MARKET_COVERAGE'
+      && (usable === 0 || coverage === MARKETS.length))
+    || (v.status === 'BLOCKED_DATA' && usable !== 0)
+    || (budget.status !== 'RUN' && usable !== 0))
     return empty('INVALID', true);
   const ageMs = Math.max(0, nowMs - observedAt);
-  const coverage = markets.filter((x) => x.status === 'READY').length;
   return Object.freeze({
     contract: WATCH_READBACK_CONTRACT, present: true,
     // 'OBSERVING' describes fresh data discovery ONLY, not actual profitable work.
