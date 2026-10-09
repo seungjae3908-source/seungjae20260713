@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { compiledMomentumFormula, compiledFuturesMomentumFormula } from './research-bundle-formula-fixture.js';
 import {
+  FORMULA_AUTO_BACKTEST_PRODUCER_INPUT_CONTRACT_V1,
   FORMULA_AUTO_BACKTEST_QUEUE_ITEM_CONTRACT_V1,
+  buildFormulaProducedTrainInputV1,
+  ingestFormulaProducedTrainInputsV1,
   FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1,
   buildFormulaPaperStrategyRegistryV1,
   evaluateFormulaAutoBacktestQueueItemV1,
@@ -359,4 +362,69 @@ test('cached registry cannot disable future signal and canonical Paper admission
   await writeFile(registryPath, JSON.stringify(original));
   const replay = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
   assert.equal(replay.paperRegisteredCount, 0);
+});
+
+
+test('staged canonical TRAIN producer input reaches the backtest inbox and never becomes Paper PASS', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-producer-intake-'));
+  const staged = join(root, 'formula-backtest', 'producer-outbox');
+  const sha = 'a'.repeat(40);
+  await mkdir(staged, { recursive: true, mode: 0o700 });
+  const envelope = buildFormulaProducedTrainInputV1({ item: queueItem(), researchCodeSha: sha });
+  assert.equal(envelope.contract, FORMULA_AUTO_BACKTEST_PRODUCER_INPUT_CONTRACT_V1);
+  await writeFile(join(staged, envelope.itemDigest + '.json'), JSON.stringify(envelope), { mode: 0o600 });
+
+  const result = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: sha });
+  assert.equal(result.stagedIntake.status, 'STAGED_TRAIN_IMPORTED');
+  assert.equal(result.stagedIntake.imported, 1);
+  assert.equal(result.stagedIntake.producerBound, false);
+  assert.equal(result.stagedIntake.upstreamPublicDataAttested, false);
+  assert.equal(result.paperRegisteredCount, 0);
+  assert.equal(result.counts.PASS, 0);
+  assert.equal(result.scanned, 1);
+  const second = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: sha });
+  assert.equal(second.stagedIntake.imported, 0);
+  assert.equal(second.stagedIntake.alreadyQueued, 1);
+  assert.equal(second.paperRegisteredCount, 0);
+  assert.equal((await readdir(join(root, 'formula-backtest', 'results'))).length, 1);
+});
+
+test('staged producer rejects mismatched SHA, digest, file permissions and links without enqueuing', async () => {
+  const sha = 'a'.repeat(40);
+  for (const mutate of [
+    (record) => ({ ...record, researchCodeSha: 'b'.repeat(40) }),
+    (record) => ({ ...record, itemDigest: 'c'.repeat(64) }),
+    (record) => ({ ...record, item: { ...record.item, dataset: { ...record.item.dataset, stageEvidence: { oos: { status: 'PASS' } } } }),
+  ]) {
+    const root = await mkdtemp(join(tmpdir(), 'formula-producer-forged-'));
+    const staged = join(root, 'formula-backtest', 'producer-outbox');
+    await mkdir(staged, { recursive: true, mode: 0o700 });
+    const valid = buildFormulaProducedTrainInputV1({ item: queueItem(), researchCodeSha: sha });
+    await writeFile(join(staged, valid.itemDigest + '.json'), JSON.stringify(mutate(valid)), { mode: 0o600 });
+    await assert.rejects(() => ingestFormulaProducedTrainInputsV1({ stateRoot: root, researchCodeSha: sha }), /FORMULA_INTAKE_/);
+    assert.equal((await readdir(join(root, 'formula-backtest'))).includes('inbox'), false);
+  }
+  const root = await mkdtemp(join(tmpdir(), 'formula-producer-file-mode-'));
+  const staged = join(root, 'formula-backtest', 'producer-outbox');
+  await mkdir(staged, { recursive: true, mode: 0o700 });
+  const valid = buildFormulaProducedTrainInputV1({ item: queueItem(), researchCodeSha: sha });
+  const path = join(staged, valid.itemDigest + '.json');
+  await writeFile(path, JSON.stringify(valid), { mode: 0o600 });
+  await chmod(path, 0o644);
+  await assert.rejects(() => ingestFormulaProducedTrainInputsV1({ stateRoot: root, researchCodeSha: sha }), /FORMULA_INTAKE_FILE_UNSAFE/);
+  const symlinkRoot = await mkdtemp(join(tmpdir(), 'formula-producer-symlink-'));
+  const symlinkDir = join(symlinkRoot, 'formula-backtest', 'producer-outbox');
+  await mkdir(symlinkDir, { recursive: true, mode: 0o700 });
+  await symlink(path, join(symlinkDir, valid.itemDigest + '.json'));
+  await assert.rejects(() => ingestFormulaProducedTrainInputsV1({ stateRoot: symlinkRoot, researchCodeSha: sha }), /FORMULA_INTAKE_/);
+});
+
+test('missing authentic formula producer stays observable as missing rather than invented ready', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-producer-missing-'));
+  const summary = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha: 'a'.repeat(40) });
+  assert.equal(summary.stagedIntake.status, 'MISSING_PRODUCER_OUTBOX');
+  assert.equal(summary.stagedIntake.producerBound, false);
+  assert.equal(summary.stagedIntake.paperDispatchAllowed, false);
+  assert.equal(summary.scanned, 0);
+  assert.equal(summary.paperRegisteredCount, 0);
 });
