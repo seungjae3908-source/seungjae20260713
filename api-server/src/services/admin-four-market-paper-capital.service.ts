@@ -303,8 +303,11 @@ export function projectAdminMarketCapital(
     dailyLosingTrades,
     settledTrades: seen.size, blockers: Object.freeze([...new Set(errors)]),
     settlementReady: errors.length === 0,
+    // Ordinary losses draw down actual available Paper equity. Never
+    // replenish the 1m seed or stop after a single small loss: five losing
+    // trades or the independent daily realized-loss limit are the blockers.
     newEntriesAllowed: errors.length === 0
-      && operatingCapitalKrw >= ADMIN_MARKET_INITIAL_KRW
+      && operatingCapitalKrw > 0
       && dailyLosingTrades < 5
       && dailyNetPnlKrw > -50_000,
     reserveWithdrawalAutomatic: false as const,

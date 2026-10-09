@@ -221,3 +221,32 @@ test('legacy and other-market Paper fills cannot be replayed into a new 1m admin
   assert.equal(invalid.valid,false);
   assert.deepEqual(invalid.orders,[]);
 });
+
+test('one verified small loss reduces actual collateral but does not falsely trigger five-loss stop', () => {
+  const now = AT.getTime() + 10_000;
+  const loss = [{
+    id: 'first-loss', market: 'crypto_spot' as const,
+    closedAt: new Date(AT.getTime() + 1_000).toISOString(),
+    netPnlKrw: -5_000, fullCostsVerified: true, closeTimeFxVerified: true,
+  }];
+  const capital = projectAdminMarketCapital('crypto_spot', loss, now);
+  assert.equal(capital.operatingCapitalKrw, 995_000);
+  assert.equal(capital.reserveKrw, 0);
+  assert.equal(capital.dailyLosingTrades, 1);
+  assert.equal(capital.newEntriesAllowed, true);
+  const budget = adminMarketPaperRiskBudget({
+    market: 'crypto_spot', records: wallets(), openPlans: [],
+    verifiedCapital: capital, nowMs: now,
+  });
+  assert.equal(budget.ready, true);
+  assert.equal(budget.accountValueKrw, 995_000);
+  assert.equal(budget.availableToTradeKrw, 995_000);
+  const stopped = projectAdminMarketCapital('crypto_spot',
+    Array.from({ length: 5 }, (_, i) => ({
+      id: 'loss-'+i, market: 'crypto_spot' as const,
+      closedAt: new Date(AT.getTime() + (i+1)*1_000).toISOString(),
+      netPnlKrw: -5_000, fullCostsVerified: true, closeTimeFxVerified: true,
+    })), now);
+  assert.equal(stopped.dailyLosingTrades, 5);
+  assert.equal(stopped.newEntriesAllowed, false);
+});

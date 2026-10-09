@@ -8,7 +8,7 @@ import type { TradingPolicy } from '../services/trade-automation.types';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { enforceMemberTradingPolicy } from '../services/trade-automation-policy-guard.service';
 import { automaticLiveExecutionEnabled } from '../services/trade-automation.service';
-import { getUserSupabase } from '../lib/supabase';
+import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW, ADMIN_WALLET_CONFIRMATION,
   adminPaperWalletId, buildAdminFourMarketPaperBootstrap,
@@ -86,6 +86,7 @@ type PaperJournalDependencies = {
   }>;
   adminPolicyReader: (request: AuthenticatedRequest, ownerId: string) => Promise<TradingPolicy>;
   adminPolicyWriter: (request: AuthenticatedRequest, ownerId: string, policy: TradingPolicy) => Promise<void>;
+  adminRlsGuardReader: (request: AuthenticatedRequest) => Promise<boolean>;
   adminFourMarketInsert: (
     request: AuthenticatedRequest, ownerId: string,
     records: ReturnType<typeof buildAdminFourMarketPaperBootstrap>,
@@ -298,13 +299,35 @@ export function createPaperJournalRouter(
       if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
       await createSupabaseTradingRepository(request.accessToken, userId).savePolicy(userId, policy);
     });
+  const adminRlsGuardReader = dependencies.adminRlsGuardReader
+    ?? (async (request: AuthenticatedRequest) => {
+      if (!request.accessToken) return false;
+      const { data, error } = await getUserSupabase(request.accessToken)
+        .rpc('admin_four_paper_wallet_rls_guard_ready');
+      return !error && data === true;
+    });
+  const requireAdminRlsGuard = async (request: AuthenticatedRequest) => {
+    if (await adminRlsGuardReader(request) !== true) {
+      throw new PaperJournalError('ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED',
+        '시장별 가상계좌의 데이터베이스 보호가 확인되지 않았습니다.', 409);
+    }
+  };
+  
   const adminFourMarketInsert = dependencies.adminFourMarketInsert
     ?? (async (request: AuthenticatedRequest, userId: string,
       records: ReturnType<typeof buildAdminFourMarketPaperBootstrap>) => {
-      if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
-      // Four rows in ONE PostgreSQL INSERT statement: all-or-none, insert-only.
-      // Never use the generic paper journal upsert or a service-role bypass.
-      const { data, error } = await getUserSupabase(request.accessToken)
+      if (!request.accessToken || !request.member?.id || userId !== request.member.id
+        || !hasCapability(request.member, 'canManageMembers')) {
+        throw new PaperJournalError('CAPABILITY_REQUIRED', '관리자 권한이 필요합니다.', 403);
+      }
+      // RLS denies direct authenticated V2 wallet inserts and amendments.
+      // Only this authenticated/confirmed exact-owner server operation may
+      // use a privileged client. Never fall back to an anon connection.
+      if (!hasSupabaseServerKey()) throw new PaperJournalError(
+        'ADMIN_PAPER_PRIVILEGED_INSERT_NOT_CONFIGURED',
+        '보호된 모의계좌 저장 권한이 준비되지 않았습니다.', 503);
+      // One PostgreSQL INSERT for all four records: insert-only, no upsert.
+      const { data, error } = await getSupabase()
         .from('paper_accounts').insert(records.map((row) => ({
           user_id: userId, id: row.id, payload: row.payload,
           version: 1, deleted_at: null, updated_at: now().toISOString(),
@@ -411,14 +434,20 @@ export function createPaperJournalRouter(
   router.get('/paper-journal/admin-four-market/status', async (request: AuthenticatedRequest, response) => {
     try {
       const owner = requireAdminPaperScope(request);
-      const [records, history, policy] = await Promise.all([
+      const [records, history, policy, rlsGuardReady] = await Promise.all([
         repositoryFactory(request).listSnapshot(owner),
         automaticPaperHistoryReader(request, owner),
         adminPolicyReader(request, owner),
+        adminRlsGuardReader(request),
       ]);
+      const assessment = adminWalletCreationDecision(
+        records, history.orders, history.plans, policy, now().getTime());
+      const creationBlockers = rlsGuardReady ? assessment.creationBlockers
+        : [...new Set([...assessment.creationBlockers, 'ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED'])];
       return response.json({
         ok: true, readOnlyProbe: true, ownerScope: 'SELF', administratorOnly: true,
-        ...adminWalletCreationDecision(records, history.orders, history.plans, policy, now().getTime()),
+        ...assessment, rlsGuardReady, canCreate: assessment.canCreate && rlsGuardReady,
+        creationBlockers,
         policy: {
           totalCapitalKrw: policy.totalCapitalKrw,
           maxOrderKrw: policy.maxOrderKrw,
@@ -443,6 +472,7 @@ export function createPaperJournalRouter(
       if (!adminAutomaticLiveGateOff()) {
         throw new PaperJournalError('ADMIN_PAPER_REAL_AUTO_GATE_MUST_BE_OFF','실자동매매 상태에서는 자본 정책을 변경할 수 없습니다.',409);
       }
+      await requireAdminRlsGuard(request);
       const [records, history, policyBefore] = await Promise.all([
         repositoryFactory(request).listSnapshot(owner),
         automaticPaperHistoryReader(request, owner),
@@ -487,6 +517,7 @@ export function createPaperJournalRouter(
     try {
       if (requestSize(request) > MAX_REQUEST_BYTES) throw new PaperJournalError('REQUEST_TOO_LARGE','요청 크기 제한을 초과했습니다.',413);
       const owner = requireAdminPaperScope(request);
+      await requireAdminRlsGuard(request);
       if (request.body?.confirmation !== ADMIN_WALLET_CONFIRMATION) {
         throw new PaperJournalError('ADMIN_FOUR_MARKET_CONFIRMATION_REQUIRED',
           '기존 기록을 보존하며 4시장 모의계좌를 만드는 확인이 필요합니다.',409);

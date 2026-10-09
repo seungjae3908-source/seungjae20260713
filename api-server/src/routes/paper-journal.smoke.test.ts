@@ -57,6 +57,7 @@ async function startServer(options: {
   authenticated?: boolean; repository?: PaperJournalRepository; throwFactory?: boolean;
   reviewProvider?: TradingReviewProvider | null; memberTier?: string;
   automaticPaperHistory?: { orders: any[]; plans: any[] };
+  adminRlsGuardReader?: (req: unknown) => Promise<boolean>;
   adminPolicyReader?: (req: unknown, owner: string) => Promise<any>;
   adminPolicyWriter?: (req: unknown, owner: string, policy: any) => Promise<void>;
   adminFourMarketInsert?: (req: unknown, owner: string, records: any[]) => Promise<any[]>;
@@ -74,6 +75,7 @@ async function startServer(options: {
     now: () => NOW,
     reviewProvider: options.reviewProvider === undefined ? reviewProvider : options.reviewProvider,
     automaticPaperHistoryReader: async () => options.automaticPaperHistory ?? { orders: [], plans: [] },
+    adminRlsGuardReader: options.adminRlsGuardReader ?? (async () => true),
     ...(options.adminPolicyReader ? { adminPolicyReader: options.adminPolicyReader } : {}),
     ...(options.adminPolicyWriter ? { adminPolicyWriter: options.adminPolicyWriter } : {}),
     ...(options.adminFourMarketInsert ? { adminFourMarketInsert: options.adminFourMarketInsert } : {}),
@@ -711,4 +713,39 @@ test('admin 1m setup rejects AUTO-on policies before any capital mutation', asyn
     });
     assert.equal(create.status,409);
   } finally { await new Promise<void>(resolve=>fixture.server.close(()=>resolve())); }
+});
+
+test('administrator wallet mutation refuses unknown database RLS state, even with valid owner confirmation', async () => {
+  let policyWrites = 0;
+  let walletInserts = 0;
+  const fixture = await startServer({
+    memberTier: 'admin',
+    adminRlsGuardReader: async () => false,
+    adminPolicyReader: async () => normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY, mode:'approval', automaticEnabled:false,
+      totalCapitalKrw:1_000_000,
+    }),
+    adminPolicyWriter: async () => { policyWrites += 1; },
+    adminFourMarketInsert: async () => { walletInserts += 1; return []; },
+  });
+  const prefix = fixture.baseUrl + '/api/paper-journal/admin-four-market';
+  const request = (suffix: string, confirmation: string) => fetch(prefix + suffix, {
+    method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ confirmation }),
+  });
+  try {
+    const status = await safeJson(await fetch(prefix + '/status'));
+    assert.equal(status.rlsGuardReady, false);
+    assert.equal(status.canCreate, false);
+    assert.ok(status.creationBlockers.includes('ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED'));
+    const policyResp = await request('/prepare-policy','SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY');
+    assert.equal(policyResp.status,409);
+    assert.equal((await safeJson(policyResp)).code,'ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED');
+    const bootstrapResp = await request('/bootstrap',ADMIN_WALLET_CONFIRMATION);
+    assert.equal(bootstrapResp.status,409);
+    assert.equal((await safeJson(bootstrapResp)).code,'ADMIN_PAPER_DATABASE_WALLET_GUARD_REQUIRED');
+    assert.equal(policyWrites,0);
+    assert.equal(walletInserts,0);
+  } finally {
+    await new Promise<void>(resolve => fixture.server.close(() => resolve()));
+  }
 });
