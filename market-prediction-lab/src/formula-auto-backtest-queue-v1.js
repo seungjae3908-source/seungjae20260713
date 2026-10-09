@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, open, readFile, readdir, rename } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { assertFormulaCandidateV1 } from './autonomous-strategy-formula-generator-v1.js';
@@ -12,6 +13,7 @@ import {
   runResearchTournamentV1,
 } from './research-tournament-engine-v1.js';
 
+export const FORMULA_AUTO_BACKTEST_PRODUCER_INPUT_CONTRACT_V1 = 'research-formula-produced-train-input/v1';
 export const FORMULA_AUTO_BACKTEST_QUEUE_ITEM_CONTRACT_V1 = 'research-formula-auto-backtest-queue-item/v1';
 export const FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1 = 'research-formula-auto-backtest-result/v1';
 export const FORMULA_AUTO_BACKTEST_SUMMARY_CONTRACT_V1 = 'research-formula-auto-backtest-summary/v1';
@@ -439,6 +441,161 @@ export async function evaluateFormulaAutoBacktestQueueItemV1(item) {
   });
 }
 
+
+/**
+ * Research producer -> TRAIN queue intake. This accepts only structurally
+ * valid, private, immutable staged items bound to the pinned Research SHA.
+ * It does NOT authenticate the upstream public data supplier, infer OOS,
+ * mint PASS, create Paper admission, or dispatch any financial order.
+ */
+const INTAKE_FILE_NAME = /^[0-9a-f]{64}\.json$/u;
+const MAX_INTAKE_BYTES = 8 * 1024 * 1024;
+
+function validateIntakeSha(value) {
+  if (typeof value !== 'string' || !/^[0-9a-f]{40}$/u.test(value)) {
+    throw new Error('FORMULA_INTAKE_EXACT_RESEARCH_SHA_REQUIRED');
+  }
+  return value;
+}
+
+export function buildFormulaProducedTrainInputV1({ item, researchCodeSha } = {}) {
+  const sha = validateIntakeSha(researchCodeSha);
+  validateFormulaAutoBacktestQueueItemV1(item);
+  return Object.freeze({
+    schemaVersion: 1,
+    contract: FORMULA_AUTO_BACKTEST_PRODUCER_INPUT_CONTRACT_V1,
+    researchCodeSha: sha,
+    itemDigest: digest(item),
+    item: structuredClone(item),
+  });
+}
+
+async function assertPrivateIntakeDirectory(path) {
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()
+    || (info.mode & 0o077) !== 0
+    || (typeof process.getuid === 'function' && info.uid !== process.getuid())
+    || await realpath(path) !== path) {
+    throw new Error('FORMULA_INTAKE_DIRECTORY_UNSAFE');
+  }
+}
+
+async function readPrivateIntakeJson(path) {
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const first = await handle.stat();
+    if (!first.isFile() || first.nlink !== 1 || first.size <= 0 || first.size > MAX_INTAKE_BYTES
+      || (first.mode & 0o077) !== 0
+      || (typeof process.getuid === 'function' && first.uid !== process.getuid())) {
+      throw new Error('FORMULA_INTAKE_FILE_UNSAFE');
+    }
+    const bytes = await handle.readFile();
+    const last = await handle.stat();
+    if (bytes.length !== first.size || last.size !== first.size
+      || last.ino !== first.ino || last.mtimeMs !== first.mtimeMs
+      || last.nlink !== 1) {
+      throw new Error('FORMULA_INTAKE_FILE_CHANGED_DURING_READ');
+    }
+    try {
+      return JSON.parse(bytes.toString('utf8'));
+    } catch {
+      throw new Error('FORMULA_INTAKE_JSON_INVALID');
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+function intakeReport(status, count, imported, alreadyQueued) {
+  return Object.freeze({
+    status,
+    stagedItemCount: count,
+    imported,
+    alreadyQueued,
+    producerBound: false,
+    upstreamPublicDataAttested: false,
+    verifiedOos: false,
+    paperDispatchAllowed: false,
+    financialMutationCount: 0,
+    privateRequestCount: 0,
+    executionAuthority: 'NONE',
+  });
+}
+
+export async function ingestFormulaProducedTrainInputsV1({
+  stateRoot,
+  researchCodeSha,
+  maximumItems = 50,
+} = {}) {
+  const sha = validateIntakeSha(researchCodeSha);
+  const root = ensureStateRoot(stateRoot);
+  if (!Number.isSafeInteger(maximumItems) || maximumItems < 1 || maximumItems > 50) {
+    throw new Error('FORMULA_INTAKE_BATCH_LIMIT_INVALID');
+  }
+  const staged = join(root, 'formula-backtest', 'producer-outbox');
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  let fileNames;
+  try {
+    fileNames = await readdir(staged);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return intakeReport('MISSING_PRODUCER_OUTBOX', null, 0, 0);
+    throw error;
+  }
+  await assertPrivateIntakeDirectory(staged);
+  await mkdir(inbox, { recursive: true, mode: 0o700 });
+  await assertPrivateIntakeDirectory(inbox);
+  const files = fileNames.filter((name) => name.endsWith('.json')).sort();
+  if (files.length > 10_000 || files.some((name) => !INTAKE_FILE_NAME.test(name))) {
+    throw new Error('FORMULA_INTAKE_FILENAME_OR_BACKLOG_INVALID');
+  }
+  let imported = 0;
+  let alreadyQueued = 0;
+  for (const name of files) {
+    const record = await readPrivateIntakeJson(join(staged, name));
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || Object.keys(record).sort().join(',') !== 'contract,item,itemDigest,researchCodeSha,schemaVersion'
+      || record.schemaVersion !== 1
+      || record.contract !== FORMULA_AUTO_BACKTEST_PRODUCER_INPUT_CONTRACT_V1
+      || record.researchCodeSha !== sha
+      || typeof record.itemDigest !== 'string'
+      || !/^[0-9a-f]{64}$/u.test(record.itemDigest)
+      || name !== record.itemDigest + '.json'
+      || digest(record.item) !== record.itemDigest) {
+      throw new Error('FORMULA_INTAKE_PRODUCER_CONTRACT_INVALID');
+    }
+    // TRAIN-only canonical validator rejects future candles, mismatched
+    // market/direction/timeframe, credentials and untrusted OOS/cost claims.
+    validateFormulaAutoBacktestQueueItemV1(record.item);
+    const destination = join(inbox, name);
+    try {
+      const previous = await readPrivateIntakeJson(destination);
+      if (digest(previous) !== record.itemDigest) throw new Error('FORMULA_INTAKE_EXISTING_QUEUE_CONFLICT');
+      alreadyQueued += 1;
+      continue;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (imported >= maximumItems) continue;
+    try {
+      await writeOnce(destination, record.item);
+      imported += 1;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const previous = await readPrivateIntakeJson(destination);
+      if (digest(previous) !== record.itemDigest) throw new Error('FORMULA_INTAKE_EXISTING_QUEUE_CONFLICT');
+      alreadyQueued += 1;
+    }
+  }
+  return intakeReport(
+    files.length === 0 ? 'EMPTY_PRODUCER_OUTBOX' : imported > 0 ? 'STAGED_TRAIN_IMPORTED' : 'STAGED_TRAIN_ALREADY_QUEUED',
+    files.length, imported, alreadyQueued,
+  );
+}
+
+
 async function writeOnce(path, value) {
   await mkdir(resolve(path, '..'), { recursive: true, mode: 0o700 });
   const handle = await open(path, 'wx', 0o600);
@@ -480,6 +637,11 @@ export async function processFormulaAutoBacktestQueueV1({
   }
   // Rotate by the last inspected filename, rather than replaying the first
   // alphabetical 50 forever. Original inputs/results remain immutable.
+  const stagedIntake = await ingestFormulaProducedTrainInputsV1({
+    stateRoot: root,
+    researchCodeSha,
+    maximumItems,
+  });
   const allFiles = (await readdir(inbox)).filter((name) => SAFE_FILE.test(name)).sort();
   let previousSummary = null;
   try {
@@ -606,6 +768,7 @@ export async function processFormulaAutoBacktestQueueV1({
     generatedAt: new Date().toISOString(),
     scanned: files.length,
     inboxCount: allFiles.length,
+    stagedIntake,
     lastProcessedFileName: files.at(-1) ?? previousCursor,
     counts,
     paperRegisteredCount: paperRegistry.entryCount,
