@@ -75,6 +75,22 @@ test('PR validation never requests Staging secrets, deploy, private provider or 
   assert.ok(!workflow.includes("contents: write"));
   assert.ok(!workflow.includes("run_full_validation: 'false'"));
 });
+test('Publisher binding never crosses the GitHub masked job-output boundary', () => {
+  requireAll(workflow, [
+    'Resolve Staging admin publisher binding inside same protected deploy job',
+    'runStagingAdminAuthPreflight();',
+    'STAGING_BINDING_FILE=',
+    'STAGING_CORE_LOCAL_PUBLISHER_BINDING_INVALID',
+    'staging-core-publisher-binding',
+    'rm -f -- "$RUNNER_TEMP/staging-core-publisher-binding"',
+    'STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}',
+    'STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}',
+  ]);
+  assert.ok(!workflow.includes('needs.owner-gate.outputs.publisher_digest'));
+  assert.ok(!workflow.includes('publisher_digest: ${{ steps.publisher.outputs.publisher_sha256 }}'));
+  assert.ok(workflow.indexOf('Resolve Staging admin publisher binding inside same protected deploy job')
+    < workflow.indexOf('Deploy exact SHA using existing Staging rollback/canary isolation'));
+});
 test('protected Stage deploy is exact-main, isolated, serialized with official full Staging and cleans SSH credentials', () => {
   requireAll(workflow, [
     "needs.owner-gate.outputs.action == 'deploy'",
@@ -85,7 +101,7 @@ test('protected Stage deploy is exact-main, isolated, serialized with official f
     'STAGING_PORT=18083',
     'STAGING_CANARY_PORT=18084',
     'ops/deploy-staging.sh',
-    'Destroy Staging SSH deployment authority',
+    'Destroy Staging SSH deployment authority and publisher binding',
     'test ! -e "$HOME/.ssh/id_ed25519"',
     'STAGING_TRADING_CORE_EXACT_SHA_VERIFIED',
     'v?.deployMarkerSha', 'v?.backgroundWorkersEnabled',
