@@ -1,4 +1,4 @@
-import type { TradingAssetClass, TradingPlan } from './trade-automation.types';
+import type { TradingAssetClass, TradingOrder, TradingPlan } from './trade-automation.types';
 import type { PaperJournalSyncRecord, StoredPaperJournalRecord } from './paper-journal.types';
 
 export const ADMIN_FOUR_PAPER_MARKETS = [
@@ -133,6 +133,40 @@ export function inspectAdminFourMarketPaperWallets(
     automaticWithdrawalEnabled: false as const,
   });
 }
+/**
+ * Settlement and reserve calculations must only see canonical orders from the
+ * exact DB-owned market wallet epoch. This scope is NEVER a risk-history
+ * deletion: the risk evidence function still sees complete, immutable orders.
+ */
+export function adminMarketCurrentEpochSettlementScope(input: {
+  market: AdminPaperMarket;
+  plans: readonly TradingPlan[];
+  orders: readonly TradingOrder[];
+  openedAtMs: number;
+  nowMs: number;
+}) {
+  if (!Number.isFinite(input.openedAtMs) || !Number.isFinite(input.nowMs)
+    || input.openedAtMs < 0 || input.openedAtMs > input.nowMs + 5_000) {
+    return { plans: [] as TradingPlan[], orders: [] as TradingOrder[], valid: false as const };
+  }
+  const plans = input.plans.filter((plan) => {
+    const created = Date.parse(plan.createdAt);
+    return plan.accountMode === 'paper' && plan.executionMode === 'automatic'
+      && adminPaperMarketFromPlan(plan) === input.market
+      && Number.isFinite(created) && created >= input.openedAtMs
+      && created <= input.nowMs + 5_000;
+  });
+  const byPlan = new Map(plans.map((plan) => [plan.id, plan]));
+  const orders = input.orders.filter((order) => {
+    const plan = byPlan.get(order.planId);
+    const created = Date.parse(order.createdAt);
+    return plan && order.userId === plan.userId
+      && Number.isFinite(created) && created >= input.openedAtMs
+      && created <= input.nowMs + 5_000;
+  });
+  return { plans, orders, valid: true as const };
+}
+
 /** Per-market Paper exposure is never collateral for another market. */
 export function adminMarketPaperRiskBudget(input: {
   market: AdminPaperMarket;

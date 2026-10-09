@@ -7,6 +7,7 @@ import {
   adminPaperWalletId, adminPaperMarketFromPlan, adminMarketPaperRiskBudget,
   buildAdminFourMarketPaperBootstrap, inspectAdminFourMarketPaperWallets,
   projectAdminMarketCapital,
+  adminMarketCurrentEpochSettlementScope,
 } from './admin-four-market-paper-capital.service';
 
 const AT = new Date('2026-10-09T09:00:00Z');
@@ -182,4 +183,41 @@ test('admin market daily loss count and 50k net loss guard stay market-specific'
   const untouched=projectAdminMarketCapital('domestic_stock',losses,now);
   assert.equal(untouched.dailyLosingTrades,0);
   assert.equal(untouched.newEntriesAllowed,true);
+});
+
+test('legacy and other-market Paper fills cannot be replayed into a new 1m admin campaign', () => {
+  const epochMs = AT.getTime();
+  const oldDate = new Date(epochMs - 60_000).toISOString();
+  const currentDate = new Date(epochMs + 1_000).toISOString();
+  const oldPlan = {
+    id:'old-paper',userId:'owner-a',accountMode:'paper',executionMode:'automatic',
+    exchange:'upbit',market:'KRW',createdAt:oldDate,
+  } as TradingPlan;
+  const newPlan = {...oldPlan,id:'new-paper',createdAt:currentDate};
+  const otherMarket = {
+    ...oldPlan,id:'us-paper',exchange:'kiwoom',market:'US',createdAt:currentDate,
+  } as TradingPlan;
+  const oldFill = {
+    id:'old-fill',planId:oldPlan.id,userId:'owner-a',createdAt:oldDate,
+    state:'FILLED',filledQuantity:2,
+  } as TradingOrder;
+  const newFill = {
+    ...oldFill,id:'new-fill',planId:newPlan.id,createdAt:currentDate,
+  };
+  const otherFill = {
+    ...oldFill,id:'us-fill',planId:otherMarket.id,createdAt:currentDate,
+  };
+  const scoped = adminMarketCurrentEpochSettlementScope({
+    market:'crypto_spot',openedAtMs:epochMs,nowMs:epochMs+5_000,
+    plans:[oldPlan,newPlan,otherMarket],orders:[oldFill,newFill,otherFill],
+  });
+  assert.equal(scoped.valid,true);
+  assert.deepEqual(scoped.plans.map(p=>p.id),['new-paper']);
+  assert.deepEqual(scoped.orders.map(o=>o.id),['new-fill']);
+  const invalid = adminMarketCurrentEpochSettlementScope({
+    market:'crypto_spot',openedAtMs:epochMs+20_000,nowMs:epochMs,
+    plans:[newPlan],orders:[newFill],
+  });
+  assert.equal(invalid.valid,false);
+  assert.deepEqual(invalid.orders,[]);
 });

@@ -28,6 +28,7 @@ import {
   type AdminPaperMarket,
   adminPaperMarketFromPlan,
   adminMarketPaperRiskBudget,
+  adminMarketCurrentEpochSettlementScope,
   inspectAdminFourMarketPaperWallets,
   projectAdminMarketCapital,
 } from './admin-four-market-paper-capital.service';
@@ -1022,20 +1023,13 @@ async function memberRuntimeState(
           // NEVER be credited as profit or loss in a new admin V2 campaign.
           // Reuse the exact server-owned account epoch boundary required
           // by the canonical order-event outbox and position supervisor.
-          const epochPlans = scopedPlans.filter((plan) => {
-            const created = Date.parse(plan.createdAt);
-            return Number.isFinite(created) && created >= account.openedAtMs!
-              && created <= nowMs + 5_000;
+          const canonicalScope = adminMarketCurrentEpochSettlementScope({
+            market, openedAtMs: account.openedAtMs!, nowMs,
+            plans: scopedPlans, orders: scopedOrders,
           });
-          const byEpochPlan = new Map(epochPlans.map((plan) => [plan.id, plan]));
-          const epochOrders = scopedOrders.filter((order) => {
-            const plan = byEpochPlan.get(order.planId);
-            return Boolean(plan && automaticPaperOrderWithinWalletEpoch(
-              plan, order, account.openedAtMs, nowMs,
-            ));
-          });
+          if (!canonicalScope.valid) throw new Error('ADMIN_PAPER_EPOCH_INVALID');
           const payloads = tradeAutomationJournalPayloadsFromSnapshot(
-            userId, epochOrders, epochPlans);
+            userId, canonicalScope.orders, canonicalScope.plans);
           const journal = buildUnifiedTradeJournal(
             payloads, { source: 'APP_PAPER', range: 'ALL' }, new Date(nowMs));
           if (journal.integrityIssues.length) throw new Error('ADMIN_PAPER_LEDGER_INTEGRITY_REQUIRED');
