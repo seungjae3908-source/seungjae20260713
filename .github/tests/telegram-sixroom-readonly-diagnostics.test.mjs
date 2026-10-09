@@ -62,3 +62,55 @@ test('protected approval never reads same-step outputs and accepts only main-lin
  assert.ok(verifyStep.includes('git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" origin/main'));
  assert.ok(!verifyStep.includes('test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN_SHA"'), 'new main commits may not invalidate read-only inspection');
 });
+
+
+test('read-only source audit reports only missing key NAMES present in fixed config files', () => {
+ const start=workflow.indexOf('function findMissingKeysInAlternateEnvFiles(');
+ const end=workflow.indexOf('const evidence={',start);
+ assert.ok(start>0&&end>start);
+ const sourceAudit=vm.runInNewContext(workflow.slice(start,end)+'\nfindMissingKeysInAlternateEnvFiles;', {
+   fs: {readFileSync: () => {throw new Error('injected read only');}}
+ });
+ const missing=[
+   'TELEGRAM_KR_STOCK_CHAT_ID','TELEGRAM_US_STOCK_CHAT_ID',
+   'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID','TELEGRAM_OWNER_MEMBER_ID'
+ ];
+ const read=(file)=>{
+   if(file==='/opt/stock-app/.env')return [
+     '# TELEGRAM_KR_STOCK_CHAT_ID=-100900',
+     'export TELEGRAM_US_STOCK_CHAT_ID="-100901"',
+     'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID=',
+     'TELEGRAM_OWNER_MEMBER_ID="member-fixture"'
+   ].join('\n');
+   throw new Error('not found');
+ };
+ const found=Array.from(sourceAudit(missing,read));
+ assert.deepEqual(found,['TELEGRAM_US_STOCK_CHAT_ID','TELEGRAM_OWNER_MEMBER_ID']);
+ assert.ok(!JSON.stringify(found).includes('-100901'),'chat values must never enter evidence');
+ assert.ok(workflow.includes('missingKeyFoundInEnvFiles:[]'));
+ assert.ok(workflow.includes('telegramActivationApproved:false'));
+ assert.ok(workflow.includes('personalTelegramWorkerEnabled:false'));
+ assert.ok(workflow.includes('Telegram sends / financial mutations: 0 / 0'));
+});
+
+
+test('read-only verdict does not confuse present room config with active Telegram delivery', () => {
+ const start=workflow.indexOf('if(!evidence.identityMatch)evidence.classification=');
+ const end=workflow.indexOf('\n            }\n          }catch', start);
+ assert.ok(start>0&&end>start,'production classification block');
+ const classify=vm.runInNewContext('(evidence,rooms)=>{\n'+workflow.slice(start,end)+'\nreturn evidence.classification;\n}');
+ const good={
+   classification:'OK',identityMatch:true,missingCore:[],backgroundWorkersEnabled:true,
+   telegramActivationApproved:true,telegramIntelligenceWorkerEnabled:true,personalTelegramWorkerEnabled:true
+ };
+ const check=(overrides={},rooms={missing:[],duplicates:[]})=>
+   classify({...good,...overrides},rooms);
+ assert.equal(check(),'OK');
+ assert.equal(check({telegramActivationApproved:false}),'TELEGRAM_ACTIVATION_DISABLED');
+ assert.equal(check({telegramIntelligenceWorkerEnabled:false}),'TELEGRAM_MARKET_WORKER_DISABLED');
+ assert.equal(check({personalTelegramWorkerEnabled:false}),'TELEGRAM_PERSONAL_WORKER_DISABLED');
+ assert.equal(check({backgroundWorkersEnabled:false}),'BACKGROUND_WORKERS_DISABLED');
+ assert.equal(check({}, {missing:['TELEGRAM_KR_STOCK_CHAT_ID'],duplicates:[]}), 'SIX_ROOM_CONFIG_MISSING');
+ assert.equal(check({}, {missing:[],duplicates:[['a','b']]}), 'SIX_ROOM_ROUTING_COLLISION');
+ assert.equal(check({identityMatch:false}), 'PRODUCTION_SHA_MISMATCH');
+});
