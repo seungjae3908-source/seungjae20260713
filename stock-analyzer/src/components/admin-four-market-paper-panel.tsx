@@ -22,6 +22,15 @@ type MarketWallet = {
   reserveKrw: number | null;
 };
 type AdminWalletStatus = {
+  marketCapital: Record<AdminMarket,{
+    settlementReady: boolean;
+    blockers: string[];
+    operatingCapitalKrw: number | null;
+    reserveKrw: number | null;
+    newEntriesAllowed: boolean;
+    dailyLosingTrades: number | null;
+  }>;
+  marketCapitalComputedFrom: string;
   ready: boolean;
   canCreate: boolean;
   initialCapitalKrw: number;
@@ -47,7 +56,18 @@ async function readStatus(signal?: AbortSignal): Promise<AdminWalletStatus> {
     || value.financialMutationCount !== 0 || value.privateProviderRequests !== 0
     || value.orderSubmitted !== false || value.exchangeRequestSent !== false
     || !Array.isArray(value.blockers) || !Array.isArray(value.creationBlockers)
-    || value.initialCapitalKrw !== 4_000_000) {
+    || value.initialCapitalKrw !== 4_000_000
+    || value.marketCapitalComputedFrom !== 'CANONICAL_CURRENT_EPOCH_SETTLEMENT_ONLY'
+    || !value.marketCapital || MARKETS.some(m => {
+      const balance = value.marketCapital[m.key];
+      return !balance || typeof balance.settlementReady !== 'boolean'
+        || typeof balance.newEntriesAllowed !== 'boolean'
+        || !Array.isArray(balance.blockers)
+        || (balance.settlementReady && (
+          typeof balance.operatingCapitalKrw !== 'number'
+          || typeof balance.reserveKrw !== 'number'
+        ));
+    })) {
     throw new Error('ADMIN_MARKET_PAPER_STATUS_UNAVAILABLE');
   }
   return value;
@@ -154,15 +174,20 @@ export function AdminFourMarketPaperPanel() {
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" data-testid="admin-four-market-wallets">
         {MARKETS.map(({ key, label }) => {
           const value = status?.marketWallets?.[key];
+          const actual = status?.marketCapital?.[key];
           return (
             <div key={key} className="rounded-xl border border-card-border p-3">
               <p className="text-xs font-semibold">{label}</p>
               <p className="mt-1 text-sm font-bold">
-                {value?.ready ? money(value.equityKrw ?? INITIAL_KRW) : money(INITIAL_KRW)}
+                {value?.ready && actual?.settlementReady
+                  ? money(actual.operatingCapitalKrw ?? INITIAL_KRW)
+                  : '기준 원금 ' + money(INITIAL_KRW)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {value?.ready
-                  ? `가용 ${money(value.availableMarginKrw ?? 0)} · 예비금 ${money(value.reserveKrw ?? 0)}`
+                  ? actual?.settlementReady
+                    ? `검증된 예비금 ${money(actual.reserveKrw ?? 0)} · 당일 손실 ${actual.dailyLosingTrades ?? 0}회`
+                    : '정산 자료 부족 · 현재 운용잔고/예비금 미확정'
                   : '미생성 · 다른 시장의 자금은 사용할 수 없음'}
               </p>
             </div>

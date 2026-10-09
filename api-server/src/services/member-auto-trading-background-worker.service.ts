@@ -22,13 +22,13 @@ import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
 import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal.types';
+import { adminFourMarketPaperCapitalReadback } from './admin-four-market-paper-readback.service';
 import {
   ADMIN_FOUR_PAPER_MARKETS,
   ADMIN_MARKET_INITIAL_KRW,
   type AdminPaperMarket,
   adminPaperMarketFromPlan,
   adminMarketPaperRiskBudget,
-  adminMarketCurrentEpochSettlementScope,
   inspectAdminFourMarketPaperWallets,
   projectAdminMarketCapital,
 } from './admin-four-market-paper-capital.service';
@@ -998,6 +998,9 @@ async function memberRuntimeState(
     const truncated = orders.length >= 500 || plans.length >= 200;
     adminMarketRisk = {} as NonNullable<MemberRuntimeState['adminMarketRisk']>;
     adminMarketCapital = {} as NonNullable<MemberRuntimeState['adminMarketCapital']>;
+    const adminReadback = adminFourMarketPaperCapitalReadback({
+      ownerId: userId, records, plans, orders, nowMs,
+    });
     for (const market of ADMIN_FOUR_PAPER_MARKETS) {
       const account = marketWallets.marketWallets[market];
       const scopedPlans = plans.filter((plan) => plan.accountMode === 'paper'
@@ -1013,43 +1016,7 @@ async function memberRuntimeState(
           );
         } catch { /* A malformed market lane must not borrow funds from its peers. */ }
       }
-      // Only canonical CLOSED Paper events with full cost and close-time KRW
-      // settlement may increase compounding capital or reserved profits.
-      // Missing USD/USDT close-time FX evidence fails closed for that market.
-      let laneCapital = projectAdminMarketCapital(market, [], nowMs);
-      if (laneRisk.ready) {
-        try {
-          // Legacy Paper rows remain immutable and observable, but can
-          // NEVER be credited as profit or loss in a new admin V2 campaign.
-          // Reuse the exact server-owned account epoch boundary required
-          // by the canonical order-event outbox and position supervisor.
-          const canonicalScope = adminMarketCurrentEpochSettlementScope({
-            market, openedAtMs: account.openedAtMs!, nowMs,
-            plans: scopedPlans, orders: scopedOrders,
-          });
-          if (!canonicalScope.valid) throw new Error('ADMIN_PAPER_EPOCH_INVALID');
-          const payloads = tradeAutomationJournalPayloadsFromSnapshot(
-            userId, canonicalScope.orders, canonicalScope.plans);
-          const journal = buildUnifiedTradeJournal(
-            payloads, { source: 'APP_PAPER', range: 'ALL' }, new Date(nowMs));
-          if (journal.integrityIssues.length) throw new Error('ADMIN_PAPER_LEDGER_INTEGRITY_REQUIRED');
-          const closed = journal.trades.filter((row) => row.source === 'APP_PAPER'
-            && row.status === 'CLOSED');
-          laneCapital = projectAdminMarketCapital(market, closed.map((row) => ({
-            id: row.id, market, closedAt: row.closedAt ?? '',
-            netPnlKrw: row.netPnl ?? Number.NaN,
-            fullCostsVerified: row.costEvidence.status === 'READY'
-              && typeof row.fees === 'number' && Number.isFinite(row.fees)
-              && typeof row.tax === 'number' && Number.isFinite(row.tax),
-            closeTimeFxVerified: row.currency === 'KRW',
-          })), nowMs);
-        } catch {
-          laneCapital = Object.freeze({
-            ...laneCapital, settlementReady: false, newEntriesAllowed: false,
-            blockers: ['ADMIN_PAPER_LEDGER_INTEGRITY_REQUIRED'],
-          });
-        }
-      }
+      const laneCapital = adminReadback.capital[market];
       adminMarketCapital[market] = laneCapital;
       if (laneRisk.ready && !laneCapital.newEntriesAllowed) {
         laneRisk = {
