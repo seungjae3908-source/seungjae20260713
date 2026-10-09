@@ -350,7 +350,10 @@ for (const token of [
   'this.memberBatchCursor = hasMore && lastUserId ? lastUserId : null;',
   'const refreshRuntime = async () =>',
   'Always re-read canonical exposure at the entry boundary',
-  'let entryProjectionHealthy = await syncExecutionProjection();',
+  // A canonical projection is not enough: admin Paper entry must also
+  // have an attested database-side write barrier (RLS) before we trust fills.
+  'let entryProjectionHealthy = adminWalletDbGuardReady',
+  '&& await syncExecutionProjection();',
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
   'if (liveEntriesArmedThisTick && hasCapability',
