@@ -604,8 +604,11 @@ jobs:
             }
 
             console.log('TELEGRAM_PREFLIGHT_OK: runtime config, bot identity, rooms, webhook, zero-mutation checks passed');
-          })().catch(() => {
-            console.error('TELEGRAM_PREFLIGHT_UNEXPECTED_FAILURE');
+          })().catch((error) => {
+            const reason = error instanceof Error ? error.message : '';
+            const safeReason = ['TELEGRAM_SIX_ROOM_CONFIG_MISSING', 'TELEGRAM_SIX_ROOM_ROUTING_COLLISION'].includes(reason)
+              ? reason : 'TELEGRAM_PREFLIGHT_UNEXPECTED_FAILURE';
+            console.error(safeReason);
             process.exit(6);
           });
           NODE
