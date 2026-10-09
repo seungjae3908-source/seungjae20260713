@@ -17,6 +17,7 @@ if (value.status !== 'passed') throw new Error('live staging bootstrap artifact 
 if (value.schema_version !== '20260805.1') throw new Error('live staging bootstrap schema version mismatch');
 if (value.atomic_transaction !== true) throw new Error('live staging bootstrap was not atomic');
 if (value.idempotency_passes !== 2) throw new Error('live staging bootstrap did not run twice');
+if (value.admin_v2_rls_verified !== true) throw new Error('live staging admin V2 RLS guard was not verified');
 if (value.production_export_used !== false) throw new Error('live staging bootstrap used a production export');
 if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.storage_objects_copied !== 0) {
   throw new Error('live staging bootstrap copied forbidden data');
@@ -118,6 +119,26 @@ if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.st
 NODE
 
 run_production_paper_gate "existing-schema-noop" 6
+
+assert_production_paper_v2_tamper_fails() {
+  local stdout_file="$BOOTSTRAP_ARTIFACT_DIR/v2-guard-tamper.stdout"
+  local stderr_file="$BOOTSTRAP_ARTIFACT_DIR/v2-guard-tamper.stderr"
+  echo "[phase8-db] verify Paper privilege gate rejects permissive admin V2 policy tampering"
+  "${PSQL[@]}" --command "alter policy admin_v2_paper_wallet_insert_guard on public.paper_accounts with check (true);"
+  if CI=true \
+    PRODUCTION_PAPER_JOURNAL_ALLOW_DISPOSABLE_CI=true \
+    APPROVED_TARGET_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    PROD_DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}" \
+    node "${ROOT_DIR}/ops/apply-production-paper-journal-privileges.mjs" \
+      > "$stdout_file" 2> "$stderr_file"; then
+    echo '[phase8-db] insecure V2 Paper wallet policy unexpectedly passed' >&2
+    exit 1
+  fi
+  grep -Fx '[production-paper-journal-privileges] paper_journal_policy_contract_invalid' "$stderr_file"
+  run_sql "restore administrator V2 Paper write barriers" \
+    "api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql"
+}
+assert_production_paper_v2_tamper_fails
 
 run_sql "verify legacy personal Telegram policy cleanup" "api-server/supabase/test/personal_telegram_policy_cleanup_integration.sql"
 
