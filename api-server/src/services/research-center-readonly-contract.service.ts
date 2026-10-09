@@ -724,6 +724,7 @@ function emptyMarketWatch(status: 'MISSING' | 'INVALID' = 'MISSING', present = f
     status, present, researchSha: null, observedAt: null, ageMs: null,
     marketCoverageCount: null, markets: [] as unknown[],
     cyclesToday: null, candidatesToday: null, cyclesSinceRelease: null,
+    prospectiveSampleStudy: null,
     continuous24hProven: false, formulaCandidateProduced: false,
     oosProven: false, paperExecutionProven: false,
     profitabilityProven: false, executionAuthority: 'NONE',
@@ -761,6 +762,32 @@ export function sanitizeMarketWatchReadback(value: unknown) {
     || cyclesSinceRelease == null || cyclesSinceRelease < cyclesToday) {
     return emptyMarketWatch('INVALID', true);
   }
+  // A public ticker excursion is NOT a fill, formula PASS, OOS sample or PnL.
+  let prospectiveSampleStudy: null | {
+    status: 'PUBLIC_PRICE_OBSERVATION_ONLY';
+    pendingCount: number; observedCoarseToday: number;
+    blockedToday: number; untrackedThisCycle: number;
+    economicEvidenceCredit: 0; paperCredit: 0; oosCredit: 0;
+  } = null;
+  if (v.prospectiveSampleStudy != null) {
+    const row = record(v.prospectiveSampleStudy);
+    const pending = watchSafeCount(row?.pendingCount, 1025);
+    const observed = watchSafeCount(row?.observedCoarseToday, 1_000_000_000_000);
+    const blocked = watchSafeCount(row?.blockedToday, 1_000_000_000_000);
+    const untracked = watchSafeCount(row?.untrackedThisCycle, 49);
+    if (!row || row.status !== 'PUBLIC_PRICE_OBSERVATION_ONLY'
+      || pending == null || observed == null || blocked == null
+      || untracked == null || row.economicEvidenceCredit !== 0
+      || row.paperCredit !== 0 || row.oosCredit !== 0) {
+      return emptyMarketWatch('INVALID', true);
+    }
+    prospectiveSampleStudy = {
+      status: 'PUBLIC_PRICE_OBSERVATION_ONLY', pendingCount: pending,
+      observedCoarseToday: observed, blockedToday: blocked,
+      untrackedThisCycle: untracked,
+      economicEvidenceCredit: 0, paperCredit: 0, oosCredit: 0,
+    };
+  }
   const rows = v.markets.map((raw, index) => {
     const row = record(raw);
     const status = row?.status;
@@ -789,7 +816,7 @@ export function sanitizeMarketWatchReadback(value: unknown) {
     contract: MARKET_WATCH_READBACK_CONTRACT,
     status: v.status, present: true, researchSha: v.researchSha.toLowerCase(),
     observedAt, ageMs, marketCoverageCount: coverage, markets: rows,
-    cyclesToday, candidatesToday, cyclesSinceRelease,
+    cyclesToday, candidatesToday, cyclesSinceRelease, prospectiveSampleStudy,
     continuous24hProven: false, formulaCandidateProduced: false,
     oosProven: false, paperExecutionProven: false,
     profitabilityProven: false, executionAuthority: 'NONE',
