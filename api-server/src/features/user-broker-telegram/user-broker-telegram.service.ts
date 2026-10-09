@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
 import type { TelegramAlertInput, TelegramAlertResult } from '../../services/telegram-notification.service';
+import { telegramSixRoomRoutingIsolated } from '../../services/telegram-market-room.service';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import {
@@ -485,6 +486,10 @@ export class UserBrokerTelegramService {
         && this.ownerMemberId === event.userId
         && this.ownerAutoTradingChatId
         && this.ownerAutoTradingChatId !== connection.telegramChatId
+        && telegramSixRoomRoutingIsolated({
+          ...process.env,
+          TELEGRAM_AUTO_TRADING_CHAT_ID: this.ownerAutoTradingChatId,
+        })
       ) {
         try {
           await this.transport.send(this.ownerAutoTradingChatId, rendered);

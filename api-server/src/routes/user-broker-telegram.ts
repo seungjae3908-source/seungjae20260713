@@ -20,6 +20,7 @@ import type {
 } from '../features/user-broker-telegram/user-broker-telegram.types';
 import { defaultTelegramAlertPolicy } from '../services/telegram-alert-policy.service';
 import { sendPersonalTelegramTestMessage } from '../services/telegram-test-message.service';
+import { readUserTelegramDeliveryWorkerHealth } from '../features/user-broker-telegram/user-broker-telegram.worker';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
@@ -73,6 +74,14 @@ function unavailableAlertPolicyState(userId: string) {
 }
 
 function telegramRuntimeState() {
+  const personalWorkerHealth = readUserTelegramDeliveryWorkerHealth();
+  const personalTickAt = Date.parse(personalWorkerHealth.lastTickAt ?? '');
+  // "enabled" also appears in failure snapshots when no real worker started.
+  // Count a worker as started only after a recent observed processing tick.
+  const personalWorkerStarted = personalWorkerHealth.enabled === true
+    && Number.isFinite(personalTickAt)
+    && personalTickAt <= Date.now() + 5_000
+    && Date.now() - personalTickAt <= 360_000;
   const deliveryReady = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
   const webhookConfigured = Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim());
   const botUsernameConfigured = Boolean(process.env.TELEGRAM_BOT_USERNAME?.trim());
@@ -85,6 +94,8 @@ function telegramRuntimeState() {
     cryptoRoomReady: Boolean(process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim()),
     backgroundWorkersEnabled: process.env.BACKGROUND_WORKERS_ENABLED !== 'false',
     personalWorkerEnabled: process.env.PERSONAL_TELEGRAM_WORKER_ENABLED === 'true',
+    personalWorkerStarted,
+    workerActivationApproved: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true',
     intelligenceWorkerEnabled: process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'true',
     richSignalEnabled: process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED === 'true',
     aiExplanationEnabled: process.env.TELEGRAM_SIGNAL_AI_ENABLED === 'true',

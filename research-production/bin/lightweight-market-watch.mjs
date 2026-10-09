@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { cpus, loadavg } from 'node:os';
 import {
-  appendFile, lstat, mkdir, open, readFile, rename, rm, statfs, writeFile,
+  lstat, mkdir, open, readFile, rename, rm, statfs, writeFile,
 } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -199,9 +199,13 @@ async function cycle(root, researchSha, previous, telemetry) {
     marketStates[market] = source.quotes.length
       ? report.next : (previous?.marketStates?.[market] ?? report.next);
     for (const found of report.candidates) {
+      // Exact public quote timestamps make a replayed observation recognizably
+      // the same discovery after a crash; the event is still not a trade.
       const eventId = watchCycleDigest({
         researchSha, market, symbol: found.symbol,
-        direction: found.direction, observedAt: found.observedAt,
+        direction: found.direction, source: found.source,
+        sourceAtMs: found.sourceAtMs,
+        priorSourceAtMs: found.priorSourceAtMs,
       });
       allCandidates.push({ ...found, eventId, researchSha });
       savedAlerts[market + ':' + found.symbol + ':' + found.direction] = nowMs;
@@ -226,9 +230,12 @@ async function cycle(root, researchSha, previous, telemetry) {
   };
   const next = { schemaVersion: WATCH_CONTRACT, researchSha,
     marketStates, lastAlerts: savedAlerts };
+  // Emit observations before advancing the local cursor: a storage failure
+  // must not silently discard a discovered candidate. Consumers must dedupe
+  // eventId because a crash between these writes can replay the same event.
+  await appendEvents(root, allCandidates, state.observedAt);
   await atomicJson(join(root, 'watch', 'state-v1.json'), next);
   await atomicJson(join(root, 'latest', 'lightweight-market-watch.json'), state);
-  await appendEvents(root, allCandidates, state.observedAt);
   process.stdout.write(JSON.stringify({
     observedAt: state.observedAt, status: state.status,
     budget: state.resourceBudget.status,

@@ -332,7 +332,8 @@ test('supports all requested alert templates', () => {
 });
 
 test('signal intelligence Telegram turns internal state codes into a concise Korean user message', () => {
-  process.env.TELEGRAM_CRYPTO_CHAT_ID = 'crypto-spot-room';
+  process.env.TELEGRAM_CRYPTO_CHAT_ID = 'legacy-shared-crypto-room';
+  process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID = 'crypto-spot-room';
   const input = buildSignalIntelligenceTelegramInput({
     type: 'STATE_CHANGED',
     id: 'ada-position-1d',
@@ -353,6 +354,7 @@ test('signal intelligence Telegram turns internal state codes into a concise Kor
   }, 'a'.repeat(40), new Date('2026-09-28T02:46:13.197Z'));
 
   assert.ok(input);
+  assert.equal(input!.destinationChatId, 'crypto-spot-room');
   const rendered = renderTelegramAlert(input!);
   assert.match(rendered, /📊 ADA · 코인현물/);
   assert.match(rendered, /🟡 현재 판단: 관망/);
@@ -407,6 +409,41 @@ test('scanner signal room routing splits domestic, overseas, spot, and futures r
   assert.equal(scannerTelegramRoomChatId('US_STOCK_ROOM'), 'us-stock-room');
   assert.equal(scannerTelegramRoomChatId('CRYPTO_SPOT_ROOM'), 'crypto-spot-room');
   assert.equal(scannerTelegramRoomChatId('CRYPTO_FUTURES_ROOM'), 'crypto-futures-room');
+});
+
+test('US exchange names cannot route to Korea; unknown market is never guessed', () => {
+  process.env.TELEGRAM_KR_STOCK_CHAT_ID = 'kr-venue-room';
+  process.env.TELEGRAM_US_STOCK_CHAT_ID = 'us-venue-room';
+  delete process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID;
+  delete process.env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID;
+  for (const market of ['US', 'USA', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE-ARCA']) {
+    const example = scannerAlert({ market });
+    assert.equal(scannerTelegramRoomFor(example), 'US_STOCK_ROOM', market);
+    assert.equal(scannerTelegramInput(example)?.destinationChatId, 'us-venue-room', market);
+    assert.match(scannerInAppNotificationInput(example, { memberId: 'test-member' })?.body ?? '', /미국주식/, market);
+  }
+  for (const market of ['KR', 'KOSPI', 'KOSDAQ', 'KRX']) {
+    assert.equal(scannerTelegramRoomFor(scannerAlert({ market })), 'KR_STOCK_ROOM', market);
+  }
+  for (const market of ['AUS', 'UNKNOWN', '', 'US-MISLABELLED']) {
+    const example = scannerAlert({ market });
+    assert.equal(scannerTelegramRoomFor(example), null, market);
+    assert.equal(scannerTelegramInput(example), null, market);
+    assert.equal(scannerInAppNotificationInput(example, { memberId: 'test-member' }), null, market);
+  }
+});
+
+test('duplicate dedicated room destinations fail closed, including whitespace collisions', () => {
+  process.env.TELEGRAM_KR_STOCK_CHAT_ID = '-100111111';
+  process.env.TELEGRAM_US_STOCK_CHAT_ID = ' -100111111 ';
+  process.env.TELEGRAM_CRYPTO_SPOT_CHAT_ID = '-100222222';
+  process.env.TELEGRAM_CRYPTO_FUTURES_CHAT_ID = '-100333333';
+  assert.equal(scannerTelegramRoomChatId('KR_STOCK_ROOM'), null);
+  assert.equal(scannerTelegramRoomChatId('US_STOCK_ROOM'), null);
+  assert.equal(scannerTelegramRoomChatId('CRYPTO_SPOT_ROOM'), null);
+  assert.equal(scannerTelegramInput(scannerAlert({ market: 'US' })), null);
+  process.env.TELEGRAM_US_STOCK_CHAT_ID = '-100444444';
+  assert.equal(scannerTelegramRoomChatId('US_STOCK_ROOM'), '-100444444');
 });
 
 test('maps stock/spot BUY only and futures LONG/SHORT to their dedicated Telegram rooms', () => {

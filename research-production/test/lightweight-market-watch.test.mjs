@@ -77,11 +77,22 @@ test('stock feeds require fresh explicit provenance and expose subset coverage',
     asOf: new Date(NOW - 2_000).toISOString(),
     completeUniverse: false,
     quotes: [{ symbol: '005930', price: 82000,
-      turnover24h: 2e9, change24hPercent: 2.5 }],
+      turnover24h: 2e9, change24hPercent: 2.5,
+      asOf: new Date(NOW - 3_000).toISOString() }],
   };
   const result = normalizeStockFeed(input, 'KR_STOCK', NOW);
   assert.equal(result.status, 'PARTIAL_UNIVERSE');
   assert.equal(result.quotes[0].symbol, '005930');
+  assert.equal(result.quotes[0].sourceAtMs, NOW - 3_000);
+  assert.throws(() => normalizeStockFeed({ ...input, quotes: [
+    { ...input.quotes[0], asOf: undefined },
+  ] }, 'KR_STOCK', NOW), /STOCK_PUBLIC_FEED_EMPTY/);
+  assert.throws(() => normalizeStockFeed({ ...input, quotes: [
+    { ...input.quotes[0], asOf: new Date(NOW - 500_000).toISOString() },
+  ] }, 'KR_STOCK', NOW), /STOCK_PUBLIC_FEED_EMPTY/);
+  assert.throws(() => normalizeStockFeed({ ...input, quotes: [
+    { ...input.quotes[0], asOf: new Date(NOW + 20_000).toISOString() },
+  ] }, 'KR_STOCK', NOW), /STOCK_PUBLIC_FEED_EMPTY/);
   assert.throws(() => normalizeStockFeed(
     { ...input, asOf: new Date(NOW - 500_000).toISOString() },
     'KR_STOCK', NOW), /STALE/);
@@ -107,6 +118,7 @@ test('fresh two-snapshot price acceleration generates only provisional research 
       change24h: '0.03', usdtVolume: '12000000', ts: NOW - 1_000 }],
   }, NOW);
   const previous = { observedAtMs: NOW - 120_000,
+    source: 'BITGET_PUBLIC_TICKERS',
     quotes: [{ symbol: 'BTCUSDT', price: 100, sourceAtMs: NOW - 121_000 }] };
   const r = evaluateMarketOpportunities({ market: 'CRYPTO_FUTURES',
     source, previous, lastAlerts: {}, nowMs: NOW });
@@ -133,6 +145,7 @@ test('KR/US/spot falling price is a watch observation, never a short sell instru
   const r = evaluateMarketOpportunities({
     market: 'CRYPTO_SPOT', source, nowMs: NOW, lastAlerts: {},
     previous: { observedAtMs: NOW - 60_000,
+      source: 'PUBLIC_TEST',
       quotes: [{ symbol: 'BTC', price: 100, sourceAtMs: NOW - 61_000 }] },
   });
   assert.equal(r.candidates.length, 1);
@@ -147,11 +160,48 @@ test('same-timestamp and expired snapshots cannot create fake accelerations', ()
     quotes: [{ symbol: '005930', price: 110,
       sourceAtMs: NOW - 1_000, turnover24h: 2e9, change24hPercent: 10 }] };
   const old = { quotes: [{ symbol: '005930', price: 100,
-    sourceAtMs: NOW - 1_000 }], observedAtMs: NOW - 60_000 };
+    sourceAtMs: NOW - 1_000 }], observedAtMs: NOW - 60_000,
+    source: 'PUBLIC_TEST' };
   assert.equal(evaluateMarketOpportunities({ market: 'KR_STOCK',
     source, previous: old, nowMs: NOW }).candidates.length, 0);
   assert.equal(evaluateMarketOpportunities({ market: 'KR_STOCK',
     source, previous: { ...old, observedAtMs: NOW - 600_000 },
+    nowMs: NOW }).candidates.length, 0);
+});
+
+
+test('switching stock data providers cannot fabricate a two-snapshot price move', () => {
+  const source = { market: 'US_STOCK', status: 'PARTIAL_UNIVERSE',
+    source: 'PROVIDER_B', listedCount: 1,
+    quotes: [{ symbol: 'MSFT', price: 104,
+      sourceAtMs: NOW - 1_000, turnover24h: 5e6, change24hPercent: 4 }] };
+  const previous = { source: 'PROVIDER_A', observedAtMs: NOW - 60_000,
+    quotes: [{ symbol: 'MSFT', price: 100, sourceAtMs: NOW - 61_000 }] };
+  assert.equal(evaluateMarketOpportunities({
+    market: 'US_STOCK', source, previous, nowMs: NOW,
+  }).candidates.length, 0);
+  const report = evaluateMarketOpportunities({
+    market: 'US_STOCK', source, previous: { ...previous, source: 'PROVIDER_B' },
+    nowMs: NOW,
+  });
+  assert.equal(report.candidates.length, 1);
+  assert.equal(report.candidates[0].sourceAtMs, NOW - 1_000);
+  assert.equal(report.candidates[0].priorSourceAtMs, NOW - 61_000);
+  assert.equal(report.candidates[0].isTradingSignal, false);
+});
+
+test('stale prior stock quote and tampered old source time are blocked', () => {
+  const source = { market: 'KR_STOCK', status: 'READY',
+    source: 'PUBLIC_B', listedCount: 1,
+    quotes: [{ symbol: '005930', price: 106,
+      sourceAtMs: NOW - 1_000, turnover24h: 2e9, change24hPercent: 6 }] };
+  const previous = { source: 'PUBLIC_B', observedAtMs: NOW - 60_000,
+    quotes: [{ symbol: '005930', price: 100, sourceAtMs: NOW - 450_000 }] };
+  assert.equal(evaluateMarketOpportunities({ market: 'KR_STOCK',
+    source, previous, nowMs: NOW }).candidates.length, 0);
+  assert.equal(evaluateMarketOpportunities({ market: 'KR_STOCK',
+    source, previous: { ...previous,
+      quotes: [{ symbol: '005930', price: 100, sourceAtMs: NOW - 50_000 }] },
     nowMs: NOW }).candidates.length, 0);
 });
 
