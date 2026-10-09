@@ -346,10 +346,23 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
   }
 });
 
-test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite duplicate, and keeps reduce-only explicit', () => {
-  for (const leverage of [2, 3, 4, 5, 6, 7] as const) {
+test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
+  for (const leverage of [2, 3] as const) {
     assert.equal(
       normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      leverage,
+    );
+  }
+  for (const leverage of [4, 5, 6, 7] as const) {
+    assert.equal(
+      normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      3,
+    );
+    assert.equal(
+      normalizeTradingPolicy(
+        { ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage },
+        PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      ).bitgetLeverage,
       leverage,
     );
   }
@@ -361,7 +374,10 @@ test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite
     () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 as 2 }),
     /BITGET_LEVERAGE_POLICY_INVALID/,
   );
-  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 });
+  const policy = normalizeTradingPolicy(
+    { ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 },
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  );
   const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
     quoteAmount: null, estimatedKrw: 100_000, leverage: 8, marginMode: 'isolated',
     marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: 'long' } });
