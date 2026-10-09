@@ -127,6 +127,8 @@ jobs:
         run: node ops/verify-production-member-access-hardening.mjs --static
       - name: Verify administrator 4-market Paper RLS deployment contract
         run: |
+          node --check ops/apply-production-admin-four-paper-rls.mjs
+          node --check ops/verify-production-admin-four-paper-rls.mjs
           node ops/verify-production-admin-four-paper-rls.mjs --static
           node --test .github/tests/production-admin-four-paper-rls.test.mjs
       - name: Verify approval-free post-deploy QA isolation contract
