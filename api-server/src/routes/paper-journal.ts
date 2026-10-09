@@ -4,7 +4,12 @@ import type { AuthenticatedRequest } from '../middleware/auth';
 import { calculatePaperJournalAnalytics, createTradingReviewDataset } from '../services/paper-journal-analytics.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import { createSupabaseTradingRepository, type TradingRepository } from '../services/trade-automation.repository';
-import type { TradingPolicy } from '../services/trade-automation.types';
+import {
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type TradingOrder,
+  type TradingPlan,
+  type TradingPolicy,
+} from '../services/trade-automation.types';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { enforceMemberTradingPolicy } from '../services/trade-automation-policy-guard.service';
 import { automaticLiveExecutionEnabled } from '../services/trade-automation.service';
@@ -15,7 +20,6 @@ import {
   adminPaperWalletId, buildAdminFourMarketPaperBootstrap,
   inspectAdminFourMarketPaperWallets, isAdminPaperWalletId,
 } from '../services/admin-four-market-paper-capital.service';
-import type { TradingOrder, TradingPlan } from '../services/trade-automation.types';
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
@@ -293,12 +297,16 @@ export function createPaperJournalRouter(
   const adminPolicyReader = dependencies.adminPolicyReader
     ?? (async (request: AuthenticatedRequest, userId: string) => {
       if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
-      return createSupabaseTradingRepository(request.accessToken, userId).getPolicy(userId);
+      return createSupabaseTradingRepository(
+        request.accessToken, userId, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      ).getPolicy(userId);
     });
   const adminPolicyWriter = dependencies.adminPolicyWriter
     ?? (async (request: AuthenticatedRequest, userId: string, policy: TradingPolicy) => {
       if (!request.accessToken) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
-      await createSupabaseTradingRepository(request.accessToken, userId).savePolicy(userId, policy);
+      await createSupabaseTradingRepository(
+        request.accessToken, userId, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      ).savePolicy(userId, policy);
     });
   const adminRlsGuardReader = dependencies.adminRlsGuardReader
     ?? (async (request: AuthenticatedRequest) => {
@@ -499,7 +507,7 @@ export function createPaperJournalRouter(
       const candidate = normalizeTradingPolicy({
         ...policyBefore,
         totalCapitalKrw: Math.max(ADMIN_MARKET_INITIAL_KRW, policyBefore.totalCapitalKrw),
-      });
+      }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
       const safe = enforceMemberTradingPolicy(candidate, policyBefore);
       if (safe.totalCapitalKrw !== policyBefore.totalCapitalKrw) {
         await adminPolicyWriter(request, owner, safe);
