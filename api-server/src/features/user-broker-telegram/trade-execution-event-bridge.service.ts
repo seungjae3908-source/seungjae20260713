@@ -10,6 +10,8 @@ export type TradeExecutionEventBridgeResult = {
   missingReferences: number;
   /** Only the caller-owned Paper order was scanned; never a user-wide history sweep. */
   scopedToOrder?: true;
+  /** Owner-scoped, newly enqueued ORDER_FILLED delivery IDs for exact SENT verification. */
+  filledDeliveryIds?: string[];
   privateApiRequests: 0;
   ordersSubmitted: 0;
   ordersCancelled: 0;
@@ -99,6 +101,7 @@ export class TradeExecutionEventBridgeService {
     let mapped = 0;
     let inserted = 0;
     let deliveryQueued = 0;
+    const filledDeliveryIds: string[] = [];
     let missingReferences = 0;
 
     for (const transition of transitions) {
@@ -140,7 +143,14 @@ export class TradeExecutionEventBridgeService {
       mapped += 1;
       const result = await this.integrationService.recordEvent(event, new Date(), membership);
       if (result.inserted) inserted += 1;
-      if (result.deliveryQueued) deliveryQueued += 1;
+      if (result.deliveryQueued) {
+        deliveryQueued += 1;
+        if (scopedOrderId && event.type === 'ORDER_FILLED') {
+          const queuedId = 'deliveryId' in result ? result.deliveryId : null;
+          if (typeof queuedId !== 'string') throw new Error('EXECUTION_SYNC_FILLED_DELIVERY_ID_MISSING');
+          filledDeliveryIds.push(queuedId);
+        }
+      }
     }
 
     return {
@@ -149,7 +159,7 @@ export class TradeExecutionEventBridgeService {
       inserted,
       deliveryQueued,
       missingReferences,
-      ...(scopedOrderId ? { scopedToOrder: true as const } : {}),
+      ...(scopedOrderId ? { scopedToOrder: true as const, filledDeliveryIds } : {}),
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,

@@ -132,7 +132,9 @@ test('automatic Paper wallet requires explicit simulated-only setup and never tr
   expect(page).toContain('result.orderSubmitted !== false || result.exchangeRequestSent !== false');
   expect(page).not.toContain('createLiveOrderForPaperSetup');
   expect(worker).toContain("AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'");
-  expect(worker).toContain('selectAutomaticPaperAccountEquity(paperResult.records)');
+  expect(worker).toContain('selectAutomaticPaperAccountEquity(records)');
+  expect(worker).toContain('inspectAdminFourMarketPaperWallets(records, nowMs)');
+  expect(worker).toContain('adminPaperDatabaseGuardReady');
 });
 
 test('Paper wallet initialization is blocked by the current server-owned historical automatic fills', () => {
