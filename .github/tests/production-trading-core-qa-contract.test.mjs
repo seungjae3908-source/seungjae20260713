@@ -298,3 +298,21 @@ test('Admin V2 Paper Worker revalidates DB wallet and canonical-order guard befo
   assert.ok(worker.includes('guarded = await this.source.adminPaperDatabaseGuardReady?.() === true'));
   assert.ok(sql.includes('to authenticated, service_role;'));
 });
+
+test('Admin V2 split-leg and stop-target policies prevent client forged execution evidence', () => {
+  const migration = read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
+  const sqlTest = read('api-server/supabase/test/admin_four_paper_wallet_rls_guard_integration.sql');
+  for (const table of ['trade_order_legs', 'trade_protection_orders']) {
+    assert.ok(migration.includes("'"+table+"'"), table);
+    assert.ok(sqlTest.includes("public."+table), table);
+  }
+  for (const denied of [
+    'ADMIN_V2_CLIENT_FORGED_LEG_ALLOWED', 'ADMIN_V2_CLIENT_LEG_UPDATE_ALLOWED',
+    'ADMIN_V2_CLIENT_LEG_DELETE_ALLOWED',
+    'ADMIN_V2_CLIENT_FORGED_PROTECTION_ALLOWED',
+    'ADMIN_V2_CLIENT_PROTECTION_UPDATE_ALLOWED',
+    'ADMIN_V2_CLIENT_PROTECTION_DELETE_ALLOWED',
+  ]) assert.ok(sqlTest.includes(denied), denied);
+  assert.ok(migration.includes(') = 15'));
+  assert.ok(migration.includes("'audit_logs','notification_history'"));
+});
