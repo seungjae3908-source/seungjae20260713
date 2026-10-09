@@ -23,6 +23,27 @@ type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' 
 const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
 const AUTO_PAPER_INITIAL_KRW = 500_000;
 
+type AutomaticPaperWalletPreflight = {
+  state: 'READY_FRESH' | 'READY_ISOLATE_LEGACY' | 'ALREADY_EXISTS' | 'BLOCKED';
+  safeToPrepare: boolean;
+  requiresHistoryPreservationConfirmation: boolean;
+  historical: { automaticPaperPlanCount: number; executedAutomaticPaperOrderCount: number;
+    missingFilledQuantityEvidence: number; missingFeeEvidence: number };
+};
+
+async function readAutomaticPaperWalletPreflight(signal?: AbortSignal): Promise<AutomaticPaperWalletPreflight> {
+  const response = await authorizedFetch('/api/paper-journal/automatic-wallet-readiness', { signal });
+  const data = await response.json().catch(() => null) as
+    (AutomaticPaperWalletPreflight & { ok?: boolean; readOnlyProbe?: boolean; initialCapitalKrw?: number }) | null;
+  if (!response.ok || data?.ok !== true || data?.readOnlyProbe !== true
+    || data?.initialCapitalKrw !== AUTO_PAPER_INITIAL_KRW
+    || !['READY_FRESH', 'READY_ISOLATE_LEGACY', 'ALREADY_EXISTS', 'BLOCKED'].includes(data?.state ?? '')
+    || typeof data?.safeToPrepare !== 'boolean') {
+    throw new Error('가상계좌 사전 안전검증을 확인하지 못했습니다.');
+  }
+  return data;
+}
+
 async function automaticPaperHistoryAllowsNewWallet(signal?: AbortSignal): Promise<boolean> {
   const response = await authorizedFetch('/api/trade-automation/status', { signal });
   const body = await response.json().catch(() => null) as {
@@ -204,6 +225,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   );
   const [autoPaperMessage, setAutoPaperMessage] = useState('');
   const [autoPaperBusy, setAutoPaperBusy] = useState(false);
+  const [autoPaperPreflight, setAutoPaperPreflight] = useState<AutomaticPaperWalletPreflight | null>(null);
   const paperStorage = useMemo(
     () => userId ? createUserPaperStorage(window.localStorage, userId) : window.localStorage,
     [userId],
@@ -265,6 +287,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
 
   useEffect(() => {
     if (fixture) {
+      setAutoPaperPreflight(null);
       setAutoPaperStatus('fixture');
       return;
     }
@@ -273,14 +296,27 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     // journal snapshots. Do not produce an intentional 403 as a background
     // browser request; keep the backend capability/RLS restriction intact.
     if (!canJournalSync) {
+      setAutoPaperPreflight(null);
       setAutoPaperStatus('restricted');
       return;
     }
     const controller = new AbortController();
     setAutoPaperStatus('checking');
-    void inspectAutomaticPaperAccount(controller.signal)
-      .then((status) => { if (!controller.signal.aborted) setAutoPaperStatus(status); })
-      .catch(() => { if (!controller.signal.aborted) setAutoPaperStatus('failed'); });
+    setAutoPaperPreflight(null);
+    void (async () => {
+      const status = await inspectAutomaticPaperAccount(controller.signal);
+      const preflight = status === 'blocked' || status === 'missing'
+        ? await readAutomaticPaperWalletPreflight(controller.signal)
+        : null;
+      if (controller.signal.aborted) return;
+      setAutoPaperPreflight(preflight);
+      setAutoPaperStatus(status);
+    })().catch(() => {
+      if (!controller.signal.aborted) {
+        setAutoPaperPreflight(null);
+        setAutoPaperStatus('failed');
+      }
+    });
     return () => controller.abort();
   }, [userId, canAuto, canJournalSync, fixture]);
 
@@ -297,6 +333,15 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       if (before !== expectedStatus) {
         setAutoPaperStatus(before);
         setAutoPaperMessage('계좌 상태가 변경되어 다시 확인이 필요합니다.');
+        return;
+      }
+      // Re-evaluate the server-owned preflight immediately before any write.
+      const latest = await readAutomaticPaperWalletPreflight();
+      setAutoPaperPreflight(latest);
+      const expectedPreflightState = isolateLegacy ? 'READY_ISOLATE_LEGACY' : 'READY_FRESH';
+      if (!latest.safeToPrepare || latest.state !== expectedPreflightState
+        || latest.requiresHistoryPreservationConfirmation !== isolateLegacy) {
+        setAutoPaperMessage('서버 사전 안전검증에서 계좌 준비가 차단되었습니다. 기존 기록은 보존됩니다.');
         return;
       }
       const at = new Date().toISOString();
@@ -326,6 +371,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       const after = await inspectAutomaticPaperAccount();
       setAutoPaperStatus(after);
       if (after !== 'ready') throw new Error('서버 모의계좌 저장·조회 검증이 완료되지 않았습니다.');
+      setAutoPaperPreflight(null);
       setAutoPaperMessage('50만원 가상계좌 저장·조회를 확인했습니다. 실제 주문은 활성화되지 않습니다.');
     } catch (error) {
       setAutoPaperStatus('failed');
@@ -491,7 +537,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <span className="text-xs font-semibold">
             {autoPaperStatus === 'ready' ? '서버 계좌 확인됨'
               : autoPaperStatus === 'missing' ? '계좌 준비 필요'
-                : autoPaperStatus === 'blocked' ? '기존 기록 확인 필요'
+                : autoPaperStatus === 'blocked'
+                  ? autoPaperPreflight?.state === 'READY_ISOLATE_LEGACY'
+                    ? '기존 이력 보존 후 준비 가능' : '기존 기록 확인 필요'
                   : autoPaperStatus === 'restricted' ? '모의계좌 관리 권한 없음'
                   : autoPaperStatus === 'failed' ? '계좌 점검 실패'
                     : autoPaperStatus === 'fixture' ? '테스트 화면' : '확인 중'}
@@ -507,7 +555,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             과거 자동모의 계획 {walletAudit.automaticPaperPlanCount}건 · 체결 이력 {walletAudit.executedAutomaticPaperOrderCount}건
             {walletAudit.missingFilledQuantityEvidence > 0 ? ` · 수량 증거 누락 ${walletAudit.missingFilledQuantityEvidence}건` : ''}
             {walletAudit.missingFeeEvidence > 0 ? ` · 비용 증거 누락 ${walletAudit.missingFeeEvidence}건` : ''}
-            . 과거 기록은 보존되며 50만원 가상계좌 재설정은 차단됩니다.
+            . 과거 기록은 보존하며 서버 사전검증이 승인한 경우에만 새 계좌를 분리 생성할 수 있습니다.
           </p>
         ) : null}
         {autoPaperStatus === 'blocked' && policy ? (
@@ -517,8 +565,14 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             코인선물 레버리지 {policy.bitgetLeverage}배. 이 화면에서 운용 한도를 변경하지 않습니다.
           </p>
         ) : null}
+        {autoPaperStatus === 'blocked' && autoPaperPreflight?.state === 'BLOCKED' ? (
+          <p className="mt-2 text-xs text-amber-700" data-testid="automatic-paper-legacy-preflight-blocked">
+            기존 거래 이력의 안전 분리 조건이 충족되지 않아 계좌 준비를 차단했습니다.
+          </p>
+        ) : null}
         {autoPaperStatus === 'blocked'
-          && (walletAudit?.automaticPaperPlanCount ?? 0) > 0 ? (
+          && autoPaperPreflight?.safeToPrepare === true
+          && autoPaperPreflight.state === 'READY_ISOLATE_LEGACY' ? (
           <button
             type="button"
             className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
@@ -529,7 +583,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             과거 기록 보존 후 신규 50만원 모의계좌 준비
           </button>
         ) : null}
-        {autoPaperStatus === 'missing' ? (
+        {autoPaperStatus === 'missing'
+          && autoPaperPreflight?.state === 'READY_FRESH'
+          && autoPaperPreflight.safeToPrepare === true ? (
           <button
             type="button"
             className="mt-3 min-h-11 rounded-xl border border-card-border px-4 text-sm font-semibold"
