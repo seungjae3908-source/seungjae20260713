@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_SAFETY, blockedSource,
   evaluateMarketOpportunities, evaluateWatchBudget,
@@ -215,10 +216,21 @@ test('digest is deterministic, never used as profit or authorization proof', () 
 test('new systemd service is rate-limited, isolated and never enabled by this code', async () => {
   const unit = await readFile(new URL('../deploy/research-production-market-watch.service', import.meta.url), 'utf8');
   assert.match(unit, /CPUQuota=40%/);
+  assert.match(unit, /ExecStart=\/usr\/bin\/env node --max-old-space-size=192/);
   assert.match(unit, /MemoryMax=512M/);
   assert.match(unit, /MemoryHigh=384M/);
   assert.match(unit, /NoNewPrivileges=true/);
   assert.match(unit, /ProtectSystem=strict/);
   assert.match(unit, /ReadWritePaths=\/var\/lib\/investment-research-production/);
   assert.doesNotMatch(unit, /ExecStart=.*(trade-automation|order|broker)/i);
+});
+
+
+test('systemd unit passes real syntax verification in Linux CI', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const path = new URL('../deploy/research-production-market-watch.service', import.meta.url).pathname;
+  const result = spawnSync('systemd-analyze', ['verify', path], { encoding: 'utf8' });
+  assert.equal(result.status, 0,
+    'systemd unit verify failed: ' + String(result.stderr || result.error || result.stdout));
 });
