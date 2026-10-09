@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import router, {
   normalizeReadonlyCredentialsForLiveExecution,
   setTradeAutomationRepositoryFactoryForTests,
+  setTradePaperRuntimeWalletReaderForTests,
   setTradeExitPreviewReadersFactoryForTests,
   setTradeReadonlyCredentialRepositoryFactoryForTests,
 } from './trade-automation';
@@ -348,10 +349,73 @@ test.beforeEach(async () => {
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradePaperRuntimeWalletReaderForTests(null);
   setTradeReadonlyCredentialRepositoryFactoryForTests(null);
   setTradeExitPreviewReadersFactoryForTests(null);
   setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+});
+
+test('Paper runtime readiness endpoint inspects only the authenticated member and never sends provider requests', async () => {
+  let inspectedMember: string | null = null;
+  setTradePaperRuntimeWalletReaderForTests(async (userId) => {
+    inspectedMember = userId;
+    return null;
+  });
+  const { server, baseUrl } = await startServer(true, 'regular');
+  try {
+    const response = await fetch(baseUrl + '/api/trade-automation/paper-runtime-readiness');
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.ok, true);
+    assert.equal(body.readOnlyProbe, true);
+    assert.equal(body.memberScope, 'SELF');
+    assert.equal(body.readyForPaperEvaluation, false);
+    assert.equal(body.paperWalletReady, false);
+    assert.ok(body.blockers.includes('BACKGROUND_PAPER_WALLET_REQUIRED'));
+    assert.equal(body.privateProviderRequests, 0);
+    assert.equal(body.financialMutationCount, 0);
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(body.exchangeRequestSent, false);
+    assert.equal(body.realOrderAuthorityGranted, false);
+    assert.equal(inspectedMember, USER);
+  } finally {
+    setTradePaperRuntimeWalletReaderForTests(null);
+    await close(server);
+  }
+});
+
+test('Paper runtime readiness fails closed without journal scope or during storage read errors', async () => {
+  let walletReads = 0;
+  setTradePaperRuntimeWalletReaderForTests(async () => {
+    walletReads += 1;
+    throw new Error('private sensitive storage failure must never be returned');
+  });
+  const associate = await startServer(true, 'associate');
+  try {
+    const response = await fetch(associate.baseUrl + '/api/trade-automation/paper-runtime-readiness');
+    assert.equal(response.status, 403);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.error, 'CAPABILITY_REQUIRED');
+    assert.equal(body.orderSubmitted, false);
+    assert.equal(walletReads, 0);
+  } finally { await close(associate.server); }
+
+  const regular = await startServer(true, 'regular');
+  try {
+    const response = await fetch(regular.baseUrl + '/api/trade-automation/paper-runtime-readiness');
+    assert.equal(response.status, 503);
+    const body = await response.text();
+    assert.doesNotMatch(body, /private sensitive storage failure/);
+    const payload = JSON.parse(body) as Record<string, unknown>;
+    assert.equal(payload.readyForPaperEvaluation, false);
+    assert.equal(payload.financialMutationCount, 0);
+    assert.equal(payload.orderSubmitted, false);
+    assert.equal(walletReads, 1);
+  } finally {
+    setTradePaperRuntimeWalletReaderForTests(null);
+    await close(regular.server);
+  }
 });
 
 test('exit preview re-reads the real position in read-only mode and never submits a trade', async () => {
