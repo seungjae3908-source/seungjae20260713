@@ -654,11 +654,25 @@ export function automaticLiveStrategyAllowlisted(
     && policy.enabledStrategies.includes(strategyId);
 }
 
+/**
+ * Shared admission invariant: a new automatic Paper campaign cannot claim
+ * 500,000 KRW collateral while its saved member-wide capital budget remains
+ * below that baseline. This does NOT disable risk-reducing exit supervision.
+ */
+export function automaticPaperCapitalPolicyReady(
+  policy: Pick<TradingPolicy, 'totalCapitalKrw'>,
+) {
+  return typeof policy.totalCapitalKrw === 'number'
+    && Number.isFinite(policy.totalCapitalKrw)
+    && policy.totalCapitalKrw >= AUTOMATIC_PAPER_INITIAL_KRW;
+}
+
 function policyAllowsEntry(member: EligibleMember, entry: MemberAutoTradingPaperHandoffEntry) {
   const policy = member.policy;
   const mapping = marketMapping(entry.identity.market, policy);
   if (mapping.assetClass === 'crypto_futures' && !hasCapability(member.profile, 'canAccessFutures')) return false;
   if (policy.mode !== 'automatic' || !policy.automaticEnabled || policy.emergencyStopped || policy.newEntriesStopped) return false;
+  if (!automaticPaperCapitalPolicyReady(policy)) return false;
   if (!policy.marketEnabled[mapping.assetClass] || !policy.exchangeEnabled[mapping.exchange]) return false;
   const symbol = mapping.exchange === 'upbit'
     ? entry.identity.symbol.toUpperCase().replace(/^KRW-/u, '')
