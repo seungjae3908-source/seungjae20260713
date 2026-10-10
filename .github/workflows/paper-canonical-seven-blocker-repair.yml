@@ -80,6 +80,7 @@ jobs:
           node --check ops/materialize-paper-canonical-forward-observer.mjs
           node --check ops/publish-paper-canonical-validation-freshness-policy.mjs
           node --check ops/run-paper-forward-flat-snapshot-republish.mjs
+          node --test market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
           node api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
       - name: Backend semantic validation
         run: pnpm --dir api-server run typecheck
@@ -405,7 +406,7 @@ jobs:
           remote_command="node --input-type=module - --expected-main-sha=$TARGET_SHA --pm2-name=stock-app"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$SSH_USER@$SSH_HOST" "$remote_command" < "$bundle"             > "$EVIDENCE_DIR/mid-readiness.json"
           node ops/plan-paper-canonical-seven-blocker-repair.mjs             --readiness="$EVIDENCE_DIR/mid-readiness.json"             --maximum-age-ms="$MAXIMUM_AGE_MS"             > "$EVIDENCE_DIR/mid-plan.json"
-      - name: Refresh exact-SHA Paper snapshot only when readiness still requires it
+      - name: Refresh exact-SHA Paper snapshot without changing open economic state
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -434,6 +435,38 @@ jobs:
           else
             printf '%s\n' '{"status":"NOT_REQUIRED","economicStatePreserved":true,"realOrder":0,"executionAuthority":"NONE"}' > "$EVIDENCE_DIR/flat-republish.json"
           fi
+      - name: Verify exact-SHA refresh evidence before Natural Paper cycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module - "$EVIDENCE_DIR/flat-republish.json" "$TARGET_SHA" <<'NODE'
+          import fs from 'node:fs';
+          const [path, target] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (value?.status === 'NOT_REQUIRED') {
+            if (value.economicStatePreserved !== true || value.realOrder !== 0 || value.executionAuthority !== 'NONE') process.exit(1);
+            process.exit(0);
+          }
+          const statusOk = value?.status === 'FLAT_REPUBLISHED' || value?.status === 'NON_FLAT_REPUBLISHED';
+          const accountingOk = value?.paperAccountingMutation === 0
+            || (value?.paperAccountingMutation === 1
+              && (value?.dailyRiskWindowRolled === true || value?.weeklyRiskWindowRolled === true));
+          const ok = value?.schemaVersion === 'paper-forward-flat-snapshot-republish-v1'
+            && statusOk && value?.targetSha === target && value?.sourceShaAfter === target
+            && value?.economicStatePreserved === true && value?.freshnessMetadataMutation === 1 && accountingOk
+            && value?.openPositionCountBefore === value?.openPositionCountAfter
+            && value?.pendingOrderCountBefore === value?.pendingOrderCountAfter
+            && value?.usedMarginPreserved === true && value?.unrealizedPnlPreserved === true
+            && value?.paperStateTransport === 'PUBLISHED' && value?.scheduleMutation === 0
+            && value?.productionAppMutation === 0 && value?.productionDbMutation === 0
+            && value?.realFinancialMutation === 0 && value?.privateBrokerExchangeApi === 0
+            && value?.realOrder === 0 && value?.realCancel === 0 && value?.realAmend === 0
+            && value?.realTransfer === 0 && value?.realWithdrawal === 0
+            && value?.liveTrading === false && value?.executionAuthority === 'NONE'
+            && value?.naturalCycleCredit === 0 && value?.naturalSampleCredit === 0
+            && value?.naturalSettlementCredit === 0 && value?.sensitiveValuesEmitted === false;
+          if (!ok) process.exit(1);
+          NODE
       - name: Run one genuine exact-SHA Natural Paper cycle without live/private authority
         shell: bash
         run: |
