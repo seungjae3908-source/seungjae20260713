@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const workflow = readFileSync('.github/workflows/research-market-watch-runtime-audit.yml', 'utf8');
-const script = readFileSync('research-production/deploy/read-only-market-watch-evidence.sh', 'utf8');
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const workflow = readFileSync(resolve(repoRoot, '.github/workflows/research-market-watch-runtime-audit.yml'), 'utf8');
+const script = readFileSync(resolve(repoRoot, 'research-production/deploy/read-only-market-watch-evidence.sh'), 'utf8');
 
 test('runtime evidence requires exact owner, canonical Hub and two pinned SHAs', () => {
   for (const token of [
