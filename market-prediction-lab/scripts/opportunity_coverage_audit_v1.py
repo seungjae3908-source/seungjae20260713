@@ -7,6 +7,9 @@ execution, strategy promotion, or profitability evidence is created.
 """
 from __future__ import annotations
 
+import math
+from collections import Counter
+
 import pandas as pd
 
 MARKETS = frozenset(("KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"))
@@ -44,8 +47,50 @@ class ObservedDailyOpportunityAudit:
         self.duplicate_bars = 0
         self.duplicate_symbol_sources = 0
         self.events = []
+        self._selection_gates = None
 
-    def observe_history(self, frame: pd.DataFrame) -> None:
+    def observe_history(self, frame: pd.DataFrame, *, selection_gates: dict | None = None) -> None:
+        # Capture the exact contemporaneous thresholds used by the same
+        # candidate_features function; unknown means classification unavailable.
+        if selection_gates is not None:
+            fields = ("min_abs_gap", "max_abs_gap", "min_price", "min_prior_avg_dollar_volume")
+            try:
+                normal = tuple(float(selection_gates[key]) for key in fields)
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("OPPORTUNITY_AUDIT_GATE_SCHEMA_INVALID") from error
+            if (not all(math.isfinite(value) and value >= 0 for value in normal)
+                or normal[0] > normal[1]):
+                raise ValueError("OPPORTUNITY_AUDIT_GATE_VALUES_INVALID")
+            if self._selection_gates is None:
+                self._selection_gates = normal
+            elif self._selection_gates != normal:
+                raise ValueError("OPPORTUNITY_AUDIT_GATE_SOURCE_CHANGED")
+
+    def candidate_gate_reason(self, *, gap, prior_close, prior_avg_dollar, prior_rvol):
+        """One deterministic *primary* missing reason from the open-only gates.
+
+        More than one predicate may fail. The priority creates disjoint
+        counts, not a claim that exactly one real-world cause existed.
+        """
+        if self._selection_gates is None:
+            return "PRESELECTION_GATE_CONFIG_NOT_ATTESTED"
+        min_gap, max_gap, min_price, min_dollar = self._selection_gates
+        if not (math.isfinite(prior_rvol) and prior_rvol > 0
+                and math.isfinite(prior_avg_dollar)):
+            return "PRIOR_VOLUME_OR_HISTORY_MISSING"
+        if prior_close < min_price:
+            return "PRIOR_CLOSE_BELOW_PRICE_FLOOR"
+        if prior_avg_dollar < min_dollar:
+            return "PRIOR_DOLLAR_VOLUME_BELOW_FLOOR"
+        if not math.isfinite(gap):
+            return "OPEN_GAP_UNAVAILABLE"
+        if abs(gap) < min_gap:
+            return "OPEN_ABSOLUTE_GAP_BELOW_MINIMUM"
+        if abs(gap) > max_gap:
+            return "OPEN_ABSOLUTE_GAP_ABOVE_MAXIMUM"
+        return "OTHER_INDICATOR_OR_SOURCE_FILTER"
+
+
         if not isinstance(frame, pd.DataFrame) or not set(REQUIRED_BARS).issubset(frame.columns):
             raise ValueError("OPPORTUNITY_RAW_HISTORY_SCHEMA_INVALID")
         if frame.empty:
@@ -74,6 +119,12 @@ class ObservedDailyOpportunityAudit:
         self.duplicate_bars += int(bars.duplicated("timestamp").sum())
         bars = bars.drop_duplicates("timestamp", keep="last")
         bars["prior_close"] = bars["close"].shift(1)
+        bars["open_gap"] = bars["open"] / bars["prior_close"] - 1
+        # Identical prior-information windows to source candidate_features.
+        bars["prior_avg_dollar"] = (bars["close"] * bars["volume"]).shift(1).rolling(20).mean()
+        bars["prior_rvol"] = bars["volume"].shift(1) / (
+            bars["volume"].shift(2).rolling(20).mean().replace(0, float("nan"))
+        )
         evaluated = bars.loc[
             (bars["timestamp"] >= self.start)
             & (bars["timestamp"] <= self.end + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1))
@@ -83,20 +134,26 @@ class ObservedDailyOpportunityAudit:
             return
         self.eval_symbols.add(symbol)
         self.observed_symbol_days += len(evaluated)
-        for timestamp, open_, high, low, prior_close in evaluated[
-            ["timestamp", "open", "high", "low", "prior_close"]
+        for timestamp, open_, high, low, prior_close, open_gap, prior_dollar, prior_rvol in evaluated[
+            ["timestamp", "open", "high", "low", "prior_close",
+             "open_gap", "prior_avg_dollar", "prior_rvol"]
         ].itertuples(index=False, name=None):
             day = utc_day(timestamp)
             self.eval_days.add(day)
+            gate_reason = self.candidate_gate_reason(
+                gap=float(open_gap), prior_close=float(prior_close),
+                prior_avg_dollar=float(prior_dollar),
+                prior_rvol=float(prior_rvol),
+            )
             up = (high / prior_close - 1) * 100
             down = (1 - low / prior_close) * 100
             up_at_open = (open_ / prior_close - 1) * 100
             down_at_open = (1 - open_ / prior_close) * 100
             for threshold in THRESHOLDS_PCT:
                 if up >= threshold:
-                    self.events.append((symbol, day, "LONG", threshold, up_at_open >= threshold))
+                    self.events.append((symbol, day, "LONG", threshold, up_at_open >= threshold, gate_reason))
                 if self.market == "CRYPTO_FUTURES" and down >= threshold:
-                    self.events.append((symbol, day, "SHORT", threshold, down_at_open >= threshold))
+                    self.events.append((symbol, day, "SHORT", threshold, down_at_open >= threshold, gate_reason))
 
     def summarize(self, preselected_frame: pd.DataFrame) -> dict:
         if not isinstance(preselected_frame, pd.DataFrame):
@@ -115,12 +172,18 @@ class ObservedDailyOpportunityAudit:
             for pct in THRESHOLDS_PCT:
                 subset = [e for e in self.events if e[2] == direction and e[3] == pct]
                 matched = [e for e in subset if (e[0], e[1]) in pool]
+                missing = [e for e in subset if (e[0], e[1]) not in pool]
                 before_open = [e for e in subset if e[4]]
+                # These are ordered, disjoint *open preselection* reasons.
+                # They are not diagnoses of the actual live scanner.
+                exclusions = Counter(e[5] for e in missing)
                 levels[str(pct)] = {
                     "observedHighLowEventCount": len(subset),
                     "openAlreadyBeyondThreshold": len(before_open),
                     "candidatePoolOverlapCount": len(matched),
-                    "candidatePoolMissingCount": len(subset) - len(matched),
+                    "candidatePoolMissingCount": len(missing),
+                    "preselectionMissingPrimaryReasons": dict(sorted(exclusions.items())),
+                    "primaryReasonClassification": "ORDERED_OPEN_GATES_BEST_EFFORT",
                     "candidatePoolOverlapPercent": (
                         round(100 * len(matched) / len(subset), 3) if subset else None
                     ),
@@ -148,6 +211,7 @@ class ObservedDailyOpportunityAudit:
             "invalidBars": self.invalid_bars,
             "duplicateBars": self.duplicate_bars,
             "duplicateSymbolSources": self.duplicate_symbol_sources,
+            "preselectionGateSettingsBound": self._selection_gates is not None,
             "directions": events_by_direction,
             "pointInTimeUniverseAndDelistingsVerified": False,
             "fullMarketOpportunityDenominator": None,
@@ -194,6 +258,26 @@ def self_test() -> None:
     assert set(stocks.summarize(observed)["directions"]) == {"LONG"}
     assert ObservedDailyOpportunityAudit("US_STOCK", "2025-01-01", "2025-01-04").summarize(observed)["status"] == "BLOCKED_DATA"
     assert spot_report["executionAuthority"] == "NONE"
+    # Synthetic input here is a contract test ONLY, not economic evidence.
+    warmup_rows = [
+        ("TEST", pd.Timestamp("2025-01-01", tz="UTC") + pd.Timedelta(days=i),
+         100, 101, 99, 100, 200_000)
+        for i in range(24)
+    ]
+    # 1% opening gap fails the 1.5% min gate; intraday high crosses +10%.
+    warmup_rows.append(("TEST", "2025-01-25", 101, 115, 100, 105, 200_000))
+    mini = pd.DataFrame(warmup_rows, columns=REQUIRED_BARS)
+    us = ObservedDailyOpportunityAudit("US_STOCK", "2025-01-25", "2025-01-25")
+    us.observe_history(mini, selection_gates={
+        "min_abs_gap": .015, "max_abs_gap": .30, "min_price": 1.,
+        "min_prior_avg_dollar_volume": 1_000_000.,
+    })
+    empty = pd.DataFrame(columns=["symbol", "timestamp"])
+    ten = us.summarize(empty)["directions"]["LONG"]["10"]
+    assert ten["observedHighLowEventCount"] == 1
+    assert ten["candidatePoolMissingCount"] == 1
+    assert ten["preselectionMissingPrimaryReasons"] == {"OPEN_ABSOLUTE_GAP_BELOW_MINIMUM": 1}
+    assert sum(ten["preselectionMissingPrimaryReasons"].values()) == ten["candidatePoolMissingCount"]
     print("FOUR_MARKET_OBSERVED_DAILY_OPPORTUNITY_AUDIT_SELF_TEST_PASS")
 
 

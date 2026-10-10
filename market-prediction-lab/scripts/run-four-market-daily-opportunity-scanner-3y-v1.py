@@ -430,7 +430,12 @@ def load_market_with_observed_opportunities(market: str, audit: ObservedDailyOpp
     original = us.candidate_features
 
     def observed_candidate_features(frame: pd.DataFrame) -> pd.DataFrame:
-        audit.observe_history(frame)
+        audit.observe_history(frame, selection_gates={
+            "min_abs_gap": us.MIN_GAP,
+            "max_abs_gap": us.MAX_GAP,
+            "min_price": us.MIN_PRICE,
+            "min_prior_avg_dollar_volume": us.MIN_AVG_DOLLAR_VOLUME,
+        })
         return original(frame)
 
     us.candidate_features = observed_candidate_features
