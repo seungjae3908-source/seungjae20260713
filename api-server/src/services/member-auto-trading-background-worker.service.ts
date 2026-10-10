@@ -22,7 +22,10 @@ import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
 import type { PaperJournalRepository, StoredPaperJournalRecord } from './paper-journal.types';
-import { adminFourMarketPaperCapitalReadback } from './admin-four-market-paper-readback.service';
+import {
+  adminFourMarketPaperCapitalReadback,
+  memberFourMarketPaperCapitalReadback,
+} from './admin-four-market-paper-readback.service';
 import {
   ADMIN_FOUR_PAPER_MARKETS,
   ADMIN_MARKET_INITIAL_KRW,
@@ -31,7 +34,11 @@ import {
   adminMarketPaperRiskBudget,
   adminMarketPaperAvailableBalance,
   inspectAdminFourMarketPaperWallets,
+  inspectMemberFourMarketPaperWallets,
+  memberMarketPaperRiskBudget,
   projectAdminMarketCapital,
+  projectMemberMarketCapital,
+  type FourMarketPaperWalletRole,
 } from './admin-four-market-paper-capital.service';
 import type {
   ExchangeConnection,
@@ -318,9 +325,11 @@ type MemberRuntimeState = Readonly<{
   dailyPnlPercent: number;
   weeklyPnlPercent: number;
   consecutiveLosses: number;
-  adminMarketWalletRows: readonly StoredPaperJournalRecord[] | null;
-  adminMarketRisk: Record<AdminPaperMarket, ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>> | null;
-  adminMarketCapital: Record<AdminPaperMarket, ReturnType<typeof projectAdminMarketCapital>> | null;
+  fourMarketWalletRole: FourMarketPaperWalletRole | null;
+  fourMarketWalletRows: readonly StoredPaperJournalRecord[] | null;
+  fourMarketRisk: Record<AdminPaperMarket, ReturnType<typeof automaticPaperRiskEvidenceFromCanonicalLedger>> | null;
+  fourMarketCapital: Record<AdminPaperMarket,
+    ReturnType<typeof projectAdminMarketCapital> | ReturnType<typeof projectMemberMarketCapital>> | null;
   plans: readonly TradingPlan[];
   orders: readonly TradingOrder[];
 }>;
@@ -333,6 +342,7 @@ export interface MemberAutoTradingBackgroundSource {
   memberTelegramConnected?(userId: string): Promise<boolean>;
   /** Recheck V2 database protections every tick. Missing RPC means FAIL-CLOSED. */
   adminPaperDatabaseGuardReady?(): Promise<boolean>;
+  fourMarketPaperDatabaseGuardReady?(): Promise<boolean>;
   revalidateLiveAllFourReadiness?(userId: string): Promise<boolean>;
   tradingRepositoryFor(userId: string): TradingRepository;
   paperJournalRepositoryFor(userId: string): PaperJournalRepository;
@@ -685,6 +695,37 @@ export function automaticLiveStrategyAllowlisted(
 }
 
 /**
+ * A V2 Paper lane owns its own one-million-won operating balance. Its
+ * settlement-backed 50% compound growth may expand Paper sizing only; it
+ * never changes the stored member policy or any Live/provider authority.
+ */
+export function deriveFourMarketPaperExecutionPolicy(
+  policy: TradingPolicy,
+  market: AdminPaperMarket,
+  capital: Readonly<{
+    settlementReady: boolean;
+    newEntriesAllowed: boolean;
+    operatingCapitalKrw: number;
+  }>,
+): TradingPolicy {
+  const laneCapital = Number(capital.operatingCapitalKrw);
+  if (!capital.settlementReady || !capital.newEntriesAllowed
+    || !finite(laneCapital) || laneCapital <= 0) {
+    throw new Error('BACKGROUND_PAPER_MARKET_CAPITAL_NOT_READY');
+  }
+  return Object.freeze({
+    ...policy,
+    totalCapitalKrw: laneCapital,
+    maxOrderKrw: laneCapital,
+    maxInstrumentKrw: laneCapital,
+    maxAssetClassKrw: Object.freeze({
+      ...policy.maxAssetClassKrw,
+      [market]: laneCapital,
+    }),
+  });
+}
+
+/**
  * Shared admission invariant: a new automatic Paper campaign cannot claim
  * 500,000 KRW collateral while its saved member-wide capital budget remains
  * below that baseline. This does NOT disable risk-reducing exit supervision.
@@ -980,12 +1021,18 @@ async function memberRuntimeState(
     repository.listPlans(userId), repository.listOrders(userId),
   ]);
   const records = paperResult.records;
-  // Admin V2 is opt-in on a durable wallet row, not inferred from role.
-  // Existing admin/regular V1 tests and journals remain backward compatible.
-  const fourMarketMode = adminMember && records.some((row) =>
-    row.kind === 'account' && row.id.startsWith('automatic-paper-admin-v2:'));
+  // Role-scoped V2 is opt-in on durable wallet rows, not inferred from role.
+  // Existing V1 history remains visible and is never rewritten or reset.
+  const fourMarketWalletRole: FourMarketPaperWalletRole = adminMember ? 'admin' : 'member';
+  const walletPrefix = adminMember
+    ? 'automatic-paper-admin-v2:' : 'automatic-paper-member-v2:';
+  const fourMarketMode = records.some((row) =>
+    row.kind === 'account' && row.id.startsWith(walletPrefix));
   const marketWallets = fourMarketMode && paperResult.validRead
-    ? inspectAdminFourMarketPaperWallets(records, nowMs) : null;
+    ? adminMember
+      ? inspectAdminFourMarketPaperWallets(records, nowMs)
+      : inspectMemberFourMarketPaperWallets(records, nowMs)
+    : null;
   const automaticEquity = !fourMarketMode && paperResult.validRead
     ? selectAutomaticPaperAccountEquity(records) : null;
   const paperWalletOpenedAtMs = fourMarketMode
@@ -1003,8 +1050,8 @@ async function memberRuntimeState(
     consecutiveLosses: 0, closedTrades: 0,
   });
   let risk = emptyRisk('BACKGROUND_PAPER_WALLET_REQUIRED');
-  let adminMarketRisk: MemberRuntimeState['adminMarketRisk'] = null;
-  let adminMarketCapital: MemberRuntimeState['adminMarketCapital'] = null;
+  let fourMarketRisk: MemberRuntimeState['fourMarketRisk'] = null;
+  let fourMarketCapital: MemberRuntimeState['fourMarketCapital'] = null;
   if (fourMarketMode && marketWallets?.ready && paperWalletOpenedAtMs != null) {
     const byId = new Map(plans.map((plan) => [plan.id, plan]));
     // Unknown filled plan references can never be assigned to an innocent
@@ -1013,11 +1060,11 @@ async function memberRuntimeState(
       && (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
         || order.state === 'RECOVERY_REQUIRED' || order.filledQuantity > 0));
     const truncated = orders.length >= 500 || plans.length >= 200;
-    adminMarketRisk = {} as NonNullable<MemberRuntimeState['adminMarketRisk']>;
-    adminMarketCapital = {} as NonNullable<MemberRuntimeState['adminMarketCapital']>;
-    const adminReadback = adminFourMarketPaperCapitalReadback({
-      ownerId: userId, records, plans, orders, nowMs,
-    });
+    fourMarketRisk = {} as NonNullable<MemberRuntimeState['fourMarketRisk']>;
+    fourMarketCapital = {} as NonNullable<MemberRuntimeState['fourMarketCapital']>;
+    const capitalReadback = adminMember
+      ? adminFourMarketPaperCapitalReadback({ ownerId: userId, records, plans, orders, nowMs })
+      : memberFourMarketPaperCapitalReadback({ ownerId: userId, records, plans, orders, nowMs });
     for (const market of ADMIN_FOUR_PAPER_MARKETS) {
       const account = marketWallets.marketWallets[market];
       const scopedPlans = plans.filter((plan) => plan.accountMode === 'paper'
@@ -1033,28 +1080,29 @@ async function memberRuntimeState(
           );
         } catch { /* A malformed market lane must not borrow funds from its peers. */ }
       }
-      const laneCapital = adminReadback.capital[market];
-      adminMarketCapital[market] = laneCapital;
+      const laneCapital = capitalReadback.capital[market];
+      fourMarketCapital[market] = laneCapital;
       if (laneRisk.ready && !laneCapital.newEntriesAllowed) {
         laneRisk = {
           ...laneRisk, ready: false,
           blockers: laneCapital.blockers.length
-            ? laneCapital.blockers : ['ADMIN_PAPER_MARKET_SETTLED_LOSS_LIMIT'],
+            ? laneCapital.blockers
+            : [`${adminMember ? 'ADMIN' : 'MEMBER'}_PAPER_MARKET_SETTLED_LOSS_LIMIT`],
         };
       }
-      adminMarketRisk[market] = laneRisk;
+      fourMarketRisk[market] = laneRisk;
     }
-    const allReady = ADMIN_FOUR_PAPER_MARKETS.every((market) => adminMarketRisk![market].ready);
+    const allReady = ADMIN_FOUR_PAPER_MARKETS.every((market) => fourMarketRisk![market].ready);
     risk = allReady ? { ready: true, blockers: [],
       dailyPnlPercent: Math.min(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
-        adminMarketRisk![market].dailyPnlPercent)),
+        fourMarketRisk![market].dailyPnlPercent)),
       weeklyPnlPercent: Math.min(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
-        adminMarketRisk![market].weeklyPnlPercent)),
+        fourMarketRisk![market].weeklyPnlPercent)),
       consecutiveLosses: Math.max(...ADMIN_FOUR_PAPER_MARKETS.map((market) =>
-        adminMarketRisk![market].consecutiveLosses)),
+        fourMarketRisk![market].consecutiveLosses)),
       closedTrades: ADMIN_FOUR_PAPER_MARKETS.reduce((sum, market) =>
-        sum + adminMarketRisk![market].closedTrades, 0),
-    } : emptyRisk('ADMIN_PAPER_MARKET_RISK_EVIDENCE_REQUIRED');
+        sum + fourMarketRisk![market].closedTrades, 0),
+    } : emptyRisk(`${adminMember ? 'ADMIN' : 'MEMBER'}_PAPER_MARKET_RISK_EVIDENCE_REQUIRED`);
   } else if (!fourMarketMode) {
     try {
       risk = automaticPaperRiskEvidenceFromCanonicalLedger(
@@ -1068,8 +1116,9 @@ async function memberRuntimeState(
     dailyPnlPercent: risk.dailyPnlPercent,
     weeklyPnlPercent: risk.weeklyPnlPercent,
     consecutiveLosses: risk.consecutiveLosses,
-    adminMarketWalletRows: fourMarketMode ? records : null,
-    adminMarketRisk, adminMarketCapital,
+    fourMarketWalletRole: fourMarketMode ? fourMarketWalletRole : null,
+    fourMarketWalletRows: fourMarketMode ? records : null,
+    fourMarketRisk, fourMarketCapital,
     plans, orders,
   });
 }
@@ -1088,19 +1137,25 @@ function exposureState(
     marketMappingForPlan(plan).assetClass === mapping.assetClass);
   const sameInstrument = sameClass.filter((plan) => plan.exchange === mapping.exchange
     && plan.symbol.toUpperCase() === entry.identity.symbol.toUpperCase());
-  const sameStrategy = runtime.adminMarketRisk && accountMode === 'paper'
+  const sameStrategy = runtime.fourMarketRisk && accountMode === 'paper'
     ? sameClass.filter((plan) => plan.strategyId === entry.identity.strategyId)
     : active.filter((plan) => plan.strategyId === entry.identity.strategyId);
   const sum = (rows: readonly TradingPlan[]) =>
     rows.reduce((total, plan) => total + Math.max(0, Number(plan.estimatedKrw) || 0), 0);
-  const marketIsolated = runtime.adminMarketRisk != null && accountMode === 'paper';
+  const marketIsolated = runtime.fourMarketRisk != null && accountMode === 'paper';
+  const marketBudgetInput = {
+    market: mapping.assetClass,
+    records: runtime.fourMarketWalletRows ?? [],
+    openPlans: active,
+    nowMs,
+    verifiedCapital: runtime.fourMarketCapital?.[mapping.assetClass],
+  };
   const budget = marketIsolated
-    ? adminMarketPaperRiskBudget({
-        market: mapping.assetClass, records: runtime.adminMarketWalletRows ?? [],
-        openPlans: active, nowMs,
-        verifiedCapital: runtime.adminMarketCapital?.[mapping.assetClass],
-      }) : null;
-  if (budget && !budget.ready) throw new Error('ADMIN_PAPER_MARKET_RISK_BUDGET_UNAVAILABLE');
+    ? runtime.fourMarketWalletRole === 'admin'
+      ? adminMarketPaperRiskBudget(marketBudgetInput)
+      : memberMarketPaperRiskBudget(marketBudgetInput)
+    : null;
+  if (budget && !budget.ready) throw new Error('PAPER_MARKET_RISK_BUDGET_UNAVAILABLE');
   const accountExposureKrw = marketIsolated ? sum(sameClass) : sum(active);
   const instrumentExposureKrw = sum(sameInstrument);
   const budgetEquity = budget?.accountValueKrw ?? policy.totalCapitalKrw;
@@ -1186,7 +1241,7 @@ function buildPlanInput(
   if (!positive(estimatedKrw)) throw new Error('BACKGROUND_ORDER_KRW_INVALID');
 
   const exposure = exposureState(runtime, member.policy, entry, nowMs);
-  const marketRisk = runtime.adminMarketRisk?.[mapping.assetClass] ?? null;
+  const marketRisk = runtime.fourMarketRisk?.[mapping.assetClass] ?? null;
   const slippage = costPercent(entry, 'slippageRate');
   const fee = costPercent(entry, 'commissionRate');
   const averageSpread = costPercent(entry, 'spreadRate');
@@ -1846,11 +1901,12 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
         let adminWalletDbGuardReady = true;
-        if (runtime.adminMarketWalletRows !== null) {
+        if (runtime.fourMarketWalletRows !== null) {
           if (adminDbGuardThisTick === null) {
             try {
-              adminDbGuardThisTick =
-                await this.source.adminPaperDatabaseGuardReady?.() === true;
+              const guard = this.source.fourMarketPaperDatabaseGuardReady
+                ?? this.source.adminPaperDatabaseGuardReady;
+              adminDbGuardThisTick = await guard?.call(this.source) === true;
             } catch {
               adminDbGuardThisTick = false;
             }
@@ -1939,7 +1995,20 @@ export class MemberAutoTradingBackgroundWorker {
           }
         };
 
-        let formulaAiPilotCapital: RulePackPilotCapitalState | null = null;
+        // LIVE capital and compounding are independent per market. A verified
+        // gain in (for example) Upbit spot must never enlarge a stock or
+        // futures order budget during the same worker tick.
+        const formulaAiPilotCapitalByMarket = new Map<TradingAssetClass, RulePackPilotCapitalState>();
+        const formulaAiPilotCapital = async (market: TradingAssetClass) => {
+          const cached = formulaAiPilotCapitalByMarket.get(market);
+          if (cached) return cached;
+          const capital = await readRulePackPilotCapitalState(
+            repository, member.userId, now,
+            rulePackPilotInitialCapitalForPolicy(member.policy), market,
+          );
+          formulaAiPilotCapitalByMarket.set(market, capital);
+          return capital;
+        };
         // Do not promote potentially browser-forged V2 Paper fills into
         // Journal/Telegram when the DB write barriers cannot be attested.
         let entryProjectionHealthy = adminWalletDbGuardReady
@@ -2041,7 +2110,7 @@ export class MemberAutoTradingBackgroundWorker {
         // Maintain eligible Live exits above even when Paper storage is
         // absent. Do not create Paper or Live entries using placeholder equity.
         if (!runtime.paperAccountReady
-          || (!runtime.adminMarketRisk && !runtime.paperFinancialRiskReady)) {
+          || (!runtime.fourMarketRisk && !runtime.paperFinancialRiskReady)) {
           // A paper-ledger block and a simultaneous Telegram outage are two
           // independent reasons not to admit Live entry. Surface both in
           // health without letting either bypass the other.
@@ -2054,7 +2123,7 @@ export class MemberAutoTradingBackgroundWorker {
           continue;
         }
         for (const entry of entries) {
-          if (!policyAllowsEntry(member, entry, runtime.adminMarketRisk != null)) {
+          if (!policyAllowsEntry(member, entry, runtime.fourMarketRisk != null)) {
             result.skipped += 1;
             continue;
           }
@@ -2064,12 +2133,14 @@ export class MemberAutoTradingBackgroundWorker {
             // covers a prior entry that mutated an order and then failed during
             // lifecycle/projection post-processing before its normal refresh.
             await refreshRuntime();
-            if (runtime.adminMarketWalletRows !== null) {
+            if (runtime.fourMarketWalletRows !== null) {
               // Revalidate at the new-entry boundary so a revoked migration
               // cannot be hidden by the earlier tick-scoped readiness cache.
               let guarded = false;
               try {
-                guarded = await this.source.adminPaperDatabaseGuardReady?.() === true;
+                const guard = this.source.fourMarketPaperDatabaseGuardReady
+                  ?? this.source.adminPaperDatabaseGuardReady;
+                guarded = await guard?.call(this.source) === true;
               } catch { guarded = false; }
               if (!guarded) {
                 result.newEntriesFailClosed = true;
@@ -2078,8 +2149,8 @@ export class MemberAutoTradingBackgroundWorker {
               }
             }
             const candidateMarket = marketMapping(entry.identity.market, member.policy).assetClass;
-            if (!runtime.paperAccountReady || (runtime.adminMarketRisk
-              ? runtime.adminMarketRisk[candidateMarket].ready !== true
+            if (!runtime.paperAccountReady || (runtime.fourMarketRisk
+              ? runtime.fourMarketRisk[candidateMarket].ready !== true
               : !runtime.paperFinancialRiskReady)) {
               result.newEntriesFailClosed = true;
               result.blocked += 1;
@@ -2091,21 +2162,25 @@ export class MemberAutoTradingBackgroundWorker {
               fxCache.set(entry.identity.market, fx);
             }
             let paperInput = buildPlanInput(member, entry, runtime, fx, nowMs);
-            let paperEntryPolicy = member.policy;
+            let paperEntryPolicy = runtime.fourMarketCapital
+              ? deriveFourMarketPaperExecutionPolicy(
+                  member.policy,
+                  candidateMarket,
+                  runtime.fourMarketCapital[candidateMarket],
+                )
+              : member.policy;
             if (member.policy.pilotStage === 'formula-ai-exception'
+              && runtime.fourMarketCapital == null
               && paperInput.estimatedKrw > member.policy.maxOrderKrw) {
               // Compounding beyond the stored base cap requires an immutable
               // signal-specific review and signed worker-only provenance.
               formulaAiReviewReasonsForLive(entry, nowMs);
-              formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
-                repository, member.userId, now,
-                rulePackPilotInitialCapitalForPolicy(member.policy),
-              );
+              const marketPilotCapital = await formulaAiPilotCapital(candidateMarket);
               validateFormulaAiPilotEntry(
-                member, entry, runtime, formulaAiPilotCapital, paperInput.estimatedKrw, nowMs,
+                member, entry, runtime, marketPilotCapital, paperInput.estimatedKrw, nowMs,
               );
               paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
-                member.policy, formulaAiPilotCapital,
+                member.policy, marketPilotCapital, candidateMarket,
               );
               paperInput = issueRulePackPilotDynamicCapReceipt(
                 member.userId, paperInput, nowMs,
@@ -2182,21 +2257,20 @@ export class MemberAutoTradingBackgroundWorker {
               let liveMember = member;
               if (member.policy.pilotStage === 'formula-ai-exception') {
                 formulaAiReviewReasonsForLive(entry, nowMs);
-                formulaAiPilotCapital ??= await readRulePackPilotCapitalState(
-                  repository, member.userId, now,
-                  rulePackPilotInitialCapitalForPolicy(member.policy),
-                );
+                const marketPilotCapital = await formulaAiPilotCapital(candidateMarket);
                 validateFormulaAiPilotEntry(
                   member,
                   entry,
                   runtime,
-                  formulaAiPilotCapital,
+                  marketPilotCapital,
                   paperInput.estimatedKrw,
                   nowMs,
                 );
                 liveMember = Object.freeze({
                   ...member,
-                  policy: deriveRulePackPilotExecutionPolicy(member.policy, formulaAiPilotCapital),
+                  policy: deriveRulePackPilotExecutionPolicy(
+                    member.policy, marketPilotCapital, candidateMarket,
+                  ),
                 });
               }
               const provider = marketMapping(entry.identity.market, liveMember.policy).exchange as AccountProvider;
@@ -2237,8 +2311,11 @@ export class MemberAutoTradingBackgroundWorker {
                 estimatedSlippagePercent: livePreview.snapshot.estimatedSlippagePercent,
                 averageSpreadPercent: livePreview.snapshot.spreadPercent,
               };
-              if (member.policy.pilotStage === 'formula-ai-exception'
-                && liveInput.estimatedKrw > member.policy.maxOrderKrw) {
+              if (member.policy.pilotStage === 'formula-ai-exception') {
+                // The signed receipt also preserves the role-scoped four-
+                // market portfolio ceiling (member 2m / admin 4m) during the
+                // persisted approval and provider pre-submission rechecks,
+                // even when this particular order is below the lane cap.
                 liveInput = issueRulePackPilotDynamicCapReceipt(
                   member.userId, liveInput, nowMs,
                 );
@@ -2491,6 +2568,11 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
     // SECURITY INVOKER returns only a boolean: strict V2 wallet+canonical
     // policies, seed constraint and revoked TRUNCATE must ALL still exist.
     const { data, error } = await this.client.rpc('admin_four_paper_wallet_rls_guard_ready');
+    return !error && data === true;
+  }
+
+  async fourMarketPaperDatabaseGuardReady() {
+    const { data, error } = await this.client.rpc('four_market_paper_wallet_rls_guard_ready');
     return !error && data === true;
   }
 
