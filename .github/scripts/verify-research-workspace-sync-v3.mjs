@@ -529,7 +529,7 @@ const researchCenterChanged=changed.filter((p)=>
  researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
 );
 // Research market-watch DTO-only review: preserve the existing Paper and
-// Research Center workflows completely unchanged. Only this exact six-path,
+// Research Center workflows completely unchanged. Only this exact seven-path,
 // observation-only PR may use the already-triggered dedicated Research Center
 // predeploy workflow as its guard instead of changing its YAML on every edit.
 const publicWatchReadbackOnlyPaths=[
@@ -539,6 +539,7 @@ const publicWatchReadbackOnlyPaths=[
  'api-server/src/services/research-center-readonly-contract.service.test.ts',
  'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
  'stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx',
+ 'stock-analyzer/src/pages/research-center.tsx',
 ];
 function reviewedPublicWatchReadbackOnly(){
  if(changed.length!==publicWatchReadbackOnlyPaths.length
@@ -558,6 +559,7 @@ function reviewedPublicWatchReadbackOnly(){
  const proof=git('show','HEAD:api-server/scripts/verify-research-center-predeploy-contract.mjs');
  const dto=git('show','HEAD:api-server/src/services/research-center-readonly-contract.service.ts');
  const panel=git('show','HEAD:stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx');
+ const page=git('show','HEAD:stock-analyzer/src/pages/research-center.tsx');
  const backend=git('show','HEAD:api-server/src/services/research-center-readonly-contract.service.test.ts');
  const browser=git('show','HEAD:stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts');
  const requireAll=(source,tokens)=>tokens.every(token=>source.includes(token));
@@ -566,6 +568,9 @@ function reviewedPublicWatchReadbackOnly(){
    "watch PARTIAL source-count parity",
    "watch 6-minute staleness threshold",
    "watch UI no-order boundary",
+   "bounded 2-minute Research overview polling",
+   "no hidden-tab overview polling",
+   "cached Research overview refetch error must propagate to watch",
  ])&&requireAll(dto,[
    "const usableCount = rows.filter(",
    "v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4)",
@@ -575,13 +580,19 @@ function reviewedPublicWatchReadbackOnly(){
  ])&&requireAll(panel,[
    "if (value.startsWith('BLOCKED_')) return '데이터 미연결';",
    "if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';",
+   "readbackFailed ? '최근 조회 실패 · 이전 기록'",
    "실주문 권한은 없습니다.",
+ ])&&requireAll(page,[
+   "refetchInterval: 120_000,",
+   "refetchIntervalInBackground: false,",
+   "readbackFailed={overviewQuery.isError}",
  ])&&requireAll(backend,[
    "watcher source health states and staleness must agree",
    "status: 'BLOCKED_DATA'",
  ])&&requireAll(browser,[
    "four-market watch shows partial live public sources",
    "a stale public feed never appears as currently collecting",
+   "market-watch overview polls every two minutes while visible",
  ]);
 }
 if(researchCenterChanged.length>0){
