@@ -104,6 +104,37 @@ export function validateFlatSnapshot(snapshot, { publisherDigest, targetSha = nu
   return snapshot;
 }
 
+export function isNonFlatSnapshotError(error) {
+  return Boolean(error && typeof error === 'object' && error.code === 'SNAPSHOT_NOT_FLAT');
+}
+
+export function buildNonFlatSkipEvidence({ targetSha, sourceShaBefore }) {
+  if (!exactSha(targetSha) || !exactSha(sourceShaBefore)) fail('NON_FLAT_SKIP_SHA_INVALID');
+  return Object.freeze({
+    schemaVersion: SCHEMA_VERSION,
+    status: 'SKIPPED_NON_FLAT',
+    targetSha,
+    sourceShaBefore,
+    economicStatePreserved: true,
+    freshnessMetadataMutation: 0,
+    paperAccountingMutation: 0,
+    scheduleMutation: 0,
+    productionAppMutation: 0,
+    productionDbMutation: 0,
+    realFinancialMutation: 0,
+    privateBrokerExchangeApi: 0,
+    realOrder: 0,
+    realCancel: 0,
+    realAmend: 0,
+    realTransfer: 0,
+    realWithdrawal: 0,
+    liveTrading: false,
+    executionAuthority: 'NONE',
+    nextStep: 'GENUINE_PAPER_CYCLE',
+    sensitiveValuesEmitted: false,
+  });
+}
+
 function dayKey(at) {
   return at.toISOString().slice(0, 10);
 }
@@ -307,7 +338,18 @@ export async function runFlatSnapshotRepublish() {
 
   const binding = await readJson(bindingPath, 'BINDING_READ_FAILED');
   validateBinding(binding, { targetSha, publisherDigest, snapshotPath });
-  const beforeSnapshot = validateFlatSnapshot(await readJson(snapshotPath, 'SNAPSHOT_READ_FAILED'), { publisherDigest });
+  const rawBeforeSnapshot = await readJson(snapshotPath, 'SNAPSHOT_READ_FAILED');
+  let beforeSnapshot;
+  try {
+    beforeSnapshot = validateFlatSnapshot(rawBeforeSnapshot, { publisherDigest });
+  } catch (error) {
+    if (!isNonFlatSnapshotError(error)) throw error;
+    process.stdout.write(`${JSON.stringify(buildNonFlatSkipEvidence({
+      targetSha,
+      sourceShaBefore: rawBeforeSnapshot?.sourceSha,
+    }), null, 2)}\n`);
+    return;
+  }
   const beforeState = clone(beforeSnapshot.state);
   const anchor = selectRefreshAnchor(beforeState);
   const action = buildRefreshAction({ stateDigest: beforeSnapshot.stateDigestSha256, ...anchor });
