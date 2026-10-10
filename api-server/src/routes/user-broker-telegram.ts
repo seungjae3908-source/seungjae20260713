@@ -20,7 +20,10 @@ import type {
 } from '../features/user-broker-telegram/user-broker-telegram.types';
 import { defaultTelegramAlertPolicy } from '../services/telegram-alert-policy.service';
 import { sendPersonalTelegramTestMessage } from '../services/telegram-test-message.service';
-import { readUserTelegramDeliveryWorkerHealth } from '../features/user-broker-telegram/user-broker-telegram.worker';
+import {
+  readUserTelegramDeliveryWorkerHealth,
+  userTelegramDeliveryWorkerHealthy,
+} from '../features/user-broker-telegram/user-broker-telegram.worker';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
@@ -56,7 +59,14 @@ function errorCode(error: unknown): string {
 
 function unavailableTelegramState() {
   return {
-    telegram: { connected: false, status: 'UNAVAILABLE', connectedAt: null },
+    telegram: {
+      connected: false,
+      status: 'UNAVAILABLE',
+      connectedAt: null,
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
+    },
     preferences: defaultNotificationPreferences(),
     deliveries: [],
     telegramStorageAvailable: false,
@@ -75,6 +85,7 @@ function unavailableAlertPolicyState(userId: string) {
 
 function telegramRuntimeState() {
   const personalWorkerHealth = readUserTelegramDeliveryWorkerHealth();
+  const personalWorkerHealthy = userTelegramDeliveryWorkerHealthy(personalWorkerHealth);
   const personalTickAt = Date.parse(personalWorkerHealth.lastTickAt ?? '');
   // "enabled" also appears in failure snapshots when no real worker started.
   // Count a worker as started only after a recent observed processing tick.
@@ -95,6 +106,10 @@ function telegramRuntimeState() {
     backgroundWorkersEnabled: process.env.BACKGROUND_WORKERS_ENABLED !== 'false',
     personalWorkerEnabled: process.env.PERSONAL_TELEGRAM_WORKER_ENABLED === 'true',
     personalWorkerStarted,
+    personalWorkerHealthy,
+    personalWorkerErrorCode: personalWorkerHealth.errorCode,
+    personalWorkerLastTickAt: personalWorkerHealth.lastTickAt,
+    personalWorkerLastConfirmedDeliveryAt: personalWorkerHealth.lastConfirmedDeliveryAt,
     workerActivationApproved: process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true',
     intelligenceWorkerEnabled: process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'true',
     richSignalEnabled: process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED === 'true',
