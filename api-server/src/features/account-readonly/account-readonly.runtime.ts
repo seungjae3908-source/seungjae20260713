@@ -20,6 +20,7 @@ import {
 import { KiwoomReadonlyProvider, type KiwoomReadonlyCredentials } from './providers/kiwoom-readonly.provider';
 import {
   createTossReadonlyTransport,
+  processTossTokenManager,
   TossReadonlyProvider,
   TossTokenManager,
   type TossCredentials,
@@ -394,7 +395,9 @@ export function createVaultBackedAccountReaders(
     fetchImpl,
   );
   const tossTransport = createTossReadonlyTransport(fetchImpl);
-  const tossTokens = new TossTokenManager(tossTransport);
+  const tossTokens = options.fetchImpl
+    ? new TossTokenManager(tossTransport)
+    : processTossTokenManager();
   const tossProvider = new TossReadonlyProvider(tossTransport, tossTokens);
   const kiwoomProvider = new KiwoomReadonlyProvider(fetchImpl);
 
