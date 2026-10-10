@@ -1,0 +1,246 @@
+name: Research Lightweight Market Watch Isolated Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'research-production/deploy/activate-lightweight-market-watch.sh'
+      - 'research-production/deploy/research-production-market-watch.service'
+      - 'research-production/test/lightweight-market-watch-activation.test.mjs'
+      - '.github/workflows/research-market-watch-activation.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+  statuses: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: research-market-watch-activation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify isolated safe activation contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n research-production/deploy/activate-lightweight-market-watch.sh
+          systemd-analyze verify research-production/deploy/research-production-market-watch.service
+          node --test research-production/test/lightweight-market-watch-activation.test.mjs
+          grep -Fxq 'CPUQuota=40%' research-production/deploy/research-production-market-watch.service
+          grep -Fxq 'MemoryMax=512M' research-production/deploy/research-production-market-watch.service
+          grep -Fxq 'NoNewPrivileges=true' research-production/deploy/research-production-market-watch.service
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.number == 1102 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-market-watch ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Authorize exact main, both merged Research sources, coherent 6/6
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body || '').trim();
+            const m = /^\/activate-market-watch ([0-9a-f]{40})$/i.exec(body);
+            if (!m) { core.setFailed('MARKET_WATCH_EXACT_SHA_REQUIRED'); return; }
+            const target = m[1].toLowerCase();
+            const main = (await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha.toLowerCase();
+            if (target !== main) { core.setFailed('MARKET_WATCH_MAIN_MOVED'); return; }
+            for (const n of [1743,1764]) {
+              const p = (await github.rest.pulls.get({
+                owner:context.repo.owner,repo:context.repo.repo,pull_number:n,
+              })).data;
+              if (!p.merged || !p.merge_commit_sha) {
+                core.setFailed('MARKET_WATCH_SOURCE_PR_NOT_MERGED_'+n);return;
+              }
+              const cmp = (await github.rest.repos.compareCommits({
+                owner:context.repo.owner,repo:context.repo.repo,
+                base:p.merge_commit_sha,head:target,
+              })).data;
+              if (!['ahead','identical'].includes(cmp.status)) {
+                core.setFailed('MARKET_WATCH_SOURCE_NOT_IN_MAIN_'+n);return;
+              }
+            }
+            const all = await github.paginate(github.rest.issues.listComments,{
+              owner:context.repo.owner,repo:context.repo.repo,
+              issue_number:1102,per_page:100,
+            });
+            const receipt = all.find(x=>x.user?.login==='github-actions[bot]'
+              && String(x.body||'').includes('[RESEARCH_MARKET_WATCH_ACTIVATION]')
+              && String(x.body||'').includes('status: success')
+              && String(x.body||'').includes('target_sha: '+target));
+            if (receipt) {core.setFailed('MARKET_WATCH_DUPLICATE_ACTIVATION_BLOCKED');return;}
+            const required = ['application-ci/verified','browser-ui/verified',
+              'database-rls/verified','security-integration/verified',
+              'ai-privacy/verified','futures-public-network-smoke/verified'];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,{
+              owner:context.repo.owner,repo:context.repo.repo,ref:target,per_page:100,
+            });
+            const byRun = new Map();
+            for(const s of statuses) {
+              const m = String(s.target_url||'').match(/\/actions\/runs\/(\d+)/);
+              if(!m) continue;
+              if(!byRun.has(m[1]))byRun.set(m[1],new Map());
+              const map=byRun.get(m[1]);
+              if(!map.has(s.context))map.set(s.context,s.state);
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo,{
+              owner:context.repo.owner,repo:context.repo.repo,
+              head_sha:target,per_page:100,
+            });
+            const exact = runs.filter(run=>run.head_sha.toLowerCase()===target
+              && run.path==='.github/workflows/futures-public-network-smoke.yml'
+              && ['push','workflow_dispatch'].includes(run.event))
+              .sort((a,b)=>Number(b.id)-Number(a.id));
+            const latest=exact[0];
+            if(!latest || latest.status!=='completed' || latest.conclusion!=='success'
+              || !required.every(context=>(byRun.get(String(latest.id))||new Map()).get(context)==='success')) {
+              core.setFailed('MARKET_WATCH_CURRENT_MAIN_REQUIRED_CI_6_OF_6_MISSING');return;
+            }
+            core.setOutput('target_sha',target);
+
+  activate:
+    if: needs.authorize.result == 'success'
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify isolated source SHA and safe systemd unit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          bash -n research-production/deploy/activate-lightweight-market-watch.sh
+          systemd-analyze verify research-production/deploy/research-production-market-watch.service
+      - name: Set up pinned production SSH without leaking credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Recheck exact current main before touching host
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')" = "$TARGET_SHA"
+      - name: Validate safe server release, trading disabled, memory and disk (no mutation)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight" \
+            < research-production/deploy/activate-lightweight-market-watch.sh \
+            | tee "$RUNNER_TEMP/market-watch-preflight.txt"
+          grep -Fxq 'WATCH_PREFLIGHT_PASSED=true' "$RUNNER_TEMP/market-watch-preflight.txt"
+          grep -Fxq 'WATCH_EXECUTION_AUTHORITY=NONE' "$RUNNER_TEMP/market-watch-preflight.txt"
+      - name: Activate only isolated resource-limited market watch, rollback on failure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" \
+            < research-production/deploy/activate-lightweight-market-watch.sh \
+            | tee "$RUNNER_TEMP/market-watch-activation.txt"
+          grep -Fxq 'WATCH_SERVICE_ACTIVE=true' "$RUNNER_TEMP/market-watch-activation.txt"
+          grep -Fxq "WATCH_TARGET_SHA=$TARGET_SHA" "$RUNNER_TEMP/market-watch-activation.txt"
+          grep -Fxq 'WATCH_EXECUTION_AUTHORITY=NONE' "$RUNNER_TEMP/market-watch-activation.txt"
+          grep -Fxq 'WATCH_24H_UPTIME_PROVEN=false' "$RUNNER_TEMP/market-watch-activation.txt"
+      - name: Independently reverify live watch systemd state and fresh safe status
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- verify" \
+            < research-production/deploy/activate-lightweight-market-watch.sh \
+            | tee "$RUNNER_TEMP/market-watch-verify.txt"
+          grep -Fxq 'WATCH_SERVICE_ACTIVE=true' "$RUNNER_TEMP/market-watch-verify.txt"
+          grep -Fxq 'WATCH_EXECUTION_AUTHORITY=NONE' "$RUNNER_TEMP/market-watch-verify.txt"
+      - name: Report exact live startup receipt to canonical Hub
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1102,
+              body:['[RESEARCH_MARKET_WATCH_ACTIVATION]','status: success',
+                'target_sha: '+process.env.TARGET_SHA,
+                'workflow_run: '+context.runId,
+                'service_active: true','research_only: true',
+                'observed_first_cycle: true',
+                '24_hour_uptime_proven: false',
+                'four_market_full_feed_proven: false',
+                'paper_orders: 0','real_orders: 0','execution_authority: NONE',
+                'replit_used: false'].join('\n'),
+            });
+      - name: Report blocked or failed startup without false success
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1102,
+              body:['[RESEARCH_MARKET_WATCH_ACTIVATION]','status: failed_closed',
+                'target_sha: '+process.env.TARGET_SHA,
+                'workflow_run: '+context.runId,
+                'service_active: not_proven',
+                '24_hour_uptime_proven: false','real_orders: 0',
+                'execution_authority: NONE','replit_used: false'].join('\n'),
+            });
+      - name: Destroy runner SSH private-key material
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts
