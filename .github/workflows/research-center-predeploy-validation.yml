@@ -148,7 +148,7 @@ jobs:
           grep -Fq "if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';" "$client"
           grep -Fq "four-market watch shows partial live public sources" "$browser"
           grep -Fq "a stale public feed never appears as currently collecting" "$browser"
-          ! grep -Eq 'LIVE_TRADING=true|PRIVATE_API_ENABLED=true|ORDER_AUTHORITY=true|REAL_ORDER_ENABLED=true' "$client" "$sanitizer"
+          ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$client" "$sanitizer"
 
       - name: Backend and frontend semantic typecheck
         run: |
