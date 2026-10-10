@@ -3,11 +3,16 @@ import test from 'node:test';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
 import { TradeExecutionService } from './trade-execution.service';
+import {
+  createTossReadonlyTransport,
+  processTossTokenManager,
+  TossTokenManager,
+} from '../features/account-readonly/providers/toss-readonly.provider';
 
 const USER = 'toss-live-verify-user';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 
-test('Toss live verification resolves missing accountSeq from accounts and persists it encrypted', async () => {
+test('Toss live verification reuses the process token, resolves accountSeq, and persists it encrypted', async () => {
   const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
   const previousFetch = globalThis.fetch;
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
@@ -74,7 +79,10 @@ test('Toss live verification resolves missing accountSeq from accounts and persi
   }) as typeof fetch;
 
   try {
-    const result = await new TradeExecutionService(repository).verifyLiveConnection(USER, 'toss');
+    const tokens = processTossTokenManager();
+    await tokens.token({ clientId: 'CLIENT_ID_TEST_ONLY', clientSecret: 'CLIENT_SECRET_TEST_ONLY' });
+    const result = await new TradeExecutionService(repository, undefined, tokens)
+      .verifyLiveConnection(USER, 'toss');
     assert.equal(result.verified, true);
     assert.equal(result.providerRequests, 3);
     assert.equal(result.orderRequests, 0);
@@ -155,19 +163,23 @@ test('Toss live verification retries bounded transient rate limits without order
 
   const observedDelays: number[] = [];
   try {
+    const tokens = new TossTokenManager(createTossReadonlyTransport(
+      (input, init) => globalThis.fetch(input, init),
+    ));
     const result = await new TradeExecutionService(
       repository,
       async (delayMs) => { observedDelays.push(delayMs); },
+      tokens,
     ).verifyLiveConnection(USER, 'toss');
     assert.equal(result.verified, true);
-    assert.equal(result.providerRequests, 5);
+    assert.equal(result.providerRequests, 4);
     assert.equal(result.orderRequests, 0);
     assert.equal(result.cancelRequests, 0);
     assert.equal(result.amendRequests, 0);
     assert.equal(result.transferRequests, 0);
     assert.equal(result.withdrawalRequests, 0);
     assert.equal(result.realOrderSubmitted, false);
-    assert.deepEqual(observedDelays, [1_000, 2_000]);
+    assert.deepEqual(observedDelays, [1_000]);
     assert.deepEqual(seen, [
       '/oauth2/token',
       '/oauth2/token',

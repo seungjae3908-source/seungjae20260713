@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   SCHEMA_VERSION,
   buildRefreshAction,
   canonicalJson,
+  createMetadataOnlyRefreshState,
+  normalizedRiskWindow,
   selectRefreshAnchor,
   requireStableRiskWindow,
   sha256,
   validateBinding,
   validateFlatSnapshot,
+  validateSnapshot,
   validateRepublishResponse,
 } from '../../ops/run-paper-forward-flat-snapshot-republish.mjs';
 
@@ -66,7 +70,41 @@ test('flat snapshot rejects open exposure and accepts closed history anchor', ()
   opened.state.positions[0].remainingQuantity = 1;
   opened.openPositionCount = 1;
   opened.stateDigestSha256 = sha256(canonicalJson(opened.state));
+  assert.equal(validateSnapshot(opened, { publisherDigest }).openPositionCount, 1);
+  assert.deepEqual(selectRefreshAnchor(opened.state), { symbol: 'BTCUSDT', price: 65000 });
   assert.throws(() => validateFlatSnapshot(opened, { publisherDigest }), /SNAPSHOT_NOT_FLAT/);
+});
+
+test('non-flat exact-SHA refresh preserves open positions, balances, and risk state byte-for-byte', () => {
+  const before = state();
+  before.positions[0] = {
+    ...before.positions[0],
+    status: 'open',
+    remainingQuantity: 0.1,
+    entryPrice: 65000,
+    currentPrice: 65000,
+    notionalValue: 6500,
+    unrealizedPnl: 0,
+    maximumFavorableExcursion: 0,
+    maximumAdverseExcursion: 0,
+  };
+  before.account.usedMargin = 3250;
+  before.account.availableMargin = before.account.equity - before.account.usedMargin;
+  const stateDigest = sha256(canonicalJson(before));
+  const action = buildRefreshAction({ stateDigest, symbol: 'BTCUSDT', price: 65000, nonFlat: true });
+  const after = createMetadataOnlyRefreshState(before, action, nowIso);
+
+  assert.equal(action.eventId, `paper-nonflat-republish:${stateDigest.slice(0, 24)}`);
+  assert.deepEqual(after.positions, before.positions);
+  assert.deepEqual(after.orders, before.orders);
+  assert.deepEqual(after.riskState, before.riskState);
+  assert.equal(after.account.cashBalance, before.account.cashBalance);
+  assert.equal(after.account.equity, before.account.equity);
+  assert.equal(after.account.usedMargin, before.account.usedMargin);
+  assert.equal(after.account.availableMargin, before.account.availableMargin);
+  assert.equal(after.processedEventIds.at(-1), action.eventId);
+  assert.equal(after.updatedAt, nowIso);
+  assert.equal(after.account.updatedAt, nowIso);
 });
 
 test('refresh action is deterministic from current snapshot digest', () => {
@@ -98,6 +136,31 @@ test('republish accepts only metadata refresh with exact economic state preserva
   assert.equal(result.transportDigest, sha256(canonicalJson(after)));
 });
 
+test('republish accepts only a bounded authenticated server timestamp', () => {
+  const before = state();
+  const action = buildRefreshAction({ stateDigest: sha256(canonicalJson(before)), symbol: 'BTCUSDT', price: 65000 });
+  const serverNowIso = new Date(Date.parse(nowIso) + 250).toISOString();
+  const after = createMetadataOnlyRefreshState(before, action, serverNowIso);
+  const body = {
+    ok: true, mode: 'paper-only', orderSubmitted: false, exchangeRequestSent: false,
+    result: { ok: true, mode: 'paper-only', orderSubmitted: false, exchangeRequestSent: false, state: after, order: null, position: null, fills: [], warnings: [], duplicateEvent: false },
+    paperStateTransport: {
+      status: 'PUBLISHED', publisherAccountBound: true, executionAuthority: 'NONE', privateApiAllowed: false,
+      liveTrading: false, financialMutationAllowed: false, reason: null, stateDigestSha256: sha256(canonicalJson(after)), observedAtMs: Date.parse(serverNowIso),
+    },
+  };
+  const result = validateRepublishResponse(body, {
+    beforeState: before, targetSha, publisherDigest, action, nowIso, allowServerTimestamp: true,
+  });
+  assert.equal(result.effectiveNowIso, serverNowIso);
+
+  after.updatedAt = new Date(Date.parse(nowIso) + 60_001).toISOString();
+  after.account.updatedAt = after.updatedAt;
+  assert.throws(() => validateRepublishResponse(body, {
+    beforeState: before, targetSha, publisherDigest, action, nowIso, allowServerTimestamp: true,
+  }), /REPUBLISH_SERVER_TIMESTAMP_INVALID/);
+});
+
 test('republish rejects any balance, position, fill, journal, or risk change', () => {
   const before = state();
   const action = buildRefreshAction({ stateDigest: sha256(canonicalJson(before)), symbol: 'BTCUSDT', price: 65000 });
@@ -122,4 +185,33 @@ test('risk day/week rollover fails before any republish mutation', () => {
 
 test('schema and safety labels are stable', () => {
   assert.equal(SCHEMA_VERSION, 'paper-forward-flat-snapshot-republish-v1');
+});
+
+test('explicit refresh rollover resets only expired daily/weekly counters', () => {
+  const before = state();
+  const nextDay = new Date('2026-08-25T04:00:00.000Z');
+  const normalized = normalizedRiskWindow(before, nextDay);
+  const action = buildRefreshAction({ stateDigest: sha256(canonicalJson(before)), symbol: 'BTCUSDT', price: 65000 });
+  const after = createMetadataOnlyRefreshState(before, action, nextDay.toISOString(), { allowRiskWindowRollover: true });
+
+  assert.equal(normalized.dailyWindowRolled, true);
+  assert.equal(normalized.weeklyWindowRolled, false);
+  assert.deepEqual(after.riskState, {
+    ...before.riskState,
+    dayKey: '2026-08-25',
+    dailyRealizedPnl: 0,
+  });
+  assert.deepEqual(after.positions, before.positions);
+  assert.deepEqual(after.orders, before.orders);
+  assert.equal(after.account.realizedPnl, before.account.realizedPnl);
+  assert.equal(after.account.equity, before.account.equity);
+});
+
+test('snapshot republish contract test stays registered in bounded validation paths', async () => {
+  const workflow = await readFile(
+    new URL('../../.github/workflows/paper-forward-schedule-validation.yml', import.meta.url),
+    'utf8',
+  );
+  const testPath = 'market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js';
+  assert.equal(workflow.split(testPath).length - 1, 2);
 });
