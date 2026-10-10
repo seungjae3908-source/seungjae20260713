@@ -7,7 +7,10 @@ import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   readMemberAutoTradingBackgroundRuntimeHealth,
 } from './member-auto-trading-background-worker.service';
-import { buildAdminFourMarketPaperBootstrap } from './admin-four-market-paper-capital.service';
+import {
+  buildAdminFourMarketPaperBootstrap,
+  buildMemberFourMarketPaperBootstrap,
+} from './admin-four-market-paper-capital.service';
 import {
   memberAutomaticPaperReadiness,
   type MemberAutomaticPaperReadinessInput,
@@ -208,6 +211,32 @@ test('administrator Paper readiness requires four 1m wallets and all four routed
   }));
   assert.equal(incomplete.readyForPaperEvaluation,false);
   assert.ok(incomplete.blockers.includes('BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED'));
+});
+
+test('regular member four-market readiness accepts four 1m wallets with a 500k Live policy', () => {
+  const rows = buildMemberFourMarketPaperBootstrap(new Date(NOW)).map((row) => ({
+    ...row,
+    createdAt: new Date(NOW).toISOString(),
+    serverUpdatedAt: new Date(NOW).toISOString(),
+  }));
+  const allFour = normalizeTradingPolicy({
+    ...policy(),
+    totalCapitalKrw: 500_000,
+    marketEnabled: {domestic_stock:true,us_stock:true,crypto_spot:true,crypto_futures:true},
+    exchangeEnabled: {toss:true,kiwoom:true,upbit:true,bitget:true},
+  });
+  const ready = memberAutomaticPaperReadiness(input({
+    policy: allFour,
+    fourMarketWalletRole: 'member',
+    fourMarketWalletRecords: rows,
+    fourMarketDatabaseGuardReady: true,
+  }));
+  assert.equal(ready.paperWalletReady, true);
+  assert.equal(ready.paperCapitalPolicyReady, true);
+  assert.equal(ready.fourMarketWalletRole, 'member');
+  assert.equal(ready.fourMarketWalletsReady, true);
+  assert.equal(ready.readyForPaperEvaluation, true);
+  assert.equal(ready.realOrderAuthorityGranted, false);
 });
 
 test('admin readiness never reports READY after DB RLS guard rollback', () => {

@@ -4,7 +4,10 @@ import path from 'node:path';
 const root = path.basename(process.cwd()) === 'api-server'
   ? path.resolve(process.cwd(), '..')
   : path.resolve(process.cwd());
-const read = (relative) => readFile(path.join(root, relative), 'utf8');
+// Contract slices use LF delimiters. Normalize Windows checkouts so this
+// verifier checks the source contract rather than failing on CRLF bytes.
+const read = async (relative) => (await readFile(path.join(root, relative), 'utf8'))
+  .replace(/\r\n/g, '\n');
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[ai-preview-diagnostic-contract] ${message}`);
 };
