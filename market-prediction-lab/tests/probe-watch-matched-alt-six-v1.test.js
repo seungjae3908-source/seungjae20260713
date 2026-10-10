@@ -70,6 +70,11 @@ test("Upbit missing minute is BLOCKED_DATA rather than no opportunities",()=>{
  const r=run("CRYPTO_SPOT","KRW-ETH",{gap:400,up:24});
  assert.equal(r.status,"BLOCKED_DATA");
  assert.equal(r.observedDayCrossingCount,null);
+ assert.equal(r.reason,"ALT_NATIVE_MINUTE_ROW_COUNT_INCOMPLETE");
+ assert.equal(r.observedNativeSourceRows,1499);
+ assert.equal(r.requestedMinuteSlots,1500);
+ assert.equal(r.minuteGapCauseIndependentlyVerified,false);
+ assert.equal(r.absentMinuteIsNotZeroOpportunity,true);
  assert.equal(r.netProfitPct,null);
 });
 test("same market but another actual symbol cannot contaminate result",()=>{
