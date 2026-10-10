@@ -125,3 +125,36 @@ test('desktop keeps the chart and analysis side by side without mobile tabs', as
   await expect(page.getByText('현재 판단')).toBeVisible();
   await expect(page.getByText('단타 · 읽기 전용')).toBeVisible();
 });
+
+
+test('AI Chart App boundary defers unrelated rankings/recommendations without changing home or route permissions', () => {
+  const appSource = source('src/App.tsx');
+  expect(appSource).toContain("import HomePage from '@/pages/home';");
+  expect(appSource).toContain("const loadMarketRankingsPage = () => import('@/pages/search');");
+  expect(appSource).toContain('const MarketRankingsPage = lazy(loadMarketRankingsPage);');
+  expect(appSource).toContain("const loadRecommendationsPage = () => import('@/pages/recommendations');");
+  expect(appSource).toContain('const RecommendationsPage = lazy(loadRecommendationsPage);');
+  expect(appSource).toContain('<Route path="/market-rankings" component={MarketRankingsPage} />');
+  expect(appSource).toContain("return gated('canAccessRiskPreview', <RecommendationsPage />);");
+  expect(appSource).not.toContain("import SearchPage from '@/pages/search';");
+  expect(appSource).not.toContain("import RecommendationsPage from '@/pages/recommendations';");
+});
+
+for (const width of [390, 1440]) {
+  test('direct AI Chart ' + width + 'px route does not fetch unrelated ranking/recommendation source modules', async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await primeSelection(page);
+    const unrelatedModuleRequests: string[] = [];
+    page.on('request', (request) => {
+      let pathname = '';
+      try { pathname = new URL(request.url()).pathname; } catch { return; }
+      if (/\/src\/pages\/(?:search|recommendations)\.tsx$/.test(pathname)) {
+        unrelatedModuleRequests.push(pathname);
+      }
+    });
+    await page.goto(chartUrl);
+    await expect(page.getByTestId('app-shell')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
+    expect(unrelatedModuleRequests).toEqual([]);
+  });
+}
