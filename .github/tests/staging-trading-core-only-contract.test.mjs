@@ -53,6 +53,15 @@ test('Hub command is owner-only and staging-only', () => {
     "github.event.comment.author_association == 'OWNER'",
     "startsWith(github.event.comment.body, '/run-trading-core-staging ')",
     'STAGING_CORE_HUB_EXACT_COMMAND_REQUIRED',
+    'Verify direct owner or exact delegated owner-orchestrator provenance',
+    'STAGING_CORE_DELEGATED_PROVENANCE_REQUIRED',
+    'STAGING_CORE_DELEGATED_PROVENANCE_REJECTED',
+    "parent.path === '.github/workflows/production-postdeploy-qa.yml'",
+    "parent.event === 'issue_comment'",
+    "parent.actor?.login === context.repo.owner",
+    "parent.triggering_actor?.login === context.repo.owner",
+    "['queued', 'in_progress'].includes(parent.status)",
+    'DISPATCH_AUTHORIZED: ${{ steps.dispatch-authority.outputs.authorized }}',
     'STAGING_CORE_ACTION_INVALID',
     "needs.owner-gate.outputs.action == 'deploy'",
     'action: ${{ steps.target.outputs.action }}',
@@ -61,6 +70,8 @@ test('Hub command is owner-only and staging-only', () => {
   assert.ok(workflow.includes('([0-9a-f]{40}) (--preflight|--deploy)$/u.exec(process.env.OWNER_BODY'));
   assert.ok(!workflow.includes('actions: write'));
   assert.ok(!workflow.includes('environment: production'));
+  assert.ok(workflow.includes('delegated_by_run_id:'));
+  assert.ok(!workflow.includes("context.actor === 'github-actions[bot]' && core.setOutput('authorized', 'true')"));
 });
 
 test('Owner preflight proves canonical DB admin capability and owner Paper GET before Staging mutation', () => {
