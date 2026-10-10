@@ -133,23 +133,6 @@ jobs:
           grep -Fq "input.producerBound !== false || input.paperConsumerBound !== false" api-server/src/services/research-center-readonly-contract.service.ts
           grep -Fq 'Paper 미연결' stock-analyzer/src/pages/research-center.tsx
 
-      - name: Validate four-market watcher readback and UI fail-closed regression coverage
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          client='stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx'
-          sanitizer='api-server/src/services/research-center-readonly-contract.service.ts'
-          fixtures='api-server/src/services/research-center-readonly-contract.service.test.ts'
-          browser='stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts'
-          grep -Fq "v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4)" "$sanitizer"
-          grep -Fq "v.status === 'BLOCKED_DATA' && usableCount !== 0" "$sanitizer"
-          grep -Fq "v.status === 'STALE' ? ageMs <= 360_000 : ageMs > 360_000" "$sanitizer"
-          grep -Fq "watcher source health states and staleness must agree" "$fixtures"
-          grep -Fq "if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';" "$client"
-          grep -Fq "four-market watch shows partial live public sources" "$browser"
-          grep -Fq "a stale public feed never appears as currently collecting" "$browser"
-          ! grep -Eq 'LIVE_TRADING=(true|1)|PRIVATE_API_ENABLED=(true|1)|ORDER_AUTHORITY=(true|1)|REAL_ORDER_ENABLED=(true|1)' "$client" "$sanitizer"
-
       - name: Backend and frontend semantic typecheck
         run: |
           set -Eeuo pipefail

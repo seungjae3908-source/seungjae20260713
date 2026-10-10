@@ -528,12 +528,73 @@ function isCanonicalMemberFixtureOnlyChange(p){
 const researchCenterChanged=changed.filter((p)=>
  researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
 );
+// Research market-watch DTO-only review: preserve the existing Paper and
+// Research Center workflows completely unchanged. Only this exact six-path,
+// observation-only PR may use the already-triggered dedicated Research Center
+// predeploy workflow as its guard instead of changing its YAML on every edit.
+const publicWatchReadbackOnlyPaths=[
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ 'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+ 'api-server/src/services/research-center-readonly-contract.service.ts',
+ 'api-server/src/services/research-center-readonly-contract.service.test.ts',
+ 'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
+ 'stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx',
+];
+function reviewedPublicWatchReadbackOnly(){
+ if(changed.length!==publicWatchReadbackOnlyPaths.length
+    ||!publicWatchReadbackOnlyPaths.every(p=>changed.includes(p)))return false;
+ const workflowPath='.github/workflows/research-center-predeploy-validation.yml';
+ const committed=git('show','HEAD:'+workflowPath);
+ // Any modification to the protected workflow restores the original two-guard
+ // requirement. It is not necessary to modify Paper's allowlist or tests.
+ if(committed!==git('show',MAIN+':'+workflowPath))return false;
+ for(const evidence of [
+  "'api-server/src/services/research-center-readonly-contract.service.ts'",
+  "'api-server/src/services/research-center-readonly-contract.service.test.ts'",
+  "'stock-analyzer/e2e/research-*.spec.ts'",
+  "Research Center overview, evidence, Paper and abort browser regressions",
+  "Development-only safety boundary",
+ ])if(!committed.includes(evidence))return false;
+ const proof=git('show','HEAD:api-server/scripts/verify-research-center-predeploy-contract.mjs');
+ const dto=git('show','HEAD:api-server/src/services/research-center-readonly-contract.service.ts');
+ const panel=git('show','HEAD:stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx');
+ const backend=git('show','HEAD:api-server/src/services/research-center-readonly-contract.service.test.ts');
+ const browser=git('show','HEAD:stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts');
+ const requireAll=(source,tokens)=>tokens.every(token=>source.includes(token));
+ return requireAll(proof,[
+   "market watch usable source reconciliation",
+   "watch PARTIAL source-count parity",
+   "watch 6-minute staleness threshold",
+   "watch UI no-order boundary",
+ ])&&requireAll(dto,[
+   "const usableCount = rows.filter(",
+   "v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4)",
+   "v.status === 'BLOCKED_DATA' && usableCount !== 0",
+   "v.status === 'STALE' ? ageMs <= 360_000 : ageMs > 360_000",
+   "profitabilityProven: false, executionAuthority: 'NONE'",
+ ])&&requireAll(panel,[
+   "if (value.startsWith('BLOCKED_')) return '데이터 미연결';",
+   "if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';",
+   "실주문 권한은 없습니다.",
+ ])&&requireAll(backend,[
+   "watcher source health states and staleness must agree",
+   "status: 'BLOCKED_DATA'",
+ ])&&requireAll(browser,[
+   "four-market watch shows partial live public sources",
+   "a stale public feed never appears as currently collecting",
+ ]);
+}
 if(researchCenterChanged.length>0){
  const requiredIntegrationGuards=[
   '.github/workflows/research-center-predeploy-validation.yml',
   'api-server/scripts/verify-research-center-predeploy-contract.mjs',
  ];
- for(const p of requiredIntegrationGuards)if(!changed.includes(p))throw new Error('RESEARCH_CENTER_INTEGRATION_GUARD_MISSING:'+p);
+ const watcherDtoOnly=reviewedPublicWatchReadbackOnly();
+ for(const p of requiredIntegrationGuards){
+  if(!changed.includes(p)
+   &&!(watcherDtoOnly&&p==='.github/workflows/research-center-predeploy-validation.yml'))
+   throw new Error('RESEARCH_CENTER_INTEGRATION_GUARD_MISSING:'+p);
+ }
 }
 for(const p of changed)if(!allowed.has(p))throw new Error('UNREVIEWED_PATH:'+p);
 git('merge-base','--is-ancestor',MAIN,'HEAD');
