@@ -38,6 +38,11 @@ type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
 
 type Status = {
   policy: Policy;
+  initialMaxOrderKrw?: number;
+  discoveryMaxOrderKrw?: number;
+  administratorOrderBaseline?: boolean;
+  maximumBitgetLeverage?: 3 | 7;
+  administratorLeveragePolicy?: boolean;
   connections: Array<{
     exchange: Exchange; accountMode: 'paper' | 'mock' | 'live'; configured: boolean;
     lastVerifiedAt: string | null; lastErrorCode: string | null; credentialsExposed: false;
@@ -136,8 +141,10 @@ const MARKET_DESCRIPTIONS: Record<Market, string> = {
   domestic_stock: '모의 + 거래키·서버게이트 충족 시 Toss/Kiwoom 실전',
   us_stock: 'Kiwoom 고정 · LONG only',
   crypto_spot: 'Upbit 고정 · 모의매매 지원',
-  crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated 2~7배',
+  crypto_futures: 'Bitget 고정 · LONG/SHORT, isolated · 역할별 레버리지 상한',
 };
+
+const BITGET_LEVERAGE_OPTIONS = [2, 3, 4, 5, 6, 7] as const;
 
 const DEFAULT_MARKETS: MarketSwitches = {
   domestic_stock: true,
@@ -157,11 +164,11 @@ const DEFAULT_POLICY: UiPolicy = {
   enabledAssets: { bitget: [], upbit: [], kiwoom: [], toss: [] },
   enabledStrategies: [],
   totalCapitalKrw: 1_000_000,
-  maxOrderKrw: 1_000_000,
-  dailyLossLimitPercent: 5,
+  maxOrderKrw: 500_000,
+  dailyLossLimitPercent: 3,
   maxAssetPercent: 30,
   maxOpenPositions: 5,
-  maxDailyOrders: 10,
+  maxDailyOrders: 0,
   maxConsecutiveLosses: 3,
   bitgetLeverage: 2,
   pilotStage: 'approval-20',
@@ -228,6 +235,8 @@ export function TradeAutomationSettings({
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
   const refreshInFlight = useRef(false);
+  const maximumBitgetLeverage = status?.maximumBitgetLeverage
+    ?? (canManagePilot ? 7 : 3);
 
   async function load({ syncDraft = true }: { syncDraft?: boolean } = {}) {
     if (fixture || refreshInFlight.current) return;
@@ -307,6 +316,7 @@ export function TradeAutomationSettings({
     const outbound: UiPolicy = {
       ...draft,
       mode: 'automatic',
+      bitgetLeverage: Math.min(draft.bitgetLeverage, maximumBitgetLeverage) as Policy['bitgetLeverage'],
       exchangeEnabled: exchangesForMarkets(draft.marketEnabled, draft.stockBrokerByMarket),
     };
     if (fixture) {
@@ -458,6 +468,11 @@ export function TradeAutomationSettings({
     || status?.policy.newEntriesStopped === true;
   const effectiveStopped = memberStopped || status?.emergencyStopped === true;
   const globalOnlyStopped = !memberStopped && status?.emergencyStopped === true;
+  const initialMaxOrderKrw = status?.initialMaxOrderKrw
+    ?? (canManagePilot ? 1_000_000 : 500_000);
+  const initialMaxOrderLabel = initialMaxOrderKrw === 1_000_000 ? '100만원' : '50만원';
+  const discoveryMaxOrderKrw = status?.discoveryMaxOrderKrw
+    ?? (canManagePilot ? 500_000 : 100_000);
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -614,13 +629,24 @@ export function TradeAutomationSettings({
 
     <div className="mt-4 grid grid-cols-2 gap-2">
       <NumberField label="총 운용금액" value={draft.totalCapitalKrw} onChange={(value) => updateNumber('totalCapitalKrw', value)} suffix="원" />
-      <NumberField label="1회 주문금액" value={draft.maxOrderKrw} onChange={(value) => updateNumber('maxOrderKrw', value)} suffix="원" />
+      <NumberField
+        label={`1회 기준 주문금액 (초기 최대 ${initialMaxOrderLabel})`}
+        value={draft.maxOrderKrw}
+        onChange={(value) => updateNumber('maxOrderKrw', value)}
+        suffix="원"
+        max={initialMaxOrderKrw}
+      />
       <NumberField label="최대 보유비중" value={draft.maxAssetPercent} onChange={(value) => updateNumber('maxAssetPercent', value)} suffix="%" />
       <NumberField label="일일 손실한도" value={draft.dailyLossLimitPercent} onChange={(value) => updateNumber('dailyLossLimitPercent', value)} suffix="%" />
       <NumberField label="동시 보유 수" value={draft.maxOpenPositions} onChange={(value) => updateNumber('maxOpenPositions', value)} suffix="개" />
-      <NumberField label="일일 주문 수" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
+      <NumberField label="일일 주문 수 (0=기회 기반)" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
+    <p className="mt-2 text-[11px] font-semibold text-muted-foreground">
+      {initialMaxOrderKrw === 1_000_000 ? '관리자' : '회원'} 초기 기준은 {initialMaxOrderLabel}이며,
+      확정 순수익의 50%만 재투자되어 다음 주문 가능액이 증가합니다. 미확정 손익은 반영하지 않습니다.
+      일일 주문 수 0은 횟수 채우기나 강제 진입 없이 검증된 기회만 처리한다는 뜻이며, 중복 주문·손실·동시 보유 안전장치는 계속 적용됩니다.
+    </p>
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
       허용 전략
@@ -646,20 +672,26 @@ export function TradeAutomationSettings({
       Bitget 레버리지
       <select
         aria-label="Bitget 레버리지"
-        value={draft.bitgetLeverage}
+        value={Math.min(draft.bitgetLeverage, maximumBitgetLeverage)}
         onChange={(event) => setDraft((value) => ({
           ...value,
-          bitgetLeverage: Math.min(7, Math.max(2, Number(event.target.value))) as 2 | 3 | 4 | 5 | 6 | 7,
+          bitgetLeverage: Math.min(
+            maximumBitgetLeverage, Math.max(2, Number(event.target.value)),
+          ) as Policy['bitgetLeverage'],
         }))}
         className="mt-2 h-11 w-full rounded-xl border border-card-border bg-card px-3"
       >
-        <option value="2">2배 (기본)</option>
-        <option value="3">3배</option>
-        <option value="4">4배</option>
-        <option value="5">5배</option>
-        <option value="6">6배</option>
-        <option value="7">7배 (최대)</option>
+        {BITGET_LEVERAGE_OPTIONS
+          .filter((leverage) => leverage <= maximumBitgetLeverage)
+          .map((leverage) => (
+            <option key={leverage} value={leverage}>
+              {leverage}배{leverage === 2 ? ' (기본)' : leverage === maximumBitgetLeverage ? ' (최대)' : ''}
+            </option>
+          ))}
       </select>
+      <span className="mt-2 block text-[11px] font-semibold text-muted-foreground">
+        {maximumBitgetLeverage === 7 ? '관리자 최대 7배' : '회원 최대 3배'} · isolated만 허용
+      </span>
     </label> : null}
 
     {canManagePilot ? <div className="mt-3 rounded-2xl border border-card-border bg-background p-3 text-xs" data-testid="formula-ai-pilot-control">
@@ -688,7 +720,9 @@ export function TradeAutomationSettings({
             </span>}
       </div>
       <p className="mt-2 leading-5 text-muted-foreground">
-        이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 수식+AI 예외 신호만 별도 운영 위험검사를 통과할 수 있습니다.
+        이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 활성화 후에는 주문별 수동 승인 없이
+        수식+AI·비용·위험검사를 통과한 신호만 자동 처리하며, 발견 단계 1회 주문은
+        최대 {discoveryMaxOrderKrw.toLocaleString('ko-KR')}원으로 제한됩니다.
       </p>
     </div> : null}
 
@@ -741,7 +775,7 @@ export function TradeAutomationSettings({
           <dt className="font-bold">활성 시장</dt><dd>{activeMarkets.map((market) => MARKET_LABELS[market]).join(', ') || '없음'}</dd>
           <dt className="font-bold">최대 주문</dt><dd>{draft.maxOrderKrw.toLocaleString('ko-KR')}원</dd>
           <dt className="font-bold">일일 손실</dt><dd>-{draft.dailyLossLimitPercent}% 도달 시 차단</dd>
-          <dt className="font-bold">레버리지</dt><dd>Bitget 최대 {draft.bitgetLeverage}배</dd>
+          <dt className="font-bold">레버리지</dt><dd>Bitget {Math.min(draft.bitgetLeverage, maximumBitgetLeverage)}배 · 역할 상한 {maximumBitgetLeverage}배 · isolated</dd>
           <dt className="font-bold">허용 전략</dt><dd>{draft.enabledStrategies.join(', ') || '없음 · 자동 신규진입 차단'}</dd>
           <dt className="font-bold">국내주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.domestic_stock]}</dd>
           <dt className="font-bold">미국주식 증권사</dt><dd>{STOCK_BROKER_LABELS[draft.stockBrokerByMarket.us_stock]}</dd>
@@ -765,11 +799,17 @@ function Switch({ active }: { active: boolean }) {
   </span>;
 }
 
-function NumberField({ label, value, onChange, suffix }: { label: string; value: number; onChange: (value: string) => void; suffix: string }) {
+function NumberField({ label, value, onChange, suffix, max }: {
+  label: string;
+  value: number;
+  onChange: (value: string) => void;
+  suffix: string;
+  max?: number;
+}) {
   return <label className="rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
     {label}
     <span className="mt-2 flex items-center gap-1">
-      <input type="number" min="0" value={value} onChange={(event) => onChange(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold" />
+      <input type="number" min="0" max={max} value={value} onChange={(event) => onChange(event.target.value)} className="h-10 min-w-0 flex-1 rounded-xl border border-card-border bg-card px-2 text-right text-sm font-bold" />
       <span>{suffix}</span>
     </span>
   </label>;
