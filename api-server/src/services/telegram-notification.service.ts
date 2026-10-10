@@ -61,6 +61,7 @@ export type TelegramAlertResult =
       ok: false;
       attempts: number;
       skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      errorCode?: string | null;
     };
 
 export type TelegramMessageKind = 'TEXT' | 'PHOTO';
@@ -77,6 +78,7 @@ export type TelegramTrackedAlertResult =
       ok: false;
       attempts: number;
       skipped: 'NOT_CONFIGURED' | 'DUPLICATE' | 'COOLDOWN' | 'DELIVERY_FAILED';
+      errorCode?: string | null;
     };
 
 type TelegramSendResponse = {
@@ -298,6 +300,7 @@ async function sendOnce(
   messageId: number | null;
   messageKind: TelegramMessageKind;
   renderedText: string;
+  errorCode: string | null;
 }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -364,6 +367,7 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
+        errorCode: `TELEGRAM_HTTP_${response.status}`,
       };
     }
 
@@ -377,6 +381,7 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
+        errorCode: 'TELEGRAM_RESPONSE_INVALID',
       };
     }
     const rawMessageId = result.result?.message_id;
@@ -389,6 +394,7 @@ async function sendOnce(
       messageId,
       messageKind,
       renderedText,
+      errorCode: result.ok === true ? null : 'TELEGRAM_API_REJECTED',
     };
   } catch {
     if (attempt < MAX_RETRIES) {
@@ -402,6 +408,7 @@ async function sendOnce(
       messageId: null,
       messageKind: text.length <= TELEGRAM_CAPTION_LIMIT && safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
       renderedText: text,
+      errorCode: 'TELEGRAM_NETWORK_ERROR',
     };
   } finally {
     clearTimeout(timeout);
@@ -453,6 +460,7 @@ export async function sendTelegramAlertWithReceipt(
         ok: false,
         attempts: result.attempts,
         skipped: 'DELIVERY_FAILED',
+        errorCode: result.errorCode,
       };
     }
 

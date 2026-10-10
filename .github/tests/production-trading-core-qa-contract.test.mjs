@@ -40,6 +40,8 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
     'personalWorkerStarted',
     'workerActivationApproved',
     'PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY',
+    'PRODUCTION_TRADING_CORE_TELEGRAM_RECONNECT_REQUIRED',
+    'PRODUCTION_TRADING_CORE_TELEGRAM_CONNECTION_REQUIRED',
     'memberAutoPolicyReadiness',
     'preparedMemberAutoPolicy',
     'memberAutoPolicyPrepared',
@@ -87,6 +89,8 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
   }
   assert.ok(config.includes('production-trading-core-qa\\.spec\\.ts'));
   assert.ok(productionDeploy.includes("PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'"));
+  assert.ok(productionDeploy.includes('PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM:'));
+  assert.ok(productionDeploy.includes("inputs.qa_scope == 'automation_research'"));
   assert.ok(productionDeploy.includes('Prepare safe member ALL4 policy and run Focused Trading Core Production QA'));
 });
 
