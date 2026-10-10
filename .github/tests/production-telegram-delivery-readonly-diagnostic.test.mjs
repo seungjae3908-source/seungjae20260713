@@ -26,6 +26,7 @@ test('diagnostic is exact-run, authenticated, sanitized and read-only', () => {
     "appGet<any>(page, '/api/user-integrations')",
     "page.request.get(route",
     'productionReadOnlyAccessToken',
+    "test.skip(!diagnosticEnabled, 'Protected Production Telegram diagnostic only')",
     'WORKER_QUEUE_STARVATION_OR_NOT_TICKING',
     'DELIVERY_RECOVERED_AFTER_QA_DEADLINE',
     'lastErrorCode: safeCode(item.lastErrorCode)',

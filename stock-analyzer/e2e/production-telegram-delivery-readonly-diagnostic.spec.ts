@@ -18,15 +18,7 @@ const artifactDir = path.resolve(
   process.env.PRODUCTION_TELEGRAM_DELIVERY_DIAGNOSTIC_DIR
     ?? 'production-telegram-delivery-diagnostic-artifacts',
 );
-
-if (!/^[0-9a-f]{40}$/.test(expectedDeploySha)) throw new Error('EXPECTED_DEPLOY_SHA_INVALID');
-if (!Number.isSafeInteger(failedProductionRunId) || failedProductionRunId <= 0) {
-  throw new Error('FAILED_PRODUCTION_RUN_ID_INVALID');
-}
-if (!Number.isFinite(Date.parse(windowStart)) || !Number.isFinite(Date.parse(windowEnd))) {
-  throw new Error('DIAGNOSTIC_WINDOW_INVALID');
-}
-if (!qaLogin || !qaPassword) throw new Error('PRODUCTION_QA_CREDENTIAL_REQUIRED');
+const diagnosticEnabled = process.env.PRODUCTION_TELEGRAM_DELIVERY_DIAGNOSTIC === 'true';
 
 type ApiResult<T> = { ok: boolean; status: number; body: T | null };
 
@@ -76,6 +68,15 @@ function classify(deliveries: Array<Record<string, unknown>>, endMs: number) {
 }
 
 test('read exact failed-window Telegram delivery state without messages or financial mutation', async ({ page }) => {
+  test.skip(!diagnosticEnabled, 'Protected Production Telegram diagnostic only');
+  if (!/^[0-9a-f]{40}$/.test(expectedDeploySha)) throw new Error('EXPECTED_DEPLOY_SHA_INVALID');
+  if (!Number.isSafeInteger(failedProductionRunId) || failedProductionRunId <= 0) {
+    throw new Error('FAILED_PRODUCTION_RUN_ID_INVALID');
+  }
+  if (!Number.isFinite(Date.parse(windowStart)) || !Number.isFinite(Date.parse(windowEnd))) {
+    throw new Error('DIAGNOSTIC_WINDOW_INVALID');
+  }
+  if (!qaLogin || !qaPassword) throw new Error('PRODUCTION_QA_CREDENTIAL_REQUIRED');
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
   const response = await appGet<any>(page, '/api/user-integrations');
   expect(response.ok, `USER_INTEGRATIONS_HTTP_${response.status}`).toBe(true);
