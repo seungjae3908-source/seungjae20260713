@@ -11,13 +11,17 @@ const login = String(process.env.PRODUCTION_QA_LOGIN ?? '');
 const password = String(process.env.PRODUCTION_QA_PASSWORD ?? '');
 const sha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
 const phase = String(process.env.AUTOMATIC_PAPER_ACTIVATION_PHASE ?? 'VERIFY').toUpperCase();
+const enabled = process.env.PRODUCTION_AUTOMATIC_PAPER_ACTIVATION === 'true';
 const artifactDir = path.resolve(process.cwd(), process.env.AUTOMATIC_PAPER_ARTIFACT_DIR
   ?? 'production-automatic-paper-activation-artifacts');
 
-if (!baseUrl || new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('OFFICIAL_PRODUCTION_ORIGIN_REQUIRED');
-if (!login || !password) throw new Error('PRODUCTION_QA_CREDENTIAL_REQUIRED');
-if (!/^[0-9a-f]{40}$/u.test(sha)) throw new Error('EXACT_DEPLOY_SHA_REQUIRED');
-if (!['PREPARE', 'VERIFY'].includes(phase)) throw new Error('AUTOMATIC_PAPER_PHASE_INVALID');
+test.skip(!enabled, 'Production automatic Paper activation runs only in its protected workflow.');
+if (enabled) {
+  if (!baseUrl || new URL(baseUrl).origin !== 'https://lsj119.com') throw new Error('OFFICIAL_PRODUCTION_ORIGIN_REQUIRED');
+  if (!login || !password) throw new Error('PRODUCTION_QA_CREDENTIAL_REQUIRED');
+  if (!/^[0-9a-f]{40}$/u.test(sha)) throw new Error('EXACT_DEPLOY_SHA_REQUIRED');
+  if (!['PREPARE', 'VERIFY'].includes(phase)) throw new Error('AUTOMATIC_PAPER_PHASE_INVALID');
+}
 
 type ApiResult = { ok: boolean; status: number; body: any };
 

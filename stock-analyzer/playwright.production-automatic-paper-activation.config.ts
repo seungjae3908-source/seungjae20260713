@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.PRODUCTION_BASE_URL?.trim();
+if (process.env.PRODUCTION_AUTOMATIC_PAPER_ACTIVATION !== 'true') {
+  throw new Error('PRODUCTION_AUTOMATIC_PAPER_ACTIVATION=true is required');
+}
 if (!baseURL || new URL(baseURL).origin !== 'https://lsj119.com') {
   throw new Error('OFFICIAL_PRODUCTION_ORIGIN_REQUIRED');
 }
