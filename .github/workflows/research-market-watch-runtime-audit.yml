@@ -1,0 +1,221 @@
+name: Research Lightweight Market Watch Read-Only Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-market-watch-runtime-audit.yml'
+      - 'research-production/deploy/read-only-market-watch-evidence.sh'
+      - 'research-production/test/lightweight-market-watch-runtime-audit.test.mjs'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: research-market-watch-runtime-readonly-audit
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate bounded inspection without mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n research-production/deploy/read-only-market-watch-evidence.sh
+          node --test research-production/test/lightweight-market-watch-runtime-audit.test.mjs
+
+  audit:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.number == 1102 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/audit-market-watch ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MAIN_SHA: ${{ steps.gate.outputs.main_sha }
+      RESEARCH_SHA: ${{ steps.gate.outputs.research_sha }
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }
+      SSH_USER: ${{ secrets.PROD_SSH_USER }
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Authorize exact current main and independently successful deployed release
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body=String(context.payload.comment?.body||'').trim();
+            const m=/^\/audit-market-watch ([a-f0-9]{40}) ([a-f0-9]{40})$/i.exec(body);
+            if (!m) {core.setFailed('WATCH_AUDIT_EXACT_SHA_PAIR_REQUIRED');return;}
+            const mainSha=m[1].toLowerCase();
+            const researchSha=m[2].toLowerCase();
+            const current=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha.toLowerCase();
+            if (mainSha!==current) {core.setFailed('WATCH_AUDIT_MAIN_MOVED');return;}
+            const cmp=(await github.rest.repos.compareCommits({
+              owner:context.repo.owner,repo:context.repo.repo,
+              base:researchSha,head:mainSha,
+            })).data;
+            if (!['ahead','identical'].includes(cmp.status)) {
+              core.setFailed('WATCH_AUDIT_RELEASE_NOT_ANCESTOR');return;
+            }
+            const comments=await github.paginate(github.rest.issues.listComments,{
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1102,per_page:100,
+            });
+            const receipt=[...comments].reverse().find(c=>
+              c.user?.login==='github-actions[bot]'
+              && String(c.body||'').includes('[RESEARCH_MARKET_WATCH_ACTIVATION]')
+              && String(c.body||'').includes('status: success')
+              && String(c.body||'').includes('target_sha: '+researchSha)
+              && String(c.body||'').includes('service_active: true')
+              && String(c.body||'').includes('execution_authority: NONE')
+            );
+            const runId=Number(String(receipt?.body||'').match(/(?:^|\n)workflow_run:\s*(\d+)/)?.[1]||0);
+            if (!Number.isSafeInteger(runId)||runId<=0) {
+              core.setFailed('WATCH_AUDIT_SUCCESSFUL_ACTIVATION_RECEIPT_MISSING');return;
+            }
+            const run=(await github.rest.actions.getWorkflowRun({
+              owner:context.repo.owner,repo:context.repo.repo,run_id:runId,
+            })).data;
+            if (run.status!=='completed'||run.conclusion!=='success'
+                ||String(run.head_sha).toLowerCase()!==researchSha) {
+              core.setFailed('WATCH_AUDIT_ACTIVATION_RUN_MISMATCH');return;
+            }
+            core.setOutput('main_sha',mainSha);
+            core.setOutput('research_sha',researchSha);
+
+      - name: Configure pinned SSH identity on runner only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Recheck current main and script source before server read
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$MAIN_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')" = "$MAIN_SHA"
+          bash -n research-production/deploy/read-only-market-watch-evidence.sh
+
+      - name: Collect sanitized watcher status cadence and capacity without any server write
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'RESEARCH_SHA=%q' "$RESEARCH_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" \
+            < research-production/deploy/read-only-market-watch-evidence.sh \
+            | tee "$RUNNER_TEMP/research-watch-readonly.txt"
+          grep -Fxq 'WATCH_DIAG_BEGIN' "$RUNNER_TEMP/research-watch-readonly.txt"
+          grep -Fxq 'WATCH_DIAG_END' "$RUNNER_TEMP/research-watch-readonly.txt"
+          grep -Fxq 'WATCH_SERVICE_ACTIVE=true' "$RUNNER_TEMP/research-watch-readonly.txt"
+          grep -Fxq "WATCH_RELEASE_SHA=$RESEARCH_SHA" "$RUNNER_TEMP/research-watch-readonly.txt"
+          grep -Fxq 'WATCH_EXECUTION_AUTHORITY=NONE' "$RUNNER_TEMP/research-watch-readonly.txt"
+          grep -Fxq 'WATCH_24H_UPTIME_PROVEN=false' "$RUNNER_TEMP/research-watch-readonly.txt"
+
+      - name: Report aggregate evidence to canonical Hub
+        if: success()
+        env:
+          REPORT_PATH: ${{ runner.temp }/research-watch-readonly.txt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const lines=fs.readFileSync(process.env.REPORT_PATH,'utf8').split(/\r?\n/);
+            const values=new Map(lines.filter(l=>/^WATCH_[A-Z0-9_]+=[A-Z0-9_]+$/u.test(l))
+              .map(l=>{const i=l.indexOf('=');return [l.slice(0,i),l.slice(i+1)];}));
+            const safe=(name)=>values.get(name)||'unknown';
+            const markets=['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'];
+            const body=[
+              '[RESEARCH_MARKET_WATCH_RUNTIME_AUDIT]',
+              'status: observed_readonly',
+              'main_sha: '+process.env.MAIN_SHA,
+              'research_release_sha: '+process.env.RESEARCH_SHA,
+              'workflow_run: '+context.runId,
+              'service_active: '+safe('WATCH_SERVICE_ACTIVE'),
+              'watch_status: '+safe('WATCH_STATUS'),
+              'preflight_status: '+safe('WATCH_PREFLIGHT'),
+              'market_coverage_count: '+safe('WATCH_COVERAGE_COUNT'),
+              'cycle_age_ms: '+safe('WATCH_LAST_CYCLE_AGE_MS'),
+              'cycles_since_release: '+safe('WATCH_CYCLES_SINCE_RELEASE'),
+              'cadence_samples: '+safe('WATCH_CADENCE_SAMPLES'),
+              'storage_runway_days: '+safe('WATCH_DISK_RUNWAY_DAYS'),
+              'service_restarts: '+safe('WATCH_SERVICE_RESTARTS'),
+              'service_memory_bytes: '+safe('WATCH_MEMORY_CURRENT_BYTES'),
+              ...markets.map(m=>'market_'+m.toLowerCase()+': '+safe('WATCH_'+m+'_STATUS')
+                +' observed='+safe('WATCH_'+m+'_OBSERVED')
+                +' listed='+safe('WATCH_'+m+'_LISTED')),
+              'continuous_24h_uptime_proven: false',
+              'four_market_full_feed_proven: false',
+              'paper_execution_proven: false',
+              'profitability_proven: false',
+              'execution_authority: NONE',
+              'production_server_write: 0',
+              'production_process_restart: 0',
+              'production_db_mutation: 0',
+              'real_orders: 0',
+              'paper_orders: 0',
+              'replit_used: false',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1102,body,
+            });
+
+      - name: Report failed closed without inventing runtime proof
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1102,
+              body:['[RESEARCH_MARKET_WATCH_RUNTIME_AUDIT]',
+                'status: failed_closed',
+                'workflow_run: '+context.runId,
+                'service_active: not_proven',
+                'market_coverage: unknown',
+                'continuous_24h_uptime_proven: false',
+                'paper_orders: 0','real_orders: 0',
+                'execution_authority: NONE','replit_used: false'].join('\n'),
+            });
+
+      - name: Remove runner SSH credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts
