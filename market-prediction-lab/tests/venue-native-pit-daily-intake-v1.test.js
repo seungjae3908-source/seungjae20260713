@@ -1,8 +1,9 @@
 import test from "node:test";
-import {mkdtempSync,readFileSync,statSync} from "node:fs";
+import {mkdtempSync,readFileSync,statSync,writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {parseNativePITBatchArgsV1,runNativePITBatchCliV1}
+import {parseNativePITBatchArgsV1,runNativePITBatchCliV1,
+ verifyNativePITChunkEnvelopeV1}
   from "../scripts/run-native-pit-daily-batch-v1.mjs";
 import assert from "node:assert/strict";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
@@ -218,4 +219,89 @@ test("offline CLI produces honest BLOCKED with private 0600 output, never source
  assert.equal(saved.result.reason,"PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED");
  assert.equal(saved.dataUsage,"RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED");
  await assert.rejects(()=>runNativePITBatchCliV1(c),/EEXIST/);
+});
+
+test("CLI complete offline-mocked plan → fetch envelope → assemble is executable",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-whole-cli-e2e-"));
+ const archive=manifest("CRYPTO_SPOT",["KRW-ABC","KRW-DEF"]);
+ const archiveFile=join(folder,"historical-pit.json");
+ writeFileSync(archiveFile,JSON.stringify(archive),{mode:0o600});
+ const mk=(mode,output,extra=[])=>parseNativePITBatchArgsV1([
+  "--mode",mode,"--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--manifest",archiveFile,"--output",output,...extra,
+ ]);
+ const plan=await runNativePITBatchCliV1(mk("plan",join(folder,"plan.json")));
+ assert.equal(plan.status,"BLOCKED_DATA");
+ assert.equal(plan.rosterDigestSha256,archive.rawMembershipDigestSha256);
+ const files=[];
+ for(let i=0;i<2;i++){
+  const file=join(folder,"native-"+i+".json");files.push(file);
+  const c=mk("fetch",file,[
+   "--read-public","--expected-pit-sha",plan.rosterDigestSha256,
+   "--offset",String(i),"--limit","1",
+  ]);
+  const r=await runNativePITBatchCliV1(c,{upbitFetch:upbit});
+  assert.equal(r.status,"PIT_NATIVE_DAY_CHUNK_OBSERVED");
+  assert.equal(r.nextOffset,i===0?1:null);
+  assert.equal(r.rosterDigestSha256,plan.rosterDigestSha256);
+  assert.equal(statSync(file).mode&0o077,0);
+  const wrapped=JSON.parse(readFileSync(file,"utf8"));
+  const actual=verifyNativePITChunkEnvelopeV1(wrapped,{
+   market:"CRYPTO_SPOT",dayStartMs:T,
+   expectedRosterDigestSha256:plan.rosterDigestSha256,
+  });
+  assert.equal(actual.chunkOffset,i);
+  assert.equal(actual.rows.length,1);
+ }
+ const finalFile=join(folder,"assembled.json");
+ const assembled=await runNativePITBatchCliV1(mk("assemble",finalFile,[
+  "--expected-pit-sha",plan.rosterDigestSha256,
+  "--chunks",files.slice().reverse().join(","),
+ ]));
+ assert.equal(assembled.status,"TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY");
+ assert.equal(assembled.sourceAttestedFullSymbolDayPriceJoin,true);
+ assert.equal(assembled.trueMarketWideRecall,null);
+ assert.equal(assembled.profitabilityProven,false);
+ assert.equal(assembled.executionAuthority,"NONE");
+ const done=JSON.parse(readFileSync(finalFile,"utf8"));
+ assert.equal(done.result.sourceAttestedDailyBars,2);
+ assert.equal(done.result.actualMarketWideOpportunityCount,null);
+});
+test("CLI rejects mismatched envelope, stale roster and absent fetch SHA",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-cli-tamper-"));
+ const m=manifest("CRYPTO_SPOT",["KRW-ABC"]);
+ const manifestFile=join(folder,"roster.json");
+ writeFileSync(manifestFile,JSON.stringify(m),{mode:0o600});
+ const args=(mode,output,other=[])=>parseNativePITBatchArgsV1([
+  "--mode",mode,"--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--manifest",manifestFile,"--output",output,...other,
+ ]);
+ assert.throws(()=>args("fetch",join(folder,"never.json"),["--read-public"]),
+  /PIT_CLI_FETCH_ROSTER_AND_SHA_REQUIRED/);
+ const chunkFile=join(folder,"good.json");
+ await runNativePITBatchCliV1(args("fetch",chunkFile,[
+  "--read-public","--expected-pit-sha",m.rawMembershipDigestSha256,
+  "--limit","1",
+ ]),{upbitFetch:upbit});
+ const raw=JSON.parse(readFileSync(chunkFile,"utf8"));
+ for(const mutation of [
+  x=>{x.schemaVersion="FAKE";},
+  x=>{x.executionAuthority="LIVE";},
+  x=>{x.result.venue="BINANCE_USDT";},
+  x=>{x.result.dayStartMs+=D;},
+  x=>{x.result.rosterDigestSha256="0".repeat(64);},
+  x=>{x.result.chunkComplete=false;},
+ ]){
+  const x=structuredClone(raw);mutation(x);
+  assert.throws(()=>verifyNativePITChunkEnvelopeV1(x,{
+   market:"CRYPTO_SPOT",dayStartMs:T,
+   expectedRosterDigestSha256:m.rawMembershipDigestSha256,
+  }),/PIT_CLI_CHUNK_ENVELOPE_OR_PROVENANCE_INVALID/);
+ }
+ const bareFile=join(folder,"bare.json");
+ writeFileSync(bareFile,JSON.stringify(raw.result),{mode:0o600});
+ await assert.rejects(()=>runNativePITBatchCliV1(args("assemble",
+  join(folder,"fail.json"),["--chunks",bareFile])),
+  /PIT_CLI_CHUNK_ENVELOPE_OR_PROVENANCE_INVALID/);
+ assert.equal(statSync(chunkFile).mode&0o077,0);
 });
