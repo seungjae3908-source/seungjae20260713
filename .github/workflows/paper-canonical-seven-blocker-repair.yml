@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/paper-canonical-seven-blocker-repair.yml
+      - .github/scripts/current-main-ci-provenance.cjs
       - market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
       - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-plan-v1.test.js
       - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-cli-v1.test.js
@@ -172,38 +173,13 @@ jobs:
               return;
             }
 
-            const required = [
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
-              'futures-public-network-smoke/verified',
-            ];
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            const { inspectCurrentMainCiProvenance } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/current-main-ci-provenance.cjs`
+            );
+            const ci = await inspectCurrentMainCiProvenance({
+              github, context, targetSha: target,
             });
-            statuses.sort((a,b) => Number(b.id) - Number(a.id));
-            const latest = new Map();
-            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
-            if (required.some((name) => latest.get(name)?.state !== 'success')) {
-              core.setFailed('PAPER_REPAIR_REQUIRED_CI_NOT_6_OF_6');
-              return;
-            }
-            const runIds = new Set(required.map((name) =>
-              /\/actions\/runs\/(\d+)/.exec(String(latest.get(name)?.target_url ?? ''))?.[1] ?? null));
-            if (runIds.size !== 1 || runIds.has(null)) {
-              core.setFailed('PAPER_REPAIR_REQUIRED_CI_PROVENANCE_INCOHERENT');
-              return;
-            }
-            const requiredRunId = Number([...runIds][0]);
-            const requiredRun = (await github.rest.actions.getWorkflowRun({
-              owner: context.repo.owner, repo: context.repo.repo, run_id: requiredRunId,
-            })).data;
-            if (requiredRun.head_sha !== target || requiredRun.status !== 'completed' || requiredRun.conclusion !== 'success') {
-              core.setFailed('PAPER_REPAIR_REQUIRED_CI_PROVENANCE_REJECTED');
-              return;
-            }
+            const requiredRunId = ci.runId;
 
             const productionRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
               owner: context.repo.owner, repo: context.repo.repo,
