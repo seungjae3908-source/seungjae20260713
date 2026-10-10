@@ -42,6 +42,7 @@ const files = Object.fromEntries(await Promise.all([
   'stock-analyzer/src/lib/app-navigation.ts',
   'stock-analyzer/src/lib/research-center.ts',
   'stock-analyzer/src/pages/research-center.tsx',
+  'stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx',
   'research-dashboard/server.py',
   'stock-analyzer/src/lib/research-center-product.ts',
   'stock-analyzer/src/lib/research-journal-binding.ts',
@@ -68,6 +69,7 @@ const app = files['stock-analyzer/src/App.tsx'];
 const nav = files['stock-analyzer/src/lib/app-navigation.ts'];
 const researchClient = files['stock-analyzer/src/lib/research-center.ts'];
 const researchPage = files['stock-analyzer/src/pages/research-center.tsx'];
+const watchPanel = files['stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx'];
 const dashboardSource = files['research-dashboard/server.py'];
 const product = files['stock-analyzer/src/lib/research-center-product.ts'];
 const journalClient = files['stock-analyzer/src/lib/research-journal-binding.ts'];
@@ -95,6 +97,21 @@ requireText(overviewContract, 'input.producerBound !== false || input.paperConsu
 requireText(dashboardSource, 'def summarize_formula_queue_readback(summary, registry):', 'dashboard readback');
 requireText(dashboardSource, "if counts['PASS'] or registered:", 'no TRAIN-only PASS or Paper registry promotion');
 requireText(dashboardSource, "'producerBound': False, 'paperConsumerBound': False", 'unattested inputs fail-closed');
+ 
+// Public market-watch status is an observation-only admin readback.
+// No disconnected source may be advertised as collecting and no local cadence
+// counter may become independent uptime, OOS, Paper or trading authority.
+requireText(overviewContract, "const usableCount = rows.filter(", 'market watch usable source reconciliation');
+requireText(overviewContract, "v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4)", 'watch PARTIAL source-count parity');
+requireText(overviewContract, "v.status === 'BLOCKED_DATA' && usableCount !== 0", 'watch BLOCKED_DATA source guard');
+requireText(overviewContract, "v.status === 'STALE' ? ageMs <= 360_000 : ageMs > 360_000", 'watch 6-minute staleness threshold');
+requireText(overviewContract, "status === 'READY' && (observedCount === 0 || listedCount !== observedCount)", 'watch zero-feed READY rejection');
+requireText(overviewContract, "continuous24hProven: false, formulaCandidateProduced: false", 'watch never proves uptime or formula PASS');
+requireText(overviewContract, "profitabilityProven: false, executionAuthority: 'NONE'", 'watch no profitability and no orders');
+requireText(watchPanel, "if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';", 'watch UI stale feed warning');
+requireText(watchPanel, "if (watchStatus === 'HOLD') return '서버 보호 정지';", 'watch UI resource pause warning');
+requireText(watchPanel, '실주문 권한은 없습니다.', 'watch UI no-order boundary');
+
 
 requireText(admin, 'router.use(requireAuthenticated, requireAdmin);', 'admin auth boundary');
 requireText(admin, "router.get('/research/overview'", 'admin Research overview route');
