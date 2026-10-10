@@ -9,17 +9,18 @@
  *         dailyReceiptsByMarket:{MARKET:{"<utcDayStartMs>":
  *           {manifest:{...},dailySource:{...}}}}}
  */
-import {readFileSync,statSync,mkdirSync,writeFileSync} from "node:fs";
+import {readFileSync,lstatSync,mkdirSync,writeFileSync} from "node:fs";
 import {dirname,resolve} from "node:path";
 import {fileURLToPath} from "node:url";
-import {auditFourMarketHistoricalWholeUniverseV1}
+import {auditFourMarketHistoricalWholeUniverseV1,
+ WHOLE_MARKET_BENCHMARK_WINDOW_V1}
  from "../src/four-market-whole-pit-price-coverage-v1.js";
 // Exactly the fixed 3-year daily benchmark period used by the existing
 // run-us-daily-opportunity-scanner-3y-v1.py, NOT the six-symbol 2026-10-09 QA.
 // A UTC calendar date is not proof that every contract was live/tradable.
 export const THREE_YEAR_UTC_DATE_SCOPE_V1=Object.freeze({
-  startMs:Date.parse("2023-09-26T00:00:00.000Z"),
-  endExclusiveMs:Date.parse("2026-09-26T00:00:00.000Z"),
+  startMs:WHOLE_MARKET_BENCHMARK_WINDOW_V1.startMs,
+  endExclusiveMs:WHOLE_MARKET_BENCHMARK_WINDOW_V1.endExclusiveMs,
   originalDailyBenchmarkInclusiveEndDate:"2026-09-25",
 });
 export function fixedHistoricalCryptoUtcDatesV1(){
@@ -27,21 +28,38 @@ export function fixedHistoricalCryptoUtcDatesV1(){
  for(let ts=THREE_YEAR_UTC_DATE_SCOPE_V1.startMs;
      ts<THREE_YEAR_UTC_DATE_SCOPE_V1.endExclusiveMs;ts+=86_400_000)
    days.push(ts);
- if(days.length>1100 || days.length<1090)
+ if(days.length!==WHOLE_MARKET_BENCHMARK_WINDOW_V1.expectedCryptoUtcDayCount)
    throw new Error("PIT_CRYPTO_HISTORY_DATE_COUNT_INVALID");
  return {
    CRYPTO_SPOT:[...days],CRYPTO_FUTURES:[...days],
  };
 }
 export function reportFourWholePITReadinessV1(raw=null){
- // KR and US calendars require official historical venue sessions.
- // Crypto trades 24/7 but historic CONTRACT/PAIR membership remains UNKNOWN.
- // Supplying a historical archive overrides these source-free defaults.
- return auditFourMarketHistoricalWholeUniverseV1(raw??{
-   requestedTradingDaysByMarket:fixedHistoricalCryptoUtcDatesV1(),
-   dailyReceiptsByMarket:{},
+ // One or six selected symbols on one date are never the 3-year denominator.
+ const fixed=fixedHistoricalCryptoUtcDatesV1();
+ if(raw!=null&&(typeof raw!=="object"||Array.isArray(raw)))
+   throw new TypeError("PIT_BENCHMARK_SOURCE_NOT_AN_OBJECT");
+ const submitted=raw?.requestedTradingDaysByMarket??{};
+ if(submitted===null||typeof submitted!=="object"||Array.isArray(submitted))
+   throw new TypeError("PIT_BENCHMARK_CALENDAR_SCHEMA_INVALID");
+ const overridden={};
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+   const dates=submitted[market];
+   if(dates!=null&&!Array.isArray(dates))
+     throw new TypeError("PIT_BENCHMARK_CRYPTO_DATE_SCOPE_INVALID");
+   overridden[market]=dates!=null&&(
+     dates.length!==fixed[market].length||
+     dates.some((day,i)=>day!==fixed[market][i]));
+ }
+ const audit=auditFourMarketHistoricalWholeUniverseV1({
+   requestedTradingDaysByMarket:{...submitted,...fixed},
+   dailyReceiptsByMarket:raw?.dailyReceiptsByMarket??{},
+ });
+ return Object.freeze({...audit,
+   partialCallerCryptoCalendarIgnored:overridden,
  });
 }
+
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const inputPath=process.argv[2]??null;
  const outputPath=resolve(process.argv[3]??
@@ -49,13 +67,18 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  let raw=null;
  if(inputPath){
   const path=resolve(inputPath);
-  if(statSync(path).size>8*1024*1024)
-    throw new Error("PIT_CHUNK_SOURCE_FILE_TOO_LARGE");
+  if(path===outputPath)
+    throw new Error("PIT_PRIVATE_SOURCE_DESTINATION_IDENTICAL");
+  const st=lstatSync(path);
+  if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1
+    ||st.size<=0||st.size>64*1024*1024||(st.mode&0o077)!==0)
+    throw new Error("PIT_CHUNK_PRIVATE_INPUT_UNSAFE");
   raw=JSON.parse(readFileSync(path,"utf8"));
  }
  const result=reportFourWholePITReadinessV1(raw);
  mkdirSync(dirname(outputPath),{recursive:true});
- writeFileSync(outputPath,JSON.stringify(result,null,2)+"\n",{mode:0o600});
+ writeFileSync(outputPath,JSON.stringify(result,null,2)+"\n",
+   {mode:0o600,flag:"wx"});
  process.stdout.write(JSON.stringify({
   status:"TRUTH_BOUNDARY_RESEARCH_ONLY",scope:result.scope,
   markets:Object.fromEntries(Object.entries(result.markets).map(([m,x])=>[
@@ -63,6 +86,8 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
       sourceAttestedPriceJoinedDays:x.sourceAttestedPriceJoinedDays},
   ])),
   historicalFullMarketOpportunityDenominatorVerified:false,
+  allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined:
+    result.allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined,
   trueMarketWideRecall:null,profitabilityProven:false,executionAuthority:"NONE",
  })+"\n");
 }
