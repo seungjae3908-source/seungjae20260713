@@ -377,6 +377,21 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/src/components/trade-automation-settings.tsx',
  'stock-analyzer/src/pages/auto-trading.tsx',
  'stock-analyzer/src/pages/phase12-trade-automation-e2e.tsx',
+ // Exact, independently reviewed automatic-vs-manual Paper-only boundary.
+ // LIVE role policy checks and Production/Paper forward contract gates remain
+ // mandatory whenever these paths change. No wildcard scope expansion.
+ '.github/scripts/verify-research-workspace-sync-v3.mjs',
+ '.github/workflows/paper-forward-schedule-validation.yml',
+ 'api-server/src/services/paper-futures-mode-policy.service.test.ts',
+ 'api-server/src/services/paper-futures-mode-policy.service.ts',
+ 'api-server/src/services/paper-trading-candle.service.ts',
+ 'api-server/src/services/paper-trading-core.service.ts',
+ 'api-server/src/services/paper-trading-engine.service.test.ts',
+ 'api-server/src/services/paper-trading-position.service.ts',
+ 'api-server/src/services/paper-trading.types.ts',
+ 'api-server/src/services/trading-risk-engine.service.ts',
+ 'stock-analyzer/src/components/paper-trading-panel.tsx',
+ 'stock-analyzer/src/lib/paper-trading.ts',
  'ops/deploy-production.sh',
 ];
 // Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
