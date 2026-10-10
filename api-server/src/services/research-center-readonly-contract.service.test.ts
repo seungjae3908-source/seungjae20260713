@@ -286,6 +286,57 @@ test('coarse sample study cannot claim economic success, infinite counts or orde
   }).status, 'INVALID');
 });
 
+test('watcher source health states and staleness must agree with observed four-market feeds', () => {
+  const base = marketWatch();
+  const allBlocked = base.markets.map((row) => ({
+    ...row, source: 'NONE', status: 'BLOCKED_PUBLIC_FEED_MISSING',
+    listedCount: 0, observedCount: 0, newCandidates: 0,
+  }));
+  // A consumer may not present active partial coverage if all sources are blocked.
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'PARTIAL', marketCoverageCount: 0, markets: allBlocked,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'BLOCKED_DATA', marketCoverageCount: 0, markets: allBlocked,
+  }).status, 'BLOCKED_DATA');
+  // Even with four READY markets, a forged PARTIAL flag is not an allowed
+  // alternate label for full coverage.
+  const allReady = base.markets.map((row) => ({
+    ...row, source: 'VERIFIED_PUBLIC_FEED', status: 'READY',
+    listedCount: 15, observedCount: 15, newCandidates: 0,
+  }));
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'PARTIAL', marketCoverageCount: 4, markets: allReady,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'OBSERVING', marketCoverageCount: 4, markets: allReady,
+  }).status, 'OBSERVING');
+  for (const impossible of ['BLOCKED_DATA', 'HOLD', 'THROTTLED'] as const) {
+    assert.equal(sanitizeMarketWatchReadback({ ...base, status: impossible }).status, 'INVALID',
+      impossible + ' cannot report operating feeds');
+  }
+  // The source contract does not allow a READY market with no observed quotes.
+  const fakeReady = base.markets.map((row, index) => index === 2 ? {
+    ...row, listedCount: 0, observedCount: 0, newCandidates: 0,
+  } : row);
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, markets: fakeReady,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'PARTIAL', ageMs: 420_000,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'STALE', ageMs: 30_000,
+  }).status, 'INVALID');
+  const stale = sanitizeMarketWatchReadback({
+    ...base, status: 'STALE', ageMs: 420_000,
+  });
+  assert.equal(stale.status, 'STALE');
+  assert.equal(stale.executionAuthority, 'NONE');
+  assert.equal(stale.profitabilityProven, false);
+  assert.equal(stale.oosProven, false);
+});
+
 function watchCadence() {
   return {
     contract: 'public-watch-cadence-admin-readback-v1',
