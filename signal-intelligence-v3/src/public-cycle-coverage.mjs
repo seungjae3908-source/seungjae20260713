@@ -57,9 +57,14 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
     || !integer(execution.providerErrorCount) || execution.providerErrorCount !== 0
     || !integer(execution.timeoutCount) || execution.timeoutCount !== 0
     || universe.stale === true) return hold('INCOMPLETE_OR_STALE_BATCH');
+  const expectedEnd = cursor + execution.requestedCount;
+  if (expectedEnd > universe.totalCount) return hold('BATCH_EXCEEDS_UNIVERSE');
+  if (universe.nextCursor === null && expectedEnd !== universe.totalCount)
+    return hold('PREMATURE_UNIVERSE_END');
   const after = universe.nextCursor === null ? 0 : universe.nextCursor;
   if (!integer(after) || after > universe.totalCount
-    || (after !== 0 && after <= cursor)) return hold('CURSOR_NOT_MONOTONIC');
+    || (after !== 0 && after !== expectedEnd))
+    return hold('CURSOR_NOT_MONOTONIC');
   if (status === 'CANDIDATES_AVAILABLE' || status === 'VALID_NO_TRADE') {
     if (universe.partial === true || execution.partial === true
       || response.dataState !== 'complete') return hold('NOT_FULLY_VERIFIED');
