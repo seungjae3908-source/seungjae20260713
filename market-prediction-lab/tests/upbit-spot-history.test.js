@@ -101,3 +101,35 @@ test("collector rejects unsupported timeframe instead of silently rewriting it",
     /unsupported Upbit history timeframe/,
   );
 });
+
+
+test("Upbit KRW native 1m history traces bounded pages but not historical scanner availability", async () => {
+  const end=Date.UTC(2026,7,12);
+  const all=Array.from({length:130},(_,i)=>row(end-(i+1)*60_000,100+i));
+  const result=await collectUpbitSpotHistory({
+    symbol:"KRW-BTC",timeframe:"1m",startTime:end-120*60_000,endTime:end,
+    minCandles:2,minIntervalMs:0,
+    fetchImpl:async(url)=>{
+      assert.ok(url.includes("/v1/candles/minutes/1?"));
+      const to=Date.parse(new URL(url).searchParams.get("to"));
+      return response(all.filter(r=>r.timestamp<to).slice(0,200));
+    },
+  });
+  assert.equal(result.providerMarket,"KRW-BTC");
+  assert.equal(result.intervalMs,60_000);
+  assert.equal(result.candleCount,120);
+  assert.equal(result.rawPageWindowTraversed,true);
+  assert.equal(result.historicalSignalAvailabilityProven,false);
+  assert.equal(result.historicPointInTimeListingComplete,false);
+  assert.equal(result.missingMinuteNoTradeProof,false);
+});
+
+test("Upbit 1m partial maximum-page range fails closed", async () => {
+  const end=Date.UTC(2026,7,12);
+  const all=Array.from({length:200},(_,i)=>row(end-(i+1)*60_000,100+i));
+  await assert.rejects(()=>collectUpbitSpotHistory({
+    symbol:"ETH",timeframe:"1m",startTime:end-2_000*60_000,endTime:end,
+    maxPages:1,minCandles:2,minIntervalMs:0,
+    fetchImpl:async()=>response(all),
+  }),/UPBIT_HISTORY_RANGE_INCOMPLETE/);
+});
