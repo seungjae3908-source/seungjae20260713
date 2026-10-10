@@ -71,6 +71,26 @@ export function recalculateAccount(state: PaperTradingState, at: string) {
   state.updatedAt = at;
 }
 
+/**
+ * Approximate manual Paper isolated margin liquidation threshold.
+ * Not a real exchange liquidation quote; never usable by LIVE execution.
+ */
+export function estimatedManualPaperLiquidationPrice(
+  position: Pick<PaperPosition, 'entryPrice' | 'leverage' | 'side' | 'maintenanceMarginRate'>,
+): number | null {
+  if (!(Number.isFinite(position.entryPrice) && position.entryPrice > 0)
+    || !(Number.isInteger(position.leverage) && position.leverage >= 1 && position.leverage <= 125)) return null;
+  const supplied = position.maintenanceMarginRate;
+  const maintenance = typeof supplied === 'number'
+    && Number.isFinite(supplied) && supplied >= 0 && supplied < 1
+    ? supplied : 0.005;
+  const ratio = position.side === 'long'
+    ? 1 - 1 / position.leverage + maintenance
+    : 1 + 1 / position.leverage - maintenance;
+  const price = position.entryPrice * ratio;
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 export function createPositionFromOrder(
   state: PaperTradingState,
   order: PaperOrder,
@@ -109,6 +129,7 @@ export function createPositionFromOrder(
     quantity: order.quantity,
     remainingQuantity: order.quantity,
     leverage: order.leverage,
+    maintenanceMarginRate: order.maintenanceMarginRate,
     notionalValue: reference * order.quantity,
     requiredMargin,
     stopLossPrice: order.stopLossPrice,
@@ -406,12 +427,29 @@ export function closePositionInternal(
   const entryFeeAllocation = position.entryFee * (actualQuantity / position.quantity);
   const entrySlippageAllocation = position.entrySlippageCost * (actualQuantity / position.quantity);
   const funding = canonical?.settlement?.fundingCost ?? fundingCost(position, actualQuantity, at);
-  const netForJournal = canonical?.settlement?.netPnl ?? (referenceGrossPnl - entryFeeAllocation - exitFee - entrySlippageAllocation - exitSlippage - funding);
-  const cashChange = fillGrossPnl - (canonical?.settlement?.exitCost ?? exitFee) - funding;
+  const rawJournalNet = canonical?.settlement?.netPnl ?? (referenceGrossPnl - entryFeeAllocation - exitFee - entrySlippageAllocation - exitSlippage - funding);
+  const rawCashChange = fillGrossPnl - (canonical?.settlement?.exitCost ?? exitFee) - funding;
+  // Isolated simulated losses cannot debit more than the initial margin
+  // pledged by THIS position, even after a price gap. Entry commission is
+  // already reflected in the account at entry time.
+  const isolatedLiquidation = reason === 'liquidation' && !canonical;
+  const allocatedMargin = position.initialRequiredMargin * (actualQuantity / position.quantity);
+  const cashChange = isolatedLiquidation
+    ? Math.max(-allocatedMargin, rawCashChange) : rawCashChange;
+  const netForJournal = isolatedLiquidation
+    ? cashChange - entryFeeAllocation : rawJournalNet;
+  if (isolatedLiquidation) {
+    position.warnings = unique([
+      ...position.warnings,
+      'PAPER_ISOLATED_LIQUIDATION_ESTIMATE: 실제 청산가격·갭·추가 수수료와 다를 수 있습니다.',
+    ]);
+  }
 
   position.remainingQuantity = Math.max(0, position.remainingQuantity - actualQuantity);
   position.currentPrice = reference;
-  position.realizedPnl += referenceGrossPnl - exitFee - exitSlippage - funding;
+  position.realizedPnl += isolatedLiquidation
+    ? cashChange + entrySlippageAllocation
+    : referenceGrossPnl - exitFee - exitSlippage - funding;
   position.totalFees += exitFee;
   position.totalSlippage += exitSlippage;
   position.totalFunding += funding;
