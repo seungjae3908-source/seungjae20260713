@@ -64,7 +64,7 @@ test('Bitget public aggregate does not manufacture a trade from ticker data', ()
         usdtVolume: '0', ts: String(NOW - 1_000) },
     ],
   }, NOW);
-  assert.equal(market.status, 'READY');
+  assert.equal(market.status, 'PARTIAL_TICKERS'); // no independent contract roster
   assert.equal(market.quotes.length, 2);
   assert.equal(market.quotes[0].change24hPercent, 4);
   assert.equal(WATCH_SAFETY.orderAuthority, 'NONE');
@@ -239,6 +239,79 @@ test('new systemd service is rate-limited, isolated and never enabled by this co
 
 
 
+
+test('Bitget public USDT futures contract roster exposes truncated ticker results', () => {
+  const c = (symbol, symbolStatus = 'normal') =>
+    ({ symbol, quoteCoin: 'USDT', symbolStatus });
+  const q = symbol => ({ symbol, lastPr: '100', usdtVolume: '22000000',
+    change24h: '0.02', ts: String(NOW - 1000) });
+  const contracts = { code: '00000', data: [
+    c('BTCUSDT'), c('ETHUSDT'), c('OFFUSDT', 'off'),
+  ] };
+  const valid = normalizeBitgetSnapshot({ code: '00000',
+    data: [q('BTCUSDT'), q('ETHUSDT')] }, NOW, contracts);
+  assert.equal(valid.status, 'READY');
+  assert.equal(valid.listedCount, 2);
+  assert.equal(valid.quotes.length, 2);
+  const missing = normalizeBitgetSnapshot({ code: '00000',
+    data: [q('BTCUSDT')] }, NOW, contracts);
+  assert.equal(missing.status, 'PARTIAL_TICKERS');
+  assert.equal(missing.listedCount, 2);
+  assert.equal(missing.quotes.length, 1);
+  const extra = normalizeBitgetSnapshot({ code: '00000',
+    data: [q('BTCUSDT'), q('ETHUSDT'), q('OFFUSDT')] }, NOW, contracts);
+  assert.equal(extra.status, 'PARTIAL_TICKERS');
+  assert.equal(extra.quotes.length, 2);
+  const stale = normalizeBitgetSnapshot({ code: '00000',
+    data: [q('BTCUSDT'), { ...q('ETHUSDT'), ts: String(NOW - 400000) }],
+  }, NOW, contracts);
+  assert.equal(stale.status, 'PARTIAL_TICKERS');
+  assert.equal(stale.quotes.length, 1);
+  const restricted = normalizeBitgetSnapshot({ code: '00000',
+    data: [q('BTCUSDT'), q('ETHUSDT')] }, NOW,
+  { code: '00000', data: [c('BTCUSDT'), c('ETHUSDT', 'limit_open')] });
+  assert.equal(restricted.status, 'READY'); // coverage only, never order authority
+  assert.equal(restricted.quotes.length, 2);
+});
+test('Bitget malformed contract rosters refuse fake readiness', () => {
+  const q = { symbol: 'BTCUSDT', lastPr: '100', change24h: '0.02',
+    usdtVolume: '22000000', ts: String(NOW - 1000) };
+  const c = { symbol: 'BTCUSDT', quoteCoin: 'USDT', symbolStatus: 'normal' };
+  for (const bad of [
+    { code: '99999', data: [c] }, { code: '00000', data: [] },
+    { code: '00000', data: [c, c] },
+    { code: '00000', data: [{ ...c, symbolStatus: 'UNKNOWN' }] },
+    { code: '00000', data: [{ ...c, quoteCoin: 'BTC' }] },
+    { code: '00000', data: [{ ...c, symbolStatus: 'off' }] },
+  ]) assert.throws(() => normalizeBitgetSnapshot({
+    code: '00000', data: [q],
+  }, NOW, bad), /BITGET_CONTRACT_ROSTER_(INVALID|EMPTY)/);
+  assert.equal(normalizeBitgetSnapshot({ code: '00000', data: [q] }, NOW).status,
+    'PARTIAL_TICKERS');
+});
+test('conflicting same-timestamp symbol prices cannot become provisional evidence', () => {
+  const q = { symbol: 'BTCUSDT', lastPr: '100', change24h: '0.02',
+    usdtVolume: '22000000', ts: String(NOW - 1000) };
+  assert.throws(() => normalizeBitgetSnapshot({
+    code: '00000', data: [q, { ...q, lastPr: '110' }],
+  }, NOW), /WATCH_SOURCE_DUPLICATE_PRICE_CONFLICT/);
+  const asOf = new Date(NOW - 1000).toISOString();
+  const stock = { schemaVersion: 'research-stock-public-snapshot-v1',
+    source: 'SAFE_SOURCE', market: 'KR_STOCK', asOf, completeUniverse: false };
+  const row = { symbol: '005930', price: 100, turnover24h: 2e9,
+    change24hPercent: 1, asOf };
+  assert.throws(() => normalizeStockFeed({ ...stock,
+    quotes: [row, { ...row, price: 110 }],
+  }, 'KR_STOCK', NOW), /WATCH_SOURCE_DUPLICATE_PRICE_CONFLICT/);
+  assert.equal(normalizeStockFeed({ ...stock, quotes: [row, { ...row }] },
+    'KR_STOCK', NOW).status, 'PARTIAL_UNIVERSE');
+});
+test('worker queries only public contracts plus public all-tickers', async () => {
+  const file = await readFile(new URL('../bin/lightweight-market-watch.mjs', import.meta.url), 'utf8');
+  assert.match(file, /\/api\/v2\/mix\/market\/contracts\?productType=USDT-FUTURES/);
+  assert.match(file, /\/api\/v2\/mix\/market\/tickers\?productType=USDT-FUTURES/);
+  assert.match(file, /normalizeBitgetSnapshot\(payload, Date\.now\(\), contracts\)/);
+});
 
 test('incomplete Bitget tickers cannot be labeled full-universe READY', () => {
   const snapshot = normalizeBitgetSnapshot({

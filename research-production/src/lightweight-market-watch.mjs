@@ -62,6 +62,10 @@ function uniqueQuotes(rows) {
   const map = new Map();
   for (const row of rows) {
     const old = map.get(row.symbol);
+    // An identical source time with a different price is not independent
+    // price evidence. Refuse to select whichever duplicate arrived last.
+    if (old && old.sourceAtMs === row.sourceAtMs && old.price !== row.price)
+      throw new Error('WATCH_SOURCE_DUPLICATE_PRICE_CONFLICT');
     if (!old || row.sourceAtMs >= old.sourceAtMs) map.set(row.symbol, row);
   }
   const ordered = [...map.values()].sort((a, b) =>
@@ -164,35 +168,60 @@ export function normalizeUpbitSnapshot(marketRows, tickerRows, nowMs) {
   const status = quotes.length === listed.size ? 'READY' : 'PARTIAL_TICKERS';
   return sourceResult('CRYPTO_SPOT', 'UPBIT_PUBLIC_TICKERS', status, listed.size, quotes);
 }
-export function normalizeBitgetSnapshot(payload, nowMs) {
+// Use the independent PUBLIC Bitget contracts endpoint to detect missing
+// USDT-FUTURES tickers. Current-roster parity is NOT historical PIT proof.
+function bitgetCurrentPublicRoster(payload) {
+  if (!payload || String(payload.code) !== '00000'
+    || !Array.isArray(payload.data) || payload.data.length === 0
+    || payload.data.length > 30_000)
+    throw new Error('BITGET_CONTRACT_ROSTER_INVALID');
+  const seen = new Set();
+  const current = new Set();
+  const allowedStatus = new Set([
+    'listed', 'normal', 'maintain', 'limit_open', 'restrictedAPI', 'off',
+  ]);
+  for (const row of payload.data) {
+    const ticker = symbol(row?.symbol);
+    if (!ticker || !ticker.endsWith('USDT') || row?.quoteCoin !== 'USDT'
+      || !allowedStatus.has(row?.symbolStatus) || seen.has(ticker))
+      throw new Error('BITGET_CONTRACT_ROSTER_INVALID');
+    seen.add(ticker);
+    if (row.symbolStatus !== 'off') current.add(ticker);
+  }
+  if (current.size === 0) throw new Error('BITGET_CONTRACT_ROSTER_EMPTY');
+  return current;
+}
+export function normalizeBitgetSnapshot(payload, nowMs, contracts = null) {
   if (!payload || String(payload.code) !== '00000' || !Array.isArray(payload.data))
     throw new Error('BITGET_PUBLIC_SHAPE_INVALID');
+  // Tickers cannot self-certify the completeness of their own source.
+  const roster = contracts == null ? null : bitgetCurrentPublicRoster(contracts);
   const quotes = [];
+  let invalidOrUnexpectedRows = 0;
   for (const row of payload.data) {
     const ticker = symbol(row?.symbol);
     const price = number(row?.lastPr);
     const turnover = number(row?.usdtVolume);
     const percent = number(row?.change24h);
     const observed = number(row?.ts);
-    if (!ticker || !(price > 0) || !(turnover >= 0) || percent == null
-      || !validAge(observed, nowMs)) continue;
+    if (!ticker || (roster && !roster.has(ticker))
+      || !(price > 0) || !(turnover >= 0) || percent == null
+      || !validAge(observed, nowMs)) {
+      invalidOrUnexpectedRows++;
+      continue;
+    }
     quotes.push(Object.freeze({
-      symbol: ticker, price,
-      turnover24h: turnover,
-      change24hPercent: percent * 100,
-      sourceAtMs: observed,
+      symbol: ticker, price, turnover24h: turnover,
+      change24hPercent: percent * 100, sourceAtMs: observed,
     }));
   }
   if (!quotes.length) throw new Error('BITGET_PUBLIC_QUOTES_UNAVAILABLE');
-  // Public APIs can return a partially usable market list. A subset must
-  // never be displayed to Research as verified full-universe coverage.
-  const quoteSymbols = new Set(quotes.map((row) => row.symbol));
-  const complete = quoteSymbols.size === payload.data.length;
-  return sourceResult(
-    'CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS',
-    complete ? 'READY' : 'PARTIAL_TICKERS',
-    payload.data.length, quotes,
-  );
+  const unique = new Set(quotes.map(v => v.symbol)).size;
+  const matched = roster != null && invalidOrUnexpectedRows === 0
+    && unique === roster.size && quotes.length === roster.size;
+  return sourceResult('CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS',
+    matched ? 'READY' : 'PARTIAL_TICKERS',
+    roster?.size ?? payload.data.length, quotes);
 }
 export function normalizeStockFeed(raw, market, nowMs) {
   if (market !== 'KR_STOCK' && market !== 'US_STOCK')

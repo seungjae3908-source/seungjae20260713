@@ -70,8 +70,11 @@ async function spotSnapshot(nowMs) {
   return normalizeUpbitSnapshot(spotMarkets, all, Date.now());
 }
 async function futuresSnapshot() {
+  // Both calls are bounded, public and read-only. A partial ticker response
+  // must not claim full current-contract coverage.
+  const contracts = await publicJson(BITGET + '/api/v2/mix/market/contracts?productType=USDT-FUTURES');
   const payload = await publicJson(BITGET + '/api/v2/mix/market/tickers?productType=USDT-FUTURES');
-  return normalizeBitgetSnapshot(payload, Date.now());
+  return normalizeBitgetSnapshot(payload, Date.now(), contracts);
 }
 async function readSmallFileNoFollow(path, maxBytes = 4_000_000) {
   const meta = await lstat(path);
