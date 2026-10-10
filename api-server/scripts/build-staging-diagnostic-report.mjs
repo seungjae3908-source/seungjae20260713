@@ -99,6 +99,98 @@ const browserDiagnostics = (browser) => ({
     : [],
 });
 
+
+const AI_CHART_TIMING_FIELDS = [
+  'coldDocumentMs', 'coldChunkMs', 'firstRouteChunkMs', 'firstShellMs',
+  'firstUsableChartMs', 'warmRouteMs', 'warmUsableChartMs',
+];
+const AI_CHART_EXPECTED_SESSIONS = 3;
+const AI_CHART_LATENCY_LIMIT_MS = 5_000;
+
+const safeAiChartSession = (value) => {
+  if (!value || typeof value !== 'object' || !Number.isInteger(value.session)
+    || value.session < 1 || value.session > AI_CHART_EXPECTED_SESSIONS) return null;
+  const session = { session: value.session };
+  for (const field of AI_CHART_TIMING_FIELDS) {
+    // Reject missing, negative, non-finite or implausible values. Do not
+    // transform missing evidence into 0ms or include account/private fields.
+    if (typeof value[field] !== 'number' || !Number.isFinite(value[field])
+      || value[field] < 0 || value[field] > 120_000) return null;
+    session[field] = Math.round(value[field]);
+  }
+  return session;
+};
+
+const aiChartTimingSummary = (values) => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2
+    : sorted[mid];
+  return {
+    medianMs: Math.round(median),
+    p95Ms: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
+    maxMs: sorted.at(-1),
+    overFiveSeconds: sorted.filter((value) => value > AI_CHART_LATENCY_LIMIT_MS).length,
+  };
+};
+
+export const summarizeAiChartLatency = (browser) => {
+  const chart = browser?.authenticated_ai_chart;
+  const rawSessions = Array.isArray(chart?.sessions) ? chart.sessions : [];
+  const safeSessions = rawSessions.map(safeAiChartSession).filter(Boolean);
+  const uniqueSessions = new Set(safeSessions.map((item) => item.session));
+  const sessionOrder = [...safeSessions].sort((a, b) => a.session - b.session);
+  const metrics = sessionOrder.length === 0 ? null : Object.fromEntries(
+    AI_CHART_TIMING_FIELDS.map((field) => [
+      field, aiChartTimingSummary(sessionOrder.map((item) => item[field])),
+    ]),
+  );
+  // A partial or duplicate sample can accidentally share the same p95 and
+  // median as a complete three-session run. Never certify summary consistency
+  // before all three distinct canonical session identities are present.
+  const completeSessionSet = rawSessions.length === AI_CHART_EXPECTED_SESSIONS
+    && safeSessions.length === AI_CHART_EXPECTED_SESSIONS
+    && uniqueSessions.size === AI_CHART_EXPECTED_SESSIONS;
+  const consistentCanonicalSummary = Boolean(
+    completeSessionSet && metrics && chart?.summary && AI_CHART_TIMING_FIELDS.every((field) => {
+      const declared = chart.summary[field];
+      const computed = metrics[field];
+      return declared && computed
+        && ['medianMs', 'p95Ms', 'maxMs', 'overFiveSeconds'].every(
+          (key) => typeof declared[key] === 'number' && declared[key] === computed[key],
+        );
+    }),
+  );
+  const complete = completeSessionSet && consistentCanonicalSummary;
+  const p95Breached = complete && (
+    metrics.firstUsableChartMs.p95Ms > AI_CHART_LATENCY_LIMIT_MS
+    || metrics.warmUsableChartMs.p95Ms > AI_CHART_LATENCY_LIMIT_MS
+    || metrics.firstUsableChartMs.overFiveSeconds > 0
+    || metrics.warmUsableChartMs.overFiveSeconds > 0
+  );
+  const status = rawSessions.length === 0
+    ? 'NOT_COLLECTED'
+    : !complete
+      ? 'PARTIAL_OR_INCONSISTENT'
+      : p95Breached
+        ? 'BREACH'
+        : 'WITHIN_LIMIT';
+  return {
+    status,
+    expected_sessions: AI_CHART_EXPECTED_SESSIONS,
+    observed_sessions: safeSessions.length,
+    raw_session_count: rawSessions.length,
+    threshold_ms: AI_CHART_LATENCY_LIMIT_MS,
+    // Never retain URL, auth token, login identity, headers or the input
+    // snapshot beyond these seven whitelisted numeric timing measurements.
+    sessions: sessionOrder.slice(0, AI_CHART_EXPECTED_SESSIONS),
+    metrics,
+    source_summary_consistent: consistentCanonicalSummary,
+  };
+};
+
 const addClusterEvidence = (clusters, key, evidence) => {
   const existing = clusters.get(key) ?? {
     key,
@@ -139,6 +231,9 @@ export const buildDiagnosticReport = ({
   const failedTests = tests.filter((record) => record.status === 'failed');
   const skippedTests = tests.filter((record) => record.status === 'skipped');
   const passedTests = tests.filter((record) => record.status === 'passed');
+  const aiChartLatency = summarizeAiChartLatency(browser);
+  const aiChartTimingRequired = tests.some((record) =>
+    record.fullTitle.includes('regular: futures, scanner, paper trading, and safe AI preview'));
   const clusters = new Map();
 
   for (const failure of failedTests) {
@@ -238,6 +333,26 @@ export const buildDiagnosticReport = ({
     });
   }
 
+  // Report both the measured breach and missing measurements. Never classify
+  // an unmeasured AI Chart journey as a fast one.
+  if (aiChartTimingRequired && aiChartLatency.status !== 'WITHIN_LIMIT') {
+    const complete = aiChartLatency.status === 'BREACH';
+    const coldP95 = aiChartLatency.metrics?.firstUsableChartMs?.p95Ms ?? 'missing';
+    const warmP95 = aiChartLatency.metrics?.warmUsableChartMs?.p95Ms ?? 'missing';
+    addClusterEvidence(
+      clusters,
+      complete ? 'AI_CHART:COLD_OR_WARM_P95_BREACH' : 'AI_CHART:LATENCY_EVIDENCE_INCOMPLETE',
+      {
+        kind: 'AI_CHART_PERFORMANCE',
+        test: 'authenticated AI Chart cold/warm first-usable',
+        detail: `status=${aiChartLatency.status}; cold_p95_ms=${coldP95}; warm_p95_ms=${warmP95}; measured=${aiChartLatency.observed_sessions}/${AI_CHART_EXPECTED_SESSIONS}; limit_ms=${AI_CHART_LATENCY_LIMIT_MS}`,
+        surface: 'AI_CHART',
+        confidence: complete ? 'EXACT_PERFORMANCE_SAMPLES' : 'EVIDENCE_INCOMPLETE',
+        ordinal: tests.find((record) => record.fullTitle.includes('regular: futures, scanner, paper trading, and safe AI preview'))?.ordinal ?? 0,
+      },
+    );
+  }
+
   const requiredArtifacts = {
     runner: Boolean(runner),
     playwright: Boolean(playwright),
@@ -245,6 +360,7 @@ export const buildDiagnosticReport = ({
     accountProvisioning: Boolean(accountProvisioning),
     accountCleanup: Boolean(accountCleanup),
     runtime: Boolean(runtime),
+    aiChartTiming: !aiChartTimingRequired || ['WITHIN_LIMIT', 'BREACH'].includes(aiChartLatency.status),
   };
   const collectionComplete = Object.values(requiredArtifacts).every(Boolean) && tests.length > 0;
 
@@ -288,6 +404,7 @@ export const buildDiagnosticReport = ({
     runner_exit_code: Number.isFinite(Number(runner?.runner_exit_code)) ? Number(runner.runner_exit_code) : null,
     collection_complete: collectionComplete,
     required_artifacts: requiredArtifacts,
+    authenticated_ai_chart_latency: aiChartLatency,
     tests: {
       total: tests.length,
       passed: passedTests.length,
@@ -331,7 +448,7 @@ const mergeUnique = (values) => {
   return merged;
 };
 
-const readMergedBrowserDiagnostics = (artifactDir) => {
+export const readMergedBrowserDiagnostics = (artifactDir) => {
   const workerFiles = fs.existsSync(artifactDir)
     ? fs.readdirSync(artifactDir)
       .filter((name) => /^staging-browser-results-\d+\.json$/u.test(name))
@@ -345,6 +462,13 @@ const readMergedBrowserDiagnostics = (artifactDir) => {
     page_errors: mergeUnique(values.flatMap((value) => value.page_errors ?? [])),
     unhandled_rejections: mergeUnique(values.flatMap((value) => value.unhandled_rejections ?? [])),
     unexpected_http_errors: mergeUnique(values.flatMap((value) => value.unexpected_http_errors ?? [])),
+    // Preserve only the structured performance slots from canonical worker
+    // telemetry. The report serializer later whitelists numeric fields.
+    authenticated_ai_chart: {
+      sessions: values.flatMap((value) => Array.isArray(value.authenticated_ai_chart?.sessions)
+        ? value.authenticated_ai_chart.sessions : []),
+      summary: values.map((value) => value.authenticated_ai_chart?.summary).find(Boolean) ?? null,
+    },
     source_worker_files: workerFiles,
   };
 };
