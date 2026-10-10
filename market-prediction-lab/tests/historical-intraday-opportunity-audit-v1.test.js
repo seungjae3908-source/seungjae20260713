@@ -185,3 +185,35 @@ test("all four markets remain research-only under venue-aligned inputs", () => {
     assert.equal(result.fullMarketOpportunityDenominatorVerified,false);
   }
 });
+
+test("missing range endpoints cannot attest minute coverage", () => {
+  const missingStart=coverage().map((row,index)=>index===0?{...row,startMs:undefined}:row);
+  assert.equal(run("KR_STOCK",{coverage:missingStart}).reason,"INTRADAY_SOURCE_COVERAGE_MISSING");
+  const missingEnd=coverage().map((row,index)=>index===0?{...row,endMs:null}:row);
+  assert.equal(run("US_STOCK",{coverage:missingEnd}).status,"BLOCKED_DATA");
+});
+
+test("stale scanner source is DATA_DELAYED, not an eligible early discovery", () => {
+  const candidate=observation("A","LONG","CANDIDATE",12,"stale-candidate");
+  const report=run("KR_STOCK",{
+    scannerObservations:[{...candidate,dataCutoffMs:S+8*M}],
+  });
+  const ten=report.opportunities.find((e)=>e.thresholdPct===10);
+  assert.equal(ten.discoveredBeforeCrossing,false);
+  assert.equal(ten.missingOrEntryReason,"DATA_DELAYED");
+  assert.equal(report.quality.byHorizon.FIRST_10PCT.recall,0);
+  assert.equal(report.maxScannerLagMs,180_000);
+});
+
+test("scanner signal ID collision across symbols or directions is rejected", () => {
+  assert.throws(()=>run("US_STOCK",{
+    scannerObservations:[
+      observation("A","LONG","CANDIDATE",12,"duplicate"),
+      observation("B","LONG","CANDIDATE",12,"duplicate"),
+    ],
+  }),/SIGNAL_ID_REUSED_FOR_DIFFERENT_OPPORTUNITIES/);
+});
+
+test("unexpected inherited market keys are rejected",()=>{
+  assert.throws(()=>audit({market:"toString"}),/MARKET_INVALID/);
+});
