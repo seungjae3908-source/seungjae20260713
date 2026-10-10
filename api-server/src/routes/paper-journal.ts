@@ -31,8 +31,10 @@ import {
 import {
   AUTOMATIC_PAPER_ACCOUNT_ID,
   AUTOMATIC_PAPER_INITIAL_KRW,
+  AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS,
   automaticPaperWalletBootstrapReadiness,
   automaticPaperLegacyEpochIsolationReadiness,
+  isAutomaticPaperAccountId,
 } from '../services/member-auto-trading-background-worker.service';
 import { readTradeAutomationJournalPayloads } from '../services/trade-automation-unified-journal-adapter';
 import {
@@ -117,7 +119,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Server-owned preflight for a one-time 500k automatic Paper wallet.
+ * Server-owned preflight for a one-time 1M automatic Paper wallet.
  * The same evidence controls preview and write; no settlement history is
  * rewritten, and a previously inserted/tombstoned wallet cannot be refilled.
  */
@@ -130,10 +132,16 @@ function automaticPaperWalletStartDecision(
   const bootstrap = automaticPaperWalletBootstrapReadiness(orders, plans);
   const walletPreviouslyRecorded = records.some((row) =>
     row.kind === 'account' && row.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+  const legacyWallets = records.filter((row) => row.kind === 'account'
+    && AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS.some((id) => id === row.id));
+  const legacyWalletOnly = legacyWallets.length === 1
+    && records.every((row) => row.kind === 'account' && isAutomaticPaperAccountId(row.id))
+    && orders.length === 0 && plans.length === 0;
   const freshReady = !walletPreviouslyRecorded
     && records.length === 0 && bootstrap.safeToInitialize;
   const isolation = automaticPaperLegacyEpochIsolationReadiness(orders, plans, records, nowMs);
-  const isolatedReady = !walletPreviouslyRecorded && !freshReady && isolation.safeToIsolate;
+  const isolatedReady = !walletPreviouslyRecorded && !freshReady
+    && (legacyWalletOnly || isolation.safeToIsolate);
   const state = walletPreviouslyRecorded
     ? 'ALREADY_EXISTS' as const
     : freshReady
@@ -158,7 +166,8 @@ function automaticPaperWalletStartDecision(
       missingFeeEvidence: bootstrap.missingFeeEvidence,
       legacyPlanCount: isolation.legacyPlanCount,
       legacyOrderCount: isolation.legacyOrderCount,
-      legacyJournalCount: isolation.legacyJournalCount,
+        legacyJournalCount: isolation.legacyJournalCount,
+        legacyWalletCount: legacyWallets.length,
     },
   };
 }
@@ -513,7 +522,7 @@ export function createPaperJournalRouter(
     const oppositeRoleWallets = records.filter((row) => row.kind === 'account'
       && isProtectedFourMarketPaperWalletId(row.id) && !ownsRoleWallet(row.id));
     const legacyWallets = records.filter((row) => row.kind === 'account'
-      && row.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+      && isAutomaticPaperAccountId(row.id));
     const otherLegacyRows = records.filter((row) => row.kind !== 'account');
     const fresh = records.length === 0 && orders.length === 0 && plans.length === 0;
     const legacyWalletOnly = legacyWallets.length <= 1 && otherLegacyRows.length === 0
@@ -878,6 +887,12 @@ export function createPaperJournalRouter(
       }
       const walletRecords = submitted.filter((item) => isObject(item)
         && item.kind === 'account' && item.id === AUTOMATIC_PAPER_ACCOUNT_ID);
+      if (submitted.some((item) => isObject(item)
+        && item.kind === 'account'
+        && AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS.some((id) => id === item.id))) {
+        throw new PaperJournalError('AUTOMATIC_PAPER_LEGACY_WALLET_IMMUTABLE',
+          '기존 50만원 자동모의계좌는 과거 기록으로 보존되며 변경할 수 없습니다.', 409);
+      }
       if (walletRecords.length && request.member
         && hasCapability(request.member, 'canManageMembers')) {
         throw new PaperJournalError('ADMIN_PAPER_USE_FOUR_MARKET_WALLETS',
@@ -892,7 +907,7 @@ export function createPaperJournalRouter(
         const wallet = walletRecords[0] as Record<string, unknown>;
         const payload = isObject(wallet.payload) ? wallet.payload : null;
         // Client-owned local Paper accounts cannot set the baseline for the
-        // automatic worker. Only a fresh, exact 500k zero-exposure wallet is
+        // automatic worker. Only a fresh, exact 1M zero-exposure wallet is
         // allowed, never a reset or a mixed-account sync request.
         if (walletRecords.length !== 1 || submitted.length !== 1
           || wallet.version !== 1 || wallet.deletedAt !== null
@@ -904,7 +919,7 @@ export function createPaperJournalRouter(
           || payload?.usedMargin !== 0
           || payload?.realizedPnl !== 0 || payload?.unrealizedPnl !== 0) {
           throw new PaperJournalError('AUTOMATIC_PAPER_WALLET_BASELINE_INVALID',
-            '자동모의매매 가상계좌는 50만원 초기 상태로 한 번만 준비할 수 있습니다.', 409);
+            '자동모의매매 가상계좌는 100만원 초기 상태로 한 번만 준비할 수 있습니다.', 409);
         }
         const [existingPaper, canonical] = await Promise.all([
           repository.listSnapshot(userId),
@@ -920,7 +935,7 @@ export function createPaperJournalRouter(
         // The read-only preflight and this write share exact server-side
         // evidence. A stale UI or reordered client request cannot waive it.
         const newEpochApproved = body?.legacyEpochConfirmation ===
-          'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY';
+          'START_NEW_1M_PAPER_EPOCH_PRESERVE_HISTORY';
         if (!decision.safeToPrepare
           || (decision.requiresHistoryPreservationConfirmation && !newEpochApproved)
           || (!decision.requiresHistoryPreservationConfirmation && newEpochApproved)) {
