@@ -40,8 +40,12 @@ function blocked(market,venue,reason) {
     executionAuthority:"NONE",
   });
 }
-export function nativeDayResultFromCollectedV1(market,venue,collected){
-  const symbol=market==="CRYPTO_SPOT"?"KRW-BTC":"BTCUSDT";
+export function nativeDayResultFromCollectedV1(market,venue,collected,selectedSymbol=null){
+  const symbol=selectedSymbol ?? (market==="CRYPTO_SPOT"?"KRW-BTC":"BTCUSDT");
+  if(typeof symbol!=="string" || !(market==="CRYPTO_SPOT"
+     ? /^KRW-[A-Z0-9]{1,20}$/.test(symbol)
+     : /^[A-Z0-9]{2,20}USDT$/.test(symbol)))
+    return blocked(market,venue,"UTC_DAY_SELECTED_SYMBOL_INVALID");
   const source=market==="CRYPTO_SPOT"?"upbit-public-candles":"bitget-public-v2";
   const {historyStartMs,utcDayStartMs,utcDayEndMs}=UTC_DAY_SAMPLE_V1;
   if(!["CRYPTO_SPOT","CRYPTO_FUTURES"].includes(market)

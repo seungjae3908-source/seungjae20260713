@@ -20,6 +20,8 @@ on:
       - market-prediction-lab/src/historical-scanner-evidence-funnel-v1.js
       - market-prediction-lab/tests/historical-scanner-evidence-funnel-v1.test.js
       - market-prediction-lab/scripts/report-historical-scanner-readiness-v1.mjs
+      - market-prediction-lab/scripts/probe-native-selected-day-v1.mjs
+      - market-prediction-lab/tests/native-selected-day-v1.test.js
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -160,6 +162,38 @@ jobs:
             market-prediction-lab/docs/native-utc-day-opportunity-v1.json
             market-prediction-lab/docs/native-utc-day-raw-1m-v1.json
             market-prediction-lab/docs/historical-scanner-funnel-readiness-v1.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Research fixed current-listed four-symbol native venues (post-hoc cohort)
+        timeout-minutes: 6
+        run: |
+          node --test market-prediction-lab/tests/native-selected-day-v1.test.js
+          node market-prediction-lab/scripts/probe-native-selected-day-v1.mjs market-prediction-lab/docs/native-selected-historical-day-v1.json market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
+
+      - name: Assert selected-symbol cohort truth boundary
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const x=JSON.parse(readFileSync("market-prediction-lab/docs/native-selected-historical-day-v1.json","utf8"));
+          if(x.executionAuthority!=="NONE" || x.profitabilityProven!==false ||
+             x.historicalPointInTimeUniverseVerified!==false || x.trueMarketWideRecall!==null ||
+             x.actualFillCount!==null || x.realOrders!==false || x.selectedSymbolCount!==8)
+            process.exit(1);
+          for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+            if(!Array.isArray(x.markets[market]) || x.markets[market].length!==4)process.exit(1);
+            if(x.markets[market].some(r=>!["BLOCKED_DATA","OBSERVED_SELECTED_SYMBOL_DAY"].includes(r.status)
+             || r.earlyDetectedCount!==null || r.trueMarketWideRecall!==null
+             || r.netProfitPct!==null)) process.exit(1);
+          }
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-selected-symbol-utc-day-pilot-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-selected-historical-day-v1.json
+            market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
           if-no-files-found: error
           retention-days: 14
 
