@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {collectUSTwoDatedAsOfAllStockPricesV1 as collect}
   from "../src/us-two-dated-all-stock-source-v1.js";
 const CURRENT="2025-02-03",PRIOR="2025-01-31",K="ONLY-UNIT-TEST-APPROVED-KEY";
@@ -93,6 +94,8 @@ test("actual FRIDAY-MONDAY source dates use genuine ET daily prices and do not i
  assert.equal(r.profitabilityProven,false);
  assert.equal(JSON.stringify(r).includes(K),false);
  assert.match(r.sourceRowsSha256,/^[0-9a-f]{64}$/);
+ assert.equal(r.joinedSourceRowsSha256,
+   createHash("sha256").update(JSON.stringify(r.rows)).digest("hex"));
 });
 test("new listing is not a zero move; missing last historical as-of active symbol is visible",async()=>{
  const mocked=fixture({

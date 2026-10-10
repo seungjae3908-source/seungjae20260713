@@ -45,7 +45,8 @@ function hold(market,reason,extra={}){
   schemaVersion:"four-market-stock-source-limited-daily-evidence-v1",
   status:"BLOCKED_DATA",market,venue:VENUE[market]??null,reason,
   date:null,priorCandidateDate:null,sourceAttestedNameCount:null,
-  sourceRowsSha256:null,canonicalRowsJSON:null,rows:null,
+  sourceRowsSha256:null,sourceJoinedRowsSha256:null,
+  canonicalRowsJSON:null,rows:null,
   sourceObservedDailyEvents:null,originalScannerEventRecall:null,
   fullMarketOpportunityDenominatorVerified:false,
   actualMarketWideOpportunityCount:null,trueMarketWideRecall:null,
@@ -160,6 +161,13 @@ export function prepareStockSourceLimitedDailyEvidenceV1({
      close:row.close,volume:row.volume,
    });
  }
+ // The upstream lineage digest also includes provider roster/prices. That
+ // composite is not recalculable from a standalone saved receipt; bind every
+ // serialized joined row separately so silently changed OHLC cannot score.
+ // Integrity hash != official source authenticity or full historic PIT.
+ if(!SHA.test(source.joinedSourceRowsSha256??"")
+    ||source.joinedSourceRowsSha256!==sha(JSON.stringify(rows)))
+   return hold(market,"STOCK_JOINED_SOURCE_ROWS_DIGEST_MISSING_OR_CHANGED");
  normalized.sort((a,b)=>a.symbol.localeCompare(b.symbol));
  const canonicalRowsJSON=JSON.stringify(normalized);
  return Object.freeze({
@@ -173,6 +181,7 @@ export function prepareStockSourceLimitedDailyEvidenceV1({
   sourceProvider:kr?"KRX_OPENAPI_AUTHORIZED_THREE_BOARDS":
     "MASSIVE_US_ASOF_ACTIVE_GROUPED_UNADJUSTED",
   sourceReferenceSha256:source[kr?"recordSha256":"sourceRowsSha256"],
+  sourceJoinedRowsSha256:source.joinedSourceRowsSha256,
   sourceRowsSha256:sha(canonicalRowsJSON),
   canonicalRowsJSON,
   rows:Object.freeze(normalized),

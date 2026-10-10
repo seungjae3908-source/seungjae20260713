@@ -55,6 +55,7 @@ function receipt(market,n=2){
   trueMarketWideRecall:null,actualMarketWideOpportunityCount:null,
   fullMarketOpportunityDenominatorVerified:false,
   requestedTradingDates:kr?[priorKR,nowKR]:[priorUS,nowUS],
+  joinedSourceRowsSha256:createHash("sha256").update(JSON.stringify(rows)).digest("hex"),
   ...(kr?{
    recordSha256:H,records:rows,
    observedCurrentSymbols:n,joinedPriorPriceSymbols:n,
@@ -252,5 +253,21 @@ test("Receipt schema must match historical KR/US adapter, not a foreign or omitt
   const foreign=receipt(market);
   foreign.schemaVersion="unrelated-provider-schema";
   assert.equal(pack({market,source:foreign}).status,"BLOCKED_DATA");
+ }
+});
+
+test("valid-looking changed raw stock OHLC without new source hash is BLOCKED, not scored",()=>{
+ for(const market of ["KR_STOCK","US_STOCK"]){
+  const src=receipt(market);
+  src[market==="KR_STOCK"?"records":"rows"][0].high=123;
+  const r=pack({market,source:src});
+  assert.equal(r.status,"BLOCKED_DATA");
+  assert.equal(r.reason,"STOCK_JOINED_SOURCE_ROWS_DIGEST_MISSING_OR_CHANGED");
+  assert.equal(r.actualMarketWideOpportunityCount,null);
+  assert.equal(r.trueMarketWideRecall,null);
+  const absent=receipt(market);
+  delete absent.joinedSourceRowsSha256;
+  assert.equal(pack({market,source:absent}).reason,
+    "STOCK_JOINED_SOURCE_ROWS_DIGEST_MISSING_OR_CHANGED");
  }
 });
