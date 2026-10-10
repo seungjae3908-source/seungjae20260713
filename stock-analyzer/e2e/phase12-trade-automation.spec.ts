@@ -69,6 +69,8 @@ for (const width of [360, 390, 430]) {
 
     await page.getByTestId('trading-section-settings').click();
 
+    await expect(page.getByTestId('auto-trading-telegram-settings')).toHaveAttribute('open', '');
+    await expect(page.getByTestId('user-broker-telegram-panel')).toBeVisible();
     await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveValue('kiwoom');

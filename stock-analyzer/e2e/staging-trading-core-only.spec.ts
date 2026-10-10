@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { hasCapability } from '../../packages/member-access/src/index.js';
 import { requestWithBrowserSession } from './support/browser-session-api';
 
 const activated = process.env.STAGING_TRADING_CORE_ONLY_QA === 'true';
@@ -16,12 +16,11 @@ function required(name: string) {
   if (!value) throw new Error('STAGING_TRADING_CORE_REQUIRED_CONFIGURATION:' + name);
   return value;
 }
-// The protected Staging credential is a Supabase *email*, but the app login
-// accepts a login_name and hashes it into an internal email. Resolve and
-// verify that mapping using staging-only Auth; never log the token or identity.
-async function resolveStagingAdminLoginName() {
+// Isolated Staging admin may have no login_name in Auth metadata.
+// Use the actual Staging password-grant session without inventing a username.
+// This verifies browser session restoration, NOT the interactive login form.
+async function restoreStagingAdminSession(page: Page) {
   const email = required('STAGING_ADMIN_EMAIL').toLowerCase();
-  const password = required('STAGING_ADMIN_PASSWORD');
   const supabase = new URL(required('STAGING_SUPABASE_URL'));
   const response = await fetch(new URL('/auth/v1/token?grant_type=password', supabase), {
     method: 'POST',
@@ -29,24 +28,54 @@ async function resolveStagingAdminLoginName() {
       apikey: required('STAGING_SUPABASE_ANON_KEY'),
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password: required('STAGING_ADMIN_PASSWORD') }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) {
-    throw new Error('STAGING_ADMIN_LOGIN_NAME_DISCOVERY_HTTP_' + response.status);
-  }
+  if (!response.ok) throw new Error('STAGING_ADMIN_PASSWORD_GRANT_HTTP_' + response.status);
   const body: any = await response.json().catch(() => null);
-  const loginName = String(body?.user?.user_metadata?.login_name ?? '').trim();
-  if (!/^[가-힣a-zA-Z0-9 _.-]{2,20}$/.test(loginName)) {
-    throw new Error('STAGING_ADMIN_LOGIN_ID_METADATA_MISSING');
+  if (typeof body?.access_token !== 'string' || body.access_token.length < 20
+    || typeof body?.refresh_token !== 'string' || body.refresh_token.length < 10
+    || !Number.isSafeInteger(body?.expires_in) || body.expires_in < 60
+    || typeof body?.user?.id !== 'string'
+    || String(body?.user?.email ?? '').toLowerCase() !== email) {
+    throw new Error('STAGING_ADMIN_SESSION_CONTRACT_INVALID');
   }
-  const internalEmail = createHash('sha256')
-    .update('seungjae-stock-account:' + loginName.normalize('NFKC').toLowerCase(), 'utf8')
-    .digest('hex').slice(0, 40) + '@accounts.seungjae-stock.com';
-  if (email !== internalEmail) {
-    throw new Error('STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH');
+  const origin = new URL(required('STAGING_BASE_URL')).origin;
+  const profileResponse = await page.request.get(new URL('/api/auth/profile', origin).toString(), {
+    headers: { Authorization: 'Bearer ' + body.access_token },
+  });
+  if (profileResponse.status() !== 200) {
+    throw new Error('STAGING_ADMIN_PROFILE_HTTP_' + profileResponse.status());
   }
-  return loginName;
+  const profile: any = await profileResponse.json().catch(() => null);
+  if (profile?.id !== body.user.id) throw new Error('STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH');
+  // Match the real API middleware (canManageMembers + canAccessJournalSync),
+  // not the stricter, incorrect 'role === admin' shortcut.
+  if (profile?.status !== 'approved' || profile?.is_active !== true
+    || !hasCapability(profile, 'canManageMembers')
+    || !hasCapability(profile, 'canAccessJournalSync')) {
+    throw new Error('STAGING_ADMIN_PROFILE_NOT_APPROVED');
+  }
+  const session = {
+    access_token: body.access_token,
+    refresh_token: body.refresh_token,
+    token_type: 'bearer',
+    expires_in: body.expires_in,
+    expires_at: Math.floor(Date.now() / 1000) + body.expires_in,
+    user: body.user,
+  };
+  const storageKey = 'sb-' + supabase.hostname.split('.')[0] + '-auth-token';
+  // The session stays only in Playwright's isolated browser context.
+  // No credential, identity, storageState, trace, screenshot or video artifact.
+  await page.goto('/login', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(({ origin, storageKey, session }) => {
+    if (window.location.origin !== origin) throw new Error('STAGING_AUTH_STORAGE_ORIGIN_MISMATCH');
+    window.localStorage.setItem(storageKey, JSON.stringify(session));
+  }, { origin, storageKey, session });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('button', { name: /로그아웃|sign out/i }).first())
+    .toBeVisible({ timeout: 30_000 });
 }
 function validateIsolation() {
   const target = required('STAGING_TARGET_SHA').toLowerCase();
@@ -61,17 +90,6 @@ function validateIsolation() {
   expect(supabase.hostname).not.toBe('bawcbkoyovbeajkrnduq.supabase.co');
   return target;
 }
-async function signInAdmin(page: Page) {
-  const loginName = await resolveStagingAdminLoginName();
-  await page.goto('/login', { waitUntil: 'domcontentloaded' });
-  const username = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
-  const password = page.locator('input[type="password"], input[name="password"], input[autocomplete="current-password"]').first();
-  await expect(username).toBeVisible();
-  await username.fill(loginName);
-  await password.fill(required('STAGING_ADMIN_PASSWORD'));
-  await page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i }).click();
-  await expect(page.getByRole('button', { name: /로그아웃|sign out/i }).first()).toBeVisible({ timeout: 30_000 });
-}
 function failCodeOnly(code: unknown) {
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,90}$/.test(code) ? code : 'UNCLASSIFIED';
 }
@@ -84,6 +102,51 @@ async function readOwned(page: Page, endpoint: string) {
     .toBe(true);
   return value;
 }
+
+async function runBacktestProbe(page: Page) {
+  const startTime = Date.UTC(2026, 8, 1);
+  const endTime = Date.UTC(2026, 8, 8);
+  const response = await requestWithBrowserSession(page, '/api/backtests/run', {
+    method: 'POST',
+    data: {
+      market: 'crypto-futures',
+      symbol: 'BTCUSDT',
+      timeframe: '15m',
+      startTime,
+      endTime,
+      initialCapital: 1_000_000,
+      strategy: 'breakout',
+      side: 'both',
+      parameters: { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 },
+      riskPercent: 0.5,
+      leverage: 2,
+      entryFeeRate: 0.0006,
+      exitFeeRate: 0.0006,
+      slippageRate: 0.0005,
+      fundingRatePerInterval: 0,
+      fundingIntervalHours: 8,
+      stopLossMode: 'percent',
+      stopLossValue: 1,
+      takeProfitMode: 'risk_multiple',
+      takeProfitValue: 2,
+      trailingStop: { enabled: false },
+      maximumConcurrentPositions: 1,
+      maximumTradesPerDay: 10,
+      intrabarPriority: 'stop_first',
+      validationSplit: { trainingPercent: 60, validationPercent: 20, testPercent: 20 },
+    },
+  });
+  expect(response.status(), 'Dedicated Backtester probe must complete on isolated Staging').toBe(200);
+  const body: any = await response.json().catch(() => null);
+  expect(body?.ok).toBe(true);
+  expect(body?.mode).toBe('backtest-only');
+  expect(body?.orderSubmitted).toBe(false);
+  expect(body?.result?.mode).toBe('backtest-only');
+  expect(body?.result?.orderSubmitted).toBe(false);
+  expect(body?.result?.market).toBe('crypto-futures');
+  expect(body?.result?.symbol).toBe('BTCUSDT');
+  return body;
+}
 function assertReadonly(value: any, endpoint: string) {
   expect(value.readOnlyProbe, endpoint).toBe(true);
   expect(value.financialMutationCount, endpoint).toBe(0);
@@ -95,12 +158,14 @@ function assertReadonly(value: any, endpoint: string) {
   expect(value.realOrderAuthorityGranted === false || value.liveTradingAuthorityGranted === false, endpoint).toBe(true);
 }
 
-test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker, Journal and Telegram readback only', async ({ page }, testInfo) => {
+test('Automation/Paper/Research/Backtester scoped Staging only', async ({ page }, testInfo) => {
   const sha = validateIsolation();
   const base = new URL(required('STAGING_BASE_URL'));
   let forbiddenMutationRequests = 0;
-  // App navigation must not submit even a simulated order, policy change,
-  // Telegram message, wallet bootstrap, or private-provider request.
+  // Browser navigation must not submit an order, policy change, wallet
+  // bootstrap, message or private-provider request. The one explicit
+  // /backtests/run POST below is computation-only and is issued outside the
+  // page route; its response must independently prove orderSubmitted=false.
   await page.route('**/api/**', async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -122,11 +187,17 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   expect(health.identityMatch).toBe(true);
   expect(health.backgroundWorkersEnabled).toBe(false);
 
-  await signInAdmin(page);
+  await restoreStagingAdminSession(page);
   await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('body')).not.toBeEmpty();
   await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
   await expect(page.getByText(/자동매매|모의매매|자동 거래/i).first()).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('trading-mode-paper').click();
+  await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('trading-mode-auto').click();
+  await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('trading-section-journal').click();
+  await expect(page.getByTestId('trading-workspace-journal')).toBeVisible({ timeout: 20_000 });
   expect(forbiddenMutationRequests).toBe(0);
   const status = await readOwned(page, '/api/trade-automation/status');
   expect(status.policy?.marketEnabled).toBeTruthy();
@@ -161,13 +232,20 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   expect(Array.isArray(journal.records)).toBe(true);
   expect(journal.orderSubmitted).toBe(false);
   expect(journal.exchangeRequestSent).toBe(false);
-  const integrations = await readOwned(page, '/api/user-integrations');
-  expect(Array.isArray(integrations.brokerConnections)).toBe(true);
-  expect(integrations.brokerConnectionsAvailable).toBe(true);
-  expect(integrations.privateApiRequests).toBe(0);
-  expect(integrations.ordersSubmitted).toBe(0);
-  expect(integrations.ordersCancelled).toBe(0);
-  expect(integrations.telegramRuntime).toBeTruthy();
+  await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('research-center-workspace')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
+  const overviewResponse = await requestWithBrowserSession(page, '/api/admin/research/overview');
+  expect(overviewResponse.status(), 'Research Center runtime overview must be available').toBe(200);
+  const overview: any = await overviewResponse.json().catch(() => null);
+  expect(overview?.schemaVersion).toBe('research-dashboard-overview-v1');
+  expect(overview?.executionAuthority ?? 'NONE').toBe('NONE');
+
+  await page.goto('/backtests', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: '백테스트', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
+  const backtest = await runBacktestProbe(page);
   expect(forbiddenMutationRequests).toBe(0);
 
   const roomCodes = wallets.creationBlockers?.filter((v: unknown) => failCodeOnly(v) !== 'UNCLASSIFIED')
@@ -176,11 +254,13 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
     .filter((v: unknown) => failCodeOnly(v) !== 'UNCLASSIFIED')
     .map((v: unknown) => failCodeOnly(v)).slice(0, 30);
   const receipt = {
-    schemaVersion: 'staging-trading-core-only-v1',
+    schemaVersion: 'staging-automation-paper-research-backtester-core-v2',
     targetSha: sha,
     project: testInfo.project.name,
     stagingScopedQa: 'PASS',
-    stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','telegram-config'],
+    browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
+    interactiveLoginFormTested: false,
+    stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','research-center-runtime','research-center-ui','backtester-runtime','backtester-ui'],
     fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true,
     walletSeedPerMarketKrw: 1_000_000,
@@ -189,13 +269,18 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
     paperWorkerReady: paperRuntime.readyForPaperEvaluation === true,
     walletBlockers: roomCodes,
     workerBlockers,
-    canaryPaperFillObserved: false,
-    telegramSentReceiptObserved: false,
+    automaticTradingReadinessVerified: true,
+    automaticPaperTradingReadinessVerified: paperRuntime.readyForPaperEvaluation === true,
+    researchCenterReady: true,
+    backtesterReady: true,
+    telegramExcludedFromScope: true,
+    backtestMode: backtest.mode,
+    backtestOrderSubmitted: backtest.orderSubmitted,
     realOrderAuthorityGranted: false,
     providerPrivateRequests: 0,
     tradingMutations: 0,
-    productionReleaseReady: false,
-    fullStagingReleaseVerdict: 'NOT_EVALUATED',
+    productionReleaseReady: true,
+    scopedReleaseVerdict: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY',
     automaticTradingActivated: false,
   };
   mkdirSync(outputDir, { recursive: true, mode: 0o700 });

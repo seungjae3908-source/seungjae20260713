@@ -12,7 +12,11 @@ import {
 } from './trade-exchange-adapters.service';
 import { evaluateTradingPlan, normalizeTradingPolicy, upbitKrwPriceStep } from './trade-automation-risk.service';
 import { assertOrderTransition, canTransitionOrder } from './trade-order-state-machine.service';
-import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type TradingPlanInput,
+} from './trade-automation.types';
 import { readTradeAutomationJournalPayloads } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 import {
@@ -91,6 +95,46 @@ test('automatic trading and every exchange default to OFF', () => {
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false, toss: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [], toss: [] });
   assert.equal(policy.bitgetLeverage, 2);
+  assert.equal(policy.totalCapitalKrw, 1_000_000);
+  assert.equal(policy.maxOrderKrw, 500_000);
+});
+
+test('member entry is capped at 500k while administrator entry accepts 1M and both fail closed above tier', () => {
+  const memberPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  });
+  assert.equal(memberPolicy.maxOrderKrw, 500_000);
+  assert.equal(evaluateTradingPlan(plan({
+    quoteAmount: 500_000,
+    estimatedKrw: 500_000,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+  assert.ok(evaluateTradingPlan(plan({
+    quoteAmount: 500_001,
+    estimatedKrw: 500_001,
+  }), memberPolicy, { emergencyStopped: false, serverLiveEnabled: false })
+    .blockCodes.includes('MAX_ORDER_AMOUNT'));
+
+  const administratorPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 5_000_000,
+    maxOrderKrw: 5_000_000,
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  assert.equal(administratorPolicy.maxOrderKrw, 1_000_000);
+
+  const exact = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_000,
+    estimatedKrw: 1_000_000,
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.equal(exact.blockCodes.includes('MAX_ORDER_AMOUNT'), false);
+
+  const exceeded = evaluateTradingPlan(plan({
+    quoteAmount: 1_000_001,
+    estimatedKrw: 1_000_001,
+  }), administratorPolicy, { emergencyStopped: false, serverLiveEnabled: false });
+  assert.ok(exceeded.blockCodes.includes('MAX_ORDER_AMOUNT'));
 });
 
 test('spot live create is capability allowlisted and exact-authority bound', () => {
@@ -302,10 +346,43 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
   }
 });
 
-test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite duplicate, and keeps reduce-only explicit', () => {
-  for (const leverage of [2, 3, 4, 5, 6, 7] as const) {
+test('zero daily order quota stays opportunity-driven while an explicit positive quota remains fail-closed', () => {
+  const opportunityDriven = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 0,
+  });
+  const afterManyValidOpportunities = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 500 },
+  }), opportunityDriven, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(afterManyValidOpportunities.blockCodes.includes('DAILY_ORDER_LIMIT'), false);
+
+  const explicitlyBounded = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 10,
+  });
+  const bounded = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 10 },
+  }), explicitlyBounded, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(bounded.blockCodes.includes('DAILY_ORDER_LIMIT'));
+});
+
+test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
+  for (const leverage of [2, 3] as const) {
     assert.equal(
       normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      leverage,
+    );
+  }
+  for (const leverage of [4, 5, 6, 7] as const) {
+    assert.equal(
+      normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage }).bitgetLeverage,
+      3,
+    );
+    assert.equal(
+      normalizeTradingPolicy(
+        { ...DEFAULT_TRADING_POLICY, bitgetLeverage: leverage },
+        PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+      ).bitgetLeverage,
       leverage,
     );
   }
@@ -317,7 +394,10 @@ test('Bitget allows 2x-7x within member policy, blocks policy excess/8x/opposite
     () => normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 1 as 2 }),
     /BITGET_LEVERAGE_POLICY_INVALID/,
   );
-  const policy = normalizeTradingPolicy({ ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 });
+  const policy = normalizeTradingPolicy(
+    { ...DEFAULT_TRADING_POLICY, bitgetLeverage: 7 },
+    PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  );
   const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
     quoteAmount: null, estimatedKrw: 100_000, leverage: 8, marginMode: 'isolated',
     marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: 'long' } });
@@ -968,7 +1048,7 @@ test('live connection verification authenticates the three spot providers with z
         });
       }
       if (url.includes('openapi.tossinvest.com/oauth2/token')) {
-        return new Response(JSON.stringify({ access_token: 'toss-token' }), {
+        return new Response(JSON.stringify({ access_token: 'toss-token', expires_in: 3600 }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }
