@@ -2,7 +2,7 @@
 // Read-only inspection of optional KR/US public stock snapshot files.
 // A well-formed source label or completeUniverse=true is NOT proof of
 // provenance, data rights, whole-universe coverage, or trading authority.
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +103,12 @@ export async function inspectStockInputs(root, nowMs = Date.now()) {
   };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isDirectInvocation() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isDirectInvocation()) {
   inspectStockInputs(process.env.RESEARCH_STATE_ROOT ?? '').then(report => {
     process.stdout.write(JSON.stringify(report) + '\n');
     if (report.status === 'INVALID') process.exitCode = 2;
