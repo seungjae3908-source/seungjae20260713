@@ -59,7 +59,13 @@ Even that command requires all of the following:
 - **All trading/live/provider order gates OFF** and
   `executionAuthority=NONE`. Any live authority blocks the action.
 - Existing bot token and Telegram activation flags verified before any
-  runtime change.
+  runtime change. A globally disabled `BACKGROUND_WORKERS_ENABLED=false`
+  explicitly blocks binding, and its value must remain unchanged through
+  the PM2 restart. The API defaults background workers to enabled when
+  this flag is absent; a missing value is not proof of an actual worker tick.
+- Alternate `LIVE_TRADING_ENABLED` / `AUTO_TRADING_ENABLED`, provider order
+  permissions, transfer and withdrawal switches are also prohibited from
+  being enabled during a Telegram-only bind.
 
 If every condition passes, APPLY attempts **one PM2 restart with only the
 approved missing room IDs/owner UUID**. It then checks new PM2 environment,
