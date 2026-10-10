@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAdminFourMarketPaperBootstrap } from './admin-four-market-paper-capital.service';
-import { adminFourMarketPaperCapitalReadback } from './admin-four-market-paper-readback.service';
+import {
+  buildAdminFourMarketPaperBootstrap,
+  buildMemberFourMarketPaperBootstrap,
+} from './admin-four-market-paper-capital.service';
+import {
+  adminFourMarketPaperCapitalReadback,
+  memberFourMarketPaperCapitalReadback,
+} from './admin-four-market-paper-readback.service';
 import type { StoredPaperJournalRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 
@@ -25,6 +31,22 @@ test('admin readback reports 1m virtual seed and zero reserve until a canonical 
   }
   assert.equal(response.realOrdersPlaced,false);
   assert.equal(response.reserveTransferred,false);
+});
+test('member readback reports four isolated 1m seeds without granting real order authority', () => {
+  const memberRecords = buildMemberFourMarketPaperBootstrap(new Date(opened)).map(row => ({
+    ...row, createdAt: opened, serverUpdatedAt: opened,
+  }));
+  const response = memberFourMarketPaperCapitalReadback({
+    ownerId: 'member-only', records: memberRecords, plans: [], orders: [], nowMs: NOW,
+  });
+  assert.equal(response.role, 'member');
+  assert.equal(response.walletReady, true);
+  for (const market of ['domestic_stock','us_stock','crypto_spot','crypto_futures'] as const) {
+    assert.equal(response.marketReadback[market].operatingCapitalKrw, 1_000_000);
+    assert.equal(response.marketReadback[market].reserveKrw, 0);
+  }
+  assert.equal(response.realOrdersPlaced, false);
+  assert.equal(response.reserveTransferred, false);
 });
 test('a malformed new-epoch FILLED order is blocked for its market and never reported as zero-loss equity', () => {
   const plan = {
