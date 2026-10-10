@@ -486,6 +486,8 @@ export class TradeExecutionService {
       if ((error instanceof Error && error.name === 'AbortError') || code === 'PROVIDER_TIMEOUT') {
         throw new Error('TOSS_TIMEOUT');
       }
+      if (code === 'RATE_LIMITED') throw new Error('TOSS_RATE_LIMITED');
+      if (code === 'PROVIDER_UNAVAILABLE') throw new Error('TOSS_UNAVAILABLE');
       throw error;
     } finally {
       clearTimeout(timeout);
