@@ -31,6 +31,7 @@ import {
   type AiChartV3EngineEvidence,
 } from '@/lib/ai-chart-v3-decision-engine';
 import type { AnalysisSelection, AnalysisTradeAction } from '@/lib/analysis-selection';
+import { signalIdFromMatchingChartRoute } from '@/lib/ai-chart-signal-context';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import { computeChartIndicators } from '@/lib/chart-indicator-engine';
 import { analyzeChartStructure } from '@/lib/chart-structure-engine';
@@ -267,11 +268,6 @@ function initialSignalOverlayVisible(): boolean {
   return window.localStorage.getItem(SIGNAL_OVERLAY_STORAGE_KEY) !== 'false';
 }
 
-function signalIdFromContext(): string | null {
-  if (typeof window === 'undefined') return null;
-  return new URLSearchParams(window.location.search).get('signalId')?.trim() || null;
-}
-
 function SignalDirectionIcon({ side }: { side: AiChartSignalSide }) {
   if (side === 'BUY' || side === 'LONG') return <TrendingUp className="h-4 w-4 shrink-0" aria-hidden="true" />;
   if (side === 'SELL' || side === 'SHORT') return <TrendingDown className="h-4 w-4 shrink-0" aria-hidden="true" />;
@@ -371,11 +367,24 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
     staleTime: 15_000,
     gcTime: 10 * 60 * 1000,
   });
-  const currentDataStatus: UnifiedChartDataStatus = currentChartQuery.data
-    ? unifiedChartDataStatus(currentChartQuery.data, currentChartQuery.isError)
-    : currentChartQuery.isError
-      ? 'unavailable'
-      : 'insufficient';
+  // Prefer the same-identity, actual live-chart analysis quality over an old
+  // REST cache timestamp when a verified public stream is updating candles.
+  const analysisDataStatus = analysis?.market === selection.market
+    && analysis.symbol === selection.ticker
+    && analysis.timeframe === selection.timeframe
+    ? analysis.relatedIndicators.dataStatus : null;
+  const isAnalysisQuality = (value: unknown): value is UnifiedChartDataStatus =>
+    value === 'ok' || value === 'delayed' || value === 'stale' || value === 'insufficient' || value === 'unavailable';
+  // An ordinary REST analysis must not override an older provider timestamp.
+  // Only the same-symbol accepted public WebSocket trade may supersede REST freshness.
+  const verifiedLiveAnalysis = analysis?.source.endsWith(':PUBLIC_WS_VERIFIED') === true;
+  const currentDataStatus: UnifiedChartDataStatus = verifiedLiveAnalysis && isAnalysisQuality(analysisDataStatus)
+    ? analysisDataStatus
+    : currentChartQuery.data
+      ? unifiedChartDataStatus(currentChartQuery.data, currentChartQuery.isError)
+      : currentChartQuery.isError
+        ? 'unavailable'
+        : 'insufficient';
 
   const queries = useQueries({
     queries: supplementalTimeframes.map((timeframe) => ({
@@ -484,7 +493,9 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
     ...plan.targets,
     plan.riskReward,
   ].some((value) => value != null && Number.isFinite(value));
-  const signalId = signalIdFromContext();
+  const signalId = selection.signalId ?? signalIdFromMatchingChartRoute(
+    selection, typeof window === 'undefined' ? '' : window.location.search,
+  );
   const supplementalLoading = multiTimeframeRequested && queries.some((query) => query.isFetching);
 
   const toggleSignalOverlay = () => {

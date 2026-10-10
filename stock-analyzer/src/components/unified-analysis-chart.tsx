@@ -50,11 +50,13 @@ import {
   type ChartIndicatorResult,
 } from '@/lib/chart-indicator-engine';
 import { analyzeChartStructure } from '@/lib/chart-structure-engine';
+import { historyCursorBeforeTime, mergeBoundedChartHistory } from '@/lib/chart-history-window';
 import {
   UNIFIED_CHART_TIMEFRAMES,
   UnifiedChartDataError,
   defaultUnifiedSymbol,
   fetchUnifiedChartData,
+  fetchUnifiedChartHistoryPage,
   marketAssetType,
   normalizeUnifiedSymbol,
   unifiedMarketLabel,
@@ -62,6 +64,7 @@ import {
   type UnifiedChartTimeframe,
 } from '@/lib/unified-chart-data';
 import type { AnalysisMarket, AnalysisSelection } from '@/lib/analysis-selection';
+import type { AiChartPositionOverlay } from '@/components/ai-chart-position-panel';
 import { cn } from '@/lib/utils';
 
 type OverlayKey =
@@ -106,6 +109,8 @@ type Props = {
   selection: AnalysisSelection;
   onSelectionChange: (selection: AnalysisSelection) => void;
   onAnalysisChange?: (analysis: ChartAnalysis | null) => void;
+  positionOverlay?: AiChartPositionOverlay | null;
+  externalPositionController?: boolean;
 };
 
 type AiChartRealtimeHealth = {
@@ -355,6 +360,7 @@ function buildCurrentAnalysis(input: {
   indicators: ChartIndicatorResult;
   levels: PriceLevels;
   previous: ChartAnalysis | null;
+  verifiedPublicStream: boolean;
 }): ChartAnalysis | null {
   const candles = input.data.normalization.candles;
   const latest = candles.at(-1);
@@ -428,7 +434,7 @@ function buildCurrentAnalysis(input: {
     title,
     summary,
     patterns: patternText ? [patternText] : [],
-    source: input.data.provider,
+    source: input.verifiedPublicStream ? `${input.data.provider}:PUBLIC_WS_VERIFIED` : input.data.provider,
     isClosedCandle: latest.isClosed,
     anchorTimes: anchors.map((pivot) => pivot.time),
     anchorPoints: anchors.map((pivot) => ({ time: pivot.time, price: pivot.price, role: pivot.kind })),
@@ -438,7 +444,7 @@ function buildCurrentAnalysis(input: {
   });
 }
 
-export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisChange }: Props) {
+export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisChange, positionOverlay, externalPositionController = false }: Props) {
   const market = selection.market;
   const timeframe = (UNIFIED_CHART_TIMEFRAMES.some((item) => item.key === selection.timeframe) ? selection.timeframe : '5m') as UnifiedChartTimeframe;
   const [draft, setDraft] = useState(selection.ticker);
@@ -450,6 +456,18 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [inputError, setInputError] = useState('');
   const [selectedCandleTime, setSelectedCandleTime] = useState<number | null>(null);
+  const historyKey = `${market}:${selection.ticker}:${timeframe}`;
+  const historyKeyRef = useRef(historyKey);
+  historyKeyRef.current = historyKey;
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const [archiveMode, setArchiveMode] = useState(false);
+  const archiveModeRef = useRef(false);
+  archiveModeRef.current = archiveMode;
+  const [history, setHistory] = useState<{ key: string; candles: NormalizedChartCandle[]; status: 'idle' | 'loading' | 'exhausted' | 'capped' | 'error'; error: string | null }>({ key: '', candles: [], status: 'idle', error: null });
+  const liveCandleIdentityRef = useRef('');
+  const lastAnalysisUpdateAtRef = useRef(0);
+  const lastAnalysisCandleTimeRef = useRef<number | null>(null);
+  const [liveCandle, setLiveCandle] = useState<NormalizedChartCandle | null>(null);
   const streamMarket: AiChartPublicStreamMarket | null = market === 'UPBIT' || market === 'BITGET' ? market : null;
   const [realtimeHealth, setRealtimeHealth] = useState<AiChartRealtimeHealth>({
     transportMode: 'POLLING',
@@ -472,9 +490,17 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     setSearchOpen(false);
     setTimeline([]);
     setSelectedCandleTime(null);
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = null;
+    setArchiveMode(false);
+    setHistory({ key: historyKey, candles: [], status: 'idle', error: null });
+    liveCandleIdentityRef.current = '';
+    setLiveCandle(null);
+    lastAnalysisUpdateAtRef.current = 0;
+    lastAnalysisCandleTimeRef.current = null;
     previousAnalysisRef.current = null;
     onAnalysisChange?.(null);
-  }, [selection.market, selection.ticker, selection.timeframe, onAnalysisChange]);
+  }, [selection.market, selection.ticker, selection.timeframe, historyKey, onAnalysisChange]);
 
   const searchQuery = useQuery({
     queryKey: ['unified-chart-search', market, query.trim()],
@@ -648,11 +674,22 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           return false;
         }
         if (reconciled.acceptedEvents === 0 || !reconciled.latestCandle) return false;
-        if (!realtimeCanvasRef.current?.applyRealtimeCandle(reconciled.latestCandle)) {
+        // Archive browsing renders older genuine bars in a separate window.
+        // Never inject a current live trade into that historical candlestick series.
+        if (!archiveModeRef.current && !realtimeCanvasRef.current?.applyRealtimeCandle(reconciled.latestCandle)) {
           requestRecovery(['INVALID_EVENT_VALUE'], 'INCREMENTAL_CHART_UPDATE_REJECTED');
           return false;
         }
         reduction = reconciled.reduction;
+        const now = Date.now();
+        // Keep the imperative canvas on every frame; publish derived AI state
+        // at most once per second unless a new candle has started.
+        if (now - lastAnalysisUpdateAtRef.current >= 1_000 || reconciled.latestCandle.time !== lastAnalysisCandleTimeRef.current) {
+          lastAnalysisUpdateAtRef.current = now;
+          lastAnalysisCandleTimeRef.current = reconciled.latestCandle.time;
+          liveCandleIdentityRef.current = historyKey;
+          setLiveCandle(reconciled.latestCandle);
+        }
         lastValidEventAt = events.reduce(
           (latest, event) => Math.max(latest, event.eventTimeMs),
           lastValidEventAt ?? 0,
@@ -668,19 +705,56 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     };
   }, [chartQuery.data, chartQuery.dataUpdatedAt, chartQuery.refetch, live, market, selection.ticker, streamMarket, timeframe]);
 
-  const candles = chartQuery.data?.normalization.candles ?? EMPTY_CANDLES;
+  const snapshotCandles = chartQuery.data?.normalization.candles ?? EMPTY_CANDLES;
+  const olderCandles = history.key === historyKey ? history.candles : EMPTY_CANDLES;
+  const recentCandles = useMemo(() => {
+    const combined = new Map<number, NormalizedChartCandle>();
+    for (const row of olderCandles) combined.set(row.time, row);
+    for (const row of snapshotCandles) combined.set(row.time, row);
+    const lastSnapshot = snapshotCandles.at(-1);
+    if (liveCandle && liveCandleIdentityRef.current === historyKey && (!lastSnapshot || liveCandle.time >= lastSnapshot.time)) {
+      combined.set(liveCandle.time, liveCandle);
+    }
+    return [...combined.values()].sort((left, right) => left.time - right.time).slice(-2_000);
+  }, [historyKey, liveCandle, olderCandles, snapshotCandles]);
+  // The archive is a separate, bounded visual window. It never substitutes
+  // an old provider close for the live AI analysis or trading reference.
+  const candles = archiveMode && olderCandles.length >= 2 ? olderCandles : recentCandles;
+  // A live decision must not change merely because the user scrolled into
+  // older historical bars. It is always sourced from the current provider
+  // snapshot plus an accepted, identity-matched live public candle.
+  const analysisCandles = useMemo(() => {
+    const combined = new Map<number, NormalizedChartCandle>();
+    for (const row of snapshotCandles) combined.set(row.time, row);
+    const last = snapshotCandles.at(-1);
+    if (liveCandle && liveCandleIdentityRef.current === historyKey && (!last || liveCandle.time >= last.time)) {
+      combined.set(liveCandle.time, liveCandle);
+    }
+    return [...combined.values()].sort((a, b) => a.time - b.time).slice(-300);
+  }, [historyKey, liveCandle, snapshotCandles]);
+  const effectiveChartData = useMemo(() => chartQuery.data ? {
+    ...chartQuery.data,
+    normalization: { ...chartQuery.data.normalization, candles: analysisCandles },
+  } : undefined, [analysisCandles, chartQuery.data]);
   const indicators = useMemo(() => computeChartIndicators(candles), [candles]);
   const levels = useMemo(() => computeLevels(candles, indicators), [candles, indicators]);
+  const analysisIndicators = useMemo(() => computeChartIndicators(analysisCandles), [analysisCandles]);
+  const analysisLevels = useMemo(() => computeLevels(analysisCandles, analysisIndicators),
+    [analysisCandles, analysisIndicators]);
   const analysis = useMemo(() => {
-    if (!chartQuery.data || !levels || candles.length < 2) return null;
+    if (!effectiveChartData || !analysisLevels || analysisCandles.length < 2) return null;
     return buildCurrentAnalysis({
       selection: { ...selection, timeframe },
-      data: chartQuery.data,
-      indicators,
-      levels,
+      data: effectiveChartData,
+      indicators: analysisIndicators,
+      levels: analysisLevels,
+      verifiedPublicStream: liveCandle != null
+        && liveCandleIdentityRef.current === historyKey
+        && realtimeHealth.connectionState === 'LIVE_STREAM'
+        && realtimeHealth.dataStatus === 'LIVE',
       previous: previousAnalysisRef.current,
     });
-  }, [candles.length, chartQuery.data, indicators, levels, selection, timeframe]);
+  }, [analysisCandles.length, analysisIndicators, analysisLevels, effectiveChartData, historyKey, liveCandle, realtimeHealth.connectionState, realtimeHealth.dataStatus, selection, timeframe]);
 
   useEffect(() => {
     if (selectedCandleTime != null && !candles.some((candle) => candle.time === selectedCandleTime)) {
@@ -726,6 +800,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       displayName: candidate.name.trim() || symbol,
       timeframe: nextTimeframe,
       searchRunId: sameScannerIdentity ? selection.searchRunId : undefined,
+      signalId: sameScannerIdentity ? selection.signalId : undefined,
       signalScore: sameScannerIdentity ? selection.signalScore : undefined,
       signalRank: sameScannerIdentity ? selection.signalRank : undefined,
       confidence: sameScannerIdentity ? selection.confidence : undefined,
@@ -741,6 +816,49 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const handleCandleSelect = useCallback((time: number) => {
     setSelectedCandleTime(time);
   }, []);
+  const historyStatus = history.key === historyKey ? history.status : 'idle';
+  const historyError = history.key === historyKey ? history.error : null;
+  const loadPreviousCandles = useCallback(async () => {
+    // Use the oldest fetched history bar, even if the 2,000-bar viewport trimmed it.
+    // Using candles[0] here can re-fetch a page already present in history.
+    const beforeTime = historyCursorBeforeTime(candles, olderCandles);
+    if (beforeTime == null || historyStatus === 'loading' || historyStatus === 'exhausted') return;
+    // Once the recent 2,000-bar display is full, continue in a sliding
+    // archive window instead of permanently blocking at 1,800 older bars.
+    const continueAsArchive = archiveMode || historyStatus === 'capped';
+    historyAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+    const key = historyKey;
+    if (continueAsArchive && !archiveMode) setArchiveMode(true);
+    setHistory((current) => ({ key, candles: current.key === key ? current.candles : [], status: 'loading', error: null }));
+    try {
+      const older = await fetchUnifiedChartHistoryPage({ market, symbol: selection.ticker, timeframe, beforeTime, signal: controller.signal });
+      if (controller.signal.aborted || historyKeyRef.current !== key) return;
+      const rows = older.filter((row) => row.time < beforeTime);
+      setHistory((current) => {
+        if (current.key !== key) return current;
+        const bounded = mergeBoundedChartHistory(current.candles, rows, continueAsArchive, 1_800);
+        // Sparse trading/aggregated bars count as real progress, not exhaustion.
+        const status = rows.length === 0 ? 'exhausted'
+          : continueAsArchive ? 'idle' : bounded.length >= 1_800 ? 'capped' : 'idle';
+        return { key, candles: bounded, status, error: null };
+      });
+    } catch (error) {
+      if (!controller.signal.aborted && historyKeyRef.current === key) {
+        setHistory((current) => current.key !== key ? current : { ...current, status: 'error', error: error instanceof Error ? error.message : '이전 캔들 조회 오류' });
+      }
+    } finally {
+      if (historyAbortRef.current === controller) historyAbortRef.current = null;
+    }
+  }, [archiveMode, candles, historyKey, historyStatus, market, olderCandles, selection.ticker, timeframe]);
+  const returnToCurrentChart = useCallback(() => {
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = null;
+    setArchiveMode(false);
+    setSelectedCandleTime(null);
+    setHistory({ key: historyKey, candles: [], status: 'idle', error: null });
+  }, [historyKey]);
   const changeMarket = (nextMarket: AnalysisMarket) => {
     if (nextMarket === market) return;
     const fallback = defaultUnifiedSymbol(nextMarket);
@@ -761,13 +879,13 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   });
   const toggleOverlay = (key: OverlayKey) => setOverlays((current) => persistOverlays({ ...current, [key]: !current[key] }));
 
-  const dataStatus = sourceAwareChartDataStatus(chartQuery.data, chartQuery.isError);
-  const latest = candles.at(-1);
-  const currentIndicator = indicators.latest;
+  const dataStatus = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError);
+  const latest = analysisCandles.at(-1);
+  const currentIndicator = analysisIndicators.latest;
   const searchRows = searchQuery.data ?? [];
   const warnings = chartQuery.data?.normalization.warnings ?? [];
   const errorMessage = chartQuery.error instanceof Error ? chartQuery.error.message : '차트 데이터를 불러오지 못했습니다.';
-  const pricePlan = selection.pricePlan;
+  const pricePlan = archiveMode ? undefined : selection.pricePlan;
   const entry1Text = formatPlanPrice(pricePlan?.entryZone?.from, market);
   const entry2Text = pricePlan?.entryZone?.to != null
     && pricePlan.entryZone.to !== pricePlan.entryZone.from
@@ -868,8 +986,17 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} selection={selection} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas key={`${historyKey}:${archiveMode ? 'archive' : 'recent'}`} ref={realtimeCanvasRef} selection={selection} candles={candles} indicators={indicators} levels={levels} externalPositionOverlay={positionOverlay} externalPositionController={externalPositionController} analysis={archiveMode ? null : analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} onRequestOlderCandles={loadPreviousCandles} canLoadOlderCandles={historyStatus !== 'loading' && historyStatus !== 'exhausted'} />}
         </div>
+        {candles.length >= 2 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-card-border px-3 py-2" data-testid="chart-history-coverage">
+            <span className="text-[11px] text-muted-foreground">실제 캔들 {candles.length}개 · 시작 {new Date(candles[0].time * 1_000).toLocaleString('ko-KR')} · 이전 구간은 제공기관 보유 범위에 따름</span>
+            {archiveMode && <span data-testid="chart-history-archive-mode" className="text-[11px] font-bold text-warning">과거 구간 보기 · 현재 신호와 분리 · 실주문 없음</span>}
+            <button type="button" data-testid="chart-history-load-previous" onClick={() => void loadPreviousCandles()} disabled={historyStatus === 'loading' || historyStatus === 'exhausted'} className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs font-bold disabled:opacity-50">{historyStatus === 'loading' ? '과거 봉 조회 중…' : historyStatus === 'capped' ? '더 이전 구간 계속 탐색' : historyStatus === 'exhausted' ? '조회 가능한 과거 봉 없음' : archiveMode ? '이전 과거 구간' : '이전 캔들 불러오기'}</button>
+            {archiveMode && <button type="button" data-testid="chart-history-return-current" onClick={returnToCurrentChart} className="rounded-xl border border-card-border bg-card px-3 py-2 text-xs font-bold">현재 실시간 차트 복귀</button>}
+            {historyError && <span role="alert" className="w-full text-xs text-destructive">{historyError} · 재시도 가능</span>}
+          </div>
+        )}
       </section>
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-v3-evidence-status" data-realtime-provider={realtimeHealth.provider}>
@@ -935,7 +1062,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
 
       {warnings.length > 0 && <section className="rounded-3xl border border-warning/30 bg-warning/5 p-4" data-testid="chart-data-warnings"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warning" /><h2 className="text-sm font-black">데이터 품질 알림</h2></div><ul className="mt-2 space-y-1 text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul></section>}
 
-      {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label={structureReferenceLabel} value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
+      {latest && analysisLevels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(analysisLevels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(analysisLevels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label={structureReferenceLabel} value={formatPrice(analysisLevels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><div><p className="text-[11px] font-extrabold text-primary">분석 상태 타임라인</p><h2 className="mt-1 text-sm font-black">형성 → 후보 → 확정·무효화</h2></div><span className="text-[10px] font-bold text-muted-foreground">최근 {timeline.length}건</span></div><div className="mt-3 max-h-72 space-y-2 overflow-y-auto">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-2xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-[10px] font-black text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p><p className="mt-1 text-[10px] font-semibold text-muted-foreground">{new Date(item.analysis.detectedAt).toLocaleString('ko-KR')}</p></div>) : <p className="rounded-2xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></section>
       <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 업비트·비트겟은 검증된 공개 WebSocket을 우선 사용하고 이상 시 REST polling으로 fail-closed 전환합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
+import { shouldClearMemberProfileOnSessionChange } from '@/lib/member-profile-session-transition';
 import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
 import {
   AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
@@ -126,12 +127,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function applySession(next: Session | null) {
+    const previousUserId = sessionRef.current?.user.id ?? null;
+    const nextUserId = next?.user.id ?? null;
+    // Never show the previous user's cached admin/member capabilities after
+    // an authenticated identity switch. Same-user token refresh keeps the
+    // current profile until it can be refreshed.
+    if (!next || shouldClearMemberProfileOnSessionChange(previousUserId, nextUserId)) applyProfile(null);
     sessionRef.current = next;
     setSession(next);
     const requestKey = profileRequestKey(next);
-    profileRequestsRef.current.setIdentity(next?.user.id ?? null, requestKey);
-    userIntegrationsRequestLifecycle.setIdentity(next?.user.id ?? null, requestKey);
-    if (!next) applyProfile(null);
+    profileRequestsRef.current.setIdentity(nextUserId, requestKey);
+    userIntegrationsRequestLifecycle.setIdentity(nextUserId, requestKey);
   }
 
   function loadProfile(user: User | null, options: { force?: boolean; maxAgeMs?: number; signal?: AbortSignal } = {}): Promise<void> {

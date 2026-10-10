@@ -92,7 +92,14 @@ export function deriveMemberTier(profile) {
     : typeof value.membershipLevel === 'string'
       ? value.membershipLevel
       : null;
-  const active = value.is_active === true || value.isActive === true;
+  const canonicalActive = value.is_active;
+  const alternateActive = value.isActive;
+  // Never let a stale camelCase flag re-enable a database-disabled profile.
+  // Conflicting explicit boolean representations are not an authorization
+  // source: both must agree, and any explicit false denies access.
+  const active = canonicalActive !== false
+    && alternateActive !== false
+    && (canonicalActive === true || alternateActive === true);
   const status = typeof value.status === 'string' ? value.status : null;
   const expiry = typeof value.membership_expires_at === 'string'
     ? value.membership_expires_at

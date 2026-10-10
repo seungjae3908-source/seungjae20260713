@@ -25,6 +25,7 @@ import {
 } from '@/components/ai-chart-position-panel';
 import { ChartPatternOverlayPanel } from '@/components/chart-pattern-overlay-panel';
 import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
+import { positionOverlayForChart } from '@/lib/ai-chart-position-overlay-binding';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import {
@@ -33,6 +34,7 @@ import {
   type ChartIndicatorResult,
 } from '@/lib/chart-indicator-engine';
 import { buildChartPatternOverlay } from '@/lib/chart-pattern-overlay';
+import { retainLogicalViewportOnHistoryPrepend } from '@/lib/chart-history-viewport';
 import { analyzeChartStructure } from '@/lib/chart-structure-engine';
 import type { UnifiedChartTimeframe } from '@/lib/unified-chart-data';
 import { cn } from '@/lib/utils';
@@ -116,11 +118,15 @@ type Props = {
   levels: PriceLevels;
   analysis: ChartAnalysis | null;
   pricePlan?: AnalysisPricePlan;
+  externalPositionOverlay?: AiChartPositionOverlay | null;
+  externalPositionController?: boolean;
   overlays: OverlayState;
   timeframe: UnifiedChartTimeframe;
   resetKey: string;
   market: AnalysisMarket;
   onCandleSelect: (time: number) => void;
+  onRequestOlderCandles?: () => void;
+  canLoadOlderCandles?: boolean;
 };
 
 function createLine(
@@ -289,11 +295,15 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   levels,
   analysis,
   pricePlan,
+  externalPositionOverlay,
+  externalPositionController = false,
   overlays,
   timeframe,
   resetKey,
   market,
   onCandleSelect,
+  onRequestOlderCandles,
+  canLoadOlderCandles = false,
 }: Props, ref) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -302,14 +312,34 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   const latestCandleRef = useRef<NormalizedChartCandle | null>(candles.at(-1) ?? null);
   const instanceRef = useRef<ChartInstance | null>(null);
   const storedViewportRef = useRef<StoredViewport | null>(null);
+  const previouslyRenderedOldestTimeRef = useRef<number | null>(null);
+  // Historical requests are triggered by an actual pan/zoom gesture near the
+  // left edge. Refs avoid tearing down lightweight-charts on each new page.
+  const olderCallbackRef = useRef(onRequestOlderCandles);
+  olderCallbackRef.current = onRequestOlderCandles;
+  const canLoadOlderRef = useRef(canLoadOlderCandles);
+  canLoadOlderRef.current = canLoadOlderCandles;
+  const gestureToOldestRef = useRef(false);
+  const candleCountRef = useRef(candles.length);
+  candleCountRef.current = candles.length;
   const [fullscreen, setFullscreen] = useState(false);
-  const [positionOverlay, setPositionOverlay] = useState<AiChartPositionOverlay | null>(null);
+  const [localPositionOverlay, setLocalPositionOverlay] = useState<AiChartPositionOverlay | null>(null);
   const hasChartData = candles.length >= 2;
   const chartSymbol = useMemo(
     () => chartSymbolFromResetKey(resetKey, market, timeframe),
     [market, resetKey, timeframe],
   );
   const latestChartPrice = candles.at(-1)?.close ?? null;
+  const positionOverlay = useMemo(() => positionOverlayForChart(
+    externalPositionController ? externalPositionOverlay : localPositionOverlay,
+    market,
+    chartSymbol,
+  ), [chartSymbol, externalPositionController, externalPositionOverlay, localPositionOverlay, market]);
+
+  useEffect(() => {
+    gestureToOldestRef.current = false;
+    previouslyRenderedOldestTimeRef.current = null;
+  }, [resetKey]);
 
   useImperativeHandle(ref, () => ({
     applyRealtimeCandle: (candle) => {
@@ -487,6 +517,14 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     const publishVisibleRange = () => {
       const range = exposeLogicalViewport(wrapperRef.current, chart);
       if (range) storedViewportRef.current = { resetKey, logicalRange: range };
+      // A first render / resize must not kick off hidden HTTP pagination.
+      // Only a user's pan/zoom into the genuine oldest section requests a page.
+      const nearOldest = range != null
+        && range.from <= Math.min(24, Math.max(8, Math.floor(candleCountRef.current * 0.08)));
+      if (nearOldest && gestureToOldestRef.current && canLoadOlderRef.current && olderCallbackRef.current) {
+        gestureToOldestRef.current = false;
+        olderCallbackRef.current();
+      }
     };
     chart.subscribeClick(handleClick);
     chart.subscribeCrosshairMove(handleCrosshairMove);
@@ -689,7 +727,13 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     markers.sort((left, right) => Number(left.time) - Number(right.time));
     instance.candle.setMarkers(markers as never[]);
 
-    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const anchoredRange = retainLogicalViewportOnHistoryPrepend(
+      beforeUpdate,
+      previouslyRenderedOldestTimeRef.current,
+      candles.map((row) => row.time),
+    );
+    previouslyRenderedOldestTimeRef.current = candles[0]?.time ?? null;
+    restoreLogicalViewport(instance.chart, anchoredRange);
     const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
     if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
   }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, pricePlan, resetKey, timeframe]);
@@ -760,6 +804,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     <div className="space-y-3" data-testid="pattern-aware-chart-region">
       <div
         ref={wrapperRef}
+        onWheelCapture={() => { gestureToOldestRef.current = true; }}
+        onPointerDownCapture={() => { gestureToOldestRef.current = true; }}
         data-testid="unified-chart-wrapper"
         data-pattern-overlay-id={overlays.markers ? patternOverlay?.analysisId ?? '' : ''}
         data-position-average={positionOverlay?.position.averageEntryPrice ?? ''}
@@ -787,7 +833,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         />
         <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
       </div>
-      {chartSymbol ? (
+      {chartSymbol && !externalPositionController ? (
         <div className="px-3 sm:px-4">
           <AiChartPositionPanel
             selection={selection}
@@ -795,7 +841,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
             symbol={chartSymbol}
             chartPrice={latestChartPrice}
             pricePlan={pricePlan}
-            onOverlayChange={setPositionOverlay}
+            onOverlayChange={setLocalPositionOverlay}
           />
         </div>
       ) : null}

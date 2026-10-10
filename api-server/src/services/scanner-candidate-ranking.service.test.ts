@@ -1,11 +1,17 @@
 import './forward-calibration-gross-edge.service.test';
 import './forward-recommendation-observer-runtime.service.test';
+// Keep these OOS identity safety regressions inside the existing registered
+// Scanner unit lane; shared api-server/test.mjs governance remains unchanged.
+import './forward-observer-scanner-quality-consumer.service.test';
+import './scanner-verified-grade-evidence.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   passesMinimumBacktestQuality,
   rankScannerCandidates,
 } from './scanner-candidate-ranking.service';
+import { rankVerifiedScannerCandidates } from './scanner-verified-grade-evidence.service';
+import { scannerBacktestLookupKey } from './forward-observer-scanner-quality-consumer.service';
 import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import type { ScannerBacktestQualitySummary, ScannerSignalCard } from './scanner-signal.types';
 
@@ -191,4 +197,26 @@ test('discovery accepts futures shorts but rejects stock shorts neutral and stal
   );
   assert.deepEqual(discovery.cards.map((item) => item.symbol), ['FUTURES_SHORT']);
   assert.equal(discovery.cards[0].direction, 'SHORT');
+});
+
+test('futures OOS cannot be borrowed by an opposite side or a raw symbol-only map', () => {
+  const long = { ...card('BTCUSDT', 90), assetClass: 'coin_futures' as const, market: 'futures' };
+  const short = { ...long, signalId: 'short-btc', direction: 'SHORT' as const };
+  const longKey = scannerBacktestLookupKey(long)!;
+  const shortKey = scannerBacktestLookupKey(short)!;
+  assert.notEqual(longKey, shortKey);
+  assert.equal(scannerBacktestLookupKey({ ...long, direction: 'NEUTRAL' }), null);
+  assert.equal(scannerBacktestLookupKey({ ...card('AAPL'), direction: 'SHORT' }), null);
+  const legacy = rankVerifiedScannerCandidates({
+    cards: [long, short], market: 'futures', strategy: 'swing',
+    backtests: { BTCUSDT: verified() },
+  });
+  assert.equal(legacy.cards.every(c => c.signalGrade === 'B'), true);
+  const exact = rankVerifiedScannerCandidates({
+    cards: [long, short], market: 'futures', strategy: 'swing',
+    backtests: { [longKey]: verified() },
+  });
+  assert.equal(exact.cards.find(c => c.direction === 'LONG')?.signalGrade, 'S');
+  assert.equal(exact.cards.find(c => c.direction === 'SHORT')?.signalGrade, 'B');
+  assert.equal(exact.diagnostics.backtestMissingCount, 1);
 });
