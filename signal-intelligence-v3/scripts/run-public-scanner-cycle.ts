@@ -16,6 +16,7 @@ import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
+  PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
 } from '../src/public-cycle-coverage.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
@@ -36,7 +37,7 @@ const strategyProfiles = Object.freeze([
 const marketProfiles = Object.freeze([
   Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 }),
   Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 }),
-  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20 }),
+  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: PUBLIC_V3_SPOT_STAGE_TWO_LIMIT }),
   Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 }),
 ]);
 const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
