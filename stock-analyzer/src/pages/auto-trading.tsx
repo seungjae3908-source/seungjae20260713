@@ -820,7 +820,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <TradeAutomationSettings fixture={fixture} selectedMarket={market} canManagePilot={canManagePilot} />
         </div>
       </details>
-      <details className="rounded-2xl border border-card-border bg-card">
+      <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="auto-trading-telegram-settings"
+        open
+      >
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
           <span>알림 · 텔레그램</span>
           <span aria-hidden className="text-muted-foreground">⌄</span>
