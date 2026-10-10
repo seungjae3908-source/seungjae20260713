@@ -125,7 +125,7 @@ jobs:
           const keys=['schemaVersion','scope','mainSha','expectedDeployedSha',
             'pm2Sha','markerSha','pm2Online','exactDeployedIdentity',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
-            'roomBindingsValid','personal','marketBrief','signalSubscriber',
+            'roomBindingsValid','personal','marketBrief','signalSubscriber','signalSource',
             'proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
           const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
@@ -145,6 +145,11 @@ jobs:
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)
             ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
+            ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE',
+              'INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
+            ||!Number.isInteger(r.signalSource.eventCount) ||r.signalSource.eventCount<0
+            ||r.signalSource.eventCount>10000
+            ||typeof r.signalSource.safetyValidated!=='boolean'
             ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
             ||!/^[A-Z_]+$/u.test(String(r.classification))
             ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)
@@ -191,6 +196,8 @@ jobs:
                 '- Signal subscriber ledger: '+s.status+' / '+s.recordCount+
                     ' recorded / '+s.recent24hCount+' last 24h',
                 '- Signal subscriber latest ledger evidence: '+(s.lastEvidenceAt||'none'),
+                '- Local signal source GET status/count/safety: '+
+                  [r.signalSource.status,r.signalSource.eventCount,r.signalSource.safetyValidated].join(' / '),
                 '- Classification: '+r.classification+'; proof level: '+r.proofLevel,
                 '- State entries mean accepted-or-deduped, not confirmed Bot API delivery.',
                 '- Telegram sends / database writes / PM2 restarts / financial changes: 0 / 0 / 0 / 0',
