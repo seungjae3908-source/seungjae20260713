@@ -15,6 +15,8 @@ on:
       - market-prediction-lab/tests/bitget-collector.test.js
       - market-prediction-lab/scripts/probe-native-minute-historical-v1.mjs
       - market-prediction-lab/tests/native-minute-historical-source-smoke-v1.test.js
+      - market-prediction-lab/scripts/probe-native-utc-day-historical-v1.mjs
+      - market-prediction-lab/tests/native-utc-day-opportunity-audit-v1.test.js
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -100,6 +102,40 @@ jobs:
         with:
           name: native-one-minute-source-probe-${{ github.sha }}
           path: market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Audit historical UTC day using prior-day venue close and full 1m
+        timeout-minutes: 5
+        run: |
+          node --test market-prediction-lab/tests/native-utc-day-opportunity-audit-v1.test.js
+          node market-prediction-lab/scripts/probe-native-utc-day-historical-v1.mjs market-prediction-lab/docs/native-utc-day-opportunity-v1.json market-prediction-lab/docs/native-utc-day-raw-1m-v1.json
+
+      - name: Assert UTC-day historical truth boundary
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/native-utc-day-opportunity-v1.json"));
+          if(r.executionAuthority!=="NONE" || r.realOrders!==false ||
+             r.profitabilityProven!==false || r.fullMarketOpportunityDenominatorVerified!==false ||
+             r.trueMarketWideRecall!==null || r.actualFillEvidenceVerified!==false)process.exit(1);
+          for(const market of ["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"]){
+            const x=r.markets[market];
+            if(!x || (x.status!=="BLOCKED_DATA" && x.status!=="OBSERVED_DAY_ONLY"))process.exit(1);
+            if(x.status==="OBSERVED_DAY_ONLY" && (
+               x.observedMinuteCount!==1440 || x.priorHourObservedMinuteCount!==60 ||
+               x.baselineDefinition!=="PREVIOUS_UTC_DAY_FINAL_1M_CLOSE_SAME_VENUE" ||
+               x.actualFillCount!==null || x.trueMarketWideRecall!==null ||
+               x.historicalScannerAsOfAvailabilityVerified!==false))process.exit(1);
+          }
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-utc-day-prior-close-first-crossing-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-utc-day-opportunity-v1.json
+            market-prediction-lab/docs/native-utc-day-raw-1m-v1.json
           if-no-files-found: error
           retention-days: 14
 
