@@ -465,7 +465,22 @@ test('explicit cockpit read-only lookup draws and hides one average line without
   expect(accountReads).toEqual([]);
   await panel.getByTestId('ai-chart-load-position').click();
   await expect.poll(() => accountReads.length).toBe(1);
-  await expect(wrapper).toHaveAttribute('data-position-average', '70000');
+  try {
+    await expect(wrapper).toHaveAttribute('data-position-average', '70000');
+  } catch (error) {
+    const panelText = await panel.innerText().catch(() => '<panel-unavailable>');
+    const connected = await page.getByTestId('ai-chart-position-overlay-bridge')
+      .getAttribute('data-has-verified-overlay').catch(() => '<bridge-unavailable>');
+    const route = page.url().replace(/([?&])(?:token|access_token|secret|key)=[^&]*/gi, '$1[redacted]');
+    console.log('POSITION_OVERLAY_BRIDGE_DIAGNOSTIC=' + JSON.stringify({
+      panelPreview: panelText.slice(0, 1200),
+      hasVerifiedOverlay: connected,
+      readCount: accountReads.length,
+      chartAttribute: await wrapper.getAttribute('data-position-average'),
+      route,
+    }));
+    throw error;
+  }
   await panel.getByTestId('ai-chart-toggle-position-lines').click();
   await expect(wrapper).toHaveAttribute('data-position-average', '');
   expect(mutations).toEqual([]);
