@@ -75,13 +75,71 @@ function latestPrior(rows, symbol, direction, beforeMs) {
     && row.availableAtMs < beforeMs).at(-1) ?? null;
 }
 
+
+const EMPTY_REASONS = new Set(["NO_TRADES", "TRADING_HALT"]);
+
+/**
+ * Closed-minute proof: bar intervals and explicitly verified empty ranges must
+ * tile the session exactly. A bool such as noTradeGapsChecked cannot stand in
+ * for the missing range evidence. Source claims are still cohort-only, not
+ * market-wide completeness attestation.
+ *
+ * Complexity: O((bars + ranges) log(bars + ranges)) per symbol/session.
+ */
+function verifyMinutePartition({ symbol, session, receipt, series, intervalMs }) {
+  if (!Array.isArray(receipt?.verifiedEmptyRanges)) {
+    return { reason:"MINUTE_EMPTY_RANGE_MANIFEST_MISSING", symbol };
+  }
+  const spans = series.map((bar) => ({
+    startMs:bar.timestampMs, endMs:bar.timestampMs + intervalMs,
+    kind:"BAR",
+  }));
+  let emptyMinutes = 0;
+  for (const [index, range] of receipt.verifiedEmptyRanges.entries()) {
+    if (!validTime(range?.startMs) || !validTime(range?.endMs)
+        || range.startMs >= range.endMs
+        || range.startMs % intervalMs !== 0 || range.endMs % intervalMs !== 0
+        || range.startMs < session.startMs || range.endMs > session.endMs
+        || !EMPTY_REASONS.has(range?.reason)
+        || range.exhaustiveSourcePagesVerified !== true
+        || String(range?.sourceId ?? "") !== String(receipt?.sourceId ?? "")
+        || !String(range?.evidenceId ?? "").trim()) {
+      return { reason:"UNVERIFIED_EMPTY_MINUTE_RANGE", symbol, index };
+    }
+    emptyMinutes += (range.endMs - range.startMs) / intervalMs;
+    spans.push({ startMs:range.startMs, endMs:range.endMs, kind:"PROVEN_EMPTY" });
+  }
+  spans.sort((a,b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  let cursor = session.startMs;
+  for (const span of spans) {
+    if (span.startMs > cursor) {
+      return { reason:"UNVERIFIED_ONE_MINUTE_GAP", symbol,
+        missingStartMs:cursor, missingEndMs:span.startMs };
+    }
+    if (span.startMs < cursor) {
+      return { reason:"MINUTE_BAR_EMPTY_RANGE_CONFLICT", symbol,
+        conflictStartMs:span.startMs, previousEndMs:cursor };
+    }
+    cursor = span.endMs;
+  }
+  if (cursor < session.endMs) return { reason:"UNVERIFIED_ONE_MINUTE_GAP", symbol,
+    missingStartMs:cursor, missingEndMs:session.endMs };
+  if (cursor !== session.endMs) return { reason:"MINUTE_RANGE_OUTSIDE_SESSION", symbol };
+  return { reason:null, symbol, verifiedCandleMinutes:series.length,
+    verifiedEmptyMinutes:emptyMinutes };
+}
+
 /**
  * Provider-normalized input, NEVER raw exchange data without provenance:
  * universe: { sourceId, pointInTimeVerified, delistedIncluded,
  *   suspendedIncluded, expectedActiveSymbols, symbols:[{symbol,priorClose,
  *   baselineAvailableAtMs}] }
  * coverage: one {symbol, status:"VERIFIED_COMPLETE"|"VERIFIED_NO_TRADES",
- *   sourceId, startMs, endMs, noTradeGapsChecked:true} per PIT symbol.
+ *   sourceId, startMs, endMs, noTradeGapsChecked:true,
+ *   verifiedEmptyRanges:[{startMs,endMs,reason:"NO_TRADES"|"TRADING_HALT",
+ *     sourceId,evidenceId,exhaustiveSourcePagesVerified:true}]} per PIT symbol.
+ *   Missing 1m intervals MUST be covered by explicit source-evidenced ranges.
+ *   A missing Upbit candle is not automatically NO_TRADES.
  * bars: closed 1m OHLCV with timestampMs=OPEN and actual availableAtMs.
  * scannerObservations: {symbol,direction,state,availableAtMs,dataCutoffMs,
  *   signalId (required for discovered states)}. States are evidenced claims,
@@ -154,13 +212,20 @@ export function auditHistoricalIntradayOpportunitiesV1({
     seen.add(key);
     bySymbol.get(candle.symbol).push(candle);
   }
+  let verifiedCandleMinutes = 0;
+  let verifiedEmptyMinutes = 0;
   for (const [symbol, series] of bySymbol) {
     series.sort((a,b) => a.timestampMs - b.timestampMs);
-    const status = coverageBySymbol.get(symbol).status;
+    const receipt = coverageBySymbol.get(symbol);
+    const status = receipt.status;
     if ((status === "VERIFIED_COMPLETE" && !series.length)
         || (status === "VERIFIED_NO_TRADES" && series.length)) {
       return blocked(market, "SOURCE_COVERAGE_CONTRADICTS_BARS", {symbol});
     }
+    const proof = verifyMinutePartition({symbol,session,receipt,series,intervalMs});
+    if (proof.reason) return blocked(market, proof.reason, proof);
+    verifiedCandleMinutes += proof.verifiedCandleMinutes;
+    verifiedEmptyMinutes += proof.verifiedEmptyMinutes;
   }
   // A current-day/survivor ticker set alone cannot qualify as an active PIT list.
   const watched = watchedSymbols == null ? null : new Set(watchedSymbols.map(symbolOf));
@@ -197,6 +262,12 @@ export function auditHistoricalIntradayOpportunitiesV1({
         const first = latestPrior(scans, symbol, direction, crossing.timestampMs);
         const priorCandidate = scans.find((row) => row.symbol === symbol && row.direction === direction
           && DISCOVERED.has(row.state) && row.availableAtMs < crossing.timestampMs);
+        // A later OBSERVED_NO_SIGNAL must not hide this candidate's subsequent
+        // RANK/ENTRY/EXECUTION stage; follow the SAME signalId before crossing.
+        const candidateStage = priorCandidate ? scans.filter((row) =>
+          row.symbol === symbol && row.direction === direction
+          && row.signalId === priorCandidate.signalId && DISCOVERED.has(row.state)
+          && row.availableAtMs < crossing.timestampMs).at(-1) : null;
         const discovery = !!priorCandidate;
         let reason = "DISCOVERED_BEFORE_CROSSING";
         if (!discovery) {
@@ -206,12 +277,13 @@ export function auditHistoricalIntradayOpportunitiesV1({
             : first.state === "DATA_DELAYED" ? "DATA_DELAYED"
             : first.state === "OBSERVED_NO_SIGNAL" ? "SIGNAL_MISSED"
             : "DISCOVERY_TIMING_NOT_ATTESTED";
-        } else if (first?.state === "RANK_EXCLUDED" || first?.state === "ENTRY_BLOCKED"
-          || first?.state === "EXECUTION_FAILED") {
-          reason = first.state;
-        } else if (first?.state === "CANDIDATE") {
+        } else if (candidateStage?.state === "RANK_EXCLUDED"
+          || candidateStage?.state === "ENTRY_BLOCKED"
+          || candidateStage?.state === "EXECUTION_FAILED") {
+          reason = candidateStage.state;
+        } else if (candidateStage?.state === "CANDIDATE") {
           reason = "ENTRY_OUTCOME_NOT_ATTESTED";
-        } else if (first?.state === "SIMULATED_FILL") {
+        } else if (candidateStage?.state === "SIMULATED_FILL") {
           reason = "SIMULATED_FILL_NOT_ACTUAL_EXECUTION";
         }
         reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
@@ -271,6 +343,8 @@ export function auditHistoricalIntradayOpportunitiesV1({
     timeframe:"1m", thresholdPcts:THRESHOLDS_PCT, maxScannerLagMs,
     universeSourceId:universe.sourceId,
     universeSymbolCount:membership.size, coveredSymbolCount:coverageBySymbol.size,
+    sourceMinuteCoverage:"EXPLICIT_BAR_OR_VERIFIED_EMPTY_INTERVAL_PARTITION",
+    verifiedCandleMinutes, verifiedEmptyMinutes,
     observedOpportunityCount:opportunities.length, reasonCounts,
     opportunities, quality,
     // Intrabar order is unobservable in OHLC. Only interval + bar availability proven.
