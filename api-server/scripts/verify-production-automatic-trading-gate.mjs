@@ -14,6 +14,8 @@ const paperJournalRoute = read('api-server/src/routes/paper-journal.ts');
 const paperJournalRepo = read('api-server/src/services/paper-journal-supabase.repository.ts');
 const paperJournalSmoke = read('api-server/src/routes/paper-journal.smoke.test.ts');
 const paperWorker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+const paperFuturesMode = read('api-server/src/services/paper-futures-mode-policy.service.ts');
+const paperPreSubmission = read('api-server/src/services/trade-pre-submission-risk.service.ts');
 const handoffContract = read('api-server/src/services/member-auto-trading-ai-review-evidence.service.ts');
 const liveEntryArm = read('api-server/src/services/member-auto-trading-live-arm.service.ts');
 const paperWorkerTest = read('api-server/src/services/member-auto-trading-background-worker.service.test.ts');
@@ -53,7 +55,25 @@ requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_
 requireText(tradeTypes, 'PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_ADMIN_FOUR_MARKET_LIVE_TOTAL_MISSING');
 requireText(tradeRisk, 'Math.min(leverage, maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_NORMALIZATION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
-requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
+// LIVE role ceilings still come from the unchanged stored policy, while the
+// automatic simulated Paper position has its own independently proven 7x.
+requireText(paperFuturesMode, 'AUTOMATIC_PAPER_FUTURES_LEVERAGE = 7', 'AUTO_GATE_PAPER_7X_CONSTANT_MISSING');
+requireText(paperFuturesMode, "plan.accountMode !== 'paper' || plan.exchange !== 'bitget' || executionMode !== 'automatic'",
+  'AUTO_GATE_PAPER_ONLY_SCOPE_MISSING');
+requireText(paperFuturesMode, 'return { ...policy, bitgetLeverage: AUTOMATIC_PAPER_FUTURES_LEVERAGE }',
+  'AUTO_GATE_PAPER_NONPERSISTENT_POLICY_MISSING');
+requireText(paperWorker, 'leverageEvidence !== AUTOMATIC_PAPER_FUTURES_LEVERAGE',
+  'AUTO_GATE_PAPER_VERIFIED_7X_HANDOFF_MISSING');
+requireText(paperWorker, "marginModeEvidence !== 'isolated'",
+  'AUTO_GATE_PAPER_ISOLATED_MARGIN_MISSING');
+requireText(tradeService, 'automaticPaperFuturesLeverageBlockers(input, executionMode)',
+  'AUTO_GATE_PAPER_CREATION_LEVERAGE_GUARD_MISSING');
+requireText(tradeService, 'scopeAutomaticPaperFuturesRiskPolicy(',
+  'AUTO_GATE_PAPER_AUTOMATIC_APPROVAL_SCOPE_MISSING');
+requireText(paperPreSubmission, 'automaticPaperFuturesLeverageBlockers(refreshedPlan, executionMode)',
+  'AUTO_GATE_PAPER_PRE_SUBMISSION_7X_RECHECK_MISSING');
+requireText(paperPreSubmission, 'scopeAutomaticPaperFuturesRiskPolicy(',
+  'AUTO_GATE_PAPER_PRE_SUBMISSION_POLICY_SCOPE_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
 
 // A fresh 1M automatic Paper wallet is a separate virtual ledger. Existing
