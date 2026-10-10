@@ -85,10 +85,11 @@ test("original watcher event+cadence hash contracts validate as positive evidenc
  assert.equal(x.receipt.actualFillCount,null);
  assert.equal(x.receipt.realOrders,false);
 });
-test("empty event source still cannot certify zero full-market discoveries",()=>{
+test("empty event file cannot certify zero full-market discoveries",()=>{
  const x=input([],[cadence()]);
- assert.equal(x.receipt.status,"VALIDATED_POSITIVE_LOG_COHORT_ONLY");
- assert.equal(x.receipt.distinctEventIds,0);
+ assert.equal(x.receipt.status,"BLOCKED_DATA");
+ assert.equal(x.receipt.reason,"SOURCE_JSONL_EMPTY_EVENTS");
+ assert.equal(x.receipt.originalEventRows,null);
  assert.equal(x.receipt.trueMarketWideRecall,null);
  assert.equal(x.receipt.verifiedFalseNegativeCount,null);
 });

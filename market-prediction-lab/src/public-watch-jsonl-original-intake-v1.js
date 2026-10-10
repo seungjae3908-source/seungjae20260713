@@ -71,6 +71,7 @@ function base(status,reason,dayUtc,expectedResearchSha,extra={}){
 }
 function parseText(raw,kind,limit){
   if(typeof raw!=="string")return {error:"SOURCE_FILE_MISSING_"+kind};
+  if(raw==="" || raw==="\n")return {error:"SOURCE_JSONL_EMPTY_"+kind};
   const size=Buffer.byteLength(raw,"utf8");
   if(size>PUBLIC_WATCH_EXPORT_LIMITS_V1.maxFileBytes)
     return {error:"SOURCE_FILE_TOO_LARGE_"+kind};
