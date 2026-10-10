@@ -18,6 +18,7 @@ const artifactDir = path.resolve(
 );
 const enabled = process.env.PRODUCTION_TRADING_CORE_QA === 'true';
 const prepareMemberAutoPolicy = process.env.PRODUCTION_TRADING_CORE_PREPARE_POLICY === 'true';
+const requireTelegramActivation = process.env.PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM === 'true';
 
 test.skip(!enabled, 'Production Trading Core QA runs only in the dedicated protected workflow.');
 
@@ -250,6 +251,14 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(integrationBefore.ok).toBe(true);
     expect(integrationBefore.body?.ok).toBe(true);
     expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
+    if (integrationBefore.body?.telegram?.recoveryRequired === true) {
+      throw new Error(`PRODUCTION_TRADING_CORE_TELEGRAM_RECONNECT_REQUIRED:${String(
+        integrationBefore.body?.telegram?.recoveryErrorCode ?? 'TELEGRAM_CONNECTION_RECOVERY_REQUIRED',
+      ).replace(/[^A-Z0-9_:-]/giu, '_').slice(0, 120)}`);
+    }
+    if (requireTelegramActivation && integrationBefore.body?.telegram?.connected !== true) {
+      throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_CONNECTION_REQUIRED');
+    }
     if (integrationBefore.body?.telegram?.connected === true) {
       const worker = integrationBefore.body?.telegramRuntime ?? {};
       if (worker.deliveryReady !== true || worker.backgroundWorkersEnabled !== true
