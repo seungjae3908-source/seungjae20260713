@@ -5,6 +5,8 @@ import test from 'node:test';
 const read = (file) => readFileSync(file, 'utf8');
 const workflow = read('.github/workflows/production-deploy.yml');
 const predeploy = read('stock-analyzer/e2e/production-automation-research-predeploy-readiness.spec.ts');
+const providerAssessment = read('stock-analyzer/e2e/support/production-automation-research-predeploy.ts');
+const providerAssessmentTests = read('stock-analyzer/e2e/production-automation-research-predeploy-policy.spec.ts');
 const config = read('stock-analyzer/playwright.production-automation-research-predeploy.config.ts');
 const focused = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
 
@@ -29,7 +31,12 @@ test('predeploy browser audit is authenticated, sanitized, read-only and exclude
     "appGet<any>(page, '/api/trade-automation/status')",
     "appGet<any>(page, '/api/trade-automation/paper-runtime-readiness')",
     'PRODUCTION_RUNTIME_IDENTITY_DRIFT',
-    "schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v2'",
+    "schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v3'",
+    'readyForDeployment:',
+    'activationReadyBeforeDeploy:',
+    'postDeployProviderReverificationRequired:',
+    'postDeployVerificationBlockers:',
+    'targetDiffersFromActiveProduction',
     'telegramExcludedFromScope: true',
     'PRODUCTION_PREDEPLOY_READINESS_BLOCKED',
     'sshConfigured: false',
@@ -64,4 +71,20 @@ test('focused Trading Core preserves temporary member policy rollback', () => {
   assert.ok(policyWrite > 0);
   assert.ok(focused.includes('if (memberAutoPolicyPrepared)'));
   assert.equal(focused.includes('if (prepareMemberAutoPolicy) {\n      try {\n        const restored'), false);
+});
+
+test('provider repair deployment defers verification only for a new SHA and keeps authority blockers hard', () => {
+  for (const marker of [
+    'targetDiffersFromActiveProduction',
+    'postDeployVerificationBlockers.push(...verificationBlockers)',
+    'deploymentBlockers.push(...verificationBlockers)',
+    'PROVIDER_NOT_CONFIGURED:',
+    'LIVE_SERVER_GATE_NOT_OFF:',
+    'AUTO_SERVER_GATE_NOT_OFF:',
+  ]) assert.ok(providerAssessment.includes(marker), marker);
+  for (const marker of [
+    'a new exact-SHA repair deployment defers only provider verification',
+    'the already-active SHA cannot bypass a provider verification failure',
+    'missing configuration or enabled LIVE/AUTO authority always blocks deployment',
+  ]) assert.ok(providerAssessmentTests.includes(marker), marker);
 });

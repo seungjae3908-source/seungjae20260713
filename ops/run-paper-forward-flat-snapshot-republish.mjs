@@ -77,7 +77,7 @@ export function validateBinding(binding, { targetSha, publisherDigest, snapshotP
   return true;
 }
 
-export function validateFlatSnapshot(snapshot, { publisherDigest, targetSha = null, requireFresh = false, nowMs = Date.now() } = {}) {
+export function validateSnapshot(snapshot, { publisherDigest, targetSha = null, requireFresh = false, nowMs = Date.now() } = {}) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) fail('SNAPSHOT_REQUIRED');
   if (snapshot.schemaVersion !== SNAPSHOT_VERSION || snapshot.paperStateSchemaVersion !== 1) fail('SNAPSHOT_SCHEMA_INVALID');
   if (targetSha != null && snapshot.sourceSha !== targetSha) fail('SNAPSHOT_TARGET_SHA_MISMATCH');
@@ -91,17 +91,28 @@ export function validateFlatSnapshot(snapshot, { publisherDigest, targetSha = nu
     || snapshot.financialMutationAllowed !== false) fail('SNAPSHOT_SAFETY_INVALID');
   if (!snapshot.state || snapshot.state.schemaVersion !== 1 || !snapshot.state.account) fail('SNAPSHOT_STATE_INVALID');
   if (!digest(snapshot.stateDigestSha256) || sha256(canonicalJson(snapshot.state)) !== snapshot.stateDigestSha256) fail('SNAPSHOT_DIGEST_INVALID');
-  if (openPositions(snapshot.state).length !== 0 || pendingOrders(snapshot.state).length !== 0 || snapshot.openPositionCount !== 0) fail('SNAPSHOT_NOT_FLAT');
-  if (!zero(snapshot.state.account.usedMargin) || !zero(snapshot.state.account.unrealizedPnl)) fail('SNAPSHOT_ACCOUNT_NOT_FLAT');
-  if (!finite(snapshot.state.account.cashBalance) || !finite(snapshot.state.account.equity) || !finite(snapshot.state.account.availableMargin)
-    || Math.abs(snapshot.state.account.equity - snapshot.state.account.cashBalance) > EPSILON
-    || Math.abs(snapshot.state.account.availableMargin - snapshot.state.account.equity) > EPSILON) fail('SNAPSHOT_FLAT_ACCOUNT_INCONSISTENT');
+  const openCount = Array.isArray(snapshot.state.positions)
+    ? snapshot.state.positions.filter((position) => position?.status !== 'closed').length
+    : 0;
+  if (!Number.isSafeInteger(snapshot.openPositionCount) || snapshot.openPositionCount !== openCount) fail('SNAPSHOT_OPEN_POSITION_COUNT_MISMATCH');
+  if (![snapshot.state.account.cashBalance, snapshot.state.account.equity, snapshot.state.account.availableMargin,
+    snapshot.state.account.usedMargin, snapshot.state.account.unrealizedPnl].every(finite)) fail('SNAPSHOT_ACCOUNT_INVALID');
   const stateUpdatedAtMs = Date.parse(String(snapshot.state.updatedAt ?? ''));
   if (!finite(stateUpdatedAtMs) || snapshot.stateUpdatedAtMs !== stateUpdatedAtMs) fail('SNAPSHOT_STATE_TIMESTAMP_INVALID');
   if (!finite(snapshot.observedAtMs) || !finite(snapshot.maximumAgeMs) || snapshot.maximumAgeMs <= 0) fail('SNAPSHOT_TIME_METADATA_INVALID');
+  if (snapshot.observedAtMs < snapshot.stateUpdatedAtMs) fail('SNAPSHOT_OBSERVATION_PRECEDES_STATE');
   if (requireFresh && (nowMs < snapshot.observedAtMs || nowMs - snapshot.stateUpdatedAtMs > snapshot.maximumAgeMs)) fail('SNAPSHOT_STALE_OR_FUTURE');
   if (snapshot.accountId !== snapshot.state.account.id || snapshot.equity !== snapshot.state.account.equity) fail('SNAPSHOT_ACCOUNT_METADATA_MISMATCH');
   return snapshot;
+}
+
+export function validateFlatSnapshot(snapshot, options = {}) {
+  const validated = validateSnapshot(snapshot, options);
+  if (validated.openPositionCount !== 0 || pendingOrders(validated.state).length !== 0) fail('SNAPSHOT_NOT_FLAT');
+  if (!zero(validated.state.account.usedMargin) || !zero(validated.state.account.unrealizedPnl)) fail('SNAPSHOT_ACCOUNT_NOT_FLAT');
+  if (Math.abs(validated.state.account.equity - validated.state.account.cashBalance) > EPSILON
+    || Math.abs(validated.state.account.availableMargin - validated.state.account.equity) > EPSILON) fail('SNAPSHOT_FLAT_ACCOUNT_INCONSISTENT');
+  return validated;
 }
 
 function dayKey(at) {
@@ -125,19 +136,44 @@ export function requireStableRiskWindow(state, now) {
 
 export function selectRefreshAnchor(state) {
   const positions = Array.isArray(state?.positions) ? state.positions : [];
-  const closed = positions.find((position) => position?.status === 'closed'
+  const eligible = positions.find((position) => position?.status !== 'closed'
+    && Number(position?.remainingQuantity) > EPSILON
+    && typeof position?.symbol === 'string' && /^[A-Z0-9]{2,20}$/u.test(position.symbol.trim().toUpperCase())
+    && finite(position?.currentPrice) && position.currentPrice > 0)
+    ?? positions.find((position) => position?.status === 'closed'
     && typeof position?.symbol === 'string' && /^[A-Z0-9]{2,20}$/u.test(position.symbol.trim().toUpperCase())
     && finite(position?.currentPrice) && position.currentPrice > 0);
-  if (!closed) fail('FLAT_REFRESH_ANCHOR_REQUIRED');
-  return { symbol: closed.symbol.trim().toUpperCase(), price: closed.currentPrice };
+  if (!eligible) fail('SNAPSHOT_REFRESH_ANCHOR_REQUIRED');
+  return { symbol: eligible.symbol.trim().toUpperCase(), price: eligible.currentPrice };
 }
 
-export function buildRefreshAction({ stateDigest, symbol, price }) {
+export function normalizedRiskWindow(state, now) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || !state?.riskState) fail('RISK_WINDOW_INVALID');
+  const risk = state.riskState;
+  if (![risk.dailyRealizedPnl, risk.weeklyRealizedPnl, risk.consecutiveLosses].every(finite)) fail('RISK_WINDOW_INVALID');
+  const currentDay = dayKey(now);
+  const currentWeek = weekKey(now);
+  const dailyWindowRolled = risk.dayKey !== currentDay;
+  const weeklyWindowRolled = risk.weekKey !== currentWeek;
+  return Object.freeze({
+    riskState: Object.freeze({
+      dayKey: currentDay,
+      weekKey: currentWeek,
+      dailyRealizedPnl: dailyWindowRolled ? 0 : risk.dailyRealizedPnl,
+      weeklyRealizedPnl: weeklyWindowRolled ? 0 : risk.weeklyRealizedPnl,
+      consecutiveLosses: risk.consecutiveLosses,
+    }),
+    dailyWindowRolled,
+    weeklyWindowRolled,
+  });
+}
+
+export function buildRefreshAction({ stateDigest, symbol, price, nonFlat = false }) {
   if (!digest(stateDigest)) fail('REFRESH_STATE_DIGEST_INVALID');
   if (!/^[A-Z0-9]{2,20}$/u.test(symbol) || !finite(price) || price <= 0) fail('REFRESH_ANCHOR_INVALID');
   return {
     type: 'mark_price',
-    eventId: `paper-flat-republish:${stateDigest.slice(0, 24)}`,
+    eventId: `paper-${nonFlat ? 'nonflat' : 'flat'}-republish:${stateDigest.slice(0, 24)}`,
     symbol,
     price,
   };
@@ -158,7 +194,7 @@ function invariantStateView(state) {
   };
 }
 
-export function createMetadataOnlyFlatRefreshState(beforeState, action, nowIso) {
+export function createMetadataOnlyRefreshState(beforeState, action, nowIso, { allowRiskWindowRollover = false } = {}) {
   const now = new Date(nowIso);
   if (!Number.isFinite(now.getTime()) || now.toISOString() !== nowIso) fail('REPUBLISH_TIMESTAMP_INVALID');
   const eventValid = /^[A-Za-z0-9._:-]{1,120}$/u.test(String(action?.eventId ?? ''));
@@ -169,25 +205,32 @@ export function createMetadataOnlyFlatRefreshState(beforeState, action, nowIso) 
   const isolatedSnapshotBridge = action?.type === 'snapshot_bridge'
     && String(action?.eventId ?? '').startsWith('paper-no-deploy-snapshot-bridge:');
   if (!eventValid || (!markPriceRefresh && !isolatedSnapshotBridge)) fail('REPUBLISH_ACTION_INVALID');
-  if (markPriceRefresh) requireStableRiskWindow(beforeState, now);
+  const riskWindow = markPriceRefresh
+    ? normalizedRiskWindow(beforeState, now)
+    : Object.freeze({ riskState: clone(beforeState.riskState), dailyWindowRolled: false, weeklyWindowRolled: false });
+  if (markPriceRefresh && !allowRiskWindowRollover) requireStableRiskWindow(beforeState, now);
   const beforeEvents = Array.isArray(beforeState?.processedEventIds) ? beforeState.processedEventIds : [];
   if (beforeEvents.includes(action.eventId)) fail('REPUBLISH_EVENT_ALREADY_PROCESSED');
 
   const afterState = clone(beforeState);
+  afterState.riskState = clone(riskWindow.riskState);
   afterState.account.updatedAt = nowIso;
   afterState.updatedAt = nowIso;
   afterState.processedEventIds = [...beforeEvents, action.eventId].slice(-500);
-  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(beforeState))) {
+  const expectedInvariantState = clone(beforeState);
+  expectedInvariantState.riskState = clone(riskWindow.riskState);
+  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(expectedInvariantState))) {
     fail('REPUBLISH_ECONOMIC_STATE_CHANGED');
   }
-  if (openPositions(afterState).length !== 0
-    || pendingOrders(afterState).length !== 0
-    || !zero(afterState.account?.usedMargin)
-    || !zero(afterState.account?.unrealizedPnl)) fail('REPUBLISH_RESULT_NOT_FLAT');
   return afterState;
 }
 
-export function validateRepublishResponse(body, { beforeState, targetSha, publisherDigest, action, nowIso }) {
+export const createMetadataOnlyFlatRefreshState = createMetadataOnlyRefreshState;
+
+export function validateRepublishResponse(body, {
+  beforeState, targetSha, publisherDigest, action, nowIso, allowRiskWindowRollover = false,
+  allowServerTimestamp = false, maximumServerDelayMs = 60_000,
+}) {
   if (!body || body.ok !== true || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
     fail('REPUBLISH_SAFETY_ENVELOPE_INVALID');
   }
@@ -199,18 +242,38 @@ export function validateRepublishResponse(body, { beforeState, targetSha, publis
     fail('REPUBLISH_MUST_BE_METADATA_ONLY');
   }
   const afterState = result.state;
-  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(beforeState))) {
+  let effectiveNowIso = nowIso;
+  if (allowServerTimestamp) {
+    const requestedAtMs = Date.parse(nowIso);
+    const serverAtMs = Date.parse(String(afterState?.updatedAt ?? ''));
+    if (!Number.isSafeInteger(maximumServerDelayMs) || maximumServerDelayMs < 0
+      || !finite(requestedAtMs) || !finite(serverAtMs)
+      || serverAtMs < requestedAtMs || serverAtMs - requestedAtMs > maximumServerDelayMs
+      || afterState?.account?.updatedAt !== afterState?.updatedAt) fail('REPUBLISH_SERVER_TIMESTAMP_INVALID');
+    effectiveNowIso = new Date(serverAtMs).toISOString();
+  }
+  const expectedState = createMetadataOnlyRefreshState(beforeState, action, effectiveNowIso, { allowRiskWindowRollover });
+  if (canonicalJson(invariantStateView(afterState)) !== canonicalJson(invariantStateView(expectedState))) {
     fail('REPUBLISH_ECONOMIC_STATE_CHANGED');
   }
-  const expectedState = createMetadataOnlyFlatRefreshState(beforeState, action, nowIso);
   if (canonicalJson(afterState) !== canonicalJson(expectedState)) fail('REPUBLISH_METADATA_REFRESH_MISMATCH');
   const transport = body.paperStateTransport;
   if (!transport || transport.status !== 'PUBLISHED' || transport.publisherAccountBound !== true
     || transport.executionAuthority !== 'NONE' || transport.privateApiAllowed !== false
     || transport.liveTrading !== false || transport.financialMutationAllowed !== false
-    || transport.reason !== null || !digest(transport.stateDigestSha256)) fail('REPUBLISH_TRANSPORT_INVALID');
+    || transport.reason !== null || !digest(transport.stateDigestSha256)
+    || transport.observedAtMs !== Date.parse(effectiveNowIso)) fail('REPUBLISH_TRANSPORT_INVALID');
   if (sha256(canonicalJson(afterState)) !== transport.stateDigestSha256) fail('REPUBLISH_TRANSPORT_DIGEST_MISMATCH');
-  return { afterState, transportDigest: transport.stateDigestSha256, targetSha, publisherDigest };
+  const riskWindow = normalizedRiskWindow(beforeState, new Date(effectiveNowIso));
+  return {
+    afterState,
+    transportDigest: transport.stateDigestSha256,
+    targetSha,
+    publisherDigest,
+    effectiveNowIso,
+    dailyRiskWindowRolled: riskWindow.dailyWindowRolled,
+    weeklyRiskWindowRolled: riskWindow.weeklyWindowRolled,
+  };
 }
 
 function managedCronCount() {
@@ -307,12 +370,12 @@ export async function runFlatSnapshotRepublish() {
 
   const binding = await readJson(bindingPath, 'BINDING_READ_FAILED');
   validateBinding(binding, { targetSha, publisherDigest, snapshotPath });
-  const beforeSnapshot = validateFlatSnapshot(await readJson(snapshotPath, 'SNAPSHOT_READ_FAILED'), { publisherDigest });
+  const beforeSnapshot = validateSnapshot(await readJson(snapshotPath, 'SNAPSHOT_READ_FAILED'), { publisherDigest });
   const beforeState = clone(beforeSnapshot.state);
+  const nonFlat = openPositions(beforeState).length > 0 || pendingOrders(beforeState).length > 0;
   const anchor = selectRefreshAnchor(beforeState);
-  const action = buildRefreshAction({ stateDigest: beforeSnapshot.stateDigestSha256, ...anchor });
+  const action = buildRefreshAction({ stateDigest: beforeSnapshot.stateDigestSha256, ...anchor, nonFlat });
   const now = new Date();
-  requireStableRiskWindow(beforeState, now);
   const nowIso = now.toISOString();
   const baseUrl = `http://127.0.0.1:${livePort}`;
   await requireHealth(baseUrl, targetSha);
@@ -325,9 +388,17 @@ export async function runFlatSnapshotRepublish() {
     body: JSON.stringify({ state: beforeState, action, now: nowIso }),
   });
   if (!response.response.ok) fail(String(response.body?.code ?? 'PAPER_REPUBLISH_REQUEST_FAILED'));
-  const validated = validateRepublishResponse(response.body, { beforeState, targetSha, publisherDigest, action, nowIso });
+  const validated = validateRepublishResponse(response.body, {
+    beforeState,
+    targetSha,
+    publisherDigest,
+    action,
+    nowIso,
+    allowRiskWindowRollover: true,
+    allowServerTimestamp: true,
+  });
 
-  const finalSnapshot = validateFlatSnapshot(await readJson(snapshotPath, 'FINAL_SNAPSHOT_READ_FAILED'), {
+  const finalSnapshot = validateSnapshot(await readJson(snapshotPath, 'FINAL_SNAPSHOT_READ_FAILED'), {
     publisherDigest,
     targetSha,
     requireFresh: true,
@@ -344,20 +415,24 @@ export async function runFlatSnapshotRepublish() {
 
   process.stdout.write(`${JSON.stringify({
     schemaVersion: SCHEMA_VERSION,
-    status: 'FLAT_REPUBLISHED',
+    status: nonFlat ? 'NON_FLAT_REPUBLISHED' : 'FLAT_REPUBLISHED',
     targetSha,
     sourceShaBefore: beforeSnapshot.sourceSha,
     sourceShaAfter: finalSnapshot.sourceSha,
     stateDigestChanged: beforeSnapshot.stateDigestSha256 !== finalSnapshot.stateDigestSha256,
     economicStatePreserved: true,
     freshnessMetadataMutation: 1,
-    paperAccountingMutation: 0,
-    openPositionCountBefore: 0,
-    openPositionCountAfter: 0,
-    pendingOrderCountBefore: 0,
-    pendingOrderCountAfter: 0,
-    usedMarginZero: true,
-    unrealizedPnlZero: true,
+    paperAccountingMutation: validated.dailyRiskWindowRolled || validated.weeklyRiskWindowRolled ? 1 : 0,
+    dailyRiskWindowRolled: validated.dailyRiskWindowRolled,
+    weeklyRiskWindowRolled: validated.weeklyRiskWindowRolled,
+    openPositionCountBefore: openPositions(beforeState).length,
+    openPositionCountAfter: openPositions(finalSnapshot.state).length,
+    pendingOrderCountBefore: pendingOrders(beforeState).length,
+    pendingOrderCountAfter: pendingOrders(finalSnapshot.state).length,
+    usedMarginZero: zero(finalSnapshot.state.account.usedMargin),
+    unrealizedPnlZero: zero(finalSnapshot.state.account.unrealizedPnl),
+    usedMarginPreserved: finalSnapshot.state.account.usedMargin === beforeState.account.usedMargin,
+    unrealizedPnlPreserved: finalSnapshot.state.account.unrealizedPnl === beforeState.account.unrealizedPnl,
     publisherAccountBound: true,
     paperStateTransport: 'PUBLISHED',
     scheduleActiveBefore: false,
