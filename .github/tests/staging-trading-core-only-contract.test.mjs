@@ -72,6 +72,11 @@ test('Hub command is owner-only and staging-only', () => {
   assert.ok(!workflow.includes('environment: production'));
   assert.ok(workflow.includes('delegated_by_run_id:'));
   assert.ok(!workflow.includes("context.actor === 'github-actions[bot]' && core.setOutput('authorized', 'true')"));
+  const ownerGate = workflow.indexOf('  owner-gate:');
+  const delegatedAuthority = workflow.indexOf('Verify direct owner or exact delegated owner-orchestrator provenance');
+  const exactTarget = workflow.indexOf('Require exact SHA, owner dispatch and unchanged current main');
+  assert.ok(ownerGate >= 0 && ownerGate < delegatedAuthority && delegatedAuthority < exactTarget,
+    'delegated authority must execute inside owner-gate before the exact target check');
 });
 
 test('Owner preflight proves canonical DB admin capability and owner Paper GET before Staging mutation', () => {
