@@ -1,0 +1,86 @@
+name: Prediction Lab Same-Date Public Watch Native Price Proof V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/probe-watch-matching-utc-day-v1.mjs
+      - market-prediction-lab/tests/probe-watch-matching-utc-day-v1.test.js
+      - market-prediction-lab/scripts/report-matching-public-watch-v1.mjs
+      - .github/workflows/prediction-lab-same-date-watch-native-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-same-date-watch-native-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-day-matching:
+    name: Exact 2026 UTC-day read-only native price source and original-watch gap
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test native 1m day, reusable original JSONL and as-of public-watch contracts
+        run: |
+          node --test \
+            market-prediction-lab/tests/probe-watch-matching-utc-day-v1.test.js \
+            market-prediction-lab/tests/public-watch-jsonl-original-intake-v1.test.js \
+            market-prediction-lab/tests/public-watch-native-minute-reconcile-v1.test.js
+      - name: Fetch fixed completed matching-day Upbit and Bitget public 1m BTC
+        timeout-minutes: 4
+        run: |
+          node market-prediction-lab/scripts/probe-watch-matching-utc-day-v1.mjs \
+            market-prediction-lab/docs/native-watch-matched-day-v1.json \
+            market-prediction-lab/docs/native-watch-matched-day-raw-v1.json
+      - name: Read same UTC day original watch export only if supplied; none in CI
+        run: |
+          node market-prediction-lab/scripts/report-matching-public-watch-v1.mjs \
+            market-prediction-lab/docs/native-watch-matched-day-v1.json \
+            market-prediction-lab/docs/native-public-watch-matching-readiness-v1.json
+      - name: Reject invented no-signal recall when no original archive is supplied
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const s=JSON.parse(readFileSync("market-prediction-lab/docs/native-watch-matched-day-v1.json","utf8"));
+          const x=JSON.parse(readFileSync("market-prediction-lab/docs/native-public-watch-matching-readiness-v1.json","utf8"));
+          if(s.sampledDay.dayUtc!=="2026-10-09"||s.executionAuthority!=="NONE"||
+             s.profitabilityProven!==false||s.fullMarketOpportunityDenominatorVerified!==false||
+             s.trueMarketWideRecall!==null || ![0,1,2].includes(s.observedMarketSamples))
+             process.exit(1);
+          for(const v of Object.values(s.markets)){
+            if(!["BLOCKED_DATA","OBSERVED_DAY_ONLY"].includes(v.status) ||
+               v.observedDayCrossingCount===undefined||v.actualFillCount!==null||
+               v.trueMarketWideRecall!==null)process.exit(1);
+          }
+          if(x.UTCDate!=="2026-10-09" ||
+             x.status!=="BLOCKED_ORIGINAL_WATCH_EXPORT_NOT_ATTACHED" ||
+             x.originalPublicWatchIntake.reason!=="ORIGINAL_WATCH_FILES_NOT_CONNECTED" ||
+             x.originalPublicWatchIntake.distinctEventIds!==null ||
+             x.sameDateSourceLimitedPositiveMatch!==null ||
+             x.verifiedFalseNegativeCount!==null ||
+             x.trueMarketWideRecall!==null||x.actualFillCount!==null||
+             x.profitabilityProven!==false||x.executionAuthority!=="NONE")
+             process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: same-day-native-price-vs-unavailable-watch-export-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-watch-matched-day-v1.json
+            market-prediction-lab/docs/native-watch-matched-day-raw-v1.json
+            market-prediction-lab/docs/native-public-watch-matching-readiness-v1.json
+          if-no-files-found: error
+          retention-days: 14
