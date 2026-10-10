@@ -176,7 +176,11 @@ export function normalizeStockFeed(raw, market, nowMs) {
     throw new Error('STOCK_MARKET_INVALID');
   if (!raw || raw.schemaVersion !== 'research-stock-public-snapshot-v1'
     || raw.market !== market || typeof raw.source !== 'string'
-    || !/^[a-zA-Z0-9._-]{3,64}$/.test(raw.source)
+    // Source identities also flow into local Node and Python admin
+    // readbacks; never accept a name those readers reject. "NONE" is
+    // reserved for an unavailable/blocked feed, not a healthy provider.
+    || !/^[A-Za-z0-9_-]{3,64}$/.test(raw.source)
+    || raw.source === 'NONE'
     || typeof raw.completeUniverse !== 'boolean'
     || !Array.isArray(raw.quotes) || raw.quotes.length > 30_000) {
     throw new Error('STOCK_PUBLIC_FEED_INVALID');
