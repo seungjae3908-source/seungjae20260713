@@ -851,6 +851,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   return (
     <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
+      {externalPositionController ? (
+        <span
+          aria-hidden="true"
+          data-testid="ai-chart-position-overlay-bridge"
+          data-has-verified-overlay={visibleTradePositionOverlay ? 'true' : 'false'}
+        />
+      ) : null}
       <header className="sticky top-0 z-30 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
           {!embedded && !externalMode && (
