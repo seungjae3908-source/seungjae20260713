@@ -159,6 +159,7 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
       AUTOMATIC_PAPER_ARTIFACT_DIR: production-automatic-paper-only-artifacts
+      PRODUCTION_AUTOMATIC_PAPER_ACTIVATION: 'true'
     steps:
       - uses: actions/checkout@v4
         with:
