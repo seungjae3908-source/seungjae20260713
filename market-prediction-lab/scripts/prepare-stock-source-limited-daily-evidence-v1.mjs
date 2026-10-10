@@ -10,6 +10,8 @@
  *   --input /private/us-daily-event-input.json \
  *   --output /private/us-daily-price-events.json
  *
+ * --allow-partial-diagnostic-only permits a prior-baseline matched
+ * SOURCE-LIMITED COHORT only: missing names never count as zero.
  * No internet, key, environment read, GitHub artifact, DB/order API, or
  * positive profitability claim. Input and output require local private
  * 0600 regular files. Source license may further restrict redistribution.
@@ -24,11 +26,15 @@ export function parseStockDailyEvidenceArgsV1(args=[]){
  if(!Array.isArray(args)||args.length>9)
    throw new TypeError("STOCK_EVIDENCE_CLI_ARGS_INVALID");
  const fields=new Set(["--market","--input","--output"]);
- const values={};let fixture=false;
+ const values={};let fixture=false,partial=false;
  for(let i=0;i<args.length;i++){
    if(args[i]==="--test-fixture"){
      if(fixture)throw new TypeError("STOCK_EVIDENCE_CLI_DUPLICATE_FIXTURE");
      fixture=true;continue;
+   }
+   if(args[i]==="--allow-partial-diagnostic-only"){
+     if(partial)throw new TypeError("STOCK_EVIDENCE_CLI_DUPLICATE_PARTIAL_FLAG");
+     partial=true;continue;
    }
    const k=args[i];
    if(!fields.has(k)||Object.hasOwn(values,k)||
@@ -44,7 +50,7 @@ export function parseStockDailyEvidenceArgsV1(args=[]){
     throw new TypeError("STOCK_EVIDENCE_CLI_SOURCE_DESTINATION_IDENTICAL");
  return Object.freeze({market:values["--market"],
    input:values["--input"],output:values["--output"],
-   testFixtureOnly:fixture});
+   testFixtureOnly:fixture,allowPartialDiagnosticOnly:partial});
 }
 function loadPrivateSource(path){
  const file=resolve(path),st=lstatSync(file);
@@ -58,6 +64,7 @@ export function runStockSourceLimitedDailyInputCliV1(config){
  const evidence=prepareStockSourceLimitedDailyEvidenceV1({
    market:config.market,source:original,
    testFixtureOnly:config.testFixtureOnly===true,
+   allowPartialDiagnosticOnly:config.allowPartialDiagnosticOnly===true,
  });
  const filename=resolve(config.output);
  mkdirSync(dirname(filename),{recursive:true});
@@ -67,6 +74,9 @@ export function runStockSourceLimitedDailyInputCliV1(config){
  return Object.freeze({market:config.market,
    status:evidence.status,reason:evidence.reason,
    sourceAttestedNameCount:evidence.sourceAttestedNameCount,
+   sourceObservedCurrentNameCount:evidence.sourceObservedCurrentNameCount,
+   sourceUnscorableCurrentNameCount:evidence.sourceUnscorableCurrentNameCount,
+   sourceUniverseCoveragePartial:evidence.sourceUniverseCoveragePartial,
    sourceObservedDailyEvents:null,
    fullMarketOpportunityDenominatorVerified:false,
    trueMarketWideRecall:null,profitabilityProven:false,
