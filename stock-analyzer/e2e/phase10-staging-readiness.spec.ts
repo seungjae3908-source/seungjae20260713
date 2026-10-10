@@ -530,6 +530,21 @@ function isSameOriginBrowserRead(request: Request) {
   }
 }
 
+function isPendingAiChartCandleReadIdentity(input: {
+  method: string;
+  rawUrl: string;
+  origin: string;
+}) {
+  try {
+    const url = new URL(input.rawUrl);
+    return input.method === 'GET'
+      && url.origin === input.origin
+      && /^\/api\/stocks\/[^/]+\/candles$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function isScannerReadIdentity(input: {
   method: string;
   rawUrl: string;
@@ -821,6 +836,32 @@ async function waitForBrowserNetworkQuiescence(page: Page) {
     {
       message: 'same-origin browser reads and mutations must settle before context teardown',
       timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe('quiescent');
+}
+
+async function waitForPendingAiChartCandleReads(page: Page) {
+  const origin = new URL(page.url()).origin;
+  let quietSince: number | null = null;
+  await expect.poll(
+    () => {
+      const outstanding = [...(pendingSameOriginReadRequests.get(page) ?? [])]
+        .filter((request) => isPendingAiChartCandleReadIdentity({
+          method: request.method(),
+          rawUrl: request.url(),
+          origin,
+        })).length;
+      if (outstanding > 0) {
+        quietSince = null;
+        return 'pending';
+      }
+      if (quietSince === null) quietSince = Date.now();
+      return Date.now() - quietSince >= 750 ? 'quiescent' : 'quiet';
+    },
+    {
+      message: 'real same-origin AI Chart candle reads must settle before navigation',
+      timeout: 20_000,
       intervals: [100, 200, 300, 500],
     },
   ).toBe('quiescent');
@@ -1209,6 +1250,9 @@ async function expectHealthyRoute<T>(
   observeAfterSettle?: () => Promise<T>,
 ): Promise<T | void> {
   await settle(page);
+  if (['/ai-chart', '/stock-info'].includes(new URL(page.url()).pathname)) {
+    await waitForPendingAiChartCandleReads(page);
+  }
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
     ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'
@@ -1251,6 +1295,9 @@ async function expectHealthyRoute<T>(
 
 async function expectDeniedRoute(page: Page, route: string) {
   await settle(page);
+  if (['/ai-chart', '/stock-info'].includes(new URL(page.url()).pathname)) {
+    await waitForPendingAiChartCandleReads(page);
+  }
   const origin = new URL(page.url()).origin;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
@@ -1654,6 +1701,45 @@ async function runAuthenticatedAiChartCertification(
             : null,
         };
       });
+      // Capture only public static asset path/timings, never querystrings,
+      // request headers, tokens or account identities. Keep the strict p95
+      // requirement unchanged: this is diagnostic evidence, not a bypass.
+      const publicChunkWaterfall = await page.evaluate(() => {
+        const origin = window.location.origin;
+        return performance.getEntriesByType('resource')
+          .filter((entry): entry is PerformanceResourceTiming => entry instanceof PerformanceResourceTiming)
+          .flatMap((entry) => {
+            try {
+              const url = new URL(entry.name);
+              if (url.origin !== origin || !url.pathname.startsWith('/assets/')
+                || !/\.(?:js|css)$/.test(url.pathname)) return [];
+              return [{
+                path: url.pathname,
+                initiatorType: entry.initiatorType,
+                startedAtMs: Math.round(entry.startTime),
+                responseStartMs: Math.round(entry.responseStart),
+                responseEndMs: Math.round(entry.responseEnd),
+                durationMs: Math.round(entry.duration),
+                transferSize: entry.transferSize,
+                decodedBodySize: entry.decodedBodySize,
+              }];
+            } catch {
+              return [];
+            }
+          })
+          .sort((left, right) => right.responseEndMs - left.responseEndMs)
+          .slice(0, 25);
+      });
+      await testInfo.attach('ai-chart-cold-public-asset-waterfall-session-' + session + '.json', {
+        body: Buffer.from(JSON.stringify({
+          session,
+          firstUsableChartMs: cold.usableMs,
+          firstShellMs: cold.firstShellMs,
+          coldRouteChunkMs: navigationTiming.firstRouteChunkMs,
+          assets: publicChunkWaterfall,
+        }, null, 2)),
+        contentType: 'application/json',
+      });
       expect(
         navigationTiming.firstRouteChunkMs,
         'AI Chart route chunk timing must be present; missing timing is not zero',
@@ -1977,6 +2063,30 @@ test('stock chart hedge abort proof requires a matching successful primary candl
   expect(isExpectedStockChartHedgeAbortIdentity({ ...base, errorText: 'net::ERR_FAILED' })).toBe(false);
   expect(isExpectedStockChartHedgeAbortIdentity({ ...base, successfulPrimaryIdentity: null })).toBe(false);
   expect(isExpectedStockChartHedgeAbortIdentity({ ...base, now: 12_001 })).toBe(false);
+});
+
+test('stock detail and AI Chart departures drain only legitimate same-origin candle reads', () => {
+  const origin = 'https://staging.example.test';
+  const sample = {
+    method: 'GET',
+    rawUrl: `${origin}/api/stocks/005930/candles?tf=5m`,
+    origin,
+  };
+  expect(isPendingAiChartCandleReadIdentity(sample)).toBe(true);
+  expect(isPendingAiChartCandleReadIdentity({
+    ...sample, rawUrl: `${origin}/api/stocks/005930/candles`,
+  })).toBe(true);
+  expect(isPendingAiChartCandleReadIdentity({ ...sample, method: 'POST' })).toBe(false);
+  expect(isPendingAiChartCandleReadIdentity({
+    ...sample, rawUrl: `${origin}/api/stocks/005930/chart?tf=5m`,
+  })).toBe(false);
+  expect(isPendingAiChartCandleReadIdentity({
+    ...sample, rawUrl: `${origin}/api/market/scan`,
+  })).toBe(false);
+  expect(isPendingAiChartCandleReadIdentity({
+    ...sample, rawUrl: 'https://other.example.test/api/stocks/005930/candles',
+  })).toBe(false);
+  expect(isPendingAiChartCandleReadIdentity({ ...sample, rawUrl: 'not-a-url' })).toBe(false);
 });
 
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
