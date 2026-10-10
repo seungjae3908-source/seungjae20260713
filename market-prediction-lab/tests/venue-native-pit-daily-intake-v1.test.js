@@ -44,9 +44,11 @@ async function upbit(url){
  }};
 }
 const bitget={get:async(path,params)=>{
- assert.equal(path,"/api/v3/market/history-candles");
- assert.equal(params.category,"USDT-FUTURES");
- assert.equal(params.interval,"1D");
+ assert.equal(path,"/api/v2/mix/market/history-candles");
+ assert.equal(params.productType,"USDT-FUTURES");
+ assert.equal(params.granularity,"1Dutc");
+ assert.equal(params.category,undefined);
+ assert.equal(params.interval,undefined);
  assert.equal(params.startTime,T-2*D);
  assert.equal(params.endTime,T+D);
  return {code:"00000",data:[
@@ -65,11 +67,15 @@ test("native Upbit daily data uses actual KRW venue and closed prior bar",async(
  assert.equal(r.trueMarketWideRecall,null);
  assert.equal(r.executionAuthority,"NONE");
 });
-test("Bitget v3 history is price-only and future LONG/SHORT needs separate scanner evidence",async()=>{
+test("Bitget V2 explicit UTC-day history is price-only and LONG/SHORT needs scanner evidence",async()=>{
  const r=await one({market:"CRYPTO_FUTURES",symbol:"ABCUSDT",dayStartMs:T,
   bitgetClient:bitget,nowMs:T+3*D});
  assert.equal(r.status,"NATIVE_SELECTED_PIT_SYMBOL_DAY_PRICE_ONLY");
  assert.equal(r.sourceReceipt.provider,"BITGET");
+ assert.equal(r.sourceReceipt.endpoint,"/api/v2/mix/market/history-candles");
+ assert.equal(r.sourceReceipt.granularity,"1Dutc");
+ assert.equal(r.sourceReceipt.utcCalendarDayBoundaryRequested,true);
+ assert.equal(r.priceRow.sourceId,"BITGET_PUBLIC_V2_USDT_FUTURES_1DUTC");
  assert.equal(r.priceRow.priorClose,101);
  assert.equal(r.priceRow.high,115);
  assert.equal(r.actualFillCount,null);
@@ -402,4 +408,38 @@ test("CLI private native day handoff works only on an assembled offline PIT sour
   "--read-public","--emit-private-day-rows",
   "--expected-pit-sha",digest,
  ]),/PIT_CLI_SOURCE_AUTHORITY_INVALID/);
+});
+
+test("Bitget shift by UTC+8 is BLOCKED, never re-dated into false whole-market events",async()=>{
+ const shifted=await one({market:"CRYPTO_FUTURES",
+  symbol:"ABCUSDT",dayStartMs:T,nowMs:T+3*D,
+  bitgetClient:{get:async(path,params)=>{
+   assert.equal(path,"/api/v2/mix/market/history-candles");
+   assert.equal(params.granularity,"1Dutc");
+   // Simulate a provider that ignored explicit UTC and returned a
+   // 16:00 UTC local-day boundary. No rounding or false opportunities.
+   return {code:"00000",data:[
+    [String(T-8*3600_000),"105","115","103","110","1200","90000"],
+    [String(T-D-8*3600_000),"100","102","99","101","1100","80000"],
+   ]};
+  }},
+ });
+ assert.equal(shifted.status,"BLOCKED_DATA");
+ assert.equal(shifted.reason,"NATIVE_EXCHANGE_UTC_DAY_BOUNDARY_NOT_VERIFIED");
+ assert.equal(shifted.actualMarketWideOpportunityCount,null);
+ assert.equal(shifted.trueMarketWideRecall,null);
+ assert.equal(shifted.profitabilityProven,false);
+});
+test("Bitget wrong missing UTC prior day is a BLOCKED event, not 0% return",async()=>{
+ const partial=await one({market:"CRYPTO_FUTURES",
+  symbol:"ABCUSDT",dayStartMs:T,nowMs:T+3*D,
+  bitgetClient:{get:async(path,params)=>{
+   assert.equal(path,"/api/v2/mix/market/history-candles");
+   assert.equal(params.granularity,"1Dutc");
+   return {code:"00000",data:[[String(T),"100","120","90","111","500","1000"]]};
+  }},
+ });
+ assert.equal(partial.status,"BLOCKED_DATA");
+ assert.equal(partial.reason,"NATIVE_PRIOR_UTC_DAY_CLOSE_MISSING");
+ assert.equal(partial.actualMarketWideOpportunityCount,null);
 });

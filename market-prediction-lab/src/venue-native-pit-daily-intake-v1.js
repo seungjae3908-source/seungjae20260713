@@ -1,7 +1,7 @@
 import {createHash} from "node:crypto";
 import {collectUpbitSpotHistory} from "./upbit-spot-history.js";
 import {normalizeBitgetCandle} from "./bitget-candle-collector.js";
-import {BitgetPublicApiError} from "./bitget-public-client.js";
+import {BitgetPublicApiError,BITGET_ENDPOINTS} from "./bitget-public-client.js";
 import {auditHistoricalPITVenueUniverseV1}
   from "./historical-pit-venue-universe-gate-v1.js";
 import {FOUR_MARKET_WHOLE_SCOPE_V1 as SCOPE,
@@ -128,20 +128,32 @@ export async function collectNativePITDayPriceV1({
   }else{
     if(!bitgetClient||typeof bitgetClient.get!=="function")
       throw new TypeError("BITGET_READ_ONLY_PUBLIC_CLIENT_REQUIRED");
-    // v3 official history endpoint can query older than 90 days;
-    // per-query window is only 3 days here (documented max 90).
-    const params={category:"USDT-FUTURES",symbol,interval:"1D",
-      type:"market",startTime:dayStartMs-2*D,endTime:dayStartMs+D,limit:100};
-    const x=await bitgetClient.get("/api/v3/market/history-candles",params);
+    // Official Bitget classic V2 supports an EXPLICIT UTC calendar-day bar
+    // granularity, "1Dutc". V3 "1D" is not an attested UTC-day boundary.
+    // Mixing a shifted "1D" and Upbit 00:00 UTC bars would misattribute
+    // +/-5/10/20% opportunity events to the wrong historical date.
+    // Query just the requested closed UTC day and its actual prior UTC day.
+    const params={symbol,productType:"USDT-FUTURES",granularity:"1Dutc",
+      startTime:dayStartMs-2*D,endTime:dayStartMs+D,limit:100};
+    const x=await bitgetClient.get(BITGET_ENDPOINTS.futuresHistoryCandles,params);
     if(!Array.isArray(x?.data)||x.data.length>100)
-      throw new TypeError("BITGET_V3_HISTORIC_DAY_RESPONSE_INVALID");
+      throw new TypeError("BITGET_V2_UTC_HISTORIC_DAY_RESPONSE_INVALID");
     candles=x.data.map(normalizeBitgetCandle);
-    sourceId="BITGET_PUBLIC_V3_USDT_FUTURES_1D";
-    sourceReceipt={provider:"BITGET",endpoint:"/api/v3/market/history-candles",
-      category:"USDT-FUTURES",historicalContractLifecycleVerified:false,
+    sourceId="BITGET_PUBLIC_V2_USDT_FUTURES_1DUTC";
+    sourceReceipt={provider:"BITGET",endpoint:BITGET_ENDPOINTS.futuresHistoryCandles,
+      productType:"USDT-FUTURES",granularity:"1Dutc",
+      utcCalendarDayBoundaryRequested:true,
+      historicalContractLifecycleVerified:false,
       providerCurrentInstrumentsNotPIT:true,
       responseRows:x.data.length};
   }
+  // Reject provider or timezone mismatches as a per-symbol BLOCKED receipt,
+  // never round an exchange-local 1D candle into a fictitious UTC candle.
+  if(candles.some(x=>x.timestamp%D!==0))
+    return blocked(market,"NATIVE_EXCHANGE_UTC_DAY_BOUNDARY_NOT_VERIFIED",{
+      symbol,sourceId,sourceReceipt,offendingTimestampsPreview:candles
+        .filter(x=>x.timestamp%D!==0).slice(0,3).map(x=>x.timestamp),
+    });
   const {prior,current}=pickDay(candles,dayStartMs);
   if(!prior||!current)return blocked(market,
     !prior?"NATIVE_PRIOR_UTC_DAY_CLOSE_MISSING":
@@ -281,7 +293,7 @@ export function assembleHistoricalPITDayChunksV1({
   const providerSource=market==="CRYPTO_SPOT"
     ?"UPBIT_PUBLIC_DAY_CANDLES_V1"
     :market==="CRYPTO_FUTURES"
-      ?"BITGET_PUBLIC_V3_USDT_FUTURES_1D":null;
+      ?"BITGET_PUBLIC_V2_USDT_FUTURES_1DUTC":null;
   const ordered=[...chunks].sort((a,b)=>a.chunkOffset-b.chunkOffset);
   let count=0;const rows=[];
   for(const piece of ordered){
