@@ -1,7 +1,7 @@
 import { Router, type IRouter } from 'express';
 import { createHmac, randomUUID } from 'node:crypto';
 import { requireMember } from '../middleware/auth';
-import { fetchNonEmptyPublicCandleRows } from '../lib/public-candle-retry';
+import { fetchHistoricalPublicCandleRows, fetchNonEmptyPublicCandleRows } from '../lib/public-candle-retry';
 import { absoluteUpbitCandleTime } from '../lib/upbit-candle-time';
 import cryptoAutoRouter from './crypto-auto';
 
@@ -180,16 +180,35 @@ router.get('/crypto/spot/candles', async (req, res) => {
   const symbol = safeSymbol(req.query.symbol || 'BTC');
   const unit = Math.max(1, Math.min(240, Number(req.query.unit ?? 15) || 15));
   const count = Math.max(1, Math.min(200, Number(req.query.count ?? 120) || 120));
+  const before = req.query.before == null ? null : Date.parse(String(req.query.before));
+  if (before !== null && (!Number.isFinite(before) || before <= 0 || before > Date.now() + 60_000)) {
+    return res.status(400).json({ ok: false, error: 'UPBIT_HISTORY_CURSOR_INVALID' });
+  }
   // tf=1D|1W|1M 이면 업비트 일/주/월봉, 없으면 기존 분봉 동작 유지.
   const tf = String(req.query.tf ?? '').toUpperCase();
   const tfPath = tf === '1D' ? 'days' : tf === '1W' ? 'weeks' : tf === '1M' ? 'months' : null;
+  const cursor = before === null ? '' : `&to=${encodeURIComponent(new Date(before).toISOString())}`;
   const url = tfPath
-    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`
-    : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}`;
+    ? `${UPBIT_BASE}/v1/candles/${tfPath}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}${cursor}`
+    : `${UPBIT_BASE}/v1/candles/minutes/${unit}?market=${encodeURIComponent(`KRW-${symbol}`)}&count=${count}${cursor}`;
   try {
-    const rows = await fetchNonEmptyPublicCandleRows(() => fetchJson<any[]>(url));
-    const candles = rows.reverse().map((row) => ({ time: absoluteUpbitCandleTime(row), open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }));
-    return res.json({ ok: true, provider: 'upbit', fetchedAt: new Date().toISOString(), exchange: 'UPBIT', market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, updatedAt: new Date().toISOString() });
+    const rows = before === null
+      ? await fetchNonEmptyPublicCandleRows(() => fetchJson<any[]>(url))
+      : await fetchHistoricalPublicCandleRows(() => fetchJson<any[]>(url));
+    const sourceExhausted = before !== null && rows.length === 0;
+    const candles = rows.reverse().map((row) => ({ time: absoluteUpbitCandleTime(row), open: finite(row.opening_price), high: finite(row.high_price), low: finite(row.low_price), close: finite(row.trade_price), volume: finite(row.candle_acc_trade_volume), tradingValue: finite(row.candle_acc_trade_price) }))
+      // Historical pagination must be strictly exclusive at the provider's
+      // requested cursor. Client normalization independently enforces it too.
+      .filter((candle) => before === null || (candle.time !== null
+        && Number.isFinite(Date.parse(candle.time)) && Date.parse(candle.time) < before));
+    if (before !== null && rows.length > 0 && candles.length === 0) {
+      // A nonempty provider response containing only overlapping/future bars
+      // is not proof of source exhaustion. Fail closed rather than reporting
+      // a successful empty page and permanently truncating the chart.
+      return res.status(502).json({ ok: false, provider: 'upbit', exchange: 'UPBIT',
+        error: 'UPBIT_HISTORY_CURSOR_NO_PROGRESS', candles: [], count: 0 });
+    }
+    return res.json({ ok: true, provider: 'upbit', fetchedAt: new Date().toISOString(), exchange: 'UPBIT', market: `KRW-${symbol}`, unit: tfPath ? tf : `${unit}m`, candles, count: candles.length, sourceExhausted, updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error('upbit candles error:', error);
     return res.status(502).json({ ok: false, provider: 'upbit', exchange: 'UPBIT', candles: [], count: 0, error: 'UPBIT_CANDLES_UNAVAILABLE', message: '업비트 캔들 조회 실패 — 결과 0건이 아니라 조회 오류입니다.' });
@@ -250,11 +269,26 @@ router.get('/crypto/futures/candles', async (req, res) => {
   const allowed = new Set(['1m', '3m', '5m', '15m', '30m', '1H', '4H', '6H', '12H', '1D', '1W']);
   const rawGranularity = String(req.query.granularity ?? '15m');
   const granularity = allowed.has(rawGranularity) ? rawGranularity : '15m';
-  const limit = Math.max(1, Math.min(1000, Number(req.query.limit ?? 200) || 200));
+  const requestedBefore = req.query.before == null ? null : Number(req.query.before);
+  if (requestedBefore !== null && (!Number.isSafeInteger(requestedBefore) || requestedBefore <= 0 || requestedBefore > Date.now() + 60_000)) {
+    return res.status(400).json({ ok: false, error: 'BITGET_HISTORY_CURSOR_INVALID' });
+  }
+  if (requestedBefore !== null && !allowed.has(rawGranularity)) {
+    // Never silently substitute 15m for a requested historical 3m/4H/etc.
+    // A cross-timeframe page would corrupt the AI chart's candle timeline.
+    return res.status(400).json({ ok: false, error: 'BITGET_HISTORY_GRANULARITY_INVALID' });
+  }
+  const limit = Math.max(1, Math.min(requestedBefore == null ? 1000 : 200, Number(req.query.limit ?? 200) || 200));
   try {
-    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(granularity)}&limit=${limit}`);
+    // Use the historical endpoint only for older completed candles.
+    const endpoint = requestedBefore == null ? 'candles' : 'history-candles';
+    const cursor = requestedBefore == null ? '' : `&endTime=${Math.max(1, requestedBefore - 1)}`;
+    const payload = await fetchJson<any>(`${BITGET_BASE}/api/v2/mix/market/${endpoint}?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(granularity)}&limit=${limit}${cursor}`);
     if (String(payload?.code ?? '') !== '00000' || !Array.isArray(payload?.data)) throw new Error(`BITGET_${String(payload?.code ?? 'INVALID')}`);
-    const candles = payload.data.reverse().map((row: any[]) => ({
+    // Bitget can supply historical candles in either chronological order.
+    // Never blindly reverse a provider array: sort actual timestamps instead,
+    // and keep one real row per bar time without fabricating any candle.
+    const sourceRows = payload.data.map((row: any[]) => ({
       time: finite(row[0]),
       open: finite(row[1]),
       high: finite(row[2]),
@@ -262,7 +296,17 @@ router.get('/crypto/futures/candles', async (req, res) => {
       close: finite(row[4]),
       volume: finite(row[5]),
       quoteVolume: finite(row[6]),
-    }));
+    })).filter((row: { time: number | null }) => requestedBefore == null || (typeof row.time === 'number' && Number.isFinite(row.time) && row.time < requestedBefore));
+    const orderedRows = sourceRows.sort((left: { time: number | null }, right: { time: number | null }) =>
+      (left.time ?? Number.NEGATIVE_INFINITY) - (right.time ?? Number.NEGATIVE_INFINITY));
+    const candles = orderedRows.filter((row: { time: number | null }, index: number) =>
+      index === 0 || row.time !== orderedRows[index - 1].time);
+    if (requestedBefore !== null && payload.data.length > 0 && candles.length === 0) {
+      // Provider returned only cursor-overlapping or invalid rows. Do not
+      // publish a successful empty history page that stops further paging.
+      return res.status(502).json({ ok: false, provider: 'bitget', exchange: 'BITGET',
+        error: 'BITGET_HISTORY_CURSOR_NO_PROGRESS', candles: [], count: 0 });
+    }
     const now = new Date().toISOString();
     return res.json({
       ok: true,

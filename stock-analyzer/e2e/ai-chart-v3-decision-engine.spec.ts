@@ -217,6 +217,65 @@ test('position-aware invalidation exits without creating an order', () => {
   expect(result.reasons).toEqual(['POSITION_INVALIDATED']);
 });
 
+
+test('all independent missing V3 provenance owners are surfaced together without trading', () => {
+  const blocked = decideAiChartV3(decisionBase({
+    regime: 'INSUFFICIENT_DATA',
+    strategyHealth: 'UNKNOWN',
+    eventRisk: 'UNKNOWN',
+    calibration: null,
+  }));
+  expect(blocked.decision).toBe('WAIT');
+  expect(blocked.calibrationState).toBe('MISSING_EVIDENCE');
+  expect(blocked.reasons).toEqual([
+    'REGIME_EVIDENCE_UNAVAILABLE',
+    'STRATEGY_HEALTH_UNAVAILABLE',
+    'EVENT_RISK_UNAVAILABLE',
+    'PERFORMANCE_EVIDENCE_UNAVAILABLE',
+  ]);
+  expect(blocked.calibratedProbability).toBeNull();
+  expect(blocked.costAdjustedEvPct).toBeNull();
+
+  const partial = decideAiChartV3(decisionBase({
+    strategyHealth: 'UNKNOWN',
+    eventRisk: 'UNKNOWN',
+    calibration: { ...readyCalibration, sampleN: 5 },
+  }));
+  expect(partial.decision).toBe('WAIT');
+  expect(partial.reasons).toEqual([
+    'STRATEGY_HEALTH_UNAVAILABLE',
+    'EVENT_RISK_UNAVAILABLE',
+    'INSUFFICIENT_SAMPLE',
+  ]);
+  expect(partial.calibratedProbability).toBeNull();
+  expect(partial.costAdjustedEvPct).toBeNull();
+});
+
+test('future-dated canonical calibration evidence fails closed despite valid-looking hashes', () => {
+  const future = calibrateAiChartV3Performance({
+    ...readyCalibration,
+    provenance: {
+      ...readyCalibration.provenance,
+      observedAt: new Date(Date.now() + 86_400_000).toISOString(),
+    },
+  }, canonicalIdentity);
+  expect(future.state).toBe('INVALID_EVIDENCE');
+  expect(future.probability).toBeNull();
+  expect(future.costAdjustedEvPct).toBeNull();
+
+  const decision = decideAiChartV3(decisionBase({
+    regime: 'UPTREND', strategyHealth: 'ACTIVE', eventRisk: 'LOW',
+    calibration: {
+      ...readyCalibration,
+      provenance: { ...readyCalibration.provenance, observedAt: new Date(Date.now() + 86_400_000).toISOString() },
+    },
+  }));
+  expect(decision.decision).toBe('WATCH');
+  expect(decision.reasons).toContain('INVALID_PERFORMANCE_EVIDENCE');
+  expect(decision.calibratedProbability).toBeNull();
+  expect(decision.costAdjustedEvPct).toBeNull();
+});
+
 test('AI Chart intelligence panel is wired to the V3 decision gate and keeps probability/EV unavailable by default', async () => {
   const panel = await readFile(new URL('../src/components/ai-chart-v2-intelligence-panel.tsx', import.meta.url), 'utf8');
   expect(panel).toContain("from '@/lib/ai-chart-v3-decision-engine'");

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAssetMode } from '@/lib/asset-mode';
+import { useAuth } from '@/lib/auth';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import {
   selectionQuery,
@@ -26,6 +27,7 @@ import {
   type UnifiedScannerStrategyMode,
 } from '@/lib/signal-scanner-profile';
 import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
+import { uniqueScannerDisplayCards } from '@/lib/scanner-display-cards';
 
 export type ScannerView = 'KR' | 'US' | 'SPOT' | 'FUTURES';
 type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' | 'error';
@@ -115,7 +117,11 @@ function actionLabel(card: ScannerSignalCard): string {
   if (futures) {
     if (card.action === 'LONG') return '롱';
     if (card.action === 'SHORT') return '숏';
-    if (card.action === 'NONE' || card.action === 'NO_TRADE') return '거래 안 함';
+    if (card.action === 'NONE' || card.action === 'NO_TRADE') {
+      if (card.direction === 'LONG') return '롱 · 거래 안 함';
+      if (card.direction === 'SHORT') return '숏 · 거래 안 함';
+      return '거래 안 함';
+    }
     return '방향 미확인';
   }
   if (card.action === 'BUY') return '매수';
@@ -540,6 +546,7 @@ function SignalDetailPanel({
 
 export default function SignalScannerPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
+  const auth = useAuth();
   const assetMode = useAssetMode();
   const analysisSelection = useAnalysisSelection();
   const initialView: ScannerView = assetMode.asset === 'coin'
@@ -553,12 +560,11 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [cursor, setCursor] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
-  const [data, setData] = useState<ScannerResponse | null>(null);
+  const [storedData, setData] = useState<ScannerResponse | null>(null);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showOrderPreparation, setShowOrderPreparation] = useState(false);
   const dataRef = useRef<ScannerResponse | null>(null);
-  dataRef.current = data;
   const [errorMessage, setErrorMessage] = useState('');
   const latestSequence = useRef(0);
   const lastGeneratedAt = useRef<string | null>(null);
@@ -568,7 +574,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const profile = useMemo(() => getScannerUiProfile(market, strategy), [market, strategy]);
   const effectiveTimeframe = embedded ? embeddedTimeframe : profile.timeframe;
   const stockView = view === 'KR' || view === 'US';
-  const batchSize = stockView ? 100 : 24;
+  // Bound interactive work to the 8.5s stock / 12s crypto deadlines.
+  const batchSize = stockView ? 12 : 10;
   const profileRequest = useMemo<SignalScannerRequest>(() => ({
     assetClass: stockView ? 'stock' : view === 'SPOT' ? 'coin_spot' : 'coin_futures',
     market: view === 'KR' ? 'KR' : view === 'US' ? 'US' : view === 'SPOT' ? 'UPBIT' : 'BITGET',
@@ -585,26 +592,25 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     () => embedded ? { ...profileRequest, timeframe: embeddedTimeframe } : profileRequest,
     [embedded, embeddedTimeframe, profileRequest],
   );
-  const requestKey = useMemo(() => JSON.stringify(request), [request]);
+  const memberScope = auth.user?.id ?? null;
+  const requestKey = useMemo(() => JSON.stringify([request, memberScope]), [request, memberScope]);
+  // No result from another market, timeframe, page or strategy can be displayed.
+  const data = displayedRequestKey.current === requestKey ? storedData : null;
+  dataRef.current = data;
 
-  const normalizedCards = useMemo(() => {
-    if (!data?.cards) return [];
-    const map = new Map<string, ScannerSignalCard>();
-    for (const card of data.cards) {
-      if (!card?.signalId || !card.symbol || !card.name) continue;
-      if (!map.has(card.symbol)) map.set(card.symbol, card);
-    }
-    return Array.from(map.values()).sort(compareScannerCards);
-  }, [data?.cards]);
+  const normalizedCards = useMemo(
+    () => uniqueScannerDisplayCards(data?.cards ?? []).sort(compareScannerCards),
+    [data?.cards],
+  );
   const futuresDirectionCounts = useMemo(() => ({
     ALL: normalizedCards.length,
-    LONG: normalizedCards.filter((card) => card.action === 'LONG').length,
-    SHORT: normalizedCards.filter((card) => card.action === 'SHORT').length,
+    LONG: normalizedCards.filter((card) => card.direction === 'LONG').length,
+    SHORT: normalizedCards.filter((card) => card.direction === 'SHORT').length,
   }), [normalizedCards]);
   const visibleCards = useMemo(
     () => view !== 'FUTURES' || futuresDirectionFilter === 'ALL'
       ? normalizedCards
-      : normalizedCards.filter((card) => card.action === futuresDirectionFilter),
+      : normalizedCards.filter((card) => card.direction === futuresDirectionFilter),
     [futuresDirectionFilter, normalizedCards, view],
   );
   const selectedCard = useMemo(
@@ -626,6 +632,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
   useEffect(() => {
     lastGeneratedAt.current = null;
+    setData(null);
+    dataRef.current = null;
     setSelectedSignalId(null);
     setDetailOpen(false);
     setShowOrderPreparation(false);
@@ -645,7 +653,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     latestSequence.current = sequence;
     if (displayedRequestKey.current !== requestKey) setStatus('loading');
     setErrorMessage('');
-    void fetchSignalScanner(request, controller.signal)
+    void fetchSignalScanner(request, controller.signal, memberScope)
       .then((result) => {
         if (controller.signal.aborted || latestSequence.current !== sequence) return;
         if (lastGeneratedAt.current && new Date(result.generatedAt) < new Date(lastGeneratedAt.current)) return;
@@ -667,6 +675,15 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         }
         const message = requestErrorMessage(error);
         setErrorMessage(message);
+        if (error instanceof SignalScannerRequestError && (error.status === 401 || error.status === 403)) {
+          // Never leave a previous member's result visible after auth rejection.
+          displayedRequestKey.current = null;
+          dataRef.current = null;
+          setData(null);
+          setSelectedSignalId(null);
+          setDetailOpen(false);
+          setShowOrderPreparation(false);
+        }
         if (error instanceof SignalScannerRequestError && [409, 429, 502].includes(error.status) && dataRef.current) {
           setStatus('partial');
           return;
@@ -674,7 +691,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         setStatus('error');
       });
     return () => controller.abort();
-  }, [request, requestKey, refreshToken]);
+  }, [request, requestKey, refreshToken, memberScope]);
 
   useEffect(() => {
     const refreshWhenVisible = () => {
@@ -837,10 +854,15 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 <div><p className="text-sm font-black">{data.message}</p><p className="mt-1 text-xs text-muted-foreground">{strategyLabel(strategy)} · {data.timeframe} · {new Date(data.generatedAt).toLocaleString('ko-KR')}</p></div>
                 <div className="flex flex-wrap justify-end gap-1"><span className="rounded-full border border-card-border px-3 py-1 text-xs font-bold">{data.dataState}</span>{outcome ? <span data-testid="scanner-outcome" className="rounded-full border border-card-border px-3 py-1 text-[10px] font-black">{outcome}</span> : null}</div>
               </div>
+              {(data.execution.backtestMissingCount ?? 0) > 0 && (
+                <p role="status" data-testid="scanner-oos-missing" className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs font-bold text-warning">
+                  현재 묶음의 {data.execution.backtestMissingCount}개 후보에 검증된 OOS·워크포워드 근거가 부족합니다. 신호점수가 높아도 S/A 등급으로 승격하지 않으며 관찰 후보로 표시합니다.
+                </p>
+              )}
               <div className="mt-3 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">스캔</p><p className="text-sm font-black">{data.execution.requestedCount}</p></div>
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">분석 완료</p><p className="text-sm font-black">{data.execution.dataSuccessCount ?? data.execution.completedCount}</p></div>
-                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표시</p><p className="text-sm font-black">{data.execution.finalDisplayedCount ?? normalizedCards.length}</p></div>
+                <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">표시</p><p data-testid="scanner-visible-count" className="text-sm font-black">{visibleCards.length}</p></div>
                 <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Provider 오류</p><p className="text-sm font-black">{data.execution.providerErrorCount}</p></div>
               </div>
             </section>
@@ -861,7 +883,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 <h2 className="font-black">승인 대기 알림</h2>
                 <p className="mt-1 text-xs text-muted-foreground">상세 정보만 열며 주문을 실행하지 않습니다.</p>
                 <div className="mt-3 space-y-2">{data.alerts.map((alert) => (
-                  <button key={alert.idempotencyKey} type="button" onClick={() => { const card = normalizedCards.find((item) => item.signalId === alert.signalId); if (card) selectSignal(card); }} className="min-h-11 w-full rounded-xl border border-primary/30 bg-card px-3 py-2 text-left text-sm">
+                  <button key={alert.idempotencyKey} type="button" onClick={() => { const card = normalizedCards.find((item) => item.signalId === alert.signalId); if (card) { if (view === 'FUTURES') setFuturesDirectionFilter('ALL'); selectSignal(card); } }} className="min-h-11 w-full rounded-xl border border-primary/30 bg-card px-3 py-2 text-left text-sm">
                     <span className="font-black">{alertTitle(alert)}</span>
                   </button>
                 ))}</div>

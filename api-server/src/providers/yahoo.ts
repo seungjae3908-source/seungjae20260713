@@ -147,7 +147,7 @@ async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResul
 
 async function fetchYahooChart(
   symbol: string,
-  params?: { range: string; interval: string },
+  params?: { range: string; interval: string } | { period1: number; period2: number; interval: string },
 ): Promise<YahooChartResult> {
   const encoded = encodeURIComponent(symbol);
 
@@ -156,9 +156,11 @@ async function fetchYahooChart(
   // candle requests still use their requested timeframe/range.
   const query = params
     ? [
-        params.range
-          ? `range=${params.range}&interval=${params.interval}`
-          : `period1=0&period2=9999999999&interval=${params.interval}`,
+        'period1' in params
+          ? `period1=${params.period1}&period2=${params.period2}&interval=${params.interval}`
+          : params.range
+            ? `range=${params.range}&interval=${params.interval}`
+            : `period1=0&period2=9999999999&interval=${params.interval}`,
       ]
     : ['range=1mo&interval=1d'];
 
@@ -399,6 +401,48 @@ export async function getCandles(
   const rows = normalizeYahooCandles(result);
 
   return aggregateYahooDerivedTimeframe(requestedTimeframe, rows);
+}
+
+/** A bounded, genuinely cursor-bound Yahoo historical read; unlike getCandles,
+ * do NOT re-fetch the latest range when the user scrolls into earlier dates.
+ * Yahoo intraday retention is provider-limited. Never manufacture missing bars.
+ */
+export function yahooHistoricalChartParams(timeframe: string, beforeMs: number): {
+  period1: number;
+  period2: number;
+  interval: string;
+} {
+  if (!Number.isSafeInteger(beforeMs) || beforeMs <= 0) {
+    throw new Error('YAHOO_HISTORY_CURSOR_INVALID');
+  }
+  const sourceTimeframe = timeframe === '3m' ? '1m' : timeframe === '4H' ? '60m' : timeframe;
+  const interval = yahooChartParams(sourceTimeframe).interval;
+  // Strictly bounded source windows; no unlimited multi-year minute download.
+  const windowDays: Record<string, number> = {
+    '1m': 6, '3m': 6, '5m': 28, '15m': 28, '30m': 28,
+    '60m': 180, '1H': 180, '4H': 365, '1D': 500,
+  };
+  const days = windowDays[timeframe];
+  if (!days) throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${timeframe}`);
+  // Yahoo's chart period1/period2 are UNIX seconds; period2 is exclusive.
+  const period2 = Math.floor(beforeMs / 1000);
+  return { period1: Math.max(1, period2 - days * 86_400), period2, interval };
+}
+
+export async function getHistoricalCandles(
+  entryOrTicker: CatalogEntry | string,
+  timeframe: string,
+  beforeMs: number,
+): Promise<Candle[]> {
+  const symbol = yahooSymbol(getTickerFromEntry(entryOrTicker));
+  const params = yahooHistoricalChartParams(timeframe, beforeMs);
+  const result = await fetchYahooChart(symbol, params);
+  return aggregateYahooDerivedTimeframe(timeframe, normalizeYahooCandles(result))
+    .filter((row) => {
+      const timestamp = Date.parse(String(row.time));
+      return Number.isFinite(timestamp) && timestamp < beforeMs;
+    })
+    .slice(-200);
 }
 
 export const candles = getCandles;

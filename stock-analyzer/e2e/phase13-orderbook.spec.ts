@@ -347,3 +347,31 @@ test('single polling owner issues one request per interval for the same key', as
   await page.waitForTimeout(400);
   expect(calls.length).toBe(2);
 });
+test('US Toss canonical orderbook shows actual provider identity, freshness and spread without order privileges', async ({ page }) => {
+  const calls = await mockOrderbook(page, {
+    ...readyFixture,
+    market: 'US', symbol: 'AAPL', ticker: 'AAPL', currency: 'USD',
+    provider: 'toss',
+    providerTimestamp: '2026-08-13T03:20:05.000Z',
+    asks: [{ rank: 1, price: 101, quantity: 3, cumulativeQuantity: 3 }],
+    bids: [{ rank: 1, price: 100, quantity: 4, cumulativeQuantity: 4 }],
+    bestAsk: 101, bestBid: 100, spread: 1, spreadPct: 0.9901, imbalance: 0.142857,
+  });
+  const privateRequests: string[] = [];
+  page.on('request', (request) => {
+    if (privateTradingPath(request.url())) privateRequests.push(request.url());
+  });
+
+  await page.goto('/__phase13-orderbook-e2e?ticker=AAPL&market=US&assetClass=stock');
+  const dialog = page.getByRole('dialog', { name: /AAPL 호가창/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('Toss read-only')).toBeVisible();
+  await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
+  await expect(dialog.getByTestId('ask-level-1')).toContainText('101');
+  await expect(dialog.getByTestId('bid-level-1')).toContainText('100');
+  await expect(dialog.getByText('Spread %')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /매수|매도|주문|취소|정정|잔고|포지션/ })).toHaveCount(0);
+  expect(calls.length).toBeGreaterThan(0);
+  expect(calls.every((request) => request.method === 'GET')).toBe(true);
+  expect(privateRequests).toEqual([]);
+});
