@@ -56,6 +56,30 @@ type CacheRow = {
 };
 const lastGood = new Map<MarketScope, CacheRow>();
 const CACHE_MS = 12 * 60 * 60_000;
+// These lower bounds are outage/truncation anomaly guards, NOT proof that an
+// external source supplied the complete stock exchange universe.
+export const SCANNER_PROVIDER_ROSTER_MINIMUM: Readonly<Record<MarketScope, number>> =
+  Object.freeze({ KR: 500, US: 1_000 });
+
+export function classifyScannerUniverseSource(
+  market: MarketScope,
+  entries: readonly ScannerUniverseEntry[],
+): Readonly<{ source: ScannerUniverseSource; partial: boolean; stale: boolean; providerErrorCount: number }> {
+  const expected: ScannerUniverseSource =
+    market === 'KR' ? 'krx-symbol-master' : 'finnhub-symbol-master';
+  const allExpected = entries.length > 0 && entries.every((row) =>
+    row.market === market && row.listingStatus === 'LISTED' && row.source === expected);
+  if (allExpected && entries.length >= SCANNER_PROVIDER_ROSTER_MINIMUM[market]) {
+    return { source: expected, partial: false, stale: false, providerErrorCount: 0 };
+  }
+  const cached = entries.length > 0 && entries.every((row) => row.source === 'last-good-cache');
+  return {
+    source: cached ? 'last-good-cache' : allExpected ? expected : 'curated-fallback',
+    partial: true,
+    stale: cached || !allExpected,
+    providerErrorCount: 1,
+  };
+}
 
 function catalogFallback(market: MarketScope): ScannerUniverseEntry[] {
   return CATALOG
@@ -204,8 +228,10 @@ async function liveUniverse(market: MarketScope, signal?: AbortSignal): Promise<
     currency: 'USD',
     assetType: row.assetType,
     exchange: row.exchange,
-    listingStatus: 'LISTED',
-    source: 'finnhub-symbol-master',
+    // Respect the provider's fallback provenance; a curated or expired
+    // cache row is not an authenticated/current LISTED symbol.
+    listingStatus: row.listingStatus,
+    source: row.source === 'static-catalog' ? 'curated-fallback' : row.source,
   }));
 }
 
@@ -242,26 +268,25 @@ export const ScannerUniverseService = {
       const capability = publicOnlyCapability(market, rawLive);
       const live = capability.entries;
       if (live.length > 0) {
-        const source: ScannerUniverseSource = market === 'KR'
-          ? 'krx-symbol-master'
-          : 'finnhub-symbol-master';
-        lastGood.set(market, {
-          at: now,
-          entries: live,
-          source,
-          rawTotalCount: capability.rawTotalCount,
-          explainedExclusions: capability.exclusions,
-        });
+        const evidence = classifyScannerUniverseSource(market, live);
+        // Never replace a previously attested roster with a tiny provider
+        // response or silently upgrade a fallback catalog to whole-market.
+        if (!evidence.partial) {
+          lastGood.set(market, {
+            at: now,
+            entries: live,
+            source: evidence.source,
+            rawTotalCount: capability.rawTotalCount,
+            explainedExclusions: capability.exclusions,
+          });
+        }
         return {
           entries: live,
           totalCount: live.length,
           rawTotalCount: capability.rawTotalCount,
           explainedExcludedCount: capability.exclusions.length,
           explainedExclusions: capability.exclusions,
-          source,
-          partial: false,
-          stale: false,
-          providerErrorCount: 0,
+          ...evidence,
           loadedAt: new Date(now).toISOString(),
         };
       }
