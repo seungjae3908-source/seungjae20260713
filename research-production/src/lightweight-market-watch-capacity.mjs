@@ -18,7 +18,7 @@ export function summarizeWatchStorageCapacity({ files, diskFreeBytes, nowUtcDay 
   if (!Array.isArray(files) || files.length > WATCH_CAPACITY_POLICY.maxDays * 3
     || !valid(diskFreeBytes) || !validUtcDay(nowUtcDay))
     throw new Error('WATCH_CAPACITY_INPUT_INVALID');
-  const seen = new Set(), sizeByDate = new Map();
+  const seen = new Set(), sizeByDate = new Map(), cadenceDays = new Set();
   for(const f of files) {
     if (!f || !WATCH_CAPACITY_POLICY.categories.includes(f.category)
       || !validUtcDay(f.day)
@@ -27,16 +27,19 @@ export function summarizeWatchStorageCapacity({ files, diskFreeBytes, nowUtcDay 
       throw new Error('WATCH_CAPACITY_FILE_INVALID');
     seen.add(f.category+':'+f.day);
     sizeByDate.set(f.day,(sizeByDate.get(f.day)??0)+f.bytes);
+    if (f.category === 'cadence') cadenceDays.add(f.day);
   }
   const ordered=[...sizeByDate.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
-  // Do not turn a single quiet day or a sparse, intermittently running worker
-  // into a "healthy" multi-month capacity forecast. Require the last seven
-  // CONSECUTIVE completed UTC dates; absence is UNKNOWN, never zero usage.
+  // A discovery/outcome event day does NOT prove the watch was even running.
+  // Require actual cadence-file presence on all seven completed UTC dates;
+  // file presence is still not proof of independently attested 24h uptime.
+  // Missing days are UNKNOWN, never counted as zero-byte days.
   const todayMs = Date.parse(nowUtcDay + 'T00:00:00Z');
   const days = Array.from({ length: 7 }, (_, i) =>
     new Date(todayMs - (7 - i) * 86_400_000).toISOString().slice(0,10));
   const observedCompletedDays = days.filter(d => sizeByDate.has(d)).length;
-  const sevenDayHistoryComplete = observedCompletedDays === 7;
+  const cadenceCompletedDays = days.filter(d => cadenceDays.has(d)).length;
+  const sevenDayHistoryComplete = observedCompletedDays === 7 && cadenceCompletedDays === 7;
   const mean = sevenDayHistoryComplete
     ? Math.ceil(days.reduce((sum, day) => sum + sizeByDate.get(day), 0) / 7)
     : null;
@@ -50,7 +53,7 @@ export function summarizeWatchStorageCapacity({ files, diskFreeBytes, nowUtcDay 
     fileCount:files.length, datedDayCount:ordered.length,
     totalTrackedBytes:ordered.reduce((n,[,bytes])=>n+bytes,0),
     lastSevenCompletedDaysAverageBytes:mean,
-    observedCompletedDays, sevenDayHistoryComplete,
+    observedCompletedDays, cadenceCompletedDays, sevenDayHistoryComplete,
     diskFreeBytes, reservedDiskFloorBytes:WATCH_CAPACITY_POLICY.diskFloorBytes,
     projectedDaysAboveFloor:projectedDays,
     retentionApplied:false, archiveVerified:false, deletionAllowed:false,
