@@ -1,10 +1,12 @@
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inspectStockInputs, STOCK_PREFLIGHT_CONTRACT } from '../bin/stock-source-preflight.mjs';
+import {
+  inspectStockInputs, readVerifiedStockSource, STOCK_PREFLIGHT_CONTRACT,
+} from '../bin/stock-source-preflight.mjs';
 
 const NOW = Date.parse('2026-10-10T06:00:00.000Z');
 const DIR = 'market-watch-input';
@@ -98,6 +100,52 @@ test('unsafe root, directory, symlink, hardlink and write permissions cannot be 
   });
 });
 
+
+
+test('actual watcher stock read enforces the same owner and source contract', async () => {
+  await withRoot(async root => {
+    await mkdir(join(root, DIR), { mode: 0o700 });
+    await put(root, 'KR_STOCK', input('KR_STOCK'));
+    await put(root, 'US_STOCK', input('US_STOCK', true));
+    for (const market of ['KR_STOCK', 'US_STOCK']) {
+      const actual = await readVerifiedStockSource(root, market, NOW);
+      const diag = await inspectStockInputs(root, NOW);
+      assert.equal(actual.source, market === 'KR_STOCK' ? 'KRX_PUBLIC_V1' : 'US_PUBLIC_V1');
+      assert.equal(actual.status, 'PARTIAL_UNIVERSE');
+      assert.equal(actual.quotes.length, diag.markets.find(v => v.market === market).observedCount);
+      assert.equal(diag.fullUniverseVerified, false);
+    }
+    await assert.rejects(
+      readVerifiedStockSource(root, '../account', NOW), /STOCK_SOURCE_ARGUMENT_INVALID/,
+    );
+    await assert.rejects(
+      readVerifiedStockSource('/', 'KR_STOCK', NOW), /STOCK_SOURCE_ARGUMENT_INVALID/,
+    );
+    const stockFile = join(root, DIR, 'KR_STOCK.json');
+    await chmod(stockFile, 0o666);
+    await assert.rejects(
+      readVerifiedStockSource(root, 'KR_STOCK', NOW), /UNSAFE_STOCK_INPUT/,
+    );
+    await chmod(stockFile, 0o600);
+    await link(stockFile, join(root, DIR, 'hardlink-stock.json'));
+    await assert.rejects(
+      readVerifiedStockSource(root, 'KR_STOCK', NOW), /UNSAFE_STOCK_INPUT/,
+    );
+    await rm(join(root, DIR, 'hardlink-stock.json'));
+    await rm(stockFile);
+    await symlink(join(root, DIR, 'US_STOCK.json'), stockFile);
+    await assert.rejects(
+      readVerifiedStockSource(root, 'KR_STOCK', NOW), /UNSAFE_STOCK_INPUT/,
+    );
+  });
+});
+
+test('watcher uses verified KR/US stock reader instead of bypassing preflight checks', async () => {
+  const script = await readFile(new URL('../bin/lightweight-market-watch.mjs', import.meta.url), 'utf8');
+  assert.match(script, /import \{ readVerifiedStockSource \} from '\.\/stock-source-preflight\.mjs'/);
+  assert.match(script, /return await readVerifiedStockSource\(root, market, Date\.now\(\)\)/);
+  assert.doesNotMatch(script, /normalizeStockFeed\(JSON\.parse\(contents\), market, Date\.now\(\)\)/);
+});
 
 test('stock input diagnostics invoked via a symlinked checkout still run directly',async()=>{
   await withRoot(async root=>{
