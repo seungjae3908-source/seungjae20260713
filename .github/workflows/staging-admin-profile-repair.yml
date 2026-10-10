@@ -1,0 +1,183 @@
+name: Staging Admin Profile Repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact current main SHA for the one-profile isolated Staging repair
+        required: true
+        type: string
+  issue_comment:
+    types: [created]
+  pull_request:
+    paths:
+      - '.github/workflows/staging-admin-profile-repair.yml'
+      - 'api-server/scripts/repair-staging-admin-profile.mjs'
+      - 'api-server/scripts/repair-staging-admin-profile.test.mjs'
+      - 'api-server/scripts/verify-staging-admin-profile-repair-contract.mjs'
+
+permissions:
+  actions: read
+  contents: read
+  statuses: read
+  issues: read
+
+concurrency:
+  group: staging-admin-profile-repair
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Verify bounded Staging admin profile repair contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify script, transition tests and workflow safety
+        run: |
+          node --check api-server/scripts/repair-staging-admin-profile.mjs
+          node --test api-server/scripts/repair-staging-admin-profile.test.mjs
+          node api-server/scripts/verify-staging-admin-profile-repair-contract.mjs
+
+  authorize:
+    name: Authorize exact-main isolated Staging profile repair
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner ||
+        github.event_name == 'issue_comment' &&
+        github.event.issue.number == 1555 &&
+        !github.event.issue.pull_request &&
+        github.event.issue.state == 'open' &&
+        github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
+        startsWith(github.event.comment.body, '/repair-staging-admin-profile ')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Parse exact approved current-main SHA
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.sha || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const raw = process.env.EVENT_NAME === 'workflow_dispatch'
+            ? String(process.env.INPUT_SHA ?? '').trim()
+            : String(process.env.COMMENT_BODY ?? '').trim();
+          const match = process.env.EVENT_NAME === 'workflow_dispatch'
+            ? /^([0-9a-f]{40})$/u.exec(raw)
+            : /^\/repair-staging-admin-profile ([0-9a-f]{40})$/u.exec(raw);
+          if (!match) throw new Error('Exact command required: /repair-staging-admin-profile <40-char-current-main-sha>');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+      - name: Require exact current main
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          [[ "$TARGET_SHA" == "$(git rev-parse refs/remotes/origin/main)" ]] || {
+            echo 'Target SHA is not exact current main.' >&2
+            exit 1
+          }
+      - name: Require coherent exact-main Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified', 'browser-ui/verified', 'database-rls/verified',
+              'security-integration/verified', 'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              ref: process.env.TARGET_SHA, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const failed = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (failed.length) { core.setFailed(`Required CI is not 6/6 SUCCESS: ${failed.join(', ')}`); return; }
+            const runIds = new Set(required.map((name) =>
+              /\/actions\/runs\/(\d+)/u.exec(String(latest.get(name)?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: Number([...runIds][0]),
+            })).data;
+            if (String(run.head_sha ?? '').toLowerCase() !== process.env.TARGET_SHA
+              || run.status !== 'completed' || run.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not an exact successful current-main run.');
+            }
+
+  repair:
+    name: Repair and verify only the configured isolated Staging admin profile
+    if: needs.authorize.result == 'success'
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: staging
+    env:
+      REPAIR_APPROVED: STAGING_ADMIN_PROFILE_REPAIR_V1
+      EXPECTED_STAGING_PROJECT_REF: petlfbztqguuzkasfpug
+      KNOWN_PRODUCTION_PROJECT_REF: bawcbkoyovbeajkrnduq
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
+      ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.authorize.outputs.target_sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install server dependencies
+        run: pnpm install --frozen-lockfile --filter @workspace/api-server...
+      - name: Repair one bounded profile and verify exact readback
+        run: node api-server/scripts/repair-staging-admin-profile.mjs
+      - name: Verify real Staging server capabilities and zero financial mutation
+        run: node api-server/scripts/staging-trading-core-admin-profile.mjs
+      - name: Record sanitized bounded repair evidence
+        run: |
+          {
+            echo '## Isolated Staging admin profile repair verified'
+            echo
+            echo "- Target SHA: \`${{ needs.authorize.outputs.target_sha }}\`"
+            echo '- Profile scope: configured Staging admin identity only'
+            echo '- Canonical admin capability readback: `PASS`'
+            echo '- Paper journal read-only probe: `PASS`'
+            echo '- Production touched: `false`'
+            echo '- Auth user/password touched: `false`'
+            echo '- Orders/cancels/amends/transfers/withdrawals: `0`'
+            echo '- Secret values recorded: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
