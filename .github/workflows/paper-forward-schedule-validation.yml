@@ -266,6 +266,7 @@ on:
       - api-server/test.mjs
       - stock-analyzer/src/components/paper-trading-panel.tsx
       - stock-analyzer/src/lib/paper-trading.ts
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -606,6 +607,7 @@ jobs:
             api-server/test.mjs
             stock-analyzer/src/components/paper-trading-panel.tsx
             stock-analyzer/src/lib/paper-trading.ts
+            .github/scripts/verify-research-workspace-sync-v3.mjs
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
