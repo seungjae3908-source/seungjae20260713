@@ -89,7 +89,11 @@ jobs:
           const markets=["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"];
           if(markets.some(m=>!r.markets[m]) || r.executionAuthority!=="NONE" ||
             r.profitabilityProven!==false || r.marketWideOpportunityDenominatorVerified!==false ||
-            r.actualFillEvidenceVerified!==false || r.realOrders!==false) process.exit(1);
+            r.actualFillEvidenceVerified!==false || r.realOrders!==false ||
+            Object.values(r.markets).some(x=>x.status==="OBSERVED_SAMPLE_ONLY" &&
+              (x.minuteOpportunityWindow?.status!=="OBSERVED_WINDOW_ONLY" ||
+               x.minuteOpportunityWindow?.trueMarketWideRecall!==null ||
+               x.minuteOpportunityWindow?.netProfitPct!==null))) process.exit(1);
           '
 
       - uses: actions/upload-artifact@v4

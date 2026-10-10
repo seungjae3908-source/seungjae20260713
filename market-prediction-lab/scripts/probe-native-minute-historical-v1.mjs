@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { collectUpbitSpotHistory } from "../src/upbit-spot-history.js";
 import { BitgetPublicClient, BitgetPublicApiError } from "../src/bitget-public-client.js";
 import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
+import { auditNativeObservedMinuteWindowV1 } from "../src/historical-intraday-opportunity-audit-v1.js";
 
 export const HISTORICAL_SAMPLE_WINDOW_V1 = Object.freeze({
   startMs: Date.parse("2025-01-02T00:00:00Z"),
@@ -41,6 +42,15 @@ export function safeNativeSampleResult(market, venue, collected) {
   const count=collected.candles.filter(x=>
     Number.isSafeInteger(x.timestamp) && x.timestamp>=startMs && x.timestamp<endMs).length;
   if (count < 2) throw new Error("SAMPLE_HISTORICAL_WINDOW_EMPTY");
+  const minuteOpportunityWindow=auditNativeObservedMinuteWindowV1({
+    market,venue,source:collected.source ?? collected.provider,
+    symbol:collected.providerMarket ?? collected.symbol,
+    startMs,endMs,bars:collected.candles,pageWindowTraversed:collected.rawPageWindowTraversed,
+  });
+  // Source-limited events require a closed continuous minute window. Missing
+  // minute gaps cannot be relabeled as no-trade or hidden by a successful HTTP.
+  if (minuteOpportunityWindow.status!=="OBSERVED_WINDOW_ONLY")
+    throw new Error("SAMPLE_MINUTE_AUDIT_BLOCKED:"+minuteOpportunityWindow.reason);
   return Object.freeze({
     market,venue,status:"OBSERVED_SAMPLE_ONLY",
     candleCount:count,source:collected.source ?? collected.provider,
@@ -49,6 +59,8 @@ export function safeNativeSampleResult(market, venue, collected) {
     lastTimestampMs:collected.candles.at(-1).timestamp,
     requestedStartMs:startMs,requestedEndMs:endMs,
     rawPageWindowTraversed:true,
+    minuteOpportunityWindow,
+    observedWindowCrossingCount:minuteOpportunityWindow.observedCrossingCount,
     historicalListingMembershipProven:false,
     timeAvailableToScannerProven:false,
     missingMinuteNoTradesProven:false,
@@ -127,6 +139,7 @@ if (process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)
     sourceStatus:result.sourceStatus,observedSourceCount:result.observedSourceCount,
     markets:Object.fromEntries(Object.entries(result.markets).map(([key,value])=>[key,{
       status:value.status,reason:value.reason ?? null,candleCount:value.candleCount,
+      observedWindowCrossingCount:value.observedWindowCrossingCount ?? null,
     }])),profitabilityProven:false,executionAuthority:"NONE",
   })+"\n");
 }
