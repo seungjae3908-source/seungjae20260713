@@ -132,6 +132,31 @@ result, OOS/walk-forward PASS, or proof of monthly 20%-100% performance.
   This Draft does not create any queue consumer, change existing signal gates,
   or activate the systemd worker.
 
+## Read-only KR/US input preflight (Draft; no market-watch start)
+
+When a separately approved Research checkout contains this tool, inspect the
+**optional** local stock snapshot files without starting systemd or connecting
+to a brokerage/market-data API:
+
+~~~bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  node /opt/investment-research/current/research-production/bin/stock-source-preflight.mjs
+~~~
+
+This reads only KR_STOCK.json and US_STOCK.json with no-follow file checks,
+a 4 MB bound, matching service ownership, safe permissions and exact
+timestamp/source-ID/schema validation. It emits only aggregate quote counts
+and a bounded source identifier, not raw tickers/prices or any credential.
+MISSING, STALE and INVALID are distinct; an absent directory is INCOMPLETE,
+not evidence that a market contains zero stocks. No files are created.
+FORMAT_VALID_ONLY means **format/freshness** passed for both local inputs.
+Even if a feed asserts completeUniverse=true, the report explicitly leaves
+independentProviderVerified, marketDataRightsVerified, fullUniverseVerified,
+continuous24hProven and executionAuthority unproven/NONE. This is not a
+substitute for licensed KR/US feed contracts or an independent Vultr audit.
+No currently running host is claimed to have executed this Draft-only CLI.
+
 ## Safe preflight and required follow-on steps
 
 1. Confirm `nproc=2`, MemAvailable, disk floor >=5 GiB, swap activity,
