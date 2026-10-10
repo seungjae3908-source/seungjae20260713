@@ -261,6 +261,13 @@ export function auditFourMarketHistoricalWholeUniverseV1({
       r.status==="TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY").length;
     const completeNonFixture=dayResults.filter(r=>
       r.status==="SOURCE_ATTESTED_FULL_NAME_DAILY_JOIN_ONLY").length;
+    // Audit longitudinal PIT identity, not just isolated one-day price joins.
+    // 1,096 independently passing dates can still be unrelated provider
+    // snapshots with different lifecycles. A fixed-benchmark claim requires
+    // the SAME full-span archive, digest, provider identity and source class.
+    const fingerprints=new Set(),sourceIdentities=new Set(),sourceClasses=new Set();
+    let everyJoinedArchiveSpansBenchmark=true;
+    const lineageGaps=[];
     const months={},reasonCounts={},incomplete=[];
     for(let i=0;i<days.length;i++){
       const month=new Date(days[i]).toISOString().slice(0,7);
@@ -272,6 +279,19 @@ export function auditFourMarketHistoricalWholeUniverseV1({
         stats.sourceAttestedPriceJoinedDays++;
         if(receipt.status==="TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY")
           stats.fixtureJoinedDays++;
+        const manifest=input[String(days[i])]?.manifest;
+        fingerprints.add(manifest.rawMembershipDigestSha256);
+        sourceIdentities.add(manifest.sourceId);
+        sourceClasses.add(manifest.sourceClass);
+        if(manifest.coverageStartMs>benchmark.startMs
+          ||manifest.coverageEndMs<benchmark.endExclusiveMs){
+          everyJoinedArchiveSpansBenchmark=false;
+          if(lineageGaps.length<15)
+            lineageGaps.push({
+              dateUtc:new Date(days[i]).toISOString().slice(0,10),
+              reason:"HISTORICAL_LIFECYCLE_ARCHIVE_NOT_FULL_BENCHMARK",
+            });
+        }
       }else{
         stats.blockedOrIncompleteDays++;
         reasonCounts[receipt.reason]=(reasonCounts[receipt.reason]??0)+1;
@@ -280,9 +300,21 @@ export function auditFourMarketHistoricalWholeUniverseV1({
             reason:receipt.reason});
       }
     }
-    // Self-provided stock dates cannot prove an official 3-year calendar.
+    // A 3y coverage label is not a substitute for proof of official stock
+    // sessions, independent archive authenticity, original scanner recall,
+    // or a market-wide profit denominator. It is source-attested ONLY.
+    const stablePITLineage=covered>0&&fingerprints.size===1
+      &&sourceIdentities.size===1&&sourceClasses.size===1;
+    const lifecycleArchiveStatus=!exactCryptoCalendar
+      ?"FULL_CRYPTO_UTC_BENCHMARK_CALENDAR_NOT_ATTESTED"
+      :covered!==days.length?"INCOMPLETE_HISTORICAL_PRICE_OR_PIT_DAY_COVERAGE"
+      :fixtureJoined>0?"FIXTURE_CANNOT_ATTEST_HISTORICAL_BENCHMARK"
+      :!stablePITLineage?"LIFECYCLE_SOURCE_ID_OR_DIGEST_CHANGED_ACROSS_DAYS"
+      :!everyJoinedArchiveSpansBenchmark
+        ?"LIFECYCLE_SOURCE_ARCHIVE_SPAN_TOO_SHORT"
+      :"SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY";
     const benchmarkPeriodSourceAttestedPriceJoined=
-      exactCryptoCalendar&&completeNonFixture===days.length;
+      lifecycleArchiveStatus==="SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY";
     results[market]={
       ...blocked(market,covered===days.length?
         "SOURCE_ATTESTED_NOT_INDEPENDENTLY_AUTHENTICATED":
@@ -292,6 +324,14 @@ export function auditFourMarketHistoricalWholeUniverseV1({
       benchmarkCalendarStatus:calendarStatus,
       fullBenchmarkDateCoverage:exactCryptoCalendar,
       benchmarkPeriodSourceAttestedPriceJoined,
+      lifecycleArchiveStatus,
+      lifecycleSourceLineageConsistent:stablePITLineage,
+      lifecycleArchiveDigestCount:fingerprints.size,
+      lifecycleArchiveSourceIdentityCount:sourceIdentities.size,
+      lifecycleArchiveSourceClassCount:sourceClasses.size,
+      lifecycleArchiveFullWindowAttested:everyJoinedArchiveSpansBenchmark
+        &&covered===days.length,
+      lifecycleArchiveSpanGapPreview:lineageGaps,
       fixtureJoinedDays:fixtureJoined,
       sourceAttestedMonthlyCoverage:months,
       incompleteDaysPreview:incomplete,blockedReasonCounts:reasonCounts,

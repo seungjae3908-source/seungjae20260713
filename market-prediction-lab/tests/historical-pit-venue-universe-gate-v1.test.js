@@ -155,3 +155,27 @@ test("source receipt with profitability marked proven is refused",()=>{
   const f=sourceSummary();f.profitabilityProven=true;
   assert.throws(()=>report({nativeSelectedSummary:f}),/PIT_SOURCE_RECEIPT_INVALID/);
 });
+
+test("early PIT session with zero AS-OF removals can use a full later-delisting archive",()=>{
+ const members=rows();
+ members[1]={...members[1],removedAtMs:START+30*UTC};
+ const full=fixture(members,{
+   coverageEndMs:START+31*UTC,
+   retrievedAtMs:START+40*UTC,
+ });
+ const result=eval1(full);
+ assert.equal(result.status,"TEST_FIXTURE_ONLY");
+ assert.equal(result.dayActiveArchivedMembers,2);
+ assert.equal(result.archivedEndedInThreeYears,0);
+ assert.equal(result.archivedRemovedAcrossSourceWindow,1);
+ assert.equal(result.actualFillCount,null);
+ assert.equal(result.trueMarketWideRecall,null);
+ assert.equal(result.fullMarketOpportunityDenominatorVerified,false);
+});
+test("an archival roster cannot be certified complete through a date in its future",()=>{
+ const future=fixture(rows(),{retrievedAtMs:START});
+ const r=eval1(future);
+ assert.equal(r.status,"BLOCKED_PIT_UNIVERSE");
+ assert.equal(r.reason,"PIT_ARCHIVE_SOURCE_ATTESTATION_INVALID");
+ assert.equal(r.trueMarketWideRecall,null);
+});
