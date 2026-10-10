@@ -6,6 +6,8 @@ on:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
       - market-prediction-lab/src/us-asof-all-stock-grouped-daily-v1.js
+      - market-prediction-lab/src/us-two-dated-all-stock-source-v1.js
+      - market-prediction-lab/tests/us-two-dated-all-stock-source-v1.test.js
       - market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
       - market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs
       - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
@@ -57,6 +59,7 @@ jobs:
           node --test market-prediction-lab/tests/krx-dated-all-stock-ohlcv-v1.test.js
           node --test market-prediction-lab/tests/krx-two-dated-all-stock-sources-v1.test.js
           node --test market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
+          node --test market-prediction-lab/tests/us-two-dated-all-stock-source-v1.test.js
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
