@@ -338,3 +338,31 @@ test('alternate live, provider order and fund movement switches all block Telegr
       'FINANCIAL_AUTHORITY_NOT_OFF',key);
   }
 });
+
+
+test('unrelated issue comments cannot supersede pending protected binding PLAN/APPLY', () => {
+  const workflow = fs.readFileSync(
+    '.github/workflows/telegram-sixroom-vault-pm2-binding.yml', 'utf8');
+  const start = workflow.indexOf('\nconcurrency:\n');
+  const end = workflow.indexOf('\njobs:\n', start);
+  assert.ok(start > -1 && end > start);
+  const group = workflow.slice(start, end);
+  // Both authorization and comment command must be checked before joining
+  // the shared owner queue. Staging receipts and unrelated owner CI commands
+  // must use a unique noncommand group; GitHub can evict pending runs even
+  // when cancel-in-progress is false.
+  for (const required of [
+    "github.event_name == 'issue_comment'",
+    'github.event.issue.number == 1555',
+    'github.event.issue.pull_request == null',
+    "github.event.issue.state == 'open'",
+    "github.event.comment.user.login == 'seungjae3908-source'",
+    "github.event.comment.author_association == 'OWNER'",
+    "startsWith(github.event.comment.body, '/run-telegram-sixroom-binding-plan ')",
+    "startsWith(github.event.comment.body, '/run-telegram-sixroom-binding-apply ')",
+    "&& 'production-owner'",
+    "|| format('noncommand-{0}', github.run_id)",
+    'cancel-in-progress: false',
+  ]) assert.ok(group.includes(required),required);
+  assert.ok(!group.includes("&& 'production-owner' || github.run_id"));
+});
