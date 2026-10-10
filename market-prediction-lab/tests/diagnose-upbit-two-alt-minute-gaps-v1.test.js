@@ -4,6 +4,7 @@ import {
  diagnoseUpbitMinuteRangeV1 as audit,
  diagnosePublicUpbitMinuteGapsV1 as probe,
  recheckMissingUpbitMinuteSlotsV1 as recheck,
+ auditPublicUpbitGapTicksV1 as tickAudit,
 } from "../scripts/diagnose-upbit-two-alt-minute-gaps-v1.mjs";
 import {WATCH_MATCHED_UTC_DAY_V1 as DAY}
   from "../scripts/probe-watch-matching-utc-day-v1.mjs";
@@ -148,4 +149,65 @@ test("invalid re-query response never becomes an accepted minute",async()=>{
  assert.equal(r.failedRequeries,1);
  assert.equal(r.presentOnRequery,0);
  assert.equal(r.observations[0].outcome,"REQUERY_SOURCE_ERROR");
+});
+
+function tickFixture(symbol,ms){
+ return {market:symbol,trade_date_utc:new Date(ms).toISOString().slice(0,10),
+  timestamp:ms,trade_price:100,trade_volume:1};
+}
+function nativeAbsent(symbol,ms){
+ const diagnostic=audit({symbol,source:sample(symbol,{
+  missing:[(ms-DAY.historyStartMs)/M],
+ })});
+ return {diagnostic,targetedRecheck:{
+   status:"TARGETED_NATIVE_RECHECK_COMPLETE",
+   absentOnRequery:1,observations:[{
+     timestampMs:ms,outcome:"NATIVE_CANDLE_ABSENT_ON_REQUERY",
+   }],
+ }};
+}
+test("public tick endpoint confirms a latest prior tick, not a synthetic minute candle",async()=>{
+ const symbol="KRW-ETH",ms=DAY.utcDayStartMs+10*M;
+ const {diagnostic,targetedRecheck}=nativeAbsent(symbol,ms);
+ const calls=[];
+ const r=await tickAudit({symbol,diagnostic,targetedRecheck,
+  nowMs:Date.UTC(2026,9,10,9),minIntervalMs:0,
+  fetchImpl:async(url)=>{calls.push(new URL(url));
+   return response([tickFixture(symbol,ms-8000)]);
+  }});
+ assert.equal(calls[0].searchParams.get("days_ago"),"1");
+ assert.equal(calls[0].searchParams.get("to"),"00:11:00");
+ assert.equal(r.status,"TICK_CROSSCHECK_COMPLETE");
+ assert.equal(r.latestTickPrecedesMissingMinute,1);
+ assert.equal(r.tickInsideMissingCandleMinute,0);
+ assert.equal(r.independentFullHistoryVerified,false);
+ assert.equal(r.noSyntheticMinuteBars,true);
+ assert.equal(r.marketWideRecall,null);
+});
+test("public tick found in missing minute flags native candle contradiction",async()=>{
+ const symbol="KRW-SOL",ms=DAY.utcDayStartMs+31*M;
+ const {diagnostic,targetedRecheck}=nativeAbsent(symbol,ms);
+ const r=await tickAudit({symbol,diagnostic,targetedRecheck,
+   nowMs:Date.UTC(2026,9,10,9),minIntervalMs:0,
+   fetchImpl:async()=>response([tickFixture(symbol,ms+5000)])});
+ assert.equal(r.status,"TICK_CROSSCHECK_COMPLETE");
+ assert.equal(r.tickInsideMissingCandleMinute,1);
+ assert.equal(r.latestTickPrecedesMissingMinute,0);
+ assert.equal(r.profitabilityProven,false);
+});
+test("aged or denied tick history does not fabricate proof of no trades",async()=>{
+ const symbol="KRW-ETH",ms=DAY.utcDayStartMs+30*M;
+ const {diagnostic,targetedRecheck}=nativeAbsent(symbol,ms);
+ let calls=0;
+ const aged=await tickAudit({symbol,diagnostic,targetedRecheck,
+  nowMs:Date.UTC(2026,9,18),minIntervalMs:0,
+  fetchImpl:async()=>{calls++;return response([])}});
+ assert.equal(calls,0);
+ assert.equal(aged.unverifiedMinutes,1);
+ const denied=await tickAudit({symbol,diagnostic,targetedRecheck,
+  nowMs:Date.UTC(2026,9,10),minIntervalMs:0,
+  fetchImpl:async()=>response([],429)});
+ assert.equal(denied.unverifiedMinutes,1);
+ assert.equal(denied.latestTickPrecedesMissingMinute,0);
+ assert.match(denied.observations[0].errorCode,/UPBIT_TICKS_HTTP_429/);
 });
