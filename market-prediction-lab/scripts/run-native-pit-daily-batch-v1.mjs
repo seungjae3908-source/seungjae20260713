@@ -1,0 +1,136 @@
+#!/usr/bin/env node
+/**
+ * OFFLINE-DEFAULT research entrypoint for a historically dated, all-name PIT
+ * security/contract roster and native day OHLCV. Not a trading system.
+ *
+ * 1. Validate roster without network:
+ * node run-native-pit-daily-batch-v1.mjs --mode plan --market CRYPTO_SPOT
+ *   --day 2025-10-09 --manifest /private/pit.json --output /private/plan.json
+ * 2. Fetch public native day data only with explicit --read-public:
+ * node ... --mode fetch --market CRYPTO_SPOT --day 2025-10-09
+ *   --manifest /private/pit.json --offset 0 --limit 20
+ *   --read-public --output /private/chunk-0.json
+ * 3. Assemble all chunks from the SAME PIT roster:
+ * node ... --mode assemble --market CRYPTO_SPOT --day 2025-10-09
+ *   --manifest /private/pit.json --chunks /private/chunk-0.json,/private/chunk-20.json
+ *   --output /private/day-audit.json
+ *
+ * An archive downloaded from today's Upbit supported pairs, current Bitget
+ * instrument list, or today's stock catalog is NOT a historical complete
+ * PIT roster. Commercial reuse rights of Upbit downloads are NOT established.
+ * No Replit, secrets, private APIs, DB changes, orders or deployment.
+ */
+import {readFileSync,lstatSync,writeFileSync,mkdirSync} from "node:fs";
+import {resolve,dirname} from "node:path";
+import {fileURLToPath} from "node:url";
+import {BitgetPublicClient} from "../src/bitget-public-client.js";
+import {
+  collectNativeHistoricalPITDayChunkV1,
+  assembleHistoricalPITDayChunksV1,
+} from "../src/venue-native-pit-daily-intake-v1.js";
+
+const FIELDS=new Set(["--mode","--market","--day","--manifest",
+  "--offset","--limit","--output","--chunks","--expected-pit-sha"]);
+const SHA=/^[0-9a-f]{64}$/;
+const names=new Set(["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"]);
+export function parseNativePITBatchArgsV1(args=[]){
+  if(!Array.isArray(args)||args.length>30)
+    throw new TypeError("PIT_CLI_ARGS_INVALID");
+  const kv={};let allowPublicReadOnlyFetch=false;
+  for(let i=0;i<args.length;i++){
+    const key=args[i];
+    if(key==="--read-public"){
+      if(allowPublicReadOnlyFetch)throw new TypeError("PIT_CLI_DUPLICATE_FLAG");
+      allowPublicReadOnlyFetch=true;continue;
+    }
+    if(!FIELDS.has(key)||Object.hasOwn(kv,key)||!args[i+1]
+       ||String(args[i+1]).startsWith("--"))
+      throw new TypeError("PIT_CLI_OPTION_INVALID");
+    kv[key]=args[++i];
+  }
+  const mode=kv["--mode"]??"plan",market=kv["--market"],day=kv["--day"];
+  if(!["plan","fetch","assemble"].includes(mode)||!names.has(market)
+     ||typeof day!=="string"||!/^20\d{2}-\d{2}-\d{2}$/.test(day)
+     ||!Number.isFinite(Date.parse(day+"T00:00:00.000Z"))
+     ||new Date(day+"T00:00:00.000Z").toISOString().slice(0,10)!==day
+     ||typeof kv["--output"]!=="string"||!kv["--output"].trim())
+    throw new TypeError("PIT_CLI_REQUIRED_ARGS_INVALID");
+  const offset=Number(kv["--offset"]??0),limit=Number(kv["--limit"]??20);
+  if(!Number.isSafeInteger(offset)||offset<0
+     ||!Number.isSafeInteger(limit)||limit<1||limit>20)
+    throw new TypeError("PIT_CLI_BUDGET_INVALID");
+  if(allowPublicReadOnlyFetch&&mode!=="fetch"
+     ||mode==="fetch"&&!allowPublicReadOnlyFetch
+     ||mode!=="assemble"&&kv["--chunks"]!=null
+     ||mode==="assemble"&&(kv["--chunks"]==null||kv["--manifest"]==null))
+    throw new TypeError("PIT_CLI_SOURCE_AUTHORITY_INVALID");
+  const expectedSHA=kv["--expected-pit-sha"]??null;
+  if(expectedSHA!=null&&!SHA.test(expectedSHA))
+    throw new TypeError("PIT_CLI_SOURCE_SHA_INVALID");
+  const chunks=kv["--chunks"]==null?[]:kv["--chunks"].split(",");
+  if(chunks.length>5000||chunks.some(x=>!x.trim())
+     ||new Set(chunks).size!==chunks.length)
+    throw new TypeError("PIT_CLI_CHUNK_INPUT_INVALID");
+  return Object.freeze({
+    mode,market,dayStartMs:Date.parse(day+"T00:00:00.000Z"),
+    manifestPath:kv["--manifest"]??null,outputPath:kv["--output"],
+    offset,limit,expectedSHA,chunks,allowPublicReadOnlyFetch,
+  });
+}
+function readBoundedJson(file){
+  const p=resolve(file),stat=lstatSync(p);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1
+     ||stat.size<=0||stat.size>8*1024*1024)
+    throw new Error("PIT_CLI_UNSAFE_OR_OVERSIZED_INPUT");
+  return JSON.parse(readFileSync(p,"utf8"));
+}
+export async function runNativePITBatchCliV1(config){
+  const manifest=config.manifestPath?readBoundedJson(config.manifestPath):null;
+  let report;
+  if(config.mode==="assemble"){
+    const chunks=config.chunks.map(readBoundedJson);
+    report=assembleHistoricalPITDayChunksV1({
+      market:config.market,dayStartMs:config.dayStartMs,
+      manifest,chunks,
+    });
+  }else{
+    report=await collectNativeHistoricalPITDayChunkV1({
+      market:config.market,dayStartMs:config.dayStartMs,
+      manifest,offset:config.offset,limit:config.limit,
+      allowPublicReadOnlyFetch:config.allowPublicReadOnlyFetch,
+      expectedRosterDigestSha256:config.expectedSHA,
+      bitgetClient:config.allowPublicReadOnlyFetch
+        ?new BitgetPublicClient({
+          maxRetries:1,minIntervalMs:220,timeoutMs:12_000,
+        }):null,
+      minBetweenSymbolsMs:220,
+    });
+  }
+  const output=resolve(config.outputPath);
+  mkdirSync(dirname(output),{recursive:true});
+  writeFileSync(output,JSON.stringify({
+    schemaVersion:"native-historic-pit-day-read-only-cli-v1",
+    createdAt:new Date().toISOString(),
+    dataUsage:"RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED",
+    provenanceIndependentAuthentication:false,
+    executionAuthority:"NONE",
+    result:report,
+  },null,2)+"\n",{encoding:"utf8",mode:0o600,flag:"wx"});
+  return Object.freeze({
+    status:report.status,reason:report.reason??null,
+    market:config.market,
+    requestedHistoricalActiveMembers:
+      report.requestedHistoricalActiveMembers??null,
+    sourceAttestedFullSymbolDayPriceJoin:
+      report.sourceAttestedFullSymbolDayPriceJoin??false,
+    nextOffset:report.nextOffset??null,
+    fullMarketOpportunityDenominatorVerified:false,
+    trueMarketWideRecall:null,profitabilityProven:false,
+    executionAuthority:"NONE",
+  });
+}
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+  const result=await runNativePITBatchCliV1(
+    parseNativePITBatchArgsV1(process.argv.slice(2)));
+  process.stdout.write(JSON.stringify(result)+"\n");
+}

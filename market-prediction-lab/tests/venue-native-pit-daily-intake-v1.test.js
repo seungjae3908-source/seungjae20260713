@@ -1,4 +1,9 @@
 import test from "node:test";
+import {mkdtempSync,readFileSync,statSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {parseNativePITBatchArgsV1,runNativePITBatchCliV1}
+  from "../scripts/run-native-pit-daily-batch-v1.mjs";
 import assert from "node:assert/strict";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
 import {collectNativePITDayPriceV1 as one,collectNativeHistoricalPITDayChunkV1 as chunk,
@@ -173,4 +178,44 @@ test("intraday fresh listing is visible and blocks complete-day source claim",as
  const r=assemble({market:"CRYPTO_SPOT",manifest:roster,
   dayStartMs:T,chunks:[c],retrievedAtMs:T+4*D});
  assert.equal(r.status,"BLOCKED_DATA");
+});
+
+test("research-only CLI validates date, max batch and explicit public read",()=>{
+ const a=parseNativePITBatchArgsV1([
+  "--mode","plan","--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--output","/tmp/unused-pit-readiness.json",
+ ]);
+ assert.equal(a.allowPublicReadOnlyFetch,false);
+ assert.equal(a.limit,20);
+ assert.throws(()=>parseNativePITBatchArgsV1([
+  "--mode","fetch","--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--output","/tmp/unused.json",
+ ]),/PIT_CLI_SOURCE_AUTHORITY_INVALID/);
+ assert.throws(()=>parseNativePITBatchArgsV1([
+  "--mode","plan","--market","CRYPTO_SPOT","--day","2025-02-31",
+  "--output","/tmp/unused.json",
+ ]),/PIT_CLI_REQUIRED_ARGS_INVALID/);
+ assert.throws(()=>parseNativePITBatchArgsV1([
+  "--mode","fetch","--read-public","--market","CRYPTO_SPOT",
+  "--day","2025-10-09","--offset","0","--limit","2000",
+  "--output","/tmp/unused.json",
+ ]),/PIT_CLI_BUDGET_INVALID/);
+});
+test("offline CLI produces honest BLOCKED with private 0600 output, never source requests",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-private-roster-"));
+ const output=join(folder,"report.json");
+ const c=parseNativePITBatchArgsV1([
+  "--mode","plan","--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--output",output,
+ ]);
+ const r=await runNativePITBatchCliV1(c);
+ assert.equal(r.status,"BLOCKED_DATA");
+ assert.equal(r.executionAuthority,"NONE");
+ assert.equal(r.trueMarketWideRecall,null);
+ assert.equal(statSync(output).mode&0o077,0);
+ const saved=JSON.parse(readFileSync(output,"utf8"));
+ assert.equal(saved.result.status,"BLOCKED_DATA");
+ assert.equal(saved.result.reason,"PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED");
+ assert.equal(saved.dataUsage,"RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED");
+ await assert.rejects(()=>runNativePITBatchCliV1(c),/EEXIST/);
 });

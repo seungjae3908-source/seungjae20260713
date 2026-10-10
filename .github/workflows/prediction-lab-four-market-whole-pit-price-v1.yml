@@ -9,6 +9,7 @@ on:
       - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
       - market-prediction-lab/src/venue-native-pit-daily-intake-v1.js
       - market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+      - market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs
       - market-prediction-lab/src/upbit-spot-history.js
       - market-prediction-lab/tests/upbit-spot-history.test.js
       - market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
@@ -42,6 +43,19 @@ jobs:
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+      - name: Verify CLI no-PIT network fail-closed and no-orders policy
+        run: |
+          node market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs \
+            --mode plan --market CRYPTO_SPOT --day 2025-10-09 \
+            --output "$RUNNER_TEMP/pit-source-blocked.json"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/pit-source-blocked.json","utf8"));
+            if(r.result.status!=="BLOCKED_DATA" ||
+               r.result.reason!=="PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED" ||
+               r.result.trueMarketWideRecall!==null ||
+               r.result.executionAuthority!=="NONE")process.exit(1);
+          '
       - name: Emit truthful missing-historical-source readiness
         run: |
           node market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
