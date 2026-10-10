@@ -5,12 +5,13 @@ const GiB=1024**3;
 const today='2026-10-10';
 const file=(day,bytes,category='events')=>({day,bytes,category});
 const run=(files,diskFreeBytes=37*GiB)=>summarizeWatchStorageCapacity({files,diskFreeBytes,nowUtcDay:today});
-const lastSeven=(bytes=4*1024**2)=>Array.from({length:7},(_,i)=>
- file('2026-10-'+String(3+i).padStart(2,'0'),bytes));
+const lastSeven=(bytes=4*1024**2,category='cadence')=>Array.from({length:7},(_,i)=>
+ file('2026-10-'+String(3+i).padStart(2,'0'),bytes,category));
 test('unknown 24h history is not a falsely approved retention plan',()=>{
  const x=run([]);assert.equal(x.status,'INSUFFICIENT_HISTORY');
  assert.equal(x.projectedDaysAboveFloor,null);
  assert.equal(x.observedCompletedDays,0);
+ assert.equal(x.cadenceCompletedDays,0);
  assert.equal(x.sevenDayHistoryComplete,false);
  assert.equal(x.retentionApplied,false);assert.equal(x.archiveVerified,false);
  assert.equal(x.deletionAllowed,false);assert.equal(x.continuous24hProven,false);
@@ -23,6 +24,7 @@ test('conservative capacity forecast uses only completed UTC days',()=>{
  assert.equal(x.fileCount,8);
  assert.equal(x.datedDayCount,8);
  assert.equal(x.observedCompletedDays,7);
+ assert.equal(x.cadenceCompletedDays,7);
  assert.equal(x.sevenDayHistoryComplete,true);
  assert.equal(x.status,'OBSERVATION_ONLY');
  assert.ok(x.projectedDaysAboveFloor>365);
@@ -54,6 +56,7 @@ test('missing or nonconsecutive days block optimistic runway projection',()=>{
  const a=run([...sparse,file('2026-09-20',1*1024**2)]);
  assert.equal(a.status,'INSUFFICIENT_HISTORY');
  assert.equal(a.observedCompletedDays,6);
+ assert.equal(a.cadenceCompletedDays,6);
  assert.equal(a.sevenDayHistoryComplete,false);
  assert.equal(a.lastSevenCompletedDaysAverageBytes,null);
  assert.equal(a.projectedDaysAboveFloor,null);
@@ -61,6 +64,24 @@ test('missing or nonconsecutive days block optimistic runway projection',()=>{
  assert.equal(one.status,'INSUFFICIENT_HISTORY');
  assert.equal(one.observedCompletedDays,1);
  assert.equal(one.projectedDaysAboveFloor,null);
+});
+test('seven event-only days cannot impersonate seven days of market-watch cadence',()=>{
+ const x=run(lastSeven(4*1024**2,'events'));
+ assert.equal(x.observedCompletedDays,7);
+ assert.equal(x.cadenceCompletedDays,0);
+ assert.equal(x.sevenDayHistoryComplete,false);
+ assert.equal(x.status,'INSUFFICIENT_HISTORY');
+ assert.equal(x.projectedDaysAboveFloor,null);
+});
+test('cadence gap stays unknown even when every day has a discovery file',()=>{
+ const events=lastSeven(6*1024**2,'events');
+ const cadence=lastSeven(512,'cadence').filter(f=>f.day!=='2026-10-06');
+ const x=run([...events,...cadence]);
+ assert.equal(x.observedCompletedDays,7);
+ assert.equal(x.cadenceCompletedDays,6);
+ assert.equal(x.sevenDayHistoryComplete,false);
+ assert.equal(x.status,'INSUFFICIENT_HISTORY');
+ assert.equal(x.lastSevenCompletedDaysAverageBytes,null);
 });
 test('daily ceiling never amounts to automatic deletion or order permission',()=>{
  const x=run([file('2026-10-09',WATCH_CAPACITY_POLICY.maxFileBytes,'cadence')]);
