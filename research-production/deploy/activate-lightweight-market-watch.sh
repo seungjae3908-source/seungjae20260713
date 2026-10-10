@@ -66,7 +66,9 @@ check_budget() {
   free_kb="$(df -Pk "$STATE" | awk 'NR==2 {print $4}')"
   [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb >= 5767168 )) || return 71
   load_one="$(awk '{print $1}' /proc/loadavg)"
-  awk -v load="$load_one" 'BEGIN {exit !(load>=0 && load<1.5)}' || return 71
+  # Gawk reserves "load" as a builtin; using it as -v var caused fatal
+  # syntax errors and falsely reported resource pressure on safe Vultr hosts.
+  awk -v load_average="$load_one" 'BEGIN {exit !(load_average>=0 && load_average<1.5)}' || return 71
 }
 preflight() {
   check_release || { echo 'WATCH_EXACT_RESEARCH_RELEASE_REQUIRED'; return 70; }
