@@ -163,6 +163,8 @@ export async function collectBitgetCandles({
     symbol,
     timeframe,
     productType: isFutures ? productType : undefined,
+    requestedStartTime: startTime, requestedEndTime: endTime,
+    intervalMs,
     reachedRequestedStart, rawPageWindowTraversed: reachedRequestedStart && all.length <= maxCandles,
     historicalSignalAvailabilityProven: false,
     historicPointInTimeContractUniverseComplete: false,
