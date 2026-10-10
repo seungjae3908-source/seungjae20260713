@@ -145,7 +145,7 @@ export function reconcileOriginalPublicWatchV1({
    ||nativeUtcDayReport.schemaVersion!=="native-utc-day-historical-public-1m-audit-v1"
    ||nativeUtcDayReport.executionAuthority!=="NONE"
    ||nativeUtcDayReport.profitabilityProven!==false
-   ||nativeUtcDayReport.marketWideOpportunityDenominatorVerified!==false
+   ||nativeUtcDayReport.fullMarketOpportunityDenominatorVerified!==false
    ||!record(nativeUtcDayReport.markets)
    ||!Array.isArray(watchEvents)||watchEvents.length>10000
    ||!Array.isArray(cadenceRows)||cadenceRows.length>2000)
