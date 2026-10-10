@@ -212,6 +212,7 @@ on:
       - .github/tests/paper-forward-genuine-cost-window.test.mjs
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -529,6 +530,7 @@ jobs:
             .github/tests/paper-forward-genuine-cost-window.test.mjs
             ops/bridge-paper-forward-no-deploy-snapshot.mjs
             ops/run-paper-forward-flat-snapshot-republish.mjs
+            market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
             ops/collect-paper-forward-no-deploy-diagnostics.mjs
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
