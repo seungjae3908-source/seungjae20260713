@@ -312,3 +312,29 @@ test('binding APPLY requires Staging Node health provenance, not PM2/network alo
     "'- Health marker SHA / identity match: '+target+' / true'",
   ]) assert.ok(workflow.includes(literal), literal);
 });
+
+
+test('global background-worker shutdown blocks binding and cannot race during PM2 restart',()=>{
+  const off=runtime({BACKGROUND_WORKERS_ENABLED:'false'});
+  assert.equal(preflightBinding(baseOptions({runtime:off})).classification,
+    'TELEGRAM_WORKER_GATE_INACTIVE');
+  assert.equal(preflightBinding(baseOptions({runtime:runtime({BACKGROUND_WORKERS_ENABLED:'true'})})).classification,
+    'BINDING_READY');
+  // The current API contract enables workers by default unless explicitly false.
+  assert.equal(preflightBinding(baseOptions()).classification,'BINDING_READY');
+  const before=runtime({BACKGROUND_WORKERS_ENABLED:'true'});
+  assert.equal(flagsUnchanged(before,{...before,BACKGROUND_WORKERS_ENABLED:'false'}),false);
+});
+
+test('alternate live, provider order and fund movement switches all block Telegram-only PM2 restart',()=>{
+  for(const key of [
+    'LIVE_TRADING_ENABLED','AUTO_TRADING_ENABLED','TOSS_ORDER_ENABLED',
+    'KIWOOM_ORDER_ENABLED','UPBIT_ORDER_ENABLED','BITGET_ORDER_ENABLED',
+    'TRANSFER_ENABLED','WITHDRAWAL_ENABLED',
+  ]) {
+    assert.ok(TRADING_BOOLEAN_GATES.includes(key),key);
+    assert.equal(tradingIsOff(runtime({[key]:'true'})),false,key);
+    assert.equal(preflightBinding(baseOptions({runtime:runtime({[key]:'true'})})).classification,
+      'FINANCIAL_AUTHORITY_NOT_OFF',key);
+  }
+});
