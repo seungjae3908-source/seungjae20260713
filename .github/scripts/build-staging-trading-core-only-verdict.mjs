@@ -6,7 +6,7 @@ if (!dir || !/^[0-9a-f]{40}$/.test(sha)) throw new Error('STAGING_TRADING_CORE_V
 const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
   const filename = path.join(dir, 'scoped-' + project + '.json');
   const receipt = JSON.parse(fs.readFileSync(filename, 'utf8'));
-  if (receipt.schemaVersion !== 'staging-automation-research-core-v1'
+  if (receipt.schemaVersion !== 'staging-automation-paper-research-backtester-core-v2'
     || receipt.targetSha !== sha || receipt.project !== project
     || receipt.stagingScopedQa !== 'PASS'
     || receipt.browserAuthMode !== 'STAGING_PASSWORD_SESSION_RESTORE'
@@ -14,7 +14,7 @@ const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
     || receipt.fourMarketsStructural !== true
     || receipt.providersValidatedWithoutPrivateCalls !== true
     || receipt.walletSeedPerMarketKrw !== 1_000_000
-    || !Array.isArray(receipt.stagesChecked) || receipt.stagesChecked.length !== 13
+    || !Array.isArray(receipt.stagesChecked) || receipt.stagesChecked.length !== 11
     || !Number.isInteger(receipt.walletCount) || receipt.walletCount < 0 || receipt.walletCount > 4
     || typeof receipt.stagingWalletReady !== 'boolean'
     || typeof receipt.paperWorkerReady !== 'boolean'
@@ -30,14 +30,13 @@ const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
       && receipt.walletBlockers.length === 0 && receipt.workerBlockers.length === 0)
     || receipt.researchCenterReady !== true
     || receipt.backtesterReady !== true
-    || receipt.telegramTradeJournalReady !== true
-    || receipt.telegramJournalPreferenceEnabled !== true
+    || receipt.telegramExcludedFromScope !== true
     || receipt.backtestMode !== 'backtest-only'
     || receipt.backtestOrderSubmitted !== false
     || receipt.realOrderAuthorityGranted !== false
     || receipt.providerPrivateRequests !== 0 || receipt.tradingMutations !== 0
     || receipt.productionReleaseReady !== true
-    || receipt.scopedReleaseVerdict !== 'AUTOMATION_RESEARCH_ONLY'
+    || receipt.scopedReleaseVerdict !== 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY'
     || receipt.automaticTradingActivated !== false) {
     throw new Error('STAGING_TRADING_CORE_SCOPED_RECEIPT_INVALID:' + project);
   }
@@ -48,15 +47,15 @@ const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
 // verdict and never grants LIVE or AUTO execution authority.
 // Staging deliberately has background workers disabled. Runtime activation is
 // therefore not a release prerequisite here: this lane proves that the exact
-// build exposes the five scoped UI/API contracts and records any remaining
+// build exposes the four scoped UI/API contracts and records any remaining
 // activation prerequisites for the protected Production gates.
 const operationalReadiness = proofs.every(v =>
   v.stagingWalletReady === true && v.walletCount === 4 && v.paperWorkerReady === true)
   ? 'PREREQUISITES_PRESENT' : 'PREACTIVATION_BLOCKERS_RECORDED';
 const verdict = {
-  schemaVersion: 'staging-automation-research-verdict-v1',
+  schemaVersion: 'staging-automation-paper-research-backtester-verdict-v2',
   targetSha: sha,
-  scope: 'AUTOMATION_RESEARCH_ONLY',
+  scope: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY',
   scopedStagingQa: 'PASS',
   release_ready: true,
   failed: 0,
@@ -78,8 +77,8 @@ const verdict = {
     automaticPaperTrading: 'PASS',
     researchCenter: 'PASS',
     backtester: 'PASS',
-    telegramTradeJournal: 'PASS',
   },
+  telegramExcludedFromScope: true,
   productionReleaseReady: true,
   fullStagingReleaseVerdict: 'NOT_EVALUATED_BY_SCOPED_LANE',
   activationReady: operationalReadiness === 'PREREQUISITES_PRESENT',

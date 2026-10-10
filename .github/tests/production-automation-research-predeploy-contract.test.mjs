@@ -5,12 +5,14 @@ import test from 'node:test';
 const read = (file) => readFileSync(file, 'utf8');
 const workflow = read('.github/workflows/production-deploy.yml');
 const predeploy = read('stock-analyzer/e2e/production-automation-research-predeploy-readiness.spec.ts');
+const providerAssessment = read('stock-analyzer/e2e/support/production-automation-research-predeploy.ts');
+const providerAssessmentTests = read('stock-analyzer/e2e/production-automation-research-predeploy-policy.spec.ts');
 const config = read('stock-analyzer/playwright.production-automation-research-predeploy.config.ts');
 const focused = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
 
-test('Automation/Research external readiness runs before every Production mutation boundary', () => {
+test('Automation/Paper/Research/Backtester readiness runs before every Production mutation boundary', () => {
   const install = workflow.indexOf('Install exact-SHA QA dependencies before Production mutation');
-  const preflight = workflow.indexOf('Pre-deploy external readiness — providers, Paper, Telegram and zero authority');
+  const preflight = workflow.indexOf('Pre-deploy readiness — Auto, Paper, Research, Backtester and zero authority');
   const ssh = workflow.indexOf('- name: Configure SSH');
   const database = workflow.indexOf('Require canonical Production trade schema and journal privileges before application mutation');
   const deploy = workflow.indexOf('- name: Deploy exact approved revision');
@@ -23,15 +25,19 @@ test('Automation/Research external readiness runs before every Production mutati
   assert.equal(workflow.match(/pnpm\/action-setup@v4/g)?.length, 1);
 });
 
-test('predeploy browser audit is authenticated, sanitized, read-only and classifies Telegram 403', () => {
+test('predeploy browser audit is authenticated, sanitized, read-only and excludes Telegram', () => {
   for (const marker of [
     "appGet<any>(page, '/api/health')",
     "appGet<any>(page, '/api/trade-automation/status')",
     "appGet<any>(page, '/api/trade-automation/paper-runtime-readiness')",
-    "appGet<any>(page, '/api/user-integrations')",
     'PRODUCTION_RUNTIME_IDENTITY_DRIFT',
-    'TELEGRAM_DESTINATION_FORBIDDEN_RECONNECT_REQUIRED',
-    'TELEGRAM_ZERO_TRADING_AUTHORITY_VIOLATION',
+    "schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v3'",
+    'readyForDeployment:',
+    'activationReadyBeforeDeploy:',
+    'postDeployProviderReverificationRequired:',
+    'postDeployVerificationBlockers:',
+    'targetDiffersFromActiveProduction',
+    'telegramExcludedFromScope: true',
     'PRODUCTION_PREDEPLOY_READINESS_BLOCKED',
     'sshConfigured: false',
     'databaseMutations: 0',
@@ -47,6 +53,11 @@ test('predeploy browser audit is authenticated, sanitized, read-only and classif
     'accountValuesRecorded: false',
   ]) assert.ok(predeploy.includes(marker), marker);
   for (const forbidden of [
+    "appGet<any>(page, '/api/user-integrations')",
+    'TELEGRAM_DESTINATION_FORBIDDEN_RECONNECT_REQUIRED',
+    'TELEGRAM_CONNECTION_REQUIRED',
+  ]) assert.equal(predeploy.includes(forbidden), false, forbidden);
+  for (const forbidden of [
     'page.request.post(', 'page.request.put(', 'page.request.patch(', 'page.request.delete(',
     '/telegram/test', '/trade-automation/policy', '/trade-automation/plans', 'sendMessage',
   ]) assert.equal(predeploy.includes(forbidden), false, forbidden);
@@ -55,10 +66,25 @@ test('predeploy browser audit is authenticated, sanitized, read-only and classif
   }
 });
 
-test('focused Trading Core checks Telegram before temporary member policy preparation', () => {
-  const telegramRead = focused.indexOf("integrationBefore = await appApi<any>(page, '/api/user-integrations')");
+test('focused Trading Core preserves temporary member policy rollback', () => {
   const policyWrite = focused.indexOf('preparedMemberAutoPolicy(statusBefore.body.policy)');
-  assert.ok(telegramRead > 0 && policyWrite > telegramRead);
+  assert.ok(policyWrite > 0);
   assert.ok(focused.includes('if (memberAutoPolicyPrepared)'));
   assert.equal(focused.includes('if (prepareMemberAutoPolicy) {\n      try {\n        const restored'), false);
+});
+
+test('provider repair deployment defers verification only for a new SHA and keeps authority blockers hard', () => {
+  for (const marker of [
+    'targetDiffersFromActiveProduction',
+    'postDeployVerificationBlockers.push(...verificationBlockers)',
+    'deploymentBlockers.push(...verificationBlockers)',
+    'PROVIDER_NOT_CONFIGURED:',
+    'LIVE_SERVER_GATE_NOT_OFF:',
+    'AUTO_SERVER_GATE_NOT_OFF:',
+  ]) assert.ok(providerAssessment.includes(marker), marker);
+  for (const marker of [
+    'a new exact-SHA repair deployment defers only provider verification',
+    'the already-active SHA cannot bypass a provider verification failure',
+    'missing configuration or enabled LIVE/AUTO authority always blocks deployment',
+  ]) assert.ok(providerAssessmentTests.includes(marker), marker);
 });

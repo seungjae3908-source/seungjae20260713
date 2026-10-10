@@ -5,6 +5,7 @@ import {
   loginProductionReadOnly,
   productionReadOnlyAccessToken,
 } from './support/production-readonly-login';
+import { assessProviderBeforeRepairDeployment } from './support/production-automation-research-predeploy';
 
 const enabled = process.env.PRODUCTION_AUTOMATION_RESEARCH_PREDEPLOY === 'true';
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '').trim();
@@ -44,11 +45,6 @@ async function appGet<T>(page: Page, pathname: string): Promise<ApiResult<T>> {
   };
 }
 
-function safeCode(value: unknown, fallback: string) {
-  const normalized = String(value ?? '').trim().toUpperCase();
-  return /^[A-Z0-9_:-]{1,120}$/.test(normalized) ? normalized : fallback;
-}
-
 function providerState(connections: unknown, provider: string) {
   return Array.isArray(connections)
     ? connections.find((row) => {
@@ -67,42 +63,43 @@ function writeEvidence(value: unknown) {
   );
 }
 
-test('Production external readiness fails closed before SSH, database, deploy, policy, or message mutation', async ({ page }) => {
+test('Production Automation/Paper/Research/Backtester readiness fails closed before any mutation', async ({ page }) => {
   test.setTimeout(120_000);
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
-  const [health, automation, paper, integrations] = await Promise.all([
+  const [health, automation, paper] = await Promise.all([
     appGet<any>(page, '/api/health'),
     appGet<any>(page, '/api/trade-automation/status'),
     appGet<any>(page, '/api/trade-automation/paper-runtime-readiness'),
-    appGet<any>(page, '/api/user-integrations'),
   ]);
 
-  const blockers: string[] = [];
+  const deploymentBlockers: string[] = [];
+  const postDeployVerificationBlockers: string[] = [];
+  const activeProductionSha = /^[0-9a-f]{40}$/.test(String(health.body?.deploySha ?? '').toLowerCase())
+    ? String(health.body?.deploySha).toLowerCase()
+    : null;
+  const targetDiffersFromActiveProduction = activeProductionSha !== null && activeProductionSha !== targetSha;
   if (!health.ok || health.body?.identityMatch !== true
     || !/^[0-9a-f]{40}$/.test(String(health.body?.deploySha ?? '').toLowerCase())
     || String(health.body?.deploySha ?? '').toLowerCase()
       !== String(health.body?.deployMarkerSha ?? '').toLowerCase()) {
-    blockers.push('PRODUCTION_RUNTIME_IDENTITY_DRIFT');
+    deploymentBlockers.push('PRODUCTION_RUNTIME_IDENTITY_DRIFT');
   }
 
   if (!automation.ok || automation.body?.ok !== true) {
-    blockers.push(`AUTOMATION_STATUS_HTTP_${automation.status}`);
+    deploymentBlockers.push(`AUTOMATION_STATUS_HTTP_${automation.status}`);
   } else {
     for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
       const connection = providerState(automation.body?.connections, provider);
-      if (!connection) blockers.push(`PROVIDER_MISSING:${provider.toUpperCase()}`);
-      else {
-        if (connection.configured !== true) blockers.push(`PROVIDER_NOT_CONFIGURED:${provider.toUpperCase()}`);
-        if (!connection.lastVerifiedAt) blockers.push(`PROVIDER_NOT_VERIFIED:${provider.toUpperCase()}`);
-        if (connection.lastErrorCode != null) blockers.push(`PROVIDER_ERROR:${provider.toUpperCase()}`);
-      }
-      if (automation.body?.liveExecutionServerEnabled?.[provider] !== false) {
-        blockers.push(`LIVE_SERVER_GATE_NOT_OFF:${provider.toUpperCase()}`);
-      }
-      if (automation.body?.liveAutomaticExecutionServerEnabled?.[provider] !== false) {
-        blockers.push(`AUTO_SERVER_GATE_NOT_OFF:${provider.toUpperCase()}`);
-      }
+      const assessment = assessProviderBeforeRepairDeployment({
+        provider,
+        connection,
+        liveServerGateEnabled: automation.body?.liveExecutionServerEnabled?.[provider],
+        autoServerGateEnabled: automation.body?.liveAutomaticExecutionServerEnabled?.[provider],
+        targetDiffersFromActiveProduction,
+      });
+      deploymentBlockers.push(...assessment.deploymentBlockers);
+      postDeployVerificationBlockers.push(...assessment.postDeployVerificationBlockers);
     }
   }
 
@@ -112,57 +109,25 @@ test('Production external readiness fails closed before SSH, database, deploy, p
     || paper.body?.orderSubmitted !== false
     || paper.body?.exchangeRequestSent !== false
     || paper.body?.realOrderAuthorityGranted !== false) {
-    blockers.push(`PAPER_RUNTIME_READONLY_PRECHECK_FAILED_HTTP_${paper.status}`);
+    deploymentBlockers.push(`PAPER_RUNTIME_READONLY_PRECHECK_FAILED_HTTP_${paper.status}`);
   }
 
-  if (!integrations.ok || integrations.body?.ok !== true) {
-    blockers.push(`USER_INTEGRATIONS_HTTP_${integrations.status}`);
-  } else {
-    if (integrations.body?.telegramStorageAvailable !== true) blockers.push('TELEGRAM_STORAGE_UNAVAILABLE');
-    if (integrations.body?.alertPolicyStorageAvailable !== true) blockers.push('TELEGRAM_POLICY_STORAGE_UNAVAILABLE');
-    if (integrations.body?.telegram?.recoveryRequired === true) {
-      const error = safeCode(
-        integrations.body?.telegram?.recoveryErrorCode,
-        'TELEGRAM_CONNECTION_RECOVERY_REQUIRED',
-      );
-      blockers.push(error === 'TELEGRAM_HTTP_403'
-        ? 'TELEGRAM_DESTINATION_FORBIDDEN_RECONNECT_REQUIRED'
-        : `TELEGRAM_RECONNECT_REQUIRED:${error}`);
-    }
-    if (integrations.body?.telegram?.connected !== true) blockers.push('TELEGRAM_CONNECTION_REQUIRED');
-    const runtime = integrations.body?.telegramRuntime ?? {};
-    for (const [key, value] of [
-      ['DELIVERY', runtime.deliveryReady],
-      ['BACKGROUND_WORKERS', runtime.backgroundWorkersEnabled],
-      ['PERSONAL_WORKER_ENABLED', runtime.personalWorkerEnabled],
-      ['PERSONAL_WORKER_STARTED', runtime.personalWorkerStarted],
-      ['WORKER_ACTIVATION', runtime.workerActivationApproved],
-    ] as const) {
-      if (value !== true) blockers.push(`TELEGRAM_${key}_NOT_READY`);
-    }
-    if (runtime.orderAuthority !== 'NONE'
-      || runtime.privateTradingApiAllowed !== false
-      || runtime.realOrderAllowed !== false) {
-      blockers.push('TELEGRAM_ZERO_TRADING_AUTHORITY_VIOLATION');
-    }
-    if (integrations.body?.privateApiRequests !== 0
-      || integrations.body?.ordersSubmitted !== 0
-      || integrations.body?.ordersCancelled !== 0) {
-      blockers.push('PREDEPLOY_MUTATION_COUNTER_NONZERO');
-    }
-  }
-
-  const uniqueBlockers = [...new Set(blockers)];
+  const uniqueDeploymentBlockers = [...new Set(deploymentBlockers)];
+  const uniquePostDeployVerificationBlockers = [...new Set(postDeployVerificationBlockers)];
   writeEvidence({
-    schemaVersion: 'production-automation-research-predeploy-readiness-v1',
+    schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v3',
     generatedAt: new Date().toISOString(),
     targetSha,
     productionDeployRunId,
-    activeProductionSha: /^[0-9a-f]{40}$/.test(String(health.body?.deploySha ?? '').toLowerCase())
-      ? String(health.body?.deploySha).toLowerCase()
-      : null,
-    ready: uniqueBlockers.length === 0,
-    blockers: uniqueBlockers,
+    activeProductionSha,
+    targetDiffersFromActiveProduction,
+    ready: uniqueDeploymentBlockers.length === 0,
+    readyForDeployment: uniqueDeploymentBlockers.length === 0,
+    activationReadyBeforeDeploy: uniqueDeploymentBlockers.length === 0
+      && uniquePostDeployVerificationBlockers.length === 0,
+    blockers: uniqueDeploymentBlockers,
+    postDeployProviderReverificationRequired: uniquePostDeployVerificationBlockers.length > 0,
+    postDeployVerificationBlockers: uniquePostDeployVerificationBlockers,
     providerReadiness: Object.fromEntries(['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => {
       const connection = providerState(automation.body?.connections, provider);
       return [provider, {
@@ -173,15 +138,8 @@ test('Production external readiness fails closed before SSH, database, deploy, p
         autoServerGateOff: automation.body?.liveAutomaticExecutionServerEnabled?.[provider] === false,
       }];
     })),
-    telegram: {
-      connected: integrations.body?.telegram?.connected === true,
-      recoveryRequired: integrations.body?.telegram?.recoveryRequired === true,
-      recoveryErrorCode: safeCode(integrations.body?.telegram?.recoveryErrorCode, 'NONE'),
-      deliveryReady: integrations.body?.telegramRuntime?.deliveryReady === true,
-      personalWorkerStarted: integrations.body?.telegramRuntime?.personalWorkerStarted === true,
-      workerActivationApproved: integrations.body?.telegramRuntime?.workerActivationApproved === true,
-      orderAuthority: integrations.body?.telegramRuntime?.orderAuthority === 'NONE' ? 'NONE' : 'UNSAFE',
-    },
+    scope: ['automaticTrading', 'automaticPaperTrading', 'researchCenter', 'backtester'],
+    telegramExcludedFromScope: true,
     paperReadOnlyProbe: paper.body?.readOnlyProbe === true,
     readOnly: true,
     sshConfigured: false,
@@ -200,5 +158,8 @@ test('Production external readiness fails closed before SSH, database, deploy, p
     accountValuesRecorded: false,
   });
 
-  expect(uniqueBlockers, `PRODUCTION_PREDEPLOY_READINESS_BLOCKED:${uniqueBlockers.join(',')}`).toEqual([]);
+  expect(
+    uniqueDeploymentBlockers,
+    `PRODUCTION_PREDEPLOY_READINESS_BLOCKED:${uniqueDeploymentBlockers.join(',')}`,
+  ).toEqual([]);
 });

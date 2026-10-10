@@ -131,11 +131,11 @@ requireText(deploy, "run-production-readonly-qa.sh member", 'MEMBER_INLINE_QA_RU
 requireText(deploy, "inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research'", 'SCOPED_PROVIDER_QA_BOUNDARY_MISSING');
 requireText(deploy, '1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA', 'TRADING_CORE_INLINE_QA_STEP_MISSING');
 requireText(deploy, "PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'", 'TRADING_CORE_MEMBER_POLICY_PREPARATION_MISSING');
-requireText(deploy, '1AR · Auto, Paper, Research, Backtester and Telegram Journal Production pre-activation QA', 'AUTOMATION_RESEARCH_INLINE_QA_STEP_MISSING');
+requireText(deploy, '1AR · Auto, Paper, Research and Backtester Production pre-activation QA', 'AUTOMATION_RESEARCH_INLINE_QA_STEP_MISSING');
 requireText(deploy, 'playwright.production-automation-research-core.config.ts', 'AUTOMATION_RESEARCH_PLAYWRIGHT_MISSING');
 requireText(deploy, 'evidence_scope=trading_core', 'AUTOMATION_RESEARCH_ACTIVATION_EVIDENCE_MAPPING_MISSING');
 requireText(deploy, 'Four-provider Account / Credential Reuse / Trading Core safety: `PASS`', 'AUTOMATION_RESEARCH_ESSENTIAL_TRADING_SAFETY_MISSING');
-requireText(command, '/run-production-automation-research-telegram-release ', 'AUTOMATION_RESEARCH_OWNER_COMMAND_MISSING');
+requireText(command, '/run-production-automation-research-backtester-release ', 'AUTOMATION_RESEARCH_OWNER_COMMAND_MISSING');
 requireText(command, "? 'staging-trading-core-only.yml'", 'AUTOMATION_RESEARCH_SCOPED_STAGING_MISSING');
 requireText(command, 'delegated_by_run_id: String(context.runId)', 'AUTOMATION_RESEARCH_STAGING_DELEGATED_PROVENANCE_MISSING');
 requireOrder(deploy, [
@@ -207,7 +207,7 @@ console.log(JSON.stringify({
   runtimeEnvironmentAndSecretMutationRemoved: true,
   ownerCommand: '/run-production-postdeploy-qa <40-char-sha>',
   tradingCoreOwnerCommand: '/run-production-trading-core-release <40-char-sha>',
-  automationResearchTelegramOwnerCommand: '/run-production-automation-research-telegram-release <40-char-sha>',
+  automationResearchBacktesterOwnerCommand: '/run-production-automation-research-backtester-release <40-char-sha>',
   memberOwnerCommand: '/run-production-member-release <40-char-sha>',
   tradingCoreStagingCommand: '/run-staging-trading-core <40-char-sha>',
   recommendationsFallbackBudgetMs: 5000,
