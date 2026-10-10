@@ -340,3 +340,60 @@ test("assembler rejects a row moved into a different PIT chunk under a valid ros
   manifest:roster,chunks:[forged],retrievedAtMs:T+4*D});
  assert.equal(r.reason,"PIT_NATIVE_CHUNK_MISSING_OR_PROVENANCE_MISMATCH");
 });
+
+test("native source-attested whole-day output requires explicit private-row opt-in",async()=>{
+ const roster=manifest("CRYPTO_SPOT",["KRW-ABC"]);
+ const c=await chunk({market:"CRYPTO_SPOT",dayStartMs:T,
+  manifest:roster,allowPublicReadOnlyFetch:true,upbitFetch:upbit});
+ const summary=assemble({market:"CRYPTO_SPOT",dayStartMs:T,
+  manifest:roster,chunks:[c],retrievedAtMs:T+4*D});
+ assert.equal(summary.privateNativeDayRowsEmitted,false);
+ assert.equal(Object.hasOwn(summary,"privateNativeDaySource"),false);
+ const privateResult=assemble({market:"CRYPTO_SPOT",dayStartMs:T,
+  manifest:roster,chunks:[c],retrievedAtMs:T+4*D,
+  includePrivateNativeDayRows:true});
+ assert.equal(privateResult.status,"TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY");
+ assert.equal(privateResult.privateNativeDayRowsEmitted,true);
+ assert.equal(privateResult.privateNativeDaySource.rows.length,1);
+ const row=privateResult.privateNativeDaySource.rows[0];
+ assert.equal(row.priorBarTimestampMs,T-D);
+ assert.equal(row.priorBarOpen,100);
+ assert.equal(row.priorBarHigh,103);
+ assert.equal(row.priorBarLow,98);
+ assert.equal(row.priorBarVolume,20);
+ assert.equal(row.priorClose,101);
+ assert.equal(row.evidenceSha256,rowSha(row));
+ assert.equal(privateResult.rawNativeDailySourcePublicationAllowed,false);
+ assert.equal(privateResult.actualMarketWideOpportunityCount,null);
+});
+test("CLI private native day handoff works only on an assembled offline PIT source",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-private-day-handoff-"));
+ const roster=manifest("CRYPTO_SPOT",["KRW-ABC"]);
+ const rosterFile=join(folder,"roster.json");
+ writeFileSync(rosterFile,JSON.stringify(roster),{mode:0o600});
+ const digest=roster.rawMembershipDigestSha256;
+ const args=(mode,out,extra)=>parseNativePITBatchArgsV1([
+  "--mode",mode,"--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--manifest",rosterFile,"--output",out,...extra,
+ ]);
+ const fetchFile=join(folder,"chunk.json");
+ await runNativePITBatchCliV1(args("fetch",fetchFile,[
+  "--read-public","--expected-pit-sha",digest,"--limit","1",
+ ]),{upbitFetch:upbit});
+ const privateFile=join(folder,"private-day.json");
+ const r=await runNativePITBatchCliV1(args("assemble",privateFile,[
+  "--chunks",fetchFile,"--expected-pit-sha",digest,
+  "--emit-private-day-rows",
+ ]));
+ assert.equal(r.privateNativeDayRowsEmitted,true);
+ assert.equal(statSync(privateFile).mode&0o077,0);
+ const saved=JSON.parse(readFileSync(privateFile,"utf8"));
+ assert.equal(saved.result.privateNativeDaySource.rows.length,1);
+ assert.equal(saved.result.privateNativeDaySource.sourceClass,"TEST_FIXTURE");
+ assert.equal(saved.result.fullMarketPITUniverseVerified,false);
+ assert.equal(saved.result.profitabilityProven,false);
+ assert.throws(()=>args("fetch",join(folder,"invalid.json"),[
+  "--read-public","--emit-private-day-rows",
+  "--expected-pit-sha",digest,
+ ]),/PIT_CLI_SOURCE_AUTHORITY_INVALID/);
+});

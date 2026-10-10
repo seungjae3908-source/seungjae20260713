@@ -62,6 +62,8 @@ export function nativePITDailyPriceRowSha256V1(row){
     row?.market,row?.venue,row?.symbol,row?.timestampMs,
     row?.open,row?.high,row?.low,row?.close,row?.volume,
     row?.priorClose,row?.priorCloseAsOfMs,row?.sourceId,
+    row?.priorBarTimestampMs,row?.priorBarOpen,row?.priorBarHigh,
+    row?.priorBarLow,row?.priorBarVolume,
   ]));
 }
 function normalizedDay(market,symbol,dayStartMs,prior,day,sourceId){
@@ -70,6 +72,12 @@ function normalizedDay(market,symbol,dayStartMs,prior,day,sourceId){
     open:day.open,high:day.high,low:day.low,close:day.close,
     volume:day.volume,priorClose:prior.close,
     priorCloseAsOfMs:dayStartMs,
+    // All values below are native previous-day candles, never synthesized.
+    // Preserve them so the existing Python opportunity scorer can consume
+    // the actual prior close without inventing a lookback OHLC bar.
+    priorBarTimestampMs:prior.timestamp,
+    priorBarOpen:prior.open,priorBarHigh:prior.high,
+    priorBarLow:prior.low,priorBarVolume:prior.volume,
     sourceId,
   };
   return Object.freeze({...obs,evidenceSha256:nativePITDailyPriceRowSha256V1(obs)});
@@ -253,7 +261,10 @@ export async function collectNativeHistoricalPITDayChunkV1({
 }
 export function assembleHistoricalPITDayChunksV1({
   market,dayStartMs,manifest=null,chunks=[],retrievedAtMs=Date.now(),
+  includePrivateNativeDayRows=false,
 }={}){
+  if(typeof includePrivateNativeDayRows!=="boolean")
+    throw new TypeError("PIT_PRIVATE_DAILY_SOURCE_OPTION_INVALID");
   if(!Object.hasOwn(SCOPE,market)||!valid(dayStartMs)||dayStartMs%D!==0)
     throw new TypeError("PIT_DAY_ASSEMBLER_SCOPE_INVALID");
   const pit=auditHistoricalPITVenueUniverseV1({
@@ -355,6 +366,12 @@ export function assembleHistoricalPITDayChunksV1({
     sourceAttestedFullSymbolDayPriceJoin:audit.sourceAttestedFullSymbolDayPriceJoin,
     assembledChunkCount:ordered.length,
     nativeRowsSha256:dailySource.rowsSha256,
+    // An explicit caller may keep this locally (0600, create-only) for
+    // the canonical opportunity_coverage_audit_v1.py, never in public CI.
+    ...(includePrivateNativeDayRows && audit.sourceAttestedFullSymbolDayPriceJoin
+      ? {privateNativeDaySource:dailySource}:{}),
+    privateNativeDayRowsEmitted:
+      includePrivateNativeDayRows && audit.sourceAttestedFullSymbolDayPriceJoin,
     // Do not leak paid/personal archives to an app or a public CI artifact.
     rawNativeDailySourcePublicationAllowed:false,
     independentlyAuthenticatedHistoricalSource:false,

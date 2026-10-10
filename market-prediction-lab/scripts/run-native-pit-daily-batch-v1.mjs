@@ -14,7 +14,9 @@
  * 3. Assemble all chunks from the SAME PIT roster:
  * node ... --mode assemble --market CRYPTO_SPOT --day 2025-10-09
  *   --manifest /private/pit.json --chunks /private/chunk-0.json,/private/chunk-20.json
- *   --output /private/day-audit.json
+ *   --emit-private-day-rows --output /private/day-audit.json
+ * python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py
+ *   --input /private/day-audit.json --output /private/event-labels.json
  *
  * An archive downloaded from today's Upbit supported pairs, current Bitget
  * instrument list, or today's stock catalog is NOT a historical complete
@@ -37,12 +39,17 @@ const names=new Set(["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"]);
 export function parseNativePITBatchArgsV1(args=[]){
   if(!Array.isArray(args)||args.length>30)
     throw new TypeError("PIT_CLI_ARGS_INVALID");
-  const kv={};let allowPublicReadOnlyFetch=false;
+  const kv={};
+  let allowPublicReadOnlyFetch=false,emitPrivateDayRows=false;
   for(let i=0;i<args.length;i++){
     const key=args[i];
     if(key==="--read-public"){
       if(allowPublicReadOnlyFetch)throw new TypeError("PIT_CLI_DUPLICATE_FLAG");
       allowPublicReadOnlyFetch=true;continue;
+    }
+    if(key==="--emit-private-day-rows"){
+      if(emitPrivateDayRows)throw new TypeError("PIT_CLI_DUPLICATE_FLAG");
+      emitPrivateDayRows=true;continue;
     }
     if(!FIELDS.has(key)||Object.hasOwn(kv,key)||!args[i+1]
        ||String(args[i+1]).startsWith("--"))
@@ -62,6 +69,7 @@ export function parseNativePITBatchArgsV1(args=[]){
     throw new TypeError("PIT_CLI_BUDGET_INVALID");
   if(allowPublicReadOnlyFetch&&mode!=="fetch"
      ||mode==="fetch"&&!allowPublicReadOnlyFetch
+     ||emitPrivateDayRows&&mode!=="assemble"
      ||mode!=="assemble"&&kv["--chunks"]!=null
      ||mode==="assemble"&&(kv["--chunks"]==null||kv["--manifest"]==null))
     throw new TypeError("PIT_CLI_SOURCE_AUTHORITY_INVALID");
@@ -80,6 +88,7 @@ export function parseNativePITBatchArgsV1(args=[]){
     mode,market,dayStartMs:Date.parse(day+"T00:00:00.000Z"),
     manifestPath:kv["--manifest"]??null,outputPath:kv["--output"],
     offset,limit,expectedSHA,chunks,allowPublicReadOnlyFetch,
+    emitPrivateDayRows,
   });
 }
 export function verifyNativePITChunkEnvelopeV1(
@@ -151,6 +160,7 @@ export async function runNativePITBatchCliV1(config,{
     report=assembleHistoricalPITDayChunksV1({
       market:config.market,dayStartMs:config.dayStartMs,
       manifest,chunks,
+      includePrivateNativeDayRows:config.emitPrivateDayRows===true,
     });
   }else{
     report=await collectNativeHistoricalPITDayChunkV1({
@@ -184,6 +194,7 @@ export async function runNativePITBatchCliV1(config,{
       report.requestedHistoricalActiveMembers??null,
     sourceAttestedFullSymbolDayPriceJoin:
       report.sourceAttestedFullSymbolDayPriceJoin??false,
+    privateNativeDayRowsEmitted:report.privateNativeDayRowsEmitted??false,
     nextOffset:report.nextOffset??null,
     rosterDigestSha256:report.rosterDigestSha256??null,
     fullMarketOpportunityDenominatorVerified:false,

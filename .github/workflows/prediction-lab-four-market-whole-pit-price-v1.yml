@@ -10,6 +10,7 @@ on:
       - market-prediction-lab/src/venue-native-pit-daily-intake-v1.js
       - market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
       - market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs
+      - market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py
       - market-prediction-lab/src/upbit-spot-history.js
       - market-prediction-lab/tests/upbit-spot-history.test.js
       - market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
@@ -43,6 +44,14 @@ jobs:
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run EXISTING Python daily-opportunity scorer on native PIT fixture without any synthetic bars
+        run: |
+          python -m pip install --disable-pip-version-check --timeout 30 --retries 2 \
+            "numpy==2.2.6" "pandas==2.2.3"
+          python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py --self-test
       - name: Verify CLI no-PIT network fail-closed and no-orders policy
         run: |
           node market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs \
