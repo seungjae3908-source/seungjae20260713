@@ -30,6 +30,7 @@ on:
         options:
           - full
           - trading_core
+          - automation_research
           - member
   pull_request:
     paths:
@@ -40,6 +41,26 @@ on:
       - .github/tests/production-trading-core-qa-contract.test.mjs
       - stock-analyzer/e2e/production-trading-core-qa.spec.ts
       - stock-analyzer/playwright.production-trading-core.config.ts
+      - stock-analyzer/e2e/production-automation-research-core-qa.spec.ts
+      - stock-analyzer/playwright.production-automation-research-core.config.ts
+      - stock-analyzer/src/pages/auto-trading.tsx
+      - stock-analyzer/src/pages/paper-trading.tsx
+      - stock-analyzer/src/pages/research-center.tsx
+      - stock-analyzer/src/pages/research-center-workspace.tsx
+      - stock-analyzer/src/pages/backtests.tsx
+      - stock-analyzer/src/components/backtest-research-panel.tsx
+      - stock-analyzer/src/components/user-broker-telegram-panel.tsx
+      - api-server/src/routes/trade-automation.ts
+      - api-server/src/routes/paper-journal.ts
+      - api-server/src/routes/admin.ts
+      - api-server/src/routes/backtests.ts
+      - api-server/src/routes/user-broker-telegram.ts
+      - api-server/src/features/user-broker-telegram/**
+      - .github/workflows/staging-trading-core-only.yml
+      - .github/scripts/build-staging-trading-core-only-verdict.mjs
+      - .github/scripts/verify-staging-automation-research-verdict.mjs
+      - .github/scripts/verify-production-automation-research-core-receipt.mjs
+      - .github/tests/production-automation-research-core-qa-contract.test.mjs
       - stock-analyzer/e2e/production-trading-policy-limit-apply.spec.ts
       - stock-analyzer/playwright.production-trading-policy-limit.config.ts
       - .github/tests/production-trading-policy-limit-apply-contract.test.mjs
@@ -141,6 +162,8 @@ jobs:
           node --test .github/tests/production-admin-four-paper-rls.test.mjs
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
+      - name: Verify Automation/Research/Telegram scoped QA contract
+        run: node --test .github/tests/production-automation-research-core-qa-contract.test.mjs
       - name: Verify one-approval 1M Production trading-policy migration contract
         run: node --test .github/tests/production-trading-policy-limit-apply-contract.test.mjs
 
@@ -228,10 +251,14 @@ jobs:
         uses: actions/github-script@v7
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          QA_SCOPE: ${{ inputs.qa_scope }}
         with:
           script: |
             const targetSha = process.env.TARGET_SHA;
-            const artifactName = `staging-verdict-${targetSha}`;
+            const scoped = process.env.QA_SCOPE === 'automation_research';
+            const artifactName = scoped
+              ? `staging-automation-research-verdict-${targetSha}`
+              : `staging-verdict-${targetSha}`;
             const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -252,7 +279,9 @@ jobs:
               const valid = run.event === 'workflow_dispatch'
                 && run.head_branch === 'main'
                 && run.head_sha === targetSha
-                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.path === (scoped
+                  ? '.github/workflows/staging-trading-core-only.yml'
+                  : '.github/workflows/staging-readiness.yml')
                 && run.status === 'completed'
                 && run.conclusion === 'success';
               if (valid) {
@@ -270,15 +299,23 @@ jobs:
       - name: Download exact staging verdict artifact
         uses: actions/download-artifact@v4
         with:
-          name: staging-verdict-${{ steps.target.outputs.sha }}
+          name: ${{ inputs.qa_scope == 'automation_research' && format('staging-automation-research-verdict-{0}', steps.target.outputs.sha) || format('staging-verdict-{0}', steps.target.outputs.sha) }}
           path: staging-verdict
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.verdict-artifact.outputs.run_id }}
       - name: Require release_ready true, exact SHA, zero failures, and zero skipped checks
+        if: ${{ inputs.qa_scope != 'automation_research' }}
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+      - name: Require exact Automation/Research/Telegram scoped release verdict
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: >-
+          node .github/scripts/verify-staging-automation-research-verdict.mjs
+          staging-verdict/automation-research-staging-verdict.json "$TARGET_SHA"
       - name: Record accepted staging evidence
         run: |
           {
@@ -286,7 +323,8 @@ jobs:
             echo
             echo "- Target SHA: \`${{ steps.target.outputs.sha }}\`"
             echo "- Staging Run ID: \`${{ steps.verdict-artifact.outputs.run_id }}\`"
-            echo '- staging-verdict.json: `release_ready=true`'
+            echo "- QA scope: \`${{ inputs.qa_scope }}\`"
+            echo '- exact-SHA Staging verdict: `release_ready=true`'
             echo '- Failed checks: `0`'
             echo '- Skipped checks: `0`'
             echo '- Production deployment has not started yet.'
@@ -760,7 +798,7 @@ jobs:
 
       - name: 2 · Four-provider Account Production read-only QA
         id: account_qa
-        if: ${{ inputs.qa_scope != 'member' }}
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research' }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
@@ -802,7 +840,7 @@ jobs:
 
       - name: 3 · Production Credential Reuse QA
         id: credential_qa
-        if: ${{ inputs.qa_scope != 'member' }}
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research' }}
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
@@ -843,7 +881,7 @@ jobs:
 
       - name: 1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA
         id: trading_core_qa
-        if: ${{ inputs.qa_scope == 'trading_core' }}
+        if: ${{ inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research' }}
         env:
           EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
           PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
@@ -868,6 +906,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: 1AR · Auto, Paper, Research, Backtester and Telegram Journal Production pre-activation QA
+        id: automation_research_qa
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ github.run_id }}
+          PRODUCTION_BASE_URL: https://lsj119.com
+          PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+          PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+          PRODUCTION_AUTOMATION_RESEARCH_QA: 'true'
+          PRODUCTION_AUTOMATION_RESEARCH_ARTIFACT_DIR: production-automation-research-artifacts
+          LIVE_TRADING: 'false'
+          AUTO_TRADING: 'false'
+          REAL_ORDER_ENABLED: 'false'
+          PRIVATE_TRADING_API_ALLOWED: 'false'
+          ORDER_EXECUTION_ENABLED: 'false'
+          LIVE_AUTOMATIC_TRADING_ENABLED: 'false'
+          MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-automation-research-core.config.ts
+
+      - name: Verify Auto/Paper/Research/Backtester/Telegram Journal Production pre-activation receipt
+        if: ${{ inputs.qa_scope == 'automation_research' }}
+        run: >-
+          node .github/scripts/verify-production-automation-research-core-receipt.mjs
+          stock-analyzer/production-automation-research-artifacts/production-automation-research-core-qa.json
+          "$TARGET_SHA" "$GITHUB_RUN_ID"
+
+      - name: Upload Auto/Paper/Research/Backtester/Telegram Journal QA evidence
+        if: ${{ always() && steps.automation_research_qa.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-automation-research-core-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-automation-research-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Final exact-SHA identity, safety, and gate-conflict check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -878,12 +953,12 @@ jobs:
           "$TARGET_SHA" "$GITHUB_RUN_ID" "$DEPLOYMENT_COMPLETED_AT" "$QA_STARTED_AT" inline
 
       - name: Assemble exact-run post-deploy evidence
-        if: ${{ inputs.qa_scope != 'member' }}
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research' }}
         run: |
           set -Eeuo pipefail
           if [[ "$QA_SCOPE" == "full" ]]; then
             cp stock-analyzer/production-comprehensive-artifacts/production-comprehensive-readonly-qa.json postdeploy-evidence/
-          elif [[ "$QA_SCOPE" == "trading_core" ]]; then
+          elif [[ "$QA_SCOPE" == "trading_core" || "$QA_SCOPE" == "automation_research" ]]; then
             cp stock-analyzer/production-trading-core-artifacts/production-trading-core-qa.json postdeploy-evidence/
           else
             echo "Unsupported QA scope: $QA_SCOPE" >&2
@@ -891,10 +966,12 @@ jobs:
           fi
           cp stock-analyzer/production-account-readonly-artifacts/production-account-readonly-live-qa.json postdeploy-evidence/
           cp stock-analyzer/production-live-credential-reuse-artifacts/production-live-credential-reuse-qa.json postdeploy-evidence/
-          node .github/scripts/build-production-postdeploy-evidence.cjs postdeploy-evidence "$TARGET_SHA" "$GITHUB_RUN_ID" "$QA_SCOPE"
+          evidence_scope="$QA_SCOPE"
+          if [[ "$QA_SCOPE" == "automation_research" ]]; then evidence_scope=trading_core; fi
+          node .github/scripts/build-production-postdeploy-evidence.cjs postdeploy-evidence "$TARGET_SHA" "$GITHUB_RUN_ID" "$evidence_scope"
 
       - name: Upload immutable ACTIVATION_READY evidence
-        if: ${{ inputs.qa_scope != 'member' }}
+        if: ${{ inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research' }}
         uses: actions/upload-artifact@v4
         with:
           name: production-postdeploy-activation-ready-${{ env.TARGET_SHA }}
@@ -913,7 +990,7 @@ jobs:
             echo '- Environment: `production`'
             echo '- Release provenance: pre-merge Required CI 6/6 + exact merged-tree identity verified on current main'
             echo "- Release-ready staging evidence Run ID: \`${{ needs.approval-gate.outputs.staging_run_id }}\`"
-            echo '- staging-verdict.json: exact SHA, failed=0, skipped=0, release_ready=true'
+            echo '- exact-SHA scoped/full Staging verdict: failed=0, skipped=0, release_ready=true'
             echo '- Rollback: automatic on failed verification'
             echo "- QA scope: `$QA_SCOPE`"
             if [[ "$QA_SCOPE" == "member" ]]; then
@@ -922,6 +999,11 @@ jobs:
               echo '- ACTIVATION_READY: `NOT_EVALUATED`'
             elif [[ "$QA_SCOPE" == "trading_core" ]]; then
               echo '- Trading Core / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
+            elif [[ "$QA_SCOPE" == "automation_research" ]]; then
+              echo '- Automatic Trading / Automatic Paper Trading / Research Center / Backtester / Telegram Trading Journal pre-activation contract: `PASS`'
+              echo '- Four-provider Account / Credential Reuse / Trading Core safety: `PASS`'
+              echo '- Unrelated comprehensive UI QA: `NOT_RUN`'
+              echo '- Protected Telegram/Automatic Trading activation and post-activation delivery/worker proof: `PENDING`'
             else
               echo '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
             fi
@@ -929,7 +1011,7 @@ jobs:
             echo '- liveTradingAuthorityGranted: `false`'
             echo '- autoTradingAuthorityGranted: `false`'
             echo '- active conflicting trading gates: `0`'
-            if [[ "$QA_SCOPE" != "member" ]]; then
+            if [[ "$QA_SCOPE" == "full" || "$QA_SCOPE" == "trading_core" || "$QA_SCOPE" == "automation_research" ]]; then
               echo '- ACTIVATION_READY: `true`'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
