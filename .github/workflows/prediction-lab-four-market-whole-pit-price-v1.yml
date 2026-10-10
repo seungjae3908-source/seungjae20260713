@@ -6,6 +6,10 @@ on:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
       - market-prediction-lab/src/us-asof-all-stock-grouped-daily-v1.js
+      - market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js
+      - market-prediction-lab/tests/stock-source-limited-daily-evidence-v1.test.js
+      - market-prediction-lab/scripts/prepare-stock-source-limited-daily-evidence-v1.mjs
+      - market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py
       - market-prediction-lab/src/us-two-dated-all-stock-source-v1.js
       - market-prediction-lab/tests/us-two-dated-all-stock-source-v1.test.js
       - market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
@@ -60,6 +64,7 @@ jobs:
           node --test market-prediction-lab/tests/krx-two-dated-all-stock-sources-v1.test.js
           node --test market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
           node --test market-prediction-lab/tests/us-two-dated-all-stock-source-v1.test.js
+          node --test market-prediction-lab/tests/stock-source-limited-daily-evidence-v1.test.js
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -68,6 +73,7 @@ jobs:
           python -m pip install --disable-pip-version-check --timeout 30 --retries 2 \
             "numpy==2.2.6" "pandas==2.2.3"
           python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py --self-test
+          python market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py --self-test
       - name: Verify US point-in-time whole-date source blocks if no approved provider key
         run: |
           node market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs \
