@@ -158,6 +158,21 @@ export class TossTokenManager {
   }
 }
 
+let processTokenManager: TossTokenManager | null = null;
+
+/**
+ * Toss allows only one active access token per client. Issuing another token
+ * immediately revokes the previous one, so every Production read/execution
+ * path in this Node process must share the same token manager.
+ */
+export function processTossTokenManager() {
+  if (!processTokenManager) {
+    const dynamicFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+    processTokenManager = new TossTokenManager(createTossReadonlyTransport(dynamicFetch));
+  }
+  return processTokenManager;
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
