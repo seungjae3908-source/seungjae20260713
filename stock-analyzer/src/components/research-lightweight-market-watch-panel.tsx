@@ -17,7 +17,12 @@ const WATCH_LABEL: Record<ResearchLightweightMarketWatch['status'], string> = {
 function number(value: number | null) {
   return value == null ? '미측정' : value.toLocaleString('ko-KR');
 }
-function statusLabel(value: string) {
+function statusLabel(value: string, watchStatus?: ResearchLightweightMarketWatch['status']) {
+  // Per-market READY is the most recent saved source state, not proof that
+  // an aged/paused worker is still collecting new public ticker snapshots.
+  if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';
+  if (watchStatus === 'HOLD') return '서버 보호 정지';
+  if (watchStatus === 'THROTTLED') return '서버 보호 감속';
   if (value === 'READY') return '시세 수집';
   if (value === 'PARTIAL_TICKERS' || value === 'PARTIAL_UNIVERSE') return '일부 수집';
   if (value.startsWith('BLOCKED_')) return '데이터 미연결';
@@ -83,7 +88,7 @@ export function ResearchLightweightMarketWatchPanel({
           <div key={row.market} className="rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs">
             <div className="flex items-center justify-between gap-2">
               <strong>{MARKET_NAMES[row.market] ?? '미확인 시장'}</strong>
-              <span className="text-muted-foreground">{markets.length ? statusLabel(row.status) : '기록 없음'}</span>
+              <span className="text-muted-foreground">{markets.length ? statusLabel(row.status, summary?.status) : '기록 없음'}</span>
             </div>
             <p className="mt-1 text-muted-foreground">
               시세 {markets.length ? number(row.observedCount) + '/' + number(row.listedCount) : '미측정'} · 신규 후보 {markets.length ? number(row.newCandidates) : '미측정'}
