@@ -8,11 +8,13 @@ import { isAbsolute, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { prepareVideoResearch, videoRequestBody, executeVideoResearch } from '../src/research-workspace-video-v7.js';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
+const wrongOwner=st=>typeof process.getuid==='function'&&st.uid!==process.getuid();
+const posixModeUnsafe=(mode,mask)=>process.platform!=='win32'&&(mode&mask)!==0;
 async function readJson(path) {
   if(!isAbsolute(path))fail('VIDEO_INPUT_ABSOLUTE_PATH_REQUIRED');
   const h=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try {
-    const st=await h.stat();if(!st.isFile()||st.size>65536||st.nlink!==1||(st.mode&0o022)||st.uid!==process.getuid())fail('VIDEO_INPUT_FILE_UNSAFE');
+    const st=await h.stat();if(!st.isFile()||st.size>65536||st.nlink!==1||posixModeUnsafe(st.mode,0o022)||wrongOwner(st))fail('VIDEO_INPUT_FILE_UNSAFE');
     const b=Buffer.alloc(65537);let n=0;
     while(n<b.length){const r=await h.read(b,n,b.length-n,n);if(!r.bytesRead)break;n+=r.bytesRead;}
     const after=await h.stat();if(n!==st.size||n>65536||after.size!==st.size||after.mtimeMs!==st.mtimeMs||after.ctimeMs!==st.ctimeMs)fail('VIDEO_INPUT_CHANGED');
@@ -21,7 +23,7 @@ async function readJson(path) {
 }
 async function privateRoot(path) {
   if(!isAbsolute(path))fail('VIDEO_OUTPUT_ABSOLUTE_PATH_REQUIRED');
-  const st=await lstat(path);if(!st.isDirectory()||st.isSymbolicLink()||(st.mode&0o077)||st.uid!==process.getuid())fail('VIDEO_OUTPUT_ROOT_UNSAFE');
+  const st=await lstat(path);if(!st.isDirectory()||st.isSymbolicLink()||posixModeUnsafe(st.mode,0o077)||wrongOwner(st))fail('VIDEO_OUTPUT_ROOT_UNSAFE');
   const real=await realpath(path);if(real!==path)fail('VIDEO_OUTPUT_PATH_NOT_CANONICAL');return real;
 }
 async function exclusive(path,bytes) {
@@ -61,7 +63,11 @@ export async function runVideoCli(argv,{fetchImpl=globalThis.fetch,env=process.e
     reserve:async reservation=>{
       // A trusted shared root is required across workers. No time-based lock theft.
       await exclusive(join(root,`call-${reservation.approvalId}-${reservation.planDigest}.json`),json({...reservation,status:'ATTEMPT_RESERVED'}));
-      const h=await open(root,constants.O_RDONLY|constants.O_DIRECTORY);try{await h.sync();}finally{await h.close();}
+      const h=await open(root,constants.O_RDONLY|constants.O_DIRECTORY);
+      try{
+        try{await h.sync();}
+        catch(cause){if(process.platform!=='win32'||cause?.code!=='EPERM')throw cause;}
+      }finally{await h.close();}
       return true;
     }});
   if(result.rawResponse)await exclusive(join(dir,'provider-response.json'),result.rawResponse);

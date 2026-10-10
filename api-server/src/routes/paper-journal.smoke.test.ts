@@ -14,6 +14,7 @@ import { normalizeTradingPolicy } from '../services/trade-automation-risk.servic
 import {
   ADMIN_FOUR_PAPER_MARKETS, ADMIN_MARKET_INITIAL_KRW,
   ADMIN_WALLET_CONFIRMATION, adminPaperWalletId,
+  MEMBER_WALLET_CONFIRMATION, memberPaperWalletId,
 } from '../services/admin-four-market-paper-capital.service';
 
 const NOW = new Date('2026-08-02T05:00:00.000Z');
@@ -61,9 +62,11 @@ async function startServer(options: {
   reviewProvider?: TradingReviewProvider | null; memberTier?: string;
   automaticPaperHistory?: { orders: any[]; plans: any[] };
   adminRlsGuardReader?: (req: unknown) => Promise<boolean>;
+  fourMarketRlsGuardReader?: (req: unknown) => Promise<boolean>;
   adminPolicyReader?: (req: unknown, owner: string) => Promise<any>;
   adminPolicyWriter?: (req: unknown, owner: string, policy: any) => Promise<void>;
   adminFourMarketInsert?: (req: unknown, owner: string, records: any[]) => Promise<any[]>;
+  fourMarketInsert?: (req: unknown, owner: string, role: 'admin'|'member', records: any[]) => Promise<any[]>;
 } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -79,9 +82,11 @@ async function startServer(options: {
     reviewProvider: options.reviewProvider === undefined ? reviewProvider : options.reviewProvider,
     automaticPaperHistoryReader: async () => options.automaticPaperHistory ?? { orders: [], plans: [] },
     adminRlsGuardReader: options.adminRlsGuardReader ?? (async () => true),
+    fourMarketRlsGuardReader: options.fourMarketRlsGuardReader ?? (async () => true),
     ...(options.adminPolicyReader ? { adminPolicyReader: options.adminPolicyReader } : {}),
     ...(options.adminPolicyWriter ? { adminPolicyWriter: options.adminPolicyWriter } : {}),
     ...(options.adminFourMarketInsert ? { adminFourMarketInsert: options.adminFourMarketInsert } : {}),
+    ...(options.fourMarketInsert ? { fourMarketInsert: options.fourMarketInsert } : {}),
   }));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -561,8 +566,68 @@ test('four independent admin 1m wallets are protected from non-admin and direct 
       }),
     });
     assert.equal(direct.status, 403);
-    assert.equal((await safeJson(direct)).code, 'ADMIN_MARKET_WALLET_SERVER_ONLY');
+    assert.equal((await safeJson(direct)).code, 'PAPER_FOUR_MARKET_WALLET_SERVER_ONLY');
   } finally { await new Promise<void>((resolve) => regular.server.close(() => resolve())); }
+});
+
+test('regular member can prepare four isolated 1m Paper wallets without Live or transfer authority', async () => {
+  const repository = createRepository();
+  let insertBatches = 0;
+  const fixture = await startServer({
+    memberTier: 'regular',
+    repository,
+    adminPolicyReader: async () => normalizeTradingPolicy({
+      ...DEFAULT_TRADING_POLICY,
+      mode: 'approval', automaticEnabled: false,
+      totalCapitalKrw: 500_000, maxOrderKrw: 500_000,
+    }),
+    fourMarketInsert: async (_request, owner, role, records) => {
+      assert.equal(owner, USER);
+      assert.equal(role, 'member');
+      assert.equal(records.length, 4);
+      assert.deepEqual(records.map((row) => row.id),
+        ADMIN_FOUR_PAPER_MARKETS.map(memberPaperWalletId));
+      insertBatches += 1;
+      return Promise.all(records.map((row) =>
+        repository.upsertRecord(owner, row, NOW.toISOString())));
+    },
+  });
+  const prefix = fixture.baseUrl + '/api/paper-journal/four-market';
+  try {
+    const before = await safeJson(await fetch(prefix + '/status'));
+    assert.equal(before.role, 'member');
+    assert.equal(before.canCreate, true);
+    assert.equal(before.perMarketInitialKrw, 1_000_000);
+    assert.equal(before.totalInitialKrw, 4_000_000);
+    assert.equal(before.financialMutationCount, 0);
+    const wrong = await fetch(prefix + '/bootstrap', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmation: ADMIN_WALLET_CONFIRMATION }),
+    });
+    assert.equal(wrong.status, 409);
+    assert.equal(insertBatches, 0);
+    const createdResponse = await fetch(prefix + '/bootstrap', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmation: MEMBER_WALLET_CONFIRMATION }),
+    });
+    assert.equal(createdResponse.status, 200);
+    const created = await safeJson(createdResponse);
+    assert.equal(created.ready, true);
+    assert.equal(created.initialCapitalKrw, 4_000_000);
+    assert.equal(created.liveTradingAuthorityGranted, false);
+    assert.equal(created.autoTradingAuthorityGranted, false);
+    assert.equal(created.transferAuthorityGranted, false);
+    assert.equal(created.withdrawalAuthorityGranted, false);
+    assert.equal(insertBatches, 1);
+    const repeated = await fetch(prefix + '/bootstrap', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmation: MEMBER_WALLET_CONFIRMATION }),
+    });
+    assert.equal(repeated.status, 409);
+    assert.equal(insertBatches, 1);
+  } finally {
+    await new Promise<void>((resolve) => fixture.server.close(() => resolve()));
+  }
 });
 
 test('admin Paper-only 4x1m setup: explicit policy step + single four-row insert, no live authority', async () => {
