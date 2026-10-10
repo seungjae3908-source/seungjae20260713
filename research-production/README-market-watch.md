@@ -331,3 +331,37 @@ sudo -u investment-research env \
 
 This Draft is only CI-tested with fixtures. No real Vultr capacity census
 has been performed, and the market-watch service remains OFF.
+
+
+## One-command read-only market-watch preflight (Draft; no activation)
+
+Instead of manually opening three diagnostics, a **local** one-command summary
+now safely runs the existing read-only market-watch status, 24h cadence
+diagnostic, and daily storage capacity census in a single sequential check.
+It does not read brokerage credentials, execute Paper/Live orders, change
+systemd, deploy code, mutate the database, delete/archive files or start
+the worker. Use only from a separately approved installed exact Research
+release; these Draft PRs have not been installed on the Vultr host.
+
+~~~bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  RESEARCH_CODE_SHA=<EXACT_INSTALLED_APPROVED_RESEARCH_SHA> \
+  node /opt/investment-research/current/research-production/bin/lightweight-market-watch-preflight.mjs
+~~~
+
+The output is a small **aggregate** with the three independent status labels
+and bounded market-coverage/cadence/capacity counts; it drops raw file bodies,
+symbols, account IDs, host paths and credentials. INVALID evidence or unsafe
+files cause a fixed-code error and exit 2; absent evidence stays INCOMPLETE,
+not a fabricated PASS. Healthy-looking self-reported local files are at most
+LOCAL_EVIDENCE_ONLY. A configured Research SHA label is **not** independent
+proof of the running checkout.
+
+Crucially, this command **never** sets deploymentApproved,
+systemdEnabledOrStarted, independentlyVerified24hUptime,
+fourMarketWholeUniverseProven, fullCostAndOosProven, paperExecutionProven, or
+profitabilityProven to true. No operational activation, auto trading, 
+Formula PASS or OOS proof is produced. Full authorization still requires an
+approved release, active server/service measurements, verified data feeds,
+independent 24h uptime/latency evidence and separately approved retention.
