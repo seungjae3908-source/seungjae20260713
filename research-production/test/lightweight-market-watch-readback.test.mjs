@@ -258,3 +258,41 @@ test('local status CLI is missing-safe and does not read from the network', asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test('read-only status projects exact capped counts and rejects forged overflow evidence', () => {
+  const raw = evidence();
+  raw.markets = raw.markets.map(row => ({
+    ...row, sourceCappedCount: 0,
+    qualifyingCandidateCount: row.newCandidates,
+    candidateCappedCount: 0,
+  }));
+  raw.markets[3] = {
+    ...raw.markets[3], status: 'PARTIAL_TICKERS',
+    listedCount: 8001, observedCount: 8000, newCandidates: 12,
+    sourceCappedCount: 1, qualifyingCandidateCount: 13,
+    candidateCappedCount: 1,
+  };
+  raw.newCandidateCount = 14;
+  const receipt = summarizeLightweightMarketWatch(raw, NOW, SHA);
+  assert.equal(receipt.status, 'PARTIAL');
+  assert.equal(receipt.markets[3].sourceCappedCount, 1);
+  assert.equal(receipt.markets[3].qualifyingCandidateCount, 13);
+  assert.equal(receipt.markets[3].candidateCappedCount, 1);
+  assert.equal(receipt.continuous24hProven, false);
+  assert.equal(receipt.paperExecutionProven, false);
+  assert.equal(receipt.executionAuthority, 'NONE');
+  assert.equal(JSON.stringify(receipt).includes('BTCUSDT'), false);
+  const forged = structuredClone(raw);
+  forged.markets[3].candidateCappedCount = 100;
+  assert.equal(summarizeLightweightMarketWatch(forged, NOW, SHA).status, 'INVALID');
+  forged.markets[3].candidateCappedCount = 1;
+  forged.markets[3].status = 'READY';
+  assert.equal(summarizeLightweightMarketWatch(forged, NOW, SHA).status, 'INVALID');
+  const incomplete = structuredClone(raw);
+  delete incomplete.markets[3].sourceCappedCount;
+  assert.equal(summarizeLightweightMarketWatch(incomplete, NOW, SHA).status, 'INVALID');
+  const old = summarizeLightweightMarketWatch(evidence(), NOW, SHA);
+  assert.equal(old.markets[2].sourceCappedCount, null);
+  assert.equal(old.markets[2].candidateCappedCount, null);
+});
