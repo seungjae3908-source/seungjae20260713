@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, rm, symlink, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { summarizeWatchReadOnlyPreflight } from '../bin/lightweight-market-watch-preflight.mjs';
 
 const SHA='a'.repeat(40);
 const exe=new URL('../bin/lightweight-market-watch-preflight.mjs',import.meta.url).pathname;
@@ -152,4 +153,43 @@ test('unsafe optional stock snapshot invalidates combined preflight and does not
     assert.equal(run.stdout.includes('do-not-print-credential'),false);
     assert.equal(run.stdout.includes(root),false);
   });
+});
+
+
+test('local per-cycle quote and candidate caps surface as blocker counts, not fake market recall', () => {
+  const markets = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'];
+  const out = summarizeWatchReadOnlyPreflight({
+    marketWatch: {
+      status: 'PARTIAL', marketCoverageCount: 2,
+      executionAuthority: 'NONE',
+      markets: markets.map((market, i) => ({
+        market, sourceCappedCount: i === 1 ? 2 : 0,
+        qualifyingCandidateCount: i === 2 ? 13 : 0,
+        candidateCappedCount: i === 2 ? 1 : 0,
+      })),
+    },
+    cadence: { status: 'MISSING', cadenceWindowObserved: false,
+      executionAuthority: 'NONE' },
+    capacity: { status: 'INSUFFICIENT_HISTORY',
+      retentionApplied: false, archiveVerified: false,
+      deletionAllowed: false, projectedDaysAboveFloor: null },
+    stockSources: {
+      contract: 'public-stock-source-input-preflight-v1',
+      status: 'INCOMPLETE', independentProviderVerified: false,
+      marketDataRightsVerified: false, fullUniverseVerified: false,
+      continuous24hProven: false, paperExecutionProven: false,
+      profitabilityProven: false, executionAuthority: 'NONE',
+      markets: ['KR_STOCK', 'US_STOCK'].map(market => ({
+        market, status: 'MISSING', listedCount: null, observedCount: null, source: null,
+      })),
+    },
+  });
+  assert.equal(out.status, 'INCOMPLETE');
+  assert.equal(out.watchedSourceCappedThisCycle, 2);
+  assert.equal(out.watchedCandidatesCappedThisCycle, 1);
+  assert.ok(out.blockers.includes('WATCH_SOURCE_CAP_OBSERVED'));
+  assert.ok(out.blockers.includes('WATCH_CANDIDATE_CAP_OBSERVED'));
+  assert.equal(out.fourMarketWholeUniverseProven, false);
+  assert.equal(out.independentlyVerified24hUptime, false);
+  assert.equal(out.executionAuthority, 'NONE');
 });

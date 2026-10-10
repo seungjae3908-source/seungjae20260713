@@ -64,14 +64,27 @@ function uniqueQuotes(rows) {
     const old = map.get(row.symbol);
     if (!old || row.sourceAtMs >= old.sourceAtMs) map.set(row.symbol, row);
   }
-  return [...map.values()].sort((a, b) =>
-    b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol))
-    .slice(0, WATCH_LIMITS.maxSymbolsPerMarket);
+  const ordered = [...map.values()].sort((a, b) =>
+    b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol));
+  // VALID DISTINCT quotes omitted by the existing bounded top-turnover scan.
+  // Not a count of verified false negatives or missed profit.
+  return Object.freeze({
+    quotes: Object.freeze(ordered.slice(0, WATCH_LIMITS.maxSymbolsPerMarket)),
+    sourceCappedCount: Math.max(0, ordered.length - WATCH_LIMITS.maxSymbolsPerMarket),
+  });
 }
 function sourceResult(market, source, status, listedCount, quotes) {
+  const selected = uniqueQuotes(quotes);
+  // Never say READY after 8k truncation or de-duplication made the actual
+  // observed set smaller than the source's advertised roster.
+  const boundedStatus = status === 'READY'
+    && (selected.quotes.length === 0 || selected.quotes.length !== listedCount)
+    ? market === 'KR_STOCK' || market === 'US_STOCK'
+      ? 'PARTIAL_UNIVERSE' : 'PARTIAL_TICKERS'
+    : status;
   return Object.freeze({
-    market, source, status, listedCount,
-    quotes: Object.freeze(uniqueQuotes(quotes)),
+    market, source, status: boundedStatus, listedCount,
+    quotes: selected.quotes, sourceCappedCount: selected.sourceCappedCount,
   });
 }
 export function blockedSource(market, reason) {
@@ -305,6 +318,12 @@ export function evaluateMarketOpportunities(input) {
       listedCount: source.listedCount,
       observedCount: rows.length,
       newCandidates: selected.length,
+      // Source cap is counted before scanning. Candidate cap covers only
+      // already-qualified, timestamp-comparable, cooldown-cleared observations.
+      sourceCappedCount: Number.isSafeInteger(source.sourceCappedCount)
+        && source.sourceCappedCount >= 0 ? source.sourceCappedCount : 0,
+      qualifyingCandidateCount: candidates.length,
+      candidateCappedCount: candidates.length - selected.length,
       previousSnapshotComparable: comparable,
       executionAuthority: 'NONE',
     }),

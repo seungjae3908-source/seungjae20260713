@@ -161,6 +161,33 @@ continuous24hProven and executionAuthority unproven/NONE. This is not a
 substitute for licensed KR/US feed contracts or an independent Vultr audit.
 No currently running host is claimed to have executed this Draft-only CLI.
 
+## Bounded public-watch selection and opportunity overflow (Draft)
+
+The existing 2-vCPU watcher still processes at most **8,000 distinct fresh
+quotes per market** and emits at most **12 provisional candidates per market
+per two-minute cycle**. The caps protect the app server and were NOT raised.
+
+- `sourceCappedCount`: the number of valid distinct supplied symbols
+  left out by top-turnover 8k selection, never checked for signals. They
+  are NOT verified missed moves and unprovided/delisted symbols remain unknown.
+- `qualifyingCandidateCount`: among the retained symbols, the number
+  that pass comparable-timestamp, price, liquidity and cooldown gates.
+- `candidateCappedCount`: such qualified provisional candidates
+  beyond the top 12 that are NOT published to the event log. Not fills/PnL.
+- A source that reports READY but loses quotes to de-duplication or 8k
+  truncation is relabeled PARTIAL_TICKERS. Stock input remains
+  PARTIAL_UNIVERSE until independently authenticated licensed coverage.
+- The read-only local `lightweight-market-watch-status.mjs` validates
+  counters and returns UNKNOWN (null) for older release snapshots.
+  Unified local preflight returns `watchedSourceCappedThisCycle` and
+  `watchedCandidatesCappedThisCycle`; nonzero figures are blockers.
+  These counts are **per cycle**, not unique daily false negatives.
+
+The live PC Research Center has not been modified to display these fields.
+At two-minute resolution intermediate spikes may still be missed. Complete
+historical PIT universe, independent originals, one-minute prices, sharding,
+order feasibility/OOS/full costs and 24-hour host attestation remain pending.
+No Paper, Live, automation or profitability permission is created.
 ## Four-source read-only operational preflight
 
 The existing \`lightweight-market-watch-preflight.mjs\` now invokes the KR/US

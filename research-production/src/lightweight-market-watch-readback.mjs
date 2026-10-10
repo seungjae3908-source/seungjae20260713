@@ -70,6 +70,20 @@ export function summarizeLightweightMarketWatch(
   const markets = [];
   for (const [index, market] of MARKETS.entries()) {
     const row = object(v.markets[index]);
+    const capKeys = ['sourceCappedCount', 'qualifyingCandidateCount', 'candidateCappedCount'];
+    const anyCaps = row != null && capKeys.some(key => Object.hasOwn(row, key));
+    const allCaps = row != null && capKeys.every(key => Object.hasOwn(row, key));
+    if (anyCaps && (!allCaps
+      || !safeCount(row.sourceCappedCount) || row.sourceCappedCount > 30_000
+      || !safeCount(row.qualifyingCandidateCount) || row.qualifyingCandidateCount > 8_000
+      || !safeCount(row.candidateCappedCount) || row.candidateCappedCount > 8_000
+      || row.qualifyingCandidateCount !== row.newCandidates + row.candidateCappedCount
+      || row.qualifyingCandidateCount > row.observedCount
+      || row.sourceCappedCount > row.listedCount - row.observedCount
+      || (row.status === 'READY' && row.sourceCappedCount > 0)
+      || (BLOCKED.test(row.status)
+        && (row.sourceCappedCount !== 0 || row.qualifyingCandidateCount !== 0))))
+      return empty('INVALID', true);
     if (!row || row.market !== market || typeof row.status !== 'string'
       || !(HEALTHY_SOURCE.has(row.status) || BLOCKED.test(row.status))
       || !SAFE_SOURCE.test(String(row.source ?? ''))
@@ -88,6 +102,10 @@ export function summarizeLightweightMarketWatch(
       market, source: row.source, status: row.status,
       listedCount: row.listedCount, observedCount: row.observedCount,
       newCandidates: row.newCandidates,
+      // Old releases have no cap proof: null means UNKNOWN, never zero.
+      sourceCappedCount: allCaps ? row.sourceCappedCount : null,
+      qualifyingCandidateCount: allCaps ? row.qualifyingCandidateCount : null,
+      candidateCappedCount: allCaps ? row.candidateCappedCount : null,
     }));
   }
   if (markets.reduce((n, x) => n + x.newCandidates, 0) !== v.newCandidateCount)

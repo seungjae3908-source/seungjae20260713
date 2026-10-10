@@ -339,3 +339,71 @@ test('systemd unit passes real syntax verification in Linux CI', {
   assert.equal(result.status, 0,
     'systemd unit verify failed: ' + String(result.stderr || result.error || result.stdout));
 });
+
+
+test('8,001 distinct Bitget quotes cannot report READY after top-8,000 selection', () => {
+  const count = WATCH_LIMITS.maxSymbolsPerMarket + 1;
+  const data = Array.from({ length: count }, (_, i) => ({
+    symbol: 'S' + String(i).padStart(5, '0') + 'USDT',
+    lastPr: '100', change24h: '0.015', usdtVolume: '10000000',
+    ts: String(NOW - 1_000),
+  }));
+  const source = normalizeBitgetSnapshot({ code: '00000', data }, NOW);
+  assert.equal(source.listedCount, count);
+  assert.equal(source.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
+  assert.equal(source.sourceCappedCount, 1);
+  assert.equal(source.status, 'PARTIAL_TICKERS');
+  assert.equal(source.quotes[0].symbol, 'S00000USDT');
+  assert.equal(source.quotes.at(-1).symbol, 'S07999USDT');
+  assert.equal(WATCH_SAFETY.orderAuthority, 'NONE');
+});
+
+test('stock 8k cap counts distinct valid symbols not examined, never missed trades', () => {
+  const q = { price: 100, turnover24h: 9000000, change24hPercent: 1,
+    asOf: new Date(NOW - 1000).toISOString() };
+  const source = normalizeStockFeed({
+    schemaVersion: 'research-stock-public-snapshot-v1', market: 'US_STOCK',
+    source: 'US_SOURCE_V1', completeUniverse: true,
+    asOf: new Date(NOW - 1000).toISOString(),
+    quotes: Array.from({ length: WATCH_LIMITS.maxSymbolsPerMarket + 1 },
+      (_, i) => ({ ...q, symbol: 'S' + i })),
+  }, 'US_STOCK', NOW);
+  assert.equal(source.status, 'PARTIAL_UNIVERSE');
+  assert.equal(source.sourceCappedCount, 1);
+  assert.equal(source.quotes.length, 8000);
+  assert.equal(source.listedCount, 8001);
+});
+
+test('13 qualified provisional observations emit only 12 but account for one capped candidate', () => {
+  const quotes = Array.from({ length: 13 }, (_, i) => ({
+    symbol: 'US' + i, price: 101, sourceAtMs: NOW - 1000,
+    turnover24h: 5000000, change24hPercent: 1,
+  }));
+  const source = {
+    market: 'US_STOCK', status: 'PARTIAL_UNIVERSE', source: 'PUBLIC_V1',
+    listedCount: quotes.length, quotes, sourceCappedCount: 0,
+  };
+  const previous = {
+    observedAtMs: NOW - 120000, source: 'PUBLIC_V1',
+    quotes: quotes.map(q => ({
+      symbol: q.symbol, price: 100, sourceAtMs: NOW - 121000,
+    })),
+  };
+  const result = evaluateMarketOpportunities({
+    market: 'US_STOCK', source, previous, nowMs: NOW, lastAlerts: {},
+  });
+  assert.equal(result.summary.qualifyingCandidateCount, 13);
+  assert.equal(result.summary.newCandidates, 12);
+  assert.equal(result.summary.candidateCappedCount, 1);
+  assert.equal(result.candidates.length, WATCH_LIMITS.maxCandidatesPerMarket);
+  assert.ok(result.candidates.every(x => x.executionAuthority === 'NONE'
+    && x.isTradingSignal === false && x.paperAdmitted === false));
+  const lastAlerts = Object.fromEntries(quotes.map(q => [
+    'US_STOCK:' + q.symbol + ':UP', NOW - 30000,
+  ]));
+  const suppressed = evaluateMarketOpportunities({
+    market: 'US_STOCK', source, previous, nowMs: NOW, lastAlerts,
+  });
+  assert.equal(suppressed.summary.qualifyingCandidateCount, 0);
+  assert.equal(suppressed.summary.candidateCappedCount, 0);
+});
