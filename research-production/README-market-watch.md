@@ -313,8 +313,11 @@ sudo -u investment-research env \
 - Disk space comes from the actual local filesystem statfs, not assumed
   Vultr specifications. The forecast reserves **5 GiB** for the host,
   using mean bytes from seven **consecutive** completed UTC dates
-  (excludes today). Any missing day keeps the result at
-  INSUFFICIENT_HISTORY with a null forecast, not an optimistic zero-byte day.
+  (excludes today). Each date must also have a private bounded cadence log:
+  discovery/outcome files alone are not proof that the watch kept running.
+  Any missing cadence/date keeps INSUFFICIENT_HISTORY and a null forecast,
+  never an optimistic zero-byte day. Cadence file *presence* itself does not
+  attest hourly uptime or complete market-source coverage.
   Exactly 5 GiB free is also HOLD, since no app disk margin remains.
   Runway is approximate, not an uptime or retention SLA.
 - A report of OBSERVATION_ONLY is **NOT** permission to run indefinitely.
