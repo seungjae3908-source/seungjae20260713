@@ -25,6 +25,7 @@ import {
 } from '@/components/ai-chart-position-panel';
 import { ChartPatternOverlayPanel } from '@/components/chart-pattern-overlay-panel';
 import type { AnalysisMarket, AnalysisPricePlan, AnalysisSelection } from '@/lib/analysis-selection';
+import { positionOverlayForChart } from '@/lib/ai-chart-position-overlay-binding';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
 import {
@@ -116,6 +117,8 @@ type Props = {
   levels: PriceLevels;
   analysis: ChartAnalysis | null;
   pricePlan?: AnalysisPricePlan;
+  externalPositionOverlay?: AiChartPositionOverlay | null;
+  externalPositionController?: boolean;
   overlays: OverlayState;
   timeframe: UnifiedChartTimeframe;
   resetKey: string;
@@ -289,6 +292,8 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   levels,
   analysis,
   pricePlan,
+  externalPositionOverlay,
+  externalPositionController = false,
   overlays,
   timeframe,
   resetKey,
@@ -303,13 +308,18 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
   const instanceRef = useRef<ChartInstance | null>(null);
   const storedViewportRef = useRef<StoredViewport | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [positionOverlay, setPositionOverlay] = useState<AiChartPositionOverlay | null>(null);
+  const [localPositionOverlay, setLocalPositionOverlay] = useState<AiChartPositionOverlay | null>(null);
   const hasChartData = candles.length >= 2;
   const chartSymbol = useMemo(
     () => chartSymbolFromResetKey(resetKey, market, timeframe),
     [market, resetKey, timeframe],
   );
   const latestChartPrice = candles.at(-1)?.close ?? null;
+  const positionOverlay = useMemo(() => positionOverlayForChart(
+    externalPositionController ? externalPositionOverlay : localPositionOverlay,
+    market,
+    chartSymbol,
+  ), [chartSymbol, externalPositionController, externalPositionOverlay, localPositionOverlay, market]);
 
   useImperativeHandle(ref, () => ({
     applyRealtimeCandle: (candle) => {
@@ -787,7 +797,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         />
         <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
       </div>
-      {chartSymbol ? (
+      {chartSymbol && !externalPositionController ? (
         <div className="px-3 sm:px-4">
           <AiChartPositionPanel
             selection={selection}
@@ -795,7 +805,7 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
             symbol={chartSymbol}
             chartPrice={latestChartPrice}
             pricePlan={pricePlan}
-            onOverlayChange={setPositionOverlay}
+            onOverlayChange={setLocalPositionOverlay}
           />
         </div>
       ) : null}
