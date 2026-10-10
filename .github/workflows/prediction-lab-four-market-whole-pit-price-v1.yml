@@ -7,6 +7,10 @@ on:
     paths:
       - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
       - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+      - market-prediction-lab/src/venue-native-pit-daily-intake-v1.js
+      - market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/tests/upbit-spot-history.test.js
       - market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
       - .github/workflows/prediction-lab-four-market-whole-pit-price-v1.yml
   workflow_dispatch:
@@ -36,6 +40,8 @@ jobs:
           test "$AUTO_TRADING" = "false"
           test "$EXECUTION_AUTHORITY" = "NONE"
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+          node --test market-prediction-lab/tests/upbit-spot-history.test.js
+          node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
       - name: Emit truthful missing-historical-source readiness
         run: |
           node market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs

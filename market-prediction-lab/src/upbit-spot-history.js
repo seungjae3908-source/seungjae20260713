@@ -4,6 +4,7 @@ const BASE_URL = "https://api.upbit.com";
 const PAGE_SIZE = 200;
 const TIMEFRAMES = Object.freeze({
   "1m": Object.freeze({unit:1,intervalMs:60_000}),
+  "1d": Object.freeze({unit:null,intervalMs:86_400_000}),
   "4h": Object.freeze({ unit: 240, intervalMs: 4 * 60 * 60 * 1000 }),
   "60m": Object.freeze({ unit: 60, intervalMs: 60 * 60 * 1000 }),
 });
@@ -40,7 +41,7 @@ export async function collectUpbitSpotHistory(raw = {}) {
   const maxPages = Number(raw.maxPages ?? 40);
   const minCandles = Number(raw.minCandles ?? 120);
   const requireFullWindow = raw.requireFullWindow ?? (timeframe === "1m");
-  if (!Number.isInteger(minCandles) || minCandles < 2 || minCandles > 20_000) throw new PredictionInputError("minCandles must be 2..20000", {minCandles});
+  if (!Number.isInteger(minCandles) || minCandles < (timeframe === "1d" ? 1 : 2) || minCandles > 20_000) throw new PredictionInputError("minCandles invalid for timeframe", {minCandles});
   if (typeof requireFullWindow !== "boolean") throw new PredictionInputError("requireFullWindow must be boolean");
   if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime <= 0 || endTime <= startTime) throw new PredictionInputError("invalid Upbit history range", { startTime, endTime });
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
@@ -48,12 +49,25 @@ export async function collectUpbitSpotHistory(raw = {}) {
   const byTimestamp = new Map(); let cursor = endTime; let pages = 0; let reachedRequestedStart = false;
   while (cursor > startTime && pages < maxPages) {
     const to = new Date(cursor).toISOString();
-    const url = `${BASE_URL}/v1/candles/minutes/${timeframeConfig.unit}?market=${encodeURIComponent(market)}&to=${encodeURIComponent(to)}&count=${PAGE_SIZE}`;
+    const venuePath = timeframe === "1d" ? "/v1/candles/days"
+      : `/v1/candles/minutes/${timeframeConfig.unit}`;
+    const url = `${BASE_URL}${venuePath}?market=${encodeURIComponent(market)}&to=${encodeURIComponent(to)}&count=${PAGE_SIZE}`;
     const response = await fetchImpl(url, { signal: raw.signal, headers: { accept: "application/json", "user-agent": "seungjae-prediction-lab/1.0" } });
     if (!response.ok) throw Object.assign(new Error(`UPBIT_HISTORY_HTTP_${response.status}`), { status: response.status });
     const rows = await response.json(); if (!Array.isArray(rows)) throw new Error("UPBIT_HISTORY_INVALID_RESPONSE"); if (!rows.length) break;
     let oldest = Number.POSITIVE_INFINITY;
-    for (const rawRow of rows) { const candle = parseRow(rawRow); if (!candle) continue; oldest = Math.min(oldest, candle.timestamp); if (candle.timestamp >= startTime && candle.timestamp < endTime) byTimestamp.set(candle.timestamp, candle); }
+    for (const rawRow of rows) {
+      // A native all-name PIT price intake cannot trust a response for
+      // another pair, or a response omitting its provider identity.
+      if (raw.requireMarketIdentity === true && rawRow?.market !== market) {
+        throw new Error("UPBIT_HISTORY_MARKET_IDENTITY_UNVERIFIED");
+      }
+      const candle = parseRow(rawRow);
+      if (!candle) continue;
+      oldest = Math.min(oldest, candle.timestamp);
+      if (candle.timestamp >= startTime && candle.timestamp < endTime)
+        byTimestamp.set(candle.timestamp, candle);
+    }
     pages += 1;
     if (!Number.isFinite(oldest)) throw new Error("UPBIT_HISTORY_PAGE_TIMESTAMP_MISSING");
     if (oldest <= startTime) { reachedRequestedStart = true; break; }
