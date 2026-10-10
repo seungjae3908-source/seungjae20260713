@@ -1,5 +1,5 @@
 import test from "node:test";
-import {mkdtempSync,readFileSync,statSync,writeFileSync} from "node:fs";
+import {mkdtempSync,readFileSync,statSync,writeFileSync,chmodSync,existsSync} from "node:fs";
 import {createHash} from "node:crypto";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -442,4 +442,44 @@ test("Bitget wrong missing UTC prior day is a BLOCKED event, not 0% return",asyn
  assert.equal(partial.status,"BLOCKED_DATA");
  assert.equal(partial.reason,"NATIVE_PRIOR_UTC_DAY_CLOSE_MISSING");
  assert.equal(partial.actualMarketWideOpportunityCount,null);
+});
+
+test("existing native PIT chunk output refuses duplicate exchange GETs before network",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-repeat-output-"));
+ const m=manifest("CRYPTO_SPOT",["KRW-ABC"]);
+ const file=join(folder,"roster.json"),output=join(folder,"existing-chunk.json");
+ writeFileSync(file,JSON.stringify(m),{mode:0o600});
+ writeFileSync(output,"{\"unchanged\":true}",{mode:0o600});
+ const cfg=parseNativePITBatchArgsV1([
+  "--mode","fetch","--market","CRYPTO_SPOT",
+  "--day","2025-10-09","--manifest",file,"--read-public",
+  "--expected-pit-sha",m.rawMembershipDigestSha256,
+  "--offset","0","--limit","1","--output",output,
+ ]);
+ let calls=0;
+ await assert.rejects(()=>runNativePITBatchCliV1(cfg,{
+  upbitFetch:async()=>{calls++;throw new Error("UNEXPECTED_PROVIDER_REQUEST");},
+ }),/PIT_CLI_OUTPUT_ALREADY_EXISTS/);
+ assert.equal(calls,0);
+ assert.equal(readFileSync(output,"utf8"),"{\"unchanged\":true}");
+});
+test("group-readable PIT roster refuses access before public market price GETs",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-roster-security-"));
+ const m=manifest("CRYPTO_SPOT",["KRW-ABC"]);
+ const input=join(folder,"loose-roster.json");
+ const output=join(folder,"must-not-exist.json");
+ writeFileSync(input,JSON.stringify(m),{mode:0o600});
+ chmodSync(input,0o644);
+ const cfg=parseNativePITBatchArgsV1([
+  "--mode","fetch","--market","CRYPTO_SPOT","--day","2025-10-09",
+  "--manifest",input,"--read-public",
+  "--expected-pit-sha",m.rawMembershipDigestSha256,
+  "--output",output,
+ ]);
+ let calls=0;
+ await assert.rejects(()=>runNativePITBatchCliV1(cfg,{
+  upbitFetch:async()=>{calls++;throw new Error("UNEXPECTED_PROVIDER_REQUEST");},
+ }),/PIT_CLI_UNSAFE_OR_OVERSIZED_INPUT/);
+ assert.equal(calls,0);
+ assert.equal(existsSync(output),false);
 });

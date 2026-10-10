@@ -14,6 +14,9 @@ import {FOUR_MARKET_WHOLE_SCOPE_V1 as SCOPE,
  WHOLE_MARKET_BENCHMARK_WINDOW_V1 as WINDOW,
  digestWholeVenueDailyRowsV1} from "../src/four-market-whole-pit-price-coverage-v1.js";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
+import {collectNativeHistoricalPITDayChunkV1,
+ assembleHistoricalPITDayChunksV1}
+ from "../src/venue-native-pit-daily-intake-v1.js";
 import {
  parsePITLedgerCliArgsV1 as parseArgs,
  runPITLedgerCliV1 as cli,
@@ -228,5 +231,81 @@ test("private CLI day/ledger paths produce 0600 create-only compact records",()=
     "--day",utc(day),"--input",inp,"--output",join(folder,"unsafe.json")])),
     /PIT_LEDGER_PRIVATE_SOURCE_FILE_REQUIRED/);
   assert.equal(existsSync(join(folder,"unsafe.json")),false);
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+test("native PIT fetch -> full-name day assembly -> compact ledger receipt is directly connected",async()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-native-compact-bridge-"));
+ try{
+  const d=Date.parse("2025-10-09T00:00:00Z"),manifest=provider(spot);
+  const mock=async(url)=>{
+   const u=new URL(url);
+   assert.equal(u.pathname,"/v1/candles/days");
+   assert.equal(u.searchParams.get("market"),"KRW-ABC");
+   const end=Date.parse(u.searchParams.get("to"));
+   const bar=(time,p)=>({
+    market:"KRW-ABC",
+    candle_date_time_utc:new Date(time).toISOString().slice(0,19),
+    timestamp:time+4356,opening_price:p,
+    high_price:p+3,low_price:p-2,trade_price:p+1,
+    candle_acc_trade_volume:20,candle_acc_trade_price:2000,
+   });
+   return {ok:true,status:200,async json(){
+    return [bar(d,105),bar(d-D,100)].filter(x=>
+     Date.parse(x.candle_date_time_utc+"Z")<end);
+   }};
+  };
+  const part=await collectNativeHistoricalPITDayChunkV1({
+   market:spot,dayStartMs:d,manifest,limit:20,
+   allowPublicReadOnlyFetch:true,upbitFetch:mock,
+   nowMs:d+3*D,sleepImpl:async()=>{},minBetweenSymbolsMs:180,
+  });
+  assert.equal(part.status,"PIT_NATIVE_DAY_CHUNK_OBSERVED");
+  assert.equal(part.chunkComplete,true);
+  const assembled=assembleHistoricalPITDayChunksV1({
+   market:spot,dayStartMs:d,manifest,chunks:[part],
+   retrievedAtMs:WINDOW.endExclusiveMs+D,
+   includePrivateNativeDayRows:true,
+  });
+  assert.equal(assembled.status,"SOURCE_ATTESTED_FULL_NAME_DAILY_JOIN_ONLY");
+  assert.equal(assembled.privateNativeDayRowsEmitted,true);
+  const originalFile=join(folder,"native-assembled.json"),
+    rosterFile=join(folder,"historical-roster.json"),
+    compactFile=join(folder,"compact-receipt.json");
+  writeFileSync(rosterFile,JSON.stringify(manifest),{mode:0o600});
+  const wrapped={
+   schemaVersion:"native-historic-pit-day-read-only-cli-v1",
+   executionAuthority:"NONE",
+   provenanceIndependentAuthentication:false,
+   dataUsage:"RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED",
+   result:assembled,
+  };
+  writeFileSync(originalFile,JSON.stringify(wrapped),{mode:0o600});
+  const config=parseArgs(["--mode","day","--market",spot,
+   "--day",utc(d),"--manifest",rosterFile,
+   "--input",originalFile,"--output",compactFile]);
+  const result=cli(config);
+  assert.equal(result.status,"SOURCE_ATTESTED_PIT_PRICE_JOIN_ONLY");
+  const saved=JSON.parse(readFileSync(compactFile,"utf8"));
+  assert.equal(saved.sourceActiveSymbols,1);
+  assert.equal(saved.sourceDailyPriceRows,1);
+  assert.equal(saved.sourceAttestedFullSymbolDayPriceJoin,true);
+  assert.equal(saved.actualMarketWideOpportunityCount,null);
+  assert.equal(saved.trueMarketWideRecall,null);
+  assert.equal(saved.sourceIndependentlyAuthenticated,false);
+  assert.equal(Object.hasOwn(saved,"rows"),false);
+  const tampered=join(folder,"tampered-native.json");
+  const altered=structuredClone(wrapped);
+  altered.result.nativeRowsSha256="0".repeat(64);
+  writeFileSync(tampered,JSON.stringify(altered),{mode:0o600});
+  assert.throws(()=>cli(parseArgs(["--mode","day","--market",spot,
+   "--day",utc(d),"--manifest",rosterFile,
+   "--input",tampered,"--output",join(folder,"must-not-create.json")])),
+   /PIT_LEDGER_NATIVE_ASSEMBLY_PROVENANCE_INVALID/);
+  assert.equal(existsSync(join(folder,"must-not-create.json")),false);
+  assert.throws(()=>parseArgs(["--mode","ledger","--market",spot,
+   "--manifest",rosterFile,"--input",originalFile,
+   "--output",join(folder,"bad-ledger.json")]),
+   /PIT_LEDGER_CLI_INPUT_OR_SCOPE_INVALID/);
  }finally{rmSync(folder,{recursive:true,force:true});}
 });
