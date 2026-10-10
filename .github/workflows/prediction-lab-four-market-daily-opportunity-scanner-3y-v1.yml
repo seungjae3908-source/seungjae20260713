@@ -22,6 +22,9 @@ on:
       - market-prediction-lab/scripts/report-historical-scanner-readiness-v1.mjs
       - market-prediction-lab/scripts/probe-native-selected-day-v1.mjs
       - market-prediction-lab/tests/native-selected-day-v1.test.js
+      - market-prediction-lab/src/causal-price-warning-coverage-v1.js
+      - market-prediction-lab/tests/causal-price-warning-coverage-v1.test.js
+      - market-prediction-lab/scripts/report-causal-price-warning-coverage-v1.mjs
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -188,12 +191,30 @@ jobs:
           }
           '
 
+      - name: Causal price-only research baseline vs selected 5pct real price moves
+        run: |
+          node --test market-prediction-lab/tests/causal-price-warning-coverage-v1.test.js
+          node market-prediction-lab/scripts/report-causal-price-warning-coverage-v1.mjs market-prediction-lab/docs/native-selected-historical-day-v1.json market-prediction-lab/docs/native-selected-historical-day-raw-v1.json market-prediction-lab/docs/causal-price-warning-cohort-v1.json
+
+      - name: Guard counterfactual 1m warning truth boundaries
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/causal-price-warning-cohort-v1.json","utf8"));
+          if(r.executionAuthority!=="NONE"||r.profitabilityProven!==false||
+             r.realHistoricalScannerRecall!==null||r.actualFills!==null||
+             r.OOSPassCount!==0||r.decisionUsedFutureBarHighLow!==false||
+             r.fullMarketOpportunityDenominatorVerified!==false||
+             r.historicalPointInTimeUniverseVerified!==false)process.exit(1);
+          '
+
       - uses: actions/upload-artifact@v4
         with:
           name: native-selected-symbol-utc-day-pilot-${{ github.sha }}
           path: |
             market-prediction-lab/docs/native-selected-historical-day-v1.json
             market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
+            market-prediction-lab/docs/causal-price-warning-cohort-v1.json
           if-no-files-found: error
           retention-days: 14
 
