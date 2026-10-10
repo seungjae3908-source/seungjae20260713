@@ -3,6 +3,8 @@
 // CLIs, including explicit KR/US stock input quality. No server activation,
 // network, private trading API, permission changes, or orders.
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { isAbsolute, resolve } from 'node:path';
 
 export const MARKET_WATCH_PREFLIGHT_CONTRACT = 'public-market-watch-preflight-v1';
@@ -186,7 +188,14 @@ async function main() {
   process.stdout.write(JSON.stringify(summary)+'\n');
   if(summary.status==='INVALID')process.exitCode=2;
 }
-main().catch(()=>{
+function isDirectInvocation() {
+  // A release's /current path can be a symlink. Node ESM resolves import.meta.url
+  // to the real checkout; compare both canonical paths, not lexical strings.
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+}
+if (isDirectInvocation()) main().catch(()=>{
   // Fixed-code diagnostics only: never print private paths or raw child output.
   process.stdout.write(JSON.stringify({
     contract:MARKET_WATCH_PREFLIGHT_CONTRACT,

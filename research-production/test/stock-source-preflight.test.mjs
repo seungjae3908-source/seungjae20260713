@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { chmod, link, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -94,5 +95,24 @@ test('unsafe root, directory, symlink, hardlink and write permissions cannot be 
     await rm(join(root, DIR, 'linked.json'));
     await chmod(file, 0o666);
     assert.equal((await inspectStockInputs(root, NOW)).markets[0].status, 'INVALID');
+  });
+});
+
+
+test('stock input diagnostics invoked via a symlinked checkout still run directly',async()=>{
+  await withRoot(async root=>{
+    const target=new URL('../bin/stock-source-preflight.mjs',import.meta.url).pathname;
+    const linkPath=join(root,'linked-stock-source-preflight.mjs');
+    await symlink(target,linkPath);
+    const run=spawnSync(process.execPath,[linkPath],{
+      encoding:'utf8',timeout:20000,
+      env:{...process.env,RESEARCH_STATE_ROOT:root},
+    });
+    assert.equal(run.status,0,run.stderr+' '+run.stdout);
+    const result=JSON.parse(run.stdout);
+    assert.equal(result.contract,STOCK_PREFLIGHT_CONTRACT);
+    assert.equal(result.status,'INCOMPLETE');
+    assert.deepEqual(result.markets.map(x=>x.status),['MISSING','MISSING']);
+    assert.equal(result.executionAuthority,'NONE');
   });
 });
