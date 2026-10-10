@@ -17,6 +17,12 @@ export const WATCH_LIMITS = Object.freeze({
   intervalMs: 120_000,
   maxSymbolsPerMarket: 8_000,
   maxCandidatesPerMarket: 12,
+  // Existing eight-thousand-quote CPU bound: six thousand high-turnover
+  // anchors plus two overlapping one-thousand-symbol low-tail cohorts.
+  // A cohort remains eligible for 60 minutes to permit real future sampling.
+  stableHighTurnoverSymbols: 6_000,
+  rotationCohortSymbols: 1_000,
+  rotationWindowMs: 30 * 60_000,
   maxSourceAgeMs: 180_000,
   maxComparisonAgeMs: 300_000,
   minComparisonAgeMs: 15_000,
@@ -58,7 +64,7 @@ function validAge(timestamp, nowMs) {
     && timestamp <= nowMs + 5_000
     && nowMs - timestamp <= WATCH_LIMITS.maxSourceAgeMs;
 }
-function uniqueQuotes(rows) {
+function uniqueQuotes(rows, nowMs) {
   const map = new Map();
   for (const row of rows) {
     const old = map.get(row.symbol);
@@ -70,17 +76,48 @@ function uniqueQuotes(rows) {
   }
   const ordered = [...map.values()].sort((a, b) =>
     b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol));
-  // VALID DISTINCT quotes omitted by the existing bounded top-turnover scan.
-  // Not a count of verified false negatives or missed profit.
+  const cap = WATCH_LIMITS.maxSymbolsPerMarket;
+  let selected = ordered;
+  if (ordered.length > cap) {
+    if (!Number.isSafeInteger(nowMs) || nowMs <= 0)
+      throw new Error('WATCH_SELECTION_TIME_INVALID');
+    const fixedCount = WATCH_LIMITS.stableHighTurnoverSymbols;
+    const cohortSize = WATCH_LIMITS.rotationCohortSymbols;
+    const fixed = ordered.slice(0, fixedCount);
+    // Never rotate or rank by same-cycle percent rise: deterministic turnover
+    // core and lexical tail cannot look ahead or invent an early-move signal.
+    const tail = ordered.slice(fixedCount).sort((a, b) =>
+      a.symbol.localeCompare(b.symbol));
+    const cohorts = Math.ceil(tail.length / cohortSize);
+    const window = Math.floor(nowMs / WATCH_LIMITS.rotationWindowMs);
+    const currentCohort = window % cohorts;
+    const previousCohort = (currentCohort + cohorts - 1) % cohorts;
+    const cohort = n => tail.slice(n * cohortSize, (n + 1) * cohortSize);
+    const tailSelected = new Map();
+    // Each new cohort is observed in the current AND following 30-minute
+    // window. This reduces comparison cold starts and coarse 20-minute study
+    // dropouts without exceeding the existing 8,000-quote cycle allowance.
+    for (const row of [...cohort(currentCohort), ...cohort(previousCohort)])
+      tailSelected.set(row.symbol, row);
+    // A short final cohort must not artificially waste available slots.
+    // Extra symbols remain opportunistic only, NOT assured 20-minute coverage.
+    for (const row of tail) {
+      if (tailSelected.size >= cap - fixedCount) break;
+      if (!tailSelected.has(row.symbol)) tailSelected.set(row.symbol, row);
+    }
+    selected = [...fixed, ...tailSelected.values()].sort((a, b) =>
+      b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol));
+  }
+  // Per-cycle capped source count is not a verified missed opportunity. It
+  // also says nothing about source-omitted or historically delisted symbols.
   return Object.freeze({
-    quotes: Object.freeze(ordered.slice(0, WATCH_LIMITS.maxSymbolsPerMarket)),
-    sourceCappedCount: Math.max(0, ordered.length - WATCH_LIMITS.maxSymbolsPerMarket),
+    quotes: Object.freeze(selected),
+    sourceCappedCount: Math.max(0, ordered.length - selected.length),
   });
 }
-function sourceResult(market, source, status, listedCount, quotes) {
-  const selected = uniqueQuotes(quotes);
-  // Never say READY after 8k truncation or de-duplication made the actual
-  // observed set smaller than the source's advertised roster.
+function sourceResult(market, source, status, listedCount, quotes, nowMs) {
+  const selected = uniqueQuotes(quotes, nowMs);
+  // No full READY while even one distinct valid source quote was capped.
   const boundedStatus = status === 'READY'
     && (selected.quotes.length === 0 || selected.quotes.length !== listedCount)
     ? market === 'KR_STOCK' || market === 'US_STOCK'
@@ -166,7 +203,7 @@ export function normalizeUpbitSnapshot(marketRows, tickerRows, nowMs) {
   }
   if (!listed.size || !quotes.length) throw new Error('UPBIT_PUBLIC_QUOTES_UNAVAILABLE');
   const status = quotes.length === listed.size ? 'READY' : 'PARTIAL_TICKERS';
-  return sourceResult('CRYPTO_SPOT', 'UPBIT_PUBLIC_TICKERS', status, listed.size, quotes);
+  return sourceResult('CRYPTO_SPOT', 'UPBIT_PUBLIC_TICKERS', status, listed.size, quotes, nowMs);
 }
 // Use the independent PUBLIC Bitget contracts endpoint to detect missing
 // USDT-FUTURES tickers. Current-roster parity is NOT historical PIT proof.
@@ -221,7 +258,7 @@ export function normalizeBitgetSnapshot(payload, nowMs, contracts = null) {
     && unique === roster.size && quotes.length === roster.size;
   return sourceResult('CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS',
     matched ? 'READY' : 'PARTIAL_TICKERS',
-    roster?.size ?? payload.data.length, quotes);
+    roster?.size ?? payload.data.length, quotes, nowMs);
 }
 export function normalizeStockFeed(raw, market, nowMs) {
   if (market !== 'KR_STOCK' && market !== 'US_STOCK')
@@ -262,7 +299,7 @@ export function normalizeStockFeed(raw, market, nowMs) {
   // Until a separately validated source binding exists, no stock market may
   // turn READY solely on a file-supplied flag or a one-ticker sample.
   return sourceResult(
-    market, raw.source, 'PARTIAL_UNIVERSE', raw.quotes.length, quotes,
+    market, raw.source, 'PARTIAL_UNIVERSE', raw.quotes.length, quotes, nowMs,
   );
 }
 export function evaluateWatchBudget(telemetry) {
