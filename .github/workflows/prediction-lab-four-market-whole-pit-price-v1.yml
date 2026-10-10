@@ -7,6 +7,10 @@ on:
     paths:
       - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
       - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+      - market-prediction-lab/src/krx-dated-all-stock-ohlcv-v1.js
+      - market-prediction-lab/tests/krx-dated-all-stock-ohlcv-v1.test.js
+      - market-prediction-lab/src/krx-dated-roster-public-read-v1.js
+      - market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
       - market-prediction-lab/src/venue-native-pit-daily-intake-v1.js
       - market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
       - market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs
@@ -44,6 +48,8 @@ jobs:
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
+          node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+          node --test market-prediction-lab/tests/krx-dated-all-stock-ohlcv-v1.test.js
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
