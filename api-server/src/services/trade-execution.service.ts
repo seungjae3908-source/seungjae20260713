@@ -13,6 +13,10 @@ import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
 import { decryptTradingCredentials, encryptTradingCredentials } from './trade-credential-vault.service';
 import {
+  processTossTokenManager,
+  type TossTokenManager,
+} from '../features/account-readonly/providers/toss-readonly.provider';
+import {
   isTransientTradingProviderError,
   tradingProviderHttpErrorCode,
   tradingProviderNetworkErrorCode,
@@ -49,7 +53,6 @@ import {
   prepareTossOrderbook,
   prepareTossPrices,
   prepareTossSellableQuantity,
-  prepareTossToken,
   prepareUpbitAccounts,
   prepareUpbitOrder,
   prepareUpbitOrderChance,
@@ -264,13 +267,6 @@ function tossResult(payload: ExchangePayload) {
   return isRecord(payload.result) ? payload.result : payload;
 }
 
-function tossToken(payload: ExchangePayload) {
-  const result = isRecord(payload.result) ? payload.result : isRecord(payload.data) ? payload.data : payload;
-  const token = text(result.access_token ?? result.accessToken ?? payload.access_token);
-  if (!token) throw new Error('TOSS_TOKEN_MISSING');
-  return token;
-}
-
 function tossVerificationAccountSeq(payload: ExchangePayload, requested?: string) {
   const result = payload.result;
   const resultRecord = isRecord(result) ? result : null;
@@ -470,11 +466,30 @@ export class TradeExecutionService {
     private verificationSleep: (delayMs: number) => Promise<void> = (delayMs) => new Promise(
       (resolve) => setTimeout(resolve, delayMs),
     ),
+    private tossTokens: Pick<TossTokenManager, 'token'> = processTossTokenManager(),
   ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
     this.cancelService = new TradeCancelReconciliationService(repository);
     this.riskService = new TradePreSubmissionRiskService(repository);
+  }
+
+  private async tossAccessToken(credentials: TossCredentials) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PREFLIGHT_TIMEOUT_MS);
+    try {
+      return await this.tossTokens.token(credentials, controller.signal);
+    } catch (error) {
+      const code = error !== null && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : '';
+      if ((error instanceof Error && error.name === 'AbortError') || code === 'PROVIDER_TIMEOUT') {
+        throw new Error('TOSS_TIMEOUT');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async previewLiveRiskSnapshot(
@@ -614,8 +629,8 @@ export class TradeExecutionService {
       }
     } else {
       const toss = credentials as TossCredentials;
-      const tokenPayload = await request(() => sendExchangeRequest(BASE_URLS.toss, prepareTossToken(toss), PREFLIGHT_TIMEOUT_MS));
-      const authenticated = { ...toss, accessToken: tossToken(tokenPayload) };
+      const token = await request(() => this.tossAccessToken(toss));
+      const authenticated = { ...toss, accessToken: token };
       const market = provisional.market.toUpperCase() as 'KR' | 'US';
       if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
       const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
@@ -740,12 +755,7 @@ export class TradeExecutionService {
         )));
       } else {
         const toss = credentials as TossCredentials;
-        const tokenPayload = await request(() => sendExchangeRequest(
-          BASE_URLS.toss,
-          prepareTossToken(toss),
-          PREFLIGHT_TIMEOUT_MS,
-        ));
-        const token = tossToken(tokenPayload);
+        const token = await request(() => this.tossAccessToken(toss));
         const authenticated = { ...toss, accessToken: token };
         const accountsPayload = await request(() => sendExchangeRequest(
           BASE_URLS.toss,
@@ -1276,8 +1286,8 @@ export class TradeExecutionService {
     order: TradingOrder,
     credentials: TossCredentials,
   ) {
-    const tokenPayload = await sendExchangeRequest(BASE_URLS.toss, prepareTossToken(credentials), PREFLIGHT_TIMEOUT_MS);
-    const authenticated = { ...credentials, accessToken: tossToken(tokenPayload) };
+    const token = await this.tossAccessToken(credentials);
+    const authenticated = { ...credentials, accessToken: token };
     const market = plan.market.toUpperCase() as 'KR' | 'US';
     if (market !== 'KR' && market !== 'US') throw new Error('TOSS_MARKET_INVALID');
     const currency = market === 'KR' ? 'KRW' as const : 'USD' as const;
