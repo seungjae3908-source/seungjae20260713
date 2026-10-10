@@ -181,3 +181,19 @@ test("three-year crypto days cover the entire FIXED benchmark, not a chosen day"
  assert.equal(r.trueMarketWideRecall,null);
  assert.equal(r.profitabilityProven,false);
 });
+
+test("two non-overlapping lives of one ticker within the same date cannot collapse into one eligible daily bar",()=>{
+ const sample=source("CRYPTO_SPOT");
+ const active=sample.manifest.memberships[0];
+ sample.manifest.memberships[0]={...active,removedAtMs:START+2*3600_000};
+ sample.manifest.memberships.push({
+   ...active,listedAtMs:START+3*3600_000,removedAtMs:null,
+ });
+ sample.manifest.rawMembershipDigestSha256=digestPITMembershipRowsV1(
+  sample.manifest.memberships);
+ const r=audit({market:"CRYPTO_SPOT",dayStartMs:START,...sample});
+ assert.equal(r.status,"BLOCKED_WHOLE_MARKET_COVERAGE");
+ assert.equal(r.reason,"PIT_SAME_DAY_IDENTIFIER_REUSE_REQUIRES_SESSION_PROOF");
+ assert.equal(r.actualMarketWideOpportunityCount,null);
+ assert.equal(r.trueMarketWideRecall,null);
+});

@@ -8,7 +8,8 @@ import {parseNativePITBatchArgsV1,runNativePITBatchCliV1,
 import assert from "node:assert/strict";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
 import {collectNativePITDayPriceV1 as one,collectNativeHistoricalPITDayChunkV1 as chunk,
- assembleHistoricalPITDayChunksV1 as assemble}
+ assembleHistoricalPITDayChunksV1 as assemble,
+ nativePITDailyPriceRowSha256V1 as rowSha}
  from "../src/venue-native-pit-daily-intake-v1.js";
 const D=86400000, T=Date.parse("2025-10-09T00:00:00Z"), H="a".repeat(64);
 function manifest(market,symbols){
@@ -304,4 +305,38 @@ test("CLI rejects mismatched envelope, stale roster and absent fetch SHA",async(
   join(folder,"fail.json"),["--chunks",bareFile])),
   /PIT_CLI_CHUNK_ENVELOPE_OR_PROVENANCE_INVALID/);
  assert.equal(statSync(chunkFile).mode&0o077,0);
+});
+
+test("all-name assembler rejects changed source OHLC or wrong provider even if counts and symbols match",async()=>{
+ const roster=manifest("CRYPTO_SPOT",["KRW-ABC"]);
+ const c=await chunk({market:"CRYPTO_SPOT",dayStartMs:T,manifest:roster,
+  limit:1,allowPublicReadOnlyFetch:true,upbitFetch:upbit});
+ assert.equal(c.status,"PIT_NATIVE_DAY_CHUNK_OBSERVED");
+ assert.equal(c.rows[0].evidenceSha256,rowSha(c.rows[0]));
+ const tamperedPrice={...c,rows:[{...c.rows[0],high:c.rows[0].high+99}]};
+ assert.equal(assemble({market:"CRYPTO_SPOT",dayStartMs:T,
+  manifest:roster,chunks:[tamperedPrice],retrievedAtMs:T+4*D}).reason,
+  "PIT_NATIVE_PRICE_ROW_INTEGRITY_OR_PROVIDER_INVALID");
+ const otherProvider={...c,rows:[{...c.rows[0],
+  sourceId:"BINANCE_PUBLIC_DAY_CANDLES",
+ }]};
+ assert.equal(assemble({market:"CRYPTO_SPOT",dayStartMs:T,
+  manifest:roster,chunks:[otherProvider],retrievedAtMs:T+4*D}).reason,
+  "PIT_NATIVE_PRICE_ROW_INTEGRITY_OR_PROVIDER_INVALID");
+ const legitimate=assemble({market:"CRYPTO_SPOT",dayStartMs:T,
+  manifest:roster,chunks:[c],retrievedAtMs:T+4*D});
+ assert.equal(legitimate.status,"TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY");
+ assert.equal(legitimate.fullMarketPITUniverseVerified,false);
+ assert.equal(legitimate.actualMarketWideOpportunityCount,null);
+});
+test("assembler rejects a row moved into a different PIT chunk under a valid roster hash",async()=>{
+ const roster=manifest("CRYPTO_FUTURES",["ABCUSDT","DEFUSDT"]);
+ const c=await chunk({market:"CRYPTO_FUTURES",dayStartMs:T,manifest:roster,
+  limit:2,allowPublicReadOnlyFetch:true,bitgetClient:bitget,
+  sleepImpl:async()=>{}});
+ assert.equal(c.chunkComplete,true);
+ const forged={...c,requestedSymbolIds:[...c.requestedSymbolIds].reverse()};
+ const r=assemble({market:"CRYPTO_FUTURES",dayStartMs:T,
+  manifest:roster,chunks:[forged],retrievedAtMs:T+4*D});
+ assert.equal(r.reason,"PIT_NATIVE_CHUNK_MISSING_OR_PROVENANCE_MISMATCH");
 });
