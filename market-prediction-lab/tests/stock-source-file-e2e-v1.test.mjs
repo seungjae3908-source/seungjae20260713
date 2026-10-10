@@ -64,6 +64,7 @@ function receipt(market, count=25){
   executionAuthority:"NONE",profitabilityProven:false,
   trueMarketWideRecall:null,actualMarketWideOpportunityCount:null,
   fullMarketOpportunityDenominatorVerified:false,
+  joinedSourceRowsSha256:createHash("sha256").update(JSON.stringify(rows)).digest("hex"),
   ...(kr?{
    records:rows,recordSha256:digest,
    observedCurrentSymbols:count,joinedPriorPriceSymbols:count,
@@ -184,6 +185,22 @@ test("corrupted saved stock price rows fail the Python hash/identity boundary",(
   const outcome=JSON.parse(readFileSync(p.output,"utf8"));
   assert.equal(outcome.reason,"STOCK_SOURCE_SAVED_ROWS_CHANGED");
   assert.equal(outcome.trueMarketWideRecall,null);
+  assert.equal(outcome.profitabilityProven,false);
+ });
+});
+
+test("raw provider shaped receipt prices changed after digest creation fail closed",()=>{
+ inTemp(folder=>{
+  const market="KR_STOCK",p=paths(folder,market),raw=receipt(market);
+  raw.records[0].high=130; // still valid OHLC, but source rows SHA no longer agrees
+  writePrivate(p.input,raw);
+  const result=prepare(market,p);
+  assert.equal(result.status,"BLOCKED_DATA");
+  assert.equal(result.reason,"STOCK_JOINED_SOURCE_ROWS_DIGEST_MISSING_OR_CHANGED");
+  const scoreResult=score(p);
+  assert.equal(scoreResult.sourceObservedDailyPriceEventCount,null);
+  const outcome=JSON.parse(readFileSync(p.output,"utf8"));
+  assert.equal(outcome.actualMarketWideOpportunityCount,null);
   assert.equal(outcome.profitabilityProven,false);
  });
 });
