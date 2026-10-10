@@ -5,7 +5,9 @@ import {
   normalizeBitgetFuturesOrderbook,
   normalizeKiwoomOrderbook,
   normalizeUpbitOrderbook,
+  canonicalizeTossResponse,
 } from './stock-orderbook';
+import { normalizeTossOrderbook as normalizeTossOrderbookCore } from './stock-orderbook-core';
 
 const receivedAt = new Date('2026-08-05T03:30:10.000Z');
 
@@ -109,4 +111,35 @@ test('normalization sorts both sides, removes duplicate and invalid levels, and 
   ]);
   assert.ok(result.warnings.some((warning) => warning.includes('중복 가격')));
   assert.ok(result.warnings.some((warning) => warning.includes('유효하지 않아 제외')));
+});
+
+test('direct Toss route publishes canonical timestamp and spread fields, without an exchange request', () => {
+  const core = normalizeTossOrderbookCore('US', 'AAPL', {
+    result: {
+      timestamp: '2026-08-05T03:30:05.000Z',
+      currency: 'USD',
+      asks: [{ price: '101', volume: '3' }],
+      bids: [{ price: '100', volume: '4' }],
+    },
+  }, receivedAt);
+  const result = canonicalizeTossResponse(core);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.provider, 'toss');
+  assert.equal(result.market, 'US');
+  assert.equal(result.symbol, 'AAPL');
+  assert.equal(result.providerTimestamp, '2026-08-05T03:30:05.000Z');
+  assert.equal(result.spread, 1);
+  assert.ok(typeof result.spreadPct === 'number' && result.spreadPct > 0);
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
+});
+
+test('malformed Toss route payload fails closed rather than publishing unusable levels', () => {
+  const core = normalizeTossOrderbookCore('US', 'AAPL', {}, receivedAt);
+  const result = canonicalizeTossResponse(core);
+  assert.equal(result.status, 'unavailable');
+  assert.deepEqual(result.asks, []);
+  assert.deepEqual(result.bids, []);
+  assert.equal(result.providerTimestamp, null);
+  assert.equal(result.exchangeRequestSent, false);
 });
