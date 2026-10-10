@@ -97,9 +97,48 @@ test('pilot entry guard allows at most the smaller of operating capital, pilot m
   assert.ok(memberCap.blockers.includes('BACKGROUND_PILOT_ENTRY_LIMIT'));
 });
 
-test('pilot entry guard stops at five daily losses, 25k daily loss, three consecutive losses, or two live positions', () => {
+test('automatic LIVE discovery starts at member 100k and administrator 500k per market', () => {
+  const memberExact = decision(state(), {
+    discoveryEntryCapRequired: true,
+    estimatedKrw: 100_000,
+  });
+  assert.equal(memberExact.allowed, true);
+  assert.equal(memberExact.effectiveMaxEntryKrw, 100_000);
+  const memberOver = decision(state(), {
+    discoveryEntryCapRequired: true,
+    estimatedKrw: 100_001,
+  });
+  assert.equal(memberOver.allowed, false);
+  assert.ok(memberOver.blockers.includes('BACKGROUND_PILOT_ENTRY_LIMIT'));
+
+  const admin = state({
+    initialOperatingCapitalKrw: 1_000_000,
+    operatingCapitalKrw: 1_000_000,
+    highWaterMarkKrw: 1_000_000,
+    maxEntryKrw: 1_000_000,
+  });
+  const adminExact = decision(admin, {
+    discoveryEntryCapRequired: true,
+    estimatedKrw: 500_000,
+    policyMaxOrderKrw: 1_000_000,
+    policyTotalCapitalKrw: 4_000_000,
+  });
+  assert.equal(adminExact.allowed, true);
+  assert.equal(adminExact.effectiveMaxEntryKrw, 500_000);
+  const adminOver = decision(admin, {
+    discoveryEntryCapRequired: true,
+    estimatedKrw: 500_001,
+    policyMaxOrderKrw: 1_000_000,
+    policyTotalCapitalKrw: 4_000_000,
+  });
+  assert.equal(adminOver.allowed, false);
+  assert.ok(adminOver.blockers.includes('BACKGROUND_PILOT_ENTRY_LIMIT'));
+});
+
+test('pilot entry guard stops at five daily losses, 3% operating-capital loss, three consecutive losses, or two live positions', () => {
   assert.ok(decision(state({ dailyLosingTrades: 5 })).blockers.includes('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT'));
-  assert.ok(decision(state({ dailyRealizedPnlKrw: -25_000 })).blockers.includes('BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT'));
+  assert.ok(decision(state({ dailyRealizedPnlKrw: -15_000 })).blockers.includes('BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT'));
+  assert.equal(decision(state({ dailyRealizedPnlKrw: -14_999 })).blockers.includes('BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT'), false);
   assert.ok(decision(state({ consecutiveLosses: 3 })).blockers.includes('BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT'));
   assert.ok(decision(state(), { openLivePositions: 2 }).blockers.includes('BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT'));
 });
@@ -517,31 +556,31 @@ test('dynamic policy recheck fails closed on unsigned, too-large or revoked auto
       resolveRulePackPilotDynamicCapPolicy(repository, user, makePlan(pilotReceiptInput()), policy, new Date(NOW)),
       /BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED/,
     );
-    const signed500 = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(500_000), NOW));
+    const signed100 = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(100_000), NOW));
     const rechecked = await resolveRulePackPilotDynamicCapPolicy(
-      repository, user, signed500, policy, new Date(NOW), 0,
+      repository, user, signed100, policy, new Date(NOW), 0,
     );
     assert.equal(rechecked.totalCapitalKrw, 2_000_000);
-    assert.equal(rechecked.maxOrderKrw, 500_000);
-    const signed525 = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_000), NOW));
+    assert.equal(rechecked.maxOrderKrw, 100_000);
+    const signedOverDiscovery = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(100_001), NOW));
     await assert.rejects(
-      resolveRulePackPilotDynamicCapPolicy(repository, user, signed525, policy, new Date(NOW), 0),
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signedOverDiscovery, policy, new Date(NOW), 0),
       /BACKGROUND_PILOT_ENTRY_LIMIT/,
     );
     await assert.rejects(
-      resolveRulePackPilotDynamicCapPolicy(repository, user, signed500, {
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed100, {
         ...policy, mode: 'approval', automaticEnabled: false,
       }, new Date(NOW), 0),
       /BACKGROUND_PILOT_DYNAMIC_CAP_POLICY_REVOKED/,
     );
     await assert.rejects(
-      resolveRulePackPilotDynamicCapPolicy(repository, user, signed500, {
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed100, {
         ...policy, totalCapitalKrw: 100_000, maxOrderKrw: 30_000,
       }, new Date(NOW), 0),
       /BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED/,
     );
     await assert.rejects(
-      resolveRulePackPilotDynamicCapPolicy(repository, user, signed500, policy, new Date(NOW + 90_001), 0),
+      resolveRulePackPilotDynamicCapPolicy(repository, user, signed100, policy, new Date(NOW + 90_001), 0),
       /BACKGROUND_PILOT_DYNAMIC_CAP_ATTESTATION_REQUIRED/,
     );
   });
@@ -641,7 +680,7 @@ test('pilot ledger constructs one order/plan snapshot rather than mixing repeate
   assert.equal(plans, 1, 'one captured plan population');
 });
 
-test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, not 550k', async () => {
+test('closed KRW profit compounds capital while discovery LIVE remains capped at 100k', async () => {
   await withPilotDynamicCapEnvironment(async () => {
     const user = '11111111-1111-1111-1111-111111111111';
     const repository = new InMemoryTradingRepository();
@@ -693,7 +732,7 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
     assert.equal(spotOnly.operatingCapitalKrw, 525_000);
     assert.equal(domesticOnly.operatingCapitalKrw, 500_000,
       'spot profit cannot enlarge the domestic-stock LIVE lane');
-    const signed = issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_000), NOW);
+    const signed = issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(100_000), NOW);
     const proposed = {
       ...signed, id: 'signed-after-close', userId: user,
       idempotencyKey: 'new-after-close', state: 'APPROVAL_PENDING' as const,
@@ -705,7 +744,7 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
       repository, user, proposed, base, new Date(NOW), 0,
     );
     assert.equal(projected.totalCapitalKrw, 2_025_000);
-    assert.equal(projected.maxOrderKrw, 525_000);
+    assert.equal(projected.maxOrderKrw, 100_000);
     assert.equal(projected.maxInstrumentKrw, 525_000);
     assert.equal(base.maxOrderKrw, 500_000);
     // A gross KRW gain must not claim a KRW-denominated net return when a
