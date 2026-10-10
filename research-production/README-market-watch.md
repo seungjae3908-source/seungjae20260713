@@ -312,7 +312,10 @@ sudo -u investment-research env \
   reported; an empty watch means insufficient history. Nothing is created.
 - Disk space comes from the actual local filesystem statfs, not assumed
   Vultr specifications. The forecast reserves **5 GiB** for the host,
-  using mean bytes from at most seven completed UTC days (excludes today).
+  using mean bytes from seven **consecutive** completed UTC dates
+  (excludes today). Any missing day keeps the result at
+  INSUFFICIENT_HISTORY with a null forecast, not an optimistic zero-byte day.
+  Exactly 5 GiB free is also HOLD, since no app disk margin remains.
   Runway is approximate, not an uptime or retention SLA.
 - A report of OBSERVATION_ONLY is **NOT** permission to run indefinitely.
   Retention applied, archive verified, deletion allowed, continuous 24-hour

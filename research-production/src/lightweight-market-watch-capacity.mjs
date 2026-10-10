@@ -22,26 +22,35 @@ export function summarizeWatchStorageCapacity({ files, diskFreeBytes, nowUtcDay 
   for(const f of files) {
     if (!f || !WATCH_CAPACITY_POLICY.categories.includes(f.category)
       || !validUtcDay(f.day)
-      || !valid(f.bytes) || f.bytes > WATCH_CAPACITY_POLICY.maxFileBytes
+      || !valid(f.bytes) || f.bytes === 0 || f.bytes > WATCH_CAPACITY_POLICY.maxFileBytes
       || f.day > nowUtcDay || seen.has(f.category+':'+f.day))
       throw new Error('WATCH_CAPACITY_FILE_INVALID');
     seen.add(f.category+':'+f.day);
     sizeByDate.set(f.day,(sizeByDate.get(f.day)??0)+f.bytes);
   }
   const ordered=[...sizeByDate.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
-  const historic=ordered.filter(([d])=>d<nowUtcDay);
-  const sample=historic.slice(-7);
-  const mean=sample.length ? Math.ceil(sample.reduce((n,[,b])=>n+b,0)/sample.length) : null;
+  // Do not turn a single quiet day or a sparse, intermittently running worker
+  // into a "healthy" multi-month capacity forecast. Require the last seven
+  // CONSECUTIVE completed UTC dates; absence is UNKNOWN, never zero usage.
+  const todayMs = Date.parse(nowUtcDay + 'T00:00:00Z');
+  const days = Array.from({ length: 7 }, (_, i) =>
+    new Date(todayMs - (7 - i) * 86_400_000).toISOString().slice(0,10));
+  const observedCompletedDays = days.filter(d => sizeByDate.has(d)).length;
+  const sevenDayHistoryComplete = observedCompletedDays === 7;
+  const mean = sevenDayHistoryComplete
+    ? Math.ceil(days.reduce((sum, day) => sum + sizeByDate.get(day), 0) / 7)
+    : null;
   const remaining=Math.max(0,diskFreeBytes-WATCH_CAPACITY_POLICY.diskFloorBytes);
   const projectedDays=mean && mean>0?Math.floor(remaining/mean):null;
   return Object.freeze({
     contract:WATCH_CAPACITY_CONTRACT,
-    status:diskFreeBytes<WATCH_CAPACITY_POLICY.diskFloorBytes?'HOLD_LOW_DISK'
-      :!historic.length?'INSUFFICIENT_HISTORY'
+    status:diskFreeBytes<=WATCH_CAPACITY_POLICY.diskFloorBytes?'HOLD_LOW_DISK'
+      :!sevenDayHistoryComplete?'INSUFFICIENT_HISTORY'
       :projectedDays!==null && projectedDays<7?'HOLD_CAPACITY_RISK':'OBSERVATION_ONLY',
     fileCount:files.length, datedDayCount:ordered.length,
     totalTrackedBytes:ordered.reduce((n,[,bytes])=>n+bytes,0),
     lastSevenCompletedDaysAverageBytes:mean,
+    observedCompletedDays, sevenDayHistoryComplete,
     diskFreeBytes, reservedDiskFloorBytes:WATCH_CAPACITY_POLICY.diskFloorBytes,
     projectedDaysAboveFloor:projectedDays,
     retentionApplied:false, archiveVerified:false, deletionAllowed:false,
