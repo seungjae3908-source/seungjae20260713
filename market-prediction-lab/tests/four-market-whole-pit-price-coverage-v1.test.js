@@ -32,7 +32,7 @@ function source(market,{omit=false,addOutside=false,venue=null,split=false,
   coverageStartMs:START-900*D,coverageEndMs:END,
   retrievedAtMs:END+D,sourceId:"fixture-pit",
   allListedAndRemovedAttested:true,suspensionsAttested:true,
-  relistedIdentifiersResolved:true,memberships,
+  relistedIdentifiersResolved:true,memberships:membership,
   rawMembershipDigestSha256:digestPITMembershipRowsV1(membership)};
  const dailySource={schemaVersion:"venue-native-historical-all-names-daily-v1",
   market,venue:v,sourceClass,sourceId:"fixture-daily",
