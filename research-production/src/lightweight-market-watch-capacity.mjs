@@ -7,19 +7,22 @@ export const WATCH_CAPACITY_POLICY = Object.freeze({
   categories: ['events', 'outcomes', 'cadence'],
 });
 const valid = v => Number.isSafeInteger(v) && v >= 0;
+function validUtcDay(day) {
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(day))
+    return false;
+  const at = Date.parse(day + 'T00:00:00Z');
+  return Number.isSafeInteger(at)
+    && new Date(at).toISOString().slice(0,10) === day;
+}
 export function summarizeWatchStorageCapacity({ files, diskFreeBytes, nowUtcDay }) {
   if (!Array.isArray(files) || files.length > WATCH_CAPACITY_POLICY.maxDays * 3
-    || !valid(diskFreeBytes) || typeof nowUtcDay !== 'string'
-    || !/^\d{4}-\d{2}-\d{2}$/.test(nowUtcDay)
-    || !Number.isFinite(Date.parse(nowUtcDay + 'T00:00:00Z'))
-    || new Date(Date.parse(nowUtcDay + 'T00:00:00Z')).toISOString().slice(0,10) !== nowUtcDay)
+    || !valid(diskFreeBytes) || !validUtcDay(nowUtcDay))
     throw new Error('WATCH_CAPACITY_INPUT_INVALID');
   const seen = new Set(), sizeByDate = new Map();
   for(const f of files) {
     if (!f || !WATCH_CAPACITY_POLICY.categories.includes(f.category)
-      || typeof f.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(f.day)
+      || !validUtcDay(f.day)
       || !valid(f.bytes) || f.bytes > WATCH_CAPACITY_POLICY.maxFileBytes
-      || new Date(Date.parse(f.day+'T00:00:00Z')).toISOString().slice(0,10)!==f.day
       || f.day > nowUtcDay || seen.has(f.category+':'+f.day))
       throw new Error('WATCH_CAPACITY_FILE_INVALID');
     seen.add(f.category+':'+f.day);
