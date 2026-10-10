@@ -15,6 +15,33 @@ const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
 type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
 
+export function telegramDeliveryRequiresReconnect(errorCode: string | null | undefined): boolean {
+  const code = String(errorCode ?? '').trim().toUpperCase();
+  return code === 'TELEGRAM_HTTP_403' || code.startsWith('TELEGRAM_FORBIDDEN_');
+}
+
+export function telegramConnectionRecovery(
+  connection: { status: string; connectedAt: string } | null | undefined,
+  deliveries: ReadonlyArray<Pick<NotificationDelivery, 'state' | 'lastErrorCode' | 'updatedAt'>>,
+) {
+  if (!connection || connection.status !== 'ACTIVE') {
+    return { required: false, errorCode: null as string | null, failedAt: null as string | null };
+  }
+  const connectedAtMs = Date.parse(connection.connectedAt);
+  if (!Number.isFinite(connectedAtMs)) {
+    return { required: true, errorCode: 'TELEGRAM_CONNECTION_TIMESTAMP_INVALID', failedAt: null as string | null };
+  }
+  const latest = deliveries
+    .filter((delivery) => delivery.state === 'DEAD_LETTER'
+      && telegramDeliveryRequiresReconnect(delivery.lastErrorCode)
+      && Number.isFinite(Date.parse(delivery.updatedAt))
+      && Date.parse(delivery.updatedAt) >= connectedAtMs)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return latest
+    ? { required: true, errorCode: latest.lastErrorCode, failedAt: latest.updatedAt }
+    : { required: false, errorCode: null as string | null, failedAt: null as string | null };
+}
+
 export function hashTelegramLinkToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 export function maskBrokerAccount(value: string | null | undefined): string | null {
   const normalized = String(value ?? '').replace(/\s+/g, '').trim();
@@ -330,7 +357,15 @@ export class UserBrokerTelegramService {
     const connection = await this.repository.getTelegramConnection(userId);
     const preferences = await this.repository.getPreferences(userId);
     const deliveries = await this.repository.listDeliveries(userId);
-    return { telegram: { connected: connection?.status === 'ACTIVE', status: connection?.status ?? 'DISCONNECTED', connectedAt: connection?.connectedAt ?? null }, preferences,
+    const recovery = telegramConnectionRecovery(connection, deliveries);
+    return { telegram: {
+      connected: connection?.status === 'ACTIVE' && !recovery.required,
+      status: recovery.required ? 'RECOVERY_REQUIRED' : connection?.status ?? 'DISCONNECTED',
+      connectedAt: connection?.connectedAt ?? null,
+      recoveryRequired: recovery.required,
+      recoveryErrorCode: recovery.errorCode,
+      recoveryFailedAt: recovery.failedAt,
+    }, preferences,
       deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, payload: _payload, ...delivery }) => delivery) };
   }
   async savePreferences(userId: string, patch: Partial<NotificationPreferences>, now = new Date()) {
@@ -347,11 +382,15 @@ export class UserBrokerTelegramService {
     // later must not receive a flood of historical orders retroactively.
     const preferences = await this.repository.getPreferences(event.userId);
     const connection = await this.repository.getTelegramConnection(event.userId);
+    const connectionRecovery = connection?.status === 'ACTIVE'
+      ? telegramConnectionRecovery(connection, await this.repository.listDeliveries(event.userId))
+      : { required: false, errorCode: null, failedAt: null };
     const eligible = personalTelegramEventAllowed(membership, event);
     const eventAtMs = Date.parse(event.occurredAt);
     const connectionAtMs = Date.parse(connection?.connectedAt ?? '');
     const deliveryIntended = Boolean(preferences[event.type] && eligible
       && connection?.status === 'ACTIVE'
+      && !connectionRecovery.required
       && Number.isFinite(eventAtMs) && Number.isFinite(connectionAtMs)
       && eventAtMs >= connectionAtMs);
     const proposed: UserExecutionEvent = {
@@ -379,6 +418,9 @@ export class UserBrokerTelegramService {
     if (!preferences[canonical.type]) return { inserted, deliveryQueued: false };
     if (!eligible) return { inserted, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
     if (!connection || connection.status !== 'ACTIVE') return { inserted, deliveryQueued: false };
+    if (connectionRecovery.required) {
+      return { inserted, deliveryQueued: false, skipped: 'TELEGRAM_CONNECTION_RECOVERY_REQUIRED' as const };
+    }
     if (canonical.metadata.telegramDeliveryIntendedAtInsert !== true) {
       return { inserted, deliveryQueued: false };
     }
@@ -456,6 +498,12 @@ export class UserBrokerTelegramService {
         await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
         return { processed: true, state: 'SENT' as const };
       }
+      if (telegramDeliveryRequiresReconnect(alertResult.errorCode)) {
+        await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
+          alertResult.errorCode ?? 'TELEGRAM_HTTP_403', timestamp);
+        await this.repository.revokeTelegramConnection(userId, timestamp);
+        return { processed: true, state: 'DEAD_LETTER' as const };
+      }
       const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
       const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
       await this.repository.finishDelivery(userId, deliveryId, state, attempt, dead ? null : nextRetryAt(now, attempt),
@@ -499,6 +547,12 @@ export class UserBrokerTelegramService {
       }
       await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
       return { processed: true, state: 'SENT' as const };
+    }
+    if (telegramDeliveryRequiresReconnect(transportResult.errorCode)) {
+      await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
+        transportResult.errorCode?.slice(0, 120) || 'TELEGRAM_HTTP_403', timestamp);
+      await this.repository.revokeTelegramConnection(userId, timestamp);
+      return { processed: true, state: 'DEAD_LETTER' as const };
     }
     const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
     const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
