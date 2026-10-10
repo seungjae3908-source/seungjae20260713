@@ -1,0 +1,281 @@
+name: Production Automatic Paper-Only Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/production-automatic-paper-only-gate.yml
+      - .github/scripts/current-main-ci-provenance.cjs
+      - .github/tests/current-main-ci-provenance.test.cjs
+      - .github/tests/production-automatic-paper-only-gate-contract.test.mjs
+      - stock-analyzer/e2e/production-automatic-paper-activation.spec.ts
+      - stock-analyzer/playwright.production-automatic-paper-activation.config.ts
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: production-automatic-paper-only-gate
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Validate paper-only gate contracts
+        run: >-
+          node --test
+          .github/tests/current-main-ci-provenance.test.cjs
+          .github/tests/production-automatic-paper-only-gate-contract.test.mjs
+      - name: Typecheck Production activation probe
+        run: pnpm --dir stock-analyzer run typecheck
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      (github.event.issue.title == 'Staging Readiness Control' ||
+       startsWith(github.event.issue.title, 'Staging Readiness Control — Rollover ')) &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-production-automatic-paper-only ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      production_run_id: ${{ steps.release.outputs.production_run_id }}
+      paper_forward_run_id: ${{ steps.release.outputs.paper_forward_run_id }}
+      ci_run_id: ${{ steps.release.outputs.ci_run_id }}
+    steps:
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          const match = /^\/activate-production-automatic-paper-only ([0-9a-f]{40})$/u.exec(
+            String(process.env.COMMENT_BODY ?? '').trim(),
+          );
+          if (!match) throw new Error('EXACT_AUTOMATIC_PAPER_ONLY_COMMAND_REQUIRED');
+          appendFileSync(process.env.GITHUB_OUTPUT, `target_sha=${match[1]}\n`);
+          NODE
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Require exact main, verified CI, Production four-feature QA, and Paper Forward
+        id: release
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const { inspectCurrentMainCiProvenance } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/current-main-ci-provenance.cjs`
+            );
+            const ci = await inspectCurrentMainCiProvenance({ github, context, targetSha: target });
+            const deployRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml', branch: 'main',
+              event: 'workflow_dispatch', status: 'completed', per_page: 100,
+            });
+            const production = deployRuns
+              .filter((run) => run.head_sha === target && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
+            if (!production) throw new Error('AUTOMATIC_PAPER_EXACT_PRODUCTION_DEPLOY_REQUIRED');
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: production.id, per_page: 100,
+            });
+            for (const name of [
+              `production-automation-research-core-${target}`,
+              `production-account-readonly-live-${target}`,
+              `production-live-credential-reuse-${target}`,
+              `production-postdeploy-activation-ready-${target}`,
+            ]) {
+              const matches = artifacts.filter((item) => item.name === name
+                && item.expired !== true && item.size_in_bytes > 0);
+              if (matches.length !== 1) throw new Error(`AUTOMATIC_PAPER_PRODUCTION_ARTIFACT_REQUIRED:${name}`);
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              head_sha: target, branch: 'main', event: 'issue_comment',
+              status: 'completed', per_page: 100,
+            });
+            let paper = null;
+            for (const run of runs.filter((item) =>
+              item.name === 'Paper Forward No-Deploy Schedule Activation'
+              && item.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
+              && item.conclusion === 'success')) {
+              const paperArtifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
+              });
+              if (paperArtifacts.some((item) => item.name === `paper-forward-no-deploy-${target}`
+                && item.expired !== true && item.size_in_bytes > 0)) {
+                paper = run;
+                break;
+              }
+            }
+            if (!paper) throw new Error('AUTOMATIC_PAPER_EXACT_FORWARD_RUNTIME_REQUIRED');
+            core.setOutput('ci_run_id', String(ci.runId));
+            core.setOutput('production_run_id', String(production.id));
+            core.setOutput('paper_forward_run_id', String(paper.id));
+
+  activate:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      PRODUCTION_BASE_URL: https://lsj119.com
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      AUTOMATIC_PAPER_ARTIFACT_DIR: production-automatic-paper-only-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Install Chromium
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Mask Production login
+        run: |
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]]
+          echo "::add-mask::$PRODUCTION_QA_LOGIN"
+          echo "::add-mask::$PRODUCTION_QA_PASSWORD"
+      - name: Prepare isolated four-market Paper wallets and member policy
+        working-directory: stock-analyzer
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          AUTOMATIC_PAPER_ACTIVATION_PHASE: PREPARE
+        run: pnpm exec playwright test --config=playwright.production-automatic-paper-activation.config.ts
+      - name: Configure protected Production SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Enable only the isolated automatic Paper worker
+        run: |
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node --input-type=module -" <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { existsSync, readFileSync } from 'node:fs';
+          const target = process.env.TARGET_SHA;
+          if (readFileSync('/opt/stock-app/.deploy/current-sha', 'utf8').trim() !== target) {
+            throw new Error('AUTOMATIC_PAPER_DEPLOY_SHA_MISMATCH');
+          }
+          const rows = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const matches = rows.filter((row) => row?.name === 'stock-app');
+          if (matches.length !== 1 || matches[0]?.pm2_env?.status !== 'online') {
+            throw new Error('AUTOMATIC_PAPER_PM2_IDENTITY_INVALID');
+          }
+          const before = matches[0].pm2_env;
+          const liveKeys = [
+            'LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED',
+            'PRIVATE_TRADING_API_ALLOWED', 'ORDER_EXECUTION_ENABLED',
+            'LIVE_AUTOMATIC_TRADING_ENABLED', 'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+          ];
+          for (const key of liveKeys) {
+            if (String(before[key] ?? 'false').toLowerCase() === 'true') {
+              throw new Error(`AUTOMATIC_PAPER_LIVE_AUTHORITY_PRESENT:${key}`);
+            }
+          }
+          if (existsSync('/opt/stock-app/.deploy/auto-trading-live-entry-arm.json')) {
+            throw new Error('AUTOMATIC_PAPER_LIVE_ENTRY_ARM_PRESENT');
+          }
+          execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+            stdio: 'inherit',
+            env: {
+              ...process.env,
+              LIVE_TRADING: 'false', AUTO_TRADING: 'false',
+              REAL_ORDER_ENABLED: 'false', PRIVATE_TRADING_API_ALLOWED: 'false',
+              ORDER_EXECUTION_ENABLED: 'false', LIVE_AUTOMATIC_TRADING_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false',
+              MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'true',
+              DEPLOY_SHA: target,
+            },
+          });
+          execFileSync('pm2', ['save'], { stdio: 'inherit' });
+          NODE
+      - name: Verify persistent Paper-only readiness and zero financial authority
+        working-directory: stock-analyzer
+        env:
+          EXPECTED_DEPLOY_SHA: ${{ env.TARGET_SHA }}
+          AUTOMATIC_PAPER_ACTIVATION_PHASE: VERIFY
+        run: pnpm exec playwright test --config=playwright.production-automatic-paper-activation.config.ts
+      - name: Fail closed on activation error
+        if: failure()
+        continue-on-error: true
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED=false MEMBER_AUTO_TRADING_BACKGROUND_ENABLED=false MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED=false AUTO_TRADING=false LIVE_AUTOMATIC_TRADING_ENABLED=false pm2 restart stock-app --update-env && pm2 save"
+      - name: Upload automatic Paper-only activation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-automatic-paper-only-${{ env.TARGET_SHA }}
+          path: stock-analyzer/production-automatic-paper-only-artifacts
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Report terminal activation state
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: [
+                '[PRODUCTION_AUTOMATIC_PAPER_ONLY_ACTIVE]',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `workflow_run: ${context.runId}`,
+                'automaticPaperTrading=ACTIVE',
+                'automaticLiveTrading=false',
+                'telegramRequired=false',
+                'orders/cancels/amends/transfers/withdrawals=0',
+                'liveTradingAuthorityGranted=false',
+                'autoTradingAuthorityGranted=false',
+              ].join('\n'),
+            });
