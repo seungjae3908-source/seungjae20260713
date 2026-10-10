@@ -471,11 +471,12 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `remaining=${plan.sevenBlockers.join(',') || 'NONE'}\n`);
           NODE
       - name: Upload bounded repair evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: paper-canonical-seven-blocker-repair-${{ env.TARGET_SHA }}-${{ github.run_id }}
           path: ${{ env.EVIDENCE_DIR }}
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
       - name: Report terminal repair state without activation claim
         if: always()
