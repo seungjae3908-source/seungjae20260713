@@ -1,0 +1,291 @@
+name: Telegram Six-Room Vault to PM2 Binding (Owner Protected)
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-sixroom-vault-pm2-binding.mjs
+      - .github/workflows/telegram-sixroom-vault-pm2-binding.yml
+      - .github/tests/telegram-sixroom-vault-pm2-binding.test.mjs
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: telegram-sixroom-binding-${{ github.event_name == 'issue_comment' && 'production-owner' || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Verify binding plan, zero-trading gate and rollback
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-sixroom-vault-pm2-binding.mjs
+          node --test .github/tests/telegram-sixroom-vault-pm2-binding.test.mjs
+
+  protected:
+    name: Owner-approved Telegram binding PLAN or guarded APPLY
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      (startsWith(github.event.comment.body, '/run-telegram-sixroom-binding-plan ') ||
+       startsWith(github.event.comment.body, '/run-telegram-sixroom-binding-apply '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+      statuses: read
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse immutable owner command; forbid APPLY retry
+        id: command
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const m=/^\/run-telegram-sixroom-binding-(plan|apply) ([0-9a-f]{40}) ([0-9a-f]{40})$/u
+            .exec(String(process.env.COMMAND||'').trim());
+          if(!m){console.error('TELEGRAM_BINDING_EXACT_COMMAND_REQUIRED');process.exit(1);}
+          if(m[1]==='apply'&&process.env.GITHUB_RUN_ATTEMPT!=='1'){
+            console.error('TELEGRAM_BINDING_APPLY_RETRY_FORBIDDEN');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            ['mode='+m[1],'sha='+m[2],'deployed='+m[3],''].join('\n'));
+          NODE
+
+      - name: Check exact current main and deployed ancestor
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$TARGET_SHA" = "$(git rev-parse origin/main)"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          git cat-file -e "$DEPLOYED_SHA^{commit}"
+          git merge-base --is-ancestor "$DEPLOYED_SHA" origin/main
+
+      - name: Verify deployed app code can consume dedicated six-room keys
+        env:
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+        run: |
+          set -Eeuo pipefail
+          # An unrelated old binary cannot become six-room ready merely by
+          # injecting config. Inspect the exact deployed Git revision only.
+          room_source="$(git show "$DEPLOYED_SHA:api-server/src/services/telegram-market-room.service.ts")"
+          holdings_source="$(git show "$DEPLOYED_SHA:api-server/src/services/member-holdings-telegram-alert.service.ts")"
+          for key in TELEGRAM_KR_STOCK_CHAT_ID TELEGRAM_US_STOCK_CHAT_ID \
+            TELEGRAM_CRYPTO_SPOT_CHAT_ID TELEGRAM_CRYPTO_FUTURES_CHAT_ID; do
+            grep -Fq "$key" <<< "$room_source"
+          done
+          grep -Fq 'TELEGRAM_OWNER_MEMBER_ID' <<< "$holdings_source"
+          grep -Fq 'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID' <<< "$holdings_source"
+          echo 'TELEGRAM_BINDING_DEPLOYED_CODE_COMPATIBLE'
+
+      - name: APPLY only — verify Required CI 6/6 on exact main
+        if: steps.command.outputs.mode == 'apply'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target=process.env.TARGET_SHA;
+            const required=[
+              'application-ci/verified','browser-ui/verified',
+              'database-rls/verified','security-integration/verified',
+              'ai-privacy/verified','futures-public-network-smoke/verified',
+            ];
+            const main=await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            });
+            const statuses=await github.paginate(github.rest.repos.listCommitStatusesForRef,{
+              owner:context.repo.owner,repo:context.repo.repo,ref:target,per_page:100,
+            });
+            const latest=new Map();
+            for(const s of statuses)if(!latest.has(s.context))latest.set(s.context,s);
+            if(main.data.commit.sha!==target
+              ||required.some(name=>latest.get(name)?.state!=='success')){
+              core.setFailed('TELEGRAM_BINDING_EXACT_MAIN_REQUIRED_CI_INCOMPLETE');
+              return;
+            }
+            core.info('TELEGRAM_BINDING_REQUIRED_CI_6_OF_6_VERIFIED');
+
+      - name: APPLY only — require protected Telegram-only Staging success
+        if: steps.command.outputs.mode == 'apply'
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target=process.env.TARGET_SHA;
+            const items=await github.paginate(github.rest.issues.listComments,{
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,per_page:100,
+            });
+            const ready=items.some(c=>{
+              const b=String(c.body||'');
+              const age=Date.now()-Date.parse(c.created_at);
+              return c.user?.login==='github-actions[bot]'
+                &&b.includes('TELEGRAM-ONLY STAGING QA (NO DEPLOY / NO SEND)')
+                &&b.includes('- Exact main: '+target)
+                &&b.includes('- Actual running Staging app SHA: '+target)
+                &&b.includes('- Staging marker SHA: '+target)
+                &&b.includes('- Health marker SHA / identity match: '+target+' / true')
+                &&b.includes('- Staging PM2 online: true')
+                &&b.includes('- Token-free Telegram IPv4/TLS: IPV4_TLS_READY')
+                &&b.includes('- Network-only classification: STAGING_TELEGRAM_NETWORK_ONLY_PASS')
+                &&age>=0&&age<24*60*60*1000;
+            });
+            if(!ready)core.setFailed('TELEGRAM_BINDING_STAGING_NOT_READY');
+            else core.info('TELEGRAM_BINDING_STAGING_SCOPE_PASS');
+
+      - name: Pin protected Production SSH, never print secrets
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
+          [[ -n "$SSH_KNOWN_HOSTS" && -n "$PROD_DATABASE_URL" ]]
+          [[ "$PROD_DATABASE_URL" != *$'\n'* ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: PLAN read-only or APPLY after owner approval; sanitized receipt only
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+          MODE: ${{ steps.command.outputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          report="$RUNNER_TEMP/telegram-binding-sanitized.json"
+          echo "BINDING_RECEIPT=$report" >> "$GITHUB_ENV"
+          approved=false
+          if [[ "$MODE" == apply ]]; then approved=true; fi
+          command="$(printf 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; TELEGRAM_BINDING_EXECUTE=true TELEGRAM_BINDING_MAIN_SHA=%q TELEGRAM_BINDING_DEPLOYED_SHA=%q TELEGRAM_BINDING_RUN_ID=%q TELEGRAM_BINDING_MODE=%q TELEGRAM_BINDING_APPLY_APPROVED=%q GITHUB_RUN_ATTEMPT=%q flock -n /var/lock/stock-app-deploy.lock node --input-type=module -' "$TARGET_SHA" "$DEPLOYED_SHA" "$GITHUB_RUN_ID" "$MODE" "$approved" "$GITHUB_RUN_ATTEMPT")"
+          {
+            printf '%s\n' "$PROD_DATABASE_URL"
+            cat ops/telegram-sixroom-vault-pm2-binding.mjs
+          } | ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$command" > "$report" \
+            2> "$RUNNER_TEMP/telegram-binding-stderr-redacted.txt"
+
+          node - "$report" "$TARGET_SHA" "$DEPLOYED_SHA" "$MODE" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const expected=['schemaVersion','mode','mainSha','expectedDeployedSha',
+            'pm2Sha','markerSha','pm2Online','vaultValid','autoRoomPreserved',
+            'tradingSafe','bindingMatches','changedKeys','restartAttempts',
+            'rollbackAttempts','pm2Saved','postHealthVerified',
+            'secretValuesRecorded','telegramSends','databaseWrites',
+            'financialMutations','webhookMutations','classification'];
+          const permitted=['TELEGRAM_KR_STOCK_CHAT_ID','TELEGRAM_US_STOCK_CHAT_ID',
+            'TELEGRAM_CRYPTO_SPOT_CHAT_ID','TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+            'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID','TELEGRAM_AUTO_TRADING_CHAT_ID',
+            'TELEGRAM_OWNER_MEMBER_ID'];
+          if(r.schemaVersion!=='telegram-sixroom-vault-pm2-binding-v1'
+            ||JSON.stringify(Object.keys(r).sort())!==JSON.stringify(expected.sort())
+            ||r.mainSha!==process.argv[3]
+            ||r.expectedDeployedSha!==process.argv[4]
+            ||r.mode!==process.argv[5].toUpperCase()
+            ||![r.pm2Sha,r.markerSha].every(v=>v===null||/^[0-9a-f]{40}$/u.test(v))
+            ||!Array.isArray(r.changedKeys)||r.changedKeys.some(x=>!permitted.includes(x))
+            ||!['pm2Online','vaultValid','autoRoomPreserved','tradingSafe',
+              'bindingMatches','pm2Saved','postHealthVerified'].every(k=>typeof r[k]==='boolean')
+            ||![r.restartAttempts,r.rollbackAttempts].every(n=>Number.isInteger(n)&&n>=0&&n<=1)
+            ||![r.telegramSends,r.databaseWrites,r.webhookMutations,r.financialMutations].every(n=>n===0)
+            ||r.secretValuesRecorded!==false
+            ||!/^[A-Z_]+$/u.test(String(r.classification))
+            ||(process.argv[5]==='plan'&&
+              (r.restartAttempts!==0||r.rollbackAttempts!==0))){
+            console.error('TELEGRAM_BINDING_UNSAFE_RECEIPT');
+            process.exit(1);
+          }
+          console.log('TELEGRAM_BINDING_SANITIZED_EVIDENCE_VALID');
+          NODE
+
+      - name: Post sanitized binding classification (never private values)
+        env:
+          REPORT: ${{ env.BINDING_RECEIPT }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const r=JSON.parse(fs.readFileSync(process.env.REPORT,'utf8'));
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                'TELEGRAM SIX-ROOM VAULT TO PM2 '+r.mode,
+                '- Exact main: '+r.mainSha,
+                '- Expected Production SHA: '+r.expectedDeployedSha,
+                '- Actual PM2 / marker: '+(r.pm2Sha||'unverified')+' / '+(r.markerSha||'unverified'),
+                '- PM2 online: '+String(r.pm2Online),
+                '- Vault / AUTO room verified: '+r.vaultValid+' / '+r.autoRoomPreserved,
+                '- Financial authority OFF: '+r.tradingSafe,
+                '- Classification: '+r.classification,
+                '- Missing or changed KEY NAMES: '+(r.changedKeys.join(', ')||'none'),
+                '- PM2 restarts / rollback: '+r.restartAttempts+' / '+r.rollbackAttempts,
+                '- PM2 save / health: '+r.pm2Saved+' / '+r.postHealthVerified,
+                '- Telegram sends / DB writes / financial mutations / webhook edits: 0 / 0 / 0 / 0',
+                '- Tokens, chat IDs and owner UUID disclosed: false',
+                '- GitHub Run: '+context.runId,
+              ].join('\n'),
+            });
+
+      - name: Reject blocked PLAN and unverified APPLY
+        env:
+          MODE: ${{ steps.command.outputs.mode }}
+          REPORT: ${{ env.BINDING_RECEIPT }}
+        run: |
+          set -Eeuo pipefail
+          node - "$REPORT" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const ok=process.env.MODE==='plan'
+            ? ['BINDING_READY','ALREADY_BOUND'].includes(r.classification)
+            : r.classification==='BINDING_APPLIED_VERIFIED'
+              ||(r.classification==='ALREADY_BOUND'&&r.restartAttempts===0);
+          if(!ok){
+            console.error('TELEGRAM_BINDING_NOT_READY: '+r.classification);
+            process.exit(1);
+          }
+          console.log('TELEGRAM_BINDING_MODE_VERIFIED_'+process.env.MODE.toUpperCase());
+          NODE
