@@ -535,8 +535,14 @@ test('stock summary opens the canonical rich analysis view without a legacy redi
 
   await page.getByRole('button', { name: '상세 분석' }).click();
   await expect(page).toHaveURL(/\/stock-info\/analysis\?.*ticker=AAPL/);
+  await expect(page).toHaveURL(/[?&]tab=analysis(?:&|$)/);
   await expect(page.getByTestId('canonical-stock-analysis')).toBeVisible();
   await expect(page.getByRole('heading', { name: '애플', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('stock-ai-analysis-readonly')).toBeVisible();
+  await expect(page.getByTestId('stock-ai-request-analysis')).toBeVisible();
+  // Summary data must remain available by explicit user choice, not hijack
+  // the canonical AI Analysis deep-link on the first paint.
+  await page.getByRole('tab', { name: '요약', exact: true }).click();
   await expect(page.getByTestId('canonical-stock-analysis')).toContainText('$231.45');
 
   await page.getByRole('button', { name: '종목 목록으로 돌아가기' }).click();

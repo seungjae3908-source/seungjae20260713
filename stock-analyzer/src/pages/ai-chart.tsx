@@ -26,6 +26,8 @@ import {
   type AnalysisSelection,
 } from '@/lib/analysis-selection';
 import type { ChartAnalysis, ChartAnalysisBias, ChartAnalysisStatus } from '@/lib/chart-analysis';
+import { isolateTradeChartSelection, tradeActionFromSearch, tradeFocusFromSearch } from '@/lib/trade-navigation';
+import type { AiChartPositionOverlay } from '@/components/ai-chart-position-panel';
 import {
   acceptChartWindowMessage,
   attachChartWindowLifecycleListeners,
@@ -182,7 +184,12 @@ function strategyModeLabel(mode: AiChartStrategyMode): string {
 
 function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
   return chartSelectionKey(left) === chartSelectionKey(right)
-    && left.displayName === right.displayName;
+    && left.displayName === right.displayName
+    && left.signalId === right.signalId
+    && left.searchRunId === right.searchRunId
+    && left.signalScore === right.signalScore
+    && left.action === right.action
+    && left.selectedAt === right.selectedAt;
 }
 
 function supportedSelection(value: AnalysisSelection | null): AnalysisSelection | null {
@@ -421,6 +428,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectSelection = state.select;
   const desktop = useDesktopChartLayout();
   const initialSearchRef = useRef(currentBrowserSearch());
+  const tradeFocusRef = useRef(tradeFocusFromSearch(initialSearchRef.current));
+  const tradeActionRef = useRef(tradeActionFromSearch(initialSearchRef.current));
+  const tradeRouteRequested = new URLSearchParams(initialSearchRef.current).has('trade');
   const routeModeRef = useRef(chartWindowRouteModeFromSearch(initialSearchRef.current));
   const routeSelectionRef = useRef(supportedSelection(chartSelectionFromSearch(initialSearchRef.current)));
   const externalMode = routeModeRef.current === 'external';
@@ -428,10 +438,17 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const externalPairId = chartPairIdFromSearch(initialSearchRef.current);
   const invalidRoute = routeModeRef.current === 'invalid'
     || (hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current)
+    || (tradeRouteRequested && (!tradeFocusRef.current || !tradeActionRef.current || !routeSelectionRef.current))
     || (externalMode && (!externalSyncId || !externalPairId));
   const initialSelectionRef = useRef<AnalysisSelection>((() => {
+    const route = routeSelectionRef.current;
+    if (tradeRouteRequested) {
+      return route && tradeActionRef.current
+        ? isolateTradeChartSelection(route, tradeActionRef.current)
+        : emptySelection();
+    }
     const storedSelection = supportedSelection(state.selection);
-    return mergeChartRouteSelection(routeSelectionRef.current, storedSelection)
+    return mergeChartRouteSelection(route, storedSelection)
       ?? storedSelection
       ?? emptySelection();
   })());
@@ -442,7 +459,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
-  const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
+  const [mobileTab, setMobileTab] = useState<MobileChartTab>(() => tradeRouteRequested ? 'position' : 'summary');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -474,7 +491,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
-  const ignorePositionOverlay = useCallback(() => {}, []);
+  // The manually opened cockpit owns the read-only lookup, while the chart
+  // consumes only its verified result for the exact current selection.
+  const positionIdentity = [selection.assetType, selection.market, selection.symbol || selection.ticker, selection.timeframe, selection.selectedAt].join('|');
+  const externalPositionController = tradeRouteRequested && !embedded && !externalMode && !invalidRoute;
+  const [tradePositionOverlay, setTradePositionOverlay] = useState<{ identity: string; overlay: AiChartPositionOverlay } | null>(null);
+  const visibleTradePositionOverlay = tradePositionOverlay?.identity === positionIdentity ? tradePositionOverlay.overlay : null;
+  const handleTradePositionOverlayChange = useCallback((next: AiChartPositionOverlay | null) => {
+    setTradePositionOverlay((previous) => {
+      if (next) return { identity: positionIdentity, overlay: next };
+      return previous?.identity === positionIdentity ? null : previous;
+    });
+  }, [positionIdentity]);
 
   const stopPopupTracking = useCallback(() => {
     popupPollCleanupRef.current?.();
@@ -758,6 +786,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         selection={selection}
         onSelectionChange={updateSelection}
         onAnalysisChange={handleAnalysisChange}
+        positionOverlay={visibleTradePositionOverlay}
+        externalPositionController={externalPositionController}
       />
     </Suspense>
   ) : emptyState;
@@ -799,6 +829,20 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       )}
       <ContextCard selection={selection} analysis={analysis} />
       <DecisionCard analysis={analysis} />
+      {desktop && tradeRouteRequested ? (
+        <Suspense fallback={<p role="status" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">매매창을 준비하고 있습니다.</p>}>
+          <LazyAiChartPositionPanel
+            selection={selection}
+            market={selection.market}
+            symbol={selection.symbol || selection.ticker}
+            chartPrice={typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null}
+            pricePlan={selection.pricePlan}
+            onOverlayChange={handleTradePositionOverlayChange}
+            initialCockpitOpen
+            initialCockpitTab={tradeFocusRef.current ?? 'entry'}
+          />
+        </Suspense>
+      ) : null}
       <SafetyNote />
     </div>
   ) : <div className="space-y-4"><SafetyNote /></div>;
@@ -887,9 +931,11 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
                     selection={selection}
                     market={selection.market}
                     symbol={selection.symbol || selection.ticker}
-                    chartPrice={null}
+                    chartPrice={typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null}
                     pricePlan={selection.pricePlan}
-                    onOverlayChange={ignorePositionOverlay}
+                    onOverlayChange={handleTradePositionOverlayChange}
+                    initialCockpitOpen={tradeRouteRequested}
+                    initialCockpitTab={tradeFocusRef.current ?? 'entry'}
                   />
                 ) : emptyState}
               </section>

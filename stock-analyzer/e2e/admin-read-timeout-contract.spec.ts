@@ -35,8 +35,9 @@ test('react-query cancellation, stale data, and member mutations stay fail close
   expect(source.match(/refetchOnWindowFocus: false,/g)).toHaveLength(2);
   expect(source).toContain('data-testid="admin-members-unavailable"');
   expect(source).toContain('회원 목록 다시 시도');
-  expect(source).toContain('const memberMutationEnabled = Boolean(members.data) && !members.error && !members.isFetching;');
-  expect(source).toContain("if (!memberMutationEnabled) { setError('회원 목록의 최신 상태를 확인한 뒤 다시 시도해 주세요.'); return; }");
+  expect(source).toContain('const memberMutationEnabled = auth.isAdmin && Boolean(token) && Boolean(members.data) && !members.error && !members.isFetching;');
+  expect(source).toContain("if (!memberMutationEnabled) { setError('회원 목록의 최신 상태를 확인한 뒤 다시 시도해 주세요.'); return false; }");
+  expect(source.match(/if \(!memberMutationEnabled\) \{ setError\('회원 목록의 최신 상태를 확인한 뒤 다시 시도해 주세요\.'\); return false; \}/g)).toHaveLength(3);
   expect(source).toContain('mutationEnabled={memberMutationEnabled}');
   expect(source).toContain('data-testid="admin-member-mutations-locked"');
   expect(source).toContain("disabled={busy || !mutationEnabled || initialTier !== 'pending'}");
@@ -56,4 +57,19 @@ test('legacy approval provenance gaps are explicit and never silently backfilled
   expect(source).toContain("const approvalProvenanceMissing = member.status === 'approved'");
   expect(source).toContain('data-testid="member-approval-provenance-missing"');
   expect(source).toContain('과거 승인 정보 일부가 확인되지 않습니다. 임의로 승인자나 승인시각을 보정하지 않습니다.');
+});
+
+test('admin caches and member form are scoped to member identity and effective access', () => {
+  expect(source).toContain("queryKey: ['admin-members', auth.user?.id ?? 'anonymous', search, memberPage]");
+  expect(source).toContain("queryKey: ['admin-audit', auth.user?.id ?? 'anonymous', auditPage]");
+  expect(source).toContain('const initialTier = adminMemberEditableTier(member);');
+  expect(source).toContain('const [active, setActive] = useState(adminMemberIsActive(member));');
+  expect(source).not.toContain('member.is_active !== false');
+});
+test('failed or cancelled admin mutations retain reason, and successful password reset receipt survives readback failure', () => {
+  expect(source).toContain('async function run(action: () => Promise<boolean>)');
+  expect(source).toContain("if (await action()) setReason('');");
+  expect(source).toContain('const credentialNotice = ');
+  expect(source).toContain('setNotice(credentialNotice);');
+  expect(source).toContain('이미 발급됐으므로 중복 재설정하지 마세요.');
 });
