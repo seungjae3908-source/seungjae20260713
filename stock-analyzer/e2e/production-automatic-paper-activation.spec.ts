@@ -67,6 +67,39 @@ test('activate and verify isolated four-market automatic Paper runtime', async (
     expect(wallets.ok, JSON.stringify(wallets.body)).toBe(true);
     zeroAuthority(wallets.body);
 
+    const policyBeforePrepare = status.body?.policy;
+    const walletMutationRequired = Number(wallets.body?.policy?.totalCapitalKrw ?? 0) < 1_000_000
+      || wallets.body?.ready !== true;
+    const memberPolicyActive = policyBeforePrepare?.mode === 'automatic'
+      || policyBeforePrepare?.automaticEnabled === true;
+    if (walletMutationRequired && memberPolicyActive) {
+      if (policyBeforePrepare?.emergencyStopped === true
+        || policyBeforePrepare?.newEntriesStopped === true) {
+        throw new Error('AUTOMATIC_PAPER_MEMBER_POLICY_STOPPED');
+      }
+      // Wallet/capital mutations are intentionally rejected while the member
+      // automation policy is active. Quiesce only that member policy first;
+      // the server clears market/provider admission and this remains safe if a
+      // later preparation step fails before the Paper worker is enabled.
+      const quiesced = await api(page, '/api/trade-automation/policy', 'PUT', {
+        ...policyBeforePrepare,
+        mode: 'approval',
+        automaticEnabled: false,
+        confirmation: { acknowledged: true },
+      });
+      expect(quiesced.ok, JSON.stringify(quiesced.body)).toBe(true);
+      expect(quiesced.body?.policy?.mode).toBe('approval');
+      expect(quiesced.body?.policy?.automaticEnabled).toBe(false);
+      expect(Object.values(quiesced.body?.policy?.marketEnabled ?? {}).some(Boolean)).toBe(false);
+      expect(Object.values(quiesced.body?.policy?.exchangeEnabled ?? {}).some(Boolean)).toBe(false);
+      zeroAuthority(quiesced.body);
+
+      status = await api(page, '/api/trade-automation/status');
+      expect(status.ok, JSON.stringify(status.body)).toBe(true);
+      expect(status.body?.policy?.mode).toBe('approval');
+      expect(status.body?.policy?.automaticEnabled).toBe(false);
+    }
+
     if (Number(wallets.body?.policy?.totalCapitalKrw ?? 0) < 1_000_000) {
       const policy = await api(page, '/api/paper-journal/admin-four-market/prepare-policy', 'POST', {
         confirmation: 'SET_ADMIN_FOUR_MARKETS_1M_PAPER_POLICY',
@@ -85,7 +118,13 @@ test('activate and verify isolated four-market automatic Paper runtime', async (
       zeroAuthority(created.body);
     }
 
+    // Re-read after wallet preparation so the final automatic policy preserves
+    // the freshly raised Paper capital instead of restoring the stale value
+    // captured before prepare-policy ran.
+    status = await api(page, '/api/trade-automation/status');
+    expect(status.ok, JSON.stringify(status.body)).toBe(true);
     const policy = status.body?.policy;
+    expect(Number(policy?.totalCapitalKrw ?? 0)).toBeGreaterThanOrEqual(1_000_000);
     const saved = await api(page, '/api/trade-automation/policy', 'PUT', {
       ...policy,
       mode: 'automatic',
