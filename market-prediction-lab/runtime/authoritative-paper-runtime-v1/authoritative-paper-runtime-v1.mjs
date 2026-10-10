@@ -1,387 +1,6 @@
-// src/services/trading-risk-engine.service.ts
-var TRADING_RISK_POLICY = Object.freeze({
-  riskWarningPercent: 0.5,
-  maximumRiskPercent: 1,
-  minimumRiskReward: 1,
-  warningRiskReward: 1.5,
-  dailyLossLimitPercent: 1,
-  weeklyLossLimitPercent: 3,
-  consecutiveLossLimit: 3,
-  totalExposureMultiple: 3,
-  sameDirectionExposureMultiple: 2,
-  defaultMaintenanceMarginRate: 5e-3,
-  minimumStopLiquidationBufferPercent: 0.5,
-  maximumAdjustmentIterations: 1e3,
-  cryptoFuturesAppMaximumLeverage: 10
-});
-var DATA_STATUSES = /* @__PURE__ */ new Set([
-  "live",
-  "delayed",
-  "cached",
-  "disconnected",
-  "error",
-  "insufficient"
-]);
-var unique = (values) => [...new Set(values)];
-function finite(value) {
-  return typeof value === "number" && Number.isFinite(value);
-}
-function positiveOptional(value) {
-  return value == null || finite(value) && value > 0;
-}
-function nonNegativeOptional(value) {
-  return value == null || finite(value) && value >= 0;
-}
-function validPrecision(value) {
-  return value == null || finite(value) && Number.isInteger(value) && value >= 0 && value <= 12;
-}
-function decimalPlaces(value) {
-  const text3 = value.toString().toLowerCase();
-  if (text3.includes("e-")) return Math.min(12, Number(text3.split("e-")[1] ?? 0));
-  return Math.min(12, text3.includes(".") ? text3.split(".")[1]?.length ?? 0 : 0);
-}
-function effectiveQuantityStep(quantityStep, quantityPrecision) {
-  const precisionStep = quantityPrecision == null ? null : 10 ** -quantityPrecision;
-  const candidates = [quantityStep, precisionStep].filter((value) => finite(value) && value > 0);
-  return candidates.length ? Math.max(...candidates) : null;
-}
-function floorQuantityToRules(value, quantityStep, quantityPrecision) {
-  if (!finite(value) || value <= 0) return 0;
-  const step = effectiveQuantityStep(quantityStep, quantityPrecision);
-  if (step == null) return value;
-  const decimals = Math.min(
-    12,
-    Math.max(decimalPlaces(step), quantityPrecision ?? 0)
-  );
-  const scale = 10 ** decimals;
-  const stepUnits = Math.max(1, Math.round(step * scale));
-  const valueUnits = Math.floor(value * scale + 1e-9);
-  const flooredUnits = Math.floor(valueUnits / stepUnits) * stepUnits;
-  return Number((flooredUnits / scale).toFixed(decimals));
-}
-function baseResult(calculatedAt) {
-  return {
-    allowed: false,
-    blockCodes: [],
-    warnings: [],
-    maximumRiskAmount: null,
-    stopDistance: null,
-    stopDistancePercent: null,
-    rawQuantity: null,
-    recommendedQuantity: null,
-    notionalValue: null,
-    requiredMargin: null,
-    estimatedEntryFee: null,
-    estimatedExitFeeAtStop: null,
-    estimatedSlippageCost: null,
-    estimatedFundingCost: null,
-    estimatedMaximumLoss: null,
-    actualRiskPercent: null,
-    estimatedProfit1: null,
-    estimatedProfit2: null,
-    riskReward1: null,
-    riskReward2: null,
-    breakEvenPrice: null,
-    estimatedLiquidationPrice: null,
-    stopToLiquidationDistancePercent: null,
-    effectiveQuantityStep: null,
-    appMaximumLeverage: null,
-    exchangeMaximumLeverage: null,
-    calculatedAt
-  };
-}
-function addBlock(blocks, code) {
-  if (!blocks.includes(code)) blocks.push(code);
-}
-function validateRiskEngineInput(input) {
-  const blocks = [];
-  if (!finite(input.accountBalance) || input.accountBalance <= 0) {
-    addBlock(blocks, "INVALID_ACCOUNT_BALANCE");
-  }
-  if (!finite(input.entryPrice) || input.entryPrice <= 0) {
-    addBlock(blocks, "INVALID_ENTRY_PRICE");
-  }
-  if (!finite(input.leverage) || input.leverage < 1) {
-    addBlock(blocks, "INVALID_LEVERAGE");
-  }
-  if (!finite(input.riskPercent) || input.riskPercent <= 0 || input.riskPercent > TRADING_RISK_POLICY.maximumRiskPercent) {
-    addBlock(blocks, "INVALID_RISK_PERCENT");
-  }
-  if (!finite(input.stopLossPrice) || input.stopLossPrice <= 0) {
-    addBlock(blocks, "INVALID_STOP_LOSS");
-  } else if (input.side === "long" && input.stopLossPrice >= input.entryPrice || input.side === "short" && input.stopLossPrice <= input.entryPrice) {
-    addBlock(blocks, "INVALID_STOP_LOSS");
-  }
-  for (const target of [input.targetPrice1, input.targetPrice2]) {
-    if (target == null) continue;
-    if (!finite(target) || target <= 0 || input.side === "long" && target <= input.entryPrice || input.side === "short" && target >= input.entryPrice) {
-      addBlock(blocks, "INVALID_TARGET_PRICE");
-    }
-  }
-  const costRates = [
-    input.entryFeeRate,
-    input.exitFeeRate,
-    input.slippageRate,
-    input.estimatedFundingRate
-  ];
-  if (costRates.some((value) => !finite(value)) || costRates.slice(0, 3).some((value) => value < 0)) {
-    addBlock(blocks, "INVALID_COST_RATE");
-  }
-  if (!positiveOptional(input.quantityStep) || !validPrecision(input.quantityPrecision)) {
-    addBlock(blocks, "MINIMUM_QUANTITY");
-  }
-  if (!positiveOptional(input.minimumQuantity)) addBlock(blocks, "MINIMUM_QUANTITY");
-  if (!positiveOptional(input.minimumNotional)) addBlock(blocks, "MINIMUM_NOTIONAL");
-  if (!positiveOptional(input.maximumLeverage) || !positiveOptional(input.appMaximumLeverage)) {
-    addBlock(blocks, "INVALID_LEVERAGE");
-  }
-  if (input.contractRulesStatus != null && !DATA_STATUSES.has(input.contractRulesStatus)) {
-    addBlock(blocks, "CONTRACT_RULES_NOT_LIVE");
-  }
-  if (!nonNegativeOptional(input.openExposure) || !nonNegativeOptional(input.sameDirectionExposure)) {
-    addBlock(blocks, "EXPOSURE_LIMIT");
-  }
-  if (!nonNegativeOptional(input.consecutiveLosses)) {
-    addBlock(blocks, "CONSECUTIVE_LOSS_LIMIT");
-  }
-  if (input.dailyRealizedPnl != null && !finite(input.dailyRealizedPnl)) {
-    addBlock(blocks, "DAILY_LOSS_LIMIT");
-  }
-  if (input.weeklyRealizedPnl != null && !finite(input.weeklyRealizedPnl)) {
-    addBlock(blocks, "WEEKLY_LOSS_LIMIT");
-  }
-  return blocks;
-}
-function calculateBreakEven(input) {
-  const entryCostRate = input.entryFeeRate + input.slippageRate;
-  const exitCostRate = input.exitFeeRate + input.slippageRate;
-  if (input.side === "long") {
-    const denominator2 = 1 - exitCostRate;
-    if (!(denominator2 > 0)) return null;
-    const value2 = input.entryPrice * (1 + entryCostRate) / denominator2;
-    return Number.isFinite(value2) && value2 > 0 ? value2 : null;
-  }
-  const denominator = 1 + exitCostRate;
-  if (!(denominator > 0)) return null;
-  const value = input.entryPrice * (1 - entryCostRate) / denominator;
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-function calculateTargetProfit(input, quantity, target, entryFee, fundingCost) {
-  if (target == null || !finite(target) || !(quantity > 0)) return null;
-  const gross = input.side === "long" ? (target - input.entryPrice) * quantity : (input.entryPrice - target) * quantity;
-  const exitFee = target * quantity * input.exitFeeRate;
-  const slippage = (input.entryPrice + target) * quantity * input.slippageRate;
-  const profit = gross - entryFee - exitFee - slippage - fundingCost;
-  return Number.isFinite(profit) ? profit : null;
-}
-function liquidationPreview(input) {
-  if (input.market !== "crypto-futures") {
-    return { price: null, bufferPercent: null, assumedMaintenance: false };
-  }
-  const suppliedMaintenance = input.maintenanceMarginRate;
-  const maintenanceRate = suppliedMaintenance != null && finite(suppliedMaintenance) && suppliedMaintenance >= 0 && suppliedMaintenance < 1 ? suppliedMaintenance : TRADING_RISK_POLICY.defaultMaintenanceMarginRate;
-  const raw = input.side === "long" ? input.entryPrice * (1 - 1 / input.leverage + maintenanceRate) : input.entryPrice * (1 + 1 / input.leverage - maintenanceRate);
-  const price = Number.isFinite(raw) ? Math.max(0, raw) : null;
-  if (price == null) return { price: null, bufferPercent: null, assumedMaintenance: suppliedMaintenance == null };
-  const favorableBuffer = input.side === "long" ? input.stopLossPrice - price : price - input.stopLossPrice;
-  const bufferPercent = favorableBuffer / input.entryPrice * 100;
-  return {
-    price,
-    bufferPercent: Number.isFinite(bufferPercent) ? bufferPercent : null,
-    assumedMaintenance: suppliedMaintenance == null
-  };
-}
-function calculateTradingRisk(input, now = /* @__PURE__ */ new Date()) {
-  const result3 = baseResult(now.toISOString());
-  const blocks = validateRiskEngineInput(input);
-  const warnings = [];
-  const fatalInputBlocks = [
-    "INVALID_ACCOUNT_BALANCE",
-    "INVALID_ENTRY_PRICE",
-    "INVALID_STOP_LOSS",
-    "INVALID_TARGET_PRICE",
-    "INVALID_LEVERAGE",
-    "INVALID_RISK_PERCENT",
-    "INVALID_COST_RATE"
-  ];
-  if (blocks.some((code) => fatalInputBlocks.includes(code))) {
-    result3.blockCodes = unique(blocks);
-    result3.warnings = ["입력값을 수정한 뒤 다시 계산하세요."];
-    return result3;
-  }
-  const appMaximumLeverage = input.market === "crypto-futures" ? input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage : input.appMaximumLeverage ?? null;
-  result3.appMaximumLeverage = appMaximumLeverage;
-  result3.exchangeMaximumLeverage = input.maximumLeverage ?? null;
-  if (appMaximumLeverage != null && input.leverage > appMaximumLeverage) {
-    addBlock(blocks, "LEVERAGE_EXCEEDS_APP_LIMIT");
-  }
-  if (input.maximumLeverage != null && input.leverage > input.maximumLeverage) {
-    addBlock(blocks, "LEVERAGE_EXCEEDS_EXCHANGE_LIMIT");
-  }
-  if (input.contractRulesStatus != null && input.contractRulesStatus !== "live") {
-    addBlock(blocks, "CONTRACT_RULES_NOT_LIVE");
-    warnings.push(
-      input.contractRulesStatus === "cached" ? "캐시 계약 규칙은 확인용으로만 사용하며 진입 가능 판정은 차단합니다." : `계약 규칙 상태가 ${input.contractRulesStatus}이므로 진입 가능 판정을 차단합니다.`
-    );
-  }
-  const maximumRiskAmount = input.accountBalance * (input.riskPercent / 100);
-  const stopDistance = input.side === "long" ? input.entryPrice - input.stopLossPrice : input.stopLossPrice - input.entryPrice;
-  const stopDistancePercent = stopDistance / input.entryPrice * 100;
-  const perUnitEntryFee = input.entryPrice * input.entryFeeRate;
-  const perUnitExitFee = input.stopLossPrice * input.exitFeeRate;
-  const perUnitSlippage = (input.entryPrice + input.stopLossPrice) * input.slippageRate;
-  const perUnitFunding = input.entryPrice * Math.abs(input.estimatedFundingRate);
-  const perUnitMaximumLoss = stopDistance + perUnitEntryFee + perUnitExitFee + perUnitSlippage + perUnitFunding;
-  result3.maximumRiskAmount = maximumRiskAmount;
-  result3.stopDistance = stopDistance;
-  result3.stopDistancePercent = stopDistancePercent;
-  if (!(perUnitMaximumLoss > 0) || !Number.isFinite(perUnitMaximumLoss)) {
-    addBlock(blocks, "INVALID_STOP_LOSS");
-    result3.blockCodes = unique(blocks);
-    result3.warnings = ["수량당 총 손실 비용을 계산할 수 없습니다."];
-    return result3;
-  }
-  const rawQuantity = maximumRiskAmount / perUnitMaximumLoss;
-  const step = effectiveQuantityStep(input.quantityStep, input.quantityPrecision);
-  result3.effectiveQuantityStep = step;
-  let recommendedQuantity = floorQuantityToRules(
-    rawQuantity,
-    input.quantityStep,
-    input.quantityPrecision
-  );
-  const costsFor = (quantity) => {
-    const notional = input.entryPrice * quantity;
-    const entryFee = notional * input.entryFeeRate;
-    const exitFee = input.stopLossPrice * quantity * input.exitFeeRate;
-    const slippage = (input.entryPrice + input.stopLossPrice) * quantity * input.slippageRate;
-    const funding = notional * Math.abs(input.estimatedFundingRate);
-    const maximumLoss = stopDistance * quantity + entryFee + exitFee + slippage + funding;
-    return { notional, entryFee, exitFee, slippage, funding, maximumLoss };
-  };
-  let costs = costsFor(recommendedQuantity);
-  const tolerance = Math.max(1e-10, maximumRiskAmount * 1e-12);
-  let iterations = 0;
-  while (step != null && recommendedQuantity > 0 && costs.maximumLoss > maximumRiskAmount + tolerance && iterations < TRADING_RISK_POLICY.maximumAdjustmentIterations) {
-    recommendedQuantity = floorQuantityToRules(
-      recommendedQuantity - step,
-      step,
-      input.quantityPrecision
-    );
-    costs = costsFor(recommendedQuantity);
-    iterations += 1;
-  }
-  if (step == null && costs.maximumLoss > maximumRiskAmount + tolerance) {
-    recommendedQuantity = rawQuantity * (maximumRiskAmount / costs.maximumLoss) * (1 - 1e-12);
-    costs = costsFor(recommendedQuantity);
-  }
-  result3.rawQuantity = Number.isFinite(rawQuantity) ? rawQuantity : null;
-  result3.recommendedQuantity = Number.isFinite(recommendedQuantity) ? recommendedQuantity : null;
-  result3.notionalValue = Number.isFinite(costs.notional) ? costs.notional : null;
-  result3.requiredMargin = Number.isFinite(costs.notional / input.leverage) ? costs.notional / input.leverage : null;
-  result3.estimatedEntryFee = Number.isFinite(costs.entryFee) ? costs.entryFee : null;
-  result3.estimatedExitFeeAtStop = Number.isFinite(costs.exitFee) ? costs.exitFee : null;
-  result3.estimatedSlippageCost = Number.isFinite(costs.slippage) ? costs.slippage : null;
-  result3.estimatedFundingCost = Number.isFinite(costs.funding) ? costs.funding : null;
-  result3.estimatedMaximumLoss = Number.isFinite(costs.maximumLoss) ? costs.maximumLoss : null;
-  result3.actualRiskPercent = Number.isFinite(costs.maximumLoss / input.accountBalance * 100) ? costs.maximumLoss / input.accountBalance * 100 : null;
-  if (input.riskPercent > TRADING_RISK_POLICY.riskWarningPercent) {
-    warnings.push(
-      `1회 허용 위험률 ${input.riskPercent}%는 권장 경고 기준 ${TRADING_RISK_POLICY.riskWarningPercent}%를 초과합니다.`
-    );
-  }
-  if (input.quantityStep == null || input.minimumQuantity == null || input.minimumNotional == null) {
-    warnings.push("거래소 최소 주문 규칙을 확인할 수 없습니다.");
-  }
-  if (input.minimumQuantity != null && recommendedQuantity < input.minimumQuantity) {
-    addBlock(blocks, "MINIMUM_QUANTITY");
-  }
-  if (input.minimumNotional != null && costs.notional < input.minimumNotional) {
-    addBlock(blocks, "MINIMUM_NOTIONAL");
-  }
-  const dailyPnl = input.dailyRealizedPnl ?? 0;
-  const weeklyPnl = input.weeklyRealizedPnl ?? 0;
-  const dailyLimitAmount = input.accountBalance * TRADING_RISK_POLICY.dailyLossLimitPercent / 100;
-  const weeklyLimitAmount = input.accountBalance * TRADING_RISK_POLICY.weeklyLossLimitPercent / 100;
-  if (dailyPnl <= -dailyLimitAmount) addBlock(blocks, "DAILY_LOSS_LIMIT");
-  if (weeklyPnl <= -weeklyLimitAmount) addBlock(blocks, "WEEKLY_LOSS_LIMIT");
-  if ((input.consecutiveLosses ?? 0) >= TRADING_RISK_POLICY.consecutiveLossLimit) {
-    addBlock(blocks, "CONSECUTIVE_LOSS_LIMIT");
-  }
-  const totalExposure = (input.openExposure ?? 0) + costs.notional;
-  const directionExposure = (input.sameDirectionExposure ?? 0) + costs.notional;
-  if (totalExposure > input.accountBalance * TRADING_RISK_POLICY.totalExposureMultiple || directionExposure > input.accountBalance * TRADING_RISK_POLICY.sameDirectionExposureMultiple) {
-    addBlock(blocks, "EXPOSURE_LIMIT");
-  }
-  const dataStatus = input.dataStatus ?? "insufficient";
-  if (dataStatus !== "live") {
-    addBlock(blocks, "DATA_NOT_LIVE");
-    warnings.push(
-      dataStatus === "cached" ? "캐시 데이터는 확인용으로만 사용하며 진입 가능 판정은 차단합니다." : `데이터 상태가 ${dataStatus}이므로 진입 가능 판정을 차단합니다.`
-    );
-  }
-  if (input.estimatedFundingRate !== 0) {
-    const positive11 = input.estimatedFundingRate > 0;
-    const likelyPays = positive11 && input.side === "long" || !positive11 && input.side === "short";
-    warnings.push(
-      `${positive11 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
-    );
-  }
-  const profit1 = calculateTargetProfit(
-    input,
-    recommendedQuantity,
-    input.targetPrice1,
-    costs.entryFee,
-    costs.funding
-  );
-  const profit2 = calculateTargetProfit(
-    input,
-    recommendedQuantity,
-    input.targetPrice2,
-    costs.entryFee,
-    costs.funding
-  );
-  result3.estimatedProfit1 = profit1;
-  result3.estimatedProfit2 = profit2;
-  result3.riskReward1 = profit1 != null && costs.maximumLoss > 0 ? profit1 / costs.maximumLoss : null;
-  result3.riskReward2 = profit2 != null && costs.maximumLoss > 0 ? profit2 / costs.maximumLoss : null;
-  const primaryRiskReward = result3.riskReward1 ?? result3.riskReward2;
-  if (primaryRiskReward == null) {
-    warnings.push("목표가가 없어 손익비 기반 진입 판정은 적용하지 않았습니다.");
-  } else if (primaryRiskReward < TRADING_RISK_POLICY.minimumRiskReward) {
-    addBlock(blocks, "RISK_REWARD_TOO_LOW");
-  } else if (primaryRiskReward < TRADING_RISK_POLICY.warningRiskReward) {
-    warnings.push(
-      `손익비 ${primaryRiskReward.toFixed(2)}는 강한 경고 구간(1.0 이상 1.5 미만)입니다.`
-    );
-  }
-  const breakEvenPrice = calculateBreakEven(input);
-  result3.breakEvenPrice = breakEvenPrice;
-  if (breakEvenPrice == null) warnings.push("수수료와 슬리피지를 반영한 손익분기 가격을 계산할 수 없습니다.");
-  const liquidation = liquidationPreview(input);
-  result3.estimatedLiquidationPrice = liquidation.price;
-  result3.stopToLiquidationDistancePercent = liquidation.bufferPercent;
-  if (input.market === "crypto-futures") {
-    warnings.push("실제 청산가격은 거래소 유지증거금, 계정 모드 및 포지션 상태에 따라 달라질 수 있습니다.");
-    if (liquidation.assumedMaintenance) {
-      warnings.push(
-        `유지증거금률 정보가 없어 ${(TRADING_RISK_POLICY.defaultMaintenanceMarginRate * 100).toFixed(2)}%를 적용한 단순 근사입니다.`
-      );
-    }
-    if (liquidation.bufferPercent == null || liquidation.bufferPercent < TRADING_RISK_POLICY.minimumStopLiquidationBufferPercent) {
-      addBlock(blocks, "LIQUIDATION_TOO_CLOSE");
-    }
-  }
-  if (result3.estimatedMaximumLoss == null || result3.maximumRiskAmount == null || result3.estimatedMaximumLoss > result3.maximumRiskAmount + tolerance) {
-    addBlock(blocks, "INVALID_STOP_LOSS");
-    warnings.push("최종 수량의 예상 최대손실이 허용 손실액 이내인지 확인할 수 없습니다.");
-  }
-  result3.blockCodes = unique(blocks);
-  result3.warnings = unique(warnings);
-  result3.allowed = result3.blockCodes.length === 0;
-  return result3;
-}
-
 // src/services/paper-trading-core.service.ts
+var MANUAL_PAPER_FUTURES_MAX_LEVERAGE = 125;
+var validateManualPaperFuturesLeverage = (value) => typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MANUAL_PAPER_FUTURES_MAX_LEVERAGE;
 var PaperTradingError = class extends Error {
   constructor(code, message, statusCode = 400) {
     super(message);
@@ -393,9 +12,9 @@ var PaperTradingError = class extends Error {
 var MARKET_FRESHNESS_MS = 6e4;
 var CONTRACT_FRESHNESS_MS = 20 * 6e4;
 var EPSILON = 1e-8;
-var finite2 = (value) => typeof value === "number" && Number.isFinite(value);
-var positive = (value) => finite2(value) && value > 0;
-var nonNegative = (value) => finite2(value) && value >= 0;
+var finite = (value) => typeof value === "number" && Number.isFinite(value);
+var positive = (value) => finite(value) && value > 0;
+var nonNegative = (value) => finite(value) && value >= 0;
 function isFresh(updatedAt, now, limitMs) {
   const timestamp4 = Date.parse(updatedAt);
   return Number.isFinite(timestamp4) && now.getTime() >= timestamp4 && now.getTime() - timestamp4 <= limitMs;
@@ -413,7 +32,7 @@ function validateState(state) {
     state.account.usedMargin,
     state.account.availableMargin
   ];
-  if (accountNumbers.some((value) => !finite2(value)) || !(state.account.initialBalance > 0)) {
+  if (accountNumbers.some((value) => !finite(value)) || !(state.account.initialBalance > 0)) {
     throw new PaperTradingError("INVALID_PAPER_STATE", "모의계좌 계산값이 올바르지 않습니다.");
   }
   if (!Array.isArray(state.orders) || !Array.isArray(state.positions) || !Array.isArray(state.fills) || !Array.isArray(state.journal)) {
@@ -431,8 +50,14 @@ function validateOrderRequest(request) {
   if (!["market", "limit", "stop_market"].includes(request.orderType)) {
     throw new PaperTradingError("INVALID_ORDER_TYPE", "모의주문 유형이 올바르지 않습니다.");
   }
-  if (!positive(request.leverage) || !positive(request.stopLossPrice)) {
-    throw new PaperTradingError("INVALID_ORDER_INPUT", "레버리지와 손절가는 0보다 커야 합니다.");
+  if (!validateManualPaperFuturesLeverage(request.leverage)) {
+    throw new PaperTradingError(
+      "MANUAL_PAPER_LEVERAGE_OUT_OF_RANGE",
+      "수동 선물 모의매매 레버리지는 정수 1~125배만 설정할 수 있습니다."
+    );
+  }
+  if (!positive(request.stopLossPrice)) {
+    throw new PaperTradingError("INVALID_ORDER_INPUT", "손절가는 0보다 커야 합니다.");
   }
   if (request.orderType === "limit" && !positive(request.requestedPrice)) {
     throw new PaperTradingError("INVALID_LIMIT_PRICE", "지정가 모의주문에는 지정가가 필요합니다.");
@@ -485,8 +110,12 @@ function buildRiskInput(state, request, market, rules, supplied, entryPrice, now
     minimumQuantity: rules.minimumQuantity,
     minimumNotional: rules.minimumNotional,
     maintenanceMarginRate: rules.maintenanceMarginRate,
-    maximumLeverage: rules.maximumLeverage,
-    appMaximumLeverage: TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage,
+    // Manual Paper is an explicitly hypothetical simulation. Exchange contract
+    // leverage ceilings still appear as warnings in the UI, but no private
+    // leverage or order request may be submitted. Keep live risk untouched.
+    maximumLeverage: MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
+    appMaximumLeverage: MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
+    manualPaperSimulationOnly: true,
     contractRulesStatus: rulesStatus,
     dailyRealizedPnl: state.riskState.dailyRealizedPnl,
     weeklyRealizedPnl: state.riskState.weeklyRealizedPnl,
@@ -494,7 +123,7 @@ function buildRiskInput(state, request, market, rules, supplied, entryPrice, now
     openExposure: openExposure(state),
     sameDirectionExposure: sameDirectionExposure(state, request.side),
     dataStatus: marketStatus,
-    estimatedFundingRate: finite2(market.fundingRate) ? market.fundingRate : supplied.estimatedFundingRate
+    estimatedFundingRate: finite(market.fundingRate) ? market.fundingRate : supplied.estimatedFundingRate
   };
 }
 
@@ -786,14 +415,14 @@ function isRecord2(value) {
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
-function finite3(value) {
+function finite2(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 function positive2(value) {
-  return finite3(value) && value > 0;
+  return finite2(value) && value > 0;
 }
 function nonNegative2(value) {
-  return finite3(value) && value >= 0;
+  return finite2(value) && value >= 0;
 }
 function exactSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
@@ -887,8 +516,8 @@ function validateRisk(candidate, riskInput, riskResult, riskPolicyIdentity, nowM
   else if (evaluatedAtMs > nowMs) add3(blockers, "RISK_EVIDENCE_FROM_FUTURE");
   else if (nowMs - evaluatedAtMs > maxEvidenceAgeMs) add3(blockers, "RISK_EVIDENCE_STALE");
   if (!positive2(riskResult?.recommendedQuantity)) add3(blockers, "RISK_RECOMMENDED_QUANTITY_REQUIRED");
-  if (!finite3(riskResult?.actualRiskPercent) && riskResult?.actualRiskPercent != null) add3(blockers, "RISK_PERCENT_INVALID");
-  if (finite3(riskResult?.actualRiskPercent) && positive2(riskInput?.riskPercent) && riskResult.actualRiskPercent > riskInput.riskPercent + 1e-9) add3(blockers, "RISK_PERCENT_EXCEEDS_REQUEST");
+  if (!finite2(riskResult?.actualRiskPercent) && riskResult?.actualRiskPercent != null) add3(blockers, "RISK_PERCENT_INVALID");
+  if (finite2(riskResult?.actualRiskPercent) && positive2(riskInput?.riskPercent) && riskResult.actualRiskPercent > riskInput.riskPercent + 1e-9) add3(blockers, "RISK_PERCENT_EXCEEDS_REQUEST");
   let normalizedPolicyIdentity = null;
   if (candidate.signal.market === "CRYPTO_FUTURES") {
     if (!riskPolicyIdentity || !nonEmpty(riskPolicyIdentity.policyId) || !nonEmpty(riskPolicyIdentity.policyVersion) || !nonEmpty(riskPolicyIdentity.source) || !exactSha(riskPolicyIdentity.researchCodeSha)) {
@@ -922,18 +551,18 @@ function validateRisk(candidate, riskInput, riskResult, riskPolicyIdentity, nowM
 }
 function validQuoteEvidence(value, nowMs) {
   if (!isRecord2(value) || value.available !== true || !positive2(value.bid) || !positive2(value.ask) || value.bid > value.ask) return false;
-  if (!finite3(value.asOfMs) || !positive2(value.maxAgeMs)) return false;
+  if (!finite2(value.asOfMs) || !positive2(value.maxAgeMs)) return false;
   return value.asOfMs <= nowMs && nowMs - value.asOfMs <= value.maxAgeMs;
 }
 function normalizedQuoteEvidence(value) {
   if (!isRecord2(value)) return void 0;
   return Object.freeze({
     available: value.available === true,
-    bid: finite3(value.bid) ? value.bid : null,
-    ask: finite3(value.ask) ? value.ask : null,
-    last: finite3(value.last) ? value.last : null,
-    asOfMs: finite3(value.asOfMs) ? value.asOfMs : null,
-    maxAgeMs: finite3(value.maxAgeMs) ? value.maxAgeMs : null
+    bid: finite2(value.bid) ? value.bid : null,
+    ask: finite2(value.ask) ? value.ask : null,
+    last: finite2(value.last) ? value.last : null,
+    asOfMs: finite2(value.asOfMs) ? value.asOfMs : null,
+    maxAgeMs: finite2(value.maxAgeMs) ? value.maxAgeMs : null
   });
 }
 function normalizeExecutionEvidence(candidate, paper, raw, nowMs, blockers) {
@@ -953,8 +582,8 @@ function normalizeExecutionEvidence(candidate, paper, raw, nowMs, blockers) {
   if (raw.provider !== expectedProvider || paper.provider !== expectedProvider) add3(blockers, "EXECUTION_PROVIDER_MISMATCH");
   if (raw.publicOnly !== true || raw.dataQuality !== "READY") add3(blockers, "EXECUTION_PUBLIC_READY_EVIDENCE_REQUIRED");
   if (!nonEmpty(raw.provenance) || raw.provenance !== paper.providerProvenance) add3(blockers, "EXECUTION_PROVENANCE_MISMATCH");
-  if (!finite3(raw.asOfMs) || raw.asOfMs !== paper.observedAtMs) add3(blockers, "EXECUTION_TIMESTAMP_MISMATCH");
-  if (!positive2(raw.maxAgeMs) || finite3(raw.asOfMs) && (raw.asOfMs > nowMs || nowMs - raw.asOfMs > raw.maxAgeMs)) add3(blockers, "EXECUTION_EVIDENCE_STALE_OR_FUTURE");
+  if (!finite2(raw.asOfMs) || raw.asOfMs !== paper.observedAtMs) add3(blockers, "EXECUTION_TIMESTAMP_MISMATCH");
+  if (!positive2(raw.maxAgeMs) || finite2(raw.asOfMs) && (raw.asOfMs > nowMs || nowMs - raw.asOfMs > raw.maxAgeMs)) add3(blockers, "EXECUTION_EVIDENCE_STALE_OR_FUTURE");
   if (!positive2(raw.tickSize) || raw.tickSize !== paper.tickSize) add3(blockers, "EXECUTION_TICK_SIZE_MISMATCH");
   if (raw.privateApiUsed === true || raw.privateTradingApiAllowed === true || raw.liveOrderAllowed === true || raw.orderSubmitted === true || raw.exchangeRequestSent === true) add3(blockers, "EXECUTION_SAFETY_VIOLATION");
   const realtimeBarReady = raw.barProxyRealtimeAllowed === true;
@@ -1096,6 +725,390 @@ function buildScannerCanonicalPaperAdmissionEvidence(input) {
   };
   const bundle = deepFreeze({ ...bundleWithoutDigest, evidenceDigest: digest(bundleWithoutDigest) });
   return Object.freeze({ status: "READY", bundle, blockers: Object.freeze([]), ...safetyEnvelope() });
+}
+
+// src/services/trading-risk-engine.service.ts
+var TRADING_RISK_POLICY = Object.freeze({
+  riskWarningPercent: 0.5,
+  maximumRiskPercent: 1,
+  minimumRiskReward: 1,
+  warningRiskReward: 1.5,
+  dailyLossLimitPercent: 1,
+  weeklyLossLimitPercent: 3,
+  consecutiveLossLimit: 3,
+  totalExposureMultiple: 3,
+  sameDirectionExposureMultiple: 2,
+  defaultMaintenanceMarginRate: 5e-3,
+  minimumStopLiquidationBufferPercent: 0.5,
+  maximumAdjustmentIterations: 1e3,
+  cryptoFuturesAppMaximumLeverage: 10
+});
+var DATA_STATUSES = /* @__PURE__ */ new Set([
+  "live",
+  "delayed",
+  "cached",
+  "disconnected",
+  "error",
+  "insufficient"
+]);
+var unique = (values) => [...new Set(values)];
+function finite3(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function positiveOptional(value) {
+  return value == null || finite3(value) && value > 0;
+}
+function nonNegativeOptional(value) {
+  return value == null || finite3(value) && value >= 0;
+}
+function validPrecision(value) {
+  return value == null || finite3(value) && Number.isInteger(value) && value >= 0 && value <= 12;
+}
+function decimalPlaces(value) {
+  const text3 = value.toString().toLowerCase();
+  if (text3.includes("e-")) return Math.min(12, Number(text3.split("e-")[1] ?? 0));
+  return Math.min(12, text3.includes(".") ? text3.split(".")[1]?.length ?? 0 : 0);
+}
+function effectiveQuantityStep(quantityStep, quantityPrecision) {
+  const precisionStep = quantityPrecision == null ? null : 10 ** -quantityPrecision;
+  const candidates = [quantityStep, precisionStep].filter((value) => finite3(value) && value > 0);
+  return candidates.length ? Math.max(...candidates) : null;
+}
+function floorQuantityToRules(value, quantityStep, quantityPrecision) {
+  if (!finite3(value) || value <= 0) return 0;
+  const step = effectiveQuantityStep(quantityStep, quantityPrecision);
+  if (step == null) return value;
+  const decimals = Math.min(
+    12,
+    Math.max(decimalPlaces(step), quantityPrecision ?? 0)
+  );
+  const scale = 10 ** decimals;
+  const stepUnits = Math.max(1, Math.round(step * scale));
+  const valueUnits = Math.floor(value * scale + 1e-9);
+  const flooredUnits = Math.floor(valueUnits / stepUnits) * stepUnits;
+  return Number((flooredUnits / scale).toFixed(decimals));
+}
+function baseResult(calculatedAt) {
+  return {
+    allowed: false,
+    blockCodes: [],
+    warnings: [],
+    maximumRiskAmount: null,
+    stopDistance: null,
+    stopDistancePercent: null,
+    rawQuantity: null,
+    recommendedQuantity: null,
+    notionalValue: null,
+    requiredMargin: null,
+    estimatedEntryFee: null,
+    estimatedExitFeeAtStop: null,
+    estimatedSlippageCost: null,
+    estimatedFundingCost: null,
+    estimatedMaximumLoss: null,
+    actualRiskPercent: null,
+    estimatedProfit1: null,
+    estimatedProfit2: null,
+    riskReward1: null,
+    riskReward2: null,
+    breakEvenPrice: null,
+    estimatedLiquidationPrice: null,
+    stopToLiquidationDistancePercent: null,
+    effectiveQuantityStep: null,
+    appMaximumLeverage: null,
+    exchangeMaximumLeverage: null,
+    calculatedAt
+  };
+}
+function addBlock(blocks, code) {
+  if (!blocks.includes(code)) blocks.push(code);
+}
+function validateRiskEngineInput(input) {
+  const blocks = [];
+  if (!finite3(input.accountBalance) || input.accountBalance <= 0) {
+    addBlock(blocks, "INVALID_ACCOUNT_BALANCE");
+  }
+  if (!finite3(input.entryPrice) || input.entryPrice <= 0) {
+    addBlock(blocks, "INVALID_ENTRY_PRICE");
+  }
+  if (!finite3(input.leverage) || input.leverage < 1) {
+    addBlock(blocks, "INVALID_LEVERAGE");
+  }
+  if (!finite3(input.riskPercent) || input.riskPercent <= 0 || input.riskPercent > TRADING_RISK_POLICY.maximumRiskPercent) {
+    addBlock(blocks, "INVALID_RISK_PERCENT");
+  }
+  if (!finite3(input.stopLossPrice) || input.stopLossPrice <= 0) {
+    addBlock(blocks, "INVALID_STOP_LOSS");
+  } else if (input.side === "long" && input.stopLossPrice >= input.entryPrice || input.side === "short" && input.stopLossPrice <= input.entryPrice) {
+    addBlock(blocks, "INVALID_STOP_LOSS");
+  }
+  for (const target of [input.targetPrice1, input.targetPrice2]) {
+    if (target == null) continue;
+    if (!finite3(target) || target <= 0 || input.side === "long" && target <= input.entryPrice || input.side === "short" && target >= input.entryPrice) {
+      addBlock(blocks, "INVALID_TARGET_PRICE");
+    }
+  }
+  const costRates = [
+    input.entryFeeRate,
+    input.exitFeeRate,
+    input.slippageRate,
+    input.estimatedFundingRate
+  ];
+  if (costRates.some((value) => !finite3(value)) || costRates.slice(0, 3).some((value) => value < 0)) {
+    addBlock(blocks, "INVALID_COST_RATE");
+  }
+  if (!positiveOptional(input.quantityStep) || !validPrecision(input.quantityPrecision)) {
+    addBlock(blocks, "MINIMUM_QUANTITY");
+  }
+  if (!positiveOptional(input.minimumQuantity)) addBlock(blocks, "MINIMUM_QUANTITY");
+  if (!positiveOptional(input.minimumNotional)) addBlock(blocks, "MINIMUM_NOTIONAL");
+  if (!positiveOptional(input.maximumLeverage) || !positiveOptional(input.appMaximumLeverage)) {
+    addBlock(blocks, "INVALID_LEVERAGE");
+  }
+  if (input.contractRulesStatus != null && !DATA_STATUSES.has(input.contractRulesStatus)) {
+    addBlock(blocks, "CONTRACT_RULES_NOT_LIVE");
+  }
+  if (!nonNegativeOptional(input.openExposure) || !nonNegativeOptional(input.sameDirectionExposure)) {
+    addBlock(blocks, "EXPOSURE_LIMIT");
+  }
+  if (!nonNegativeOptional(input.consecutiveLosses)) {
+    addBlock(blocks, "CONSECUTIVE_LOSS_LIMIT");
+  }
+  if (input.dailyRealizedPnl != null && !finite3(input.dailyRealizedPnl)) {
+    addBlock(blocks, "DAILY_LOSS_LIMIT");
+  }
+  if (input.weeklyRealizedPnl != null && !finite3(input.weeklyRealizedPnl)) {
+    addBlock(blocks, "WEEKLY_LOSS_LIMIT");
+  }
+  return blocks;
+}
+function calculateBreakEven(input) {
+  const entryCostRate = input.entryFeeRate + input.slippageRate;
+  const exitCostRate = input.exitFeeRate + input.slippageRate;
+  if (input.side === "long") {
+    const denominator2 = 1 - exitCostRate;
+    if (!(denominator2 > 0)) return null;
+    const value2 = input.entryPrice * (1 + entryCostRate) / denominator2;
+    return Number.isFinite(value2) && value2 > 0 ? value2 : null;
+  }
+  const denominator = 1 + exitCostRate;
+  if (!(denominator > 0)) return null;
+  const value = input.entryPrice * (1 - entryCostRate) / denominator;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+function calculateTargetProfit(input, quantity, target, entryFee, fundingCost) {
+  if (target == null || !finite3(target) || !(quantity > 0)) return null;
+  const gross = input.side === "long" ? (target - input.entryPrice) * quantity : (input.entryPrice - target) * quantity;
+  const exitFee = target * quantity * input.exitFeeRate;
+  const slippage = (input.entryPrice + target) * quantity * input.slippageRate;
+  const profit = gross - entryFee - exitFee - slippage - fundingCost;
+  return Number.isFinite(profit) ? profit : null;
+}
+function liquidationPreview(input) {
+  if (input.market !== "crypto-futures") {
+    return { price: null, bufferPercent: null, assumedMaintenance: false };
+  }
+  const suppliedMaintenance = input.maintenanceMarginRate;
+  const maintenanceRate = suppliedMaintenance != null && finite3(suppliedMaintenance) && suppliedMaintenance >= 0 && suppliedMaintenance < 1 ? suppliedMaintenance : TRADING_RISK_POLICY.defaultMaintenanceMarginRate;
+  const raw = input.side === "long" ? input.entryPrice * (1 - 1 / input.leverage + maintenanceRate) : input.entryPrice * (1 + 1 / input.leverage - maintenanceRate);
+  const price = Number.isFinite(raw) ? Math.max(0, raw) : null;
+  if (price == null) return { price: null, bufferPercent: null, assumedMaintenance: suppliedMaintenance == null };
+  const favorableBuffer = input.side === "long" ? input.stopLossPrice - price : price - input.stopLossPrice;
+  const bufferPercent = favorableBuffer / input.entryPrice * 100;
+  return {
+    price,
+    bufferPercent: Number.isFinite(bufferPercent) ? bufferPercent : null,
+    assumedMaintenance: suppliedMaintenance == null
+  };
+}
+function calculateTradingRisk(input, now = /* @__PURE__ */ new Date()) {
+  const result3 = baseResult(now.toISOString());
+  const blocks = validateRiskEngineInput(input);
+  const warnings = [];
+  const fatalInputBlocks = [
+    "INVALID_ACCOUNT_BALANCE",
+    "INVALID_ENTRY_PRICE",
+    "INVALID_STOP_LOSS",
+    "INVALID_TARGET_PRICE",
+    "INVALID_LEVERAGE",
+    "INVALID_RISK_PERCENT",
+    "INVALID_COST_RATE"
+  ];
+  if (blocks.some((code) => fatalInputBlocks.includes(code))) {
+    result3.blockCodes = unique(blocks);
+    result3.warnings = ["입력값을 수정한 뒤 다시 계산하세요."];
+    return result3;
+  }
+  const appMaximumLeverage = input.market === "crypto-futures" ? input.appMaximumLeverage ?? TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage : input.appMaximumLeverage ?? null;
+  result3.appMaximumLeverage = appMaximumLeverage;
+  result3.exchangeMaximumLeverage = input.maximumLeverage ?? null;
+  if (appMaximumLeverage != null && input.leverage > appMaximumLeverage) {
+    addBlock(blocks, "LEVERAGE_EXCEEDS_APP_LIMIT");
+  }
+  if (input.maximumLeverage != null && input.leverage > input.maximumLeverage) {
+    addBlock(blocks, "LEVERAGE_EXCEEDS_EXCHANGE_LIMIT");
+  }
+  if (input.contractRulesStatus != null && input.contractRulesStatus !== "live") {
+    addBlock(blocks, "CONTRACT_RULES_NOT_LIVE");
+    warnings.push(
+      input.contractRulesStatus === "cached" ? "캐시 계약 규칙은 확인용으로만 사용하며 진입 가능 판정은 차단합니다." : `계약 규칙 상태가 ${input.contractRulesStatus}이므로 진입 가능 판정을 차단합니다.`
+    );
+  }
+  const maximumRiskAmount = input.accountBalance * (input.riskPercent / 100);
+  const stopDistance = input.side === "long" ? input.entryPrice - input.stopLossPrice : input.stopLossPrice - input.entryPrice;
+  const stopDistancePercent = stopDistance / input.entryPrice * 100;
+  const perUnitEntryFee = input.entryPrice * input.entryFeeRate;
+  const perUnitExitFee = input.stopLossPrice * input.exitFeeRate;
+  const perUnitSlippage = (input.entryPrice + input.stopLossPrice) * input.slippageRate;
+  const perUnitFunding = input.entryPrice * Math.abs(input.estimatedFundingRate);
+  const perUnitMaximumLoss = stopDistance + perUnitEntryFee + perUnitExitFee + perUnitSlippage + perUnitFunding;
+  result3.maximumRiskAmount = maximumRiskAmount;
+  result3.stopDistance = stopDistance;
+  result3.stopDistancePercent = stopDistancePercent;
+  if (!(perUnitMaximumLoss > 0) || !Number.isFinite(perUnitMaximumLoss)) {
+    addBlock(blocks, "INVALID_STOP_LOSS");
+    result3.blockCodes = unique(blocks);
+    result3.warnings = ["수량당 총 손실 비용을 계산할 수 없습니다."];
+    return result3;
+  }
+  const rawQuantity = maximumRiskAmount / perUnitMaximumLoss;
+  const step = effectiveQuantityStep(input.quantityStep, input.quantityPrecision);
+  result3.effectiveQuantityStep = step;
+  let recommendedQuantity = floorQuantityToRules(
+    rawQuantity,
+    input.quantityStep,
+    input.quantityPrecision
+  );
+  const costsFor = (quantity) => {
+    const notional = input.entryPrice * quantity;
+    const entryFee = notional * input.entryFeeRate;
+    const exitFee = input.stopLossPrice * quantity * input.exitFeeRate;
+    const slippage = (input.entryPrice + input.stopLossPrice) * quantity * input.slippageRate;
+    const funding = notional * Math.abs(input.estimatedFundingRate);
+    const maximumLoss = stopDistance * quantity + entryFee + exitFee + slippage + funding;
+    return { notional, entryFee, exitFee, slippage, funding, maximumLoss };
+  };
+  let costs = costsFor(recommendedQuantity);
+  const tolerance = Math.max(1e-10, maximumRiskAmount * 1e-12);
+  let iterations = 0;
+  while (step != null && recommendedQuantity > 0 && costs.maximumLoss > maximumRiskAmount + tolerance && iterations < TRADING_RISK_POLICY.maximumAdjustmentIterations) {
+    recommendedQuantity = floorQuantityToRules(
+      recommendedQuantity - step,
+      step,
+      input.quantityPrecision
+    );
+    costs = costsFor(recommendedQuantity);
+    iterations += 1;
+  }
+  if (step == null && costs.maximumLoss > maximumRiskAmount + tolerance) {
+    recommendedQuantity = rawQuantity * (maximumRiskAmount / costs.maximumLoss) * (1 - 1e-12);
+    costs = costsFor(recommendedQuantity);
+  }
+  result3.rawQuantity = Number.isFinite(rawQuantity) ? rawQuantity : null;
+  result3.recommendedQuantity = Number.isFinite(recommendedQuantity) ? recommendedQuantity : null;
+  result3.notionalValue = Number.isFinite(costs.notional) ? costs.notional : null;
+  result3.requiredMargin = Number.isFinite(costs.notional / input.leverage) ? costs.notional / input.leverage : null;
+  result3.estimatedEntryFee = Number.isFinite(costs.entryFee) ? costs.entryFee : null;
+  result3.estimatedExitFeeAtStop = Number.isFinite(costs.exitFee) ? costs.exitFee : null;
+  result3.estimatedSlippageCost = Number.isFinite(costs.slippage) ? costs.slippage : null;
+  result3.estimatedFundingCost = Number.isFinite(costs.funding) ? costs.funding : null;
+  result3.estimatedMaximumLoss = Number.isFinite(costs.maximumLoss) ? costs.maximumLoss : null;
+  result3.actualRiskPercent = Number.isFinite(costs.maximumLoss / input.accountBalance * 100) ? costs.maximumLoss / input.accountBalance * 100 : null;
+  if (input.riskPercent > TRADING_RISK_POLICY.riskWarningPercent) {
+    warnings.push(
+      `1회 허용 위험률 ${input.riskPercent}%는 권장 경고 기준 ${TRADING_RISK_POLICY.riskWarningPercent}%를 초과합니다.`
+    );
+  }
+  if (input.quantityStep == null || input.minimumQuantity == null || input.minimumNotional == null) {
+    warnings.push("거래소 최소 주문 규칙을 확인할 수 없습니다.");
+  }
+  if (input.minimumQuantity != null && recommendedQuantity < input.minimumQuantity) {
+    addBlock(blocks, "MINIMUM_QUANTITY");
+  }
+  if (input.minimumNotional != null && costs.notional < input.minimumNotional) {
+    addBlock(blocks, "MINIMUM_NOTIONAL");
+  }
+  const dailyPnl = input.dailyRealizedPnl ?? 0;
+  const weeklyPnl = input.weeklyRealizedPnl ?? 0;
+  const dailyLimitAmount = input.accountBalance * TRADING_RISK_POLICY.dailyLossLimitPercent / 100;
+  const weeklyLimitAmount = input.accountBalance * TRADING_RISK_POLICY.weeklyLossLimitPercent / 100;
+  if (dailyPnl <= -dailyLimitAmount) addBlock(blocks, "DAILY_LOSS_LIMIT");
+  if (weeklyPnl <= -weeklyLimitAmount) addBlock(blocks, "WEEKLY_LOSS_LIMIT");
+  if ((input.consecutiveLosses ?? 0) >= TRADING_RISK_POLICY.consecutiveLossLimit) {
+    addBlock(blocks, "CONSECUTIVE_LOSS_LIMIT");
+  }
+  const totalExposure = (input.openExposure ?? 0) + costs.notional;
+  const directionExposure = (input.sameDirectionExposure ?? 0) + costs.notional;
+  if (totalExposure > input.accountBalance * TRADING_RISK_POLICY.totalExposureMultiple || directionExposure > input.accountBalance * TRADING_RISK_POLICY.sameDirectionExposureMultiple) {
+    addBlock(blocks, "EXPOSURE_LIMIT");
+  }
+  const dataStatus = input.dataStatus ?? "insufficient";
+  if (dataStatus !== "live") {
+    addBlock(blocks, "DATA_NOT_LIVE");
+    warnings.push(
+      dataStatus === "cached" ? "캐시 데이터는 확인용으로만 사용하며 진입 가능 판정은 차단합니다." : `데이터 상태가 ${dataStatus}이므로 진입 가능 판정을 차단합니다.`
+    );
+  }
+  if (input.estimatedFundingRate !== 0) {
+    const positive11 = input.estimatedFundingRate > 0;
+    const likelyPays = positive11 && input.side === "long" || !positive11 && input.side === "short";
+    warnings.push(
+      `${positive11 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
+    );
+  }
+  const profit1 = calculateTargetProfit(
+    input,
+    recommendedQuantity,
+    input.targetPrice1,
+    costs.entryFee,
+    costs.funding
+  );
+  const profit2 = calculateTargetProfit(
+    input,
+    recommendedQuantity,
+    input.targetPrice2,
+    costs.entryFee,
+    costs.funding
+  );
+  result3.estimatedProfit1 = profit1;
+  result3.estimatedProfit2 = profit2;
+  result3.riskReward1 = profit1 != null && costs.maximumLoss > 0 ? profit1 / costs.maximumLoss : null;
+  result3.riskReward2 = profit2 != null && costs.maximumLoss > 0 ? profit2 / costs.maximumLoss : null;
+  const primaryRiskReward = result3.riskReward1 ?? result3.riskReward2;
+  if (primaryRiskReward == null) {
+    warnings.push("목표가가 없어 손익비 기반 진입 판정은 적용하지 않았습니다.");
+  } else if (primaryRiskReward < TRADING_RISK_POLICY.minimumRiskReward) {
+    addBlock(blocks, "RISK_REWARD_TOO_LOW");
+  } else if (primaryRiskReward < TRADING_RISK_POLICY.warningRiskReward) {
+    warnings.push(
+      `손익비 ${primaryRiskReward.toFixed(2)}는 강한 경고 구간(1.0 이상 1.5 미만)입니다.`
+    );
+  }
+  const breakEvenPrice = calculateBreakEven(input);
+  result3.breakEvenPrice = breakEvenPrice;
+  if (breakEvenPrice == null) warnings.push("수수료와 슬리피지를 반영한 손익분기 가격을 계산할 수 없습니다.");
+  const liquidation = liquidationPreview(input);
+  result3.estimatedLiquidationPrice = liquidation.price;
+  result3.stopToLiquidationDistancePercent = liquidation.bufferPercent;
+  if (input.market === "crypto-futures") {
+    warnings.push("실제 청산가격은 거래소 유지증거금, 계정 모드 및 포지션 상태에 따라 달라질 수 있습니다.");
+    if (liquidation.assumedMaintenance) {
+      warnings.push(
+        `유지증거금률 정보가 없어 ${(TRADING_RISK_POLICY.defaultMaintenanceMarginRate * 100).toFixed(2)}%를 적용한 단순 근사입니다.`
+      );
+    }
+    const liquidationBufferUnsafe = input.manualPaperSimulationOnly === true ? liquidation.bufferPercent == null || liquidation.bufferPercent <= 0 : liquidation.bufferPercent == null || liquidation.bufferPercent < TRADING_RISK_POLICY.minimumStopLiquidationBufferPercent;
+    if (liquidationBufferUnsafe) {
+      addBlock(blocks, "LIQUIDATION_TOO_CLOSE");
+    }
+  }
+  if (result3.estimatedMaximumLoss == null || result3.maximumRiskAmount == null || result3.estimatedMaximumLoss > result3.maximumRiskAmount + tolerance) {
+    addBlock(blocks, "INVALID_STOP_LOSS");
+    warnings.push("최종 수량의 예상 최대손실이 허용 손실액 이내인지 확인할 수 없습니다.");
+  }
+  result3.blockCodes = unique(blocks);
+  result3.warnings = unique(warnings);
+  result3.allowed = result3.blockCodes.length === 0;
+  return result3;
 }
 
 // src/services/scanner-crypto-futures-paper-admission-composer.service.ts
