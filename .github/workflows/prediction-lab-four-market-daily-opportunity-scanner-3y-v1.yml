@@ -7,6 +7,8 @@ on:
     paths:
       - market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
       - market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
+      - market-prediction-lab/src/historical-intraday-opportunity-audit-v1.js
+      - market-prediction-lab/tests/historical-intraday-opportunity-audit-v1.test.js
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -57,6 +59,11 @@ jobs:
           python -m py_compile market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
           python -m py_compile market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
           python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --self-test
+
+      - name: Validate intraday opportunity causality (fixture contracts only)
+        run: |
+          node --version
+          node --test market-prediction-lab/tests/historical-intraday-opportunity-audit-v1.test.js
 
       - name: Run four-market three-year benchmark
         run: python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --output market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json
