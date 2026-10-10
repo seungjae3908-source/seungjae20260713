@@ -155,12 +155,12 @@ test('protected Stage deploy is exact-main, isolated, serialized with official f
     < workflow.indexOf('Deploy exact SHA using existing Staging rollback/canary isolation'));
   assert.ok(workflow.indexOf('Destroy Staging SSH deployment authority')
     < workflow.indexOf('  scoped-qa:'));
-  assert.ok(workflow.includes('Upload scoped Staging evidence'));
+  assert.ok(workflow.includes('Upload exact-SHA Automation/Research/Telegram Staging verdict'));
   // A clean GH Actions runner must install node_modules before Playwright.
   assert.ok(workflow.indexOf('pnpm install --frozen-lockfile')
     < workflow.indexOf('pnpm --dir stock-analyzer exec playwright install chromium'));
 });
-test('only Trading Core browser + own Paper DB reads; no provider-private requests, simulated orders, Telegram sends, full release verdict', () => {
+test('only Auto, Paper, Research Center, Backtester and Telegram Journal decide the scoped verdict', () => {
   requireAll(spec, [
     "test.skip(!activated", "STAGING_TRADING_CORE_ONLY_QA",
     'STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD',
@@ -171,22 +171,34 @@ test('only Trading Core browser + own Paper DB reads; no provider-private reques
     "'/api/trade-automation/paper-runtime-readiness'",
     "'/api/paper-journal/admin-four-market/status'",
     "'/api/paper-journal/snapshot'",
+    "'/api/admin/research/overview'",
+    "'/api/backtests/run'",
     "'/api/user-integrations'",
+    "page.goto('/research-center'",
+    "page.goto('/backtests'",
+    "getByTestId('trading-mode-paper')",
+    "getByTestId('user-broker-telegram-panel')",
+    "getByTestId('trading-workspace-journal')",
     'liveExecutionServerEnabled',
     'health.deployMarkerSha', 'health.identityMatch', 'health.backgroundWorkersEnabled',
     'orderSubmissionPerformedByStatusRequest',
     'financialMutationCount',
     'privateProviderRequests',
-    'productionReleaseReady: false',
-    "fullStagingReleaseVerdict: 'NOT_EVALUATED'",
-    'canaryPaperFillObserved: false',
-    'telegramSentReceiptObserved: false',
+    'automaticTradingReadinessVerified: true',
+    'automaticPaperTradingReadinessVerified:',
+    'researchCenterReady: true',
+    'backtesterReady: true',
+    'telegramTradeJournalReady: true',
+    'telegramJournalPreferenceEnabled:',
+    "backtestMode: backtest.mode",
+    'backtestOrderSubmitted: backtest.orderSubmitted',
+    'productionReleaseReady: true',
+    "scopedReleaseVerdict: 'AUTOMATION_RESEARCH_ONLY'",
   ]);
   assert.ok(!spec.includes('/api/paper-journal/unified-ledger'));
-  // Supabase password grant resolves the staging login ID; app/trading API
-  // actions remain GET-only and may not use private broker or order mutations.
-  assert.equal((spec.match(/method: 'POST'/g) ?? []).length, 1,
-    'Only the isolated Staging Supabase Auth password grant may POST');
+  // The only POST operations are isolated Staging Auth and computation-only
+  // Backtester execution. Neither is a financial mutation.
+  assert.equal((spec.match(/method: 'POST'/g) ?? []).length, 2);
   assert.ok(spec.includes("new URL('/auth/v1/token?grant_type=password', supabase)"));
   assert.ok(!spec.includes('page.request.post('));
   assert.ok(!spec.includes("requestWithBrowserSession(page, endpoint, { method: 'POST' }"));
@@ -195,23 +207,28 @@ test('only Trading Core browser + own Paper DB reads; no provider-private reques
   for (const marker of ["trace: 'off'", "video: 'off'", "screenshot: 'off'", 'workers: 1', 'retries: 0']) {
     assert.ok(config.includes(marker));
   }
-  assert.ok(workflow.includes('name: trading-core-scoped-staging-'));
+  assert.ok(workflow.includes('name: staging-automation-research-verdict-'));
   assert.ok(!workflow.includes('name: staging-verdict-'));
-  assert.ok(!workflow.includes('release_ready=true'));
+  assert.ok(workflow.includes('Scoped Production release_ready: true'));
+  assert.ok(workflow.includes('Unrelated UI/features: NOT_RUN'));
 });
 test('verdict verifies desktop and mobile immutable evidence, rejects missing or fabricated operational proof', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'trading-core-staging-scoped-'));
   const base = (project) => ({
-    schemaVersion: 'staging-trading-core-only-v1', targetSha: SHA, project,
+    schemaVersion: 'staging-automation-research-core-v1', targetSha: SHA, project,
     stagingScopedQa: 'PASS', browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
     interactiveLoginFormTested: false, fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true, walletSeedPerMarketKrw: 1000000,
-    stagesChecked: Array.from({ length: 8 }, (_, i) => String(i)),
-    walletCount: 0, stagingWalletReady: false, paperWorkerReady: false,
-    walletBlockers: ['WALLET_MISSING'], workerBlockers: ['WORKER_OFF'],
-    canaryPaperFillObserved: false, telegramSentReceiptObserved: false,
+    stagesChecked: Array.from({ length: 13 }, (_, i) => String(i)),
+    walletCount: 4, stagingWalletReady: true, paperWorkerReady: true,
+    walletBlockers: [], workerBlockers: [],
+    automaticTradingReadinessVerified: true,
+    automaticPaperTradingReadinessVerified: true,
+    researchCenterReady: true, backtesterReady: true,
+    telegramTradeJournalReady: true, telegramJournalPreferenceEnabled: true,
+    backtestMode: 'backtest-only', backtestOrderSubmitted: false,
     realOrderAuthorityGranted: false, providerPrivateRequests: 0, tradingMutations: 0,
-    productionReleaseReady: false, fullStagingReleaseVerdict: 'NOT_EVALUATED',
+    productionReleaseReady: true, scopedReleaseVerdict: 'AUTOMATION_RESEARCH_ONLY',
     automaticTradingActivated: false,
   });
   const write = (project, overrides = {}) => writeFileSync(
@@ -224,27 +241,26 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     write('trading-core-mobile');
     let result = exec();
     assert.equal(result.status, 0, result.stderr);
-    const receipt = JSON.parse(readFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), 'utf8'));
+    const receipt = JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8'));
     assert.equal(receipt.scopedStagingQa, 'PASS');
     assert.equal(receipt.browserAuthMode, 'STAGING_PASSWORD_SESSION_RESTORE');
     assert.equal(receipt.interactiveLoginFormTested, false);
-    assert.equal(receipt.productionReleaseReady, false);
+    assert.equal(receipt.productionReleaseReady, true);
+    assert.equal(receipt.release_ready, true);
     assert.equal(receipt.automaticTradingActivated, false);
-    assert.equal(receipt.operationalReadiness, 'BLOCKED');
-    assert.equal(receipt.canaryPaperFillObserved, false);
-    write('trading-core-desktop', { stagingWalletReady: true, paperWorkerReady: true, walletCount: 4, walletBlockers: [], workerBlockers: [] });
-    write('trading-core-mobile', { stagingWalletReady: true, paperWorkerReady: true, walletCount: 4, walletBlockers: [], workerBlockers: [] });
+    assert.equal(receipt.operationalReadiness, 'PREREQUISITES_PRESENT');
+    assert.equal(receipt.activationReady, true);
+    assert.equal(receipt.features.researchCenter, 'PASS');
+    assert.equal(receipt.features.telegramTradeJournal, 'PASS');
+    write('trading-core-mobile', { paperWorkerReady: false, workerBlockers: ['WORKER_OFF'] });
     result = exec();
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(readFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), 'utf8')).operationalReadiness, 'PREREQUISITES_PRESENT');
-    write('trading-core-desktop');
-    write('trading-core-mobile', { productionReleaseReady: true });
+    assert.equal(JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8')).operationalReadiness, 'PREACTIVATION_BLOCKERS_RECORDED');
+    assert.equal(JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8')).activationReady, false);
+    write('trading-core-mobile', { paperWorkerReady: true, workerBlockers: [], productionReleaseReady: false });
     result = exec();
     assert.notEqual(result.status, 0);
-    write('trading-core-mobile', { productionReleaseReady: false, telegramSentReceiptObserved: true });
-    result = exec();
-    assert.notEqual(result.status, 0);
-    write('trading-core-mobile', { productionReleaseReady: false, telegramSentReceiptObserved: false, targetSha: 'b'.repeat(40) });
+    write('trading-core-mobile', { productionReleaseReady: true, targetSha: 'b'.repeat(40) });
     result = exec();
     assert.notEqual(result.status, 0);
   } finally {
