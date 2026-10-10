@@ -306,11 +306,39 @@ test('Telegram outage fails open after a bounded retry and does not expose secre
     ok: false,
     attempts: 2,
     skipped: 'DELIVERY_FAILED',
+    errorCode: 'TELEGRAM_NETWORK_ERROR',
   });
   assert.equal(calls, 2);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('ci-bot-token-sentinel'), false);
   assert.equal(serialized.includes('ci-chat-id-sentinel'), false);
+});
+
+test('Telegram HTTP 403 is classified safely and is not retried', async () => {
+  setFakeConfig();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ ok: false, description: 'sensitive provider detail' }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const result = await sendTelegramAlert({
+    type: 'intelligence_report',
+    details: 'connection check',
+    cooldownMs: 0,
+    duplicateWindowMs: 0,
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    attempts: 1,
+    skipped: 'DELIVERY_FAILED',
+    errorCode: 'TELEGRAM_HTTP_403',
+  });
+  assert.equal(calls, 1);
+  assert.equal(JSON.stringify(result).includes('sensitive provider detail'), false);
 });
 
 test('supports all requested alert templates', () => {
