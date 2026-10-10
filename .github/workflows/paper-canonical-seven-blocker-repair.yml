@@ -157,6 +157,12 @@ jobs:
           }
           appendFileSync(process.env.GITHUB_OUTPUT, `target_sha=${match[1]}\nmaximum_age_ms=${maximumAgeMs}\n`);
           NODE
+      - name: Checkout exact repair target for provenance helper
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
       - name: Require exact current main, coherent Required CI, official Production deploy, and Research source ancestry
         id: provenance
         uses: actions/github-script@v7
