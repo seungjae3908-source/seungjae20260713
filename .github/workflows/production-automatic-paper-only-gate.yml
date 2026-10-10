@@ -63,7 +63,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.command.outputs.target_sha }}
       production_run_id: ${{ steps.release.outputs.production_run_id }}
-      paper_forward_run_id: ${{ steps.release.outputs.paper_forward_run_id }}
+      paper_certification_run_id: ${{ steps.release.outputs.paper_certification_run_id }}
       ci_run_id: ${{ steps.release.outputs.ci_run_id }}
     steps:
       - name: Parse exact owner command
@@ -84,7 +84,7 @@ jobs:
           ref: ${{ steps.command.outputs.target_sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: Require exact main, verified CI, Production four-feature QA, and Paper Forward
+      - name: Require exact main, verified CI, Production four-feature QA, and Paper-only certification
         id: release
         uses: actions/github-script@v7
         env:
@@ -118,29 +118,41 @@ jobs:
                 && item.expired !== true && item.size_in_bytes > 0);
               if (matches.length !== 1) throw new Error(`AUTOMATIC_PAPER_PRODUCTION_ARTIFACT_REQUIRED:${name}`);
             }
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner: context.repo.owner, repo: context.repo.repo,
-              head_sha: target, branch: 'main', event: 'issue_comment',
-              status: 'completed', per_page: 100,
-            });
-            let paper = null;
-            for (const run of runs.filter((item) =>
-              item.name === 'Paper Forward No-Deploy Schedule Activation'
-              && item.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
-              && item.conclusion === 'success')) {
-              const paperArtifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-                owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
+            const certificationName = `paper-forward-no-deploy-certification-${target}`;
+            const certificationArtifacts = await github.paginate(
+              github.rest.actions.listArtifactsForRepo,
+              {
+                owner: context.repo.owner, repo: context.repo.repo,
+                name: certificationName, per_page: 100,
+              },
+            );
+            let certification = null;
+            for (const artifact of certificationArtifacts) {
+              if (artifact.expired === true
+                || artifact.size_in_bytes <= 0
+                || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
               });
-              if (paperArtifacts.some((item) => item.name === `paper-forward-no-deploy-${target}`
-                && item.expired !== true && item.size_in_bytes > 0)) {
-                paper = run;
+              const run = response.data;
+              if (run.name === 'Paper Forward No-Deploy Schedule Activation'
+                && run.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'
+                && run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === target
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                certification = run;
                 break;
               }
             }
-            if (!paper) throw new Error('AUTOMATIC_PAPER_EXACT_FORWARD_RUNTIME_REQUIRED');
+            if (!certification) {
+              throw new Error(`AUTOMATIC_PAPER_EXACT_CERTIFICATION_REQUIRED:${certificationName}`);
+            }
             core.setOutput('ci_run_id', String(ci.runId));
             core.setOutput('production_run_id', String(production.id));
-            core.setOutput('paper_forward_run_id', String(paper.id));
+            core.setOutput('paper_certification_run_id', String(certification.id));
 
   activate:
     if: github.event_name == 'issue_comment'
