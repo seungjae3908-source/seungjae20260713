@@ -525,10 +525,21 @@ export function cancelOrder(state: PaperTradingState, action: CancelPaperOrderAc
 export function markPrice(state: PaperTradingState, action: MarkPaperPriceAction, now: Date): PaperTradingActionResult {
   if (!positive(action.price)) throw new PaperTradingError('INVALID_MARK_PRICE', '현재가는 0보다 커야 합니다.');
   const at = toIso(action.at, now);
+  const fills: PaperFill[] = [];
+  let liquidatedPosition: PaperPosition | null = null;
   for (const position of state.positions) {
     if (position.symbol !== action.symbol || position.status === 'closed') continue;
     position.currentPrice = action.price;
     updateExcursions(position, action.price, action.price);
+    const liquidation = position.canonicalPaper ? null : estimatedManualPaperLiquidationPrice(position);
+    if (liquidation != null && (position.side === 'long'
+      ? action.price <= liquidation : action.price >= liquidation)) {
+      fills.push(closePositionInternal(
+        state, position, position.remainingQuantity, action.price,
+        'liquidation', `${action.eventId}:${position.id}:mark-liquidation`, at,
+      ));
+      liquidatedPosition = position;
+    }
   }
   recalculateAccount(state, at);
   return {
@@ -537,10 +548,11 @@ export function markPrice(state: PaperTradingState, action: MarkPaperPriceAction
     orderSubmitted: false,
     exchangeRequestSent: false,
     state,
-    order: null,
-    position: null,
-    fills: [],
-    warnings: [],
+    order: liquidatedPosition
+      ? state.orders.find((item) => item.id === liquidatedPosition!.orderId) ?? null : null,
+    position: liquidatedPosition,
+    fills,
+    warnings: liquidatedPosition ? ['수동 모의선물의 추정 강제청산 조건이 충족됐습니다.'] : [],
     duplicateEvent: false,
   };
 }
