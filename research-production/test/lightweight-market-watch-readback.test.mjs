@@ -8,6 +8,7 @@ import {
   WATCH_READBACK_CONTRACT,
   summarizeLightweightMarketWatch,
 } from '../src/lightweight-market-watch-readback.mjs';
+import { normalizeStockFeed } from '../src/lightweight-market-watch.mjs';
 
 const SHA = 'a'.repeat(40);
 const NOW = Date.parse('2026-10-09T12:00:00.000Z');
@@ -62,6 +63,37 @@ test('missing and valid partial market discovery never invent 24h research or pr
   assert.equal(status.profitabilityProven, false);
   assert.equal(status.executionAuthority, 'NONE');
   assert.equal(JSON.stringify(status).includes('market-watch-input'), false);
+});
+
+test('a valid stock source label survives producer to sanitized status without private exposure', () => {
+  const stock = normalizeStockFeed({
+    schemaVersion: 'research-stock-public-snapshot-v1',
+    market: 'KR_STOCK',
+    source: 'KRX_PUBLIC_V1',
+    asOf: new Date(NOW - 2_000).toISOString(),
+    completeUniverse: false,
+    quotes: [{
+      symbol: '005930', price: 100,
+      turnover24h: 2_000_000_000, change24hPercent: 1.2,
+      asOf: new Date(NOW - 3_000).toISOString(),
+    }],
+  }, 'KR_STOCK', NOW);
+  const status = evidence();
+  status.markets[0] = {
+    market: stock.market, source: stock.source, status: stock.status,
+    listedCount: stock.listedCount,
+    observedCount: stock.quotes.length, newCandidates: 0,
+    executionAuthority: 'NONE',
+  };
+  const readback = summarizeLightweightMarketWatch(status, NOW, SHA);
+  assert.equal(readback.status, 'PARTIAL');
+  assert.equal(readback.markets[0].source, 'KRX_PUBLIC_V1');
+  assert.equal(readback.markets[0].status, 'PARTIAL_UNIVERSE');
+  assert.equal(readback.marketCoverageCount, 2);
+  assert.equal(readback.continuous24hProven, false);
+  assert.equal(readback.paperExecutionProven, false);
+  assert.equal(readback.executionAuthority, 'NONE');
+  assert.equal(JSON.stringify(readback).includes('005930'), false);
 });
 
 test('stale and future state do not show current 24-hour observation', () => {
