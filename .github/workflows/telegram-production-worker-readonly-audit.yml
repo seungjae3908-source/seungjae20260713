@@ -129,6 +129,9 @@ jobs:
             'proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
           const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
+          const safeIso=x=>x===null||(typeof x==='string'
+            && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(x)
+            && Number.isFinite(Date.parse(x)) && new Date(x).toISOString()===x);
           const states=new Set(['NOT_CHECKED','ABSENT','EMPTY','PRESENT',
             'NO_VALID_RECEIPTS','UNREADABLE','UNSAFE_FILE','UNSAFE_PATH','INVALID']);
           const kindKeys=['MORNING','KR_CLOSING','US_PREMARKET','WEEKLY'];
@@ -136,7 +139,7 @@ jobs:
             && Number.isInteger(v.recordCount) && v.recordCount>=0 && v.recordCount<=10000
             && Number.isInteger(v.recent24hCount) && v.recent24hCount>=0
             && v.recent24hCount<=v.recordCount
-            && (v.lastEvidenceAt===null||!Number.isNaN(Date.parse(v.lastEvidenceAt)))
+            && safeIso(v.lastEvidenceAt)
             && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
             && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
           if(Object.keys(r).sort().join()!==keys.sort().join()
@@ -158,6 +161,7 @@ jobs:
               'personalWorkerConfigured','roomBindingsValid'].every(k=>typeof r[k]==='boolean')
             ||!r.personal ||!['healthAvailable','enabled','tickFresh','tickOk','deliveryConfirmed']
                 .every(k=>typeof r.personal[k]==='boolean')
+            ||!safeIso(r.personal.lastTickAt) ||!safeIso(r.personal.lastConfirmedDeliveryAt)
             ||(r.personal.errorCode!==null && !/^[A-Z0-9_]{1,64}$/u.test(r.personal.errorCode))
           ){
             console.error('TELEGRAM_WORKER_UNSAFE_OR_INVALID_RECEIPT');
