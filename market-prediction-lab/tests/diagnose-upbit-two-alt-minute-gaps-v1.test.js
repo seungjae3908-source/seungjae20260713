@@ -83,6 +83,9 @@ test("public HTTP outage is NOT a market with zero observed opportunities",async
  assert.equal(r.executionAuthority,"NONE");
 });
 
+function response(rows,status=200){
+ return {ok:status>=200&&status<300,status,async json(){return rows;}};
+}
 function nativeRequeryRow(symbol,ms){
  return {market:symbol,candle_date_time_utc:new Date(ms).toISOString().slice(0,19),
   opening_price:100,high_price:101,low_price:99,trade_price:100,
