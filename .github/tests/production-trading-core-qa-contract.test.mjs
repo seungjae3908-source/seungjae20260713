@@ -94,6 +94,21 @@ test('Trading Core Production QA is isolated from unrelated product QA', () => {
   assert.ok(productionDeploy.includes('Prepare safe member ALL4 policy and run Focused Trading Core Production QA'));
 });
 
+test('Telegram-excluded Automation/Research QA cannot be blocked by or deliver to Telegram', () => {
+  const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
+  const productionDeploy = read('.github/workflows/production-deploy.yml');
+  assert.ok(productionDeploy.includes("PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM: 'false'"));
+  assert.ok(spec.includes('if (requireTelegramActivation && integrationBefore.body?.telegram?.recoveryRequired === true)'));
+  assert.ok(spec.includes('if (requireTelegramActivation && integrationBefore.body?.telegram?.connected === true)'));
+  assert.ok(spec.includes('const telegramConnectedBefore = requireTelegramActivation'));
+  assert.ok(spec.includes('const telegramRuntimeReady = requireTelegramActivation'));
+  assert.ok(spec.includes('ORDER_SUBMITTED: requireTelegramActivation'));
+  assert.ok(spec.includes('ORDER_PARTIALLY_FILLED: requireTelegramActivation'));
+  assert.ok(spec.includes('ORDER_FILLED: requireTelegramActivation'));
+  assert.ok(spec.includes('telegramRequiredForQa: requireTelegramActivation'));
+  assert.ok(spec.includes('telegramDeliverySuppressedDuringQa: !requireTelegramActivation'));
+});
+
 test('Trading Core Production QA restores member policy on early failures and independently of notification restore', () => {
   const spec = read('stock-analyzer/e2e/production-trading-core-qa.spec.ts');
   assert.match(spec, /let integrationBefore: ApiResult<any>;\s+try \{[\s\S]*?integrationBefore = await appApi<any>\(page, '\/api\/user-integrations'\);[\s\S]*?if \(prepareMemberAutoPolicy\)/);
