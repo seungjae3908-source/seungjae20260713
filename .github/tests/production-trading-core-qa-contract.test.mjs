@@ -256,9 +256,11 @@ test('Admin V2 DB readiness verifies role, deny operator and immutable 1m seed',
 test('Admin 1m Paper admission requires certified canonical settlement, never only the wallet seed', () => {
   const budget=read('api-server/src/services/admin-four-market-paper-capital.service.ts');
   const worker=read('api-server/src/services/member-auto-trading-background-worker.service.ts');
-  assert.ok(budget.includes('ADMIN_PAPER_CANONICAL_SETTLEMENT_REQUIRED'));
+  assert.ok(budget.includes("[code('CANONICAL_SETTLEMENT_REQUIRED')]"));
   assert.ok(budget.includes('if (!capital || !capital.settlementReady || !capital.newEntriesAllowed'));
-  assert.ok(worker.includes('verifiedCapital: runtime.adminMarketCapital?.[mapping.assetClass]'));
+  assert.ok(worker.includes('verifiedCapital: runtime.fourMarketCapital?.[mapping.assetClass]'));
+  assert.ok(worker.includes('adminMarketPaperRiskBudget(marketBudgetInput)'));
+  assert.ok(worker.includes('memberMarketPaperRiskBudget(marketBudgetInput)'));
 });
 
 test('Admin V2 financial evidence hardening revokes RLS-bypassing TRUNCATE on canonical trade records', () => {
@@ -293,9 +295,12 @@ test('Admin V2 Paper Worker revalidates DB wallet and canonical-order guard befo
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
   const sql = read('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql');
   assert.ok(worker.includes('adminPaperDatabaseGuardReady?(): Promise<boolean>'));
+  assert.ok(worker.includes('fourMarketPaperDatabaseGuardReady?(): Promise<boolean>'));
   assert.ok(worker.includes("this.client.rpc('admin_four_paper_wallet_rls_guard_ready')"));
+  assert.ok(worker.includes("this.client.rpc('four_market_paper_wallet_rls_guard_ready')"));
   assert.ok(worker.includes('let entryProjectionHealthy = adminWalletDbGuardReady'));
-  assert.ok(worker.includes('guarded = await this.source.adminPaperDatabaseGuardReady?.() === true'));
+  assert.ok(worker.includes('const guard = this.source.fourMarketPaperDatabaseGuardReady'));
+  assert.ok(worker.includes('guarded = await guard?.call(this.source) === true'));
   assert.ok(sql.includes('to authenticated, service_role;'));
 });
 
