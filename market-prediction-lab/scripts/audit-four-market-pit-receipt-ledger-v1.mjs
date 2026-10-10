@@ -8,6 +8,11 @@
  *    --mode day --market CRYPTO_SPOT --day 2025-10-09
  *    --input /private/2025-10-09-pit-native.json
  *    --output /private/2025-10-09-compact.json
+ * For a native PIT fetch/assemble output from run-native-pit-daily-batch-v1.mjs:
+ *   --mode day --market CRYPTO_SPOT --day 2025-10-09
+ *   --manifest /private/authoritative-pit-archive.json
+ *   --input /private/native-assembled-day.json
+ *   --output /private/compact-day.json
  * 2. node ... --mode ledger --market CRYPTO_SPOT
  *    --input /private/compact-file-index.json
  *    --output /private/historical-coverage-ledger.json
@@ -38,9 +43,9 @@ function isDay(s){
  return Number.isSafeInteger(x)&&new Date(x).toISOString().slice(0,10)===s;
 }
 export function parsePITLedgerCliArgsV1(args=[]){
- if(!Array.isArray(args)||args.length<6||args.length>10)
+ if(!Array.isArray(args)||args.length<6||args.length>12)
    throw new TypeError("PIT_LEDGER_CLI_ARGS_INVALID");
- const allowed=new Set(["--mode","--market","--day","--input","--output"]);
+ const allowed=new Set(["--mode","--market","--day","--input","--output","--manifest"]);
  const v={};
  for(let i=0;i<args.length;i++){
   const flag=args[i],value=args[++i];
@@ -53,13 +58,18 @@ export function parsePITLedgerCliArgsV1(args=[]){
    ||!Object.prototype.hasOwnProperty.call(FOUR_MARKET_WHOLE_SCOPE_V1,v["--market"])
    ||!isAbsolute(v["--input"]??"")||!isAbsolute(v["--output"]??"")
    ||resolve(v["--input"])===resolve(v["--output"])
+   ||(v["--manifest"]!=null&&(
+      !isAbsolute(v["--manifest"])
+      ||resolve(v["--manifest"])===resolve(v["--input"])
+      ||resolve(v["--manifest"])===resolve(v["--output"])))
    ||(v["--mode"]==="day"&&!isDay(v["--day"]))
-   ||(v["--mode"]==="ledger"&&v["--day"]!=null))
+   ||(v["--mode"]==="ledger"&&(v["--day"]!=null||v["--manifest"]!=null)))
    throw new TypeError("PIT_LEDGER_CLI_INPUT_OR_SCOPE_INVALID");
  return Object.freeze({
   mode:v["--mode"],market:v["--market"],
   dayStartMs:v["--day"]?Date.parse(v["--day"]+"T00:00:00.000Z"):null,
   inputPath:resolve(v["--input"]),outputPath:resolve(v["--output"]),
+  manifestPath:v["--manifest"]?resolve(v["--manifest"]):null,
  });
 }
 function readPrivateJSON(path,maxBytes){
@@ -74,7 +84,12 @@ export function runPITLedgerCliV1(config){
    ||!Object.prototype.hasOwnProperty.call(FOUR_MARKET_WHOLE_SCOPE_V1,config.market)
    ||!isAbsolute(config.inputPath??"")
    ||!isAbsolute(config.outputPath??"")
-   ||config.inputPath===config.outputPath)
+   ||config.inputPath===config.outputPath
+   ||(config.manifestPath!=null&&(
+     !isAbsolute(config.manifestPath)
+     ||config.manifestPath===config.inputPath
+     ||config.manifestPath===config.outputPath))
+   ||(config.mode==="ledger"&&config.manifestPath!=null))
    throw new TypeError("PIT_LEDGER_CLI_CONFIG_INVALID");
  // Fail before parsing multi-megabyte licensed data if the destination exists.
  try{
@@ -86,9 +101,37 @@ export function runPITLedgerCliV1(config){
   const data=readPrivateJSON(config.inputPath,64*1024*1024);
   if(!data||typeof data!=="object"||Array.isArray(data))
    throw new TypeError("PIT_LEDGER_DAY_SOURCE_OBJECT_REQUIRED");
+  let manifest=data.manifest??null;
+  let dailySource=data.dailySource??null;
+  if(data.schemaVersion==="native-historic-pit-day-read-only-cli-v1"){
+   // Genuine native chunk assembler source format; do not need to reshape
+   // private OHLC manually. Re-run the canonical PIT/price gate below.
+   if(!config.manifestPath)
+    throw new TypeError("PIT_LEDGER_NATIVE_ASSEMBLY_REQUIRES_PIT_MANIFEST");
+   manifest=readPrivateJSON(config.manifestPath,64*1024*1024);
+   const r=data.result,source=r?.privateNativeDaySource;
+   if(data.executionAuthority!=="NONE"
+     ||data.provenanceIndependentAuthentication!==false
+     ||data.dataUsage!=="RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED"
+     ||!["TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY",
+       "SOURCE_ATTESTED_FULL_NAME_DAILY_JOIN_ONLY"].includes(r?.status)
+     ||r?.market!==config.market||r?.executionAuthority!=="NONE"
+     ||r?.profitabilityProven!==false||r?.fullMarketPITUniverseVerified!==false
+     ||r?.trueMarketWideRecall!==null||r?.actualMarketWideOpportunityCount!==null
+     ||r?.privateNativeDayRowsEmitted!==true
+     ||r?.sourceAttestedFullSymbolDayPriceJoin!==true
+     ||!source||source.rowsSha256!==r.nativeRowsSha256
+     ||source.dayStartMs!==config.dayStartMs
+     ||source.sourceId!==
+       [config.market,config.dayStartMs,manifest?.rawMembershipDigestSha256].join(":"))
+    throw new TypeError("PIT_LEDGER_NATIVE_ASSEMBLY_PROVENANCE_INVALID");
+   dailySource=source;
+  }else if(config.manifestPath!=null){
+   throw new TypeError("PIT_LEDGER_DIRECT_SOURCE_MANIFEST_MUST_BE_EMBEDDED");
+  }
   result=auditOnePITDayIntoCompactReceiptV1({
    market:config.market,dayStartMs:config.dayStartMs,
-   manifest:data.manifest??null,dailySource:data.dailySource??null,
+   manifest,dailySource,
   });
  }else{
   const list=readPrivateJSON(config.inputPath,1024*1024);
