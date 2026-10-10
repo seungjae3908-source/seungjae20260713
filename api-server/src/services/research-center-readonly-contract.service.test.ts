@@ -270,6 +270,49 @@ test('market watch readback passes only bounded public aggregate counts', () => 
   assert.equal(factory.lightweightMarketWatch.status, 'PARTIAL');
   assert.equal(factory.lightweightMarketWatch.marketCoverageCount, 2);
 });
+
+test('watch cap diagnostics are bounded, aggregate-only, and legacy missing counters stay unknown', () => {
+  const base = marketWatch();
+  const legacy = sanitizeMarketWatchReadback(base);
+  assert.equal(legacy.status, 'PARTIAL');
+  assert.equal(legacy.markets[2].sourceCappedCount, null);
+  assert.equal(legacy.markets[2].candidateCappedCount, null);
+  const withCaps = {
+    ...base,
+    markets: base.markets.map((m, i) => i === 2 ? {
+      ...m, status: 'PARTIAL_TICKERS', listedCount: 20,
+      observedCount: 15, newCandidates: 12,
+      sourceCappedCount: 3, qualifyingCandidateCount: 14,
+      candidateCappedCount: 2, privateTicker: 'DO_NOT_PROJECT_TICKER',
+    } : m),
+    marketCoverageCount: 1,
+  };
+  const good = sanitizeMarketWatchReadback(withCaps);
+  assert.equal(good.status, 'PARTIAL');
+  assert.equal(good.markets[2].sourceCappedCount, 3);
+  assert.equal(good.markets[2].qualifyingCandidateCount, 14);
+  assert.equal(good.markets[2].candidateCappedCount, 2);
+  assert.equal(good.markets[3].candidateCappedCount, null);
+  assert.equal(JSON.stringify(good).includes('DO_NOT_PROJECT_TICKER'), false);
+  assert.equal(good.paperExecutionProven, false);
+  assert.equal(good.executionAuthority, 'NONE');
+  for (const invalid of [
+    { sourceCappedCount: 5 }, { sourceCappedCount: -1 },
+    { sourceCappedCount: '3' }, { sourceCappedCount: true },
+    { qualifyingCandidateCount: 13 }, { candidateCappedCount: 9000 },
+  ]) {
+    const row = { ...withCaps.markets[2], ...invalid };
+    assert.equal(sanitizeMarketWatchReadback({
+      ...withCaps, markets: withCaps.markets.map((m, i) => i === 2 ? row : m),
+    }).status, 'INVALID');
+  }
+  const partial = { ...withCaps.markets[2] } as Record<string, unknown>;
+  delete partial.candidateCappedCount;
+  assert.equal(sanitizeMarketWatchReadback({
+    ...withCaps, markets: withCaps.markets.map((m, i) => i === 2 ? partial : m),
+  }).status, 'INVALID');
+});
+
 test('coarse sample study cannot claim economic success, infinite counts or orders', () => {
   const base = marketWatch();
   assert.equal(sanitizeMarketWatchReadback({

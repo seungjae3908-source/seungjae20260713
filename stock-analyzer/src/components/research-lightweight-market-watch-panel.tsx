@@ -17,6 +17,9 @@ const WATCH_LABEL: Record<ResearchLightweightMarketWatch['status'], string> = {
 function number(value: number | null) {
   return value == null ? '미측정' : value.toLocaleString('ko-KR');
 }
+function capCount(value: number | null) {
+  return value == null ? '미측정' : number(value) + '건';
+}
 function statusLabel(value: string, watchStatus?: ResearchLightweightMarketWatch['status']) {
   // Per-market READY is the most recent saved source state, not proof that
   // an aged/paused worker is still collecting new public ticker snapshots.
@@ -88,6 +91,7 @@ export function ResearchLightweightMarketWatchPanel({
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {(markets.length ? markets : Object.keys(MARKET_NAMES).map((market) => ({
           market, status: 'BLOCKED_DATA', observedCount: 0, listedCount: 0, newCandidates: 0, source: 'NONE',
+          sourceCappedCount: null, qualifyingCandidateCount: null, candidateCappedCount: null,
         }))).map((row) => (
           <div key={row.market} className="rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs">
             <div className="flex items-center justify-between gap-2">
@@ -97,9 +101,20 @@ export function ResearchLightweightMarketWatchPanel({
             <p className="mt-1 text-muted-foreground">
               시세 {markets.length ? number(row.observedCount) + '/' + number(row.listedCount) : '미측정'} · 신규 후보 {markets.length ? number(row.newCandidates) : '미측정'}
             </p>
+            <div className="mt-2 border-t border-border/60 pt-2 text-muted-foreground"
+              data-testid={'research-market-watch-cap-' + row.market}>
+              <p>원천 상한 제외 {capCount(row.sourceCappedCount ?? null)}</p>
+              <p>초기 조건 충족 {capCount(row.qualifyingCandidateCount ?? null)}</p>
+              <p>후보 출력 상한 제외 {capCount(row.candidateCappedCount ?? null)}</p>
+            </div>
           </div>
         ))}
       </div>
+      <p className="mt-2 text-[11px] text-muted-foreground" data-testid="research-market-watch-cap-warning">
+        상한 제외 수치는 수신된 시세와 초기 조건에 대한 이번 주기 내부 계측입니다.
+        전체 시장 급등락 누락률·체결 가능성·실제 수익을 뜻하지 않습니다.
+        구버전 기록이나 조회 실패 시 0건으로 추정하지 않습니다.
+      </p>
       <div className="mt-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs"
         data-testid="research-market-watch-prospective">
         <strong>20분 후속 공개시세 관찰 (UTC 당일 기준)</strong>

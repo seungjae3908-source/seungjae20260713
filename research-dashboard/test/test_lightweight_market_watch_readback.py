@@ -93,6 +93,57 @@ class MarketWatchReadbackTest(unittest.TestCase):
         self.assertNotIn('/root', json.dumps(projection))
 
 
+
+    def test_cap_counters_are_bounded_aggregate_only_and_legacy_is_unknown(self):
+        old = summarize_watch(valid_snapshot(), NOW_MS, SHA)
+        self.assertEqual(old['status'], 'PARTIAL')
+        for row in old['markets']:
+            self.assertIsNone(row['sourceCappedCount'])
+            self.assertIsNone(row['qualifyingCandidateCount'])
+            self.assertIsNone(row['candidateCappedCount'])
+        raw = valid_snapshot()
+        spot = raw['markets'][2]
+        spot.update({
+            'status': 'PARTIAL_TICKERS', 'listedCount': 20,
+            'observedCount': 15, 'newCandidates': 12,
+            'sourceCappedCount': 3,
+            'qualifyingCandidateCount': 14, 'candidateCappedCount': 2,
+            'rawTicker': 'NOT_ALLOWED_PRIVATE_TICKER',
+        })
+        raw['newCandidateCount'] = 14
+        projection = summarize_watch(raw, NOW_MS, SHA)
+        self.assertEqual(projection['status'], 'PARTIAL')
+        self.assertEqual(projection['marketCoverageCount'], 1)
+        self.assertEqual(projection['markets'][2]['sourceCappedCount'], 3)
+        self.assertEqual(projection['markets'][2]['qualifyingCandidateCount'], 14)
+        self.assertEqual(projection['markets'][2]['candidateCappedCount'], 2)
+        self.assertIsNone(projection['markets'][3]['sourceCappedCount'])
+        self.assertNotIn('NOT_ALLOWED_PRIVATE_TICKER', json.dumps(projection))
+        self.assertFalse(projection['paperExecutionProven'])
+        self.assertEqual(projection['executionAuthority'], 'NONE')
+
+        def bad(change):
+            x = valid_snapshot()
+            row = x['markets'][2]
+            row.update({
+                'sourceCappedCount': 0,
+                'qualifyingCandidateCount': 1,
+                'candidateCappedCount': 0,
+            })
+            change(x, row)
+            self.assertEqual(summarize_watch(x, NOW_MS, SHA)['status'], 'INVALID')
+        bad(lambda x, row: row.pop('candidateCappedCount'))
+        bad(lambda x, row: row.update({'sourceCappedCount': -1}))
+        bad(lambda x, row: row.update({'sourceCappedCount': 1}))
+        bad(lambda x, row: row.update({'candidateCappedCount': 1}))
+        bad(lambda x, row: row.update({'qualifyingCandidateCount': 9000}))
+        bad(lambda x, row: row.update({'sourceCappedCount': '2'}))
+        bad(lambda x, row: row.update({'sourceCappedCount': True}))
+        bad(lambda x, row: row.update({
+            'sourceCappedCount': 0, 'qualifyingCandidateCount': 0,
+            'candidateCappedCount': 0,
+        }))
+
     def test_coarse_public_samples_reject_forged_economic_credit(self):
         for mutation in (
             lambda x: x['prospectiveObservation'].update({'economicEvidenceCredit': 1}),
