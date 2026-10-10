@@ -16,7 +16,7 @@ function rows({market="CRYPTO_SPOT", priorClose=100, dayOpen=104, spike=105.5,
   items[H+spikeAt].high=Math.max(dayOpen,spike);
   items[H+spikeAt].low=Math.min(dayOpen,dip);
   return {
-    market, timeframe:"1m", rawPageWindowTraversed:true,
+    market, timeframe:"1m", intervalMs:M, rawPageWindowTraversed:true,
     historicalSignalAvailabilityProven:false,actualFillProven:false,
     source:market==="CRYPTO_SPOT"?"upbit-public-candles":undefined,
     provider:market==="CRYPTO_FUTURES"?"bitget-public-v2":undefined,
@@ -32,7 +32,7 @@ test("prior UTC day final minute close, not same-day opening trade, is baseline"
   const r=nativeDayResultFromCollectedV1("CRYPTO_SPOT","UPBIT_KRW",c);
   assert.equal(r.status,"OBSERVED_DAY_ONLY");
   assert.equal(r.previousUtcClose,100);
-  assert.equal(r.openingGapPct,4);
+  assert.ok(Math.abs(r.openingGapPct-4)<1e-10);
   assert.equal(r.observedMinuteCount,1440);
   assert.equal(r.priorHourObservedMinuteCount,60);
   assert.equal(r.observedDayCrossingCount,1);
@@ -110,7 +110,7 @@ test("all 4 market outage receipts preserve NULL not fake 0% PnL",async()=>{
   assert.equal(r.markets.CRYPTO_SPOT.status,"BLOCKED_DATA");
   assert.equal(r.markets.CRYPTO_FUTURES.status,"BLOCKED_DATA");
   assert.equal(r.markets.CRYPTO_FUTURES.netProfitPct,null);
-  assert.equal(r.marketWideOpportunityDenominatorVerified,false);
+  assert.equal(r.fullMarketOpportunityDenominatorVerified,false);
 });
 test("two-hour sample still uses its original window-open baseline",()=>{
   const v=rows();
