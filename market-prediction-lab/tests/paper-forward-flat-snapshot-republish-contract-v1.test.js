@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   SCHEMA_VERSION,
+  buildNonFlatSkipEvidence,
   buildRefreshAction,
   canonicalJson,
+  isNonFlatSnapshotError,
   selectRefreshAnchor,
   requireStableRiskWindow,
   sha256,
@@ -69,6 +72,35 @@ test('flat snapshot rejects open exposure and accepts closed history anchor', ()
   assert.throws(() => validateFlatSnapshot(opened, { publisherDigest }), /SNAPSHOT_NOT_FLAT/);
 });
 
+test('non-flat snapshot is delegated to a genuine Paper cycle without mutation authority', () => {
+  const error = Object.assign(new Error('SNAPSHOT_NOT_FLAT'), { code: 'SNAPSHOT_NOT_FLAT' });
+  assert.equal(isNonFlatSnapshotError(error), true);
+  assert.equal(isNonFlatSnapshotError(Object.assign(new Error('SNAPSHOT_DIGEST_INVALID'), { code: 'SNAPSHOT_DIGEST_INVALID' })), false);
+  assert.deepEqual(buildNonFlatSkipEvidence({ targetSha, sourceShaBefore: 'c'.repeat(40) }), {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'SKIPPED_NON_FLAT',
+    targetSha,
+    sourceShaBefore: 'c'.repeat(40),
+    economicStatePreserved: true,
+    freshnessMetadataMutation: 0,
+    paperAccountingMutation: 0,
+    scheduleMutation: 0,
+    productionAppMutation: 0,
+    productionDbMutation: 0,
+    realFinancialMutation: 0,
+    privateBrokerExchangeApi: 0,
+    realOrder: 0,
+    realCancel: 0,
+    realAmend: 0,
+    realTransfer: 0,
+    realWithdrawal: 0,
+    liveTrading: false,
+    executionAuthority: 'NONE',
+    nextStep: 'GENUINE_PAPER_CYCLE',
+    sensitiveValuesEmitted: false,
+  });
+});
+
 test('refresh action is deterministic from current snapshot digest', () => {
   const value = snapshot();
   assert.deepEqual(buildRefreshAction({ stateDigest: value.stateDigestSha256, symbol: 'BTCUSDT', price: 65000 }), {
@@ -122,4 +154,13 @@ test('risk day/week rollover fails before any republish mutation', () => {
 
 test('schema and safety labels are stable', () => {
   assert.equal(SCHEMA_VERSION, 'paper-forward-flat-snapshot-republish-v1');
+});
+
+test('snapshot republish contract test stays registered in bounded validation paths', async () => {
+  const workflow = await readFile(
+    new URL('../../.github/workflows/paper-forward-schedule-validation.yml', import.meta.url),
+    'utf8',
+  );
+  const testPath = 'market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js';
+  assert.equal(workflow.split(testPath).length - 1, 2);
 });
