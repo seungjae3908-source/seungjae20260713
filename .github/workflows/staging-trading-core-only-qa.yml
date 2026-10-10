@@ -1,0 +1,191 @@
+name: Staging Trading Core Only Read-only QA
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/staging-trading-core-only-qa.yml'
+      - '.github/tests/staging-trading-core-only-contract.test.mjs'
+      - 'stock-analyzer/playwright.staging-trading-core.config.ts'
+      - 'stock-analyzer/e2e/staging-trading-core-readonly.spec.ts'
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact SHA already deployed to Staging; current main or proven ancestor
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-trading-core-only-${{ github.event_name == 'workflow_dispatch' && 'readonly' || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate Staging-only Trading Core QA boundary
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require isolated scope, unchanged release gate, and safe browser probes
+        run: node --test .github/tests/staging-trading-core-only-contract.test.mjs
+
+  staging-trading-core:
+    name: Read-only Staging Trading Core desktop and mobile verification
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+      STAGING_TRADING_CORE_ARTIFACT_DIR: ${{ github.workspace }}/staging-trading-core-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require immutable SHA ancestry and non-Production HTTPS origin
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'STAGING_CORE_EXACT_SHA_REQUIRED' >&2; exit 1; }
+          git cat-file -e "$TARGET_SHA^{commit}"
+          git merge-base --is-ancestor "$TARGET_SHA" "$(git rev-parse HEAD)" || {
+            echo 'STAGING_CORE_MAIN_ANCESTRY_REQUIRED' >&2; exit 1
+          }
+          node <<'NODE'
+          const raw = String(process.env.STAGING_BASE_URL || '');
+          let url;
+          try { url = new URL(raw); } catch { throw new Error('STAGING_CORE_URL_INVALID'); }
+          if (url.protocol !== 'https:' || url.username || url.password
+            || url.pathname !== '/' || url.search || url.hash
+            || ['lsj119.com', 'www.lsj119.com', 'lsj119.duckdns.org'].includes(url.hostname)
+            || !url.hostname) throw new Error('STAGING_CORE_PRODUCTION_ORIGIN_FORBIDDEN');
+          console.log('STAGING_CORE_ORIGIN_RESTRICTED');
+          NODE
+          mkdir -p "$STAGING_TRADING_CORE_ARTIFACT_DIR"
+      - name: Read exact Staging marker, local health and online PM2 without mutations
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || {
+            echo 'STAGING_CORE_SSH_IDENTITY_UNAVAILABLE' >&2; exit 1
+          }
+          umask 077
+          keyfile="$(mktemp "$RUNNER_TEMP/staging-core-key.XXXXXX")"
+          knownfile="$(mktemp "$RUNNER_TEMP/staging-core-known.XXXXXX")"
+          cleanup() { rm -f "$keyfile" "$knownfile"; }
+          trap cleanup EXIT
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$keyfile"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$knownfile"
+          expected="$(printf 'EXPECTED_SHA=%q' "$TARGET_SHA")"
+          ssh -i "$keyfile" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$knownfile" \
+            "$SSH_USER@$SSH_HOST" "$expected node --input-type=module -" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const expected = process.env.EXPECTED_SHA;
+          const marker = readFileSync('/srv/seungjae-staging/.deploy/current-sha', 'utf8').trim();
+          if (marker !== expected) throw new Error('STAGING_CORE_MARKER_SHA_MISMATCH');
+          const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', maxBuffer: 20000000 }));
+          const apps = processes.filter(row => row?.name === 'seungjae-staging');
+          if (apps.length !== 1 || apps[0]?.pm2_env?.status !== 'online') {
+            throw new Error('STAGING_CORE_PM2_NOT_UNIQUE_OR_ONLINE');
+          }
+          const health = JSON.parse(execFileSync('curl',
+            ['--fail', '--silent', '--show-error', '--max-time', '15', 'http://127.0.0.1:18083/api/health'],
+            { encoding: 'utf8' }));
+          if (health?.ok !== true || String(health?.deploySha ?? '').toLowerCase() !== expected) {
+            throw new Error('STAGING_CORE_LOCAL_API_SHA_MISMATCH');
+          }
+          console.log('STAGING_CORE_LOCAL_IDENTITY_MATCH');
+          NODE
+      - name: Verify public Staging HTTPS deploy identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          receipt="$RUNNER_TEMP/staging-core-external-health.json"
+          curl --fail --silent --show-error --max-time 20 -H 'Cache-Control: no-cache' \
+            "$STAGING_BASE_URL/api/health" -o "$receipt"
+          node - "$receipt" <<'NODE'
+          const fs = require('node:fs');
+          const health = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (health?.ok !== true || String(health?.deploySha ?? '').toLowerCase() !== process.env.TARGET_SHA) {
+            throw new Error('STAGING_CORE_EXTERNAL_API_SHA_MISMATCH');
+          }
+          console.log('STAGING_CORE_PUBLIC_IDENTITY_MATCH');
+          NODE
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - name: Install test-only dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium without changing the Staging server
+        run: pnpm --dir stock-analyzer exec playwright install chromium
+      - name: Run Staging Trading Core GET-only browser journeys
+        env:
+          STAGING_TRADING_CORE_QA: 'true'
+          STAGING_TARGET_SHA: ${{ env.TARGET_SHA }}
+          STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
+          STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+        run: pnpm --dir stock-analyzer exec playwright test -c playwright.staging-trading-core.config.ts e2e/staging-trading-core-readonly.spec.ts
+      - name: Require sanitized desktop and mobile read-only receipts
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          for (const viewport of ['desktop', 'mobile']) {
+            const file = path.join(process.env.STAGING_TRADING_CORE_ARTIFACT_DIR, 'staging-core-' + viewport + '.json');
+            const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (v.schemaVersion !== 1 || v.targetSha !== process.env.TARGET_SHA
+              || v.scope !== 'TRADING_CORE_ONLY' || v.readOnly !== true
+              || v.productionDeployApproved !== false || v.activationVerified !== false
+              || v.realOrders !== 0 || v.paperOrdersCreated !== 0
+              || v.telegramSends !== 0 || v.unsafeMutations !== 0
+              || v.consoleErrors !== 0 || v.pageErrors !== 0 || v.unexpectedHttpErrors !== 0
+              || v.fullStagingReleaseReady !== 'NOT_EVALUATED' || v.secretsRecorded !== false) {
+              throw new Error('STAGING_CORE_RECEIPT_INVALID:' + viewport);
+            }
+          }
+          console.log('STAGING_CORE_DESKTOP_MOBILE_SCOPED_PASS');
+          NODE
+      - name: Upload sanitized Trading Core-only receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-trading-core-${{ inputs.target_sha }}-${{ github.run_id }}
+          path: staging-trading-core-artifacts/staging-core-*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Report scoped QA separately from release readiness
+        if: success()
+        run: |
+          {
+            echo '## Staging Trading Core-only read-only QA'
+            echo '- Scope: 4-market automatic/Paper, Provider, Journal, Telegram integration'
+            echo '- Staging deployments, DB writes, orders, Telegram sends: 0'
+            echo '- Full Staging release_ready: NOT_EVALUATED'
+            echo '- Natural Paper fill -> Journal -> Telegram SENT: NOT_VERIFIED'
+            echo '- Production deployment/activation authority: NONE'
+          } >> "$GITHUB_STEP_SUMMARY"
