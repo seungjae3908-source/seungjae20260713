@@ -74,6 +74,82 @@ jobs:
             "numpy==2.2.6" "pandas==2.2.3"
           python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py --self-test
           python market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py --self-test
+      - name: Cross-language stock all-asof-date source to existing Python price scorer (fixture-only)
+        run: |
+          node --input-type=module -e '
+            import {writeFileSync} from "node:fs";
+            import {prepareStockSourceLimitedDailyEvidenceV1 as pack} from "./market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js";
+            const safety={executionAuthority:"NONE",profitabilityProven:false,
+              trueMarketWideRecall:null,actualMarketWideOpportunityCount:null,
+              fullMarketOpportunityDenominatorVerified:false};
+            const krRow={market:"KR_STOCK",venue:"KRX",symbol:"005930",
+              isin:"KR7005930003",marketBoard:"KOSPI",
+              currentTradingDateYmd:"20250210",priorCandidateTradingDateYmd:"20250207",
+              priorOpen:100,priorHigh:103,priorLow:99,priorClose:100,priorVolume:300,
+              open:103,high:122,low:102,close:110,volume:500,
+              sourceIdentity:"KRX_OFFICIAL_DATED_TRADING_INFO",
+              automaticCorporateActionAdjustmentApplied:false};
+            const kr={...safety,market:"KR_STOCK",venue:"KRX",
+              status:"SOURCE_LIMITED_TWO_KRX_DATES_JOINED_ONLY",
+              requestedTradingDates:["20250207","20250210"],
+              recordSha256:"a".repeat(64),records:[krRow],
+              observedCurrentSymbols:1,joinedPriorPriceSymbols:1,
+              missingPreviousPriceCount:0,officialAdjacentTradingSessionCalendarVerified:false,
+              corporateActionsAdjustedAndVerified:false,
+              fullMarketHistoricDelistedUniverseVerified:false};
+            const usRow={market:"US_STOCK",venue:"US_SIP",symbol:"A",
+              shareClassFIGI:"BBG001SCTQY4",asOfDate:"2025-02-03",
+              priorCandidateTradingDate:"2025-01-31",
+              primaryExchangeMIC:"XNYS",securityType:"CS",
+              priorBarSourceTimestampMs:Date.parse("2025-01-31T21:00:00Z"),
+              priorBarUSLocalDate:"2025-01-31",
+              priorOpen:100,priorHigh:103,priorLow:99,priorClose:100,priorVolume:300,
+              currentBarSourceTimestampMs:Date.parse("2025-02-03T21:00:00Z"),
+              currentBarUSLocalDate:"2025-02-03",
+              open:103,high:122,low:102,close:110,volume:500,
+              venueTimeZone:"America/New_York",sourceAdjustedForSplits:false,
+              corporateActionAdjustmentAuthenticated:false,
+              previousSessionCalendarAuthenticated:false};
+            const us={...safety,market:"US_STOCK",venue:"US_SIP",
+              status:"SOURCE_LIMITED_TWO_US_ASOF_DATES_JOINED_ONLY",
+              requestedTradingDates:["2025-01-31","2025-02-03"],
+              sourceRowsSha256:"b".repeat(64),rows:[usRow],
+              observedCurrentAsOfTickerCount:1,joinedPriorDailyPriceCount:1,
+              missingPriorPriceOrIdentityCount:0,
+              adjacentStockTradingSessionsAuthenticated:false,
+              corporateActionsAndTickerChangesCanonicallyResolved:false,
+              fullThreeYearListedAndDelistedRosterVerified:false,
+              permanentShareClassIdentityComplete:false,
+              twoDatedSourceShareClassIdentityMatched:true};
+            for(const [market,source] of [["KR_STOCK",kr],["US_STOCK",us]]){
+              const result=pack({market,source,testFixtureOnly:true});
+              if(result.status!=="TEST_FIXTURE_TWO_DATED_STOCK_PRICE_BARS_ONLY")
+                process.exit(1);
+              writeFileSync(process.env.RUNNER_TEMP+"/"+market+"-stock-source.json",
+                JSON.stringify(result),{mode:0o600,flag:"wx"});
+            }
+          '
+          for market in KR_STOCK US_STOCK; do
+            python market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py \
+              --input "$RUNNER_TEMP/$market-stock-source.json" \
+              --output "$RUNNER_TEMP/$market-stock-outcome.json"
+          done
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            for(const market of ["KR_STOCK","US_STOCK"]){
+              const x=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/"+market+"-stock-outcome.json","utf8"));
+              if(x.market!==market||
+                 x.status!=="TEST_FIXTURE_STOCK_DAILY_EVENT_LABEL_ONLY"||
+                 x.sourceAttestedNameCount!==1||
+                 x.sourceObservedDailyPriceEventCount!==3||
+                 [5,10,20].some(n=>x.directions.LONG[String(n)].sourceObservedPriceEventCount!==1)||
+                 x.fullMarketOpportunityDenominatorVerified!==false||
+                 x.actualMarketWideOpportunityCount!==null||
+                 x.trueMarketWideRecall!==null||
+                 x.profitabilityProven!==false||
+                 x.executionAuthority!=="NONE")process.exit(1);
+            }
+          '
       - name: Verify US point-in-time whole-date source blocks if no approved provider key
         run: |
           node market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs \
