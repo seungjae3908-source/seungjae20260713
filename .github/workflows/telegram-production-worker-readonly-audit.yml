@@ -1,0 +1,217 @@
+name: Telegram Production Worker Read-Only QA
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-production-worker-readonly-audit.mjs
+      - .github/workflows/telegram-production-worker-readonly-audit.yml
+      - .github/tests/telegram-production-worker-readonly-audit.test.mjs
+      - docs/telegram-production-worker-readonly-audit.md
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: telegram-worker-readonly-${{ github.event.comment.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-production-worker-readonly-audit.mjs
+          node --test .github/tests/telegram-production-worker-readonly-audit.test.mjs
+
+  production-observe:
+    name: Observe Production Telegram ticks and persisted state, zero sends
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-worker-readonly ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMAND: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const m=/^\/run-telegram-worker-readonly ([0-9a-f]{40}) ([0-9a-f]{40})$/u.exec(
+            String(process.env.COMMAND||'').trim());
+          if(!m){console.error('EXACT_MAIN_AND_DEPLOYED_SHA_REQUIRED');process.exit(1);}
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'main='+m[1]+'\ndeployed='+m[2]+'\n');
+          NODE
+      - name: Require immutable exact current main and deployed ancestor
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.main }}
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$TARGET_SHA" = "$(git rev-parse origin/main)"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          git cat-file -e "$DEPLOYED_SHA^{commit}"
+          git merge-base --is-ancestor "$DEPLOYED_SHA" origin/main
+
+      - name: Pin Production SSH host without printing credentials
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]]
+          [[ -n "$SSH_KNOWN_HOSTS" ]]
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Read only PM2, loopback health, and existing dedupe ledgers
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.main }}
+          DEPLOYED_SHA: ${{ steps.command.outputs.deployed }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          report="$RUNNER_TEMP/telegram-production-worker-readonly.json"
+          echo "AUDIT_REPORT=$report" >> "$GITHUB_ENV"
+          remote_command="$(printf 'TELEGRAM_AUDIT_EXECUTE=true TELEGRAM_AUDIT_MAIN_SHA=%q TELEGRAM_AUDIT_DEPLOYED_SHA=%q node --input-type=module -' "$TARGET_SHA" "$DEPLOYED_SHA")"
+          ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/telegram-production-worker-readonly-audit.mjs > "$report" \
+            2> "$RUNNER_TEMP/telegram-worker-readonly-stderr-redacted.txt"
+
+          node - "$report" "$TARGET_SHA" "$DEPLOYED_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const keys=['schemaVersion','scope','mainSha','expectedDeployedSha',
+            'pm2Sha','markerSha','pm2Online','exactDeployedIdentity',
+            'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
+            'roomBindingsValid','personal','marketBrief','signalSubscriber',
+            'proofLevel','classification','telegramSends','databaseWrites',
+            'pm2Restarts','financialMutations','secretValuesRecorded'];
+          const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
+          const states=new Set(['NOT_CHECKED','ABSENT','EMPTY','PRESENT',
+            'NO_VALID_RECEIPTS','UNREADABLE','UNSAFE_FILE','UNSAFE_PATH','INVALID']);
+          const kindKeys=['MORNING','KR_CLOSING','US_PREMARKET','WEEKLY'];
+          const validState=v=>v && states.has(v.status)
+            && Number.isInteger(v.recordCount) && v.recordCount>=0 && v.recordCount<=10000
+            && Number.isInteger(v.recent24hCount) && v.recent24hCount>=0
+            && v.recent24hCount<=v.recordCount
+            && (v.lastEvidenceAt===null||!Number.isNaN(Date.parse(v.lastEvidenceAt)))
+            && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
+            && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
+          if(Object.keys(r).sort().join()!==keys.sort().join()
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v1'
+            ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
+            ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
+            ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)
+            ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
+            ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
+            ||!/^[A-Z_]+$/u.test(String(r.classification))
+            ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)
+            ||r.secretValuesRecorded!==false
+            ||!['pm2Online','exactDeployedIdentity','activationEnabled','marketWorkerConfigured',
+              'personalWorkerConfigured','roomBindingsValid'].every(k=>typeof r[k]==='boolean')
+            ||!r.personal ||!['healthAvailable','enabled','tickFresh','tickOk','deliveryConfirmed']
+                .every(k=>typeof r.personal[k]==='boolean')
+            ||(r.personal.errorCode!==null && !/^[A-Z0-9_]{1,64}$/u.test(r.personal.errorCode))
+          ){
+            console.error('TELEGRAM_WORKER_UNSAFE_OR_INVALID_RECEIPT');
+            process.exit(1);
+          }
+          console.log('TELEGRAM_WORKER_READ_ONLY_EVIDENCE_SAFE');
+          NODE
+
+      - name: Report sanitized observations, not private room IDs or user rows
+        env:
+          REPORT: ${{ env.AUDIT_REPORT }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs=require('node:fs');
+            const r=JSON.parse(fs.readFileSync(process.env.REPORT,'utf8'));
+            const b=r.marketBrief, s=r.signalSubscriber, p=r.personal;
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                'PRODUCTION TELEGRAM WORKER READ-ONLY OBSERVABILITY',
+                '- Exact main: '+r.mainSha,
+                '- Production PM2/marker: '+r.pm2Sha+' / '+r.markerSha,
+                '- PM2 online and exact identity: '+r.pm2Online+' / '+r.exactDeployedIdentity,
+                '- Telegram activation/market/personal/6 rooms: '+
+                    [r.activationEnabled,r.marketWorkerConfigured,r.personalWorkerConfigured,
+                     r.roomBindingsValid].join(' / '),
+                '- Personal tick fresh/confirmed: '+p.tickFresh+' / '+p.deliveryConfirmed,
+                '- Personal worker error code: '+(p.errorCode||'none'),
+                '- Personal last tick: '+(p.lastTickAt||'none'),
+                '- Personal last confirmed delivery: '+(p.lastConfirmedDeliveryAt||'none'),
+                '- Market brief ledger: '+b.status+' / '+b.recordCount+
+                    ' recorded / '+b.recent24hCount+' last 24h',
+                '- Market brief latest ledger evidence: '+(b.lastEvidenceAt||'none'),
+                '- Market kinds recorded: '+JSON.stringify(b.briefKinds),
+                '- Signal subscriber ledger: '+s.status+' / '+s.recordCount+
+                    ' recorded / '+s.recent24hCount+' last 24h',
+                '- Signal subscriber latest ledger evidence: '+(s.lastEvidenceAt||'none'),
+                '- Classification: '+r.classification+'; proof level: '+r.proofLevel,
+                '- State entries mean accepted-or-deduped, not confirmed Bot API delivery.',
+                '- Telegram sends / database writes / PM2 restarts / financial changes: 0 / 0 / 0 / 0',
+                '- Chat IDs, user identities, tokens and secret values disclosed: false',
+                '- GitHub Run: '+context.runId,
+              ].join('\n')
+            });
+
+      - name: Fail closed on runtime identity, flags, or health mismatch
+        env:
+          REPORT: ${{ env.AUDIT_REPORT }}
+        run: |
+          set -Eeuo pipefail
+          node - "$REPORT" <<'NODE'
+          const fs=require('node:fs');
+          const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(r.classification!=='READ_ONLY_OBSERVATION_COMPLETE'
+            ||r.pm2Online!==true ||r.exactDeployedIdentity!==true
+            ||r.roomBindingsValid!==true ||r.personal.healthAvailable!==true){
+            console.error('TELEGRAM_WORKER_OBSERVABILITY_NOT_READY: '+r.classification);
+            process.exit(1);
+          }
+          console.log('TELEGRAM_WORKER_READ_ONLY_OBSERVATION_COMPLETE');
+          NODE
