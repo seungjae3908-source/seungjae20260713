@@ -148,6 +148,102 @@ function verifyMinutePartition({ symbol, session, receipt, series, intervalMs })
  * A complete-looking manifest is still only producer ATTESTATION: market-wide
  * membership, completeness, actual fills, and profitability stay unproven.
  */
+/**
+ * Raw venue-native 1m bar -> bounded first-crossing observations.
+ * Separate from actual market-wide 1D opportunities: "baseline" is ONLY the
+ * opening trade of this fully observed sample window (NOT previous-day close).
+ * Never creates synthetic historical scanner signals or tradable fills.
+ */
+export function auditNativeObservedMinuteWindowV1({
+  market, venue, source, symbol, startMs, endMs, bars,
+  pageWindowTraversed = false,
+} = {}) {
+  if (!(market === "CRYPTO_SPOT" || market === "CRYPTO_FUTURES")
+      || venue !== VENUE[market]
+      || source !== (market === "CRYPTO_SPOT" ? "upbit-public-candles" : "bitget-public-v2")
+      || !String(symbol ?? "").trim()
+      || !validTime(startMs) || !validTime(endMs) || endMs <= startMs
+      || startMs % MINUTE_MS !== 0 || endMs % MINUTE_MS !== 0
+      || pageWindowTraversed !== true || !Array.isArray(bars)) {
+    return blocked(market,"SAMPLE_SOURCE_PROVENANCE_OR_WINDOW_INVALID");
+  }
+  // A fully tiled and closed sample window is essential: a missing 1m response
+  // might mean no trades (Upbit) or unavailable data; never guess which.
+  const slots = (endMs-startMs)/MINUTE_MS;
+  if(!Number.isSafeInteger(slots) || slots < 2 || slots > 1440
+      || bars.length !== slots) {
+    return blocked(market,"SAMPLE_MINUTE_COVERAGE_INCOMPLETE",{
+      expectedMinuteCount:slots,receivedMinuteCount:bars.length,
+    });
+  }
+  const normalized=[];
+  let prevTime=startMs-MINUTE_MS;
+  for(const [index,raw] of bars.entries()) {
+    const time=raw?.timestamp;
+    const {open,high,low,close,volume}=raw ?? {};
+    if(!validTime(time) || time !== startMs + index*MINUTE_MS
+       || time <= prevTime || ![open,high,low,close].every(finitePositive)
+       || typeof volume!=="number" || !Number.isFinite(volume) || volume < 0
+       || high < Math.max(open,close) || low > Math.min(open,close)
+       || low > high) {
+      return blocked(market,"SAMPLE_MINUTE_PRICE_OR_TIMESTAMP_INVALID",{index});
+    }
+    normalized.push({timestampMs:time,open,high,low,close,volume});
+    prevTime=time;
+  }
+  const baselinePrice=normalized[0].open;
+  const directions=market==="CRYPTO_FUTURES"?["LONG","SHORT"]:["LONG"];
+  const opportunities=[];
+  for(const direction of directions) {
+    for(const thresholdPct of THRESHOLDS_PCT) {
+      const target=direction==="LONG"
+        ? baselinePrice*(1+thresholdPct/100)
+        : baselinePrice*(1-thresholdPct/100);
+      const crossing=normalized.find(bar=>direction==="LONG"
+        ? bar.high>=target : bar.low<=target);
+      if(!crossing) continue;
+      const snapshots=Object.fromEntries(WINDOWS_MIN.map(min=>{
+        const cutoff=crossing.timestampMs - min*MINUTE_MS;
+        const earlier=normalized.findLast(bar=>bar.timestampMs+MINUTE_MS<=cutoff);
+        return ["T_MINUS_"+min,earlier?{
+          cutoffMs:cutoff,barStartMs:earlier.timestampMs,
+          lastObservedClose:earlier.close,
+          // The original API's real-time arrival stamp is not available.
+          asOfScannerAvailabilityVerified:false,
+        }:null];
+      }));
+      opportunities.push(Object.freeze({
+        eventId:[market,venue,symbol,startMs,direction,thresholdPct].join(":"),
+        market,venue,symbol,direction,thresholdPct,
+        firstCrossingBarStartMs:crossing.timestampMs,
+        firstCrossingBarEndMs:crossing.timestampMs+MINUTE_MS,
+        exactTradeTimestampMs:null,
+        tMinusObservedReconstruction:snapshots,
+        firstSeenByHistoricalScannerAtMs:null,
+        historicalScannerLeadMs:null,
+        actualExecutableEntryPrice:null,
+      }));
+    }
+  }
+  return Object.freeze({
+    schemaVersion:"native-observed-minute-opportunity-window-v1",
+    status:"OBSERVED_WINDOW_ONLY",market,venue,source,symbol,
+    windowStartMs:startMs,windowEndMs:endMs,timeframe:"1m",
+    baselineDefinition:"FIRST_OBSERVED_WINDOW_OPEN_NOT_PREVIOUS_DAY_CLOSE",
+    baselinePrice,observedMinuteCount:slots,missingMinuteCount:0,
+    opportunities:Object.freeze(opportunities),
+    observedCrossingCount:opportunities.length,
+    crossingThresholdsPcts:THRESHOLDS_PCT,
+    historicalListedUniverseVerified:false,
+    historicalScannerAsOfAvailabilityVerified:false,
+    fullMarketOpportunityDenominatorVerified:false,
+    trueMarketWideRecall:null,
+    realFillCount:null,netProfitPct:null,
+    costAdjustedProfitabilityProven:false,
+    executionAuthority:"NONE",
+  });
+}
+
 export function auditHistoricalIntradayOpportunitiesV1({
   market, venue, session, universe, coverage = [], bars = [],
   scannerObservations = [], watchedSymbols = null, intervalMs = MINUTE_MS,
