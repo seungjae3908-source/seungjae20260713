@@ -90,7 +90,11 @@ function activeDayMembers(manifest,start){
   for(const row of manifest.memberships){
     const symbol=normalize(row.symbol);
     if(row.listedAtMs>=end||(row.removedAtMs??Infinity)<=start)continue;
-    // The imported PIT gate has already rejected overlapping lifecycles.
+    // Non-overlapping lives of the SAME code can both occur in this day:
+    // a Map would otherwise silently collapse the first listing/exit.
+    if(active.has(symbol))
+      return {error:"PIT_SAME_DAY_IDENTIFIER_REUSE_REQUIRES_SESSION_PROOF",
+        symbol};
     active.set(symbol,row);
     if(row.listedAtMs>=start||(row.removedAtMs??Infinity)<end
        ||row.halts.some(h=>h.startMs<end&&h.endMs>start))
@@ -122,7 +126,11 @@ export function auditWholeVenuePITDailyCoverageV1({
   if((pit.status==="TEST_FIXTURE_ONLY") !==
      (dailySource.sourceClass==="TEST_FIXTURE"))
     return blocked(market,"PIT_AND_DAILY_SOURCE_CLASS_MISMATCH",base);
-  const {active,intraday}=activeDayMembers(manifest,dayStartMs);
+  const {active,intraday,error:activeError}=activeDayMembers(manifest,dayStartMs);
+  if(activeError)
+    return blocked(market,activeError,{
+      ...base,sourceAttestedDailyBars:dailySource.rows.length,
+    });
   if(active.size!==count)
     return blocked(market,"PIT_LIFECYCLE_ACTIVE_COUNT_MISMATCH",base);
   const seen=new Set(),unexpected=[],invalid=[],futureBaseline=[];
