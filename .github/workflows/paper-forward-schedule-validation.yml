@@ -254,6 +254,7 @@ on:
       - .github/workflows/production-automatic-trading-gate.yml
       - api-server/scripts/verify-production-automatic-trading-gate.mjs
       - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
       - api-server/src/services/paper-futures-mode-policy.service.test.ts
       - api-server/src/services/paper-futures-mode-policy.service.ts
       - api-server/src/services/paper-trading-candle.service.ts
@@ -595,6 +596,7 @@ jobs:
             .github/workflows/production-automatic-trading-gate.yml
             api-server/scripts/verify-production-automatic-trading-gate.mjs
             api-server/src/services/member-auto-trading-background-worker.service.ts
+            api-server/src/services/member-auto-trading-background-worker.service.test.ts
             api-server/src/services/paper-futures-mode-policy.service.test.ts
             api-server/src/services/paper-futures-mode-policy.service.ts
             api-server/src/services/paper-trading-candle.service.ts
