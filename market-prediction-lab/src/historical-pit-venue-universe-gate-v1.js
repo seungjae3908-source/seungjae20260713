@@ -141,6 +141,10 @@ export function auditHistoricalPITVenueUniverseV1({
      ||manifest.coverageStartMs>dayStartMs||manifest.coverageEndMs<dayEndMs
      ||!validTime(manifest.coverageStartMs)||!validTime(manifest.coverageEndMs)
      ||!validTime(manifest.retrievedAtMs)
+     // A retrospective complete-through date cannot be archived before it
+     // happened. This never certifies that a provider snapshot was available
+     // to a contemporaneous scanner.
+     ||manifest.retrievedAtMs<manifest.coverageEndMs
      ||typeof manifest.sourceId!=="string"||!manifest.sourceId.trim()
      ||manifest.allListedAndRemovedAttested!==true
      ||manifest.suspensionsAttested!==true
@@ -156,7 +160,17 @@ export function auditHistoricalPITVenueUniverseV1({
     ...known,sourceClass:cls,errorSymbol:parsed.symbol??null,
     errorIndex:parsed.index??null,
   });
-  if(parsed.endedHistorical.size===0)
+  // Delistings later in the archive must not invalidate *earlier* 2023
+  // sessions when their as-of delisting count was genuinely still zero.
+  // Require that the supplied full lifecycle source includes actual removed
+  // membership rows over its archived span (not merely an asserted flag).
+  // This is self-attested archive scope, NOT independently proven full-market
+  // survivorship correctness.
+  const archivedRemovals=parsed.rows.filter(row=>
+    row.removedAtMs!=null
+    &&row.removedAtMs>=manifest.coverageStartMs
+    &&row.removedAtMs<=manifest.coverageEndMs).length;
+  if(archivedRemovals===0)
     return blocked(market,venue,"PIT_REMOVED_NAMES_EVIDENCE_MISSING",
       {...known,sourceClass:cls});
   const missing=[...observed].filter(sym=>!parsed.dayActive.has(sym));
@@ -190,6 +204,7 @@ export function auditHistoricalPITVenueUniverseV1({
     rawMembershipDigestSha256:manifest.rawMembershipDigestSha256,
     dayActiveArchivedMembers:parsed.dayActive.size,
     archivedEndedInThreeYears:parsed.endedHistorical.size,
+    archivedRemovedAcrossSourceWindow:archivedRemovals,
     archivedSuspendedToday:parsed.suspended.size,
     observedSelectedRosterMatched:observed.size,
     archivedMembersNotInSelectedCandleCohort:unobserved.length,
