@@ -73,3 +73,15 @@ test('no generated business or research AI/paper execution is in isolated activa
   assert.ok(y.includes('24_hour_uptime_proven: false'));
   assert.doesNotMatch(y,/workflow_dispatch:.*activate-real-orders/);
 });
+
+test('Vultr CPU-load check runs under GNU awk without reserved identifier collision',async()=>{
+  const s=await readFile(script,'utf8');
+  assert.ok(s.includes("awk -v current_load=\"$load_one\" 'BEGIN {exit !(current_load>=0 && current_load<1.5)}' || return 71"));
+  assert.doesNotMatch(s,/awk -v load=/u);
+  const safe=spawnSync('awk',['-v','current_load=0.3',
+    'BEGIN {exit !(current_load>=0 && current_load<1.5)}'],{encoding:'utf8'});
+  assert.equal(safe.status,0,safe.stderr||safe.stdout);
+  const saturated=spawnSync('awk',['-v','current_load=1.7',
+    'BEGIN {exit !(current_load>=0 && current_load<1.5)}'],{encoding:'utf8'});
+  assert.equal(saturated.status,1,saturated.stderr||saturated.stdout);
+});
