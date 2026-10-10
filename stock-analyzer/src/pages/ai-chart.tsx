@@ -931,8 +931,12 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
                 {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
               </section>
             ) : null}
-            {mobileTab === 'position' ? (
-              <section data-testid="ai-chart-mobile-position" className="min-w-0">
+            {(mobileTab === 'position' || (externalPositionController && hasSelection)) ? (
+              <section
+                data-testid="ai-chart-mobile-position"
+                hidden={mobileTab !== 'position'}
+                className="min-w-0"
+              >
                 {hasSelection ? (
                   <LazyAiChartPositionPanel
                     selection={selection}
