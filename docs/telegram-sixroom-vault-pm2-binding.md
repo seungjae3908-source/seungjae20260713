@@ -44,8 +44,11 @@ Even that command requires all of the following:
 - The GitHub `production` protected environment owner review.
 - Exact current `main` and official Required CI **6/6 SUCCESS**.
 - A recent, successful owner-protected **Telegram-only Staging** result for
-  that exact main with Staging runtime/marker and IPv4/TLS ready. A merely
-  reachable or stale Staging instance is not sufficient. No full-app staging
+  that exact main with Staging runtime/marker and IPv4/TLS ready. The protected Staging receipt must additionally name the actual running
+  Node app SHA, marker SHA and authenticated health identity matching the
+  exact current main. The Staging health-provenance fix is separately owned
+  by Draft PR #1763 and must reach main before a binding APPLY can qualify.
+  A merely reachable or stale Staging instance is not sufficient. No full-app staging
   protection is disabled.
 - One unambiguous, online `stock-app`, canonical Production cwd/entrypoint,
   no PM2 watch and deploy SHA = marker = specifically approved deployed SHA.

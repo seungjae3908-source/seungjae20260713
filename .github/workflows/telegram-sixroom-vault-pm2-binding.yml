@@ -164,6 +164,9 @@ jobs:
               return c.user?.login==='github-actions[bot]'
                 &&b.includes('TELEGRAM-ONLY STAGING QA (NO DEPLOY / NO SEND)')
                 &&b.includes('- Exact main: '+target)
+                &&b.includes('- Actual running Staging app SHA: '+target)
+                &&b.includes('- Staging marker SHA: '+target)
+                &&b.includes('- Health marker SHA / identity match: '+target+' / true')
                 &&b.includes('- Staging PM2 online: true')
                 &&b.includes('- Token-free Telegram IPv4/TLS: IPV4_TLS_READY')
                 &&b.includes('- Network-only classification: STAGING_TELEGRAM_NETWORK_ONLY_PASS')

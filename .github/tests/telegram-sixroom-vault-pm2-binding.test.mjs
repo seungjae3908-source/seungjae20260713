@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import {
   ROOMS,BIND_KEYS,TRADING_BOOLEAN_GATES,TRADING_AUTHORITY_KEYS,
   validateVault,tradingIsOff,flagsUnchanged,bindingValues,
-  preflightBinding,runtimeBindingMatches,executeBinding,
+  preflightBinding,runtimeBindingMatches,executeBinding,localHealthVerified,
 } from '../../ops/telegram-sixroom-vault-pm2-binding.mjs';
 const script=fs.readFileSync('ops/telegram-sixroom-vault-pm2-binding.mjs','utf8');
 const sha='a'.repeat(40);
@@ -256,4 +257,58 @@ test('protected GitHub workflow separates read-only PLAN from risky APPLY approv
   assert.ok(workflow.includes("r.secretValuesRecorded!==false"));
   assert.ok(workflow.includes("Post sanitized binding classification"));
   assert.ok(workflow.includes('flock -n /var/lock/stock-app-deploy.lock node --input-type=module -'));
+});
+
+
+test('worker gate requires an explicit enabled intelligence flag, not an undefined default', () => {
+  for (const value of [undefined, null, 'false', '0', 'TRUE']) {
+    assert.equal(preflightBinding(baseOptions({runtime: runtime({
+      TELEGRAM_INTELLIGENCE_WORKER_ENABLED: value,
+    })})).classification, 'TELEGRAM_WORKER_GATE_INACTIVE');
+  }
+  assert.equal(preflightBinding(baseOptions()).classification, 'BINDING_READY');
+});
+
+test('direct Production health must prove API identity and exact Node, marker and deployed SHA', async () => {
+  const healthy = {
+    ok:true, service:'api-server', route:'/api/health',
+    deploySha:oldDeployed, processDeploySha:oldDeployed,
+    deployMarkerSha:oldDeployed, identityMatch:true,
+    internalPrivateDiagnostic:'MUST_NOT_REPORT',
+  };
+  const check = body => localHealthVerified(oldDeployed, {
+    getImpl: (url, options, onResponse) => {
+      assert.equal(url, 'http://127.0.0.1:8080/api/health');
+      assert.equal(options.timeout, 4500);
+      const req = new EventEmitter();
+      req.destroy = () => {};
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        onResponse(response);
+        response.emit('data', Buffer.from(JSON.stringify(body)));
+        response.emit('end');
+      });
+      return req;
+    },
+  });
+  assert.equal(await check(healthy), true);
+  for(const bad of [
+    {...healthy, service:'other'},
+    {...healthy, route:'/health'},
+    {...healthy, processDeploySha:sha},
+    {...healthy, deploySha:sha},
+    {...healthy, deployMarkerSha:sha},
+    {...healthy, identityMatch:false},
+  ]) assert.equal(await check(bad), false);
+});
+
+test('binding APPLY requires Staging Node health provenance, not PM2/network alone', () => {
+  const workflow = fs.readFileSync(
+    '.github/workflows/telegram-sixroom-vault-pm2-binding.yml', 'utf8');
+  for (const literal of [
+    "'- Actual running Staging app SHA: '+target",
+    "'- Staging marker SHA: '+target",
+    "'- Health marker SHA / identity match: '+target+' / true'",
+  ]) assert.ok(workflow.includes(literal), literal);
 });

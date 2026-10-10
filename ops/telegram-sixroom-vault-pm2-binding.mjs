@@ -129,7 +129,7 @@ export function preflightBinding({mode='plan',mainSha,deployedSha,pm2Sha,markerS
     receipt.classification='FINANCIAL_AUTHORITY_NOT_OFF'; return receipt;
   }
   if (runtime?.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true'
-    || runtime?.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'false'
+    || runtime?.TELEGRAM_INTELLIGENCE_WORKER_ENABLED !== 'true'
     || runtime?.PERSONAL_TELEGRAM_WORKER_ENABLED !== 'true') {
     receipt.classification='TELEGRAM_WORKER_GATE_INACTIVE'; return receipt;
   }
@@ -268,14 +268,14 @@ function pm2CommandEnv(runtime,override={}) {
   }
   return {...allowed,...override};
 }
-async function localHealthVerified(expectedSha) {
+export async function localHealthVerified(expectedSha, { getImpl = httpGet } = {}) {
   // Read only loopback Production health; never emit its worker or account data.
   return await new Promise(resolve=>{
     let req=null,finished=false;
     const done=v=>{if(finished)return;finished=true;clearTimeout(timer);resolve(v);};
     const timer=setTimeout(()=>{req?.destroy();done(false);},5000);
     try {
-      req=httpGet('http://127.0.0.1:8080/api/health',{timeout:4500},res=>{
+      req=getImpl('http://127.0.0.1:8080/api/health',{timeout:4500},res=>{
         if(res.statusCode!==200){res.resume();done(false);return;}
         let size=0;const chunks=[];
         res.on('data',chunk=>{
@@ -287,7 +287,10 @@ async function localHealthVerified(expectedSha) {
         res.on('end',()=>{
           let p=null;
           try{p=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{}
-          done(p?.ok===true&&p?.deploySha===expectedSha
+          done(p?.ok===true && p?.service==='api-server'
+            && p?.route==='/api/health'
+            && p?.deploySha===expectedSha
+            && p?.processDeploySha===expectedSha
             && p?.identityMatch===true
             && p?.deployMarkerSha===expectedSha);
         });
