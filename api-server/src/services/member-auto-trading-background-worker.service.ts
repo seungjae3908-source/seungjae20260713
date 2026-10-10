@@ -300,10 +300,17 @@ export function automaticPaperLegacyEpochIsolationReadiness(
   };
 }
 
-export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
-// Preserve the existing member Paper wallet contract and history. The real
-// order policy and admin four-market Paper wallets use a separate 1M policy.
-export const AUTOMATIC_PAPER_INITIAL_KRW = 500_000 as const;
+export const AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m';
+export const AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS = Object.freeze([
+  'automatic-paper-account-v1',
+] as const);
+export function isAutomaticPaperAccountId(value: unknown): boolean {
+  return value === AUTOMATIC_PAPER_ACCOUNT_ID
+    || AUTOMATIC_PAPER_LEGACY_ACCOUNT_IDS.some((id) => id === value);
+}
+// Every member starts the current automatic Paper epoch with one million won.
+// The legacy 500k account remains immutable history and is never refilled.
+export const AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const;
 const executionProjectionTransport: TelegramTransport = {
   async send() {
     return { ok: false, errorCode: 'TELEGRAM_DELIVERY_WORKER_REQUIRED' };
@@ -665,6 +672,7 @@ function validateFormulaAiPilotEntry(
   pilot: RulePackPilotCapitalState,
   estimatedKrw: number,
   nowMs: number,
+  discoveryEntryCapRequired: boolean,
 ) {
   if (member.policy.pilotStage !== 'formula-ai-exception') return;
   const decision = evaluateRulePackPilotEntryGuard({
@@ -677,6 +685,7 @@ function validateFormulaAiPilotEntry(
     policyTotalCapitalKrw: member.policy.totalCapitalKrw,
     openLivePositions: openAutomaticPlans(runtime, 'live').length,
     nowMs,
+    discoveryEntryCapRequired,
   });
   if (!decision.allowed) throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_ENTRY_BLOCKED');
 }
@@ -726,16 +735,17 @@ export function deriveFourMarketPaperExecutionPolicy(
 }
 
 /**
- * Shared admission invariant: a new automatic Paper campaign cannot claim
- * 500,000 KRW collateral while its saved member-wide capital budget remains
- * below that baseline. This does NOT disable risk-reducing exit supervision.
+ * Paper collateral is owned by the server-created Paper wallet and is
+ * intentionally independent from the smaller role-scoped LIVE budget. The
+ * stored policy must still contain a finite positive operating budget, but a
+ * 500k LIVE member policy must not invalidate a 1M Paper lane.
  */
 export function automaticPaperCapitalPolicyReady(
   policy: Pick<TradingPolicy, 'totalCapitalKrw'>,
 ) {
   return typeof policy.totalCapitalKrw === 'number'
     && Number.isFinite(policy.totalCapitalKrw)
-    && policy.totalCapitalKrw >= AUTOMATIC_PAPER_INITIAL_KRW;
+    && policy.totalCapitalKrw >= 10_000;
 }
 
 function policyAllowsEntry(
@@ -2177,7 +2187,7 @@ export class MemberAutoTradingBackgroundWorker {
               formulaAiReviewReasonsForLive(entry, nowMs);
               const marketPilotCapital = await formulaAiPilotCapital(candidateMarket);
               validateFormulaAiPilotEntry(
-                member, entry, runtime, marketPilotCapital, paperInput.estimatedKrw, nowMs,
+                member, entry, runtime, marketPilotCapital, paperInput.estimatedKrw, nowMs, false,
               );
               paperEntryPolicy = deriveRulePackPilotExecutionPolicy(
                 member.policy, marketPilotCapital, candidateMarket,
@@ -2265,11 +2275,12 @@ export class MemberAutoTradingBackgroundWorker {
                   marketPilotCapital,
                   paperInput.estimatedKrw,
                   nowMs,
+                  true,
                 );
                 liveMember = Object.freeze({
                   ...member,
                   policy: deriveRulePackPilotExecutionPolicy(
-                    member.policy, marketPilotCapital, candidateMarket,
+                    member.policy, marketPilotCapital, candidateMarket, true,
                   ),
                 });
               }

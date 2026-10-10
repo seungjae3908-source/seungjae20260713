@@ -41,11 +41,11 @@ function wallet(overrides: Partial<StoredPaperJournalRecord> = {}): StoredPaperJ
     deletedAt: null,
     payload: {
       id: AUTOMATIC_PAPER_ACCOUNT_ID,
-      initialBalance: 500_000,
-      equity: 500_000,
-      cashBalance: 500_000,
+      initialBalance: 1_000_000,
+      equity: 1_000_000,
+      cashBalance: 1_000_000,
       usedMargin: 0,
-      availableMargin: 500_000,
+      availableMargin: 1_000_000,
     },
     ...overrides,
   };
@@ -92,13 +92,13 @@ test('Paper-only worker readiness is member-scoped and never grants real order a
   assert.equal('balance' in result, false);
 });
 
-test('500k wallet readiness must not authorize a member policy still capped at 100k', () => {
+test('1m Paper wallet readiness stays independent from a 100k LIVE discovery cap', () => {
   const underfunded = normalizeTradingPolicy({ ...policy(), totalCapitalKrw: 100_000 });
   const result = memberAutomaticPaperReadiness(input({ policy: underfunded }));
   assert.equal(result.paperWalletReady, true);
-  assert.equal(result.paperCapitalPolicyReady, false);
-  assert.equal(result.readyForPaperEvaluation, false);
-  assert.ok(result.blockers.includes('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW'));
+  assert.equal(result.paperCapitalPolicyReady, true);
+  assert.equal(result.readyForPaperEvaluation, true);
+  assert.equal(result.blockers.includes('BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW'), false);
   assert.equal(result.realOrderAuthorityGranted, false);
   const exactlyFunded = memberAutomaticPaperReadiness(input({
     policy: normalizeTradingPolicy({ ...policy(), totalCapitalKrw: 500_000 }),
@@ -118,7 +118,7 @@ test('missing or tampered Paper wallet and empty allowlist fail closed', () => {
 
   for (const corrupt of [
     wallet({ deletedAt: new Date(NOW).toISOString() }),
-    wallet({ payload: { ...wallet().payload, initialBalance: 1_000_000 } }),
+    wallet({ payload: { ...wallet().payload, initialBalance: 500_000 } }),
     wallet({ createdAt: 'not-a-server-time' }),
   ]) {
     const blocked = memberAutomaticPaperReadiness(input({ wallet: corrupt }));
