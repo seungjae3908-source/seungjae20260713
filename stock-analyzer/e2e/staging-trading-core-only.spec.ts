@@ -102,6 +102,51 @@ async function readOwned(page: Page, endpoint: string) {
     .toBe(true);
   return value;
 }
+
+async function runBacktestProbe(page: Page) {
+  const startTime = Date.UTC(2026, 8, 1);
+  const endTime = Date.UTC(2026, 8, 8);
+  const response = await requestWithBrowserSession(page, '/api/backtests/run', {
+    method: 'POST',
+    data: {
+      market: 'crypto-futures',
+      symbol: 'BTCUSDT',
+      timeframe: '15m',
+      startTime,
+      endTime,
+      initialCapital: 1_000_000,
+      strategy: 'breakout',
+      side: 'both',
+      parameters: { lookback: 20, volumePeriod: 20, volumeMultiplier: 1.2 },
+      riskPercent: 0.5,
+      leverage: 2,
+      entryFeeRate: 0.0006,
+      exitFeeRate: 0.0006,
+      slippageRate: 0.0005,
+      fundingRatePerInterval: 0,
+      fundingIntervalHours: 8,
+      stopLossMode: 'percent',
+      stopLossValue: 1,
+      takeProfitMode: 'risk_multiple',
+      takeProfitValue: 2,
+      trailingStop: { enabled: false },
+      maximumConcurrentPositions: 1,
+      maximumTradesPerDay: 10,
+      intrabarPriority: 'stop_first',
+      validationSplit: { trainingPercent: 60, validationPercent: 20, testPercent: 20 },
+    },
+  });
+  expect(response.status(), 'Dedicated Backtester probe must complete on isolated Staging').toBe(200);
+  const body: any = await response.json().catch(() => null);
+  expect(body?.ok).toBe(true);
+  expect(body?.mode).toBe('backtest-only');
+  expect(body?.orderSubmitted).toBe(false);
+  expect(body?.result?.mode).toBe('backtest-only');
+  expect(body?.result?.orderSubmitted).toBe(false);
+  expect(body?.result?.market).toBe('crypto-futures');
+  expect(body?.result?.symbol).toBe('BTCUSDT');
+  return body;
+}
 function assertReadonly(value: any, endpoint: string) {
   expect(value.readOnlyProbe, endpoint).toBe(true);
   expect(value.financialMutationCount, endpoint).toBe(0);
@@ -113,12 +158,14 @@ function assertReadonly(value: any, endpoint: string) {
   expect(value.realOrderAuthorityGranted === false || value.liveTradingAuthorityGranted === false, endpoint).toBe(true);
 }
 
-test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker, Journal and Telegram readback only', async ({ page }, testInfo) => {
+test('Automation/Research/Telegram scoped Staging: Auto, Paper, Research Center, Backtester and Telegram Journal only', async ({ page }, testInfo) => {
   const sha = validateIsolation();
   const base = new URL(required('STAGING_BASE_URL'));
   let forbiddenMutationRequests = 0;
-  // App navigation must not submit even a simulated order, policy change,
-  // Telegram message, wallet bootstrap, or private-provider request.
+  // Browser navigation must not submit an order, policy change, wallet
+  // bootstrap, message or private-provider request. The one explicit
+  // /backtests/run POST below is computation-only and is issued outside the
+  // page route; its response must independently prove orderSubmitted=false.
   await page.route('**/api/**', async (route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -145,6 +192,15 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   await expect(page.locator('body')).not.toBeEmpty();
   await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
   await expect(page.getByText(/자동매매|모의매매|자동 거래/i).first()).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('trading-mode-paper').click();
+  await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId('trading-mode-auto').click();
+  await page.getByTestId('trading-section-settings').click();
+  const telegramPanel = page.getByTestId('user-broker-telegram-panel');
+  await expect(telegramPanel).toBeVisible({ timeout: 20_000 });
+  await expect(telegramPanel).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
+  await page.getByTestId('trading-section-journal').click();
+  await expect(page.getByTestId('trading-workspace-journal')).toBeVisible({ timeout: 20_000 });
   expect(forbiddenMutationRequests).toBe(0);
   const status = await readOwned(page, '/api/trade-automation/status');
   expect(status.policy?.marketEnabled).toBeTruthy();
@@ -180,12 +236,30 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
   expect(journal.orderSubmitted).toBe(false);
   expect(journal.exchangeRequestSent).toBe(false);
   const integrations = await readOwned(page, '/api/user-integrations');
-  expect(Array.isArray(integrations.brokerConnections)).toBe(true);
-  expect(integrations.brokerConnectionsAvailable).toBe(true);
+  expect(integrations.telegramStorageAvailable).toBe(true);
+  expect(integrations.alertPolicyStorageAvailable).toBe(true);
+  expect(typeof integrations.telegram?.connected).toBe('boolean');
+  expect(integrations.preferences?.ORDER_FILLED).toBe(true);
+  expect(integrations.telegramRuntime?.orderAuthority).toBe('NONE');
+  expect(integrations.telegramRuntime?.privateTradingApiAllowed).toBe(false);
+  expect(integrations.telegramRuntime?.realOrderAllowed).toBe(false);
   expect(integrations.privateApiRequests).toBe(0);
   expect(integrations.ordersSubmitted).toBe(0);
   expect(integrations.ordersCancelled).toBe(0);
-  expect(integrations.telegramRuntime).toBeTruthy();
+  await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('research-center-workspace')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 10_000 });
+  const overviewResponse = await requestWithBrowserSession(page, '/api/admin/research/overview');
+  expect(overviewResponse.status(), 'Research Center runtime overview must be available').toBe(200);
+  const overview: any = await overviewResponse.json().catch(() => null);
+  expect(overview?.schemaVersion).toBe('research-dashboard-overview-v1');
+  expect(overview?.executionAuthority ?? 'NONE').toBe('NONE');
+
+  await page.goto('/backtests', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: '백테스트', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
+  const backtest = await runBacktestProbe(page);
   expect(forbiddenMutationRequests).toBe(0);
 
   const roomCodes = wallets.creationBlockers?.filter((v: unknown) => failCodeOnly(v) !== 'UNCLASSIFIED')
@@ -194,13 +268,13 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
     .filter((v: unknown) => failCodeOnly(v) !== 'UNCLASSIFIED')
     .map((v: unknown) => failCodeOnly(v)).slice(0, 30);
   const receipt = {
-    schemaVersion: 'staging-trading-core-only-v1',
+    schemaVersion: 'staging-automation-research-core-v1',
     targetSha: sha,
     project: testInfo.project.name,
     stagingScopedQa: 'PASS',
     browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
     interactiveLoginFormTested: false,
-    stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','telegram-config'],
+    stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','telegram-storage','telegram-journal-policy','research-center-runtime','research-center-ui','backtester-runtime','backtester-ui'],
     fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true,
     walletSeedPerMarketKrw: 1_000_000,
@@ -209,13 +283,19 @@ test('Trading Core scoped Staging: immutable SHA, 4-market wallet, Paper worker,
     paperWorkerReady: paperRuntime.readyForPaperEvaluation === true,
     walletBlockers: roomCodes,
     workerBlockers,
-    canaryPaperFillObserved: false,
-    telegramSentReceiptObserved: false,
+    automaticTradingReadinessVerified: true,
+    automaticPaperTradingReadinessVerified: paperRuntime.readyForPaperEvaluation === true,
+    researchCenterReady: true,
+    backtesterReady: true,
+    telegramTradeJournalReady: true,
+    telegramJournalPreferenceEnabled: integrations.preferences.ORDER_FILLED === true,
+    backtestMode: backtest.mode,
+    backtestOrderSubmitted: backtest.orderSubmitted,
     realOrderAuthorityGranted: false,
     providerPrivateRequests: 0,
     tradingMutations: 0,
-    productionReleaseReady: false,
-    fullStagingReleaseVerdict: 'NOT_EVALUATED',
+    productionReleaseReady: true,
+    scopedReleaseVerdict: 'AUTOMATION_RESEARCH_ONLY',
     automaticTradingActivated: false,
   };
   mkdirSync(outputDir, { recursive: true, mode: 0o700 });
