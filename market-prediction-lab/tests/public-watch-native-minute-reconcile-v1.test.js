@@ -12,7 +12,7 @@ function priceReport() {
  const market="CRYPTO_FUTURES",venue="BITGET_USDT_FUTURES",symbol="BTCUSDT";
  return {
   schemaVersion:ISSUES,executionAuthority:"NONE",profitabilityProven:false,
-  marketWideOpportunityDenominatorVerified:false,
+  fullMarketOpportunityDenominatorVerified:false,
   sampledDay:{utcDayStartMs:DAY,utcDayEndMs:DAY+86_400_000},
   markets:{
    KR_STOCK:{status:"BLOCKED_DATA",market:"KR_STOCK"},
