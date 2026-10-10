@@ -1,33 +1,69 @@
 import { expect, test } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
+import { parseStockAnalysisReply, type StockAnalysisTarget } from '../src/lib/stock-ai-analysis-reply';
 
-const tabPath = fileURLToPath(new URL('../src/components/tabs/ai-tab.tsx', import.meta.url));
-
-test('malformed successful AI analysis fails closed before reason lists render', async () => {
-  const source = await readFile(tabPath, 'utf8');
-
-  expect(source).toContain('function validAnalysisPayload(value: unknown): boolean');
-  expect(source).toContain('validReasonList(record.buyReasons)');
-  expect(source).toContain('validReasonList(record.sellReasons)');
-  expect(source).toContain('if (!validAnalysisPayload(data))');
-  expect(source).toContain('AI_ANALYSIS_CONTRACT_INVALID');
-
-  const guard = source.indexOf('if (!validAnalysisPayload(data))');
-  const buyReasons = source.indexOf('<ReasonList items={data.buyReasons}');
-  const sellReasons = source.indexOf('<ReasonList items={data.sellReasons}');
-  expect(guard).toBeGreaterThanOrEqual(0);
-  expect(buyReasons).toBeGreaterThan(guard);
-  expect(sellReasons).toBeGreaterThan(guard);
+const target: StockAnalysisTarget = { market: 'US', ticker: 'AAPL', timeframe: '1D' };
+const good = () => ({
+  ok: true,
+  kind: 'answer',
+  answer: '실제 확인된 기업 정보와 뉴스만 설명합니다.',
+  selection: { market: 'US', symbol: 'AAPL', ticker: 'AAPL', timeframe: '1D', action: null },
+  provider: 'groq',
+  model: 'sample-research-model',
+  fallbackUsed: false,
+  data: {
+    status: 'partial', asOf: '2026-10-10T00:00:00.000Z', basis: 'server_collection_time',
+    sources: ['공개 시세'], missing: ['선택 시간봉 1D OHLCV·기술지표'],
+  },
 });
 
-test('missing strategy evidence never fabricates target or stop prices', async () => {
-  const source = await readFile(tabPath, 'utf8');
+test('accepts only exact same-market same-symbol real AI provider and explicit public-data limitations', () => {
+  const result = parseStockAnalysisReply(good(), target);
+  expect(result.provider).toBe('groq');
+  expect(result.data.status).toBe('partial');
+  expect(result.data.missing).toContain('선택 시간봉 1D OHLCV·기술지표');
+});
 
-  expect(source).toContain('const strategyHasEvidence = Boolean(');
-  expect(source).toContain('목표가·손절가 근거 미수집');
-  expect(source).toContain('없는 숫자를 현재가 기준 임의 퍼센트로 만들지 않습니다.');
-  expect(source).not.toContain('formatPrice(data.targetPrice, currency)');
-  expect(source).not.toContain('formatPrice(data.stopLossPrice, currency)');
-  expect(source).not.toContain('실시간 차트 데이터가 부족하여 모델 추정값으로 표시합니다.');
+test('rejects cross-market, cross-symbol, stale timeframes and execution-side echo contamination', () => {
+  for (const bad of [
+    { selection: { ...good().selection, ticker: 'MSFT' } },
+    { selection: { ...good().selection, market: 'KR' } },
+    { selection: { ...good().selection, symbol: 'TSLA' } },
+    { selection: { ...good().selection, timeframe: '5m' } },
+    { selection: { ...good().selection, action: 'BUY' } },
+  ]) {
+    expect(() => parseStockAnalysisReply({ ...good(), ...bad }, target)).toThrow('AI_STOCK_ANALYSIS_IDENTITY_MISMATCH');
+  }
+});
+
+test('refusal and unverified or fabricated provider/evidence fail closed', () => {
+  for (const bad of [
+    { kind: 'refusal' },
+    { ok: false },
+    { answer: '' },
+  ]) expect(() => parseStockAnalysisReply({ ...good(), ...bad }, target)).toThrow('AI_STOCK_ANALYSIS_RESPONSE_INVALID');
+  for (const bad of [
+    { provider: null }, { provider: 'unknown' }, { model: '' }, { fallbackUsed: 'false' },
+  ]) expect(() => parseStockAnalysisReply({ ...good(), ...bad }, target)).toThrow('AI_STOCK_ANALYSIS_PROVIDER_UNVERIFIED');
+  for (const bad of [
+    { data: { ...good().data, status: 'complete' } },
+    { data: { ...good().data, sources: [] } },
+    { data: { ...good().data, asOf: 'bad-time' } },
+  ]) expect(() => parseStockAnalysisReply({ ...good(), ...bad }, target)).toThrow('AI_STOCK_ANALYSIS_EVIDENCE_INVALID');
+});
+
+test('stock AI tab never requests the nonexistent legacy /analysis or /overview routes or executes orders', () => {
+  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/tabs/ai-tab.tsx'), 'utf8');
+  expect(source).toContain("authorizedFetch('/api/ai/chat'");
+  expect(source).toContain('parseStockAnalysisReply(body, context)');
+  expect(source).toContain('data-testid="stock-ai-grounded-answer"');
+  expect(source).toContain("result.data.status === 'unavailable'");
+  expect(source).toContain("controllerRef.current?.abort()");
+  expect(source).toContain("generation.current !== owner");
+  expect(source).not.toContain('useAnalysis(');
+  expect(source).not.toContain('/stocks/');
+  expect(source).not.toContain('/trade-automation');
+  expect(source).not.toContain('targetPrice:');
+  expect(source).not.toContain('stopLossPrice:');
 });
