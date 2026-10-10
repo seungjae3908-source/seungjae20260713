@@ -44,6 +44,8 @@ jobs:
           node --test market-prediction-lab/tests/probe-watch-matched-alt-six-v1.test.js
       - name: Probe completed 2026-10-09 selected ETH XRP SOL 1m histories
         timeout-minutes: 5
+        env:
+          PREDICTION_LAB_UPBIT_GAP_CROSSCHECK: "true"
         run: |
           node market-prediction-lab/scripts/probe-watch-matched-alt-six-v1.mjs \
             market-prediction-lab/docs/native-watch-matched-alt-six-v1.json \
@@ -55,7 +57,8 @@ jobs:
           const x=JSON.parse(readFileSync("market-prediction-lab/docs/native-watch-matched-alt-six-v1.json","utf8"));
           if(x.sourceDate.dayUtc!=="2026-10-09" ||
              x.selectedAltSymbolDays!==6 ||
-             x.observedSelectedAltSymbolDays+x.blockedSelectedAltSymbolDays!==6 ||
+             x.observedSelectedAltSymbolDays+x.sparseTickCorroboratedSelectedAltDays+
+             x.blockedSelectedAltSymbolDays!==6 ||
              x.fullMarketPITUniverseAndDelistingsVerified!==false ||
              x.originalPublicWatchEventAndCadenceEvidenceAttached!==false ||
              x.marketWideOpportunityDenominatorVerified!==false ||
@@ -71,10 +74,18 @@ jobs:
           for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
             const a=x.markets[market];
             if(!Array.isArray(a)||a.length!==3 ||
-               a.some(r=>!["OBSERVED_SELECTED_SYMBOL_DAY","BLOCKED_DATA"].includes(r.status)
+               a.some(r=>!["OBSERVED_SELECTED_SYMBOL_DAY",
+                 "OBSERVED_SPARSE_UPBIT_TICK_CORROBORATED_DAY",
+                 "BLOCKED_DATA"].includes(r.status)
                  ||r.trueMarketWideRecall!==null ||r.actualFillCount!==null ||
                  r.netProfitPct!==null))process.exit(1);
+            if(market==="CRYPTO_FUTURES"&&
+               a.some(r=>r.status==="OBSERVED_SPARSE_UPBIT_TICK_CORROBORATED_DAY"))
+              process.exit(1);
           }
+          if(x.allSixDenseNativeCandleWindowsVerified!==x.selectedAltSourceWindowComplete ||
+             x.sparseTickCorroboratedSelectedAltDays>0&&x.verifiedEntireChosenSixCount!==null)
+            process.exit(1);
           '
       - uses: actions/upload-artifact@v4
         with:
