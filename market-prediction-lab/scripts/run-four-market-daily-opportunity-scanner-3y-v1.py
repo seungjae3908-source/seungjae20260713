@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from opportunity_coverage_audit_v1 import ObservedDailyOpportunityAudit, self_test as opportunity_audit_self_test
+
 ROOT = Path(__file__).resolve().parents[2]
 US_SCRIPT = ROOT / "market-prediction-lab" / "scripts" / "run-us-daily-opportunity-scanner-3y-v1.py"
 SPEC = importlib.util.spec_from_file_location("us_daily_opportunity_v1", US_SCRIPT)
@@ -419,6 +421,25 @@ def load_market(market: str):
     return load_crypto_universe(market)
 
 
+def load_market_with_observed_opportunities(market: str, audit: ObservedDailyOpportunityAudit):
+    """Capture raw provider OHLC before candidate_features filters by gap.
+
+    This hook is scoped to a single serial research-market load. Restore
+    the source function even when the market provider fails.
+    """
+    original = us.candidate_features
+
+    def observed_candidate_features(frame: pd.DataFrame) -> pd.DataFrame:
+        audit.observe_history(frame)
+        return original(frame)
+
+    us.candidate_features = observed_candidate_features
+    try:
+        return load_market(market)
+    finally:
+        us.candidate_features = original
+
+
 def expected_market_source_failure(error: Exception) -> bool:
     """Only known public-data failures may be recorded as BLOCKED_DATA.
 
@@ -475,6 +496,8 @@ def self_test() -> None:
     assert "gross_return" not in us.RICH_FEATURES
     assert "close" not in us.RICH_FEATURES
     assert "volume" not in us.RICH_FEATURES
+    opportunity_audit_self_test()
+    assert us.candidate_features is not None
     fake_failure = RuntimeError(
         "BINANCE_GET_FAILED:https://fapi.binance.com/fapi/v1/exchangeInfo:451 Client Error"
     )
@@ -505,18 +528,30 @@ def main() -> None:
 
     for market in MARKETS:
         print(json.dumps({"marketStart": market}), flush=True)
+        raw_opportunities = ObservedDailyOpportunityAudit(market, START, END)
         try:
-            data, dates, universe = load_market(market)
+            data, dates, universe = load_market_with_observed_opportunities(market, raw_opportunities)
         except Exception as error:
             if not expected_market_source_failure(error):
                 raise
             reports[market] = blocked_market_report(market, error)
+            reports[market]["opportunityAudit"] = {
+                "status": "BLOCKED_DATA",
+                "market": market,
+                "reason": reports[market]["universe"]["blocker"],
+                "fullMarketOpportunityDenominator": None,
+                "verifiedEarlyDetectionRecall": None,
+                "executionAuthority": "NONE",
+            }
             print(json.dumps({
                 "marketBlocked": market,
                 "reason": reports[market]["universe"]["blocker"],
                 "profitabilityProven": False,
             }, ensure_ascii=False), flush=True)
             continue
+        opportunity_audit = raw_opportunities.summarize(data)
+        # OHLC highs/lows label a historical opportunity only. They are NOT
+        # pre-entry signal features and cannot establish exact first-crossing.
         strategies = strategies_for_market(market, data, dates)
         rows = []
         for item in strategies:
@@ -557,12 +592,21 @@ def main() -> None:
             "costAssumptionRoundTrip": COSTS[market],
             "pointInTimeMembershipProven": market == "US_STOCK" and False,
             "delistedCoverageProven": False,
+            "opportunityAudit": opportunity_audit,
             "results": rows,
             "profitableSurvivorsOnly": [x for x in rows if x["survivor"]],
         }
         print(json.dumps({
             "marketDone": market,
             "candidateRows": universe.get("candidateRows"),
+            "opportunityAudit": {
+                "status": opportunity_audit["status"],
+                "observedEvalSymbolCount": opportunity_audit["observedEvalSymbolCount"],
+                "observedSymbolDays": opportunity_audit["observedSymbolDays"],
+                "LONG_10": opportunity_audit["directions"]["LONG"]["10"],
+                **({"SHORT_10": opportunity_audit["directions"]["SHORT"]["10"]}
+                    if market == "CRYPTO_FUTURES" else {}),
+            },
             "topObserved": [
                 {"candidate": x["candidate"], **x["metrics"]}
                 for x in rows[:3]
@@ -607,6 +651,10 @@ def main() -> None:
             "cryptoDecisionTime": "00:00 UTC daily open using prior-bar information",
             "sameDayHighLowCloseVolumeUsedForSelection": False,
             "historicalMembershipAndDelistingComplete": False,
+            "observedOHLCOpportunityAuditOnly": True,
+            "marketWideOpportunityDenominatorEstablished": False,
+            "intradayFirstCrossingAndEarlyRecallEstablished": False,
+            "openCandidatePoolIsNotTradeEntry": True,
             "intraday0935Replication": False,
             "shortBorrowModeledForUS": False,
             "fundingIncludedForFutures": False,

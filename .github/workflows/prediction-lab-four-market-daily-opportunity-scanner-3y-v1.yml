@@ -6,6 +6,7 @@ on:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
       - market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
+      - market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -53,6 +54,7 @@ jobs:
 
       - name: Compile and self-test
         run: |
+          python -m py_compile market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
           python -m py_compile market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
           python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --self-test
 
@@ -74,6 +76,10 @@ jobs:
           assert r["safety"]["autoTrading"] is False
           assert r["truthBoundary"]["sameDayHighLowCloseVolumeUsedForSelection"] is False
           assert r["truthBoundary"]["historicalMembershipAndDelistingComplete"] is False
+          assert r["truthBoundary"]["marketWideOpportunityDenominatorEstablished"] is False
+          assert r["truthBoundary"]["intradayFirstCrossingAndEarlyRecallEstablished"] is False
+          assert all("opportunityAudit" in x for x in r["markets"].values())
+          assert all(x["opportunityAudit"]["executionAuthority"] == "NONE" for x in r["markets"].values())
           print(json.dumps({
               "markets": {
                   m: {
