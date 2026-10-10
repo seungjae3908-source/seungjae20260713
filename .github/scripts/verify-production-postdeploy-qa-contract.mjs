@@ -137,6 +137,7 @@ requireText(deploy, 'evidence_scope=trading_core', 'AUTOMATION_RESEARCH_ACTIVATI
 requireText(deploy, 'Four-provider Account / Credential Reuse / Trading Core safety: `PASS`', 'AUTOMATION_RESEARCH_ESSENTIAL_TRADING_SAFETY_MISSING');
 requireText(command, '/run-production-automation-research-telegram-release ', 'AUTOMATION_RESEARCH_OWNER_COMMAND_MISSING');
 requireText(command, "? 'staging-trading-core-only.yml'", 'AUTOMATION_RESEARCH_SCOPED_STAGING_MISSING');
+requireText(command, 'delegated_by_run_id: String(context.runId)', 'AUTOMATION_RESEARCH_STAGING_DELEGATED_PROVENANCE_MISSING');
 requireOrder(deploy, [
   '- name: 2 · Four-provider Account Production read-only QA',
   '- name: 3 · Production Credential Reuse QA',
