@@ -42,7 +42,7 @@ function digest(rows){
   for(const x of rows)h.update([x.timestamp,x.open,x.high,x.low,x.close,x.volume].join(",")+"\n");
   return h.digest("hex");
 }
-function blocked(market,venue,symbol,reason){
+function blocked(market,venue,symbol,reason,detail={}){
   return Object.freeze({
     market,venue,symbol,status:"BLOCKED_DATA",reason,
     observedMinuteCount:null,observedDayCrossingCount:null,
@@ -50,6 +50,7 @@ function blocked(market,venue,symbol,reason){
     rawCandleSha256:null,trueMarketWideRecall:null,
     originalScannerAsOfVerified:false,actualFillCount:null,
     netProfitPct:null,profitabilityProven:false,executionAuthority:"NONE",
+    ...detail,
   });
 }
 export function auditMatchedAltDayFromCollectedV1({
@@ -72,8 +73,19 @@ export function auditMatchedAltDayFromCollectedV1({
          ||collected?.providerMarket!==symbol||collected?.intervalMs!==M
        : collected?.provider!==src||collected?.symbol!==symbol)
      ||!Array.isArray(collected?.candles)
-     ||collected.candles.length!==sourceLimits.expectedMinuteRows)
+     )
     return blocked(market,venue,symbol,"ALT_NATIVE_SOURCE_OR_WINDOW_UNVERIFIED");
+  // Native one-minute venue responses may omit time slots. Separate sparse
+  // source rows from invalid symbol/time-window provenance, but do not
+  // transform an absent native candle into a zero-volume synthetic candle.
+  if(collected.candles.length!==sourceLimits.expectedMinuteRows)
+    return blocked(market,venue,symbol,
+      "ALT_NATIVE_MINUTE_ROW_COUNT_INCOMPLETE",{
+        requestedMinuteSlots:sourceLimits.expectedMinuteRows,
+        observedNativeSourceRows:collected.candles.length,
+        minuteGapCauseIndependentlyVerified:false,
+        absentMinuteIsNotZeroOpportunity:true,
+      });
   const prior=collected.candles.slice(0,60);
   const day=collected.candles.slice(60);
   const audit=auditNativeObservedMinuteWindowV1({
