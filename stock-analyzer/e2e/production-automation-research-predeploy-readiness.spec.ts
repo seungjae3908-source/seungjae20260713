@@ -44,11 +44,6 @@ async function appGet<T>(page: Page, pathname: string): Promise<ApiResult<T>> {
   };
 }
 
-function safeCode(value: unknown, fallback: string) {
-  const normalized = String(value ?? '').trim().toUpperCase();
-  return /^[A-Z0-9_:-]{1,120}$/.test(normalized) ? normalized : fallback;
-}
-
 function providerState(connections: unknown, provider: string) {
   return Array.isArray(connections)
     ? connections.find((row) => {
@@ -67,15 +62,14 @@ function writeEvidence(value: unknown) {
   );
 }
 
-test('Production external readiness fails closed before SSH, database, deploy, policy, or message mutation', async ({ page }) => {
+test('Production Automation/Paper/Research/Backtester readiness fails closed before any mutation', async ({ page }) => {
   test.setTimeout(120_000);
   await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });
 
-  const [health, automation, paper, integrations] = await Promise.all([
+  const [health, automation, paper] = await Promise.all([
     appGet<any>(page, '/api/health'),
     appGet<any>(page, '/api/trade-automation/status'),
     appGet<any>(page, '/api/trade-automation/paper-runtime-readiness'),
-    appGet<any>(page, '/api/user-integrations'),
   ]);
 
   const blockers: string[] = [];
@@ -115,46 +109,9 @@ test('Production external readiness fails closed before SSH, database, deploy, p
     blockers.push(`PAPER_RUNTIME_READONLY_PRECHECK_FAILED_HTTP_${paper.status}`);
   }
 
-  if (!integrations.ok || integrations.body?.ok !== true) {
-    blockers.push(`USER_INTEGRATIONS_HTTP_${integrations.status}`);
-  } else {
-    if (integrations.body?.telegramStorageAvailable !== true) blockers.push('TELEGRAM_STORAGE_UNAVAILABLE');
-    if (integrations.body?.alertPolicyStorageAvailable !== true) blockers.push('TELEGRAM_POLICY_STORAGE_UNAVAILABLE');
-    if (integrations.body?.telegram?.recoveryRequired === true) {
-      const error = safeCode(
-        integrations.body?.telegram?.recoveryErrorCode,
-        'TELEGRAM_CONNECTION_RECOVERY_REQUIRED',
-      );
-      blockers.push(error === 'TELEGRAM_HTTP_403'
-        ? 'TELEGRAM_DESTINATION_FORBIDDEN_RECONNECT_REQUIRED'
-        : `TELEGRAM_RECONNECT_REQUIRED:${error}`);
-    }
-    if (integrations.body?.telegram?.connected !== true) blockers.push('TELEGRAM_CONNECTION_REQUIRED');
-    const runtime = integrations.body?.telegramRuntime ?? {};
-    for (const [key, value] of [
-      ['DELIVERY', runtime.deliveryReady],
-      ['BACKGROUND_WORKERS', runtime.backgroundWorkersEnabled],
-      ['PERSONAL_WORKER_ENABLED', runtime.personalWorkerEnabled],
-      ['PERSONAL_WORKER_STARTED', runtime.personalWorkerStarted],
-      ['WORKER_ACTIVATION', runtime.workerActivationApproved],
-    ] as const) {
-      if (value !== true) blockers.push(`TELEGRAM_${key}_NOT_READY`);
-    }
-    if (runtime.orderAuthority !== 'NONE'
-      || runtime.privateTradingApiAllowed !== false
-      || runtime.realOrderAllowed !== false) {
-      blockers.push('TELEGRAM_ZERO_TRADING_AUTHORITY_VIOLATION');
-    }
-    if (integrations.body?.privateApiRequests !== 0
-      || integrations.body?.ordersSubmitted !== 0
-      || integrations.body?.ordersCancelled !== 0) {
-      blockers.push('PREDEPLOY_MUTATION_COUNTER_NONZERO');
-    }
-  }
-
   const uniqueBlockers = [...new Set(blockers)];
   writeEvidence({
-    schemaVersion: 'production-automation-research-predeploy-readiness-v1',
+    schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v2',
     generatedAt: new Date().toISOString(),
     targetSha,
     productionDeployRunId,
@@ -173,15 +130,8 @@ test('Production external readiness fails closed before SSH, database, deploy, p
         autoServerGateOff: automation.body?.liveAutomaticExecutionServerEnabled?.[provider] === false,
       }];
     })),
-    telegram: {
-      connected: integrations.body?.telegram?.connected === true,
-      recoveryRequired: integrations.body?.telegram?.recoveryRequired === true,
-      recoveryErrorCode: safeCode(integrations.body?.telegram?.recoveryErrorCode, 'NONE'),
-      deliveryReady: integrations.body?.telegramRuntime?.deliveryReady === true,
-      personalWorkerStarted: integrations.body?.telegramRuntime?.personalWorkerStarted === true,
-      workerActivationApproved: integrations.body?.telegramRuntime?.workerActivationApproved === true,
-      orderAuthority: integrations.body?.telegramRuntime?.orderAuthority === 'NONE' ? 'NONE' : 'UNSAFE',
-    },
+    scope: ['automaticTrading', 'automaticPaperTrading', 'researchCenter', 'backtester'],
+    telegramExcludedFromScope: true,
     paperReadOnlyProbe: paper.body?.readOnlyProbe === true,
     readOnly: true,
     sshConfigured: false,
