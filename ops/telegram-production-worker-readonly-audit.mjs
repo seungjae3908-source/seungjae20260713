@@ -172,12 +172,68 @@ export async function readHealthOnce({ getImpl = httpGet } = {}) {
   });
 }
 
+
+function emptySource(status) {
+  return { status, eventCount: 0, safetyValidated: false };
+}
+
+/** Only the signal subscriber's loopback, GET-only public/evidence endpoint.
+ * Never return event contents, symbols, member IDs, strategy text or prices.
+ */
+export async function readSignalSourceOnce({
+  sourceUrl = process.env.SIGNAL_INTELLIGENCE_URL?.trim() || 'http://127.0.0.1:8790/v1/signals',
+  getImpl = httpGet,
+} = {}) {
+  let target;
+  try { target = new URL(sourceUrl); } catch { return emptySource('UNSAFE_ENDPOINT'); }
+  if (target.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(target.hostname)
+    || target.pathname !== '/v1/signals' || target.search || target.hash
+    || target.username || target.password) return emptySource('UNSAFE_ENDPOINT');
+  return await new Promise(resolve => {
+    let finished = false;
+    let req = null;
+    const done = v => { if (!finished) { finished = true; clearTimeout(timer); resolve(v); } };
+    const timer = setTimeout(() => { req?.destroy?.(); done(emptySource('UNREACHABLE')); }, 5000);
+    try {
+      req = getImpl(target, { method: 'GET', timeout: 4500 }, res => {
+        if (res.statusCode !== 200) {
+          res.resume?.(); done(emptySource('UNREACHABLE')); return;
+        }
+        const chunks = [];
+        let bytes = 0;
+        res.on('data', chunk => {
+          bytes += chunk.length;
+          if (bytes > 1_048_576) { res.destroy?.(); done(emptySource('INVALID_RESPONSE')); return; }
+          chunks.push(chunk);
+        });
+        res.on('error', () => done(emptySource('UNREACHABLE')));
+        res.on('end', () => {
+          let envelope = null;
+          try { envelope = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+          const snapshot = envelope?.snapshot;
+          const valid = envelope?.ok === true && envelope?.executionAuthority === 'NONE'
+            && snapshot?.safety?.executionAuthority === 'NONE'
+            && snapshot?.safety?.privateTradingApiAllowed === false
+            && snapshot?.safety?.realOrderAllowed === false
+            && safeSha(envelope?.serviceSha) && safeSha(envelope.serviceSha) === safeSha(snapshot?.serviceSha)
+            && Array.isArray(snapshot?.events) && snapshot.events.length <= 10000;
+          done(valid ? { status: 'READY', eventCount: snapshot.events.length, safetyValidated: true }
+            : emptySource('INVALID_RESPONSE'));
+        });
+      });
+      req.on('timeout', () => req.destroy());
+      req.on('error', () => done(emptySource('UNREACHABLE')));
+    } catch { done(emptySource('UNREACHABLE')); }
+  });
+}
+
 export async function observeProductionTelegram({
   mainSha = process.env.TELEGRAM_AUDIT_MAIN_SHA,
   deployedSha = process.env.TELEGRAM_AUDIT_DEPLOYED_SHA,
   snapshot = readPm2Snapshot,
   health = readHealthOnce,
   state = readStateFile,
+  signalSource = readSignalSourceOnce,
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
@@ -192,6 +248,7 @@ export async function observeProductionTelegram({
     },
     marketBrief: emptyState('NOT_CHECKED'),
     signalSubscriber: emptyState('NOT_CHECKED'),
+    signalSource: emptySource('NOT_CHECKED'),
     proofLevel: 'NO_DELIVERY_PROOF',
     classification: 'NOT_STARTED',
     telegramSends: 0, databaseWrites: 0, pm2Restarts: 0,
@@ -250,6 +307,7 @@ export async function observeProductionTelegram({
       'telegram-intelligence-delivery-state.json', 'market', nowMs);
     receipt.signalSubscriber = state(runtime.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH,
       'signal-intelligence-telegram-state.json', 'signal', nowMs);
+    receipt.signalSource = await signalSource({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
     // Saved state is dedupe-or-delivery evidence, never Bot API confirmation.
     receipt.proofLevel = receipt.marketBrief.recordCount > 0
       || receipt.signalSubscriber.recordCount > 0 ? 'PERSISTED_LEDGER_ONLY' : 'NO_DELIVERY_PROOF';
