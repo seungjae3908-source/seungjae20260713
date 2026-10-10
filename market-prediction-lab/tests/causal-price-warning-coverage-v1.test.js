@@ -14,8 +14,8 @@ function candleRows({signalAt=20,hitAt=40,direction="SHORT",
    let o=100,h=100,l=100,c=100;
    if(i>=60+signalAt)c=100*(1+factor*signalPct/100);
    if(i===60+hitAt){
-     h=direction==="LONG"?100*(1+hitPct/100):Math.max(100,c);
-     l=direction==="SHORT"?100*(1-hitPct/100):Math.min(100,c);
+     h=direction==="LONG"?Math.max(100,c,100*(1+hitPct/100)):Math.max(100,c);
+     l=direction==="SHORT"?Math.min(100,c,100*(1-hitPct/100)):Math.min(100,c);
    } else {h=Math.max(100,c);l=Math.min(100,c);}
    return {timestamp:start+i*M,open:o,high:h,low:l,close:c,volume:10};
  });
