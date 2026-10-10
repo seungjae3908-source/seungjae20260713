@@ -12,7 +12,10 @@ test('owner command activates only isolated Paper after exact release evidence',
     'production-automation-research-core-${target}',
     'production-account-readonly-live-${target}',
     'production-live-credential-reuse-${target}',
-    'paper-forward-no-deploy-${target}',
+    'paper-forward-no-deploy-certification-${target}',
+    "run.path === '.github/workflows/paper-forward-schedule-no-deploy-activation.yml'",
+    "run.event === 'workflow_dispatch'",
+    'AUTOMATIC_PAPER_EXACT_CERTIFICATION_REQUIRED',
     "MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED: 'true'",
     "MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: 'false'",
     "LIVE_AUTOMATIC_TRADING_ENABLED: 'false'",
@@ -21,6 +24,8 @@ test('owner command activates only isolated Paper after exact release evidence',
     'Fail closed on activation error',
     "PRODUCTION_AUTOMATIC_PAPER_ACTIVATION: 'true'",
   ]) assert.ok(workflow.includes(token), `missing ${token}`);
+  assert.ok(!workflow.includes('paper-forward-no-deploy-${target}'));
+  assert.ok(!workflow.includes('AUTOMATIC_PAPER_EXACT_FORWARD_RUNTIME_REQUIRED'));
   assert.ok(!workflow.includes("LIVE_TRADING: 'true'"));
   assert.ok(!workflow.includes("AUTO_TRADING: 'true'"));
 });
