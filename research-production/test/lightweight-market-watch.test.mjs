@@ -99,6 +99,18 @@ test('stock feeds require fresh explicit provenance and expose subset coverage',
     'KR_STOCK', NOW), /STALE/);
   assert.throws(() => normalizeStockFeed(
     { ...input, source: 'my_secret=ABC' }, 'KR_STOCK', NOW), /INVALID/);
+  // The producer and all readbacks must share one allowlisted source-ID
+  // alphabet. A dotted vendor name or reserved NONE would otherwise write
+  // a healthy watch cycle that the admin UI later labels INVALID.
+  for (const invalidSource of ['KRX.V1', 'NONE', '../secret', 'PROVIDER=TOKEN']) {
+    assert.throws(() => normalizeStockFeed(
+      { ...input, source: invalidSource }, 'KR_STOCK', NOW),
+    /STOCK_PUBLIC_FEED_INVALID/, invalidSource);
+  }
+  const validSource = normalizeStockFeed(
+    { ...input, source: 'KRX_PUBLIC_V1' }, 'KR_STOCK', NOW);
+  assert.equal(validSource.source, 'KRX_PUBLIC_V1');
+  assert.equal(validSource.status, 'PARTIAL_UNIVERSE');
   assert.equal(blockedSource('US_STOCK', 'BLOCKED_PUBLIC_STOCK_FEED_MISSING').quotes.length, 0);
 });
 
