@@ -1048,7 +1048,7 @@ test('live connection verification authenticates the three spot providers with z
         });
       }
       if (url.includes('openapi.tossinvest.com/oauth2/token')) {
-        return new Response(JSON.stringify({ access_token: 'toss-token' }), {
+        return new Response(JSON.stringify({ access_token: 'toss-token', expires_in: 3600 }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }

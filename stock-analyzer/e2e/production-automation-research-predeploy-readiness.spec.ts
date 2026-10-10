@@ -5,6 +5,7 @@ import {
   loginProductionReadOnly,
   productionReadOnlyAccessToken,
 } from './support/production-readonly-login';
+import { assessProviderBeforeRepairDeployment } from './support/production-automation-research-predeploy';
 
 const enabled = process.env.PRODUCTION_AUTOMATION_RESEARCH_PREDEPLOY === 'true';
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '').trim();
@@ -72,31 +73,33 @@ test('Production Automation/Paper/Research/Backtester readiness fails closed bef
     appGet<any>(page, '/api/trade-automation/paper-runtime-readiness'),
   ]);
 
-  const blockers: string[] = [];
+  const deploymentBlockers: string[] = [];
+  const postDeployVerificationBlockers: string[] = [];
+  const activeProductionSha = /^[0-9a-f]{40}$/.test(String(health.body?.deploySha ?? '').toLowerCase())
+    ? String(health.body?.deploySha).toLowerCase()
+    : null;
+  const targetDiffersFromActiveProduction = activeProductionSha !== null && activeProductionSha !== targetSha;
   if (!health.ok || health.body?.identityMatch !== true
     || !/^[0-9a-f]{40}$/.test(String(health.body?.deploySha ?? '').toLowerCase())
     || String(health.body?.deploySha ?? '').toLowerCase()
       !== String(health.body?.deployMarkerSha ?? '').toLowerCase()) {
-    blockers.push('PRODUCTION_RUNTIME_IDENTITY_DRIFT');
+    deploymentBlockers.push('PRODUCTION_RUNTIME_IDENTITY_DRIFT');
   }
 
   if (!automation.ok || automation.body?.ok !== true) {
-    blockers.push(`AUTOMATION_STATUS_HTTP_${automation.status}`);
+    deploymentBlockers.push(`AUTOMATION_STATUS_HTTP_${automation.status}`);
   } else {
     for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
       const connection = providerState(automation.body?.connections, provider);
-      if (!connection) blockers.push(`PROVIDER_MISSING:${provider.toUpperCase()}`);
-      else {
-        if (connection.configured !== true) blockers.push(`PROVIDER_NOT_CONFIGURED:${provider.toUpperCase()}`);
-        if (!connection.lastVerifiedAt) blockers.push(`PROVIDER_NOT_VERIFIED:${provider.toUpperCase()}`);
-        if (connection.lastErrorCode != null) blockers.push(`PROVIDER_ERROR:${provider.toUpperCase()}`);
-      }
-      if (automation.body?.liveExecutionServerEnabled?.[provider] !== false) {
-        blockers.push(`LIVE_SERVER_GATE_NOT_OFF:${provider.toUpperCase()}`);
-      }
-      if (automation.body?.liveAutomaticExecutionServerEnabled?.[provider] !== false) {
-        blockers.push(`AUTO_SERVER_GATE_NOT_OFF:${provider.toUpperCase()}`);
-      }
+      const assessment = assessProviderBeforeRepairDeployment({
+        provider,
+        connection,
+        liveServerGateEnabled: automation.body?.liveExecutionServerEnabled?.[provider],
+        autoServerGateEnabled: automation.body?.liveAutomaticExecutionServerEnabled?.[provider],
+        targetDiffersFromActiveProduction,
+      });
+      deploymentBlockers.push(...assessment.deploymentBlockers);
+      postDeployVerificationBlockers.push(...assessment.postDeployVerificationBlockers);
     }
   }
 
@@ -106,20 +109,25 @@ test('Production Automation/Paper/Research/Backtester readiness fails closed bef
     || paper.body?.orderSubmitted !== false
     || paper.body?.exchangeRequestSent !== false
     || paper.body?.realOrderAuthorityGranted !== false) {
-    blockers.push(`PAPER_RUNTIME_READONLY_PRECHECK_FAILED_HTTP_${paper.status}`);
+    deploymentBlockers.push(`PAPER_RUNTIME_READONLY_PRECHECK_FAILED_HTTP_${paper.status}`);
   }
 
-  const uniqueBlockers = [...new Set(blockers)];
+  const uniqueDeploymentBlockers = [...new Set(deploymentBlockers)];
+  const uniquePostDeployVerificationBlockers = [...new Set(postDeployVerificationBlockers)];
   writeEvidence({
-    schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v2',
+    schemaVersion: 'production-automation-paper-research-backtester-predeploy-readiness-v3',
     generatedAt: new Date().toISOString(),
     targetSha,
     productionDeployRunId,
-    activeProductionSha: /^[0-9a-f]{40}$/.test(String(health.body?.deploySha ?? '').toLowerCase())
-      ? String(health.body?.deploySha).toLowerCase()
-      : null,
-    ready: uniqueBlockers.length === 0,
-    blockers: uniqueBlockers,
+    activeProductionSha,
+    targetDiffersFromActiveProduction,
+    ready: uniqueDeploymentBlockers.length === 0,
+    readyForDeployment: uniqueDeploymentBlockers.length === 0,
+    activationReadyBeforeDeploy: uniqueDeploymentBlockers.length === 0
+      && uniquePostDeployVerificationBlockers.length === 0,
+    blockers: uniqueDeploymentBlockers,
+    postDeployProviderReverificationRequired: uniquePostDeployVerificationBlockers.length > 0,
+    postDeployVerificationBlockers: uniquePostDeployVerificationBlockers,
     providerReadiness: Object.fromEntries(['toss', 'kiwoom', 'upbit', 'bitget'].map((provider) => {
       const connection = providerState(automation.body?.connections, provider);
       return [provider, {
@@ -150,5 +158,8 @@ test('Production Automation/Paper/Research/Backtester readiness fails closed bef
     accountValuesRecorded: false,
   });
 
-  expect(uniqueBlockers, `PRODUCTION_PREDEPLOY_READINESS_BLOCKED:${uniqueBlockers.join(',')}`).toEqual([]);
+  expect(
+    uniqueDeploymentBlockers,
+    `PRODUCTION_PREDEPLOY_READINESS_BLOCKED:${uniqueDeploymentBlockers.join(',')}`,
+  ).toEqual([]);
 });
