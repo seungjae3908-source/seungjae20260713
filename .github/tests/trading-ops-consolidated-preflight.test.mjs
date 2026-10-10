@@ -50,7 +50,9 @@ test('canonical app execution ledger is projected into journal without provider-
   assert.ok(!route.includes("...payload.warnings.filter((item): item is string => typeof item === 'string'), 'BROKER_HISTORY_IMPORTED_PERSISTENTLY'"));
   assert.ok(route.includes('/paper-journal/import-account-history'));
   assert.ok(route.includes("['toss', 'kiwoom']"));
-  assert.ok(service.includes("executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual'"));
+  assert.ok(service.includes("const executionMode = policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual'"));
+  assert.ok(service.includes('      executionMode,'));
+  assert.ok(service.includes('scopeAutomaticPaperFuturesRiskPolicy(policy, input, executionMode)'));
 });
 
 test('Toss existing-order history uses CLOSED read-only endpoint', () => {
