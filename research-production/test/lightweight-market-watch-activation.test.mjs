@@ -73,3 +73,19 @@ test('no generated business or research AI/paper execution is in isolated activa
   assert.ok(y.includes('24_hour_uptime_proven: false'));
   assert.doesNotMatch(y,/workflow_dispatch:.*activate-real-orders/);
 });
+
+test('Vultr load-average gate executes under gawk without reserved variable failure', async()=>{
+  const bash=await readFile(script,'utf8');
+  // The old -v load=... is a reserved gawk builtin that exits 2 at runtime.
+  // This test uses an actual awk subprocess, not just a grep of source text.
+  const match=bash.match(/awk -v load_average="\$load_one" 'BEGIN \{exit !\(load_average>=0 && load_average<1\.5\)\}' \|\| return 71/u);
+  assert.ok(match,'load average must use safe awk variable and retain fail-close threshold');
+  assert.doesNotMatch(bash,/awk -v load=/u);
+  const expr='BEGIN {exit !(load_average>=0 && load_average<1.5)}';
+  const safe=spawnSync('awk',['-v','load_average=0.2',expr],{encoding:'utf8'});
+  assert.equal(safe.status,0,safe.stderr);
+  const tooHigh=spawnSync('awk',['-v','load_average=2.0',expr],{encoding:'utf8'});
+  assert.notEqual(tooHigh.status,0,'high host load must continue to block activation');
+  const reserved=spawnSync('awk',['-v','load=0.2','BEGIN {exit !(load>=0 && load<1.5)}'],{encoding:'utf8'});
+  if(reserved.status===0) assert.fail('Expected reserved awk load variable to be rejected');
+});
