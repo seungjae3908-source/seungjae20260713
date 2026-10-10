@@ -93,9 +93,13 @@ function latestPrior(rows, symbol, direction, beforeMs) {
 export function auditHistoricalIntradayOpportunitiesV1({
   market, venue, session, universe, coverage = [], bars = [],
   scannerObservations = [], watchedSymbols = null, intervalMs = MINUTE_MS,
+  maxScannerLagMs = 180_000,
 } = {}) {
-  if (!(market in VENUE)) throw new TypeError("MARKET_INVALID");
+  if (!Object.hasOwn(VENUE, market)) throw new TypeError("MARKET_INVALID");
   if (intervalMs !== MINUTE_MS) throw new TypeError("ONE_MINUTE_ONLY");
+  if (!Number.isSafeInteger(maxScannerLagMs) || maxScannerLagMs < 0) {
+    throw new TypeError("SCANNER_LAG_LIMIT_INVALID");
+  }
   if (!session || !validTime(session.startMs) || !validTime(session.endMs)
       || session.endMs <= session.startMs
       || session.startMs % intervalMs !== 0 || session.endMs % intervalMs !== 0
@@ -134,6 +138,7 @@ export function auditHistoricalIntradayOpportunitiesV1({
     const c = coverageBySymbol.get(symbol);
     return !c || !["VERIFIED_COMPLETE", "VERIFIED_NO_TRADES"].includes(c.status)
       || !String(c.sourceId ?? "").trim()
+      || !validTime(c.startMs) || !validTime(c.endMs)
       || c.startMs > session.startMs || c.endMs < session.endMs
       || c.noTradeGapsChecked !== true;
   });
@@ -170,7 +175,10 @@ export function auditHistoricalIntradayOpportunitiesV1({
         || (DISCOVERED.has(raw.state) && !String(raw?.signalId ?? "").trim())) {
       throw new TypeError("SCANNER_CAUSAL_PROVENANCE_INVALID");
     }
-    return {symbol, direction, state:raw.state,
+    // A stale feed is a data-delay observation, NEVER an early discovery.
+    const state = raw.availableAtMs - raw.dataCutoffMs > maxScannerLagMs
+      ? "DATA_DELAYED" : raw.state;
+    return {symbol, direction, state,
       availableAtMs:raw.availableAtMs, dataCutoffMs:raw.dataCutoffMs,
       signalId: String(raw?.signalId ?? "").trim()};
   }).sort((a,b) => a.availableAtMs - b.availableAtMs);
@@ -232,9 +240,12 @@ export function auditHistoricalIntradayOpportunitiesV1({
   // Reuse canonical search-quality math. A logged candidate is never a fill.
   const uniqueSignals = new Map();
   for (const scan of scans) {
-    if (DISCOVERED.has(scan.state) && !uniqueSignals.has(scan.signalId)) {
-      uniqueSignals.set(scan.signalId, scan);
+    if (!DISCOVERED.has(scan.state)) continue;
+    const previous = uniqueSignals.get(scan.signalId);
+    if (previous && (previous.symbol !== scan.symbol || previous.direction !== scan.direction)) {
+      throw new TypeError("SIGNAL_ID_REUSED_FOR_DIFFERENT_OPPORTUNITIES");
     }
+    if (!previous) uniqueSignals.set(scan.signalId, scan);
   }
   const settledSignals = [];
   for (const scan of uniqueSignals.values()) {
@@ -257,7 +268,7 @@ export function auditHistoricalIntradayOpportunitiesV1({
   return Object.freeze({
     schemaVersion:"historical-intraday-opportunity-audit-v1",
     status:"OBSERVED_COHORT_ONLY", market, venue, sessionId:session.id,
-    timeframe:"1m", thresholdPcts:THRESHOLDS_PCT,
+    timeframe:"1m", thresholdPcts:THRESHOLDS_PCT, maxScannerLagMs,
     universeSourceId:universe.sourceId,
     universeSymbolCount:membership.size, coveredSymbolCount:coverageBySymbol.size,
     observedOpportunityCount:opportunities.length, reasonCounts,
