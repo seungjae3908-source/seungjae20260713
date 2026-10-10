@@ -34,6 +34,9 @@ test('personal Telegram test fails closed before storage or sender access withou
         repositoryCalls += 1;
         return activeConnection;
       },
+      async revokeTelegramConnection() {
+        repositoryCalls += 1;
+      },
     },
     sender: async () => {
       senderCalls += 1;
@@ -66,6 +69,9 @@ test('personal Telegram test uses only the injected sender after explicit activa
         assert.equal(userId, 'member-1');
         return activeConnection;
       },
+      async revokeTelegramConnection() {
+        repositoryCalls += 1;
+      },
     },
     sender: async (input) => {
       senderCalls += 1;
@@ -81,4 +87,31 @@ test('personal Telegram test uses only the injected sender after explicit activa
   assert.equal(result.attempts, 1);
   assert.equal(repositoryCalls, 1);
   assert.equal(senderCalls, 1);
+});
+
+test('personal Telegram test revokes a stale connection immediately on Telegram 403', async () => {
+  let revokedAt: string | null = null;
+  const result = await sendPersonalTelegramTestMessage('member-1', {
+    activationApproved: () => true,
+    connectionRepository: {
+      async getTelegramConnection() {
+        return activeConnection;
+      },
+      async revokeTelegramConnection(userId, timestamp) {
+        assert.equal(userId, 'member-1');
+        revokedAt = timestamp;
+      },
+    },
+    sender: async () => ({
+      ok: false,
+      attempts: 1,
+      skipped: 'DELIVERY_FAILED',
+      errorCode: 'TELEGRAM_HTTP_403',
+    }),
+    now: () => new Date('2026-09-03T01:02:03.000Z'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'TELEGRAM_HTTP_403');
+  assert.equal(revokedAt, '2026-09-03T01:02:03.000Z');
 });
