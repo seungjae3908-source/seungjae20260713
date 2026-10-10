@@ -204,22 +204,14 @@ test('relative root and payload paths fail closed',async()=>{
   }
 });
 
-test('registry and registered-components symlink outputs are rejected before write',async t=>{
+test('registry and registered-components symlink outputs are rejected before write',async()=>{
   for(const unsafeName of ['registry','registered-components']){
     const f=await fixture();
     const outside=await mkdtemp(join(tmpdir(),'canonical-component-registry-outside-'));
     try{
       const path=join(f.sourceDir,'dsl.json');
       await writeFile(path,JSON.stringify({value:1}));
-      try {
-        await symlink(outside,join(f.root,unsafeName),'dir');
-      } catch (error) {
-        if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error?.code)) {
-          t.skip('Windows host does not grant symbolic-link creation privilege');
-          return;
-        }
-        throw error;
-      }
+      await symlink(outside,join(f.root,unsafeName),'dir');
       await assert.rejects(
         registerCanonicalBundleComponentV1({
           inputRoot:f.root,
