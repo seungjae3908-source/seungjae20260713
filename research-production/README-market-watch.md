@@ -161,6 +161,26 @@ continuous24hProven and executionAuthority unproven/NONE. This is not a
 substitute for licensed KR/US feed contracts or an independent Vultr audit.
 No currently running host is claimed to have executed this Draft-only CLI.
 
+## Four-source read-only operational preflight
+
+The existing \`lightweight-market-watch-preflight.mjs\` now invokes the KR/US
+stock-source input preflight as its fourth **read-only local** diagnostic,
+alongside watcher status, cadence and disk capacity. Its summary includes
+\`checks.stockSources\` and only bounded aggregate \`stockInputMarkets\`
+(status/observedCount/listedCount, **not raw symbols or prices**).
+
+- Missing/stale stock files are \`INCOMPLETE\` with
+  \`STOCKSOURCES_NOT_CONNECTED\`.
+- Unsafe or malformed input is \`INVALID\`, not silently ignored.
+- Even if both local files are recent and parse correctly,
+  \`FORMAT_VALID_ONLY\` generates \`STOCKSOURCES_UPSTREAM_UNVERIFIED\`.
+  Independently licensed/authorized vendor identity, market entitlements,
+  full-universe proof and 24-hour host observations remain **unverified**.
+- The preflight never publishes stock snapshots, creates directories,
+  calls a provider, starts a systemd unit, or issues an order.
+  The command is available only after a separately approved deployment
+  of the exact Draft code; no current Vultr audit is asserted.
+
 ## Safe preflight and required follow-on steps
 
 1. Confirm `nproc=2`, MemAvailable, disk floor >=5 GiB, swap activity,
