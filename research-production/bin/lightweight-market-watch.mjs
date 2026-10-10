@@ -6,6 +6,7 @@ import {
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { preflightResearchProduction } from '../src/engine.mjs';
+import { readVerifiedStockSource } from './stock-source-preflight.mjs';
 import { advancePublicWatchProspectiveEvidence } from '../src/lightweight-market-watch-prospective.mjs';
 import { makePublicWatchCadenceRecord } from '../src/lightweight-market-watch-cadence.mjs';
 import {
@@ -14,7 +15,7 @@ import {
 import {
   WATCH_CONTRACT, WATCH_LIMITS, WATCH_MARKETS, WATCH_SAFETY,
   blockedSource, evaluateMarketOpportunities, evaluateWatchBudget,
-  normalizeBitgetSnapshot, normalizeStockFeed, normalizeUpbitSnapshot,
+  normalizeBitgetSnapshot, normalizeUpbitSnapshot,
   parseBoundedPublicJson, watchCycleDigest,
 } from '../src/lightweight-market-watch.mjs';
 
@@ -91,10 +92,8 @@ async function readSmallFileNoFollow(path, maxBytes = 4_000_000) {
   }
 }
 async function stockSnapshot(root, market) {
-  const path = join(root, 'market-watch-input', market + '.json');
   try {
-    const contents = await readSmallFileNoFollow(path);
-    return normalizeStockFeed(JSON.parse(contents), market, Date.now());
+    return await readVerifiedStockSource(root, market, Date.now());
   } catch (error) {
     if (error?.code === 'ENOENT') return blockedSource(market, 'BLOCKED_PUBLIC_STOCK_FEED_MISSING');
     return blockedSource(market, 'BLOCKED_' + errorCode(error, 'PUBLIC_STOCK_FEED_INVALID'));

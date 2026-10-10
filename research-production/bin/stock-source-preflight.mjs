@@ -24,6 +24,19 @@ const empty = (market, status) => ({
   market, status, source: null, listedCount: null, observedCount: null,
 });
 const safeDirectory = (meta) => meta?.isDirectory() && (meta.mode & 0o022) === 0;
+function validSourceRoot(root, nowMs) {
+  return typeof root === 'string' && root.length > 1
+    && root !== '/' && isAbsolute(root) && resolve(root) === root
+    && Number.isFinite(nowMs) && nowMs > 0;
+}
+async function verifiedStockInputDirectory(root) {
+  const stateDir = await lstat(root);
+  if (!safeDirectory(stateDir)) throw new Error('UNSAFE_STOCK_ROOT');
+  const directory = await lstat(join(root, 'market-watch-input'));
+  if (!safeDirectory(directory) || directory.uid !== stateDir.uid)
+    throw new Error('UNSAFE_STOCK_DIRECTORY');
+  return directory;
+}
 
 async function readPrivateStockJson(path, directoryOwner) {
   const meta = await lstat(path);
@@ -39,8 +52,12 @@ async function readPrivateStockJson(path, directoryOwner) {
       || opened.uid !== directoryOwner) throw new Error('STOCK_INPUT_CHANGED');
     const contents = await handle.readFile({ encoding: 'utf8' });
     const after = await handle.stat();
+    // An in-place overwrite can preserve the byte count and reset mtime.
+    // ctime plus device, owner and mode must also survive the entire read.
     if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs
-      || after.ino !== opened.ino || after.nlink !== 1)
+      || after.ctimeMs !== opened.ctimeMs || after.ino !== opened.ino
+      || after.dev !== opened.dev || after.nlink !== 1
+      || after.uid !== directoryOwner || (after.mode & 0o022) !== 0)
       throw new Error('STOCK_INPUT_CHANGED');
     return JSON.parse(contents);
   } finally {
@@ -48,11 +65,21 @@ async function readPrivateStockJson(path, directoryOwner) {
   }
 }
 
+// This is also the production watcher's only KR/US source read path.
+ // Source format validation alone must never bypass file ownership, directory
+ // permissions or in-place mutation checks verified by the preflight.
+export async function readVerifiedStockSource(root, market, nowMs = Date.now()) {
+  if (!validSourceRoot(root, nowMs) || !MARKETS.includes(market))
+    throw new Error('STOCK_SOURCE_ARGUMENT_INVALID');
+  const directory = await verifiedStockInputDirectory(root);
+  const raw = await readPrivateStockJson(
+    join(root, 'market-watch-input', market + '.json'), directory.uid,
+  );
+  return normalizeStockFeed(raw, market, nowMs);
+}
+
 export async function inspectStockInputs(root, nowMs = Date.now()) {
-  const validRoot = typeof root === 'string' && root.length > 1
-    && root !== '/' && isAbsolute(root) && resolve(root) === root
-    && Number.isFinite(nowMs) && nowMs > 0;
-  if (!validRoot) return {
+  if (!validSourceRoot(root, nowMs)) return {
     contract: STOCK_PREFLIGHT_CONTRACT, status: 'INVALID',
     markets: MARKETS.map(m => empty(m, 'INVALID')),
     ...NO_AUTHORITY,
@@ -60,11 +87,7 @@ export async function inspectStockInputs(root, nowMs = Date.now()) {
   const folder = join(root, 'market-watch-input');
   let directory;
   try {
-    const stateDir = await lstat(root);
-    if (!safeDirectory(stateDir)) throw new Error('UNSAFE_STOCK_ROOT');
-    directory = await lstat(folder);
-    if (!safeDirectory(directory) || directory.uid !== stateDir.uid)
-      throw new Error('UNSAFE_STOCK_DIRECTORY');
+    directory = await verifiedStockInputDirectory(root);
   } catch (error) {
     const missing = error?.code === 'ENOENT';
     return {
