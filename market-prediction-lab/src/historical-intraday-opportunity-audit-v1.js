@@ -163,6 +163,10 @@ export function auditNativeObservedMinuteWindowV1({
   pageWindowTraversed = false,
   baselineMode = "FIRST_WINDOW_OPEN",
   preWindowBars = [],
+  // Historical provider-native Upbit may OMIT minutes with no trades.
+  // ONLY explicitly tick-corroborated absent minutes can partition a sparse
+  // price sample; never create synthetic OHLCV or infer from empty candles.
+  verifiedNoTradeMinutes = [],
 } = {}) {
   if (!(market === "CRYPTO_SPOT" || market === "CRYPTO_FUTURES")
       || venue !== VENUE[market]
@@ -173,14 +177,39 @@ export function auditNativeObservedMinuteWindowV1({
       || pageWindowTraversed !== true || !Array.isArray(bars)) {
     return blocked(market,"SAMPLE_SOURCE_PROVENANCE_OR_WINDOW_INVALID");
   }
-  // A fully tiled and closed sample window is essential: a missing 1m response
-  // might mean no trades (Upbit) or unavailable data; never guess which.
+  // A sparse native Upbit candle window can be audited ONLY if every omitted
+  // minute is corroborated by the read-only public trades/ticks endpoint.
+  // Those ticks are same-provider evidence, not an independent tape or
+  // proof of availability to the historical live scanner.
   const slots = (endMs-startMs)/MINUTE_MS;
+  const sparse=bars.length!==slots;
   if(!Number.isSafeInteger(slots) || slots < 2 || slots > 1440
-      || bars.length !== slots) {
+      || !Array.isArray(verifiedNoTradeMinutes)
+      || bars.length<1 || bars.length>slots
+      || (sparse&&(market!=="CRYPTO_SPOT"
+        ||verifiedNoTradeMinutes.length!==slots-bars.length
+        ||verifiedNoTradeMinutes.length>24))
+      || (!sparse&&verifiedNoTradeMinutes.length!==0)) {
     return blocked(market,"SAMPLE_MINUTE_COVERAGE_INCOMPLETE",{
       expectedMinuteCount:slots,receivedMinuteCount:bars.length,
     });
+  }
+  const noTradesByMinute=new Map();
+  for(const receipt of verifiedNoTradeMinutes){
+    const ts=receipt?.timestampMs,latest=receipt?.latestTickAtMs;
+    if(receipt?.symbol!==symbol
+       ||receipt?.source!=="UPBIT_PUBLIC_TRADES_TICKS"
+       ||receipt?.venue!=="UPBIT_KRW"
+       ||receipt?.outcome!=="PUBLIC_LATEST_TICK_PRECEDES_MISSING_MINUTE"
+       ||!validTime(ts)||ts%MINUTE_MS!==0
+       ||ts<startMs||ts>=endMs||noTradesByMinute.has(ts)
+       ||!validTime(latest)||latest>=ts
+       ||typeof receipt?.utcMinute!=="string"
+       ||receipt.utcMinute!==new Date(ts).toISOString()
+       ||receipt.errorCode!=null){
+      return blocked(market,"SAMPLE_SPARSE_TICK_EVIDENCE_INVALID");
+    }
+    noTradesByMinute.set(ts,receipt);
   }
   const isDayMode = baselineMode === "PREVIOUS_UTC_DAY_LAST_MINUTE_CLOSE";
   if (!Array.isArray(preWindowBars)
@@ -207,7 +236,9 @@ export function auditNativeObservedMinuteWindowV1({
   for(const [index,raw] of bars.entries()) {
     const time=raw?.timestamp;
     const {open,high,low,close,volume}=raw ?? {};
-    if(!validTime(time) || time !== startMs + index*MINUTE_MS
+    if(!validTime(time) || (sparse
+         ? time<startMs||time>=endMs||time%MINUTE_MS!==0
+         : time!==startMs+index*MINUTE_MS)
        || time <= prevTime || ![open,high,low,close].every(finitePositive)
        || typeof volume!=="number" || !Number.isFinite(volume) || volume < 0
        || high < Math.max(open,close) || low > Math.min(open,close)
@@ -216,6 +247,26 @@ export function auditNativeObservedMinuteWindowV1({
     }
     normalized.push({timestampMs:time,open,high,low,close,volume});
     prevTime=time;
+  }
+  if(sparse) {
+    const observedSet=new Set(normalized.map(r=>r.timestampMs));
+    let missing=0;
+    for(let i=0;i<slots;i++){
+      const ts=startMs+i*MINUTE_MS;
+      if(!observedSet.has(ts)){
+        missing++;
+        if(!noTradesByMinute.has(ts))
+          return blocked(market,"SAMPLE_SPARSE_MINUTE_NOT_CORROBORATED",{
+            missingMinuteStartMs:ts,
+          });
+      }else if(noTradesByMinute.has(ts)){
+        return blocked(market,"SAMPLE_SPARSE_TICK_CONTRADICTS_BAR",{
+          contradictoryMinuteStartMs:ts,
+        });
+      }
+    }
+    if(missing!==noTradesByMinute.size)
+      return blocked(market,"SAMPLE_SPARSE_MINUTE_PROOF_MISMATCH");
   }
   const baselinePrice=isDayMode ? normalizedPriorHour.at(-1).close : normalized[0].open;
   const historicalContext=isDayMode ? [...normalizedPriorHour,...normalized] : normalized;
@@ -256,7 +307,8 @@ export function auditNativeObservedMinuteWindowV1({
   }
   return Object.freeze({
     schemaVersion:"native-observed-minute-opportunity-window-v1",
-    status:"OBSERVED_WINDOW_ONLY",market,venue,source,symbol,
+    status:sparse?"OBSERVED_UPBIT_SPARSE_WITH_PUBLIC_TICKS_ONLY"
+      :"OBSERVED_WINDOW_ONLY",market,venue,source,symbol,
     windowStartMs:startMs,windowEndMs:endMs,timeframe:"1m",
     baselineDefinition:isDayMode
       ? "PREVIOUS_UTC_DAY_FINAL_1M_CLOSE_SAME_VENUE"
@@ -267,7 +319,12 @@ export function auditNativeObservedMinuteWindowV1({
     retrospectivelyReconstructedPriorUtcClose:isDayMode,
     historicalScannerAsOfAvailabilityVerified:false,
     openingGapPct:(normalized[0].open/baselinePrice-1)*100,
-    observedMinuteCount:slots,missingMinuteCount:0,
+    expectedMinuteCount:slots,observedMinuteCount:normalized.length,
+    missingMinuteCount:slots-normalized.length,
+    sameVenuePublicTickCorroboratedEmptyMinutes:noTradesByMinute.size,
+    uncorroboratedEmptyMinutes:0,
+    allNativeCandleMinutesObserved:!sparse,
+    tickCorroborationIsNotIndependentHistoricalTape:sparse,
     opportunities:Object.freeze(opportunities),
     observedCrossingCount:opportunities.length,
     crossingThresholdsPcts:THRESHOLDS_PCT,
@@ -277,6 +334,7 @@ export function auditNativeObservedMinuteWindowV1({
     trueMarketWideRecall:null,
     realFillCount:null,netProfitPct:null,
     costAdjustedProfitabilityProven:false,
+    profitabilityProven:false,
     executionAuthority:"NONE",
   });
 }
