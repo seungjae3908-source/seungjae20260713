@@ -10,29 +10,58 @@ const config = readFileSync('stock-analyzer/playwright.staging-trading-core-only
 const spec = readFileSync('stock-analyzer/e2e/staging-trading-core-only.spec.ts', 'utf8');
 const verdictPath = '.github/scripts/build-staging-trading-core-only-verdict.mjs';
 const verdict = readFileSync(verdictPath, 'utf8');
+const adminProbe = readFileSync('api-server/scripts/staging-trading-core-admin-profile.mjs', 'utf8');
+const releasePreflight = readFileSync('.github/scripts/verify-automation-research-release-preflight.mjs', 'utf8');
 const SHA = 'a'.repeat(40);
 const requireAll = (text, markers) => {
   for (const marker of markers) assert.ok(text.includes(marker), 'missing contract marker: ' + marker);
 };
-test('Staging admin login maps protected email to the actual app login ID without storing a token', () => {
-  requireAll(spec, [
-    'resolveStagingAdminLoginName',
-    'STAGING_SUPABASE_ANON_KEY',
-    'user_metadata?.login_name',
-    'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING',
-    'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH',
-    'await username.fill(loginName)',
+test('fail-fast release preflight runs before Staging credentials or deployment', () => {
+  requireAll(workflow, [
+    '.github/scripts/verify-automation-research-release-preflight.mjs',
+    'node --check .github/scripts/verify-automation-research-release-preflight.mjs',
+    'node .github/scripts/verify-automation-research-release-preflight.mjs',
+    'Run fail-fast Automation/Research policy and wiring preflight',
   ]);
-  assert.ok(!spec.includes("username.fill(required('STAGING_ADMIN_EMAIL'))"));
-  assert.ok(workflow.includes('STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}'));
+  requireAll(releasePreflight, [
+    'PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000',
+    'PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000',
+    'AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const',
+    'dailyLossLimitPercent: 3',
+    'maxDailyOrders: 0',
+    'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY',
+    'telegramExcludedFromScope: true',
+    'revalidateProductionTradingGateConflicts',
+  ]);
+  assert.ok(workflow.indexOf('Run fail-fast Automation/Research policy and wiring preflight')
+    < workflow.indexOf('Fail closed on Production project, origins or missing scoped Staging credentials'));
 });
+test('Staging browser restores the real isolated admin password session without inventing login metadata', () => {
+  requireAll(spec, [
+    'restoreStagingAdminSession',
+    "new URL('/auth/v1/token?grant_type=password', supabase)",
+    "new URL('/api/auth/profile', origin)",
+    'STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH',
+    'STAGING_ADMIN_PROFILE_NOT_APPROVED',
+    'STAGING_ADMIN_SESSION_CONTRACT_INVALID',
+    'window.localStorage.setItem(storageKey, JSON.stringify(session))',
+    "await page.reload({ waitUntil: 'domcontentloaded' })",
+    'STAGING_PASSWORD_SESSION_RESTORE',
+    'interactiveLoginFormTested: false',
+  ]);
+  assert.ok(!spec.includes('STAGING_ADMIN_LOGIN_ID_METADATA_MISSING'));
+  assert.ok(!spec.includes('username.fill('));
+  assert.ok(!spec.includes('password.fill('));
+  assert.ok(!spec.includes('user_metadata?.login_name'));
+});
+
 test('Staging auth identity/token are never printed or written into scoped QA receipts', () => {
   assert.ok(!/console\.(?:log|info|warn|error)\(\s*(?:body|loginName|email|password)\b/.test(spec));
   assert.ok(!/writeFileSync\([^,]+,\s*JSON\.stringify\(body\b/.test(spec));
   requireAll(spec, [
-    "'STAGING_ADMIN_LOGIN_ID_METADATA_MISSING'",
-    "'STAGING_ADMIN_ID_EMAIL_CONTRACT_MISMATCH'",
-    "return loginName;",
+    "'STAGING_ADMIN_PROFILE_IDENTITY_MISMATCH'",
+    "'STAGING_ADMIN_PROFILE_NOT_APPROVED'",
+    "'STAGING_ADMIN_SESSION_CONTRACT_INVALID'",
   ]);
   assert.ok(!verdict.includes('adminEmail'));
   assert.ok(!verdict.includes('accessToken'));
@@ -45,6 +74,15 @@ test('Hub command is owner-only and staging-only', () => {
     "github.event.comment.author_association == 'OWNER'",
     "startsWith(github.event.comment.body, '/run-trading-core-staging ')",
     'STAGING_CORE_HUB_EXACT_COMMAND_REQUIRED',
+    'Verify direct owner or exact delegated owner-orchestrator provenance',
+    'STAGING_CORE_DELEGATED_PROVENANCE_REQUIRED',
+    'STAGING_CORE_DELEGATED_PROVENANCE_REJECTED',
+    "parent.path === '.github/workflows/production-postdeploy-qa.yml'",
+    "parent.event === 'issue_comment'",
+    "parent.actor?.login === context.repo.owner",
+    "parent.triggering_actor?.login === context.repo.owner",
+    "['queued', 'in_progress'].includes(parent.status)",
+    'DISPATCH_AUTHORIZED: ${{ steps.dispatch-authority.outputs.authorized }}',
     'STAGING_CORE_ACTION_INVALID',
     "needs.owner-gate.outputs.action == 'deploy'",
     'action: ${{ steps.target.outputs.action }}',
@@ -52,6 +90,50 @@ test('Hub command is owner-only and staging-only', () => {
   requireAll(workflow, markers);
   assert.ok(workflow.includes('([0-9a-f]{40}) (--preflight|--deploy)$/u.exec(process.env.OWNER_BODY'));
   assert.ok(!workflow.includes('actions: write'));
+  assert.ok(!workflow.includes('environment: production'));
+  assert.ok(workflow.includes('delegated_by_run_id:'));
+  assert.ok(!workflow.includes("context.actor === 'github-actions[bot]' && core.setOutput('authorized', 'true')"));
+  const ownerGate = workflow.indexOf('  owner-gate:');
+  const delegatedAuthority = workflow.indexOf('Verify direct owner or exact delegated owner-orchestrator provenance');
+  const exactTarget = workflow.indexOf('Require exact SHA, owner dispatch and unchanged current main');
+  assert.ok(ownerGate >= 0 && ownerGate < delegatedAuthority && delegatedAuthority < exactTarget,
+    'delegated authority must execute inside owner-gate before the exact target check');
+});
+
+test('Owner preflight proves canonical DB admin capability and owner Paper GET before Staging mutation', () => {
+  requireAll(workflow, [
+    'api-server/scripts/staging-trading-core-admin-profile.mjs',
+    '.github/tests/staging-trading-core-admin-profile.test.mjs',
+    'Verify Staging admin DB authorization and owner-scoped Paper GET before deployment',
+    'run: node api-server/scripts/staging-trading-core-admin-profile.mjs',
+    'node --check api-server/scripts/staging-trading-core-admin-profile.mjs',
+    'STAGING_BASE_URL: ${{ env.STAGING_BASE_URL }}',
+  ]);
+  assert.ok(workflow.indexOf('Verify Staging admin DB authorization and owner-scoped Paper GET before deployment')
+    < workflow.indexOf('  stage-deploy:'));
+  requireAll(spec, [
+    "hasCapability(profile, 'canManageMembers')",
+    "hasCapability(profile, 'canAccessJournalSync')",
+    "profile?.status !== 'approved'",
+    'profile?.is_active !== true',
+    "'STAGING_ADMIN_PROFILE_NOT_APPROVED'",
+  ]);
+  requireAll(adminProbe, [
+    'classifyStagingTradingAdminProfile',
+    "hasCapability(row, 'canManageMembers')",
+    "hasCapability(row, 'canAccessJournalSync')",
+    "'STAGING_CORE_ADMIN_PROFILE_UNAPPROVED'",
+    "'STAGING_CORE_ADMIN_PROFILE_INACTIVE'",
+    "'STAGING_CORE_ADMIN_PROFILE_CAPABILITY_MISSING'",
+    "'STAGING_CORE_ADMIN_ISOLATED_PROJECT_REQUIRED'",
+    "'STAGING_CORE_ADMIN_PAPER_READ_HTTP_'",
+    "'/api/auth/profile'",
+    "'/api/paper-journal/admin-four-market/status'",
+    "'STAGING_CORE_ADMIN_PAPER_READONLY_PASS'",
+  ]);
+  assert.ok(!adminProbe.includes('.auth.admin.updateUserById'));
+  assert.ok(!adminProbe.includes('.auth.admin.createUser'));
+  assert.ok(!adminProbe.includes('service_role'));
   assert.ok(!workflow.includes('environment: production'));
 });
 
@@ -110,12 +192,12 @@ test('protected Stage deploy is exact-main, isolated, serialized with official f
     < workflow.indexOf('Deploy exact SHA using existing Staging rollback/canary isolation'));
   assert.ok(workflow.indexOf('Destroy Staging SSH deployment authority')
     < workflow.indexOf('  scoped-qa:'));
-  assert.ok(workflow.includes('Upload scoped Staging evidence'));
+  assert.ok(workflow.includes('Upload exact-SHA Automation/Paper/Research/Backtester Staging verdict'));
   // A clean GH Actions runner must install node_modules before Playwright.
   assert.ok(workflow.indexOf('pnpm install --frozen-lockfile')
     < workflow.indexOf('pnpm --dir stock-analyzer exec playwright install chromium'));
 });
-test('only Trading Core browser + own Paper DB reads; no provider-private requests, simulated orders, Telegram sends, full release verdict', () => {
+test('only Auto, Paper, Research Center and Backtester decide the scoped verdict', () => {
   requireAll(spec, [
     "test.skip(!activated", "STAGING_TRADING_CORE_ONLY_QA",
     'STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD',
@@ -126,46 +208,63 @@ test('only Trading Core browser + own Paper DB reads; no provider-private reques
     "'/api/trade-automation/paper-runtime-readiness'",
     "'/api/paper-journal/admin-four-market/status'",
     "'/api/paper-journal/snapshot'",
-    "'/api/user-integrations'",
+    "'/api/admin/research/overview'",
+    "'/api/backtests/run'",
+    "page.goto('/research-center'",
+    "page.goto('/backtests'",
+    "getByTestId('trading-mode-paper')",
+    "getByTestId('trading-workspace-journal')",
     'liveExecutionServerEnabled',
     'health.deployMarkerSha', 'health.identityMatch', 'health.backgroundWorkersEnabled',
     'orderSubmissionPerformedByStatusRequest',
     'financialMutationCount',
     'privateProviderRequests',
-    'productionReleaseReady: false',
-    "fullStagingReleaseVerdict: 'NOT_EVALUATED'",
-    'canaryPaperFillObserved: false',
-    'telegramSentReceiptObserved: false',
+    'automaticTradingReadinessVerified: true',
+    'automaticPaperTradingReadinessVerified:',
+    'researchCenterReady: true',
+    'backtesterReady: true',
+    'telegramExcludedFromScope: true',
+    "backtestMode: backtest.mode",
+    'backtestOrderSubmitted: backtest.orderSubmitted',
+    'productionReleaseReady: true',
+    "scopedReleaseVerdict: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY'",
   ]);
   assert.ok(!spec.includes('/api/paper-journal/unified-ledger'));
-  // Supabase password grant resolves the staging login ID; app/trading API
-  // actions remain GET-only and may not use private broker or order mutations.
-  assert.equal((spec.match(/method: 'POST'/g) ?? []).length, 1,
-    'Only the isolated Staging Supabase Auth password grant may POST');
+  // The only POST operations are isolated Staging Auth and computation-only
+  // Backtester execution. Neither is a financial mutation.
+  assert.equal((spec.match(/method: 'POST'/g) ?? []).length, 2);
   assert.ok(spec.includes("new URL('/auth/v1/token?grant_type=password', supabase)"));
   assert.ok(!spec.includes('page.request.post('));
   assert.ok(!spec.includes("requestWithBrowserSession(page, endpoint, { method: 'POST' }"));
   assert.ok(!spec.includes('admin-four-market/bootstrap'));
   assert.ok(!spec.includes('telegram/test'));
+  assert.ok(!spec.includes("'/api/user-integrations'"));
+  assert.ok(!spec.includes("getByTestId('user-broker-telegram-panel')"));
   for (const marker of ["trace: 'off'", "video: 'off'", "screenshot: 'off'", 'workers: 1', 'retries: 0']) {
     assert.ok(config.includes(marker));
   }
-  assert.ok(workflow.includes('name: trading-core-scoped-staging-'));
+  assert.ok(workflow.includes('name: staging-automation-research-verdict-'));
   assert.ok(!workflow.includes('name: staging-verdict-'));
-  assert.ok(!workflow.includes('release_ready=true'));
+  assert.ok(workflow.includes('Scoped Production release_ready: true'));
+  assert.ok(workflow.includes('Unrelated UI/features: NOT_RUN'));
 });
 test('verdict verifies desktop and mobile immutable evidence, rejects missing or fabricated operational proof', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'trading-core-staging-scoped-'));
   const base = (project) => ({
-    schemaVersion: 'staging-trading-core-only-v1', targetSha: SHA, project,
-    stagingScopedQa: 'PASS', fourMarketsStructural: true,
+    schemaVersion: 'staging-automation-paper-research-backtester-core-v2', targetSha: SHA, project,
+    stagingScopedQa: 'PASS', browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
+    interactiveLoginFormTested: false, fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true, walletSeedPerMarketKrw: 1000000,
-    stagesChecked: Array.from({ length: 8 }, (_, i) => String(i)),
-    walletCount: 0, stagingWalletReady: false, paperWorkerReady: false,
-    walletBlockers: ['WALLET_MISSING'], workerBlockers: ['WORKER_OFF'],
-    canaryPaperFillObserved: false, telegramSentReceiptObserved: false,
+    stagesChecked: Array.from({ length: 11 }, (_, i) => String(i)),
+    walletCount: 4, stagingWalletReady: true, paperWorkerReady: true,
+    walletBlockers: [], workerBlockers: [],
+    automaticTradingReadinessVerified: true,
+    automaticPaperTradingReadinessVerified: true,
+    researchCenterReady: true, backtesterReady: true,
+    telegramExcludedFromScope: true,
+    backtestMode: 'backtest-only', backtestOrderSubmitted: false,
     realOrderAuthorityGranted: false, providerPrivateRequests: 0, tradingMutations: 0,
-    productionReleaseReady: false, fullStagingReleaseVerdict: 'NOT_EVALUATED',
+    productionReleaseReady: true, scopedReleaseVerdict: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY',
     automaticTradingActivated: false,
   });
   const write = (project, overrides = {}) => writeFileSync(
@@ -178,25 +277,51 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     write('trading-core-mobile');
     let result = exec();
     assert.equal(result.status, 0, result.stderr);
-    const receipt = JSON.parse(readFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), 'utf8'));
+    const receipt = JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8'));
     assert.equal(receipt.scopedStagingQa, 'PASS');
-    assert.equal(receipt.productionReleaseReady, false);
+    assert.equal(receipt.browserAuthMode, 'STAGING_PASSWORD_SESSION_RESTORE');
+    assert.equal(receipt.interactiveLoginFormTested, false);
+    assert.equal(receipt.productionReleaseReady, true);
+    assert.equal(receipt.release_ready, true);
     assert.equal(receipt.automaticTradingActivated, false);
-    assert.equal(receipt.operationalReadiness, 'BLOCKED');
-    assert.equal(receipt.canaryPaperFillObserved, false);
-    write('trading-core-desktop', { stagingWalletReady: true, paperWorkerReady: true, walletCount: 4, walletBlockers: [], workerBlockers: [] });
-    write('trading-core-mobile', { stagingWalletReady: true, paperWorkerReady: true, walletCount: 4, walletBlockers: [], workerBlockers: [] });
+    assert.equal(receipt.operationalReadiness, 'PREREQUISITES_PRESENT');
+    assert.equal(receipt.activationReady, true);
+    assert.equal(receipt.features.researchCenter, 'PASS');
+    assert.equal(receipt.telegramExcludedFromScope, true);
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: false,
+      workerBlockers: ['WORKER_OFF'],
+    });
     result = exec();
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(readFileSync(path.join(dir, 'trading-core-scoped-staging-verdict.json'), 'utf8')).operationalReadiness, 'PREREQUISITES_PRESENT');
-    write('trading-core-desktop');
-    write('trading-core-mobile', { productionReleaseReady: true });
+    assert.equal(JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8')).operationalReadiness, 'PREACTIVATION_BLOCKERS_RECORDED');
+    assert.equal(JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8')).activationReady, false);
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: true,
+      workerBlockers: ['WORKER_OFF'],
+    });
     result = exec();
     assert.notEqual(result.status, 0);
-    write('trading-core-mobile', { productionReleaseReady: false, telegramSentReceiptObserved: true });
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: false,
+      workerBlockers: [],
+    });
     result = exec();
     assert.notEqual(result.status, 0);
-    write('trading-core-mobile', { productionReleaseReady: false, telegramSentReceiptObserved: false, targetSha: 'b'.repeat(40) });
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: false,
+      workerBlockers: ['unsafe blocker details'],
+    });
+    result = exec();
+    assert.notEqual(result.status, 0);
+    write('trading-core-mobile', { paperWorkerReady: true, workerBlockers: [], productionReleaseReady: false });
+    result = exec();
+    assert.notEqual(result.status, 0);
+    write('trading-core-mobile', { productionReleaseReady: true, targetSha: 'b'.repeat(40) });
     result = exec();
     assert.notEqual(result.status, 0);
   } finally {

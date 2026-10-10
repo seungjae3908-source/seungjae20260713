@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { automaticLiveExecutionEnabled } from './trade-automation.service';
-import { DEFAULT_TRADING_POLICY, type ExchangeConnection, type TradingPlan, type TradingPolicy } from './trade-automation.types';
+import {
+  DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  type ExchangeConnection,
+  type TradingPlan,
+  type TradingPolicy,
+} from './trade-automation.types';
 import type { CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import type { PaperJournalRepository } from './paper-journal.types';
@@ -35,6 +41,7 @@ import {
   automaticPaperOrderWithinWalletEpoch,
   automaticPaperWalletServerEpochMs,
   automaticPaperRiskEvidenceFromCanonicalLedger,
+  deriveFourMarketPaperExecutionPolicy,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -145,10 +152,10 @@ test('dedicated automatic Paper equity never borrows manual simulator cash or co
   };
   assert.equal(selectAutomaticPaperAccountEquity([]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual]), null);
-  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 500_000);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 1_000_000);
   assert.equal(selectAutomaticPaperAccountEquity([manual, { ...dedicated, deletedAt: at }]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual, {
-    ...dedicated, payload: { ...dedicated.payload, initialBalance: 1_000_000 },
+    ...dedicated, payload: { ...dedicated.payload, initialBalance: 500_000 },
   }]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual, {
     ...dedicated, payload: { ...dedicated.payload, equity: -1 },
@@ -584,7 +591,7 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
-test('Bitget futures worker preserves every validated 4x-7x policy and evidence into the plan', async () => {
+test('Bitget futures worker preserves administrator 4x-7x and blocks the same evidence for members', async () => {
   for (const expectedLeverage of [4, 5, 6, 7] as const) {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
@@ -598,7 +605,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
     },
     exchangeEnabled: { bitget: true, upbit: false, kiwoom: false, toss: false },
     bitgetLeverage: expectedLeverage,
-  });
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
   await repository.savePolicy(USER, futuresPolicy);
 
   const futuresHandoff = JSON.parse(JSON.stringify(handoff(nowMs))) as any;
@@ -640,7 +647,7 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
       return [{
         userId: USER,
         policy: futuresPolicy,
-        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+        profile: { membership_level: 'admin', role: 'admin', status: 'approved', is_active: true },
       }];
     },
     async resolveFx() {
@@ -662,6 +669,33 @@ test('Bitget futures worker preserves every validated 4x-7x policy and evidence 
   assert.equal(plans[0]?.exchange, 'bitget');
   assert.equal(plans[0]?.leverage, expectedLeverage);
   assert.equal(plans[0]?.marginMode, 'isolated');
+
+  const memberRepository = new InMemoryTradingRepository();
+  await memberRepository.savePolicy(USER, futuresPolicy);
+  const memberBase = source(memberRepository, nowMs);
+  const memberWorker = new MemberAutoTradingBackgroundWorker({
+    ...memberBase,
+    async readHandoff() { return futuresHandoff as never; },
+    async listEligibleMembers() {
+      return [{
+        userId: USER,
+        policy: futuresPolicy,
+        profile: { membership_level: 'regular', role: 'full', status: 'approved', is_active: true },
+      }];
+    },
+    async resolveFx() {
+      return {
+        market: 'CRYPTO_FUTURES',
+        krwPerQuoteCurrency: 1_400,
+        source: 'UPBIT:KRW-USDT',
+        observedAt: new Date(nowMs).toISOString(),
+        stale: false,
+      };
+    },
+  });
+  const memberResult = await withFetchMock(() => memberWorker.runOnce(new Date(nowMs)));
+  assert.equal(memberResult.createdPlans, 0);
+  assert.equal((await memberRepository.listPlans(USER)).length, 0);
   }
 });
 
@@ -2569,13 +2603,34 @@ test('new wallet calculates only scoped Paper risk, still blocking new invalid f
   assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
 });
 
-test('automatic Paper worker shares the 500k minimum capital policy admission guard with readiness', () => {
-  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), false);
-  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), false);
+test('automatic Paper capital remains independent from the smaller LIVE role budget', () => {
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 9_999 }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 500_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 525_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.NaN }), false);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.POSITIVE_INFINITY }), false);
+});
+
+test('four-market Paper projection gives every member a 1m lane and compounds without changing Live policy', () => {
+  const stored = policy();
+  const projected = deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: true,
+    newEntriesAllowed: true,
+    operatingCapitalKrw: 1_050_000,
+  });
+  assert.equal(projected.totalCapitalKrw, 1_050_000);
+  assert.equal(projected.maxOrderKrw, 1_050_000);
+  assert.equal(projected.maxInstrumentKrw, 1_050_000);
+  assert.equal(projected.maxAssetClassKrw.crypto_spot, 1_050_000);
+  assert.equal(projected.bitgetLeverage, stored.bitgetLeverage);
+  assert.equal(stored.maxOrderKrw, 100_000, 'stored/Live policy must remain unchanged');
+  assert.throws(() => deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: false,
+    newEntriesAllowed: false,
+    operatingCapitalKrw: 1_000_000,
+  }), /BACKGROUND_PAPER_MARKET_CAPITAL_NOT_READY/);
 });
 
 test('admin four-market Paper worker isolates the 1m capital floor without creating private orders', async () => {

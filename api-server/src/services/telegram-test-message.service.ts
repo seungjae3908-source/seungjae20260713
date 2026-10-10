@@ -8,7 +8,7 @@ import {
   type TelegramAlertResult,
 } from './telegram-notification.service';
 
-type ConnectionReader = Pick<UserBrokerTelegramRepository, 'getTelegramConnection'>;
+type ConnectionRepository = Pick<UserBrokerTelegramRepository, 'getTelegramConnection' | 'revokeTelegramConnection'>;
 type Sender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
 
 export type TelegramTestMessageResult =
@@ -35,7 +35,7 @@ export type TelegramTestMessageResult =
     };
 
 export type TelegramTestMessageDependencies = {
-  connectionRepository?: ConnectionReader;
+  connectionRepository?: ConnectionRepository;
   sender?: Sender;
   now?: () => Date;
   activationApproved?: () => boolean;
@@ -97,10 +97,13 @@ export async function sendPersonalTelegramTestMessage(
   });
 
   if (!result.ok) {
+    if (result.errorCode === 'TELEGRAM_HTTP_403' || result.errorCode?.startsWith('TELEGRAM_FORBIDDEN_')) {
+      await connectionRepository.revokeTelegramConnection(userId, now.toISOString());
+    }
     return {
       ok: false,
       httpStatus: result.skipped === 'NOT_CONFIGURED' ? 503 : 502,
-      error: `TELEGRAM_TEST_${result.skipped}`,
+      error: result.errorCode ?? `TELEGRAM_TEST_${result.skipped}`,
       attempts: result.attempts,
       privateApiRequests: 0,
       ordersSubmitted: 0,

@@ -18,6 +18,7 @@ const artifactDir = path.resolve(
 );
 const enabled = process.env.PRODUCTION_TRADING_CORE_QA === 'true';
 const prepareMemberAutoPolicy = process.env.PRODUCTION_TRADING_CORE_PREPARE_POLICY === 'true';
+const requireTelegramActivation = process.env.PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM === 'true';
 
 test.skip(!enabled, 'Production Trading Core QA runs only in the dedicated protected workflow.');
 
@@ -157,7 +158,7 @@ function preparedMemberAutoPolicy(policy: any) {
   };
 }
 
-test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with zero real order authority', async ({ page }) => {
+test('Trading Core: provider -> Paper Auto -> Journal closes with optional Telegram and zero real order authority', async ({ page }) => {
   // The authorized Telegram worker ticks every 30s by default; its delivery
   // cadence must not race against the 30s poll boundary during Production QA.
   test.setTimeout(4 * 60_000);
@@ -220,6 +221,31 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let memberAutoResumePrepared = false;
   let integrationBefore: ApiResult<any>;
   try {
+    // The shared journal repository must remain readable, but an
+    // automation_research release explicitly excludes Telegram connection and
+    // delivery. Only a release that opts into Telegram may be blocked by an
+    // external bot/chat recovery state or Worker readiness.
+    integrationBefore = await appApi<any>(page, '/api/user-integrations');
+    expect(integrationBefore.ok).toBe(true);
+    expect(integrationBefore.body?.ok).toBe(true);
+    expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
+    if (requireTelegramActivation && integrationBefore.body?.telegram?.recoveryRequired === true) {
+      throw new Error(`PRODUCTION_TRADING_CORE_TELEGRAM_RECONNECT_REQUIRED:${String(
+        integrationBefore.body?.telegram?.recoveryErrorCode ?? 'TELEGRAM_CONNECTION_RECOVERY_REQUIRED',
+      ).replace(/[^A-Z0-9_:-]/giu, '_').slice(0, 120)}`);
+    }
+    if (requireTelegramActivation && integrationBefore.body?.telegram?.connected !== true) {
+      throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_CONNECTION_REQUIRED');
+    }
+    if (requireTelegramActivation && integrationBefore.body?.telegram?.connected === true) {
+      const worker = integrationBefore.body?.telegramRuntime ?? {};
+      if (worker.deliveryReady !== true || worker.backgroundWorkersEnabled !== true
+        || worker.personalWorkerEnabled !== true || worker.personalWorkerStarted !== true
+        || worker.workerActivationApproved !== true) {
+        throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY');
+      }
+    }
+
     if (prepareMemberAutoPolicy) {
       const prepared = await appApi<any>(
         page,
@@ -229,6 +255,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
       );
       expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
       expect(prepared.body?.ok).toBe(true);
+      // From this point every later failure must restore the captured policy.
+      memberAutoPolicyPrepared = true;
       preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
       expect(preparedPolicyReadiness.ready).toBe(true);
 
@@ -243,25 +271,11 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
           `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
         ).toBe(false);
       }
-      memberAutoPolicyPrepared = true;
-    }
-
-    integrationBefore = await appApi<any>(page, '/api/user-integrations');
-    expect(integrationBefore.ok).toBe(true);
-    expect(integrationBefore.body?.ok).toBe(true);
-    expect(integrationBefore.body?.telegramStorageAvailable).toBe(true);
-    if (integrationBefore.body?.telegram?.connected === true) {
-      const worker = integrationBefore.body?.telegramRuntime ?? {};
-      if (worker.deliveryReady !== true || worker.backgroundWorkersEnabled !== true
-        || worker.personalWorkerEnabled !== true || worker.personalWorkerStarted !== true
-        || worker.workerActivationApproved !== true) {
-        throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY');
-      }
     }
   } catch (preflightError) {
     // Member policy preparation may have resumed STOP before later assertions fail.
     // Restore the exact captured policy even when the main canary never starts.
-    if (prepareMemberAutoPolicy) {
+    if (memberAutoPolicyPrepared) {
       try {
         const restored = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
           ...originalPolicy,
@@ -284,8 +298,10 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     throw preflightError;
   }
 
-  const telegramConnectedBefore = integrationBefore.body?.telegram?.connected === true;
-  const telegramRuntimeReady = integrationBefore.body?.telegramRuntime?.deliveryReady === true
+  const telegramConnectedBefore = requireTelegramActivation
+    && integrationBefore.body?.telegram?.connected === true;
+  const telegramRuntimeReady = requireTelegramActivation
+    && integrationBefore.body?.telegramRuntime?.deliveryReady === true
     && integrationBefore.body?.telegramRuntime?.backgroundWorkersEnabled === true
     && integrationBefore.body?.telegramRuntime?.personalWorkerEnabled === true
     && integrationBefore.body?.telegramRuntime?.personalWorkerStarted === true
@@ -334,10 +350,13 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     expect(saved.body?.policy?.mode).toBe('automatic');
     expect(saved.body?.policy?.automaticEnabled).toBe(true);
 
+    // A Telegram-excluded release must not accidentally queue or deliver the
+    // Paper canary even when the member reconnects Telegram independently.
+    // Preserve and restore the member's exact preferences around the canary.
     const preferences = await appApi<any>(page, '/api/user-integrations/notifications', 'PATCH', {
-      ORDER_SUBMITTED: true,
-      ORDER_PARTIALLY_FILLED: true,
-      ORDER_FILLED: true,
+      ORDER_SUBMITTED: requireTelegramActivation,
+      ORDER_PARTIALLY_FILLED: requireTelegramActivation,
+      ORDER_FILLED: requireTelegramActivation,
     });
     expect(preferences.ok, JSON.stringify(preferences.body)).toBe(true);
 
@@ -555,6 +574,8 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
     executionSyncInserted: syncInserted,
     telegramActivationState,
     telegramActivationReady: true,
+    telegramRequiredForQa: requireTelegramActivation,
+    telegramDeliverySuppressedDuringQa: !requireTelegramActivation,
     telegramUserConnectionRequired: !telegramConnectedBefore,
     telegramPersonalActivationRequired: !telegramConnectedBefore || !telegramRuntimeReady,
     telegramConnectedBefore,
