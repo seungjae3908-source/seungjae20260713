@@ -34,13 +34,15 @@ function normalizeMemberships(rows) {
     return Object.freeze({ symbol: memberSymbol, activeFrom, activeTo, exitReason, sourceId });
   });
   normalized.sort((a, b) => a.activeFrom - b.activeFrom || a.symbol.localeCompare(b.symbol));
-  for (let index = 1; index < normalized.length; index += 1) {
-    const prior = normalized[index - 1];
-    const current = normalized[index];
-    if (prior.symbol !== current.symbol) continue;
-    if (prior.activeTo == null || current.activeFrom <= prior.activeTo) {
+  // Sorting by activeFrom interleaves different symbols. Compare with the
+  // previous interval OF THE SAME SYMBOL, not the immediately previous row.
+  const previousBySymbol = new Map();
+  for (const current of normalized) {
+    const prior = previousBySymbol.get(current.symbol);
+    if (prior && (prior.activeTo == null || current.activeFrom <= prior.activeTo)) {
       throw new PredictionInputError("membership intervals for one symbol must not overlap", { symbol: current.symbol });
     }
+    previousBySymbol.set(current.symbol, current);
   }
   return Object.freeze(normalized);
 }

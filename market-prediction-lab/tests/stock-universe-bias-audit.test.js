@@ -88,3 +88,18 @@ test("overlapping membership intervals for one symbol are rejected", () => {
     histories: [{ symbol: "ABC", firstTimestamp: START - 30 * DAY, lastTimestamp: END, source: "fixture" }],
   }), /must not overlap/);
 });
+
+test("interleaved symbols do not conceal overlapping membership periods", () => {
+  assert.throws(() => auditStockUniverseBias({
+    market: "KR_STOCK",
+    evaluationStartTime: START,
+    evaluationEndTime: END,
+    frozenAt: START - DAY,
+    memberships: [
+      { symbol: "AAA", activeFrom: START - 10 * DAY, activeTo: START + 10 * DAY, sourceId: "first-a" },
+      { symbol: "BBB", activeFrom: START - 8 * DAY, activeTo: null, sourceId: "other" },
+      { symbol: "AAA", activeFrom: START + 5 * DAY, activeTo: null, sourceId: "second-a" },
+    ],
+    histories: [],
+  }), /must not overlap/);
+});
