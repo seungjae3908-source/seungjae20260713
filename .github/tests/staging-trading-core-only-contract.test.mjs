@@ -30,7 +30,7 @@ test('fail-fast release preflight runs before Staging credentials or deployment'
     'dailyLossLimitPercent: 3',
     'maxDailyOrders: 0',
     'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY',
-    "telegramOrderAuthority: 'NONE'",
+    'telegramExcludedFromScope: true',
     'revalidateProductionTradingGateConflicts',
   ]);
   assert.ok(workflow.indexOf('Run fail-fast Automation/Research policy and wiring preflight')
@@ -192,12 +192,12 @@ test('protected Stage deploy is exact-main, isolated, serialized with official f
     < workflow.indexOf('Deploy exact SHA using existing Staging rollback/canary isolation'));
   assert.ok(workflow.indexOf('Destroy Staging SSH deployment authority')
     < workflow.indexOf('  scoped-qa:'));
-  assert.ok(workflow.includes('Upload exact-SHA Automation/Research/Telegram Staging verdict'));
+  assert.ok(workflow.includes('Upload exact-SHA Automation/Paper/Research/Backtester Staging verdict'));
   // A clean GH Actions runner must install node_modules before Playwright.
   assert.ok(workflow.indexOf('pnpm install --frozen-lockfile')
     < workflow.indexOf('pnpm --dir stock-analyzer exec playwright install chromium'));
 });
-test('only Auto, Paper, Research Center, Backtester and Telegram Journal decide the scoped verdict', () => {
+test('only Auto, Paper, Research Center and Backtester decide the scoped verdict', () => {
   requireAll(spec, [
     "test.skip(!activated", "STAGING_TRADING_CORE_ONLY_QA",
     'STAGING_ADMIN_EMAIL', 'STAGING_ADMIN_PASSWORD',
@@ -210,11 +210,9 @@ test('only Auto, Paper, Research Center, Backtester and Telegram Journal decide 
     "'/api/paper-journal/snapshot'",
     "'/api/admin/research/overview'",
     "'/api/backtests/run'",
-    "'/api/user-integrations'",
     "page.goto('/research-center'",
     "page.goto('/backtests'",
     "getByTestId('trading-mode-paper')",
-    "getByTestId('user-broker-telegram-panel')",
     "getByTestId('trading-workspace-journal')",
     'liveExecutionServerEnabled',
     'health.deployMarkerSha', 'health.identityMatch', 'health.backgroundWorkersEnabled',
@@ -225,12 +223,11 @@ test('only Auto, Paper, Research Center, Backtester and Telegram Journal decide 
     'automaticPaperTradingReadinessVerified:',
     'researchCenterReady: true',
     'backtesterReady: true',
-    'telegramTradeJournalReady: true',
-    'telegramJournalPreferenceEnabled:',
+    'telegramExcludedFromScope: true',
     "backtestMode: backtest.mode",
     'backtestOrderSubmitted: backtest.orderSubmitted',
     'productionReleaseReady: true',
-    "scopedReleaseVerdict: 'AUTOMATION_RESEARCH_ONLY'",
+    "scopedReleaseVerdict: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY'",
   ]);
   assert.ok(!spec.includes('/api/paper-journal/unified-ledger'));
   // The only POST operations are isolated Staging Auth and computation-only
@@ -241,6 +238,8 @@ test('only Auto, Paper, Research Center, Backtester and Telegram Journal decide 
   assert.ok(!spec.includes("requestWithBrowserSession(page, endpoint, { method: 'POST' }"));
   assert.ok(!spec.includes('admin-four-market/bootstrap'));
   assert.ok(!spec.includes('telegram/test'));
+  assert.ok(!spec.includes("'/api/user-integrations'"));
+  assert.ok(!spec.includes("getByTestId('user-broker-telegram-panel')"));
   for (const marker of ["trace: 'off'", "video: 'off'", "screenshot: 'off'", 'workers: 1', 'retries: 0']) {
     assert.ok(config.includes(marker));
   }
@@ -252,20 +251,20 @@ test('only Auto, Paper, Research Center, Backtester and Telegram Journal decide 
 test('verdict verifies desktop and mobile immutable evidence, rejects missing or fabricated operational proof', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'trading-core-staging-scoped-'));
   const base = (project) => ({
-    schemaVersion: 'staging-automation-research-core-v1', targetSha: SHA, project,
+    schemaVersion: 'staging-automation-paper-research-backtester-core-v2', targetSha: SHA, project,
     stagingScopedQa: 'PASS', browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
     interactiveLoginFormTested: false, fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true, walletSeedPerMarketKrw: 1000000,
-    stagesChecked: Array.from({ length: 13 }, (_, i) => String(i)),
+    stagesChecked: Array.from({ length: 11 }, (_, i) => String(i)),
     walletCount: 4, stagingWalletReady: true, paperWorkerReady: true,
     walletBlockers: [], workerBlockers: [],
     automaticTradingReadinessVerified: true,
     automaticPaperTradingReadinessVerified: true,
     researchCenterReady: true, backtesterReady: true,
-    telegramTradeJournalReady: true, telegramJournalPreferenceEnabled: true,
+    telegramExcludedFromScope: true,
     backtestMode: 'backtest-only', backtestOrderSubmitted: false,
     realOrderAuthorityGranted: false, providerPrivateRequests: 0, tradingMutations: 0,
-    productionReleaseReady: true, scopedReleaseVerdict: 'AUTOMATION_RESEARCH_ONLY',
+    productionReleaseReady: true, scopedReleaseVerdict: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY',
     automaticTradingActivated: false,
   });
   const write = (project, overrides = {}) => writeFileSync(
@@ -288,7 +287,7 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     assert.equal(receipt.operationalReadiness, 'PREREQUISITES_PRESENT');
     assert.equal(receipt.activationReady, true);
     assert.equal(receipt.features.researchCenter, 'PASS');
-    assert.equal(receipt.features.telegramTradeJournal, 'PASS');
+    assert.equal(receipt.telegramExcludedFromScope, true);
     write('trading-core-mobile', {
       paperWorkerReady: false,
       automaticPaperTradingReadinessVerified: false,
