@@ -181,7 +181,24 @@ per two-minute cycle**. The caps protect the app server and were NOT raised.
 - `qualifyingCandidateCount`: among the retained symbols, the number
   that pass comparable-timestamp, price, liquidity and cooldown gates.
 - `candidateCappedCount`: such qualified provisional candidates
-  beyond the top 12 that are NOT published to the event log. Not fills/PnL.
+  beyond the top 12 that are NOT published to the ordinary event log.
+  They do not become signals, Paper admissions, fills or realized profit.
+- New **private capped-candidate audit**: at most 32 detailed additional
+  candidates per market/cycle are recorded in a separate 0600 JSONL under
+  `watch/capped/YYYY-MM-DD.jsonl`, with a full capped-identity SHA-256
+  digest and explicit count of any further *undetailed* candidates. This
+  avoids the former loss of all identities above position 12 while keeping
+  the output/forward limit at 12. The daily capped log has the same 64 MiB,
+  2 MiB/append and 16 KiB/row fail-closed limits as existing event logs.
+  One record per affected market/cycle, maximum 4; no raw feed, account
+  keys, public API export, alerts or Paper signal authority.
+- The aggregate capacity census now accounts for the capped category.
+  If a capped log is unsafe or full, the cycle fails without advancing its
+  cursor; duplicate audit eventIds from crash retries must be deduplicated
+  by a future read-only consumer. Zero archived capped records is not proof
+  that every eligible opportunity was emitted; records beyond 32 are
+  **counted and integrity-hashed, not individually recoverable**.
+  No new execution authority or retention/deletion process is enabled.
 - A source that reports READY but loses quotes to de-duplication or 8k
   truncation is relabeled PARTIAL_TICKERS. Stock input remains
   PARTIAL_UNIVERSE until independently authenticated licensed coverage.
@@ -324,7 +341,7 @@ sudo -u investment-research env \
 ## Bounded durable local writes (Draft — worker remains OFF)
 
 The watch writer now enforces **64 MiB per UTC day and log category** for
-`watch/events` and `watch/outcomes`, with a 2 MiB append cap, a 16 KiB
+`watch/events`, `watch/outcomes` and `watch/capped`, with a 2 MiB append cap, a 16 KiB
 JSONL-row cap and a maximum of 1,024 rows per append. The existing UTC daily
 cohort reader uses the same daily file and per-line limits. Unsafe symbolic
 links, hard links, permissive file modes and oversized logs fail closed rather

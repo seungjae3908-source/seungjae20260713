@@ -4,6 +4,12 @@ export const WATCH_MARKETS = Object.freeze([
   'KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES',
 ]);
 export const WATCH_CONTRACT = 'lightweight-market-opportunity-watch-v1';
+// Private, bounded research audit of candidates outside the 12 public-watch
+// observation budget. NOT a signal, Paper strategy, or OOS/profit evidence.
+export const WATCH_CAPPED_AUDIT_CONTRACT = 'public-watch-capped-candidate-audit-v1';
+export const WATCH_CAPPED_AUDIT_LIMITS = Object.freeze({
+  maxDetailedCandidatesPerMarketCycle: 32,
+});
 export const WATCH_SAFETY = Object.freeze({
   researchOnly: true,
   orderAuthority: 'NONE',
@@ -378,7 +384,39 @@ export function evaluateMarketOpportunities(input) {
   candidates.sort((a, b) =>
     b.score - a.score || a.symbol.localeCompare(b.symbol));
   const selected = Object.freeze(candidates.slice(0, WATCH_LIMITS.maxCandidatesPerMarket));
+  const capped = candidates.slice(WATCH_LIMITS.maxCandidatesPerMarket);
+  const details = Object.freeze(capped.slice(
+    0, WATCH_CAPPED_AUDIT_LIMITS.maxDetailedCandidatesPerMarketCycle,
+  ).map((candidate) => Object.freeze({
+    symbol: candidate.symbol, direction: candidate.direction,
+    sourceAtMs: candidate.sourceAtMs,
+    priorSourceAtMs: candidate.priorSourceAtMs,
+    movePercent: candidate.movePercent, score: candidate.score,
+    turnover24h: candidate.turnover24h,
+  })));
+  // Hash all qualifying *capped* identities, including those whose details
+  // cannot fit in a small-server bounded per-cycle audit record. This is only
+  // integrity against accidental loss after observation, not market truth.
+  const cappedAudit = capped.length === 0 ? null : Object.freeze({
+    contract: WATCH_CAPPED_AUDIT_CONTRACT,
+    market, source: source.source, universeStatus: source.status,
+    kind: 'CAPPED_RESEARCH_OBSERVATION_ONLY',
+    qualifyingCandidateCount: candidates.length,
+    emittedCandidateCount: selected.length,
+    cappedCandidateCount: capped.length,
+    detailedCandidateCount: details.length,
+    undetailedCandidateCount: capped.length - details.length,
+    cappedIdentityDigest: watchCycleDigest(capped.map(candidate => [
+      candidate.symbol, candidate.direction, candidate.source,
+      candidate.sourceAtMs, candidate.priorSourceAtMs,
+      candidate.movePercent, candidate.score,
+    ])),
+    details,
+    isTradingSignal: false, paperAdmitted: false, oosPassed: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  });
   return Object.freeze({
+    cappedAudit,
     summary: Object.freeze({
       market, status: source.status, source: source.source,
       listedCount: source.listedCount,

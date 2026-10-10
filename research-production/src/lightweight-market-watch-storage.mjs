@@ -57,7 +57,7 @@ export function checkWatchDailyAppend({ size, appendBytes, isFile, nlink, mode }
 }
 
 export async function appendBoundedWatchEvents(root, events, observedAt, category) {
-  if (category !== 'events' && category !== 'outcomes' && category !== 'cadence')
+  if (!['events', 'outcomes', 'cadence', 'capped'].includes(category))
     throw new Error('WATCH_LOG_CATEGORY_INVALID');
   if (!Array.isArray(events) || events.length > WATCH_STORAGE_LIMITS.maxRowsPerAppend)
     throw new Error('WATCH_LOG_RECORD_COUNT_INVALID');
