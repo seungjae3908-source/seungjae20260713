@@ -285,3 +285,110 @@ test("PIT readiness file inputs are private, report is immutable create-only",()
   assert.deepEqual(readFileSync(output),before);
  }finally{rmSync(folder,{recursive:true,force:true});}
 });
+
+function fullCryptoSourceAttestedBenchmarkV1(){
+ const benchmark=WHOLE_MARKET_BENCHMARK_WINDOW_V1;
+ const dates=fixedHistoricalCryptoUtcDatesV1().CRYPTO_SPOT;
+ const example=source("CRYPTO_SPOT"),manifest=example.manifest;
+ manifest.sourceClass="EXCHANGE_DATED_ARCHIVE";
+ delete manifest.testOnly;
+ manifest.sourceId="TEST_ARCHIVE_LICENSED_PIT_HISTORY";
+ manifest.coverageStartMs=benchmark.startMs;
+ manifest.coverageEndMs=benchmark.endExclusiveMs;
+ manifest.retrievedAtMs=benchmark.endExclusiveMs+D;
+ manifest.memberships=manifest.memberships.map(row=>({
+   ...row,sourceId:manifest.sourceId,
+ }));
+ manifest.rawMembershipDigestSha256=digestPITMembershipRowsV1(manifest.memberships);
+ const archived=(date,pit=manifest)=>{
+  const venue="UPBIT_KRW",market="CRYPTO_SPOT";
+  const rows=pit.memberships.filter(x=>
+    x.listedAtMs<date+D&&(x.removedAtMs??Infinity)>date).map(x=>({
+    symbol:x.symbol,market,venue,timestampMs:date,
+    open:104,high:115,low:100,close:106,volume:100,
+    priorClose:100,priorCloseAsOfMs:date,
+    evidenceSha256:H,sourceId:"native-day-"+date,
+  }));
+  const dailySource={
+    schemaVersion:"venue-native-historical-all-names-daily-v1",
+    market,venue,sourceClass:"VENUE_NATIVE_DAILY_ARCHIVE",
+    sourceId:"native-day-"+date,
+    dayStartMs:date,dayEndMs:date+D,
+    retrievedAtMs:benchmark.endExclusiveMs+D,
+    exhaustiveActiveSymbolsRequested:true,
+    priceSelectionUsedFutureDayOHLC:false,
+    corporateActionAdjustmentEvidenceAttached:false,
+    sourcePriceConvention:"NATIVE_UNADJUSTED",
+    rows,rowsSha256:digestWholeVenueDailyRowsV1(rows),
+  };
+  return {manifest:pit,dailySource};
+ };
+ const receipts=Object.fromEntries(dates.map(date=>[String(date),archived(date)]));
+ return {dates,manifest,receipts};
+}
+test("1096 complete source-attested days with a single full-span lifecycle archive pass only the source stage",()=>{
+ const {dates,receipts}=fullCryptoSourceAttestedBenchmarkV1();
+ const report=four({
+  requestedTradingDaysByMarket:{CRYPTO_SPOT:dates},
+  dailyReceiptsByMarket:{CRYPTO_SPOT:receipts},
+ });
+ const market=report.markets.CRYPTO_SPOT;
+ assert.equal(market.requestedTradingDays,1096);
+ assert.equal(market.sourceAttestedPriceJoinedDays,1096);
+ assert.equal(market.fixtureJoinedDays,0);
+ assert.equal(market.blockedOrIncompleteDays,0);
+ assert.equal(market.lifecycleArchiveDigestCount,1);
+ assert.equal(market.lifecycleArchiveSourceIdentityCount,1);
+ assert.equal(market.lifecycleSourceLineageConsistent,true);
+ assert.equal(market.lifecycleArchiveFullWindowAttested,true);
+ assert.equal(market.lifecycleArchiveStatus,"SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY");
+ assert.equal(market.benchmarkPeriodSourceAttestedPriceJoined,true);
+ assert.equal(market.independentlyAuthenticatedPITAndPriceEvidence,false);
+ assert.equal(market.actualMarketWideOpportunityCount,null);
+ assert.equal(market.trueMarketWideRecall,null);
+ assert.equal(report.allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined,false);
+ assert.equal(report.historicalFullMarketOpportunityDenominatorVerified,false);
+ assert.equal(report.profitabilityProven,false);
+ assert.equal(report.executionAuthority,"NONE");
+});
+test("mixing two distinct PIT source identities across 1096 otherwise complete days blocks promotion",()=>{
+ const {dates,receipts,manifest}=fullCryptoSourceAttestedBenchmarkV1();
+ const altered={...manifest,sourceId:"ANOTHER_PIT_ARCHIVE_PROVIDER"};
+ receipts[String(dates[600])]={...receipts[String(dates[600])],manifest:altered};
+ const report=four({
+  requestedTradingDaysByMarket:{CRYPTO_SPOT:dates},
+  dailyReceiptsByMarket:{CRYPTO_SPOT:receipts},
+ });
+ const result=report.markets.CRYPTO_SPOT;
+ assert.equal(result.sourceAttestedPriceJoinedDays,1096);
+ assert.equal(result.lifecycleArchiveSourceIdentityCount,2);
+ assert.equal(result.lifecycleArchiveStatus,
+   "LIFECYCLE_SOURCE_ID_OR_DIGEST_CHANGED_ACROSS_DAYS");
+ assert.equal(result.benchmarkPeriodSourceAttestedPriceJoined,false);
+ assert.equal(result.actualMarketWideOpportunityCount,null);
+ assert.equal(result.trueMarketWideRecall,null);
+});
+test("one short-span PIT archive substituted into full 1096-day series never proves 3y continuity",()=>{
+ const {dates,receipts,manifest}=fullCryptoSourceAttestedBenchmarkV1();
+ const date=dates[700];
+ receipts[String(date)]={...receipts[String(date)],
+   manifest:{...manifest,coverageStartMs:WHOLE_MARKET_BENCHMARK_WINDOW_V1.startMs,
+     coverageEndMs:date+D}};
+ const report=four({
+  requestedTradingDaysByMarket:{CRYPTO_SPOT:dates},
+  dailyReceiptsByMarket:{CRYPTO_SPOT:receipts},
+ });
+ const result=report.markets.CRYPTO_SPOT;
+ assert.equal(result.sourceAttestedPriceJoinedDays,1096);
+ assert.equal(result.lifecycleArchiveSourceIdentityCount,1);
+ assert.equal(result.lifecycleArchiveDigestCount,1);
+ assert.equal(result.lifecycleSourceLineageConsistent,true);
+ assert.equal(result.lifecycleArchiveStatus,
+   "LIFECYCLE_SOURCE_ARCHIVE_SPAN_TOO_SHORT");
+ assert.equal(result.lifecycleArchiveFullWindowAttested,false);
+ assert.equal(result.lifecycleArchiveSpanGapPreview[0].dateUtc,
+   new Date(date).toISOString().slice(0,10));
+ assert.equal(result.benchmarkPeriodSourceAttestedPriceJoined,false);
+ assert.equal(result.actualMarketWideOpportunityCount,null);
+ assert.equal(result.trueMarketWideRecall,null);
+});

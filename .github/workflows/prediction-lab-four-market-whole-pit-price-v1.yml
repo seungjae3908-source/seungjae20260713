@@ -17,6 +17,8 @@ on:
       - market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs
       - market-prediction-lab/scripts/collect-stock-two-dated-source-v1.mjs
       - market-prediction-lab/tests/stock-two-dated-source-cli-v1.test.js
+      - market-prediction-lab/src/historical-pit-venue-universe-gate-v1.js
+      - market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
       - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
       - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
       - market-prediction-lab/src/krx-dated-all-stock-ohlcv-v1.js
@@ -59,6 +61,7 @@ jobs:
           test "$LIVE_TRADING" = "false"
           test "$AUTO_TRADING" = "false"
           test "$EXECUTION_AUTHORITY" = "NONE"
+          node --test market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
