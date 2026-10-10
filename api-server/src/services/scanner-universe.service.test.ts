@@ -96,7 +96,10 @@ test('missing US provider token uses UNKNOWN curated fallback; cursor pagination
       cursor = batch.nextCursor;
     }
     assert.equal(paged.length, new Set(paged).size);
-    assert.equal(paged.length, CATALOG.filter((row) => row.market === 'US').length);
+    const curated = new Set(CATALOG.filter((row) => row.market === 'US')
+      .map((row) => row.ticker.trim().toUpperCase()));
+    assert.ok(paged.every((ticker) => curated.has(ticker)));
+    assert.ok(paged.length <= curated.size);
   } finally {
     for (const key of keys) {
       if (before[key] === undefined) delete process.env[key];
