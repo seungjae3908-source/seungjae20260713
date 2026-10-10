@@ -41,6 +41,8 @@ const files = Object.fromEntries(await Promise.all([
   'stock-analyzer/src/App.tsx',
   'stock-analyzer/src/lib/app-navigation.ts',
   'stock-analyzer/src/lib/research-center.ts',
+  'stock-analyzer/src/pages/research-center.tsx',
+  'research-dashboard/server.py',
   'stock-analyzer/src/lib/research-center-product.ts',
   'stock-analyzer/src/lib/research-journal-binding.ts',
   'stock-analyzer/src/lib/strategy-promotion.ts',
@@ -65,6 +67,8 @@ const files = Object.fromEntries(await Promise.all([
 const app = files['stock-analyzer/src/App.tsx'];
 const nav = files['stock-analyzer/src/lib/app-navigation.ts'];
 const researchClient = files['stock-analyzer/src/lib/research-center.ts'];
+const researchPage = files['stock-analyzer/src/pages/research-center.tsx'];
+const dashboardSource = files['research-dashboard/server.py'];
 const product = files['stock-analyzer/src/lib/research-center-product.ts'];
 const journalClient = files['stock-analyzer/src/lib/research-journal-binding.ts'];
 const promotionClient = files['stock-analyzer/src/lib/strategy-promotion.ts'];
@@ -83,6 +87,14 @@ requireText(app, "function ResearchCenterAccess() { return gated('canManageMembe
 requireText(app, '<Route path="/research-center" component={ResearchCenterAccess} />', 'frontend Research Center route');
 requireRegex(nav, /id:\s*'research-center'[\s\S]{0,220}capability:\s*'canManageMembers'/u, 'navigation Research Center capability');
 requireText(researchClient, "authorizedFetch('/api/admin/research/overview'", 'overview client endpoint');
+requireText(researchClient, 'export interface ResearchFormulaBacktestReadback', 'bounded formula readback DTO');
+requireText(researchPage, 'data-testid="research-formula-backtest-status"', 'visible diagnostics');
+requireText(researchPage, 'Paper 미연결', 'missing consumer must remain explicit');
+requireText(overviewContract, 'function sanitizeFormulaBacktestReadback', 'formula DTO sanitizer');
+requireText(overviewContract, 'input.producerBound !== false || input.paperConsumerBound !== false', 'no unverified producer or consumer claim');
+requireText(dashboardSource, 'def summarize_formula_queue_readback(summary, registry):', 'dashboard readback');
+requireText(dashboardSource, "if counts['PASS'] or registered:", 'no TRAIN-only PASS or Paper registry promotion');
+requireText(dashboardSource, "'producerBound': False, 'paperConsumerBound': False", 'unattested inputs fail-closed');
 
 requireText(admin, 'router.use(requireAuthenticated, requireAdmin);', 'admin auth boundary');
 requireText(admin, "router.get('/research/overview'", 'admin Research overview route');
@@ -186,6 +198,9 @@ const technicalFailure = multiMarket.slice(failureStart, nextJob);
 forbidText(technicalFailure, "steps.market_suite.outputs.research_ready != 'true'", 'Multi-Market expected research hold');
 requireText(technicalFailure, "steps.research_hold.outcome == 'failure'", 'Multi-Market research-hold validation failure guard');
 
+requireText(researchPage, 'data-testid="research-paper-target-capital"', 'Paper KRW 1M target not a funded balance');
+requireText(researchPage, '1,000,000원 (KRW)', 'Paper canonical target');
+requireText(researchPage, '평가금액은 미측정', 'Paper funding evidence missing');
 requireText(overviewContract, "safety.readOnlyDashboard !== true", 'overview read-only safety sanitizer');
 requireText(overviewContract, "safety.liveTrading !== false", 'overview live-trading safety sanitizer');
 requireText(overviewContract, "safety.privateApi !== false", 'overview private-API safety sanitizer');

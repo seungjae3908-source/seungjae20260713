@@ -1,4 +1,4 @@
-name: Trading Core Only Staging QA
+name: Automation Paper Research Backtester Staging QA
 
 on:
   pull_request:
@@ -6,8 +6,25 @@ on:
       - '.github/workflows/staging-trading-core-only.yml'
       - '.github/tests/staging-trading-core-only-contract.test.mjs'
       - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
+      - '.github/scripts/verify-staging-automation-research-verdict.mjs'
+      - '.github/scripts/verify-automation-research-release-preflight.mjs'
+      - '.github/tests/production-automation-research-predeploy-contract.test.mjs'
+      - 'stock-analyzer/playwright.production-automation-research-predeploy.config.ts'
+      - 'stock-analyzer/e2e/production-automation-research-predeploy-readiness.spec.ts'
       - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
       - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
+      - 'stock-analyzer/src/pages/auto-trading.tsx'
+      - 'stock-analyzer/src/pages/paper-trading.tsx'
+      - 'stock-analyzer/src/pages/research-center.tsx'
+      - 'stock-analyzer/src/pages/research-center-workspace.tsx'
+      - 'stock-analyzer/src/pages/backtests.tsx'
+      - 'stock-analyzer/src/components/backtest-research-panel.tsx'
+      - 'api-server/src/routes/trade-automation.ts'
+      - 'api-server/src/routes/paper-journal.ts'
+      - 'api-server/src/routes/admin.ts'
+      - 'api-server/src/routes/backtests.ts'
+      - 'api-server/scripts/staging-trading-core-admin-profile.mjs'
+      - '.github/tests/staging-trading-core-admin-profile.test.mjs'
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -17,13 +34,18 @@ on:
         required: true
         type: string
       action:
-        description: Run owner preflight only or deploy isolated Staging and run Trading Core scoped QA
+        description: Run owner preflight only or deploy isolated Staging and run Auto/Paper/Research/Backtester scoped QA
         type: choice
         options:
           - preflight
           - deploy
         required: true
         default: preflight
+      delegated_by_run_id:
+        description: Trusted Production Post-Deploy orchestrator run ID; empty for direct owner dispatch
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -36,7 +58,7 @@ concurrency:
 
 jobs:
   validate-contract:
-    name: Validate focused Staging source and zero-Production boundary
+    name: Validate Auto/Paper/Research/Backtester Staging source and zero-Production boundary
     if: >-
       github.event_name != 'issue_comment' ||
       (      github.event.action == 'created' &&
@@ -60,7 +82,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           node --check .github/scripts/build-staging-trading-core-only-verdict.mjs
-          node --test .github/tests/staging-trading-core-only-contract.test.mjs
+          node --check .github/scripts/verify-staging-automation-research-verdict.mjs
+          node --check .github/scripts/verify-automation-research-release-preflight.mjs
+          node .github/scripts/verify-automation-research-release-preflight.mjs
+          node --check api-server/scripts/staging-trading-core-admin-profile.mjs
+          node --test .github/tests/staging-trading-core-only-contract.test.mjs .github/tests/staging-trading-core-admin-profile.test.mjs
 
   owner-gate:
     name: Owner exact-main provenance and Staging-only credentials
@@ -105,6 +131,47 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Run fail-fast Automation/Research policy and wiring preflight
+        run: node .github/scripts/verify-automation-research-release-preflight.mjs
+      - name: Verify direct owner or exact delegated owner-orchestrator provenance
+        id: dispatch-authority
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+          DELEGATED_BY_RUN_ID: ${{ inputs.delegated_by_run_id }}
+        with:
+          script: |
+            if (context.eventName === 'issue_comment' || context.actor === context.repo.owner) {
+              core.setOutput('authorized', 'true');
+              return;
+            }
+            if (context.eventName !== 'workflow_dispatch' || context.actor !== 'github-actions[bot]') {
+              core.setFailed('STAGING_CORE_OWNER_REQUIRED');
+              return;
+            }
+            const rawRunId = String(process.env.DELEGATED_BY_RUN_ID ?? '').trim();
+            const requestedSha = String(process.env.REQUESTED_SHA ?? '').trim().toLowerCase();
+            if (!/^[1-9][0-9]*$/u.test(rawRunId) || !/^[0-9a-f]{40}$/u.test(requestedSha)) {
+              core.setFailed('STAGING_CORE_DELEGATED_PROVENANCE_REQUIRED');
+              return;
+            }
+            const parent = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(rawRunId),
+            })).data;
+            const accepted = parent.path === '.github/workflows/production-postdeploy-qa.yml'
+              && parent.event === 'issue_comment'
+              && parent.head_branch === 'main'
+              && String(parent.head_sha ?? '').toLowerCase() === requestedSha
+              && parent.actor?.login === context.repo.owner
+              && parent.triggering_actor?.login === context.repo.owner
+              && ['queued', 'in_progress'].includes(parent.status);
+            if (!accepted) {
+              core.setFailed(`STAGING_CORE_DELEGATED_PROVENANCE_REJECTED:${parent.id}`);
+              return;
+            }
+            core.setOutput('authorized', 'true');
       - name: Verify exact owner-issued Hub command
         if: github.event_name == 'issue_comment'
         id: owner-command
@@ -122,10 +189,11 @@ jobs:
         env:
           REQUESTED_SHA: ${{ github.event_name == 'issue_comment' && steps.owner-command.outputs.sha || inputs.sha }}
           REQUESTED_ACTION: ${{ github.event_name == 'issue_comment' && steps.owner-command.outputs.action || inputs.action }}
+          DISPATCH_AUTHORIZED: ${{ steps.dispatch-authority.outputs.authorized }}
         run: |
           set -Eeuo pipefail
           [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'STAGING_CORE_REQUIRES_MAIN_REF' >&2; exit 1; }
-          [[ "$GITHUB_ACTOR" == 'seungjae3908-source' ]] || { echo 'STAGING_CORE_OWNER_REQUIRED' >&2; exit 1; }
+          [[ "$DISPATCH_AUTHORIZED" == 'true' ]] || { echo 'STAGING_CORE_OWNER_REQUIRED' >&2; exit 1; }
           [[ "$REQUESTED_ACTION" == preflight || "$REQUESTED_ACTION" == deploy ]] || { echo 'STAGING_CORE_ACTION_INVALID' >&2; exit 1; }
           [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'STAGING_CORE_IMMUTABLE_SHA_REQUIRED' >&2; exit 1; }
           target="$(printf %s "$REQUESTED_SHA" | tr '[:upper:]' '[:lower:]')"
@@ -178,18 +246,18 @@ jobs:
           if (db.hostname === 'bawcbkoyovbeajkrnduq.supabase.co')
             throw new Error('STAGING_CORE_PRODUCTION_DATABASE_FORBIDDEN');
           NODE
-      - name: Verify Staging-only administrator password grant
-        if: steps.target.outputs.action == 'deploy'
+      - name: Verify Staging admin DB authorization and owner-scoped Paper GET before deployment
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
           ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
-        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs
+          STAGING_BASE_URL: ${{ env.STAGING_BASE_URL }}
+        run: node api-server/scripts/staging-trading-core-admin-profile.mjs
       - name: Preflight-only result (does not deploy or change any environment)
         if: steps.target.outputs.action == 'preflight'
         run: |
-          echo 'Staging Trading Core scoped configuration preflight PASS (no deployment, no member mutation)' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Staging Trading Core admin authorization + Paper GET preflight PASS (no deployment, no member mutation)' >> "$GITHUB_STEP_SUMMARY"
 
   stage-deploy:
     name: Deploy exact revision only to isolated Staging
@@ -298,7 +366,7 @@ jobs:
           test ! -e "$HOME/.ssh/id_ed25519"
 
   scoped-qa:
-    name: Trading Core only — Staging desktop/mobile and read-only API
+    name: Auto + Paper + Research + Backtester only — desktop/mobile
     if: (github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment') && needs.owner-gate.outputs.action == 'deploy'
     needs: [owner-gate, stage-deploy]
     environment: staging
@@ -344,28 +412,34 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install isolated Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
-      - name: Run ONLY Trading Core scoped Staging UI/API tests (never place an order)
+      - name: Run ONLY Auto, Paper, Research Center and Backtester scoped Staging tests
         working-directory: stock-analyzer
         run: pnpm exec playwright test -c playwright.staging-trading-core-only.config.ts
-      - name: Verify exact-SHA scoped-only receipt; NEVER publish full-release approval
+      - name: Build and verify exact-SHA Automation/Paper/Research/Backtester scoped release receipt
         run: >-
           node .github/scripts/build-staging-trading-core-only-verdict.mjs
           stock-analyzer/staging-trading-core-artifacts "$STAGING_TARGET_SHA"
-      - name: Upload scoped Staging evidence (not a staging-verdict release artifact)
+      - name: Verify scoped verdict cannot impersonate Full Staging
+        run: >-
+          node .github/scripts/verify-staging-automation-research-verdict.mjs
+          stock-analyzer/staging-trading-core-artifacts/automation-research-staging-verdict.json
+          "$STAGING_TARGET_SHA"
+      - name: Upload exact-SHA Automation/Paper/Research/Backtester Staging verdict
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trading-core-scoped-staging-${{ needs.owner-gate.outputs.target_sha }}
+          name: staging-automation-research-verdict-${{ needs.owner-gate.outputs.target_sha }}
           path: stock-analyzer/staging-trading-core-artifacts
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
-      - name: Explain narrow verdict and activation exclusion
+      - name: Explain narrow release verdict and activation exclusion
         if: success()
         run: |
-          echo '## Trading Core Only Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Production release_ready: NOT_EVALUATED' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Full Staging browser suite: NOT_RUN' >> "$GITHUB_STEP_SUMMARY"
-          node -e "const v=require('./stock-analyzer/staging-trading-core-artifacts/trading-core-scoped-staging-verdict.json'); console.log('- Operational prerequisites: '+v.operationalReadiness)" >> "$GITHUB_STEP_SUMMARY"
+          echo '## Automation/Paper/Research/Backtester Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Scoped Production release_ready: true' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Covered: Auto Trading, Automatic Paper Trading, Research Center, Backtester' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Unrelated UI/features: NOT_RUN and cannot fail this scoped lane' >> "$GITHUB_STEP_SUMMARY"
+          node -e "const v=require('./stock-analyzer/staging-trading-core-artifacts/automation-research-staging-verdict.json'); console.log('- Operational prerequisites: '+v.operationalReadiness)" >> "$GITHUB_STEP_SUMMARY"
           echo '- Production order/provider private calls: 0' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Real Paper Worker fill/Journal/Telegram SENT: NOT_PROVEN' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Production deployment/activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Backtester computation: PASS; financial mutation authority: NONE; Telegram: OUT_OF_SCOPE' >> "$GITHUB_STEP_SUMMARY"
+          echo '- LIVE/AUTO activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"

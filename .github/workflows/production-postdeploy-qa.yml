@@ -12,6 +12,23 @@ on:
       - '.github/workflows/production-live-credential-reuse-qa.yml'
       - '.github/workflows/production-deploy.yml'
       - '.github/workflows/production-trading-core-qa.yml'
+      - 'stock-analyzer/e2e/production-automation-research-core-qa.spec.ts'
+      - 'stock-analyzer/playwright.production-automation-research-core.config.ts'
+      - 'stock-analyzer/src/pages/auto-trading.tsx'
+      - 'stock-analyzer/src/pages/paper-trading.tsx'
+      - 'stock-analyzer/src/pages/research-center.tsx'
+      - 'stock-analyzer/src/pages/research-center-workspace.tsx'
+      - 'stock-analyzer/src/pages/backtests.tsx'
+      - 'stock-analyzer/src/components/backtest-research-panel.tsx'
+      - 'api-server/src/routes/trade-automation.ts'
+      - 'api-server/src/routes/paper-journal.ts'
+      - 'api-server/src/routes/admin.ts'
+      - 'api-server/src/routes/backtests.ts'
+      - '.github/workflows/staging-trading-core-only.yml'
+      - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
+      - '.github/scripts/verify-staging-automation-research-verdict.mjs'
+      - '.github/scripts/verify-production-automation-research-core-receipt.mjs'
+      - '.github/tests/production-automation-research-core-qa-contract.test.mjs'
       - '.github/tests/production-trading-core-qa-contract.test.mjs'
       - 'stock-analyzer/e2e/production-trading-core-qa.spec.ts'
       - 'stock-analyzer/playwright.production-trading-core.config.ts'
@@ -53,6 +70,7 @@ jobs:
       - run: node --test .github/scripts/production-deploy-provenance.test.cjs
       - run: node --test .github/scripts/production-postdeploy-qa-evidence.test.cjs
       - run: node --test .github/scripts/production-release-orchestrator.test.cjs
+      - run: node --test .github/tests/production-automation-research-core-qa-contract.test.mjs
       - run: >-
           node --experimental-strip-types --test
           api-server/src/services/recommendation-deadline.service.test.ts
@@ -147,6 +165,7 @@ jobs:
       github.event.comment.author_association == 'OWNER' &&
       (startsWith(github.event.comment.body, '/run-production-postdeploy-qa ')
        || startsWith(github.event.comment.body, '/run-production-trading-core-release ')
+       || startsWith(github.event.comment.body, '/run-production-automation-research-backtester-release ')
        || startsWith(github.event.comment.body, '/run-production-member-release '))
     runs-on: ubuntu-latest
     timeout-minutes: 135
@@ -170,14 +189,22 @@ jobs:
             const body = String(process.env.COMMENT_BODY ?? '').trim();
             const full = /^\/run-production-postdeploy-qa ([0-9a-fA-F]{40})$/.exec(body);
             const tradingCore = /^\/run-production-trading-core-release ([0-9a-fA-F]{40})$/.exec(body);
+            const automationResearch = /^\/run-production-automation-research-backtester-release ([0-9a-fA-F]{40})$/.exec(body);
             const member = /^\/run-production-member-release ([0-9a-fA-F]{40})$/.exec(body);
-            const match = full || tradingCore || member;
+            const match = full || tradingCore || automationResearch || member;
             if (!match) {
-              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha> OR /run-production-trading-core-release <40-char-sha> OR /run-production-member-release <40-char-sha>');
+              core.setFailed('Exact command required: /run-production-postdeploy-qa <40-char-sha> OR /run-production-trading-core-release <40-char-sha> OR /run-production-automation-research-backtester-release <40-char-sha> OR /run-production-member-release <40-char-sha>');
               return;
             }
             const target = match[1].toLowerCase();
-            const qaScope = member ? 'member' : tradingCore ? 'trading_core' : 'full';
+            const qaScope = member ? 'member' : tradingCore ? 'trading_core'
+              : automationResearch ? 'automation_research' : 'full';
+            const stagingWorkflow = automationResearch
+              ? 'staging-trading-core-only.yml'
+              : 'staging-readiness.yml';
+            const stagingArtifactName = automationResearch
+              ? `staging-automation-research-verdict-${target}`
+              : `staging-verdict-${target}`;
             const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
             const readOptions = (label) => ({ label, attempts: 3, baseDelayMs: 1_000, sleep });
             const main = await retryGithubRead(
@@ -209,7 +236,7 @@ jobs:
               () => github.paginate(github.rest.actions.listWorkflowRuns, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                workflow_id: 'staging-readiness.yml',
+                workflow_id: stagingWorkflow,
                 event: 'workflow_dispatch',
                 branch: 'main',
                 per_page: 100,
@@ -226,8 +253,13 @@ jobs:
                 }),
                 readOptions('list-staging-artifacts'),
               );
-              if (!stagingArtifactAccepted(artifacts, { targetSha: target, runId: run.id })) {
-                throw new Error(`STAGING_RELEASE_ARTIFACT_MISSING:${run.id}:staging-verdict-${target}`);
+              const accepted = automationResearch
+                ? artifacts.some((artifact) => !artifact.expired
+                  && artifact.name === stagingArtifactName
+                  && Number(artifact.workflow_run?.id ?? run.id) === Number(run.id))
+                : stagingArtifactAccepted(artifacts, { targetSha: target, runId: run.id });
+              if (!accepted) {
+                throw new Error(`STAGING_RELEASE_ARTIFACT_MISSING:${run.id}:${stagingArtifactName}`);
               }
             };
             const waitForRun = async (runId, label, maximumPolls = 480) => {
@@ -288,14 +320,20 @@ jobs:
                 await github.rest.actions.createWorkflowDispatch({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  workflow_id: 'staging-readiness.yml',
+                  workflow_id: stagingWorkflow,
                   ref: 'main',
-                  inputs: {
-                    sha: target,
-                    action: 'deploy',
-                    run_full_validation: 'true',
-                    run_destructive_recovery_drill: 'false',
-                  },
+                  inputs: automationResearch
+                    ? {
+                        sha: target,
+                        action: 'deploy',
+                        delegated_by_run_id: String(context.runId),
+                      }
+                    : {
+                        sha: target,
+                        action: 'deploy',
+                        run_full_validation: 'true',
+                        run_destructive_recovery_drill: 'false',
+                      },
                 });
                 core.info(`Dispatched exact-main Staging release for ${target}.`);
                 for (let poll = 0; poll < 40 && !stagingRun; poll += 1) {
@@ -346,6 +384,8 @@ jobs:
                   '- One approval only: `Review deployments → production → Approve and deploy`',
                   qaScope === 'member'
                     ? '- Member-only QA runs inside the approved job; Account/Credential/Trading/Comprehensive QA are not run.'
+                    : qaScope === 'automation_research'
+                      ? '- Auto + Paper + Research + Backtester QA, essential ALL4 Account/Credential/Trading safety, and ACTIVATION_READY run; Telegram and unrelated comprehensive UI QA are not run.'
                     : qaScope === 'trading_core'
                       ? '- Trading Core → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.'
                       : '- Comprehensive → Four-provider Account → Credential Reuse → ACTIVATION_READY runs inside that approved job.',
