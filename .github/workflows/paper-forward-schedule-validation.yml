@@ -48,6 +48,12 @@ on:
       - market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
       - market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
+      - .github/scripts/current-main-ci-provenance.cjs
+      - .github/tests/current-main-ci-provenance.test.cjs
+      - .github/tests/production-automatic-paper-only-gate-contract.test.mjs
+      - .github/workflows/production-automatic-paper-only-gate.yml
+      - stock-analyzer/e2e/production-automatic-paper-activation.spec.ts
+      - stock-analyzer/playwright.production-automatic-paper-activation.config.ts
       - api-server/src/routes/backtests.ts
       - api-server/src/services/backtest-data.service.ts
       - api-server/src/services/backtest-engine.service.test.ts
@@ -330,6 +336,12 @@ jobs:
             market-intelligence-sidecar/src/public-forward-liquidity-server-canonical-cutover-readiness-v1.mjs
             market-intelligence-sidecar/scripts/run-public-forward-liquidity-server-canonical-runtime-v1.mjs
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
+            .github/scripts/current-main-ci-provenance.cjs
+            .github/tests/current-main-ci-provenance.test.cjs
+            .github/tests/production-automatic-paper-only-gate-contract.test.mjs
+            .github/workflows/production-automatic-paper-only-gate.yml
+            stock-analyzer/e2e/production-automatic-paper-activation.spec.ts
+            stock-analyzer/playwright.production-automatic-paper-activation.config.ts
             .github/workflows/paper-forward-schedule-validation.yml
             .github/workflows/research-center-predeploy-validation.yml
             .github/workflows/research-production-validation.yml
@@ -573,7 +585,7 @@ jobs:
             }
             if [[ "$path" == stock-analyzer/* ]]; then
               case "$path" in
-                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts) ;;
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
                 *)
                   echo "Unexpected Paper-facing UI change: $path" >&2
                   exit 1
