@@ -167,26 +167,6 @@ jobs:
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs \
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
 
-      # Temporary Draft-only diagnostic: print regenerated public-source
-      # artifacts so the reviewed branch can pin their exact content.
-      # This step is removed after generated files are committed.
-      - name: Inspect deterministic Paper bundle for Draft regeneration
-        if: always()
-        run: |
-          node --input-type=module <<'NODE'
-          import { existsSync, readFileSync } from 'node:fs';
-          const targets = [
-            ['BUNDLE', 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs'],
-            ['MANIFEST', 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json'],
-          ];
-          for (const [name, path] of targets) {
-            if (!existsSync(path)) throw new Error('PAPER_GENERATED_ARTIFACT_MISSING:' + name);
-            console.log('PAPER_ARTIFACT_BEGIN_' + name);
-            console.log(readFileSync(path).toString('base64').match(/.{1,300}/gu).join('\n'));
-            console.log('PAPER_ARTIFACT_END_' + name);
-          }
-          NODE
-
       - name: Run exact-head P0-C9 runtime factory tests
         run: >-
           node --test
