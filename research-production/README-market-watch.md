@@ -397,3 +397,24 @@ Activation. The dedicated deployment path is:
 The research release MUST already exist at the exact current main SHA.
 No remote SHA, capacity, credentials or operator permission are inferred;
 fail closed rather than pretending a green GitHub build activated a server.
+
+
+## Exact-main CI bridge before server activation
+
+Both source PRs must already be merged. The repository owner can post
+the command /validate-market-watch-main followed by the exact current
+40-character main SHA on the canonical Hub #1102. The owner-only
+Research Market Watch Exact-Main CI Dispatch workflow checks the SHA and
+both merged PR ancestors, prevents duplicate same-main CI runs, then
+dispatches **only** the existing Application CI workflow against main.
+This command does **not** deploy the app, start Research Production, enable
+the market watcher, or place Paper/Live orders.
+
+After the exact-main Application CI run reaches terminal success with all
+six required status contexts coherent in that same run, use the existing,
+separately gated Research Production activation route to install the
+exact-main Research release if not current. Only then invoke the
+separate /activate-market-watch command with the exact current main SHA.
+If any release, host, protected SSH environment or market-source evidence
+is missing, the watcher fails closed and remains off. This workflow is a
+controlled bridge, not a way to bypass existing production approvals.
