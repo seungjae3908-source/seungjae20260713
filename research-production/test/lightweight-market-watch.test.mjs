@@ -414,7 +414,7 @@ test('systemd unit passes real syntax verification in Linux CI', {
 });
 
 
-test('8,001 distinct Bitget quotes cannot report READY after top-8,000 selection', () => {
+test('8,001 Bitget quotes remain PARTIAL under overlapping bounded cohorts', () => {
   const count = WATCH_LIMITS.maxSymbolsPerMarket + 1;
   const data = Array.from({ length: count }, (_, i) => ({
     symbol: 'S' + String(i).padStart(5, '0') + 'USDT',
@@ -426,8 +426,9 @@ test('8,001 distinct Bitget quotes cannot report READY after top-8,000 selection
   assert.equal(source.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
   assert.equal(source.sourceCappedCount, 1);
   assert.equal(source.status, 'PARTIAL_TICKERS');
-  assert.equal(source.quotes[0].symbol, 'S00000USDT');
-  assert.equal(source.quotes.at(-1).symbol, 'S07999USDT');
+  assert.equal(new Set(source.quotes.map(q => q.symbol)).size, 8000);
+  assert.ok(source.quotes.some(q => q.symbol === 'S00000USDT'));
+  assert.ok(source.quotes.some(q => q.symbol === 'S05999USDT'));
   assert.equal(WATCH_SAFETY.orderAuthority, 'NONE');
 });
 
@@ -445,6 +446,97 @@ test('stock 8k cap counts distinct valid symbols not examined, never missed trad
   assert.equal(source.sourceCappedCount, 1);
   assert.equal(source.quotes.length, 8000);
   assert.equal(source.listedCount, 8001);
+});
+
+
+test('rotating tail observes formerly permanently excluded market names without raising the 8k cap', () => {
+  const start = Date.parse('2026-10-10T06:00:00.000Z');
+  const count = 9_000, symbolOf = i => 'S' + String(i).padStart(5, '0');
+  function stockAt(nowMs, raise = null) {
+    const timestamp = new Date(nowMs - 1_000).toISOString();
+    return normalizeStockFeed({
+      schemaVersion: 'research-stock-public-snapshot-v1',
+      market: 'US_STOCK', source: 'LICENSED_SOURCE_FORMAT_ONLY',
+      completeUniverse: true, asOf: timestamp,
+      quotes: Array.from({ length: count }, (_, i) => ({
+        symbol: symbolOf(i), price: symbolOf(i) === raise ? 101 : 100,
+        turnover24h: 20_000_000_000 - i,
+        change24hPercent: symbolOf(i) === raise ? 1 : 0,
+        asOf: timestamp,
+      })),
+    }, 'US_STOCK', nowMs);
+  }
+  const at1 = stockAt(start + 60_000);
+  const at2 = stockAt(start + 2 * 60_000);
+  const at31 = stockAt(start + 31 * 60_000);
+  const at61 = stockAt(start + 61 * 60_000);
+  const names = x => new Set(x.quotes.map(q => q.symbol));
+  const n1 = names(at1), n2 = names(at2), n31 = names(at31), n61 = names(at61);
+  assert.deepEqual([...n1], [...n2]); // 2-minute cadence keeps its baseline
+  assert.equal(at1.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
+  assert.equal(at31.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
+  assert.equal(at61.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
+  for (const at of [at1, at2, at31, at61]) {
+    assert.equal(at.status, 'PARTIAL_UNIVERSE');
+    assert.equal(at.sourceCappedCount, 1_000);
+    assert.equal(at.listedCount, count);
+  }
+  const acrossWindows = new Set([...n1, ...n31, ...n61]);
+  assert.equal(acrossWindows.size, count,
+    'three 30-minute windows must cover all 9k supplied, not just top-turnover 8k');
+  for (let i = 0; i < WATCH_LIMITS.stableHighTurnoverSymbols; i++)
+    assert.ok(n1.has(symbolOf(i)) && n31.has(symbolOf(i)) && n61.has(symbolOf(i)));
+  const newTail = [...n31].find(s => !n1.has(s));
+  assert.ok(newTail);
+  const at29 = stockAt(start + 29 * 60_000);
+  const previous = {
+    observedAtMs: start + 29 * 60_000,
+    source: at29.source,
+    quotes: at29.quotes.map(q => ({symbol:q.symbol, price:q.price,
+      sourceAtMs:q.sourceAtMs})),
+  };
+  const premature = evaluateMarketOpportunities({
+    market:'US_STOCK', source:stockAt(start + 31 * 60_000, newTail),
+    previous, nowMs:start + 31 * 60_000, lastAlerts:{},
+  });
+  assert.equal(premature.candidates.some(q => q.symbol === newTail), false,
+    'a newly included name has no authentic previous price baseline');
+  const followUp = evaluateMarketOpportunities({
+    market:'US_STOCK', source:stockAt(start + 33 * 60_000, newTail),
+    previous:{
+      observedAtMs:start + 31 * 60_000,
+      source:at31.source,
+      quotes:at31.quotes.map(q => ({symbol:q.symbol, price:q.price,
+        sourceAtMs:q.sourceAtMs})),
+    },
+    nowMs:start + 33 * 60_000, lastAlerts:{},
+  });
+  assert.equal(followUp.candidates.filter(q => q.symbol === newTail).length,1);
+  assert.equal(followUp.candidates[0].isTradingSignal,false);
+  assert.equal(followUp.summary.sourceCappedCount,1_000);
+  assert.equal(followUp.summary.candidateCappedCount,0);
+  assert.equal(followUp.candidates[0].executionAuthority,'NONE');
+});
+
+test('rotating tail stays bounded for maximum 30k current source and never fabricates full coverage', () => {
+  const now=Date.parse('2026-10-10T06:01:00.000Z');
+  const count=30_000;
+  const base={schemaVersion:'research-stock-public-snapshot-v1',
+    market:'US_STOCK',source:'FORMAT_ONLY_SOURCE',
+    completeUniverse:true,asOf:new Date(now-1_000).toISOString()};
+  const quotes=Array.from({length:count},(_,i)=>({
+    symbol:'S'+i,price:100,turnover24h:40_000_000_000-i,
+    change24hPercent:0,asOf:base.asOf,
+  }));
+  const result=normalizeStockFeed({...base,quotes},'US_STOCK',now);
+  assert.equal(result.quotes.length,8_000);
+  assert.equal(new Set(result.quotes.map(r=>r.symbol)).size,8_000);
+  assert.equal(result.sourceCappedCount,22_000);
+  assert.equal(result.status,'PARTIAL_UNIVERSE');
+  assert.equal(result.listedCount,30_000);
+  assert.equal(WATCH_LIMITS.stableHighTurnoverSymbols
+    + WATCH_LIMITS.rotationCohortSymbols*2,WATCH_LIMITS.maxSymbolsPerMarket);
+  assert.equal(WATCH_LIMITS.maxCandidatesPerMarket,12);
 });
 
 test('13 qualified provisional observations emit only 12 but account for one capped candidate', () => {
