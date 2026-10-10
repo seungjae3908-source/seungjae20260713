@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   SCHEMA_VERSION,
+  buildNonFlatSkipEvidence,
   buildRefreshAction,
   canonicalJson,
+  isNonFlatSnapshotError,
   selectRefreshAnchor,
   requireStableRiskWindow,
   sha256,
@@ -67,6 +69,35 @@ test('flat snapshot rejects open exposure and accepts closed history anchor', ()
   opened.openPositionCount = 1;
   opened.stateDigestSha256 = sha256(canonicalJson(opened.state));
   assert.throws(() => validateFlatSnapshot(opened, { publisherDigest }), /SNAPSHOT_NOT_FLAT/);
+});
+
+test('non-flat snapshot is delegated to a genuine Paper cycle without mutation authority', () => {
+  const error = Object.assign(new Error('SNAPSHOT_NOT_FLAT'), { code: 'SNAPSHOT_NOT_FLAT' });
+  assert.equal(isNonFlatSnapshotError(error), true);
+  assert.equal(isNonFlatSnapshotError(Object.assign(new Error('SNAPSHOT_DIGEST_INVALID'), { code: 'SNAPSHOT_DIGEST_INVALID' })), false);
+  assert.deepEqual(buildNonFlatSkipEvidence({ targetSha, sourceShaBefore: 'c'.repeat(40) }), {
+    schemaVersion: SCHEMA_VERSION,
+    status: 'SKIPPED_NON_FLAT',
+    targetSha,
+    sourceShaBefore: 'c'.repeat(40),
+    economicStatePreserved: true,
+    freshnessMetadataMutation: 0,
+    paperAccountingMutation: 0,
+    scheduleMutation: 0,
+    productionAppMutation: 0,
+    productionDbMutation: 0,
+    realFinancialMutation: 0,
+    privateBrokerExchangeApi: 0,
+    realOrder: 0,
+    realCancel: 0,
+    realAmend: 0,
+    realTransfer: 0,
+    realWithdrawal: 0,
+    liveTrading: false,
+    executionAuthority: 'NONE',
+    nextStep: 'GENUINE_PAPER_CYCLE',
+    sensitiveValuesEmitted: false,
+  });
 });
 
 test('refresh action is deterministic from current snapshot digest', () => {
