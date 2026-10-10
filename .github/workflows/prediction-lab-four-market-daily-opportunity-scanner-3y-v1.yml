@@ -13,6 +13,8 @@ on:
       - market-prediction-lab/tests/upbit-spot-history.test.js
       - market-prediction-lab/src/bitget-candle-collector.js
       - market-prediction-lab/tests/bitget-collector.test.js
+      - market-prediction-lab/scripts/probe-native-minute-historical-v1.mjs
+      - market-prediction-lab/tests/native-minute-historical-source-smoke-v1.test.js
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -72,6 +74,30 @@ jobs:
       - name: Verify native venue one-minute collector contracts
         run: |
           node --test market-prediction-lab/tests/upbit-spot-history.test.js market-prediction-lab/tests/bitget-collector.test.js
+
+      - name: Probe fixed historical native 1m samples (public read only)
+        timeout-minutes: 3
+        run: |
+          node --test market-prediction-lab/tests/native-minute-historical-source-smoke-v1.test.js
+          node market-prediction-lab/scripts/probe-native-minute-historical-v1.mjs market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json
+
+      - name: Assert sample truth boundary
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json","utf8"));
+          const markets=["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"];
+          if(markets.some(m=>!r.markets[m]) || r.executionAuthority!=="NONE" ||
+            r.profitabilityProven!==false || r.marketWideOpportunityDenominatorVerified!==false ||
+            r.actualFillEvidenceVerified!==false || r.realOrders!==false) process.exit(1);
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-one-minute-source-probe-${{ github.sha }}
+          path: market-prediction-lab/docs/native-historical-minute-source-smoke-v1.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run four-market three-year benchmark
         run: python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --output market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json
