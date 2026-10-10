@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   SCHEMA_VERSION,
@@ -153,4 +154,10 @@ test('risk day/week rollover fails before any republish mutation', () => {
 
 test('schema and safety labels are stable', () => {
   assert.equal(SCHEMA_VERSION, 'paper-forward-flat-snapshot-republish-v1');
+});
+
+test('snapshot republish contract test stays registered in bounded validation paths', async () => {
+  const workflow = await readFile('.github/workflows/paper-forward-schedule-validation.yml', 'utf8');
+  const testPath = 'market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js';
+  assert.equal(workflow.split(testPath).length - 1, 2);
 });
