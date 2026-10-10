@@ -54,6 +54,7 @@ function blocked(market,reason,extra={}){
     sourceAttestedFullSymbolDayPriceJoin:false,
     existingOpportunityEngineInputEligible:false,
     actualMarketWideOpportunityCount:null,actualMarketWideRecall:null,
+    trueMarketWideRecall:null,
     originalScannerObservationsVerified:false,actualFillCount:null,
     netProfitPct:null,profitabilityProven:false,
     fullMarketOpportunityDenominatorVerified:false,
