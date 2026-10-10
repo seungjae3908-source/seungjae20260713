@@ -379,12 +379,15 @@ def strategies_for_market(market: str, data: pd.DataFrame, dates: list[pd.Timest
     configure_us_module(market)
     out = []
     if market == "US_STOCK":
-        out.extend(us.rule_candidates(data, dates))
+        # US stocks are BUY/LONG-only. SHORT diagnostics in the source U.S.
+        # runner are not executable or comparable for this user's market policy.
+        # Exclude BOTH short rule families and directional AI (which may short).
+        out.extend(x for x in us.rule_candidates(data, dates)
+                   if "SHORT" not in x["candidate"] and "DIRECTIONAL" not in x["candidate"])
         out.extend([
             us.walk_forward_ai(data, us.BASIC_FEATURES, "AI_BASIC_LONG", dates),
             us.walk_forward_ai(data, us.RICH_FEATURES, "AI_WAVE_CANDLE_LONG", dates),
             us.walk_forward_ai_bracket(data, us.RICH_FEATURES, "AI_WAVE_CANDLE_LONG_BRACKET_1R_2R", dates),
-            us.walk_forward_ai_directional(data, us.RICH_FEATURES, "AI_WAVE_CANDLE_DIRECTIONAL_DIAGNOSTIC", dates),
         ])
     elif market == "KR_STOCK":
         rules = [x for x in us.rule_candidates(data, dates) if "SHORT" not in x["candidate"]]
@@ -416,6 +419,55 @@ def load_market(market: str):
     return load_crypto_universe(market)
 
 
+def expected_market_source_failure(error: Exception) -> bool:
+    """Only known public-data failures may be recorded as BLOCKED_DATA.
+
+    Strategy/math/type errors must still abort; never silently turn a broken
+    calculation into a zero return or successful four-market benchmark.
+    """
+    if isinstance(error, requests.exceptions.RequestException):
+        return True
+    if not isinstance(error, RuntimeError):
+        return False
+    return str(error).startswith((
+        "BINANCE_GET_FAILED:", "SPOT_EXCHANGE_INFO_FAILED:",
+        "FUTURES_EXCHANGE_INFO_TOO_SMALL:",
+        "CRYPTO_SPOT_NO_CANDIDATES", "CRYPTO_FUTURES_NO_CANDIDATES",
+        "KR_NO_CANDIDATES", "US_NO_CANDIDATES",
+    ))
+
+
+def blocked_market_report(market: str, error: Exception) -> dict:
+    if market not in MARKETS or not expected_market_source_failure(error):
+        raise ValueError("UNEXPECTED_MARKET_BLOCK")
+    message = str(error)
+    if "451 Client Error" in message:
+        reason = "PUBLIC_PROVIDER_HTTP_451"
+    elif "401 Client Error" in message:
+        reason = "PUBLIC_PROVIDER_HTTP_401"
+    elif "429 Client Error" in message or "HTTP_429" in message:
+        reason = "PUBLIC_PROVIDER_RATE_LIMIT"
+    elif "NO_CANDIDATES" in message:
+        reason = "NO_VALID_HISTORICAL_CANDIDATES"
+    else:
+        reason = "HISTORICAL_PUBLIC_DATA_UNAVAILABLE"
+    return {
+        "status": "BLOCKED_DATA",
+        "source": None,
+        "universe": {
+            "status": "BLOCKED_DATA",
+            "blocker": reason,
+            "candidateRows": None,
+            "coverageComplete": False,
+        },
+        "costAssumptionRoundTrip": COSTS[market],
+        "pointInTimeMembershipProven": False,
+        "delistedCoverageProven": False,
+        "results": [],
+        "profitableSurvivorsOnly": [],
+    }
+
+
 def self_test() -> None:
     assert set(MARKETS) == {"US_STOCK", "KR_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"}
     assert all(COSTS[m] > 0 for m in MARKETS)
@@ -423,6 +475,17 @@ def self_test() -> None:
     assert "gross_return" not in us.RICH_FEATURES
     assert "close" not in us.RICH_FEATURES
     assert "volume" not in us.RICH_FEATURES
+    fake_failure = RuntimeError(
+        "BINANCE_GET_FAILED:https://fapi.binance.com/fapi/v1/exchangeInfo:451 Client Error"
+    )
+    blocked = blocked_market_report("CRYPTO_FUTURES", fake_failure)
+    assert blocked["status"] == "BLOCKED_DATA"
+    assert blocked["universe"]["blocker"] == "PUBLIC_PROVIDER_HTTP_451"
+    assert blocked["profitableSurvivorsOnly"] == []
+    assert blocked["results"] == []
+    assert blocked["pointInTimeMembershipProven"] is False
+    assert not expected_market_source_failure(ValueError("BUG_IN_STRATEGY_MATH"))
+    assert not expected_market_source_failure(RuntimeError("BUG_IN_STRATEGY_MATH"))
     print("FOUR_MARKET_SELF_TEST_PASS")
 
 
@@ -442,7 +505,18 @@ def main() -> None:
 
     for market in MARKETS:
         print(json.dumps({"marketStart": market}), flush=True)
-        data, dates, universe = load_market(market)
+        try:
+            data, dates, universe = load_market(market)
+        except Exception as error:
+            if not expected_market_source_failure(error):
+                raise
+            reports[market] = blocked_market_report(market, error)
+            print(json.dumps({
+                "marketBlocked": market,
+                "reason": reports[market]["universe"]["blocker"],
+                "profitabilityProven": False,
+            }, ensure_ascii=False), flush=True)
+            continue
         strategies = strategies_for_market(market, data, dates)
         rows = []
         for item in strategies:
@@ -467,12 +541,18 @@ def main() -> None:
                 fixed_trades += int(item["trades"])
         rows.sort(key=lambda x: (x["metrics"]["totalReturn"], x["metrics"]["sharpe"] or -99), reverse=True)
         reports[market] = {
-            "source": {
-                "US_STOCK": "Stooq bulk daily U.S. stocks",
+            "status": "MEASURED_PROXY_ONLY",
+            # Reflect the *actual* US fallback provider (Stooq may return HTTP 401).
+            "source": universe.get("provider") if market == "US_STOCK" else {
                 "KR_STOCK": "Yahoo Finance daily via current app KR catalog (.KS/.KQ probe)",
                 "CRYPTO_SPOT": "Binance public spot USDT daily klines",
                 "CRYPTO_FUTURES": "Binance public USDT perpetual daily klines",
             }[market],
+            "universeScope": (
+                "CURRENT_APP_KR_CATALOG_NOT_FULL_PIT_KRX" if market == "KR_STOCK"
+                else "CURRENT_PROVIDER_LISTINGS_NOT_FULL_PIT" if market != "US_STOCK"
+                else "HISTORICAL_BAR_PRESENCE_NOT_PIT_DELISTING_PROOF"
+            ),
             "universe": universe,
             "costAssumptionRoundTrip": COSTS[market],
             "pointInTimeMembershipProven": market == "US_STOCK" and False,
@@ -504,8 +584,18 @@ def main() -> None:
             "periods": period_table(combined_daily, "CRYPTO_SPOT"),
         }
 
+    measured_market_count = sum(
+        reports[m]["status"] == "MEASURED_PROXY_ONLY" for m in MARKETS
+    )
+    result_status = (
+        "MEASURED_PROXY_ONLY" if measured_market_count == len(MARKETS)
+        else "PARTIAL_BLOCKED_DATA" if measured_market_count > 0
+        else "BLOCKED_DATA"
+    )
     report = {
         "schemaVersion": 1,
+        "status": result_status,
+        "marketStatus": {m: reports[m]["status"] for m in MARKETS},
         "contract": "four-market-daily-opportunity-scanner-3y/v1",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "period": {"start": START.isoformat(), "end": END.isoformat()},
@@ -539,7 +629,8 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({
-        "status": "PASS",
+        "status": report["status"],
+        "marketStatus": report["marketStatus"],
         "markets": {
             m: {
                 "topObserved": [
