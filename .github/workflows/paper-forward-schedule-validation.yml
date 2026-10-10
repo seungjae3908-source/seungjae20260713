@@ -250,6 +250,24 @@ on:
       - research-production/src/research-dataset-snapshot-store.mjs
       - research-production/test/research-canonical-dataset-component.test.mjs
       - research-production/test/research-dataset-snapshot-store.test.mjs
+      - .github/tests/trading-ops-consolidated-preflight.test.mjs
+      - .github/workflows/production-automatic-trading-gate.yml
+      - api-server/scripts/verify-production-automatic-trading-gate.mjs
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
+      - api-server/src/services/paper-futures-mode-policy.service.test.ts
+      - api-server/src/services/paper-futures-mode-policy.service.ts
+      - api-server/src/services/paper-trading-candle.service.ts
+      - api-server/src/services/paper-trading-core.service.ts
+      - api-server/src/services/paper-trading-engine.service.test.ts
+      - api-server/src/services/paper-trading-position.service.ts
+      - api-server/src/services/trade-automation.service.ts
+      - api-server/src/services/trade-pre-submission-risk.service.ts
+      - api-server/src/services/trading-risk-engine.service.ts
+      - api-server/test.mjs
+      - stock-analyzer/src/components/paper-trading-panel.tsx
+      - stock-analyzer/src/lib/paper-trading.ts
+      - .github/scripts/verify-research-workspace-sync-v3.mjs
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -574,6 +592,24 @@ jobs:
             stock-analyzer/src/pages/phase5-backtest-e2e.tsx
             stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
             stock-analyzer/src/lib/excel-export.ts
+            .github/tests/trading-ops-consolidated-preflight.test.mjs
+            .github/workflows/production-automatic-trading-gate.yml
+            api-server/scripts/verify-production-automatic-trading-gate.mjs
+            api-server/src/services/member-auto-trading-background-worker.service.ts
+            api-server/src/services/member-auto-trading-background-worker.service.test.ts
+            api-server/src/services/paper-futures-mode-policy.service.test.ts
+            api-server/src/services/paper-futures-mode-policy.service.ts
+            api-server/src/services/paper-trading-candle.service.ts
+            api-server/src/services/paper-trading-core.service.ts
+            api-server/src/services/paper-trading-engine.service.test.ts
+            api-server/src/services/paper-trading-position.service.ts
+            api-server/src/services/trade-automation.service.ts
+            api-server/src/services/trade-pre-submission-risk.service.ts
+            api-server/src/services/trading-risk-engine.service.ts
+            api-server/test.mjs
+            stock-analyzer/src/components/paper-trading-panel.tsx
+            stock-analyzer/src/lib/paper-trading.ts
+            .github/scripts/verify-research-workspace-sync-v3.mjs
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
@@ -589,7 +625,7 @@ jobs:
             }
             if [[ "$path" == stock-analyzer/* ]]; then
               case "$path" in
-                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts|stock-analyzer/src/components/paper-trading-panel.tsx|stock-analyzer/src/lib/paper-trading.ts) ;;
                 *)
                   echo "Unexpected Paper-facing UI change: $path" >&2
                   exit 1

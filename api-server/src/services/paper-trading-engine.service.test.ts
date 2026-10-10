@@ -289,14 +289,15 @@ test('invalid short stop direction is rejected', () => {
   assert.ok(result.order?.rejectionCodes.includes('INVALID_STOP_LOSS'));
 });
 
-test('app leverage limit is enforced', () => {
-  const result = place(undefined, { request: { leverage: 11 }, risk: { leverage: 11 } });
-  assert.ok(result.order?.rejectionCodes.includes('LEVERAGE_EXCEEDS_APP_LIMIT'));
+test('manual Paper 125x hard ceiling is enforced before risk calculation', () => {
+  assert.throws(() => place(undefined, { request: { leverage: 126 }, risk: { leverage: 126 } }), /1~125/);
 });
 
-test('exchange leverage limit is enforced', () => {
+test('manual Paper can hypothetically exceed a real provider contract limit without a broker call', () => {
   const result = place(undefined, { request: { leverage: 6 }, risk: { leverage: 6 }, rules: { maximumLeverage: 5 } });
-  assert.ok(result.order?.rejectionCodes.includes('LEVERAGE_EXCEEDS_EXCHANGE_LIMIT'));
+  assert.equal(result.order?.status, 'filled', JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
 });
 
 test('minimum quantity is enforced', () => {
@@ -850,5 +851,73 @@ test('owner state readback and actual persisted side/leverage cannot be replaced
     const ownerStub = { ...f.exitEvidence, paperStateSha256: manualPaperEvidenceSha256(changed) };
     assert.throws(() => applyPaperTradingAction(changed, canonicalClose(f, opened), f.exitNow, ownerStub),
       error => error.code === 'CANONICAL_PAPER_ACTUAL_CONSUMER_IDENTITY_MISMATCH', key);
+  }
+});
+
+test('manual-only futures 125x opens as simulated capital without a provider order and liquidates ahead of stop after a gap', () => {
+  const initial = createPaperTradingState(10_000, NOW);
+  const entry = place(initial, {
+    eventId: 'paper-125-open',
+    request: { leverage: 125, stopLossPrice: 99.95 },
+    rules: { maximumLeverage: 10, maintenanceMarginRate: 0.005 },
+  });
+  assert.equal(entry.ok, true);
+  assert.equal(entry.orderSubmitted, false);
+  assert.equal(entry.exchangeRequestSent, false);
+  assert.equal(entry.order?.status, 'filled', JSON.stringify(entry.order?.rejectionCodes));
+  assert.equal(entry.position?.leverage, 125);
+  assert.equal(entry.position?.maintenanceMarginRate, 0.005);
+  const beforeCash = entry.state.account.cashBalance;
+  const initialMargin = entry.position?.initialRequiredMargin ?? Number.NaN;
+  assert.ok(initialMargin > 0);
+
+  // OHLC touches both the stop and the liquidation threshold. A gap that
+  // opens far beyond the threshold must not wipe unrelated isolated capital.
+  const result = process(entry.state, {
+    open: 80, low: 79, high: 101, close: 99,
+  }, 'paper-125-liquidated');
+  assert.equal(result.fills.length, 1);
+  assert.equal(result.fills[0]?.fillReason, 'liquidation');
+  assert.equal(result.state.positions[0]?.status, 'closed');
+  assert.equal(result.state.journal[0]?.exitReason, 'liquidation');
+  assert.ok(result.state.account.cashBalance >= beforeCash - initialMargin - 0.000001);
+  assert.ok(result.state.account.equity > 0);
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
+  const repeated = process(result.state, {
+    open: 80, low: 79, high: 101, close: 99,
+    timestamp: NOW.getTime() + 30 * 60_000,
+  }, 'paper-125-new-candle');
+  assert.equal(repeated.fills.length, 0, 'never liquidate a closed Paper position twice');
+});
+
+test('manual 125x mark-price liquidation is idempotent and invalid non-integer leverages are blocked', () => {
+  const entry = place(createPaperTradingState(10_000, NOW), {
+    eventId: 'mark-125-open',
+    request: { leverage: 125, stopLossPrice: 99.95 },
+  });
+  assert.equal(entry.order?.status, 'filled', JSON.stringify(entry.order?.rejectionCodes));
+  const mark = applyPaperTradingAction(entry.state, {
+    type: 'mark_price',
+    eventId: 'mark-125-liquidate',
+    symbol: 'BTCUSDT',
+    price: 80,
+    at: NOW.toISOString(),
+  }, NOW);
+  assert.equal(mark.fills[0]?.fillReason, 'liquidation');
+  assert.equal(mark.state.positions[0]?.status, 'closed');
+  const repeat = applyPaperTradingAction(mark.state, {
+    type: 'mark_price', eventId: 'mark-125-liquidate', symbol: 'BTCUSDT', price: 80,
+  }, NOW);
+  assert.equal(repeat.duplicateEvent, true);
+  assert.equal(repeat.fills.length, 0);
+
+  for (const leverage of [0, 1.5, 126, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => place(createPaperTradingState(10_000, NOW), {
+        request: { leverage }, eventId: 'invalid-paper-leverage',
+      }),
+      /1~125/,
+    );
   }
 });
