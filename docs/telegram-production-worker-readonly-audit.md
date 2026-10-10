@@ -13,7 +13,7 @@ These observations do not establish that 403 continues or that post-reconnect pe
 ## Scope
 
 This Draft does not modify an existing worker or deploy the application. It adds:
-- ops/telegram-production-worker-readonly-audit.mjs: one-shot read of exact PM2 metadata, deploy marker, whitelisted loopback /api/health fields, existing Telegram market report state and signal subscriber state.
+- ops/telegram-production-worker-readonly-audit.mjs: one-shot read of exact PM2 metadata, deploy marker, whitelisted loopback /api/health fields, existing Telegram market report state and signal subscriber state, plus one bounded GET to the configured local-only signal source to validate its public non-trading envelope and count events without returning contents.
 - .github/workflows/telegram-production-worker-readonly-audit.yml: owner-only Release Control #1555 protected production workflow.
 - tests for redaction, stale SHA failure, bounded file reads and no-send behavior.
 
@@ -23,7 +23,7 @@ After a separately authorized PR merge, the owner can use the exact command:
 
 The workflow then requires a separate GitHub protected production review. The Draft PR does not dispatch this workflow.
 
-State may contain Telegram chat IDs and signal identifiers. This audit publishes no raw keys, IDs, paths, HTTP bodies, tokens or credentials. It reports only safe classifications, counts, timestamps, booleans and error codes. It rejects unsafe file locations and oversized/symlinked files.
+State may contain Telegram chat IDs and signal identifiers. This audit publishes no raw keys, IDs, paths, HTTP bodies, tokens or credentials. It reports only safe classifications, counts, timestamps, booleans and error codes. A signal source status READY means a validated local safe public signal envelope, not a signal-to-Telegram delivery. It rejects unsafe file locations and oversized/symlinked files.
 
 ## Interpretation
 
