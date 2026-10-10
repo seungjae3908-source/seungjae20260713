@@ -63,21 +63,15 @@ requireAll('stock-analyzer/src/components/trade-automation-settings.tsx', [
   '일일 주문 수 (0=기회 기반)',
   '주문별 수동 승인 없이',
 ]);
-requireAll('api-server/src/routes/user-broker-telegram.ts', [
-  "orderAuthority: 'NONE' as const",
-  'ordersSubmitted: 0',
-  'ordersCancelled: 0',
-]);
 const productionDeploy = requireAll('.github/workflows/production-deploy.yml', [
   'Install exact-SHA QA dependencies before Production mutation',
-  'Pre-deploy external readiness — providers, Paper, Telegram and zero authority',
+  'Pre-deploy readiness — Auto, Paper, Research, Backtester and zero authority',
   'playwright.production-automation-research-predeploy.config.ts',
   'production-automation-research-predeploy-${{ env.TARGET_SHA }}',
 ]);
 requireAll('stock-analyzer/e2e/production-automation-research-predeploy-readiness.spec.ts', [
   'PRODUCTION_RUNTIME_IDENTITY_DRIFT',
-  'TELEGRAM_DESTINATION_FORBIDDEN_RECONNECT_REQUIRED',
-  'TELEGRAM_ZERO_TRADING_AUTHORITY_VIOLATION',
+  'telegramExcludedFromScope: true',
   'sshConfigured: false',
   'databaseMutations: 0',
   'deploymentExecuted: false',
@@ -101,7 +95,7 @@ if (!types.includes('maxAssetPercent: 30')) {
   throw new Error('AUTOMATION_RESEARCH_PREFLIGHT_SINGLE_ASSET_BASELINE_MISSING');
 }
 const productionPreflight = productionDeploy.indexOf(
-  'Pre-deploy external readiness — providers, Paper, Telegram and zero authority',
+  'Pre-deploy readiness — Auto, Paper, Research, Backtester and zero authority',
 );
 const productionSsh = productionDeploy.indexOf('- name: Configure SSH');
 const productionDatabase = productionDeploy.indexOf(
@@ -124,6 +118,6 @@ process.stdout.write(`${JSON.stringify({
   dailyLossLimitPercent: 3,
   ordinaryDailyEntryQuota: null,
   formulaAiPerOrderConfirmationRequired: false,
-  telegramOrderAuthority: 'NONE',
+  telegramExcludedFromScope: true,
   productionExternalReadinessBeforeMutation: true,
 })}\n`);
