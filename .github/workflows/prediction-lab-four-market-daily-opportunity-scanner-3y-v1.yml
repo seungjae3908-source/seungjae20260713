@@ -28,6 +28,9 @@ on:
       - market-prediction-lab/src/historical-pit-venue-universe-gate-v1.js
       - market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
       - market-prediction-lab/scripts/report-historical-pit-universe-readiness-v1.mjs
+      - market-prediction-lab/src/krx-dated-roster-public-read-v1.js
+      - market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+      - market-prediction-lab/scripts/report-krx-roster-provider-readiness-v1.mjs
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -232,6 +235,22 @@ jobs:
           }
           '
 
+      - name: KRX dated public market-data read-only adapter contracts (no credential)
+        run: |
+          node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+          node market-prediction-lab/scripts/report-krx-roster-provider-readiness-v1.mjs market-prediction-lab/docs/krx-dated-roster-readiness-v1.json
+
+      - name: Verify KRX key has not been used or PIT completeness fabricated
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/krx-dated-roster-readiness-v1.json","utf8"));
+          if(r.status!=="BLOCKED_DATA" || r.reason!=="KRX_READONLY_MARKET_DATA_AUTH_REQUIRED" ||
+             r.dateScopedSymbolCount!==null || r.delistedHistoryVerified!==false ||
+             r.trueMarketWideRecall!==null || r.fullMarketOpportunityDenominatorVerified!==false ||
+             r.executionAuthority!=="NONE" || r.profitabilityProven!==false)process.exit(1);
+          '
+
       - uses: actions/upload-artifact@v4
         with:
           name: native-selected-symbol-utc-day-pilot-${{ github.sha }}
@@ -240,6 +259,7 @@ jobs:
             market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
             market-prediction-lab/docs/causal-price-warning-cohort-v1.json
             market-prediction-lab/docs/historical-pit-universe-readiness-v1.json
+            market-prediction-lab/docs/krx-dated-roster-readiness-v1.json
           if-no-files-found: error
           retention-days: 14
 
