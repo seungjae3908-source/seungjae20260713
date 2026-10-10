@@ -1,0 +1,86 @@
+name: Prediction Lab Six Alt Symbols Native UTC-Day Opportunity Proof V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/probe-watch-matched-alt-six-v1.mjs
+      - market-prediction-lab/tests/probe-watch-matched-alt-six-v1.test.js
+      - .github/workflows/prediction-lab-watch-matched-alt-six-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-watch-matched-six-alt-day-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selected-alt-public-source:
+    name: Six incremental selected altcoin native public 1m source receipts
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Ensure public research only
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$REAL_ORDER_ENABLED" = "false"
+          test "$PRIVATE_TRADING_API_ALLOWED" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+      - name: Validate six-alts price cohort, source gaps and denominator truth
+        run: |
+          node --test market-prediction-lab/tests/probe-watch-matched-alt-six-v1.test.js
+      - name: Probe completed 2026-10-09 selected ETH XRP SOL 1m histories
+        timeout-minutes: 5
+        run: |
+          node market-prediction-lab/scripts/probe-watch-matched-alt-six-v1.mjs \
+            market-prediction-lab/docs/native-watch-matched-alt-six-v1.json \
+            market-prediction-lab/docs/native-watch-matched-alt-six-raw-v1.json
+      - name: Assert no 0 events from blocked sources and no invented scanner recall
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const x=JSON.parse(readFileSync("market-prediction-lab/docs/native-watch-matched-alt-six-v1.json","utf8"));
+          if(x.sourceDate.dayUtc!=="2026-10-09" ||
+             x.selectedAltSymbolDays!==6 ||
+             x.observedSelectedAltSymbolDays+x.blockedSelectedAltSymbolDays!==6 ||
+             x.fullMarketPITUniverseAndDelistingsVerified!==false ||
+             x.originalPublicWatchEventAndCadenceEvidenceAttached!==false ||
+             x.marketWideOpportunityDenominatorVerified!==false ||
+             x.trueMarketWideRecall!==null || x.actualFillCount!==null ||
+             x.netProfitPct!==null || x.OOSPassCount!==0 ||
+             x.profitabilityProven!==false || x.executionAuthority!=="NONE" ||
+             x.liveTrading!==false || x.autoTrading!==false || x.realOrders!==false)
+             process.exit(1);
+          if(x.observedSelectedAltSymbolDays===0 &&
+             (x.thresholdCrossingsInVerifiedSelectedDays!==null ||
+              x.fivePctDirectionalEpisodesInVerifiedSelectedDays!==null))
+              process.exit(1);
+          for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+            const a=x.markets[market];
+            if(!Array.isArray(a)||a.length!==3 ||
+               a.some(r=>!["OBSERVED_SELECTED_SYMBOL_DAY","BLOCKED_DATA"].includes(r.status)
+                 ||r.trueMarketWideRecall!==null ||r.actualFillCount!==null ||
+                 r.netProfitPct!==null))process.exit(1);
+          }
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: matched-day-six-selected-alts-native-source-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-watch-matched-alt-six-v1.json
+            market-prediction-lab/docs/native-watch-matched-alt-six-raw-v1.json
+          retention-days: 14
+          if-no-files-found: error
