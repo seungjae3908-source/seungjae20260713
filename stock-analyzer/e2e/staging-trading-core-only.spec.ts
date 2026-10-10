@@ -158,7 +158,7 @@ function assertReadonly(value: any, endpoint: string) {
   expect(value.realOrderAuthorityGranted === false || value.liveTradingAuthorityGranted === false, endpoint).toBe(true);
 }
 
-test('Automation/Research/Telegram scoped Staging: Auto, Paper, Research Center, Backtester and Telegram Journal only', async ({ page }, testInfo) => {
+test('Automation/Paper/Research/Backtester scoped Staging only', async ({ page }, testInfo) => {
   const sha = validateIsolation();
   const base = new URL(required('STAGING_BASE_URL'));
   let forbiddenMutationRequests = 0;
@@ -196,9 +196,6 @@ test('Automation/Research/Telegram scoped Staging: Auto, Paper, Research Center,
   await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible({ timeout: 20_000 });
   await page.getByTestId('trading-mode-auto').click();
   await page.getByTestId('trading-section-settings').click();
-  const telegramPanel = page.getByTestId('user-broker-telegram-panel');
-  await expect(telegramPanel).toBeVisible({ timeout: 20_000 });
-  await expect(telegramPanel).not.toHaveAttribute('aria-busy', 'true', { timeout: 20_000 });
   await page.getByTestId('trading-section-journal').click();
   await expect(page.getByTestId('trading-workspace-journal')).toBeVisible({ timeout: 20_000 });
   expect(forbiddenMutationRequests).toBe(0);
@@ -235,17 +232,6 @@ test('Automation/Research/Telegram scoped Staging: Auto, Paper, Research Center,
   expect(Array.isArray(journal.records)).toBe(true);
   expect(journal.orderSubmitted).toBe(false);
   expect(journal.exchangeRequestSent).toBe(false);
-  const integrations = await readOwned(page, '/api/user-integrations');
-  expect(integrations.telegramStorageAvailable).toBe(true);
-  expect(integrations.alertPolicyStorageAvailable).toBe(true);
-  expect(typeof integrations.telegram?.connected).toBe('boolean');
-  expect(integrations.preferences?.ORDER_FILLED).toBe(true);
-  expect(integrations.telegramRuntime?.orderAuthority).toBe('NONE');
-  expect(integrations.telegramRuntime?.privateTradingApiAllowed).toBe(false);
-  expect(integrations.telegramRuntime?.realOrderAllowed).toBe(false);
-  expect(integrations.privateApiRequests).toBe(0);
-  expect(integrations.ordersSubmitted).toBe(0);
-  expect(integrations.ordersCancelled).toBe(0);
   await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('research-center-workspace')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 30_000 });
@@ -268,13 +254,13 @@ test('Automation/Research/Telegram scoped Staging: Auto, Paper, Research Center,
     .filter((v: unknown) => failCodeOnly(v) !== 'UNCLASSIFIED')
     .map((v: unknown) => failCodeOnly(v)).slice(0, 30);
   const receipt = {
-    schemaVersion: 'staging-automation-research-core-v1',
+    schemaVersion: 'staging-automation-paper-research-backtester-core-v2',
     targetSha: sha,
     project: testInfo.project.name,
     stagingScopedQa: 'PASS',
     browserAuthMode: 'STAGING_PASSWORD_SESSION_RESTORE',
     interactiveLoginFormTested: false,
-    stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','telegram-storage','telegram-journal-policy','research-center-runtime','research-center-ui','backtester-runtime','backtester-ui'],
+    stagesChecked: ['health','browser-auto-trading','policy-four-markets','provider-server-gates','paper-worker','admin-four-wallets','paper-journal-snapshot','research-center-runtime','research-center-ui','backtester-runtime','backtester-ui'],
     fourMarketsStructural: true,
     providersValidatedWithoutPrivateCalls: true,
     walletSeedPerMarketKrw: 1_000_000,
@@ -287,15 +273,14 @@ test('Automation/Research/Telegram scoped Staging: Auto, Paper, Research Center,
     automaticPaperTradingReadinessVerified: paperRuntime.readyForPaperEvaluation === true,
     researchCenterReady: true,
     backtesterReady: true,
-    telegramTradeJournalReady: true,
-    telegramJournalPreferenceEnabled: integrations.preferences.ORDER_FILLED === true,
+    telegramExcludedFromScope: true,
     backtestMode: backtest.mode,
     backtestOrderSubmitted: backtest.orderSubmitted,
     realOrderAuthorityGranted: false,
     providerPrivateRequests: 0,
     tradingMutations: 0,
     productionReleaseReady: true,
-    scopedReleaseVerdict: 'AUTOMATION_RESEARCH_ONLY',
+    scopedReleaseVerdict: 'AUTOMATION_PAPER_RESEARCH_BACKTESTER_ONLY',
     automaticTradingActivated: false,
   };
   mkdirSync(outputDir, { recursive: true, mode: 0o700 });

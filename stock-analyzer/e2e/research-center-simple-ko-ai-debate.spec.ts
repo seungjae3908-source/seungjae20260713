@@ -396,6 +396,46 @@ test('four-market watch shows partial live public sources and blocked stock feed
   await assertClean();
 });
 
+
+test('bounded source and candidate overflow stays observation-only; legacy missing counts remain unknown', async ({ page }) => {
+  const data = overview();
+  Object.assign(data, {
+    dataFactory: {
+      lightweightMarketWatch: {
+        contract: 'lightweight-market-watch-readback/v1',
+        status: 'PARTIAL', present: true, researchSha: RESEARCH_SHA,
+        observedAt: Date.parse(NOW), ageMs: 30_000, marketCoverageCount: 1,
+        markets: [
+          { market: 'KR_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'US_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC_TICKERS',
+            listedCount: 15, observedCount: 15, newCandidates: 12,
+            sourceCappedCount: 0, qualifyingCandidateCount: 14, candidateCappedCount: 2 },
+          { market: 'CRYPTO_FUTURES', status: 'PARTIAL_TICKERS', source: 'BITGET_PUBLIC_TICKERS',
+            listedCount: 18, observedCount: 15, newCandidates: 0,
+            sourceCappedCount: 3, qualifyingCandidateCount: 0, candidateCappedCount: 0 },
+        ],
+        cyclesToday: 8, candidatesToday: 12, cyclesSinceRelease: 8,
+        continuous24hProven: false, formulaCandidateProduced: false,
+        oosProven: false, paperExecutionProven: false,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      },
+    },
+  });
+  const { assertClean } = await installAdmin(page, data);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openExpertResearch(page);
+  await expect(page.getByTestId('research-market-watch-cap-CRYPTO_SPOT')).toContainText('후보 출력 상한 제외 2건');
+  await expect(page.getByTestId('research-market-watch-cap-CRYPTO_FUTURES')).toContainText('원천 상한 제외 3건');
+  await expect(page.getByTestId('research-market-watch-cap-KR_STOCK')).toContainText('원천 상한 제외 미측정');
+  await expect(page.getByTestId('research-market-watch-cap-warning')).toContainText('전체 시장 급등락 누락률');
+  await expect(page.getByTestId('research-market-watch-boundary')).toContainText('실주문 권한은 없습니다');
+  await expectNoHorizontalOverflow(page);
+  await assertClean();
+});
+
 test('a stale public feed never appears as currently collecting in research UI', async ({ page }) => {
   const data = overview();
   Object.assign(data, {

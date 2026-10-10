@@ -176,6 +176,8 @@ const researchCenterIntegrationReviewed=[
  'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',
  'research-dashboard/server.py',
  'research-dashboard/test/test_server.py',
+ 'research-dashboard/lightweight_market_watch_readback.py',
+ 'research-dashboard/test/test_lightweight_market_watch_readback.py',
  'stock-analyzer/src/lib/research-center.ts',
  'stock-analyzer/src/pages/research-center.tsx',
  // Exact Research Center zero-fabrication regression; not a scope wildcard.
@@ -528,10 +530,9 @@ function isCanonicalMemberFixtureOnlyChange(p){
 const researchCenterChanged=changed.filter((p)=>
  researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
 );
-// Research market-watch DTO-only review: preserve the existing Paper and
-// Research Center workflows completely unchanged. Only this exact seven-path,
-// observation-only PR may use the already-triggered dedicated Research Center
-// predeploy workflow as its guard instead of changing its YAML on every edit.
+// Research market-watch DTO-only review: the exact original seven-path
+// exception remains bounded. A wider Python/UI cap readback change MUST
+// modify and execute the dedicated Research Center predeploy workflow.
 const publicWatchReadbackOnlyPaths=[
  '.github/scripts/verify-research-workspace-sync-v3.mjs',
  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
@@ -732,6 +733,9 @@ const protectedPathExceptions=new Map([
  ['research-dashboard',new Set([
   'research-dashboard/server.py',
   'research-dashboard/test/test_server.py',
+  // Watch cap projection only; no app/server execution authority.
+  'research-dashboard/lightweight_market_watch_readback.py',
+  'research-dashboard/test/test_lightweight_market_watch_readback.py',
  ])],
  ['stock-analyzer/src/pages/research-center.tsx',new Set([
   'stock-analyzer/src/pages/research-center.tsx',

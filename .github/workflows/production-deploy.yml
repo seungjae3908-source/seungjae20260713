@@ -51,13 +51,10 @@ on:
       - stock-analyzer/src/pages/research-center-workspace.tsx
       - stock-analyzer/src/pages/backtests.tsx
       - stock-analyzer/src/components/backtest-research-panel.tsx
-      - stock-analyzer/src/components/user-broker-telegram-panel.tsx
       - api-server/src/routes/trade-automation.ts
       - api-server/src/routes/paper-journal.ts
       - api-server/src/routes/admin.ts
       - api-server/src/routes/backtests.ts
-      - api-server/src/routes/user-broker-telegram.ts
-      - api-server/src/features/user-broker-telegram/**
       - .github/workflows/staging-trading-core-only.yml
       - .github/scripts/build-staging-trading-core-only-verdict.mjs
       - .github/scripts/verify-staging-automation-research-verdict.mjs
@@ -165,7 +162,7 @@ jobs:
           node --test .github/tests/production-admin-four-paper-rls.test.mjs
       - name: Verify approval-free post-deploy QA isolation contract
         run: node .github/scripts/verify-production-postdeploy-qa-contract.mjs
-      - name: Verify Automation/Research/Telegram scoped QA contract
+      - name: Verify Automation/Paper/Research/Backtester scoped QA contract
         run: node --test .github/tests/production-automation-research-core-qa-contract.test.mjs
       - name: Verify one-approval 1M Production trading-policy migration contract
         run: node --test .github/tests/production-trading-policy-limit-apply-contract.test.mjs
@@ -312,7 +309,7 @@ jobs:
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
-      - name: Require exact Automation/Research/Telegram scoped release verdict
+      - name: Require exact Automation/Paper/Research/Backtester scoped release verdict
         if: ${{ inputs.qa_scope == 'automation_research' }}
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
@@ -373,7 +370,8 @@ jobs:
 
       # Install and prove the exact-SHA QA harness before creating SSH
       # authority or touching Production. This turns missing dependencies and
-      # external Telegram/provider drift into a pre-deployment failure.
+      # provider or Paper drift into a pre-deployment failure. Telegram is a
+      # separately operated integration and cannot block this four-feature lane.
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -390,7 +388,7 @@ jobs:
         working-directory: stock-analyzer
         run: pnpm exec playwright install chromium
 
-      - name: Pre-deploy external readiness — providers, Paper, Telegram and zero authority
+      - name: Pre-deploy readiness — Auto, Paper, Research, Backtester and zero authority
         id: automation_research_predeploy
         if: ${{ inputs.qa_scope == 'automation_research' }}
         working-directory: stock-analyzer
@@ -922,7 +920,7 @@ jobs:
           PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
           PRODUCTION_TRADING_CORE_QA: 'true'
           PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'
-          PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM: ${{ inputs.qa_scope == 'automation_research' && 'true' || 'false' }}
+          PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM: 'false'
           PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
           PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/trading-core
         working-directory: stock-analyzer
@@ -939,7 +937,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: 1AR · Auto, Paper, Research, Backtester and Telegram Journal Production pre-activation QA
+      - name: 1AR · Auto, Paper, Research and Backtester Production pre-activation QA
         id: automation_research_qa
         if: ${{ inputs.qa_scope == 'automation_research' }}
         env:
@@ -960,14 +958,14 @@ jobs:
         working-directory: stock-analyzer
         run: pnpm exec playwright test --config=playwright.production-automation-research-core.config.ts
 
-      - name: Verify Auto/Paper/Research/Backtester/Telegram Journal Production pre-activation receipt
+      - name: Verify Auto/Paper/Research/Backtester Production pre-activation receipt
         if: ${{ inputs.qa_scope == 'automation_research' }}
         run: >-
           node .github/scripts/verify-production-automation-research-core-receipt.mjs
           stock-analyzer/production-automation-research-artifacts/production-automation-research-core-qa.json
           "$TARGET_SHA" "$GITHUB_RUN_ID"
 
-      - name: Upload Auto/Paper/Research/Backtester/Telegram Journal QA evidence
+      - name: Upload Auto/Paper/Research/Backtester QA evidence
         if: ${{ always() && steps.automation_research_qa.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
@@ -1033,10 +1031,11 @@ jobs:
             elif [[ "$QA_SCOPE" == "trading_core" ]]; then
               echo '- Trading Core / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
             elif [[ "$QA_SCOPE" == "automation_research" ]]; then
-              echo '- Automatic Trading / Automatic Paper Trading / Research Center / Backtester / Telegram Trading Journal pre-activation contract: `PASS`'
+              echo '- Automatic Trading / Automatic Paper Trading / Research Center / Backtester pre-activation contract: `PASS`'
               echo '- Four-provider Account / Credential Reuse / Trading Core safety: `PASS`'
               echo '- Unrelated comprehensive UI QA: `NOT_RUN`'
-              echo '- Protected Telegram/Automatic Trading activation and post-activation delivery/worker proof: `PENDING`'
+              echo '- Telegram connection and delivery: `OUT_OF_SCOPE`'
+              echo '- Protected Automatic Trading activation remains a separate exact-SHA approval.'
             else
               echo '- Comprehensive / Toss / Kiwoom / Upbit / Bitget / Credential Reuse: `PASS`'
             fi

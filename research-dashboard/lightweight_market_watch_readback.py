@@ -155,11 +155,34 @@ def summarize_watch(raw, now_ms=None, expected_sha=None):
                 or (blocked and (observed != 0 or candidates != 0)) \
                 or row.get('executionAuthority') != 'NONE':
             return blank('INVALID', True)
+        # Release-v2 cap counters are optional in older market-watch snapshots.
+        # All absent means UNKNOWN; partial/malformed claims fail closed.
+        cap_keys = ('sourceCappedCount', 'qualifyingCandidateCount', 'candidateCappedCount')
+        cap_present = [key in row for key in cap_keys]
+        if any(cap_present) and not all(cap_present):
+            return blank('INVALID', True)
+        if all(cap_present):
+            source_cap, qualified, candidate_cap = (row[key] for key in cap_keys)
+            if not bounded_count(source_cap, 30001) \
+                    or not bounded_count(qualified, 8001) \
+                    or not bounded_count(candidate_cap, 8001) \
+                    or source_cap > listed - observed \
+                    or qualified > observed \
+                    or qualified != candidates + candidate_cap \
+                    or (status == 'READY' and source_cap != 0) \
+                    or (blocked and (source_cap != 0 or qualified != 0)):
+                return blank('INVALID', True)
+        else:
+            source_cap = qualified = candidate_cap = None
         total_candidates += candidates
         markets.append({
             'market': market, 'source': source, 'status': status,
             'listedCount': listed, 'observedCount': observed,
             'newCandidates': candidates,
+            # Never expose symbols/prices, and never coerce missing caps to 0.
+            'sourceCappedCount': source_cap,
+            'qualifyingCandidateCount': qualified,
+            'candidateCappedCount': candidate_cap,
         })
     if total_candidates != raw['newCandidateCount']:
         return blank('INVALID', True)
