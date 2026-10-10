@@ -41,6 +41,7 @@ import {
   automaticPaperOrderWithinWalletEpoch,
   automaticPaperWalletServerEpochMs,
   automaticPaperRiskEvidenceFromCanonicalLedger,
+  deriveFourMarketPaperExecutionPolicy,
   type MemberAutoTradingBackgroundSource,
 } from './member-auto-trading-background-worker.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
@@ -2609,6 +2610,26 @@ test('automatic Paper worker shares the 500k minimum capital policy admission gu
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 525_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.NaN }), false);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.POSITIVE_INFINITY }), false);
+});
+
+test('four-market Paper projection gives every member a 1m lane and compounds without changing Live policy', () => {
+  const stored = policy();
+  const projected = deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: true,
+    newEntriesAllowed: true,
+    operatingCapitalKrw: 1_050_000,
+  });
+  assert.equal(projected.totalCapitalKrw, 1_050_000);
+  assert.equal(projected.maxOrderKrw, 1_050_000);
+  assert.equal(projected.maxInstrumentKrw, 1_050_000);
+  assert.equal(projected.maxAssetClassKrw.crypto_spot, 1_050_000);
+  assert.equal(projected.bitgetLeverage, stored.bitgetLeverage);
+  assert.equal(stored.maxOrderKrw, 100_000, 'stored/Live policy must remain unchanged');
+  assert.throws(() => deriveFourMarketPaperExecutionPolicy(stored, 'crypto_spot', {
+    settlementReady: false,
+    newEntriesAllowed: false,
+    operatingCapitalKrw: 1_000_000,
+  }), /BACKGROUND_PAPER_MARKET_CAPITAL_NOT_READY/);
 });
 
 test('admin four-market Paper worker isolates the 1m capital floor without creating private orders', async () => {
