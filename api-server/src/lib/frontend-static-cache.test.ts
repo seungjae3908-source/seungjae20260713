@@ -204,8 +204,9 @@ test('AI Chart warmup stays bounded, does not prioritize unsafe URL attributes a
   assert.equal(tiny.criticalFiles, 1);
 
   const htmlBytes = Buffer.byteLength(await (await import('node:fs/promises')).readFile(path.join(runtimeDist, 'index.html')));
-  const capped = planFrontendStaticWarmup(runtimeDist, { maxFiles: 5, maxBytes: htmlBytes + 10 + 11 + 39 });
-  assert.ok(capped.plannedBytes <= 200);
+  const byteBudget = htmlBytes + 10 + 11 + 39;
+  const capped = planFrontendStaticWarmup(runtimeDist, { maxFiles: 5, maxBytes: byteBudget });
+  assert.ok(capped.plannedBytes <= byteBudget);
   assert.equal(capped.truncated, true);
   assert.equal(capped.files.some((entry) => entry.endsWith('lightweight-charts.production-xyz.js')), false);
   assert.equal(frontendStaticCacheControl(runtimeDist, path.join(assetsDir, 'ai-chart-xyz.js')), FRONTEND_IMMUTABLE_CACHE_CONTROL);
