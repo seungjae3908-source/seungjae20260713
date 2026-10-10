@@ -152,10 +152,10 @@ test('dedicated automatic Paper equity never borrows manual simulator cash or co
   };
   assert.equal(selectAutomaticPaperAccountEquity([]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual]), null);
-  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 500_000);
+  assert.equal(selectAutomaticPaperAccountEquity([manual, dedicated]), 1_000_000);
   assert.equal(selectAutomaticPaperAccountEquity([manual, { ...dedicated, deletedAt: at }]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual, {
-    ...dedicated, payload: { ...dedicated.payload, initialBalance: 1_000_000 },
+    ...dedicated, payload: { ...dedicated.payload, initialBalance: 500_000 },
   }]), null);
   assert.equal(selectAutomaticPaperAccountEquity([manual, {
     ...dedicated, payload: { ...dedicated.payload, equity: -1 },
@@ -2603,9 +2603,10 @@ test('new wallet calculates only scoped Paper risk, still blocking new invalid f
   assert.ok(blocked.blockers.includes('BACKGROUND_PAPER_FILL_QUANTITY_EVIDENCE_REQUIRED'));
 });
 
-test('automatic Paper worker shares the 500k minimum capital policy admission guard with readiness', () => {
-  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), false);
-  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), false);
+test('automatic Paper capital remains independent from the smaller LIVE role budget', () => {
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 9_999 }), false);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 100_000 }), true);
+  assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 499_999 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 500_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: 525_000 }), true);
   assert.equal(automaticPaperCapitalPolicyReady({ totalCapitalKrw: Number.NaN }), false);

@@ -346,6 +346,26 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
   }
 });
 
+test('zero daily order quota stays opportunity-driven while an explicit positive quota remains fail-closed', () => {
+  const opportunityDriven = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 0,
+  });
+  const afterManyValidOpportunities = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 500 },
+  }), opportunityDriven, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.equal(afterManyValidOpportunities.blockCodes.includes('DAILY_ORDER_LIMIT'), false);
+
+  const explicitlyBounded = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    maxDailyOrders: 10,
+  });
+  const bounded = evaluateTradingPlan(plan({
+    marketSnapshot: { ...plan().marketSnapshot, dailyOrderCount: 10 },
+  }), explicitlyBounded, { emergencyStopped: false, serverLiveEnabled: true });
+  assert.ok(bounded.blockCodes.includes('DAILY_ORDER_LIMIT'));
+});
+
 test('Bitget caps members at 3x, preserves administrator 2x-7x, and keeps risk checks explicit', () => {
   for (const leverage of [2, 3] as const) {
     assert.equal(

@@ -1,6 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildProductionPostdeployQaEvidence, verifyPostDeployMainLineage, isActiveProductionTradingGateRun } = require('./production-postdeploy-qa-evidence.cjs');
+const {
+  buildProductionPostdeployQaEvidence,
+  verifyPostDeployMainLineage,
+  isActiveProductionTradingGateRun,
+  revalidateProductionTradingGateConflicts,
+} = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
 const ZERO = {
@@ -125,6 +130,40 @@ test('only executing Trading Gate workflows block post-deploy QA; PR checks are 
   assert.equal(isActiveProductionTradingGateRun({event:'pull_request', status:'waiting'}), false);
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed', conclusion:'failure'}), false);
   assert.equal(isActiveProductionTradingGateRun({event:'issue_comment', status:'completed'}), false);
+});
+test('transient non-command Issue runs are revalidated while a persistent Trading Gate remains blocking', async () => {
+  const slept = [];
+  const transient = await revalidateProductionTradingGateConflicts(
+    [{id: 101, event:'issue_comment', status:'in_progress'}],
+    {
+      stabilizationMs: 10_000,
+      sleep: async (milliseconds) => slept.push(milliseconds),
+      loadRun: async () => ({id: 101, event:'issue_comment', status:'completed', conclusion:'skipped'}),
+    },
+  );
+  assert.deepEqual(transient, []);
+  assert.deepEqual(slept, [10_000]);
+
+  const persistent = await revalidateProductionTradingGateConflicts(
+    [{id: 202, event:'issue_comment', status:'waiting'}],
+    {
+      sleep: async () => {},
+      loadRun: async () => ({id: 202, event:'issue_comment', status:'waiting'}),
+    },
+  );
+  assert.deepEqual(persistent, [{id: 202, event:'issue_comment', status:'waiting'}]);
+});
+test('Gate revalidation does not sleep or call GitHub when no authority-capable run is active', async () => {
+  let called = false;
+  const result = await revalidateProductionTradingGateConflicts(
+    [{id: 303, event:'pull_request', status:'in_progress'}],
+    {
+      sleep: async () => { called = true; },
+      loadRun: async () => { called = true; },
+    },
+  );
+  assert.deepEqual(result, []);
+  assert.equal(called, false);
 });
 test('postdeploy main movement requires proven fast-forward ancestry, not a forced or diverged SHA', () => {
   const laterSha = 'c'.repeat(40);
