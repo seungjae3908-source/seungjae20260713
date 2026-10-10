@@ -1,0 +1,63 @@
+name: Prediction Lab Four-Market Whole PIT Daily Coverage V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
+      - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+      - market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
+      - .github/workflows/prediction-lab-four-market-whole-pit-price-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-four-market-whole-pit-price-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-only-whole-venue-pit-source-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Gate historic whole-market PIT and correct venue directions
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+          node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
+      - name: Emit truthful missing-historical-source readiness
+        run: |
+          node market-prediction-lab/scripts/report-four-market-whole-pit-readiness-v1.mjs
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync("market-prediction-lab/docs/four-market-whole-pit-price-readiness-v1.json","utf8"));
+            const names=["KR_STOCK","US_STOCK","CRYPTO_SPOT","CRYPTO_FUTURES"];
+            if(r.scope!=="ALL_HISTORIC_SYMBOLS_NOT_SIX_SELECTED_ALTS" ||
+               Object.keys(r.markets).length!==4||
+               names.some(m=>r.markets[m]?.status!=="BLOCKED_WHOLE_MARKET_COVERAGE" ||
+                 r.markets[m]?.requestedTradingDays!==null ||
+                 r.markets[m]?.actualMarketWideOpportunityCount!==null) ||
+               r.markets.CRYPTO_SPOT.venue!=="UPBIT_KRW" ||
+               r.markets.CRYPTO_FUTURES.venue!=="BITGET_USDT_FUTURES" ||
+               JSON.stringify(r.markets.CRYPTO_FUTURES.allowedDirections)!=="[\"LONG\",\"SHORT\"]"||
+               r.historicalFullMarketOpportunityDenominatorVerified!==false ||
+               r.trueMarketWideRecall!==null || r.profitabilityProven!==false ||
+               r.executionAuthority!=="NONE")process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: four-market-all-pit-daily-source-blocker-${{ github.sha }}
+          path: market-prediction-lab/docs/four-market-whole-pit-price-readiness-v1.json
+          retention-days: 14
+          if-no-files-found: error
