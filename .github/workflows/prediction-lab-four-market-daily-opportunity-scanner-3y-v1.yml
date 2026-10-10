@@ -25,6 +25,9 @@ on:
       - market-prediction-lab/src/causal-price-warning-coverage-v1.js
       - market-prediction-lab/tests/causal-price-warning-coverage-v1.test.js
       - market-prediction-lab/scripts/report-causal-price-warning-coverage-v1.mjs
+      - market-prediction-lab/src/historical-pit-venue-universe-gate-v1.js
+      - market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
+      - market-prediction-lab/scripts/report-historical-pit-universe-readiness-v1.mjs
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -208,6 +211,27 @@ jobs:
              r.historicalPointInTimeUniverseVerified!==false)process.exit(1);
           '
 
+      - name: Guard 4-market PIT listing and delisting evidence against survivor bias
+        run: |
+          node --test market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
+          node market-prediction-lab/scripts/report-historical-pit-universe-readiness-v1.mjs market-prediction-lab/docs/native-selected-historical-day-v1.json market-prediction-lab/docs/historical-pit-universe-readiness-v1.json
+
+      - name: Assert missing PIT roster remains BLOCKED instead of market-wide recall
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/historical-pit-universe-readiness-v1.json","utf8"));
+          if(r.executionAuthority!=="NONE"||r.profitabilityProven!==false||
+             r.totalHistoricActiveMarketSymbols!==null||r.fullMarketOpportunityDenominatorVerified!==false||
+             r.trueMarketWideRecall!==null||r.actualFillCount!==null||
+             Object.keys(r.markets).length!==4)process.exit(1);
+          for(const x of Object.values(r.markets)){
+            if(x.status!=="BLOCKED_PIT_UNIVERSE" ||
+               x.reason!=="DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED" ||
+               x.verifiedHistoricalMarketDenominator!==null || x.netProfitPct!==null) process.exit(1);
+          }
+          '
+
       - uses: actions/upload-artifact@v4
         with:
           name: native-selected-symbol-utc-day-pilot-${{ github.sha }}
@@ -215,6 +239,7 @@ jobs:
             market-prediction-lab/docs/native-selected-historical-day-v1.json
             market-prediction-lab/docs/native-selected-historical-day-raw-v1.json
             market-prediction-lab/docs/causal-price-warning-cohort-v1.json
+            market-prediction-lab/docs/historical-pit-universe-readiness-v1.json
           if-no-files-found: error
           retention-days: 14
 
