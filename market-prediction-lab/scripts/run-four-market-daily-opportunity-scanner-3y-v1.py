@@ -104,7 +104,10 @@ def yahoo_history(symbol: str, suffixes: tuple[str, ...]) -> pd.DataFrame:
                 })
                 frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
                 frame = frame[(frame.timestamp >= WARMUP) & (frame.timestamp <= END)]
-                if len(frame) >= 80:
+                # Two valid bars are enough to OBSERVE a day-over-day event.
+                # Candidate training still requires its own past 20d+ window.
+                # Excluding young listings here loses the surge denominator.
+                if len(frame) >= 2:
                     return frame.sort_values("timestamp").reset_index(drop=True)
             except Exception as exc:
                 errors.append(f"{ticker}:{str(exc)[:80]}")
@@ -183,22 +186,33 @@ def spot_exchange_symbols() -> list[str]:
     raise RuntimeError("SPOT_EXCHANGE_INFO_FAILED:" + "|".join(errors))
 
 
-def futures_exchange_symbols() -> list[str]:
-    payload = binance_get("https://fapi.binance.com/fapi/v1/exchangeInfo").json()
-    start_ms = int(START.timestamp() * 1000)
+def current_usdt_perpetual_contracts(rows: list[dict]) -> list[str]:
+    """Source-limited CURRENT-list proxy; historical delistings are NOT proven.
+
+    A contract listed DURING the evaluation window must not be excluded just
+    because it did not exist at the first date. Post-evaluation listings have
+    no eligible observations and may be omitted to limit public API requests.
+    """
+    end_ms = int(END.timestamp() * 1000)
     out = []
-    for row in payload.get("symbols", []):
+    for row in rows:
         if row.get("status") != "TRADING" or row.get("quoteAsset") != "USDT":
             continue
         if row.get("contractType") != "PERPETUAL":
             continue
         onboard = int(row.get("onboardDate") or 0)
-        if onboard and onboard > start_ms:
+        if onboard and onboard > end_ms:
             continue
         out.append(str(row["symbol"]).upper())
+    return sorted(set(out))
+
+
+def futures_exchange_symbols() -> list[str]:
+    payload = binance_get("https://fapi.binance.com/fapi/v1/exchangeInfo").json()
+    out = current_usdt_perpetual_contracts(payload.get("symbols", []))
     if len(out) < 20:
         raise RuntimeError(f"FUTURES_EXCHANGE_INFO_TOO_SMALL:{len(out)}")
-    return sorted(set(out))
+    return out
 
 
 def binance_klines(symbol: str, futures: bool) -> pd.DataFrame:
@@ -226,7 +240,9 @@ def binance_klines(symbol: str, futures: bool) -> pd.DataFrame:
         cursor = nxt
         if len(batch) < 1000:
             break
-    if len(rows) < 80:
+    # Preserve valid young-symbol day pairs for the raw high/low opportunity
+    # audit. Lack of indicator warmup is a SEPARATE preselection exclusion.
+    if len(rows) < 2:
         raise RuntimeError(f"KLINES_TOO_SHORT:{symbol}:{len(rows)}")
     frame = pd.DataFrame(rows, columns=[
         "open_time", "open", "high", "low", "close", "volume",
@@ -495,6 +511,20 @@ def blocked_market_report(market: str, error: Exception) -> dict:
 
 
 def self_test() -> None:
+    old = int(START.timestamp() * 1000) - 1
+    during = int(START.timestamp() * 1000) + 1
+    after_end = int(END.timestamp() * 1000) + 1
+    def contract(symbol, onboard, status="TRADING", quote="USDT"):
+        return {"symbol": symbol, "status": status, "quoteAsset": quote,
+                "contractType": "PERPETUAL", "onboardDate": onboard}
+    included = current_usdt_perpetual_contracts([
+        contract("OLDUSDT", old),
+        contract("NEWUSDT", during),
+        contract("AFTERENDUSDT", after_end),
+        contract("DELISTEDUSDT", old, status="CLOSED"),
+        contract("WRONGQUOTE", old, quote="BTC"),
+    ])
+    assert included == ["NEWUSDT", "OLDUSDT"]
     assert set(MARKETS) == {"US_STOCK", "KR_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"}
     assert all(COSTS[m] > 0 for m in MARKETS)
     assert us.START == START and us.END == END
