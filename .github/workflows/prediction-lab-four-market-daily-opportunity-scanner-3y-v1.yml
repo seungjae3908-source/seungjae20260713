@@ -9,6 +9,10 @@ on:
       - market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
       - market-prediction-lab/src/historical-intraday-opportunity-audit-v1.js
       - market-prediction-lab/tests/historical-intraday-opportunity-audit-v1.test.js
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/tests/upbit-spot-history.test.js
+      - market-prediction-lab/src/bitget-candle-collector.js
+      - market-prediction-lab/tests/bitget-collector.test.js
       - market-prediction-lab/scripts/run-us-daily-opportunity-scanner-3y-v1.py
       - .github/workflows/prediction-lab-four-market-daily-opportunity-scanner-3y-v1.yml
   workflow_dispatch:
@@ -64,6 +68,10 @@ jobs:
         run: |
           node --version
           node --test market-prediction-lab/tests/historical-intraday-opportunity-audit-v1.test.js
+
+      - name: Verify native venue one-minute collector contracts
+        run: |
+          node --test market-prediction-lab/tests/upbit-spot-history.test.js market-prediction-lab/tests/bitget-collector.test.js
 
       - name: Run four-market three-year benchmark
         run: python market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py --output market-prediction-lab/docs/four-market-daily-opportunity-scanner-3y-v1-result.json

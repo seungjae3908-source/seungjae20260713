@@ -3,6 +3,7 @@ import { PredictionInputError } from "./contracts.js";
 const BASE_URL = "https://api.upbit.com";
 const PAGE_SIZE = 200;
 const TIMEFRAMES = Object.freeze({
+  "1m": Object.freeze({unit:1,intervalMs:60_000}),
   "4h": Object.freeze({ unit: 240, intervalMs: 4 * 60 * 60 * 1000 }),
   "60m": Object.freeze({ unit: 60, intervalMs: 60 * 60 * 1000 }),
 });
@@ -37,10 +38,14 @@ export async function collectUpbitSpotHistory(raw = {}) {
   const fetchImpl = raw.fetchImpl ?? fetch;
   const minIntervalMs = Number(raw.minIntervalMs ?? 120);
   const maxPages = Number(raw.maxPages ?? 40);
+  const minCandles = Number(raw.minCandles ?? 120);
+  const requireFullWindow = raw.requireFullWindow ?? (timeframe === "1m");
+  if (!Number.isInteger(minCandles) || minCandles < 2 || minCandles > 20_000) throw new PredictionInputError("minCandles must be 2..20000", {minCandles});
+  if (typeof requireFullWindow !== "boolean") throw new PredictionInputError("requireFullWindow must be boolean");
   if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime <= 0 || endTime <= startTime) throw new PredictionInputError("invalid Upbit history range", { startTime, endTime });
   if (typeof fetchImpl !== "function") throw new TypeError("fetchImpl must be a function");
   if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 100) throw new PredictionInputError("maxPages must be 1..100");
-  const byTimestamp = new Map(); let cursor = endTime; let pages = 0;
+  const byTimestamp = new Map(); let cursor = endTime; let pages = 0; let reachedRequestedStart = false;
   while (cursor > startTime && pages < maxPages) {
     const to = new Date(cursor).toISOString();
     const url = `${BASE_URL}/v1/candles/minutes/${timeframeConfig.unit}?market=${encodeURIComponent(market)}&to=${encodeURIComponent(to)}&count=${PAGE_SIZE}`;
@@ -49,12 +54,15 @@ export async function collectUpbitSpotHistory(raw = {}) {
     const rows = await response.json(); if (!Array.isArray(rows)) throw new Error("UPBIT_HISTORY_INVALID_RESPONSE"); if (!rows.length) break;
     let oldest = Number.POSITIVE_INFINITY;
     for (const rawRow of rows) { const candle = parseRow(rawRow); if (!candle) continue; oldest = Math.min(oldest, candle.timestamp); if (candle.timestamp >= startTime && candle.timestamp < endTime) byTimestamp.set(candle.timestamp, candle); }
-    pages += 1; if (!Number.isFinite(oldest) || oldest <= startTime) break;
+    pages += 1;
+    if (!Number.isFinite(oldest)) throw new Error("UPBIT_HISTORY_PAGE_TIMESTAMP_MISSING");
+    if (oldest <= startTime) { reachedRequestedStart = true; break; }
     const nextCursor = oldest - 1; if (nextCursor >= cursor) break; cursor = nextCursor; if (minIntervalMs > 0) await sleep(minIntervalMs);
   }
   const candles = [...byTimestamp.values()].sort((left, right) => left.timestamp - right.timestamp);
-  if (candles.length < 120) throw new Error(`UPBIT_HISTORY_INSUFFICIENT_${candles.length}`);
-  return Object.freeze({ schemaVersion: 1, market: "CRYPTO_SPOT", exchange: "UPBIT", providerMarket: market, symbol: market.replace(/^KRW-/, ""), timeframe, intervalMs: timeframeConfig.intervalMs, source: "upbit-public-candles", requestedStartTime: startTime, requestedEndTime: endTime, pageCount: pages, candleCount: candles.length, firstTimestamp: candles[0].timestamp, lastTimestamp: candles.at(-1).timestamp, candles: Object.freeze(candles), liveOrderAllowed: false, privateAccountRequestAllowed: false });
+  if (requireFullWindow && !reachedRequestedStart) throw new Error("UPBIT_HISTORY_RANGE_INCOMPLETE");
+  if (candles.length < minCandles) throw new Error(`UPBIT_HISTORY_INSUFFICIENT_${candles.length}`);
+  return Object.freeze({ schemaVersion: 1, market: "CRYPTO_SPOT", exchange: "UPBIT", providerMarket: market, symbol: market.replace(/^KRW-/, ""), timeframe, intervalMs: timeframeConfig.intervalMs, source: "upbit-public-candles", requestedStartTime: startTime, requestedEndTime: endTime, pageCount: pages, reachedRequestedStart, rawPageWindowTraversed: reachedRequestedStart, historicalSignalAvailabilityProven: false, historicPointInTimeListingComplete: false, missingMinuteNoTradeProof: false, exactFirstTradeTimestampProven: false, actualFillProven: false, candleCount: candles.length, firstTimestamp: candles[0].timestamp, lastTimestamp: candles.at(-1).timestamp, candles: Object.freeze(candles), liveOrderAllowed: false, privateAccountRequestAllowed: false });
 }
 
 export { marketCode as upbitKrwMarketCode };
