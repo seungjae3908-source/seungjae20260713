@@ -56,11 +56,13 @@ requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_G
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
 requireText(autoTradingSettings, '.filter((leverage) => leverage <= maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_UI_MISSING');
 
-// A fresh 500k automatic Paper wallet is a separate virtual ledger. Existing
+// A fresh 1M automatic Paper wallet is a separate virtual ledger. Existing
 // automatic Paper fills, manual wallets and incomplete history must never be
 // replaced or interpreted as proof of an empty account.
 for (const [input, token, code] of [
-  [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'", 'AUTO_PAPER_WALLET_ID_MISSING'],
+  [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m'", 'AUTO_PAPER_WALLET_ID_MISSING'],
+  [paperWorker, "'automatic-paper-account-v1'", 'AUTO_PAPER_LEGACY_WALLET_ID_MISSING'],
+  [paperWorker, 'AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const', 'AUTO_PAPER_1M_BASELINE_MISSING'],
   [paperWorker, 'selectAutomaticPaperAccountEquity(records)', 'AUTO_PAPER_DEDICATED_EQUITY_MISSING'],
   [paperWorker, 'inspectAdminFourMarketPaperWallets(records, nowMs)', 'ADMIN_FOUR_MARKET_PAPER_WALLET_INTEGRITY_MISSING'],
   [paperWorker, 'adminMarketPaperRiskBudget(marketBudgetInput)', 'ADMIN_FOUR_MARKET_PAPER_MARKET_BUDGET_MISSING'],
@@ -525,7 +527,7 @@ requireText(pilotCapital, 'evaluateRulePackPilotEntryGuard', 'AUTO_PILOT_ENTRY_G
 for (const token of [
   'BACKGROUND_PILOT_ENTRY_LIMIT',
   'BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT',
-  'BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT',
+  'BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT',
   'BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT',
   'BACKGROUND_PILOT_CONCURRENT_POSITION_LIMIT',
   'BACKGROUND_PILOT_FRESH_SIGNAL_REQUIRED',
@@ -536,7 +538,7 @@ for (const token of [
 requireText(pilotCapitalTest, 'pilot capital starts at 500k and compounds only half of new high-water profit', 'AUTO_PILOT_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, 'administrator pilot starts at 1M and verified 50% compounding raises the next cap to 1.025M', 'AUTO_ADMIN_PILOT_1M_50_50_TEST_MISSING');
 requireText(pilotCapitalTest, "dailyLosingTrades: 5", 'AUTO_PILOT_DAILY_LOSS_COUNT_TEST_MISSING');
-requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -25_000", 'AUTO_PILOT_DAILY_LOSS_KRW_TEST_MISSING');
+requireText(pilotCapitalTest, "dailyRealizedPnlKrw: -15_000", 'AUTO_PILOT_DAILY_LOSS_PERCENT_TEST_MISSING');
 requireText(pilotCapitalTest, "consecutiveLosses: 3", 'AUTO_PILOT_CONSECUTIVE_LOSS_TEST_MISSING');
 requireText(pilotCapitalTest, "openLivePositions: 2", 'AUTO_PILOT_CONCURRENT_POSITION_TEST_MISSING');
 requireText(autoTradingPage, "auth.can('canManageMembers')", 'AUTO_FORMULA_AI_PILOT_ADMIN_UI_CAPABILITY_MISSING');
