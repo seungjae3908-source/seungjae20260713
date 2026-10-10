@@ -20,12 +20,12 @@ function number(value: number | null) {
 function statusLabel(value: string, watchStatus?: ResearchLightweightMarketWatch['status']) {
   // Per-market READY is the most recent saved source state, not proof that
   // an aged/paused worker is still collecting new public ticker snapshots.
+  if (value.startsWith('BLOCKED_')) return '데이터 미연결';
   if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';
   if (watchStatus === 'HOLD') return '서버 보호 정지';
   if (watchStatus === 'THROTTLED') return '서버 보호 감속';
   if (value === 'READY') return '시세 수집';
   if (value === 'PARTIAL_TICKERS' || value === 'PARTIAL_UNIVERSE') return '일부 수집';
-  if (value.startsWith('BLOCKED_')) return '데이터 미연결';
   return '확인 필요';
 }
 function displayTime(ms: number | null) {
