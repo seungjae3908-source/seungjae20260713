@@ -40,14 +40,18 @@ function displayTime(ms: number | null) {
 }
 
 export function ResearchLightweightMarketWatchPanel({
-  watch, cadence,
+  watch, cadence, readbackFailed = false,
 }: {
   watch?: ResearchLightweightMarketWatch | null;
   cadence?: ResearchLightweightMarketWatchCadence | null;
+  readbackFailed?: boolean;
 }) {
   const summary = watch ?? null;
-  const label = summary ? WATCH_LABEL[summary.status] : WATCH_LABEL.MISSING;
-  const fresh = summary?.status === 'OBSERVING' || summary?.status === 'PARTIAL';
+  // A failed overview refetch may preserve cached data. Never label that
+  // stale cached snapshot as an active market feed.
+  const status = readbackFailed ? 'STALE' : summary?.status;
+  const label = readbackFailed ? '최근 조회 실패 · 이전 기록' : status ? WATCH_LABEL[status] : WATCH_LABEL.MISSING;
+  const fresh = !readbackFailed && (status === 'OBSERVING' || status === 'PARTIAL');
   const liveMarkets = summary?.marketCoverageCount ?? null;
   const markets = summary?.markets ?? [];
   const prospective = summary?.prospectiveSampleStudy ?? null;
@@ -88,7 +92,7 @@ export function ResearchLightweightMarketWatchPanel({
           <div key={row.market} className="rounded-xl border border-border bg-muted/20 px-3 py-2 text-xs">
             <div className="flex items-center justify-between gap-2">
               <strong>{MARKET_NAMES[row.market] ?? '미확인 시장'}</strong>
-              <span className="text-muted-foreground">{markets.length ? statusLabel(row.status, summary?.status) : '기록 없음'}</span>
+              <span className="text-muted-foreground">{markets.length ? statusLabel(row.status, status) : '기록 없음'}</span>
             </div>
             <p className="mt-1 text-muted-foreground">
               시세 {markets.length ? number(row.observedCount) + '/' + number(row.listedCount) : '미측정'} · 신규 후보 {markets.length ? number(row.newCandidates) : '미측정'}
