@@ -23,9 +23,9 @@ const callArgs=(market,output,keyFile=null)=>({
  date:market==="KR_STOCK"?KR_NOW:US_NOW,
  output,readPublic:keyFile!==null,approvedKeyFile:keyFile,
 });
-function temp(fn){
+async function temp(fn){
  const folder=mkdtempSync(join(tmpdir(),"two-stock-source-"));
- try{return fn(folder);}finally{rmSync(folder,{recursive:true,force:true});}
+ try{return await fn(folder);}finally{rmSync(folder,{recursive:true,force:true});}
 }
 const keyFile=folder=>{
  const p=join(folder,"mock-read-public-key.txt");
@@ -178,8 +178,8 @@ test("preexisting output prevents licensed API calls; read-only key never leaks"
   assert.equal(readFileSync(out,"utf8"),"{}");
   chmodSync(key,0o644);
   const other=join(folder,"new.json");
-  await assert.rejects(run(callArgs("US_STOCK",other,key)),/
-    STOCK_TWO_DATED_APPROVED_KEY_FILE_UNSAFE/);
+  await assert.rejects(run(callArgs("US_STOCK",other,key)),
+    /STOCK_TWO_DATED_APPROVED_KEY_FILE_UNSAFE/);
   assert.equal(existsSync(other),false);
  });
 });
