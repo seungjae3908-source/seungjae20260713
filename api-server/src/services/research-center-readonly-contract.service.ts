@@ -803,13 +803,22 @@ export function sanitizeMarketWatchReadback(value: unknown) {
       || (healthy && source === 'NONE') || listedCount == null
       || observedCount == null || newCandidates == null || observedCount > listedCount
       || newCandidates > observedCount || row.executionAuthority !== 'NONE'
-      || (status === 'READY' && listedCount !== observedCount)
+      || (status === 'READY' && (observedCount === 0 || listedCount !== observedCount))
       || (blocked && (newCandidates !== 0 || observedCount !== 0))) return null;
     return { market: WATCH_MARKETS[index], status, source, listedCount, observedCount, newCandidates };
   });
+  const readyCount = rows.filter((row) => row?.status === 'READY').length;
+  const usableCount = rows.filter((row) => row != null && WATCH_HEALTHY_SOURCE.has(row.status)).length;
+  // Mirror the exact Research Dashboard readback. A forged or outdated
+  // PARTIAL/BLOCKED_DATA/HOLD projection must not pretend that a market feed
+  // is currently operating; STALE requires an aged observation.
   if (rows.some((row) => row == null)
-    || rows.filter((row) => row?.status === 'READY').length !== coverage
-    || (v.status === 'OBSERVING' && coverage !== 4)) {
+    || readyCount !== coverage
+    || (v.status === 'OBSERVING' && coverage !== 4)
+    || (v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4))
+    || (v.status === 'BLOCKED_DATA' && usableCount !== 0)
+    || ((v.status === 'HOLD' || v.status === 'THROTTLED') && usableCount !== 0)
+    || (v.status === 'STALE' ? ageMs <= 360_000 : ageMs > 360_000)) {
     return emptyMarketWatch('INVALID', true);
   }
   return {
