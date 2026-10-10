@@ -363,6 +363,7 @@ test('explicit cockpit read-only lookup draws and hides one average line without
         openOrders: [], checkedAt: new Date().toISOString(), lastGoodAt: new Date().toISOString(),
         stale: false, errorCode: null, orderRequests: 0, cancelRequests: 0,
         amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
+        credentialsReturned: false,
         liveTradingEnabled: false, autoTradingEnabled: false,
       }),
     });
@@ -377,6 +378,7 @@ test('explicit cockpit read-only lookup draws and hides one average line without
   expect(accountReads).toEqual([]);
   await panel.getByTestId('ai-chart-load-position').click();
   await expect.poll(() => accountReads.length).toBe(1);
+  await expect(panel).toContainText('내 평단');
   // Diagnostic remains strict: reveal whether the read was accepted or
   // the subsequent presentation bridge dropped an otherwise verified overlay.
   try {
