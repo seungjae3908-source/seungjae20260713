@@ -49,7 +49,7 @@ export function parseStockDailyEvidenceArgsV1(args=[]){
 function loadPrivateSource(path){
  const file=resolve(path),st=lstatSync(file);
  if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1
-    ||st.size<=0||st.size>16*1024*1024||(st.mode&0o077)!==0)
+    ||st.size<=0||st.size>64*1024*1024||(st.mode&0o077)!==0)
    throw new TypeError("STOCK_EVIDENCE_PRIVATE_INPUT_UNSAFE");
  return JSON.parse(readFileSync(file,"utf8"));
 }

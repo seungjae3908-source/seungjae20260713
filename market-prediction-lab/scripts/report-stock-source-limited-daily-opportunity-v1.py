@@ -94,7 +94,7 @@ def score_source_limited_stock_daily_v1(source):
     canonical = source.get("canonicalRowsJSON")
     digest = source.get("sourceRowsSha256")
     if not current or not prior or prior >= current or not isinstance(rows, list) \
-       or not isinstance(canonical, str) or len(canonical) > 8*1024*1024 \
+       or not isinstance(canonical, str) or len(canonical.encode("utf-8")) > 48*1024*1024 \
        or not SHA.fullmatch(str(digest)) \
        or not isinstance(source.get("sourceAttestedNameCount"), int) \
        or isinstance(source["sourceAttestedNameCount"], bool) \
@@ -283,7 +283,7 @@ def main():
     src, output = Path(args.input), Path(args.output)
     stat = src.lstat()
     if not src.is_file() or src.is_symlink() or stat.st_nlink != 1 \
-       or stat.st_size <= 0 or stat.st_size > 8*1024*1024 \
+       or stat.st_size <= 0 or stat.st_size > 96*1024*1024 \
        or stat.st_mode & 0o077:
         raise ValueError("STOCK_SOURCE_PRIVATE_INPUT_REQUIRED")
     result = score_source_limited_stock_daily_v1(

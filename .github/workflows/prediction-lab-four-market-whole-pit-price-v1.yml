@@ -8,6 +8,7 @@ on:
       - market-prediction-lab/src/us-asof-all-stock-grouped-daily-v1.js
       - market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js
       - market-prediction-lab/tests/stock-source-limited-daily-evidence-v1.test.js
+      - market-prediction-lab/tests/stock-source-file-e2e-v1.test.mjs
       - market-prediction-lab/scripts/prepare-stock-source-limited-daily-evidence-v1.mjs
       - market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py
       - market-prediction-lab/src/us-two-dated-all-stock-source-v1.js
@@ -74,6 +75,9 @@ jobs:
             "numpy==2.2.6" "pandas==2.2.3"
           python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py --self-test
           python market-prediction-lab/scripts/report-stock-source-limited-daily-opportunity-v1.py --self-test
+      - name: File-backed 25-symbol KR/US raw receipt to Node CLI to original Python scorer (fixture-only)
+        run: |
+          node --test market-prediction-lab/tests/stock-source-file-e2e-v1.test.mjs
       - name: Cross-language stock all-asof-date source to existing Python price scorer (fixture-only)
         run: |
           node --input-type=module -e '
@@ -89,7 +93,7 @@ jobs:
               open:103,high:122,low:102,close:110,volume:500,
               sourceIdentity:"KRX_OFFICIAL_DATED_TRADING_INFO",
               automaticCorporateActionAdjustmentApplied:false};
-            const kr={...safety,market:"KR_STOCK",venue:"KRX",
+            const kr={...safety,schemaVersion:"krx-authorized-two-session-all-stock-intake-v1",market:"KR_STOCK",venue:"KRX",
               status:"SOURCE_LIMITED_TWO_KRX_DATES_JOINED_ONLY",
               requestedTradingDates:["20250207","20250210"],
               recordSha256:"a".repeat(64),records:[krRow],
@@ -110,7 +114,7 @@ jobs:
               venueTimeZone:"America/New_York",sourceAdjustedForSplits:false,
               corporateActionAdjustmentAuthenticated:false,
               previousSessionCalendarAuthenticated:false};
-            const us={...safety,market:"US_STOCK",venue:"US_SIP",
+            const us={...safety,schemaVersion:"us-two-dated-asof-all-stocks-price-source-v1",market:"US_STOCK",venue:"US_SIP",
               status:"SOURCE_LIMITED_TWO_US_ASOF_DATES_JOINED_ONLY",
               requestedTradingDates:["2025-01-31","2025-02-03"],
               sourceRowsSha256:"b".repeat(64),rows:[usRow],
