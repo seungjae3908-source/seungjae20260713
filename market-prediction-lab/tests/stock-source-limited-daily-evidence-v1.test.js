@@ -271,3 +271,78 @@ test("valid-looking changed raw stock OHLC without new source hash is BLOCKED, n
     "STOCK_JOINED_SOURCE_ROWS_DIGEST_MISSING_OR_CHANGED");
  }
 });
+
+function partialReceipt(market,count=3){
+ const source=receipt(market,count),kr=market==="KR_STOCK";
+ const rows=kr?source.records:source.rows;
+ const missing=rows.pop();
+ source.status=kr?"PARTIAL_PRIOR_SESSION_STOCK_SOURCE_BLOCKED":
+   "PARTIAL_US_PRIOR_PRICE_OR_LIFECYCLE_BLOCKED";
+ source.joinedSourceRowsSha256=createHash("sha256")
+   .update(JSON.stringify(rows)).digest("hex");
+ if(kr){
+  source.joinedPriorPriceSymbols=rows.length;
+  source.missingPreviousPriceCount=1;
+  source.unmatchedPriorISINsPreview=[{symbol:missing.symbol,isin:missing.isin}];
+ }else{
+  source.joinedPriorDailyPriceCount=rows.length;
+  source.missingPriorPriceOrIdentityCount=1;
+  source.twoDatedSourceShareClassIdentityMatched=false;
+  source.identityBlockerCounts={NO_PRIOR_ACTIVE_LISTING_OR_NEW_STOCK:1};
+  source.symbolsNeedingPriorReviewPreview=[{
+    symbol:missing.symbol,reason:"NO_PRIOR_ACTIVE_LISTING_OR_NEW_STOCK"}];
+ }
+ return source;
+}
+test("KR/US 1 missing prior baseline is BLOCKED by default, explicit partial diagnostic only",()=>{
+ for(const market of ["KR_STOCK","US_STOCK"]){
+  const source=partialReceipt(market);
+  const strict=pack({market,source,testFixtureOnly:true});
+  assert.equal(strict.status,"BLOCKED_DATA");
+  assert.equal(strict.actualMarketWideOpportunityCount,null);
+  const scoped=pack({market,source,testFixtureOnly:true,
+    allowPartialDiagnosticOnly:true});
+  assert.equal(scoped.status,"TEST_FIXTURE_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY");
+  assert.equal(scoped.sourceAttestedNameCount,2);
+  assert.equal(scoped.sourceObservedCurrentNameCount,3);
+  assert.equal(scoped.sourceUnscorableCurrentNameCount,1);
+  assert.equal(scoped.sourceUniverseCoveragePartial,true);
+  assert.equal(scoped.sourceExclusionReasonCounts[
+    market==="KR_STOCK"?"PRIOR_PRICE_OR_ISIN_IDENTITY_MISSING":
+      "NO_PRIOR_ACTIVE_LISTING_OR_NEW_STOCK"],1);
+  assert.equal(scoped.rows.length,2);
+  assert.equal(scoped.fullMarketOpportunityDenominatorVerified,false);
+  assert.equal(scoped.actualMarketWideOpportunityCount,null);
+  assert.equal(scoped.trueMarketWideRecall,null);
+  assert.equal(scoped.profitabilityProven,false);
+  assert.equal(scoped.executionAuthority,"NONE");
+ }
+});
+test("fabricated partial count, missing reason, and changed source hash do not score",()=>{
+ for(const market of ["KR_STOCK","US_STOCK"]){
+  const bad=partialReceipt(market),kr=market==="KR_STOCK";
+  bad[kr?"missingPreviousPriceCount":"missingPriorPriceOrIdentityCount"]=2;
+  assert.equal(pack({market,source:bad,allowPartialDiagnosticOnly:true}).reason,
+    "STOCK_PARTIAL_BASELINE_OR_IDENTITY_BREAKDOWN_INVALID");
+  const missing=partialReceipt(market);
+  delete missing.joinedSourceRowsSha256;
+  assert.equal(pack({market,source:missing,allowPartialDiagnosticOnly:true}).reason,
+    "STOCK_JOINED_SOURCE_ROWS_DIGEST_MISSING_OR_CHANGED");
+  const spoof=partialReceipt(market);
+  spoof[kr?"records":"rows"].pop();
+  assert.equal(pack({market,source:spoof,allowPartialDiagnosticOnly:true}).status,
+    "BLOCKED_DATA");
+ }
+});
+test("partial flag must be explicit and cannot be repeated",()=>{
+ assert.throws(()=>parseStockDailyEvidenceArgsV1([
+   "--market","KR_STOCK","--input","/tmp/a","--output","/tmp/b",
+   "--allow-partial-diagnostic-only","--allow-partial-diagnostic-only"
+ ]),/STOCK_EVIDENCE_CLI_DUPLICATE_PARTIAL_FLAG/);
+ const config=parseStockDailyEvidenceArgsV1([
+   "--market","US_STOCK","--input","/tmp/a","--output","/tmp/b",
+   "--allow-partial-diagnostic-only"
+ ]);
+ assert.equal(config.allowPartialDiagnosticOnly,true);
+ assert.equal(config.testFixtureOnly,false);
+});

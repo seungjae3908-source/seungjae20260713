@@ -37,6 +37,9 @@ def hold(reason, market=None):
         "market": market, "status": "BLOCKED_DATA", "reason": reason,
         "sourceObservedDailyPriceEventCount": None,
         "sourceAttestedNameCount": None, "directions": None,
+        "sourceObservedCurrentNameCount": None,
+        "sourceUnscorableCurrentNameCount": None,
+        "sourceUniverseCoveragePartial": False,
         "historicalScannerEarlyDetectionCount": None,
         "trueMarketWideRecall": None, "actualMarketWideOpportunityCount": None,
         "originalProspectiveWatchNegativeEvidenceVerified": False,
@@ -70,8 +73,16 @@ def score_source_limited_stock_daily_v1(source):
     if market not in VENUE:
         return hold("STOCK_SOURCE_MARKET_INVALID", market)
     status = source.get("status")
-    fixture = status == "TEST_FIXTURE_TWO_DATED_STOCK_PRICE_BARS_ONLY"
-    if not (fixture or status == "SOURCE_ATTESTED_TWO_DATED_STOCK_PRICE_BARS_ONLY") \
+    fixture = status in ("TEST_FIXTURE_TWO_DATED_STOCK_PRICE_BARS_ONLY",
+                         "TEST_FIXTURE_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY")
+    partial = status in ("TEST_FIXTURE_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY",
+                         "SOURCE_ATTESTED_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY")
+    valid_status = status in (
+        "TEST_FIXTURE_TWO_DATED_STOCK_PRICE_BARS_ONLY",
+        "SOURCE_ATTESTED_TWO_DATED_STOCK_PRICE_BARS_ONLY",
+        "TEST_FIXTURE_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY",
+        "SOURCE_ATTESTED_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY")
+    if not valid_status \
        or source.get("schemaVersion") != "four-market-stock-source-limited-daily-evidence-v1" \
        or source.get("venue") != VENUE[market] \
        or source.get("sourceProvider") != PROVIDER[market] \
@@ -102,6 +113,22 @@ def score_source_limited_stock_daily_v1(source):
        or source["sourceAttestedNameCount"] > 50000 \
        or source["sourceAttestedNameCount"] != len(rows):
         return hold("STOCK_SOURCE_SESSION_DATES_OR_ROWS_MISSING", market)
+    total = source.get("sourceObservedCurrentNameCount")
+    missing = source.get("sourceUnscorableCurrentNameCount")
+    reasons = source.get("sourceExclusionReasonCounts")
+    if (
+        not isinstance(total, int) or isinstance(total, bool)
+        or not isinstance(missing, int) or isinstance(missing, bool)
+        or total < len(rows) or total > 50_000
+        or missing != total - len(rows)
+        or (partial and missing < 1) or (not partial and missing != 0)
+        or source.get("sourceUniverseCoveragePartial") is not partial
+        or not isinstance(reasons, dict)
+        or any(not isinstance(x, int) or isinstance(x, bool) or x < 0
+               for x in reasons.values())
+        or sum(reasons.values()) != missing
+    ):
+        return hold("STOCK_PARTIAL_COHORT_DENOMINATOR_BREAKDOWN_INVALID", market)
     if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != digest:
         return hold("STOCK_SOURCE_SAVED_ROWS_HASH_MISMATCH", market)
     try:
@@ -171,13 +198,22 @@ def score_source_limited_stock_daily_v1(source):
     ]
     return {
         "schemaVersion": "four-market-stock-daily-opportunity-label-v1",
-        "status": "TEST_FIXTURE_STOCK_DAILY_EVENT_LABEL_ONLY" if fixture
-                  else "SOURCE_ATTESTED_STOCK_DAILY_EVENT_LABEL_ONLY",
-        "reason": "RETROSPECTIVE_UNADJUSTED_PRICE_SOURCE_NOT_TRADE_SIGNAL",
+        "status": (
+            ("TEST_FIXTURE_PARTIAL_STOCK_DAILY_EVENT_LABEL_ONLY"
+             if fixture else "SOURCE_ATTESTED_PARTIAL_STOCK_DAILY_EVENT_LABEL_ONLY")
+            if partial else
+            ("TEST_FIXTURE_STOCK_DAILY_EVENT_LABEL_ONLY"
+             if fixture else "SOURCE_ATTESTED_STOCK_DAILY_EVENT_LABEL_ONLY")),
+        "reason": ("PARTIAL_MATCHED_NAMES_ONLY_UNSCORABLE_BASELINES"
+                   if partial else "RETROSPECTIVE_UNADJUSTED_PRICE_SOURCE_NOT_TRADE_SIGNAL"),
         "market": market, "venue": VENUE[market],
         "marketSessionDate": current,
         "priorCandidateSessionDate": prior,
         "sourceAttestedNameCount": len(rows),
+        "sourceObservedCurrentNameCount": total,
+        "sourceUnscorableCurrentNameCount": missing,
+        "sourceUniverseCoveragePartial": partial,
+        "sourceExclusionReasonCounts": reasons,
         "sourceObservedDailyPriceEventCount": len(audit.events),
         "sourceObservedDistinctSymbolsWithAny5PctMove":
             len({e[0] for e in audit.events if e[3] == 5}),
@@ -231,6 +267,10 @@ def self_test():
             "date": current, "priorCandidateDate": prior,
             "sourceReferenceSha256": "b"*64,
             "sourceAttestedNameCount": len(rows),
+            "sourceObservedCurrentNameCount": len(rows),
+            "sourceUnscorableCurrentNameCount": 0,
+            "sourceUniverseCoveragePartial": False,
+            "sourceExclusionReasonCounts": {},
             "canonicalRowsJSON": canonical,
             "sourceRowsSha256": hashlib.sha256(canonical.encode()).hexdigest(),
             "rows": rows,
@@ -256,6 +296,22 @@ def self_test():
         assert report["trueMarketWideRecall"] is None
         assert report["actualMarketWideOpportunityCount"] is None
         assert report["profitabilityProven"] is False
+        partial_source = sample(market)
+        partial_source["status"] = "TEST_FIXTURE_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY"
+        partial_source["sourceObservedCurrentNameCount"] = 3
+        partial_source["sourceUnscorableCurrentNameCount"] = 1
+        partial_source["sourceUniverseCoveragePartial"] = True
+        partial_source["sourceExclusionReasonCounts"] = {"MISSING_PRIOR": 1}
+        scoped = score_source_limited_stock_daily_v1(partial_source)
+        assert scoped["status"] == "TEST_FIXTURE_PARTIAL_STOCK_DAILY_EVENT_LABEL_ONLY"
+        assert scoped["sourceAttestedNameCount"] == 2
+        assert scoped["sourceObservedCurrentNameCount"] == 3
+        assert scoped["sourceUnscorableCurrentNameCount"] == 1
+        assert scoped["sourceObservedDailyPriceEventCount"] == 3
+        assert scoped["actualMarketWideOpportunityCount"] is None
+        assert scoped["trueMarketWideRecall"] is None
+        partial_source["sourceObservedCurrentNameCount"] = 2
+        assert score_source_limited_stock_daily_v1(partial_source)["status"] == "BLOCKED_DATA"
         changed = sample(market)
         changed["rows"][0]["high"] = 999.
         assert score_source_limited_stock_daily_v1(changed)["reason"] == \
@@ -297,6 +353,10 @@ def main():
         "market": result["market"], "status": result["status"],
         "sourceObservedDailyPriceEventCount":
             result["sourceObservedDailyPriceEventCount"],
+        "sourceObservedCurrentNameCount":
+            result.get("sourceObservedCurrentNameCount"),
+        "sourceUnscorableCurrentNameCount":
+            result.get("sourceUnscorableCurrentNameCount"),
         "trueMarketWideRecall": None, "profitabilityProven": False,
         "executionAuthority": "NONE",
     }, ensure_ascii=False))

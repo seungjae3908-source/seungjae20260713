@@ -111,9 +111,10 @@ function paths(folder,market){
   output:join(folder,market+"-events.json"),
  };
 }
-function prepare(market,p){
+function prepare(market,p,allowPartial=false){
  return call(process.execPath,[nodeCli,"--market",market,"--input",p.input,
-   "--output",p.packed,"--test-fixture"]);
+   "--output",p.packed,"--test-fixture",
+   ...(allowPartial?["--allow-partial-diagnostic-only"]:[])]);
 }
 function score(p){
  return call("python3",[pythonCli,"--input",p.packed,"--output",p.output]);
@@ -202,5 +203,52 @@ test("raw provider shaped receipt prices changed after digest creation fail clos
   const outcome=JSON.parse(readFileSync(p.output,"utf8"));
   assert.equal(outcome.actualMarketWideOpportunityCount,null);
   assert.equal(outcome.profitabilityProven,false);
+ });
+});
+
+test("KR/US 25 as-of names with one missing prior price: score 24 matched names only",()=>{
+ inTemp(folder=>{
+  for(const market of ["KR_STOCK","US_STOCK"]){
+   const raw=receipt(market,25),kr=market==="KR_STOCK";
+   const rows=kr?raw.records:raw.rows,missing=rows.pop();
+   raw.joinedSourceRowsSha256=createHash("sha256")
+     .update(JSON.stringify(rows)).digest("hex");
+   raw.status=kr?"PARTIAL_PRIOR_SESSION_STOCK_SOURCE_BLOCKED":
+     "PARTIAL_US_PRIOR_PRICE_OR_LIFECYCLE_BLOCKED";
+   if(kr){
+    raw.joinedPriorPriceSymbols=24;raw.missingPreviousPriceCount=1;
+    raw.unmatchedPriorISINsPreview=[{symbol:missing.symbol,isin:missing.isin}];
+   }else{
+    raw.joinedPriorDailyPriceCount=24;raw.missingPriorPriceOrIdentityCount=1;
+    raw.twoDatedSourceShareClassIdentityMatched=false;
+    raw.identityBlockerCounts={NO_PRIOR_ACTIVE_LISTING_OR_NEW_STOCK:1};
+    raw.symbolsNeedingPriorReviewPreview=[{
+      symbol:missing.symbol,reason:"NO_PRIOR_ACTIVE_LISTING_OR_NEW_STOCK"}];
+   }
+   const p=paths(folder,market);
+   writePrivate(p.input,raw);
+   const prepared=prepare(market,p,true);
+   assert.equal(prepared.status,"TEST_FIXTURE_PARTIAL_TWO_DATED_STOCK_PRICE_BARS_ONLY");
+   assert.equal(prepared.sourceAttestedNameCount,24);
+   assert.equal(prepared.sourceObservedCurrentNameCount,25);
+   assert.equal(prepared.sourceUnscorableCurrentNameCount,1);
+   const outcome=score(p);
+   assert.equal(outcome.status,"TEST_FIXTURE_PARTIAL_STOCK_DAILY_EVENT_LABEL_ONLY");
+   assert.equal(outcome.sourceObservedDailyPriceEventCount,6);
+   const saved=JSON.parse(readFileSync(p.output,"utf8"));
+   assert.deepEqual([5,10,20].map(t=>saved.directions.LONG[String(t)]
+     .sourceObservedPriceEventCount),[3,2,1]);
+   assert.equal(saved.sourceUniverseCoveragePartial,true);
+   assert.equal(saved.sourceObservedCurrentNameCount,25);
+   assert.equal(saved.sourceUnscorableCurrentNameCount,1);
+   assert.equal(saved.historicalScannerEarlyDetectionCount,null);
+   assert.equal(saved.actualMarketWideOpportunityCount,null);
+   assert.equal(saved.trueMarketWideRecall,null);
+   assert.equal(saved.actualFillCount,null);
+   assert.equal(saved.netProfitPct,null);
+   assert.equal(saved.OOSPassCount,0);
+   assert.equal(saved.profitabilityProven,false);
+   assert.equal(saved.executionAuthority,"NONE");
+  }
  });
 });
