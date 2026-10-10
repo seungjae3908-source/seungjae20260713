@@ -221,6 +221,113 @@ export async function recheckMissingUpbitMinuteSlotsV1({
   });
 }
 
+
+/**
+ * Separate PUBLIC trade-ticks endpoint checks the latest actual tick strictly
+ * before each absent one-minute candle's end. Upbit publishes only seven days
+ * of public tick history; outside that window the result remains BLOCKED.
+ * A previous tick before the missing minute corroborates venue-native
+ * no-candle semantics but is NOT independent full history authenticity proof.
+ */
+export async function auditPublicUpbitGapTicksV1({
+  symbol,diagnostic,targetedRecheck,fetchImpl=globalThis.fetch,
+  nowMs=Date.now(),maxChecks=24,minIntervalMs=250,
+}={}){
+  const empty=(status)=>Object.freeze({
+    status,requestedMissingMinutes:null,checkedMinutes:0,
+    latestTickPrecedesMissingMinute:null,
+    tickInsideMissingCandleMinute:null,unverifiedMinutes:null,
+    observations:[],independentFullHistoryVerified:false,
+    noSyntheticMinuteBars:true,
+    marketWideRecall:null,profitabilityProven:false,
+    executionAuthority:"NONE",
+  });
+  if(!PAIRS.includes(symbol)||diagnostic?.symbol!==symbol
+     ||targetedRecheck?.status!=="TARGETED_NATIVE_RECHECK_COMPLETE"
+     ||!Array.isArray(targetedRecheck.observations)
+     ||typeof fetchImpl!=="function"
+     ||!Number.isSafeInteger(nowMs)||nowMs<=0
+     ||!Number.isSafeInteger(maxChecks)||maxChecks<1||maxChecks>24
+     ||!Number.isSafeInteger(minIntervalMs)||minIntervalMs<0||minIntervalMs>2000)
+    return empty("BLOCKED_TICK_RECHECK_PROVENANCE_INVALID");
+  const missing=targetedRecheck.observations.filter(x=>
+    x.outcome==="NATIVE_CANDLE_ABSENT_ON_REQUERY").map(x=>x.timestampMs);
+  if(missing.length!==targetedRecheck.absentOnRequery
+     ||missing.length>maxChecks)
+    return empty("BLOCKED_TICK_RECHECK_BUDGET_OR_COUNTS");
+  const observations=[];
+  for(const [index,ms] of missing.entries()){
+    const minuteDayUtc=new Date(ms).toISOString().slice(0,10);
+    const utcNowDay=Math.floor(nowMs/86_400_000)*86_400_000;
+    const minuteDay=Date.parse(minuteDayUtc+"T00:00:00.000Z");
+    const daysAgo=(utcNowDay-minuteDay)/86_400_000;
+    const cutoffMs=ms+M;
+    let outcome="TICK_SOURCE_UNVERIFIED",latestTickAtMs=null,errorCode=null;
+    if(!Number.isInteger(daysAgo)||daysAgo<0||daysAgo>7
+       ||new Date(cutoffMs).toISOString().slice(0,10)!==minuteDayUtc){
+      errorCode="TICK_DATE_OUTSIDE_7D_OR_CUTOFF_UTC_DAY";
+    }else{
+      try{
+        const cutoffUtc=new Date(cutoffMs).toISOString().slice(11,19);
+        const url="https://api.upbit.com/v1/trades/ticks"
+          +"?market="+encodeURIComponent(symbol)
+          +"&to="+encodeURIComponent(cutoffUtc)
+          +"&count=1"
+          +(daysAgo===0?"":"&days_ago="+daysAgo);
+        const response=await fetchImpl(url,{
+          signal:AbortSignal.timeout(12_000),
+          headers:{accept:"application/json",
+            "user-agent":"seungjae-prediction-lab/1.0"},
+        });
+        if(!response?.ok)
+          throw new Error("UPBIT_TICKS_HTTP_"+(response?.status??"UNKNOWN"));
+        const rows=await response.json();
+        if(!Array.isArray(rows)||rows.length>1)
+          throw new Error("UPBIT_TICKS_INVALID_ROWS");
+        if(!rows.length){
+          outcome="TICK_HISTORY_EMPTY_UNKNOWN";
+        }else{
+          const row=rows[0],time=Number(row?.timestamp);
+          if(row?.market!==symbol||row.trade_date_utc!==minuteDayUtc
+             ||!Number.isSafeInteger(time)||time<=0||time>=cutoffMs
+             ||new Date(time).toISOString().slice(0,10)!==minuteDayUtc
+             ||!(Number(row?.trade_price)>0)
+             ||!(Number(row?.trade_volume)>0))
+            throw new Error("UPBIT_TICKS_PROVENANCE_INVALID");
+          latestTickAtMs=time;
+          outcome=time>=ms?"PUBLIC_TICK_IN_MISSING_CANDLE_MINUTE":
+            "PUBLIC_LATEST_TICK_PRECEDES_MISSING_MINUTE";
+        }
+      }catch(error){
+        errorCode=String(error?.message??error).slice(0,120);
+      }
+    }
+    observations.push(Object.freeze({
+      timestampMs:ms,utcMinute:new Date(ms).toISOString(),
+      outcome,latestTickAtMs,errorCode,
+    }));
+    if(index<missing.length-1&&minIntervalMs>0)
+      await new Promise(resolve=>setTimeout(resolve,minIntervalMs));
+  }
+  const precedes=observations.filter(x=>
+    x.outcome==="PUBLIC_LATEST_TICK_PRECEDES_MISSING_MINUTE").length;
+  const inside=observations.filter(x=>
+    x.outcome==="PUBLIC_TICK_IN_MISSING_CANDLE_MINUTE").length;
+  const unverified=observations.length-precedes-inside;
+  return Object.freeze({
+    status:unverified?"TICK_CROSSCHECK_PARTIAL":"TICK_CROSSCHECK_COMPLETE",
+    requestedMissingMinutes:missing.length,checkedMinutes:observations.length,
+    latestTickPrecedesMissingMinute:precedes,
+    tickInsideMissingCandleMinute:inside,unverifiedMinutes:unverified,
+    observations,
+    sameProviderIndependentEndpointCorroboration:true,
+    independentFullHistoryVerified:false,
+    noSyntheticMinuteBars:true,
+    marketWideRecall:null,profitabilityProven:false,
+    executionAuthority:"NONE",
+  });
+}
+
 export async function diagnosePublicUpbitMinuteGapsV1({
   fetchImpl=globalThis.fetch,
 }={}){
@@ -239,7 +346,12 @@ export async function diagnosePublicUpbitMinuteGapsV1({
         ?await recheckMissingUpbitMinuteSlotsV1({
           symbol,diagnostic:sourceDiagnostic,fetchImpl,
         }):null;
-      markets[symbol]=Object.freeze({...sourceDiagnostic,targetedRecheck});
+      const publicTickCrosscheck=targetedRecheck?.status==="TARGETED_NATIVE_RECHECK_COMPLETE"
+        ?await auditPublicUpbitGapTicksV1({
+          symbol,diagnostic:sourceDiagnostic,targetedRecheck,fetchImpl,
+        }):null;
+      markets[symbol]=Object.freeze({...sourceDiagnostic,
+        targetedRecheck,publicTickCrosscheck});
     }catch(error){
       if(classifyPublicSourceFailure(error)!=="BLOCKED_DATA")throw error;
       markets[symbol]=blocked(symbol,
@@ -286,6 +398,12 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
           recovered:x.targetedRecheck.presentOnRequery,
           stillAbsent:x.targetedRecheck.absentOnRequery,
           errors:x.targetedRecheck.failedRequeries,
+        }:null,
+        tickCrosscheck:x.publicTickCrosscheck?{
+          status:x.publicTickCrosscheck.status,
+          noTickDuringMissingMinute:x.publicTickCrosscheck.latestTickPrecedesMissingMinute,
+          tickContradictsMissingCandle:x.publicTickCrosscheck.tickInsideMissingCandleMinute,
+          inconclusive:x.publicTickCrosscheck.unverifiedMinutes,
         }:null},
     ])),
     fullMarketOpportunityDenominatorVerified:false,
