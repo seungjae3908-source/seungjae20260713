@@ -86,10 +86,12 @@ app.use(
 );
 
 app.get('/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.json(healthPayload('/health'));
 });
 
 app.get('/api/health', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.json(healthPayload('/api/health'));
 });
 

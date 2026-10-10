@@ -268,6 +268,33 @@ function isActiveProductionTradingGateRun(run) {
   return (run?.event === 'issue_comment' || run?.event === 'workflow_dispatch')
     && run?.status !== 'completed';
 }
+
+async function revalidateProductionTradingGateConflicts(
+  candidates,
+  {
+    loadRun,
+    sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    stabilizationMs = 10_000,
+  } = {},
+) {
+  const active = Array.isArray(candidates)
+    ? candidates.filter(isActiveProductionTradingGateRun)
+    : [];
+  if (active.length === 0) return [];
+  if (typeof loadRun !== 'function') {
+    throw new Error('POSTDEPLOY_QA_GATE_REVALIDATION_LOADER_MISSING');
+  }
+
+  // Every Issue comment creates a short-lived run for all three Gate workflows.
+  // Non-Gate comments are rejected by each workflow's job-level condition and
+  // finish as SKIPPED, but GitHub may expose them as queued/in_progress for a
+  // few seconds. Re-read only the exact candidate run IDs after that condition
+  // has settled. A real activation remains waiting/in_progress and still blocks
+  // fail-closed; a completed SKIPPED run is not trading authority.
+  await sleep(stabilizationMs);
+  const refreshed = await Promise.all(active.map((run) => loadRun(run.id)));
+  return refreshed.filter(isActiveProductionTradingGateRun);
+}
 function verifyPostDeployMainLineage({ targetSha, currentMainSha, comparison = null }) {
   const target = String(targetSha ?? '').trim().toLowerCase();
   const mainSha = String(currentMainSha ?? '').trim().toLowerCase();
@@ -446,4 +473,5 @@ module.exports = {
   buildProductionPostdeployQaEvidence,
   verifyPostDeployMainLineage,
   isActiveProductionTradingGateRun,
+  revalidateProductionTradingGateConflicts,
 };
