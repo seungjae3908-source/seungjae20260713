@@ -408,3 +408,87 @@ test('explicit cockpit read-only lookup draws and hides one average line without
   expect(mutations).toEqual([]);
 });
 
+
+test('mobile cockpit retains verified average line across chart tab switch without a second account read', async ({ page }) => {
+  test.setTimeout(90_000);
+  const accountReads: string[] = [];
+  const mutations: string[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApprovedSession(page);
+  await mockStockTradeSurface(page, accountReads);
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/api/') && request.method() !== 'GET') {
+      mutations.push(request.method() + ' ' + url.pathname);
+    }
+  });
+  await page.route('**/api/stocks/005930/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (!/\/(candles|chart)$/.test(path)) return route.fallback();
+    const end = Date.now() - 5 * 60_000;
+    const candles = Array.from({ length: 90 }, (_, index) => ({
+      time: new Date(end - (89 - index) * 5 * 60_000).toISOString(),
+      open: 70_000 + index * 20, high: 70_090 + index * 20,
+      low: 69_910 + index * 20, close: 70_025 + index * 20,
+      volume: 1_000 + index * 25, isClosed: true,
+    }));
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        ticker: '005930', timeframe: '5m', provider: 'MOCK_PUBLIC',
+        fetchedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(), candles,
+      }),
+    });
+  });
+  await page.route('**/api/accounts/read-only/toss', async (route) => {
+    accountReads.push('toss');
+    expect(route.request().method()).toBe('GET');
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        provider: 'toss', readOnly: true, connected: true, status: 'CONNECTED',
+        accounts: [{ market: 'KR', accountRef: '12****34', currency: 'KRW', buyingPower: 500_000 }],
+        balances: [],
+        positions: [{
+          market: 'KR', symbol: '005930', quantity: 20, availableQuantity: 20,
+          averageEntryPrice: 70_000, currentPrice: 72_100,
+          marketValue: 1_442_000, unrealizedPnl: 42_000, unrealizedPnlPercent: 3,
+          leverage: null, liquidationPrice: null, marginMode: null, side: null,
+        }],
+        openOrders: [], checkedAt: new Date().toISOString(),
+        lastGoodAt: new Date().toISOString(), stale: false, errorCode: null,
+        orderRequests: 0, cancelRequests: 0, amendRequests: 0,
+        transferRequests: 0, withdrawalRequests: 0, credentialsReturned: false,
+        liveTradingEnabled: false, autoTradingEnabled: false,
+      }),
+    });
+  });
+  await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=Samsung&timeframe=5m&action=BUY&trade=entry');
+  const panel = page.getByTestId('ai-chart-position-panel');
+  await expect(page.getByTestId('ai-chart-mobile-position')).toBeVisible();
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('unified-chart-wrapper')).toHaveCount(0);
+  expect(accountReads).toEqual([]);
+  await panel.getByTestId('ai-chart-load-position').click();
+  await expect.poll(() => accountReads.length).toBe(1);
+  await expect(panel).toContainText('70,000원');
+
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  await expect(page.getByTestId('ai-chart-mobile-position')).toBeHidden();
+  await expect(panel).toHaveCount(1);
+  await expect(panel).toBeHidden();
+  const chart = page.getByTestId('unified-chart-wrapper');
+  await expect(chart).toBeVisible();
+  await expect(chart).toHaveAttribute('data-position-average', '70000');
+
+  await page.getByRole('tab', { name: '내 포지션', exact: true }).click();
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('70,000원');
+  await panel.getByTestId('ai-chart-toggle-position-lines').click();
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+  await expect(chart).toHaveAttribute('data-position-average', '');
+  expect(accountReads).toEqual(['toss']);
+  expect(mutations).toEqual([]);
+});
+
