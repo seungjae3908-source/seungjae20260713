@@ -180,6 +180,9 @@ const researchCenterIntegrationReviewed=[
  'stock-analyzer/src/pages/research-center.tsx',
  // Exact Research Center zero-fabrication regression; not a scope wildcard.
  'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
+ // Four-market Research Center read-only source status; checked by the
+ // exact-head Research Center predeploy guard and no execution privileges.
+ 'stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx',
  'stock-analyzer/e2e/research-video-intelligence.spec.ts',
  'stock-analyzer/src/components/research-video-source-panel.tsx',
 ];
