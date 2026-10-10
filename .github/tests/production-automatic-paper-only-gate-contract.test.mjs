@@ -19,6 +19,7 @@ test('owner command activates only isolated Paper after exact release evidence',
     "REAL_ORDER_ENABLED: 'false'",
     "PRIVATE_TRADING_API_ALLOWED: 'false'",
     'Fail closed on activation error',
+    "PRODUCTION_AUTOMATIC_PAPER_ACTIVATION: 'true'",
   ]) assert.ok(workflow.includes(token), `missing ${token}`);
   assert.ok(!workflow.includes("LIVE_TRADING: 'true'"));
   assert.ok(!workflow.includes("AUTO_TRADING: 'true'"));
@@ -27,6 +28,7 @@ test('owner command activates only isolated Paper after exact release evidence',
 test('Production probe prepares four markets and proves zero financial authority', () => {
   for (const token of [
     '/api/paper-journal/four-market/status',
+    "test.skip(!enabled",
     '/api/paper-journal/four-market/bootstrap',
     '/api/trade-automation/paper-runtime-readiness',
     "workerMode).toBe('PAPER_ONLY')",
