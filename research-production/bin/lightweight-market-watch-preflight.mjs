@@ -104,6 +104,20 @@ export function summarizeWatchReadOnlyPreflight(reports) {
     || cadence.executionAuthority !== 'NONE'
     || watch.executionAuthority !== 'NONE')
     throw new Error('WATCH_PREFLIGHT_FORGED_FLAGS');
+  // An older installed worker has no limit counters; that is UNKNOWN, not 0.
+  const watchRows = Array.isArray(watch.markets) && watch.markets.length === 4
+    ? watch.markets : null;
+  const limitsKnown = watchRows !== null
+    && watchRows.every(row => row && Number.isSafeInteger(row.sourceCappedCount)
+      && row.sourceCappedCount >= 0 && row.sourceCappedCount <= 30_000
+      && Number.isSafeInteger(row.qualifyingCandidateCount)
+      && row.qualifyingCandidateCount >= 0 && row.qualifyingCandidateCount <= 8_000
+      && Number.isSafeInteger(row.candidateCappedCount)
+      && row.candidateCappedCount >= 0 && row.candidateCappedCount <= 8_000);
+  const cappedQuotesThisCycle = limitsKnown
+    ? watchRows.reduce((sum, row) => sum + row.sourceCappedCount, 0) : null;
+  const cappedCandidatesThisCycle = limitsKnown
+    ? watchRows.reduce((sum, row) => sum + row.candidateCappedCount, 0) : null;
   const statuses = {
     marketWatch: watch.status,
     cadence: cadence.status,
@@ -132,6 +146,8 @@ export function summarizeWatchReadOnlyPreflight(reports) {
       || status.startsWith('HOLD_')||status==='INCOMPLETE_DIRECTORY_COVERAGE')
       problems.push(section.toUpperCase()+'_NOT_READY');
   }
+  if (cappedQuotesThisCycle > 0) problems.push('WATCH_SOURCE_CAP_OBSERVED');
+  if (cappedCandidatesThisCycle > 0) problems.push('WATCH_CANDIDATE_CAP_OBSERVED');
   // Even complete local diagnostic records are not a deployment approval.
   return Object.freeze({
     contract: MARKET_WATCH_PREFLIGHT_CONTRACT,
@@ -151,6 +167,9 @@ export function summarizeWatchReadOnlyPreflight(reports) {
     stockInputMarkets: stocks.markets.map(m => ({ market: m.market, status: m.status,
       observedCount: m.observedCount, listedCount: m.listedCount })),
     stockInputFreshFormatCount: stocks.markets.filter(m => m.status.startsWith('FRESH_')).length,
+    // Per-cycle public-source accounting, never verified historical recall.
+    watchedSourceCappedThisCycle: cappedQuotesThisCycle,
+    watchedCandidatesCappedThisCycle: cappedCandidatesThisCycle,
     ...SOURCE_FLAGS,
   });
 }

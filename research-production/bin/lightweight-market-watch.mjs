@@ -272,7 +272,9 @@ async function cycle(root, researchSha, previous, telemetry) {
     observedAt: state.observedAt, status: state.status,
     budget: state.resourceBudget.status,
     markets: state.markets.map((m) => ({ market: m.market, status: m.status,
-      scanned: m.observedCount, newCandidates: m.newCandidates })),
+      scanned: m.observedCount, newCandidates: m.newCandidates,
+      sourceCappedCount: m.sourceCappedCount,
+      candidateCappedCount: m.candidateCappedCount })),
     newCandidateCount: state.newCandidateCount,
     orderAuthority: 'NONE',
   }) + '\n');
