@@ -1,0 +1,64 @@
+name: Prediction Lab KRX Dated Roster Timeline QA V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/krx-dated-roster-public-read-v1.js
+      - market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
+      - market-prediction-lab/src/krx-dated-roster-timeline-v1.js
+      - market-prediction-lab/tests/krx-dated-roster-timeline-v1.test.js
+      - market-prediction-lab/scripts/report-krx-dated-roster-timeline-v1.mjs
+      - .github/workflows/prediction-lab-krx-dated-roster-timeline-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: krx-dated-roster-timeline-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dated-roster-contract:
+    name: Historical KRX date identity and transition safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate official KRX collector and dated-source transition contracts
+        run: |
+          node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js market-prediction-lab/tests/krx-dated-roster-timeline-v1.test.js
+      - name: Record that KRX archive/data entitlement remains absent
+        run: |
+          node market-prediction-lab/scripts/report-krx-dated-roster-timeline-v1.mjs market-prediction-lab/docs/krx-dated-roster-timeline-readiness-v1.json
+      - name: Verify missing roster is not called delisted or zero opportunity
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const x=JSON.parse(readFileSync("market-prediction-lab/docs/krx-dated-roster-timeline-readiness-v1.json","utf8"));
+          if(x.status!=="PARTIAL_REQUESTED_DATE_SNAPSHOTS" ||
+             x.observedDateCount!==0 ||
+             x.confirmedDelistingCount!==null ||
+             x.historicalFullMarketPITVerified!==false ||
+             x.trueMarketWideRecall!==null ||
+             x.fullMarketOpportunityDenominatorVerified!==false ||
+             x.executionAuthority!=="NONE" ||
+             x.profitabilityProven!==false ||
+             x.realOrders!==false) process.exit(1);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: krx-dated-roster-timeline-source-readiness-${{ github.sha }}
+          path: market-prediction-lab/docs/krx-dated-roster-timeline-readiness-v1.json
+          if-no-files-found: error
+          retention-days: 14
