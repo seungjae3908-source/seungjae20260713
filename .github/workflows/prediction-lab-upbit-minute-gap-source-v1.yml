@@ -1,0 +1,70 @@
+name: Prediction Lab Upbit Historical Minute Gap Source Proof V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/scripts/diagnose-upbit-two-alt-minute-gaps-v1.mjs
+      - market-prediction-lab/tests/diagnose-upbit-two-alt-minute-gaps-v1.test.js
+      - .github/workflows/prediction-lab-upbit-minute-gap-source-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-upbit-historical-minute-gaps-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-gap-diagnosis:
+    name: Exact missing-minute ranges for only ETH and SOL Upbit public history
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate source minute-gap honesty and no-trade proof prohibition
+        run: |
+          node --test market-prediction-lab/tests/diagnose-upbit-two-alt-minute-gaps-v1.test.js
+      - name: Probe only two previously blocked Upbit public histories
+        timeout-minutes: 3
+        run: |
+          node market-prediction-lab/scripts/diagnose-upbit-two-alt-minute-gaps-v1.mjs \
+            market-prediction-lab/docs/upbit-two-alt-1m-gaps-v1.json
+      - name: Assert missing candles are not zero opportunity or real fill evidence
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const r=JSON.parse(readFileSync("market-prediction-lab/docs/upbit-two-alt-1m-gaps-v1.json","utf8"));
+          if(r.dateUtc!=="2026-10-09" || r.status!=="SOURCE_COVERAGE_DIAGNOSTIC_ONLY" ||
+             r.trueMarketWideRecall!==null || r.actualFillCount!==null ||
+             r.netProfitPct!==null||r.profitabilityProven!==false ||
+             r.executionAuthority!=="NONE" ||
+             r.fullMarketOpportunityDenominatorVerified!==false ||
+             r.liveTrading!==false||r.realOrders!==false||
+             Object.keys(r.markets).length!==2)process.exit(1);
+          for(const k of ["KRW-ETH","KRW-SOL"]){
+            const x=r.markets[k];
+            if(!x||!["VERIFIED_CONTIGUOUS_SOURCE_MINUTES",
+               "BLOCKED_UNVERIFIED_ONE_MINUTE_GAPS","BLOCKED_DATA"].includes(x.status) ||
+               x.trueMarketWideRecall!==null || x.actualFillCount!==null ||
+               x.sourceMissingMinuteCauseVerified!==false)process.exit(1);
+            if(x.status==="BLOCKED_UNVERIFIED_ONE_MINUTE_GAPS" &&
+               !(x.missingMinuteCount>0))process.exit(1);
+          }
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upbit-eth-sol-exact-1m-missing-slot-evidence-${{ github.sha }}
+          path: market-prediction-lab/docs/upbit-two-alt-1m-gaps-v1.json
+          if-no-files-found: error
+          retention-days: 14
