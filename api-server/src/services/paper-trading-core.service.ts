@@ -1,4 +1,4 @@
-import { TRADING_RISK_POLICY, type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
+import { type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
 import {
   MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
   validateManualPaperFuturesLeverage,
@@ -339,6 +339,7 @@ export function makeOrder(
     triggerPrice: request.triggerPrice ?? null,
     quantity,
     leverage: request.leverage,
+    maintenanceMarginRate: action.contractRules.maintenanceMarginRate,
     stopLossPrice: request.stopLossPrice,
     takeProfitPrice1: request.takeProfitPrice1 ?? null,
     takeProfitPrice2: request.takeProfitPrice2 ?? null,
