@@ -7,6 +7,7 @@ on:
       - '.github/tests/staging-trading-core-only-contract.test.mjs'
       - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
       - '.github/scripts/verify-staging-automation-research-verdict.mjs'
+      - '.github/scripts/verify-automation-research-release-preflight.mjs'
       - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
       - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
       - 'stock-analyzer/src/pages/auto-trading.tsx'
@@ -81,6 +82,8 @@ jobs:
           set -Eeuo pipefail
           node --check .github/scripts/build-staging-trading-core-only-verdict.mjs
           node --check .github/scripts/verify-staging-automation-research-verdict.mjs
+          node --check .github/scripts/verify-automation-research-release-preflight.mjs
+          node .github/scripts/verify-automation-research-release-preflight.mjs
           node --check api-server/scripts/staging-trading-core-admin-profile.mjs
           node --test .github/tests/staging-trading-core-only-contract.test.mjs .github/tests/staging-trading-core-admin-profile.test.mjs
 
@@ -127,6 +130,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Run fail-fast Automation/Research policy and wiring preflight
+        run: node .github/scripts/verify-automation-research-release-preflight.mjs
       - name: Verify direct owner or exact delegated owner-orchestrator provenance
         id: dispatch-authority
         uses: actions/github-script@v7
