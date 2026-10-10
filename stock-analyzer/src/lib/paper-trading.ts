@@ -7,7 +7,7 @@ export type PaperSide = 'long' | 'short';
 export type PaperOrderType = 'market' | 'limit' | 'stop_market';
 export type PaperOrderStatus = 'pending' | 'filled' | 'cancelled' | 'rejected' | 'expired';
 export type PaperPositionStatus = 'open' | 'partially_closed' | 'closed';
-export type PaperFillReason = 'market' | 'limit' | 'stop_trigger' | 'stop_loss' | 'take_profit' | 'partial_close' | 'manual_close';
+export type PaperFillReason = 'market' | 'limit' | 'stop_trigger' | 'stop_loss' | 'take_profit' | 'partial_close' | 'manual_close' | 'liquidation';
 
 export type PaperAccount = {
   id: string; initialBalance: number; cashBalance: number; realizedPnl: number; unrealizedPnl: number;
@@ -16,7 +16,7 @@ export type PaperAccount = {
 
 export type PaperOrder = {
   id: string; symbol: string; side: PaperSide; orderType: PaperOrderType; status: PaperOrderStatus;
-  requestedPrice: number | null; triggerPrice: number | null; quantity: number; leverage: number;
+  requestedPrice: number | null; triggerPrice: number | null; quantity: number; leverage: number; maintenanceMarginRate?: number | null;
   stopLossPrice: number; takeProfitPrice1?: number | null; takeProfitPrice2?: number | null;
   submittedAt: string; filledAt: string | null; cancelledAt: string | null; rejectionCodes: string[]; warnings: string[];
   mode: 'paper-only'; orderSubmitted: false; exchangeRequestSent: false; riskResult: RiskEngineResult | null;
@@ -24,7 +24,7 @@ export type PaperOrder = {
 
 export type PaperPosition = {
   id: string; orderId: string; symbol: string; side: PaperSide; entryPrice: number; currentPrice: number;
-  quantity: number; remainingQuantity: number; leverage: number; notionalValue: number; requiredMargin: number;
+  quantity: number; remainingQuantity: number; leverage: number; maintenanceMarginRate?: number | null; notionalValue: number; requiredMargin: number;
   stopLossPrice: number; takeProfitPrice1?: number | null; takeProfitPrice2?: number | null;
   unrealizedPnl: number; realizedPnl: number; totalFees: number; totalSlippage: number; totalFunding: number;
   openedAt: string; closedAt: string | null; status: PaperPositionStatus; warnings: string[];
