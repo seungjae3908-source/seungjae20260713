@@ -123,5 +123,7 @@ assert(deployScript.includes('DEPLOY_SHA="$TARGET_SHA"'), 'canary/live process m
 for (const marker of ['processDeploySha', 'deployMarkerSha', 'identityMatch', 'identityStatus']) {
   assert(server.includes(marker), `health identity contract missing ${marker}`);
 }
+const healthRoutes = server.slice(server.indexOf("app.get('/health'"), server.indexOf("app.use('/api/paper-journal'"));
+assert(healthRoutes.includes("res.setHeader('Cache-Control', 'no-store, max-age=0')"), 'deployment identity health routes must not be cached');
 
 console.log('[production-browser-contract] static contract passed');

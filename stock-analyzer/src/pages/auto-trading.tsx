@@ -21,8 +21,8 @@ type TradeAutomationFixture = ComponentProps<typeof TradeAutomationSettings>['fi
 
 type TradingMode = 'auto' | 'paper';
 type AutomaticPaperAccountStatus = 'checking' | 'missing' | 'ready' | 'blocked' | 'failed' | 'restricted' | 'fixture';
-const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1';
-const AUTO_PAPER_INITIAL_KRW = 500_000;
+const AUTO_PAPER_ACCOUNT_ID = 'automatic-paper-account-v2-1m';
+const AUTO_PAPER_INITIAL_KRW = 1_000_000;
 
 type AutomaticPaperRuntimeReadiness = {
   readyForPaperEvaluation: boolean;
@@ -37,8 +37,8 @@ type AutomaticPaperRuntimeReadiness = {
 };
 
 const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
-  BACKGROUND_PAPER_WALLET_REQUIRED: '50만원 자동모의매매 전용 계좌가 없습니다.',
-  BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW: '저장된 자동매매 운용자본이 50만원 기준보다 낮습니다.',
+  BACKGROUND_PAPER_WALLET_REQUIRED: '100만원 자동모의매매 전용 계좌가 없습니다.',
+  BACKGROUND_PAPER_CAPITAL_POLICY_TOO_LOW: '저장된 자동매매 운용자본이 100만원 기준보다 낮습니다.',
   BACKGROUND_ADMIN_FOUR_MARKET_WALLETS_REQUIRED: '관리자 4시장 독립 가상계좌 4개를 준비해야 합니다.',
   BACKGROUND_ADMIN_MARKET_POLICY_1M_REQUIRED: '관리자 정책의 시장별 운용자본이 100만원 기준에 미달합니다.',
   BACKGROUND_ADMIN_FOUR_MARKETS_NOT_ENABLED: '관리자 4시장/Provider 설정이 모두 활성화되지 않았습니다.',
@@ -416,7 +416,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     const expectedStatus = isolateLegacy ? 'blocked' : 'missing';
     if (autoPaperBusy || !userId || !canAuto || !canJournalSync || fixture || autoPaperStatus !== expectedStatus) return;
     if (isolateLegacy && !window.confirm(
-      '과거 자동모의 거래와 미청산 연구용 포지션은 그대로 보존합니다. 새 50만원 계좌와는 분리하며 과거 손익을 0원이나 청산 완료로 변경하지 않습니다. 계속할까요?',
+      '과거 자동모의 거래와 미청산 연구용 포지션은 그대로 보존합니다. 새 100만원 계좌와는 분리하며 과거 손익을 0원이나 청산 완료로 변경하지 않습니다. 계속할까요?',
     )) return;
     setAutoPaperBusy(true);
     setAutoPaperMessage('');
@@ -441,7 +441,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         idempotencyKey: `automatic-paper-start-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         clientTime: at,
         ...(isolateLegacy ? {
-          legacyEpochConfirmation: 'START_NEW_500K_PAPER_EPOCH_PRESERVE_HISTORY',
+          legacyEpochConfirmation: 'START_NEW_1M_PAPER_EPOCH_PRESERVE_HISTORY',
         } : {}),
         records: [{
           kind: 'account', id: AUTO_PAPER_ACCOUNT_ID, version: 1,
@@ -465,7 +465,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       if (after !== 'ready') throw new Error('서버 모의계좌 저장·조회 검증이 완료되지 않았습니다.');
       setAutoPaperPreflight(null);
       setAutoPaperRuntimeRefresh((current) => current + 1);
-      setAutoPaperMessage('50만원 가상계좌 저장·조회를 확인했습니다. 실제 주문은 활성화되지 않습니다.');
+      setAutoPaperMessage('100만원 가상계좌 저장·조회를 확인했습니다. 실제 주문은 활성화되지 않습니다.');
     } catch (error) {
       setAutoPaperStatus('failed');
       setAutoPaperMessage(error instanceof Error ? error.message : '모의계좌 준비에 실패했습니다.');
@@ -642,7 +642,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </span>
         </div>
         <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-          자동모의매매 전용 50만원 가상자본입니다. 실계좌의 입금·출금이나 LIVE 주문 권한을 변경하지 않습니다.
+          자동모의매매 전용 100만원 가상자본입니다. 실계좌의 입금·출금이나 LIVE 주문 권한을 변경하지 않습니다.
           기존 수동 모의거래 기록이 있으면 자동으로 덮어쓰지 않습니다.
         </p>
         {autoPaperMessage ? <p role="status" className="mt-2 break-keep text-xs">{autoPaperMessage}</p> : null}
@@ -676,7 +676,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             onClick={() => void prepareAutomaticPaperAccount(true)}
             data-testid="prepare-isolated-automatic-paper-epoch"
           >
-            과거 기록 보존 후 신규 50만원 모의계좌 준비
+            과거 기록 보존 후 신규 100만원 모의계좌 준비
           </button>
         ) : null}
         {autoPaperStatus === 'missing'
@@ -689,7 +689,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             onClick={() => void prepareAutomaticPaperAccount()}
             data-testid="prepare-automatic-paper-account"
           >
-            {autoPaperBusy ? '가상계좌 검증 중' : '50만원 모의계좌 준비'}
+            {autoPaperBusy ? '가상계좌 검증 중' : '100만원 모의계좌 준비'}
           </button>
         ) : null}
       </section>
@@ -719,7 +719,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
                 : autoPaperRuntimeReadiness?.readyForPaperEvaluation
                   ? canManagePilot
                     ? '관리자 4시장 독립계좌·전략·Paper Worker·신호·매매일지 연결을 확인했습니다.'
-                    : '50만원 계좌·전략 허용목록·Paper Worker·신호와 매매일지 연결을 확인했습니다.'
+                    : '100만원 계좌·전략 허용목록·Paper Worker·신호와 매매일지 연결을 확인했습니다.'
                   : '회원의 Paper Worker 운영 상태를 조회 중입니다.'}
             </p>
           )}
