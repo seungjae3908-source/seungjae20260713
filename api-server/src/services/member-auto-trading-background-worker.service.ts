@@ -9,6 +9,9 @@ import {
 } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
+  AUTOMATIC_PAPER_FUTURES_LEVERAGE,
+} from './paper-futures-mode-policy.service';
+import {
   createServiceRoleTradingRepository,
   type TradingRepository,
 } from './trade-automation.repository';
@@ -1273,20 +1276,17 @@ function buildPlanInput(
   let leverage: 2 | 3 | 4 | 5 | 6 | 7 | null = null;
   let marginMode: 'crossed' | 'isolated' | null = null;
   if (mapping.exchange === 'bitget') {
-    const maximumLeverage = hasCapability(member.profile, 'canManageMembers')
-      ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
-      : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
-    if (!Number.isInteger(leverageEvidence)
-      || leverageEvidence < 2
-      || leverageEvidence > maximumLeverage
-      || member.policy.bitgetLeverage > maximumLeverage
-      || leverageEvidence !== member.policy.bitgetLeverage) {
-      throw new Error('BACKGROUND_LEVERAGE_EVIDENCE_MISMATCH');
+    // Automatic PAPER is 7x for every member. Never read the 3x/7x
+    // LIVE role limit as a simulated-money entitlement. Require the
+    // upstream signed/public handoff itself to prove the exact 7x margin.
+    // Missing or older 2x/3x evidence blocks; never rewrite a signed quote.
+    if (leverageEvidence !== AUTOMATIC_PAPER_FUTURES_LEVERAGE) {
+      throw new Error('BACKGROUND_AUTOMATIC_PAPER_SEVENFOLD_EVIDENCE_REQUIRED');
     }
     if (marginModeEvidence !== 'isolated') {
       throw new Error('BACKGROUND_ISOLATED_MARGIN_EVIDENCE_REQUIRED');
     }
-    leverage = leverageEvidence as 2 | 3 | 4 | 5 | 6 | 7;
+    leverage = AUTOMATIC_PAPER_FUTURES_LEVERAGE;
     marginMode = 'isolated';
   }
 
