@@ -193,3 +193,20 @@ test('local per-cycle quote and candidate caps surface as blocker counts, not fa
   assert.equal(out.independentlyVerified24hUptime, false);
   assert.equal(out.executionAuthority, 'NONE');
 });
+
+
+test('read-only preflight executes via symlinked installed checkout path',async()=>{
+  await workspace(async root=>{
+    const linked=join(root,'linked-readonly-preflight.mjs');
+    await symlink(exe,linked);
+    const run=spawnSync(process.execPath,[linked],{
+      encoding:'utf8',timeout:30000,
+      env:{...process.env,RESEARCH_STATE_ROOT:root,RESEARCH_CODE_SHA:SHA},
+    });
+    assert.equal(run.status,0,run.stderr+' '+run.stdout);
+    const report=JSON.parse(run.stdout);
+    assert.equal(report.contract,'public-market-watch-preflight-v1');
+    assert.equal(report.status,'INCOMPLETE');
+    assert.equal(report.executionAuthority,'NONE');
+  });
+});
