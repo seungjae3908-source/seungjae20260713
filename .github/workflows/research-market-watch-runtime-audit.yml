@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Validate bounded inspection without mutation
@@ -49,13 +49,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      MAIN_SHA: ${{ steps.gate.outputs.main_sha }
-      RESEARCH_SHA: ${{ steps.gate.outputs.research_sha }
-      SSH_HOST: ${{ secrets.PROD_SSH_HOST }
-      SSH_USER: ${{ secrets.PROD_SSH_USER }
-      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }
-      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }
-      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,6 +107,17 @@ jobs:
             core.setOutput('main_sha',mainSha);
             core.setOutput('research_sha',researchSha);
 
+      - name: Export pinned evidence identities to following runner steps
+        shell: bash
+        env:
+          AUTHORIZED_MAIN_SHA: ${{ steps.gate.outputs.main_sha }}
+          AUTHORIZED_RESEARCH_SHA: ${{ steps.gate.outputs.research_sha }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$AUTHORIZED_MAIN_SHA"
+          test -n "$AUTHORIZED_RESEARCH_SHA"
+          printf 'MAIN_SHA=%s\nRESEARCH_SHA=%s\n' "$AUTHORIZED_MAIN_SHA" "$AUTHORIZED_RESEARCH_SHA" >> "$GITHUB_ENV"
+
       - name: Configure pinned SSH identity on runner only
         shell: bash
         run: |
@@ -125,7 +134,7 @@ jobs:
       - name: Recheck current main and script source before server read
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "$MAIN_SHA"
@@ -152,7 +161,7 @@ jobs:
       - name: Report aggregate evidence to canonical Hub
         if: success()
         env:
-          REPORT_PATH: ${{ runner.temp }/research-watch-readonly.txt
+          REPORT_PATH: ${{ runner.temp }}/research-watch-readonly.txt
         uses: actions/github-script@v7
         with:
           script: |
