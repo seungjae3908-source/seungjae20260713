@@ -1,0 +1,96 @@
+name: Research US Reference Recipes V6
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+      - .github/workflows/research-us-toss-opening-momentum-v1.yml
+      - market-prediction-lab/src/yahoo-stock-history.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-reference-recipes-v6-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify public-data and reference-first boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          grep -Fq 'QULLAMAGGIE_COMMON_BREAKOUT_V1' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          grep -Fq 'QULLAMAGGIE_EP_V1' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          grep -Fq 'PEAD_EARNINGS_SURPRISE_V1' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+          ! grep -Eiq 'TOSS_CLIENT_ID|TOSS_CLIENT_SECRET|oauth2/token|/api/v1/orders|X-Tossinvest-Account|PRIVATE_TRADING_API_ALLOWED|REAL_ORDER_ENABLED|LIVE_TRADING|(^|[^A-Za-z])withdraw([^A-Za-z]|$)|(^|[^A-Za-z])transfer([^A-Za-z]|$)' market-prediction-lab/scripts/run-us-toss-opening-momentum-v1.mjs
+      - name: Run public US reference-recipe replay
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-toss-opening-momentum-v1.mjs docs/us-reference-recipes-v2.json
+      - name: Assert chronology, source fidelity and safety
+        working-directory: market-prediction-lab
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const r=JSON.parse(fs.readFileSync('docs/us-reference-recipes-v2.json','utf8'));
+          if(r.status!=='pass') throw new Error('STATUS');
+          if(r.recipeContract.noInventedCompositeBeforeBaseline!==true||r.recipeContract.noWaveCandleVwapAiOverlayInBaseline!==true||r.recipeContract.winnerSelectionFromThisWindow!==false) throw new Error('REFERENCE_FIRST');
+          if(r.recipeContract.commonBreakout.parameterSearch!==false||r.recipeContract.episodicPivot.parameterSearch!==false||r.recipeContract.pead.parameterSearch!==false) throw new Error('PARAMETER_SEARCH');
+          if(!r.lookahead.D1CandidateUsesOnlyPriorCompletedDailyBars||!r.lookahead.ORHEntryUsesNextCompleted5mOpenAfterTriggerBar||!r.lookahead.lowOfDayStopUsesOnlyLowObservedBeforeEntry||!r.lookahead.peadEntersFirstFullSessionStrictlyAfterReportDate) throw new Error('LOOKAHEAD');
+          if(r.universe.dailyReadySymbols<240) throw new Error('DAILY_COVERAGE');
+          if(r.episodicPivot.trueEpRequiresCatalyst!==true) throw new Error('EP_CATALYST');
+          if(r.pead.canonicalIbesSueafReplication!==false||r.pead.canonicalTimeSeriesSueStatus!=='BLOCKED_QUARTERLY_EPS_HISTORY_AND_FORECAST_VINTAGE') throw new Error('SUE_TRUTH');
+          if(!r.academicMomentum?.jtMomentumJ6K6Skip1?.aggregate||!r.academicMomentum?.high52WeekK6?.aggregate) throw new Error('ACADEMIC_BASELINES');
+          if(r.academicMomentum.jtMomentumJ6K6Skip1.aggregate.canonicalReplicationClaimAllowed!==false||r.academicMomentum.high52WeekK6.aggregate.canonicalReplicationClaimAllowed!==false) throw new Error('ACADEMIC_TRUTH');
+          if(r.promotionAssessment?.CROSS_SECTIONAL_PRICE_MOMENTUM_V1?.status!=='RESEARCH_HOLD_CROSS_UNIVERSE_CONCENTRATION_FAILED') throw new Error('MOMENTUM_PROMOTION_BOUNDARY');
+          if(r.promotionAssessment?.PEAD_EARNINGS_SURPRISE_V1?.status!=='RESEARCH_HOLD_TEMPORAL_GENERALIZATION_FAILED') throw new Error('PEAD_PROMOTION_BOUNDARY');
+          const pitEvidence=r.promotionAssessment?.pitUniverseEvidence;
+          if(pitEvidence?.materializedUsPitDatasetReady!==false||pitEvidence?.canonicalFirstZero!=='US_PIT_MEMBERSHIP_REMOVED_LISTINGS_CORPORATE_ACTION_DATASET_NOT_MATERIALIZED') throw new Error('PIT_CANONICAL_TRUTH');
+          const pit=r.pitMembershipStress;
+          if(!pit||pit.selectionUsesCurrentMembership!==false||pit.currentMembershipUsedForSelection===true||pit.canonicalPitDatasetClaimAllowed!==false) throw new Error('PIT_MEMBERSHIP_METHOD');
+          if(!['PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE','BLOCKED_PIT_PUBLIC_MEMBERSHIP_SOURCE','BLOCKED_PIT_HISTORY_COVERAGE'].includes(pit.status)) throw new Error('PIT_MEMBERSHIP_STATUS:'+String(pit.status));
+          const complete=pit.status==='PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE';
+          if(pitEvidence?.boundedHistoricalMembershipStressReady!==complete) throw new Error('PIT_BOUNDED_READY_TRUTH');
+          if(complete&&pitEvidence?.boundedStressFirstZero!=='US_PIT_TERMINAL_VALUE_AND_CORPORATE_ACTION_EVIDENCE_NOT_READY') throw new Error('PIT_BOUNDED_FIRST_ZERO');
+          if(!complete&&pitEvidence?.boundedStressFirstZero!=='US_PIT_HISTORICAL_MEMBERSHIP_SOURCE_OR_PRICE_COVERAGE_NOT_READY') throw new Error('PIT_BLOCKED_FIRST_ZERO');
+          if(pit.provider==='wikipedia-nasdaq100-change-history'&&(pit.credentialMode!=='PUBLIC_NO_KEY'||pit.providerUniverseScope!=='NASDAQ_100_RECONSTRUCTED_COMPONENTS')) throw new Error('PIT_NDX_IDENTITY');
+          if(pit.terminalValueMissingDoesNotDisappearFromDecile!==true) throw new Error('PIT_TERMINAL_BIAS_GUARD');
+          const sp=r.sp500MembershipStress;
+          if(!sp||sp.selectionUsesCurrentMembership!==false||sp.currentMembershipUsedForSelection===true||sp.canonicalPitDatasetClaimAllowed!==false) throw new Error('SP500_PIT_METHOD');
+          if(!['PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE','BLOCKED_PIT_PUBLIC_MEMBERSHIP_SOURCE','BLOCKED_PIT_HISTORY_COVERAGE'].includes(sp.status)) throw new Error('SP500_PIT_STATUS:'+String(sp.status));
+          if(sp.status==='PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE'&&(sp.provider!=='wikipedia-sp500-change-history'||sp.providerUniverseScope!=='SP500_RECONSTRUCTED_COMPONENTS'||sp.credentialMode!=='PUBLIC_NO_KEY')) throw new Error('SP500_PIT_IDENTITY');
+          if(sp.terminalValueMissingDoesNotDisappearFromDecile!==true) throw new Error('SP500_TERMINAL_BIAS_GUARD');
+          if(r.crossUniversePitComparison?.sameRecipeNoRetuning!==true||r.crossUniversePitComparison?.automaticPromotionAllowed!==false) throw new Error('CROSS_UNIVERSE_TRUTH');
+          const ndxOverlap=pit.overlappingMonthly?.jtMomentumJ6K6Skip1;
+          const spOverlap=sp.overlappingMonthly?.jtMomentumJ6K6Skip1;
+          if(!ndxOverlap||!spOverlap||ndxOverlap.canonicalReplicationClaimAllowed!==false||spOverlap.canonicalReplicationClaimAllowed!==false) throw new Error('OVERLAP_PRESENT');
+          if(ndxOverlap.automaticPromotionAllowed!==false||spOverlap.automaticPromotionAllowed!==false) throw new Error('OVERLAP_PROMOTION_BOUNDARY');
+          if(ndxOverlap.seriesMonths<6||spOverlap.seriesMonths<6) throw new Error('OVERLAP_SERIES_TOO_SHORT');
+          if(r.crossUniversePitComparison?.overlappingMonthlyJ6K6?.nasdaq100MeanMonthlySpread!==ndxOverlap.meanMonthlySpread) throw new Error('OVERLAP_NDX_BINDING');
+          if(r.crossUniversePitComparison?.overlappingMonthlyJ6K6?.sp500MeanMonthlySpread!==spOverlap.meanMonthlySpread) throw new Error('OVERLAP_SP500_BINDING');
+          if(r.promotionAssessment?.FIFTY_TWO_WEEK_HIGH_MOMENTUM_V1?.status!=='RESEARCH_HOLD_PIT_CROSS_UNIVERSE_NEGATIVE') throw new Error('HIGH52_PROMOTION_BOUNDARY');
+          if(sp.status==='PIT_HISTORICAL_MEMBERSHIP_STRESS_COMPLETE'&&sp.jtMomentumJ6K6Skip1?.aggregate?.concentrationStress?.meanLeaveBest1TopMinusBottomReturn>=0.01) throw new Error('SP500_MOMENTUM_CONCENTRATION_STRESS_UNEXPECTEDLY_POSITIVE');
+          if(r.safety.researchOnly!==true||r.safety.publicMarketDataOnly!==true||r.safety.privateAccountRequestAllowed!==false||r.safety.orderRouteCalled!==false||r.safety.executionAuthority!=='NONE'||r.safety.economicSampleCredit!==0) throw new Error('SAFETY');
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: us-reference-recipes-v4-${{ github.event.pull_request.head.sha }}
+          path: market-prediction-lab/docs/us-reference-recipes-v2.json
+          if-no-files-found: error
+          retention-days: 30
