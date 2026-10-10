@@ -147,6 +147,7 @@ async function cycle(root, researchSha, previous, telemetry) {
   const marketSummaries = [];
   const marketStates = {};
   const allCandidates = [];
+  const cappedCandidateAudits = [];
   const savedAlerts = Object.fromEntries(Object.entries(previous?.lastAlerts ?? {})
     .filter(([, at]) => Number.isFinite(at) && pollStartedAtMs - at < 24 * 60 * 60_000));
   const sources = {};
@@ -178,6 +179,20 @@ async function cycle(root, researchSha, previous, telemetry) {
       lastAlerts: savedAlerts,
     });
     marketSummaries.push(report.summary);
+    if (report.cappedAudit) {
+      // One bounded private row per affected market/cycle, never delivered as
+      // an emitted event, future study, Paper candidate or trading signal.
+      // The digest is source-derived; replays may repeat it and readers dedupe.
+      cappedCandidateAudits.push(Object.freeze({
+        ...report.cappedAudit,
+        researchSha,
+        observedAt: new Date(nowMs).toISOString(),
+        eventId: watchCycleDigest([
+          researchSha, market, report.cappedAudit.source,
+          report.cappedAudit.cappedIdentityDigest,
+        ]),
+      }));
+    }
     marketStates[market] = source.quotes.length
       ? report.next : (previous?.marketStates?.[market] ?? report.next);
     for (const found of report.candidates) {
@@ -258,9 +273,11 @@ async function cycle(root, researchSha, previous, telemetry) {
   const next = { schemaVersion: WATCH_CONTRACT, researchSha,
     marketStates, lastAlerts: savedAlerts,
     prospectivePending: prospective.pending, stats };
-  // Emit observations before advancing the local cursor: a storage failure
-  // must not silently discard a discovered candidate. Consumers must dedupe
-  // eventId because a crash between these writes can replay the same event.
+  // Persist the bounded capped-candidate evidence before ordinary events and
+  // before the cursor. A rejected audit write leaves the cycle failed-closed.
+  // Independent capped JSONL rows are never mistaken for emitted signals.
+  // A crash between appends and cursor write can replay eventIds; dedupe.
+  await appendBoundedWatchEvents(root, cappedCandidateAudits, state.observedAt, 'capped');
   await appendBoundedWatchEvents(root, prospective.outcomes, state.observedAt, 'outcomes');
   await appendBoundedWatchEvents(root, allCandidates, state.observedAt, 'events');
   await atomicDurableWatchJson(join(root, 'watch', 'state-v1.json'), next);
@@ -294,6 +311,7 @@ async function main() {
   });
   await mkdir(join(root, 'watch', 'events'), { recursive: true, mode: 0o700 });
   await mkdir(join(root, 'watch', 'outcomes'), { recursive: true, mode: 0o700 });
+  await mkdir(join(root, 'watch', 'capped'), { recursive: true, mode: 0o700 });
   await mkdir(join(root, 'watch', 'cadence'), { recursive: true, mode: 0o700 });
   await mkdir(join(root, 'latest'), { recursive: true, mode: 0o700 });
   const lock = await acquire(root);

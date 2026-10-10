@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import {
-  WATCH_CONTRACT, WATCH_LIMITS, WATCH_SAFETY, blockedSource,
+  WATCH_CONTRACT, WATCH_LIMITS, WATCH_SAFETY,
+  WATCH_CAPPED_AUDIT_CONTRACT, WATCH_CAPPED_AUDIT_LIMITS, blockedSource,
   evaluateMarketOpportunities, evaluateWatchBudget,
   normalizeBitgetSnapshot, normalizeStockFeed, normalizeUpbitSnapshot,
   parseBoundedPublicJson, watchCycleDigest,
@@ -560,6 +561,12 @@ test('13 qualified provisional observations emit only 12 but account for one cap
   assert.equal(result.summary.qualifyingCandidateCount, 13);
   assert.equal(result.summary.newCandidates, 12);
   assert.equal(result.summary.candidateCappedCount, 1);
+  assert.equal(result.cappedAudit.contract, WATCH_CAPPED_AUDIT_CONTRACT);
+  assert.equal(result.cappedAudit.cappedCandidateCount, 1);
+  assert.equal(result.cappedAudit.detailedCandidateCount, 1);
+  assert.equal(result.cappedAudit.undetailedCandidateCount, 0);
+  assert.equal(result.cappedAudit.executionAuthority, 'NONE');
+  assert.equal(result.cappedAudit.isTradingSignal, false);
   assert.equal(result.candidates.length, WATCH_LIMITS.maxCandidatesPerMarket);
   assert.ok(result.candidates.every(x => x.executionAuthority === 'NONE'
     && x.isTradingSignal === false && x.paperAdmitted === false));
@@ -571,4 +578,92 @@ test('13 qualified provisional observations emit only 12 but account for one cap
   });
   assert.equal(suppressed.summary.qualifyingCandidateCount, 0);
   assert.equal(suppressed.summary.candidateCappedCount, 0);
+  assert.equal(suppressed.cappedAudit, null);
+});
+
+test('80 eligible observations preserve bounded private capped details and truthful unmatched count', () => {
+  const quotes = Array.from({ length: 80 }, (_, i) => ({
+    symbol: 'US' + i, price: 101, sourceAtMs: NOW - 1_000,
+    turnover24h: 5_000_000, change24hPercent: 1,
+  }));
+  const source = { market: 'US_STOCK', status: 'PARTIAL_UNIVERSE',
+    source: 'PUBLIC_FORMAT_ONLY', listedCount: 80, quotes,
+    sourceCappedCount: 0 };
+  const previous = { observedAtMs: NOW - 120_000, source: source.source,
+    quotes: quotes.map(q => ({
+      symbol: q.symbol, price: 100, sourceAtMs: NOW - 121_000,
+    })) };
+  const input = {market: source.market, source, previous,
+    nowMs: NOW, lastAlerts: {}};
+  const result = evaluateMarketOpportunities(input);
+  assert.equal(result.candidates.length, 12);
+  assert.equal(result.summary.qualifyingCandidateCount, 80);
+  assert.equal(result.summary.candidateCappedCount, 68);
+  const audit = result.cappedAudit;
+  assert.equal(audit.contract, WATCH_CAPPED_AUDIT_CONTRACT);
+  assert.equal(audit.kind, 'CAPPED_RESEARCH_OBSERVATION_ONLY');
+  assert.equal(audit.emittedCandidateCount, 12);
+  assert.equal(audit.cappedCandidateCount, 68);
+  assert.equal(audit.detailedCandidateCount, 32);
+  assert.equal(audit.undetailedCandidateCount, 36);
+  assert.equal(audit.details.length,
+    WATCH_CAPPED_AUDIT_LIMITS.maxDetailedCandidatesPerMarketCycle);
+  assert.ok(audit.details.every(x => typeof x.symbol === 'string'
+    && Number.isFinite(x.sourceAtMs)
+    && Number.isFinite(x.priorSourceAtMs)
+    && x.sourceAtMs > x.priorSourceAtMs));
+  assert.equal(audit.isTradingSignal, false);
+  assert.equal(audit.paperAdmitted, false);
+  assert.equal(audit.oosPassed, false);
+  assert.equal(audit.profitabilityProven, false);
+  assert.equal(audit.executionAuthority, 'NONE');
+  assert.match(audit.cappedIdentityDigest, /^[a-f0-9]{64}$/);
+  assert.ok(Buffer.byteLength(JSON.stringify(audit), 'utf8') < 16 * 1024);
+  assert.equal(evaluateMarketOpportunities(input).cappedAudit.cappedIdentityDigest,
+    audit.cappedIdentityDigest);
+  const changed = { ...source, quotes: quotes.map(q =>
+    q.symbol === 'US79' ? {...q, price: 103} : q) };
+  assert.notEqual(evaluateMarketOpportunities({...input, source: changed})
+    .cappedAudit.cappedIdentityDigest, audit.cappedIdentityDigest);
+  const alerts = Object.fromEntries(quotes.map(q => [
+    'US_STOCK:' + q.symbol + ':UP', NOW - 1_000,
+  ]));
+  assert.equal(evaluateMarketOpportunities({...input, lastAlerts: alerts})
+    .cappedAudit, null);
+});
+
+test('8000 qualified rows never expand the capped research JSONL row or admitted event limit', () => {
+  const quotes = Array.from({length:8_000},(_,i)=>({
+    symbol:'SY'+i, price:102, sourceAtMs:NOW-1_000,
+    turnover24h:1e9, change24hPercent:2,
+  }));
+  const source = { market:'US_STOCK', status:'PARTIAL_UNIVERSE',
+    source:'PUBLIC_DATA', listedCount:quotes.length, quotes };
+  const previous = { observedAtMs:NOW-120_000, source:source.source,
+    quotes:quotes.map(q=>({symbol:q.symbol,price:100,
+      sourceAtMs:NOW-121_000})) };
+  const result = evaluateMarketOpportunities({
+    market:'US_STOCK',source,previous,nowMs:NOW,lastAlerts:{},
+  });
+  assert.equal(result.candidates.length,12);
+  assert.equal(result.summary.qualifyingCandidateCount,8_000);
+  assert.equal(result.cappedAudit.cappedCandidateCount,7_988);
+  assert.equal(result.cappedAudit.detailedCandidateCount,32);
+  assert.equal(result.cappedAudit.undetailedCandidateCount,7_956);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.cappedAudit),'utf8') < 16 * 1024);
+  assert.equal(result.cappedAudit.executionAuthority,'NONE');
+});
+
+test('market-watch worker persists private capped evidence before publishing ordinary events', async () => {
+  const script = await readFile(
+    new URL('../bin/lightweight-market-watch.mjs', import.meta.url), 'utf8');
+  const capped = "appendBoundedWatchEvents(root, cappedCandidateAudits, state.observedAt, 'capped')";
+  const events = 'appendBoundedWatchEvents(root, allCandidates, state.observedAt';
+  const cursor = "atomicDurableWatchJson(join(root, 'watch', 'state-v1.json'), next)";
+  assert.ok(script.includes(capped));
+  assert.ok(script.indexOf(capped) < script.indexOf(events));
+  assert.ok(script.indexOf(capped) < script.indexOf(cursor));
+  assert.match(script, /cappedCandidateAudits\.push/);
+  assert.match(script, /'watch', 'capped'/);
+  assert.doesNotMatch(script, /placeOrder\(|AUTO_TRADING\s*=\s*true/);
 });
