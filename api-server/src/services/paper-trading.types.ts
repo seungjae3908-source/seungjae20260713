@@ -71,6 +71,7 @@ export type PaperOrder = {
   triggerPrice: number | null;
   quantity: number;
   leverage: number;
+  maintenanceMarginRate?: number | null;
   stopLossPrice: number;
   takeProfitPrice1?: number | null;
   takeProfitPrice2?: number | null;
@@ -110,6 +111,7 @@ export type PaperPosition = {
   quantity: number;
   remainingQuantity: number;
   leverage: number;
+  maintenanceMarginRate?: number | null;
   notionalValue: number;
   requiredMargin: number;
   stopLossPrice: number;
@@ -152,7 +154,8 @@ export type PaperFillReason =
   | 'stop_loss'
   | 'take_profit'
   | 'partial_close'
-  | 'manual_close';
+  | 'manual_close'
+  | 'liquidation';
 
 export type PaperFill = {
   symbol?: string;
