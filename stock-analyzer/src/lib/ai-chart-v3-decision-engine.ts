@@ -144,7 +144,12 @@ function validCalibrationProvenance(
   if (!sameEvidenceIdentity(provenance.identity, expectedIdentity)) return false;
   if (!validDigest(provenance.datasetDigest) || !validDigest(provenance.artifactDigest) || !validDigest(provenance.costModelDigest)) return false;
   const observedAt = Date.parse(provenance.observedAt);
-  return Number.isFinite(observedAt) && observedAt > 0;
+  // Even an apparently canonical SHA pair cannot validate data dated in the
+  // future. Permit only bounded 5-minute provider clock skew; there is no
+  // fallback to a browser-computed profit probability.
+  return Number.isFinite(observedAt)
+    && observedAt > 0
+    && observedAt <= Date.now() + 5 * 60_000;
 }
 
 export function classifyAiChartV3Regime(input: AiChartV3RegimeInput): AiChartV3Regime {
@@ -275,11 +280,32 @@ function regimeEntryConflict(regime: AiChartV3Regime, longDominant: boolean, sho
   return false;
 }
 
+
+/**
+ * Show *all* missing canonical provenance owners, not merely the first
+ * short-circuit veto. Missing data is not a trading signal, and these reasons
+ * cannot authorize orders or synthesize win probabilities / after-cost EV.
+ */
+function missingAiChartV3ReadinessReasons(
+  input: AiChartV3DecisionInput,
+  calibrationState: AiChartV3CalibrationResult['state'],
+): string[] {
+  const reasons: string[] = [];
+  if (input.regime === 'INSUFFICIENT_DATA') reasons.push('REGIME_EVIDENCE_UNAVAILABLE');
+  if (input.strategyHealth === 'UNKNOWN') reasons.push('STRATEGY_HEALTH_UNAVAILABLE');
+  if (input.eventRisk === 'UNKNOWN') reasons.push('EVENT_RISK_UNAVAILABLE');
+  if (calibrationState === 'MISSING_EVIDENCE') reasons.push('PERFORMANCE_EVIDENCE_UNAVAILABLE');
+  if (calibrationState === 'INSUFFICIENT_SAMPLE') reasons.push('INSUFFICIENT_SAMPLE');
+  if (calibrationState === 'INVALID_EVIDENCE') reasons.push('INVALID_PERFORMANCE_EVIDENCE');
+  return reasons;
+}
+
 export function decideAiChartV3(input: AiChartV3DecisionInput): AiChartV3DecisionResult {
   const calibration = calibrateAiChartV3Performance(input.calibration, input.identity, input.minimumSampleN ?? 30);
   const longScore = directionalScore(input.evidence, 'BULLISH');
   const shortScore = directionalScore(input.evidence, 'BEARISH');
   const reasons: string[] = [];
+  const missingCanonicalReasons = missingAiChartV3ReadinessReasons(input, calibration.state);
 
   if (input.invalidated && input.hasPosition) {
     return { decision: 'EXIT', longScore, shortScore, calibratedProbability: calibration.probability, costAdjustedEvPct: calibration.costAdjustedEvPct, calibrationState: calibration.state, reasons: ['POSITION_INVALIDATED'] };
@@ -291,19 +317,19 @@ export function decideAiChartV3(input: AiChartV3DecisionInput): AiChartV3Decisio
     return { decision: input.hasPosition ? 'HOLD' : 'NO_TRADE', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['DATA_QUALITY_FAIL_CLOSED'] };
   }
   if (input.regime === 'INSUFFICIENT_DATA') {
-    return { decision: input.hasPosition ? 'HOLD' : 'WAIT', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['REGIME_EVIDENCE_UNAVAILABLE'] };
+    return { decision: input.hasPosition ? 'HOLD' : 'WAIT', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: missingCanonicalReasons };
   }
   if (input.regime === 'LOW_LIQUIDITY') {
     return { decision: input.hasPosition ? 'HOLD' : 'NO_TRADE', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['LOW_LIQUIDITY_FAIL_CLOSED'] };
   }
   if (input.strategyHealth === 'UNKNOWN') {
-    return { decision: input.hasPosition ? 'HOLD' : 'WAIT', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['STRATEGY_HEALTH_UNAVAILABLE'] };
+    return { decision: input.hasPosition ? 'HOLD' : 'WAIT', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: missingCanonicalReasons };
   }
   if (input.strategyHealth === 'DISABLED' || input.strategyHealth === 'RESEARCH_ONLY') {
     return { decision: input.hasPosition ? 'HOLD' : 'NO_TRADE', longScore, shortScore, calibratedProbability: calibration.probability, costAdjustedEvPct: calibration.costAdjustedEvPct, calibrationState: calibration.state, reasons: ['STRATEGY_NOT_ACTIVE'] };
   }
   if (input.eventRisk === 'UNKNOWN') {
-    return { decision: input.hasPosition ? 'HOLD' : 'WAIT', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['EVENT_RISK_UNAVAILABLE'] };
+    return { decision: input.hasPosition ? 'HOLD' : 'WAIT', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: missingCanonicalReasons };
   }
 
   const dominantLong = longScore != null && shortScore != null && longScore >= 70 && longScore - shortScore >= 10;
