@@ -268,7 +268,27 @@ export const ScannerUniverseService = {
       const capability = publicOnlyCapability(market, rawLive);
       const live = capability.entries;
       if (live.length > 0) {
-        const evidence = classifyScannerUniverseSource(market, live);
+        const source = classifyScannerUniverseSource(market, live);
+        const evidence = capability.exclusions.length > 0 && !source.partial
+          ? { ...source, partial: true } : source;
+        // A previously source-backed roster is retained as an explicitly
+        // stale, unverified fallback when the current provider returns only
+        // a subset or a curated list. No stale entry remains LISTED.
+        if (evidence.partial && cached?.entries.length) {
+          return {
+            entries: cached.entries.map((entry) => ({
+              ...entry, listingStatus: 'UNKNOWN' as const,
+              source: 'last-good-cache' as const,
+            })),
+            totalCount: cached.entries.length,
+            rawTotalCount: cached.rawTotalCount,
+            explainedExcludedCount: cached.explainedExclusions.length,
+            explainedExclusions: cached.explainedExclusions,
+            source: 'last-good-cache', partial: true, stale: true,
+            providerErrorCount: 1,
+            loadedAt: new Date(cached.at).toISOString(),
+          };
+        }
         // Never replace a previously attested roster with a tiny provider
         // response or silently upgrade a fallback catalog to whole-market.
         if (!evidence.partial) {
