@@ -250,6 +250,15 @@ export function auditNativeObservedMinuteWindowV1({
   }
   if(sparse) {
     const observedSet=new Set(normalized.map(r=>r.timestampMs));
+    // A supposed no-trade minute with an actual native candle is a direct
+    // contradiction. Report it BEFORE the incomplete proof for other minutes,
+    // without ever accepting or patching either conflicting input.
+    for(const ts of noTradesByMinute.keys()){
+      if(observedSet.has(ts))
+        return blocked(market,"SAMPLE_SPARSE_TICK_CONTRADICTS_BAR",{
+          contradictoryMinuteStartMs:ts,
+        });
+    }
     let missing=0;
     for(let i=0;i<slots;i++){
       const ts=startMs+i*MINUTE_MS;
@@ -259,10 +268,6 @@ export function auditNativeObservedMinuteWindowV1({
           return blocked(market,"SAMPLE_SPARSE_MINUTE_NOT_CORROBORATED",{
             missingMinuteStartMs:ts,
           });
-      }else if(noTradesByMinute.has(ts)){
-        return blocked(market,"SAMPLE_SPARSE_TICK_CONTRADICTS_BAR",{
-          contradictoryMinuteStartMs:ts,
-        });
       }
     }
     if(missing!==noTradesByMinute.size)
