@@ -285,3 +285,43 @@ systemd/host logs, externally observed app latency and resource readings,
 an independently attested release SHA, and licensed/fresh KR/US data.
 This worker is still OFF in this Draft. Nothing enters the Formula PASS,
 OOS, fee-adjusted returns, Paper, Journal, Telegram or Live authority chain.
+
+
+## Read-only capacity census CLI (Draft, no runtime mutation)
+
+The capacity projection now has a separate server-local **metadata-only**
+file census. It DOES NOT start the market-watch worker, call provider APIs,
+connect to the app DB, read event bodies, remove old files, modify backup
+policy or place Paper/Live orders. This works only after installing a separately
+approved Research checkout containing these tools:
+
+~~~bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  RESEARCH_CODE_SHA=<EXACT_APPROVED_INSTALLED_RESEARCH_SHA> \
+  node /opt/investment-research/current/research-production/bin/lightweight-market-watch-capacity-status.mjs
+~~~
+
+- Only fixed directories **watch/events**, **watch/outcomes**, **watch/cadence**
+  are inspected. Each filename must be exactly YYYY-MM-DD.jsonl.
+  Only file metadata is read; no raw ticker, event or account contents.
+  Non-regular files, symlinks, hardlinks, unsafe permissions, malformed/future
+  dates, oversized files or more than 366 entries per category fail closed.
+- An unsafe path returns INVALID with a fixed error code, rather than
+  exposing paths or provider exceptions. A missing category is explicitly
+  reported; an empty watch means insufficient history. Nothing is created.
+- Disk space comes from the actual local filesystem statfs, not assumed
+  Vultr specifications. The forecast reserves **5 GiB** for the host,
+  using mean bytes from at most seven completed UTC days (excludes today).
+  Runway is approximate, not an uptime or retention SLA.
+- A report of OBSERVATION_ONLY is **NOT** permission to run indefinitely.
+  Retention applied, archive verified, deletion allowed, continuous 24-hour
+  proof, profitability proof all stay false; execution authority remains NONE.
+  No archive/backup destination is configured.
+- File-count and one-year window caps intentionally fail closed when more
+  unarchived files accumulate. A separately approved and verified retention
+  policy is required before long-running activation. The configured SHA is
+  a diagnostic label, **not** an attested installed release identity.
+
+This Draft is only CI-tested with fixtures. No real Vultr capacity census
+has been performed, and the market-watch service remains OFF.
