@@ -365,3 +365,35 @@ profitabilityProven to true. No operational activation, auto trading,
 Formula PASS or OOS proof is produced. Full authorization still requires an
 approved release, active server/service measurements, verified data feeds,
 independent 24h uptime/latency evidence and separately approved retention.
+
+
+## Explicit owner-approved isolated service activation
+
+The market-watch service is NOT installed by generic Research Production
+Activation. The dedicated deployment path is:
+
+1. Merge source PRs #1743 and #1764 only after exact-head Full CI and scoped
+   Research validations are green.
+2. Activate the exact merged/current main Research Production release
+   using the separately authenticated existing release control.
+3. On canonical central Hub #1102, the repository OWNER posts the slash
+   command /activate-market-watch followed by the exact 40-character main SHA.
+   The dedicated research-market-watch-activation.yml workflow checks the
+   owner, source PR ancestry, latest exact-main coherent 6/6 Required CI,
+   and pinned production SSH host identity.
+4. Read-only server preflight checks the exact installed Research release,
+   its environment, LIVE/PRIVATE_API/ORDER disabled, dedicated service user,
+   safe unit, available host memory, filesystem reserve and CPU load.
+   A conflicting service unit is never overwritten.
+5. Only the isolated watcher unit may be installed/enabled; activation
+   needs a fresh public cryptocurrency market observation. On failure the
+   new service is stopped/disabled and any newly installed unit rolled back.
+   Existing PM2, DB, timers, trading, Telegram, app release and member
+   permissions are not modified.
+6. Even if the first cycle works, 24-hour uptime and complete KR/US
+   market-source coverage stay unproven. OOS, Paper, Full Cost and strategy
+   profitability remain independent, blocked/unknown evidence.
+
+The research release MUST already exist at the exact current main SHA.
+No remote SHA, capacity, credentials or operator permission are inferred;
+fail closed rather than pretending a green GitHub build activated a server.
