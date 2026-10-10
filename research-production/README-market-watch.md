@@ -74,7 +74,11 @@ authenticity. Publisher identities must still be separately verified before
 claiming usable KR/US stock collection.
 
 `completeUniverse=true` may only be set when the real provider feed supplies
-a verifiable, complete current eligible universe. Historical PIT universe,
+a verifiable, complete current eligible universe. However the field is
+self-reported: the current watcher **always assigns PARTIAL_UNIVERSE to stock
+snapshots** until an independently audited and licensed provider/roster proof
+path is implemented. One supplied ticker cannot turn the whole stock market
+READY. Cross-market KR/US symbol shapes are also validated. Historical PIT universe,
 corporate actions, pre/post-market coverage, subscribed real-time market
 data and all-market streaming remain **unproven**. No fabricated feed is written
 by this implementation.
