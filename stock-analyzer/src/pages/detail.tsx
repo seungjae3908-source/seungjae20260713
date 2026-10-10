@@ -10,12 +10,13 @@ import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-sel
 import { displayStockName, formatAppPrice } from '@/lib/stock-display';
 import { parseStockDetailNews, parseStockDetailProfile, parseStockDetailQuote } from '@/lib/stock-detail-response';
 import { UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
+import { resolveStockDetailTab, type StockDetailRouteTab } from '@/lib/stock-detail-route-tab';
 
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const StockDetailAnalysisPanel = lazy(() => import('@/components/stock-detail-analysis-panel'));
 
 type AnyObj = Record<string, any>;
-type DetailTab = 'summary' | 'chart' | 'news' | 'analysis';
+type DetailTab = StockDetailRouteTab;
 
 const DETAIL_TABS = [
   { value: 'summary', label: '요약' },
@@ -29,8 +30,7 @@ function queryState() {
   const params = typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search);
   const ticker = String(params.get('ticker') ?? params.get('symbol') ?? '').trim().toUpperCase();
   const market = params.get('market') === 'US' ? 'US' : 'KR';
-  const requested = params.get('tab');
-  const tab: DetailTab = requested === 'chart' || requested === 'news' || requested === 'analysis' ? requested : 'summary';
+  const tab: DetailTab = resolveStockDetailTab(window.location.pathname, params.get('tab'));
   return { params, ticker, market, tab } as const;
 }
 

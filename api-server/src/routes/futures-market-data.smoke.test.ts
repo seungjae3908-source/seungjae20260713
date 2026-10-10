@@ -4,6 +4,9 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import healthRouter from './health';
 import futuresMarketDataRouter from './futures-market-data';
+// Keep the genuine public historical HTTP integration suite in the existing
+// public-market smoke lane. Do not touch shared trading/research test wiring.
+import './chart-historical-public.smoke.test';
 import { resetFuturesMarketDataStateForTests } from '../services/futures-market-data.service';
 
 const FIXED_NOW = Date.UTC(2026, 7, 2, 0, 0, 0);
