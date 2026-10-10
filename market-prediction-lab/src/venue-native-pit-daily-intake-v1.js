@@ -51,6 +51,19 @@ function partitionCheck(item,day){
   return item.listedAtMs>day || (item.removedAtMs??Infinity)<day+D
     ||item.halts.some(x=>x.startMs<day+D&&x.endMs>day);
 }
+/**
+ * Content-integrity checksum of exactly the exported canonical row fields.
+ * It detects accidental/stale/mismatched chunk edits, but because it is
+ * reproducible it NEVER authenticates the origin of provider exchange data.
+ */
+export function nativePITDailyPriceRowSha256V1(row){
+  return sha(JSON.stringify([
+    "native-pit-daily-price-row-v1",
+    row?.market,row?.venue,row?.symbol,row?.timestampMs,
+    row?.open,row?.high,row?.low,row?.close,row?.volume,
+    row?.priorClose,row?.priorCloseAsOfMs,row?.sourceId,
+  ]));
+}
 function normalizedDay(market,symbol,dayStartMs,prior,day,sourceId){
   const obs={symbol,market,venue:SCOPE[market].venue,
     timestampMs:dayStartMs,
@@ -58,12 +71,8 @@ function normalizedDay(market,symbol,dayStartMs,prior,day,sourceId){
     volume:day.volume,priorClose:prior.close,
     priorCloseAsOfMs:dayStartMs,
     sourceId,
-    evidenceSha256:sha(JSON.stringify([
-      sourceId,symbol,prior.timestamp,prior.open,prior.high,prior.low,prior.close,
-      day.timestamp,day.open,day.high,day.low,day.close,day.volume,
-    ])),
   };
-  return Object.freeze(obs);
+  return Object.freeze({...obs,evidenceSha256:nativePITDailyPriceRowSha256V1(obs)});
 }
 function pickDay(candles,day){
   if(!Array.isArray(candles))throw new TypeError("PIT_NATIVE_DAY_CANDLES_INVALID");
@@ -258,6 +267,10 @@ export function assembleHistoricalPITDayChunksV1({
   const roster=activeRows(manifest,dayStartMs);
   if(roster.error)return blocked(market,roster.error);
   const expected=roster.active.map(x=>x.symbol);
+  const providerSource=market==="CRYPTO_SPOT"
+    ?"UPBIT_PUBLIC_DAY_CANDLES_V1"
+    :market==="CRYPTO_FUTURES"
+      ?"BITGET_PUBLIC_V3_USDT_FUTURES_1D":null;
   const ordered=[...chunks].sort((a,b)=>a.chunkOffset-b.chunkOffset);
   let count=0;const rows=[];
   for(const piece of ordered){
@@ -267,14 +280,38 @@ export function assembleHistoricalPITDayChunksV1({
        ||piece.requestedHistoricalActiveMembers!==expected.length
        ||piece.chunkOffset!==count
        ||piece.chunkComplete!==true
+       ||piece.status!=="PIT_NATIVE_DAY_CHUNK_OBSERVED"
+       ||piece.originalPITSourceStatus!==pit.status
+       ||piece.executionAuthority!=="NONE"
+       ||piece.realOrders!==false
+       ||piece.profitabilityProven!==false
+       ||piece.trueMarketWideRecall!==null
+       ||piece.nextOffset!==(count+piece.requestedChunkCount<expected.length
+         ?count+piece.requestedChunkCount:null)
+       ||!Array.isArray(piece.failed)||piece.failed.length!==0
        ||!Array.isArray(piece.rows)||!Array.isArray(piece.requestedSymbolIds)
        ||piece.rows.length!==piece.requestedChunkCount
+       ||piece.sourceAttestedPriceRows!==piece.rows.length
+       ||piece.requestsPerformed!==piece.rows.length
        ||piece.requestedSymbolIds.length!==piece.rows.length
        ||piece.requestedSymbolIds.some((s,i)=>s!==expected[count+i]
          ||piece.rows[i]?.symbol!==s))
       return blocked(market,"PIT_NATIVE_CHUNK_MISSING_OR_PROVENANCE_MISMATCH",{
         mergedNativeSymbols:count,requiredHistoricalActiveSymbols:expected.length,
       });
+    for(const row of piece.rows){
+      if(row?.market!==market||row?.venue!==SCOPE[market].venue
+         ||row?.sourceId!==providerSource
+         ||row?.timestampMs!==dayStartMs
+         ||row?.priorCloseAsOfMs!==dayStartMs
+         ||!Number.isSafeInteger(row?.timestampMs)
+         ||row?.evidenceSha256!==nativePITDailyPriceRowSha256V1(row)){
+        return blocked(market,"PIT_NATIVE_PRICE_ROW_INTEGRITY_OR_PROVIDER_INVALID",{
+          blockedChunkOffset:count,
+          sourceIndependentAuthenticityProven:false,
+        });
+      }
+    }
     rows.push(...piece.rows);
     count+=piece.rows.length;
   }
@@ -284,7 +321,15 @@ export function assembleHistoricalPITDayChunksV1({
     });
   const nativeArchiveId=[market,dayStartMs,
     manifest.rawMembershipDigestSha256].join(":");
-  const normalized=rows.map(x=>({...x,sourceId:nativeArchiveId}));
+  const normalized=rows.map(x=>{
+    const {evidenceSha256,...original}=x;
+    const arch={...original,
+      nativeProviderSourceId:x.sourceId,
+      nativeProviderRowDigestSha256:evidenceSha256,
+      sourceId:nativeArchiveId,
+    };
+    return {...arch,evidenceSha256:nativePITDailyPriceRowSha256V1(arch)};
+  });
   const dailySource={
     schemaVersion:"venue-native-historical-all-names-daily-v1",
     market,venue:SCOPE[market].venue,
