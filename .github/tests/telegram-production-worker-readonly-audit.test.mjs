@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
-  safeSha, readHealthOnce,
+  safeSha, readHealthOnce, readSignalSourceOnce,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
 
@@ -82,6 +82,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   const result=await observeProductionTelegram({
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,health,
+    signalSource:async()=>({status:'READY',eventCount:0,safetyValidated:true}),
     state:(_configured,_file,type)=>type==='market'
       ? inspectDeliveryStateText(state({[marketKey]:new Date(now-3000).toISOString()}),'market',now)
       : inspectDeliveryStateText(state({}),'signal',now),
@@ -92,6 +93,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.personal.tickOk,false);
   assert.equal(result.proofLevel,'PERSISTED_LEDGER_ONLY');
   assert.equal(result.marketBrief.recordCount,1);
+  assert.equal(result.signalSource.status,'READY');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
   assert.equal(result.databaseWrites,0);
@@ -107,6 +109,7 @@ test('disabled market, duplicated room, stale production SHA and missing health 
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:()=>({...observed(),...changes}),
     health,
+    signalSource:async()=>({status:'READY',eventCount:0,safetyValidated:true}),
     state:()=>inspectDeliveryStateText(state({}),'market',now),
   });
   assert.equal((await testCase({pm2Sha:current})).classification,'PRODUCTION_IDENTITY_MISMATCH');
@@ -150,6 +153,47 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
   const printed=JSON.stringify(r);
   assert.ok(!printed.includes('PRIVATE_USER_DATA'));
   assert.ok(!printed.includes('DO_NOT_LOG_CHAT_ID'));
+});
+
+
+test('signal source probe accepts only loopback safe GET and emits counts, never event payloads', async()=>{
+  const getImpl=(url, options, callback)=>{
+    assert.equal(url.hostname,'127.0.0.1');
+    assert.equal(url.pathname,'/v1/signals');
+    assert.equal(options.method,'GET');
+    const req=new EventEmitter();
+    req.destroy=()=>{};
+    queueMicrotask(()=>{
+      const response=new EventEmitter();
+      response.statusCode=200;
+      callback(response);
+      const payload={
+        ok:true,executionAuthority:'NONE',serviceSha:deployed,
+        snapshot:{
+          serviceSha:deployed,
+          safety:{executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false},
+          events:[{id:'NEVER_LOG_SIGNAL_ID',symbol:'NEVER_LOG_SYMBOL',market:'US_STOCK'}],
+        }
+      };
+      response.emit('data',Buffer.from(JSON.stringify(payload)));
+      response.emit('end');
+    });
+    return req;
+  };
+  const result=await readSignalSourceOnce({
+    sourceUrl:'http://127.0.0.1:8790/v1/signals',getImpl,
+  });
+  assert.deepEqual(result,{status:'READY',eventCount:1,safetyValidated:true});
+  assert.ok(!JSON.stringify(result).includes('NEVER_LOG_SIGNAL_ID'));
+  assert.ok(!JSON.stringify(result).includes('NEVER_LOG_SYMBOL'));
+  assert.equal((await readSignalSourceOnce({
+    sourceUrl:'http://evil.example/v1/signals',
+    getImpl:()=>{ throw new Error('MUST_NOT_SEND_EXTERNAL_REQUEST'); },
+  })).status,'UNSAFE_ENDPOINT');
+  assert.equal((await readSignalSourceOnce({
+    sourceUrl:'http://127.0.0.1:8790/v1/signals?private=true',
+    getImpl:()=>{ throw new Error('MUST_NOT_SEND_QUERY_REQUEST'); },
+  })).status,'UNSAFE_ENDPOINT');
 });
 
 test('protected workflow is owner-only and never sends, deploys or restarts',()=>{
