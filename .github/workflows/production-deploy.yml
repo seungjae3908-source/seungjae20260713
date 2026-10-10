@@ -890,6 +890,7 @@ jobs:
           PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
           PRODUCTION_TRADING_CORE_QA: 'true'
           PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'
+          PRODUCTION_TRADING_CORE_REQUIRE_TELEGRAM: ${{ inputs.qa_scope == 'automation_research' && 'true' || 'false' }}
           PRODUCTION_TRADING_CORE_ARTIFACT_DIR: production-trading-core-artifacts
           PRODUCTION_LOGIN_DIAGNOSTIC_DIR: production-login-diagnostics/trading-core
         working-directory: stock-analyzer
