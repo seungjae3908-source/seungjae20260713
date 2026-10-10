@@ -1,8 +1,9 @@
 import { type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
-import {
-  MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
-  validateManualPaperFuturesLeverage,
-} from './paper-futures-mode-policy.service';
+// Keep the authoritative Paper runtime bundle dependency graph unchanged.
+const MANUAL_PAPER_FUTURES_MAX_LEVERAGE = 125 as const;
+const validateManualPaperFuturesLeverage = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value)
+  && value >= 1 && value <= MANUAL_PAPER_FUTURES_MAX_LEVERAGE;
 import type { PaperRiskState, PaperTradingState, PaperOrderRequest, PaperMarketData, PaperSide, PaperContractRules, PlacePaperOrderAction, PaperOrderStatus, PaperOrder } from './paper-trading.types';
 
 export class PaperTradingError extends Error {
