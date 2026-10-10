@@ -49,23 +49,6 @@ class ObservedDailyOpportunityAudit:
         self.events = []
         self._selection_gates = None
 
-    def observe_history(self, frame: pd.DataFrame, *, selection_gates: dict | None = None) -> None:
-        # Capture the exact contemporaneous thresholds used by the same
-        # candidate_features function; unknown means classification unavailable.
-        if selection_gates is not None:
-            fields = ("min_abs_gap", "max_abs_gap", "min_price", "min_prior_avg_dollar_volume")
-            try:
-                normal = tuple(float(selection_gates[key]) for key in fields)
-            except (KeyError, TypeError, ValueError) as error:
-                raise ValueError("OPPORTUNITY_AUDIT_GATE_SCHEMA_INVALID") from error
-            if (not all(math.isfinite(value) and value >= 0 for value in normal)
-                or normal[0] > normal[1]):
-                raise ValueError("OPPORTUNITY_AUDIT_GATE_VALUES_INVALID")
-            if self._selection_gates is None:
-                self._selection_gates = normal
-            elif self._selection_gates != normal:
-                raise ValueError("OPPORTUNITY_AUDIT_GATE_SOURCE_CHANGED")
-
     def candidate_gate_reason(self, *, gap, prior_close, prior_avg_dollar, prior_rvol):
         """One deterministic *primary* missing reason from the open-only gates.
 
@@ -90,6 +73,22 @@ class ObservedDailyOpportunityAudit:
             return "OPEN_ABSOLUTE_GAP_ABOVE_MAXIMUM"
         return "OTHER_INDICATOR_OR_SOURCE_FILTER"
 
+    def observe_history(self, frame: pd.DataFrame, *, selection_gates: dict | None = None) -> None:
+        # Capture the exact contemporaneous thresholds used by the same
+        # candidate_features function; unknown means classification unavailable.
+        if selection_gates is not None:
+            fields = ("min_abs_gap", "max_abs_gap", "min_price", "min_prior_avg_dollar_volume")
+            try:
+                normal = tuple(float(selection_gates[key]) for key in fields)
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("OPPORTUNITY_AUDIT_GATE_SCHEMA_INVALID") from error
+            if (not all(math.isfinite(value) and value >= 0 for value in normal)
+                or normal[0] > normal[1]):
+                raise ValueError("OPPORTUNITY_AUDIT_GATE_VALUES_INVALID")
+            if self._selection_gates is None:
+                self._selection_gates = normal
+            elif self._selection_gates != normal:
+                raise ValueError("OPPORTUNITY_AUDIT_GATE_SOURCE_CHANGED")
 
         if not isinstance(frame, pd.DataFrame) or not set(REQUIRED_BARS).issubset(frame.columns):
             raise ValueError("OPPORTUNITY_RAW_HISTORY_SCHEMA_INVALID")
