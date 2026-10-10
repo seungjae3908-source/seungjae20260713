@@ -1,8 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { TradingRepository } from './trade-automation.repository';
-import type { TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy } from './trade-automation.types';
+import type {
+  TradingAssetClass, TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy,
+} from './trade-automation.types';
 import {
+  PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from './trade-automation.types';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
@@ -36,7 +40,17 @@ export type RulePackPilotRealizedTrade = Readonly<{
   signalId: string;
   closedAt: string;
   netPnlKrw: number;
+  market?: TradingAssetClass;
 }>;
+
+export function rulePackPilotMarketForPlan(
+  plan: Pick<TradingPlan, 'exchange' | 'market'>,
+): TradingAssetClass {
+  if (plan.exchange === 'upbit') return 'crypto_spot';
+  if (plan.exchange === 'bitget') return 'crypto_futures';
+  return String(plan.market).trim().toUpperCase() === 'US'
+    ? 'us_stock' : 'domestic_stock';
+}
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -82,6 +96,7 @@ export function deriveRulePackPilotCapitalFromTrades(
   trades: readonly RulePackPilotRealizedTrade[],
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  targetMarket?: TradingAssetClass,
 ): RulePackPilotCapitalState {
   const initialOperatingCapitalKrw = supportedPilotInitialCapital(requestedInitialOperatingCapitalKrw);
   let operatingCapitalKrw: number = initialOperatingCapitalKrw;
@@ -99,7 +114,8 @@ export function deriveRulePackPilotCapitalFromTrades(
   const today = kstDay(now);
   const nowMs = now.getTime();
 
-  const sorted = [...trades].sort((left, right) => {
+  const sorted = trades.filter((trade) => targetMarket == null || trade.market === targetMarket)
+    .sort((left, right) => {
     const time = Date.parse(left.closedAt) - Date.parse(right.closedAt);
     return time !== 0 ? time : left.id.localeCompare(right.id);
   });
@@ -292,6 +308,7 @@ export function evaluateRulePackPilotEntryGuard(
 export function deriveRulePackPilotExecutionPolicy(
   policy: TradingPolicy,
   pilot: RulePackPilotCapitalState,
+  targetMarket?: TradingAssetClass,
 ): TradingPolicy {
   const initial = supportedPilotInitialCapital(pilot.initialOperatingCapitalKrw);
   if (pilot.initialOperatingCapitalKrw !== initial) {
@@ -304,21 +321,33 @@ export function deriveRulePackPilotExecutionPolicy(
     throw new Error('BACKGROUND_PILOT_CAPITAL_SETTLEMENT_REQUIRED');
   }
   const growth = Math.max(0, operating - initial);
-  const capital = roundKrw(Math.min(operating, policy.totalCapitalKrw + growth));
+  const laneCapital = roundKrw(operating);
+  // LIVE capital is authorized independently for all four markets. The
+  // effective account-wide ceiling therefore starts at 4 x the role lane and
+  // only the current market's settlement-backed compound gain is added here.
+  // Other markets can never subsidize this market's per-order/class ceiling.
+  const portfolioInitialCapitalKrw = initial === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW
+    : PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW;
+  const portfolioCapitalKrw = roundKrw(portfolioInitialCapitalKrw + growth);
   const growingCap = (original: number) => roundKrw(Math.min(
-    capital,
+    laneCapital,
     original >= initial ? original + growth : original,
   ));
   return {
     ...policy,
-    totalCapitalKrw: capital,
+    totalCapitalKrw: portfolioCapitalKrw,
     maxOrderKrw: growingCap(policy.maxOrderKrw),
     maxInstrumentKrw: growingCap(policy.maxInstrumentKrw),
     maxAssetClassKrw: {
-      domestic_stock: growingCap(policy.maxAssetClassKrw.domestic_stock),
-      us_stock: growingCap(policy.maxAssetClassKrw.us_stock),
-      crypto_spot: growingCap(policy.maxAssetClassKrw.crypto_spot),
-      crypto_futures: growingCap(policy.maxAssetClassKrw.crypto_futures),
+      domestic_stock: targetMarket == null || targetMarket === 'domestic_stock'
+        ? growingCap(policy.maxAssetClassKrw.domestic_stock) : policy.maxAssetClassKrw.domestic_stock,
+      us_stock: targetMarket == null || targetMarket === 'us_stock'
+        ? growingCap(policy.maxAssetClassKrw.us_stock) : policy.maxAssetClassKrw.us_stock,
+      crypto_spot: targetMarket == null || targetMarket === 'crypto_spot'
+        ? growingCap(policy.maxAssetClassKrw.crypto_spot) : policy.maxAssetClassKrw.crypto_spot,
+      crypto_futures: targetMarket == null || targetMarket === 'crypto_futures'
+        ? growingCap(policy.maxAssetClassKrw.crypto_futures) : policy.maxAssetClassKrw.crypto_futures,
     },
   };
 }
@@ -484,6 +513,7 @@ export async function resolveRulePackPilotDynamicCapPolicy(
   }
   const pilot = await readRulePackPilotCapitalState(
     repository, userId, now, rulePackPilotInitialCapitalForPolicy(policy),
+    rulePackPilotMarketForPlan(plan),
   );
   const decision = evaluateRulePackPilotEntryGuard({
     pilot,
@@ -500,7 +530,7 @@ export async function resolveRulePackPilotDynamicCapPolicy(
   if (!decision.allowed) {
     throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_DYNAMIC_CAP_RISK_BLOCKED');
   }
-  return deriveRulePackPilotExecutionPolicy(policy, pilot);
+  return deriveRulePackPilotExecutionPolicy(policy, pilot, rulePackPilotMarketForPlan(plan));
 }
 
 // A numeric fee is not a KRW/quote-currency cost unless the broker recorded
@@ -545,14 +575,21 @@ export async function readRulePackPilotCapitalState(
   userId: string,
   now = new Date(),
   requestedInitialOperatingCapitalKrw: number = PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
+  targetMarket?: TradingAssetClass,
 ): Promise<RulePackPilotCapitalState> {
   // One immutable order/plan read per ledger derivation. A second independent
   // journal query could race a closing loss and construct a phantom profit HWM
   // from two different snapshots.
-  const [orders, plans] = await Promise.all([
+  const [allOrders, allPlans] = await Promise.all([
     repository.listOrders(userId),
     repository.listPlans(userId),
   ]);
+  const plans = targetMarket == null ? allPlans : allPlans.filter((plan) =>
+    plan.accountMode === 'live' && plan.executionMode === 'automatic'
+    && rulePackPilotMarketForPlan(plan) === targetMarket);
+  const scopedPlanIds = new Set(plans.map((plan) => plan.id));
+  const orders = targetMarket == null ? allOrders
+    : allOrders.filter((order) => scopedPlanIds.has(order.planId));
   const payloads = tradeAutomationJournalPayloadsFromSnapshot(userId, orders, plans);
   const journal = buildUnifiedTradeJournal(
     payloads.filter((payload) => payload.source === 'APP_AUTO'),
@@ -584,19 +621,21 @@ export async function readRulePackPilotCapitalState(
   if (journal.integrityIssues.length > 0) {
     blockers.push('PILOT_CAPITAL_AUTO_LIVE_JOURNAL_INTEGRITY_REQUIRED');
   }
-  if (!rulePackPilotLedgerHistoryComplete(orders.length, plans.length)) {
+  if (!rulePackPilotLedgerHistoryComplete(allOrders.length, allPlans.length)) {
     blockers.push('PILOT_CAPITAL_LEDGER_HISTORY_COMPLETENESS_REQUIRED');
   }
   // An unjoined fill is not "no profit"; its missing plan may hide a loss.
   // Protect role-scoped HWM accounting from incomplete ledger projections.
-  for (const order of orders) {
-    const plan = plansById.get(order.planId);
+  const allPlansById = new Map(allPlans.map((plan) => [plan.id, plan]));
+  for (const order of allOrders) {
+    const plan = allPlansById.get(order.planId);
     const apparentlyFilled = order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED'
       || (finite(order.filledQuantity) && order.filledQuantity > 0);
     if (!plan && apparentlyFilled) {
       blockers.push('PILOT_CAPITAL_ORDER_PLAN_LINEAGE_MISSING');
       continue;
     }
+    if (targetMarket != null && plan && rulePackPilotMarketForPlan(plan) !== targetMarket) continue;
     // Unknown broker outcome can hide a settled loss, even when the cached
     // quantity is still zero. Never grow capital until reconciliation finishes.
     if (plan?.accountMode === 'live' && plan.executionMode === 'automatic'
@@ -662,11 +701,12 @@ export async function readRulePackPilotCapitalState(
     trades.push(Object.freeze({
       id: trade.id, symbol: trade.symbol, signalId: entryPlan.signalId,
       closedAt: trade.closedAt, netPnlKrw: settlement.netPnlKrw,
+      market: rulePackPilotMarketForPlan(entryPlan),
     }));
   }
 
   const derived = deriveRulePackPilotCapitalFromTrades(
-    trades, now, requestedInitialOperatingCapitalKrw,
+    trades, now, requestedInitialOperatingCapitalKrw, targetMarket,
   );
   const uniqueBlockers = [...new Set([...blockers, ...derived.blockers])].sort();
   return Object.freeze({
