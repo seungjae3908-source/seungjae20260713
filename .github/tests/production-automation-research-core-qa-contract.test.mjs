@@ -14,9 +14,9 @@ const verifier = '.github/scripts/verify-production-automation-research-core-rec
 const sha = 'a'.repeat(40);
 const runId = 12345;
 
-test('dedicated release command selects scoped Staging and only the five requested Production features', () => {
+test('dedicated release command selects scoped Staging and only the four requested Production features', () => {
   for (const marker of [
-    '/run-production-automation-research-telegram-release ',
+    '/run-production-automation-research-backtester-release ',
     "? 'staging-trading-core-only.yml'",
     "? 'automation_research'",
     "qa_scope: qaScope",
@@ -35,30 +35,25 @@ test('dedicated release command selects scoped Staging and only the five request
   assert.ok(deploy.includes("inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research'"));
 });
 
-test('browser contract covers Auto, Paper, Research, Backtester and Telegram Journal without financial authority', () => {
+test('browser contract covers Auto, Paper, Research and Backtester without financial authority', () => {
   for (const marker of [
     "'/api/trade-automation/status'",
     "'/api/trade-automation/paper-runtime-readiness'",
     "'/api/paper-journal/snapshot'",
     "'/api/admin/research/overview'",
     "'/api/backtests/run'",
-    "'/api/user-integrations'",
     "page.goto('/auto-trading'",
     "getByTestId('trading-mode-paper')",
-    "getByTestId('user-broker-telegram-panel')",
     "getByTestId('trading-workspace-journal')",
     "page.goto('/research-center'",
     "page.goto('/backtests'",
     "url.pathname === '/api/backtests/run'",
     "backtest.body?.mode).toBe('backtest-only')",
     'policyMutationPerformed: false',
-    'telegramTradeJournalReady: true',
     'journalReadbackReady: true',
     "phase: 'PREACTIVATION'",
     'paperRuntimeContractVerified: true',
-    'telegramJournalPreferenceConfigured:',
-    'telegramRuntimeContractVerified: true',
-    'telegramTestDeferredToProtectedActivation: true',
+    'telegramExcludedFromScope: true',
     'liveTradingAuthorityGranted: false',
     'autoTradingAuthorityGranted: false',
     'orders: 0', 'cancels: 0', 'amends: 0', 'transfers: 0', 'withdrawals: 0',
@@ -67,6 +62,8 @@ test('browser contract covers Auto, Paper, Research, Backtester and Telegram Jou
     '/recommendations', '/ai-chart',
     '/api/trade-automation/policy', '/api/trade-automation/plans',
     '/api/user-integrations/telegram/test',
+    "'/api/user-integrations'",
+    "getByTestId('user-broker-telegram-panel')",
   ]) assert.ok(!spec.includes(forbidden), forbidden);
   for (const marker of ["trace: 'off'", "video: 'off'", "screenshot: 'off'", 'workers: 1', 'retries: 0']) {
     assert.ok(config.includes(marker), marker);
@@ -77,7 +74,7 @@ test('Production scoped receipt is exact-SHA, exact-run and fail closed', () => 
   const dir = mkdtempSync(path.join(os.tmpdir(), 'automation-research-prod-'));
   const file = path.join(dir, 'receipt.json');
   const base = {
-    schemaVersion: 'production-automation-research-core-qa-v1',
+    schemaVersion: 'production-automation-paper-research-backtester-core-qa-v2',
     targetSha: sha,
     productionDeployRunId: runId,
     generatedAt: '2026-10-10T00:00:00.000Z',
@@ -86,17 +83,13 @@ test('Production scoped receipt is exact-SHA, exact-run and fail closed', () => 
     features: {
       automaticTrading: 'PASS', automaticPaperTrading: 'PASS',
       researchCenter: 'PASS', backtester: 'PASS',
-      telegramTradeJournal: 'PASS',
     },
     backtestMode: 'backtest-only',
     phase: 'PREACTIVATION',
     paperRuntimeContractVerified: true, paperRuntimeReadyAtDeploy: false,
     paperRuntimeBlockers: ['BACKGROUND_WORKER_TICK_NOT_HEALTHY'],
-    telegramTradeJournalReady: true, telegramJournalPreferenceConfigured: true,
     journalReadbackReady: true,
-    telegramRuntimeContractVerified: true, telegramConnectedAtDeploy: false,
-    telegramWorkerReadyAtDeploy: false, telegramTestDelivered: false, telegramTestMessages: 0,
-    telegramTestDeferredToProtectedActivation: true,
+    telegramExcludedFromScope: true,
     policyMutationPerformed: false,
     liveTradingAuthorityGranted: false, autoTradingAuthorityGranted: false,
     orders: 0, cancels: 0, amends: 0, transfers: 0, withdrawals: 0,
@@ -112,7 +105,7 @@ test('Production scoped receipt is exact-SHA, exact-run and fail closed', () => 
     assert.notEqual(run({ ...base, orders: 1 }).status, 0);
     assert.notEqual(run({ ...base, features: { ...base.features, backtester: 'FAIL' } }).status, 0);
     assert.notEqual(run({ ...base, autoTradingAuthorityGranted: true }).status, 0);
-    assert.notEqual(run({ ...base, telegramTestDeferredToProtectedActivation: false }).status, 0);
+    assert.notEqual(run({ ...base, telegramExcludedFromScope: false }).status, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

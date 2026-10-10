@@ -18,7 +18,7 @@ const artifactDir = path.resolve(
     ?? 'production-automation-research-artifacts',
 );
 
-test.skip(!enabled, 'Runs only in the dedicated protected Automation/Research/Telegram pre-activation QA lane.');
+test.skip(!enabled, 'Runs only in the dedicated protected Automation/Paper/Research/Backtester pre-activation QA lane.');
 
 if (enabled) {
   if (!baseUrl || new URL(baseUrl).origin !== 'https://lsj119.com') {
@@ -83,7 +83,7 @@ function backtestRequest() {
   };
 }
 
-test('Production Auto, Paper, Research Center, Backtester and Telegram Journal close independently with zero financial authority', async ({ page }) => {
+test('Production Auto, Paper, Research Center and Backtester close independently with zero financial authority', async ({ page }) => {
   test.setTimeout(150_000);
   let forbiddenBrowserMutation = 0;
   let backtestComputationRequests = 0;
@@ -117,9 +117,6 @@ test('Production Auto, Paper, Research Center, Backtester and Telegram Journal c
   await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('trading-mode-auto').click();
   await page.getByTestId('trading-section-settings').click();
-  const telegramPanel = page.getByTestId('user-broker-telegram-panel');
-  await expect(telegramPanel).toBeVisible({ timeout: 30_000 });
-  await expect(telegramPanel).not.toHaveAttribute('aria-busy', 'true', { timeout: 30_000 });
   await page.getByTestId('trading-section-journal').click();
   await expect(page.getByTestId('trading-workspace-journal')).toBeVisible({ timeout: 30_000 });
   const automation = await api<any>(page, '/api/trade-automation/status');
@@ -155,24 +152,6 @@ test('Production Auto, Paper, Research Center, Backtester and Telegram Journal c
   expect(journal.body?.orderSubmitted).toBe(false);
   expect(journal.body?.exchangeRequestSent).toBe(false);
 
-  const integrations = await api<any>(page, '/api/user-integrations');
-  expect(integrations.ok, JSON.stringify(integrations.body)).toBe(true);
-  expect(integrations.body?.telegramStorageAvailable).toBe(true);
-  expect(integrations.body?.alertPolicyStorageAvailable).toBe(true);
-  expect(typeof integrations.body?.telegram?.connected).toBe('boolean');
-  expect(typeof integrations.body?.preferences?.ORDER_FILLED).toBe('boolean');
-  expect(typeof integrations.body?.telegramRuntime?.deliveryReady).toBe('boolean');
-  expect(typeof integrations.body?.telegramRuntime?.backgroundWorkersEnabled).toBe('boolean');
-  expect(typeof integrations.body?.telegramRuntime?.personalWorkerEnabled).toBe('boolean');
-  expect(typeof integrations.body?.telegramRuntime?.personalWorkerStarted).toBe('boolean');
-  expect(typeof integrations.body?.telegramRuntime?.workerActivationApproved).toBe('boolean');
-  expect(integrations.body?.telegramRuntime?.orderAuthority).toBe('NONE');
-  expect(integrations.body?.telegramRuntime?.privateTradingApiAllowed).toBe(false);
-  expect(integrations.body?.telegramRuntime?.realOrderAllowed).toBe(false);
-  expect(integrations.body?.privateApiRequests).toBe(0);
-  expect(integrations.body?.ordersSubmitted).toBe(0);
-  expect(integrations.body?.ordersCancelled).toBe(0);
-
   await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('research-center-workspace')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('research-general-view')).toBeVisible({ timeout: 30_000 });
@@ -196,7 +175,7 @@ test('Production Auto, Paper, Research Center, Backtester and Telegram Journal c
   writeFileSync(
     path.join(artifactDir, 'production-automation-research-core-qa.json'),
     `${JSON.stringify({
-      schemaVersion: 'production-automation-research-core-qa-v1',
+      schemaVersion: 'production-automation-paper-research-backtester-core-qa-v2',
       targetSha,
       productionDeployRunId: deployRunId,
       generatedAt: new Date().toISOString(),
@@ -208,21 +187,13 @@ test('Production Auto, Paper, Research Center, Backtester and Telegram Journal c
         automaticPaperTrading: 'PASS',
         researchCenter: 'PASS',
         backtester: 'PASS',
-        telegramTradeJournal: 'PASS',
       },
       backtestMode: 'backtest-only',
       paperRuntimeContractVerified: true,
       paperRuntimeReadyAtDeploy: paper.body.readyForPaperEvaluation === true,
       paperRuntimeBlockers: paper.body.blockers,
-      telegramTradeJournalReady: true,
       journalReadbackReady: true,
-      telegramJournalPreferenceConfigured: typeof integrations.body.preferences.ORDER_FILLED === 'boolean',
-      telegramRuntimeContractVerified: true,
-      telegramConnectedAtDeploy: integrations.body.telegram.connected === true,
-      telegramWorkerReadyAtDeploy: integrations.body.telegramRuntime.personalWorkerStarted === true,
-      telegramTestDelivered: false,
-      telegramTestMessages: 0,
-      telegramTestDeferredToProtectedActivation: true,
+      telegramExcludedFromScope: true,
       policyMutationPerformed: false,
       liveTradingAuthorityGranted: false,
       autoTradingAuthorityGranted: false,
