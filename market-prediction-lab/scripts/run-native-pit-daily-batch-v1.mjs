@@ -134,13 +134,23 @@ export function verifyNativePITChunkEnvelopeV1(
 function readBoundedJson(file){
   const p=resolve(file),stat=lstatSync(p);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1
-     ||stat.size<=0||stat.size>8*1024*1024)
+     ||stat.size<=0||stat.size>8*1024*1024
+     ||(stat.mode&0o077)!==0)
     throw new Error("PIT_CLI_UNSAFE_OR_OVERSIZED_INPUT");
   return JSON.parse(readFileSync(p,"utf8"));
 }
 export async function runNativePITBatchCliV1(config,{
   upbitFetch=globalThis.fetch,bitgetClient=null,sleepImpl=null,
 }={}){
+  // Refuse a repeated/resumed job with the same private output BEFORE
+  // paying for provider GETs or assembling thousands of OHLC rows.
+  const output=resolve(config.outputPath);
+  try{
+    lstatSync(output);
+    throw new TypeError("PIT_CLI_OUTPUT_ALREADY_EXISTS");
+  }catch(error){
+    if(error?.code!=="ENOENT")throw error;
+  }
   const manifest=config.manifestPath?readBoundedJson(config.manifestPath):null;
   let report;
   if(config.mode==="assemble"){
@@ -170,6 +180,7 @@ export async function runNativePITBatchCliV1(config,{
       expectedRosterDigestSha256:config.expectedSHA,
       upbitFetch,
       bitgetClient:config.allowPublicReadOnlyFetch
+        &&config.market==="CRYPTO_FUTURES"
         ?(bitgetClient??new BitgetPublicClient({
           maxRetries:1,minIntervalMs:220,timeoutMs:12_000,
         })):null,
@@ -177,7 +188,6 @@ export async function runNativePITBatchCliV1(config,{
       minBetweenSymbolsMs:220,
     });
   }
-  const output=resolve(config.outputPath);
   mkdirSync(dirname(output),{recursive:true});
   writeFileSync(output,JSON.stringify({
     schemaVersion:"native-historic-pit-day-read-only-cli-v1",
