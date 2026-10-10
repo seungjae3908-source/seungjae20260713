@@ -11,10 +11,31 @@ const spec = readFileSync('stock-analyzer/e2e/staging-trading-core-only.spec.ts'
 const verdictPath = '.github/scripts/build-staging-trading-core-only-verdict.mjs';
 const verdict = readFileSync(verdictPath, 'utf8');
 const adminProbe = readFileSync('api-server/scripts/staging-trading-core-admin-profile.mjs', 'utf8');
+const releasePreflight = readFileSync('.github/scripts/verify-automation-research-release-preflight.mjs', 'utf8');
 const SHA = 'a'.repeat(40);
 const requireAll = (text, markers) => {
   for (const marker of markers) assert.ok(text.includes(marker), 'missing contract marker: ' + marker);
 };
+test('fail-fast release preflight runs before Staging credentials or deployment', () => {
+  requireAll(workflow, [
+    '.github/scripts/verify-automation-research-release-preflight.mjs',
+    'node --check .github/scripts/verify-automation-research-release-preflight.mjs',
+    'node .github/scripts/verify-automation-research-release-preflight.mjs',
+    'Run fail-fast Automation/Research policy and wiring preflight',
+  ]);
+  requireAll(releasePreflight, [
+    'PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 100_000',
+    'PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW = 500_000',
+    'AUTOMATIC_PAPER_INITIAL_KRW = 1_000_000 as const',
+    'dailyLossLimitPercent: 3',
+    'maxDailyOrders: 0',
+    'PAPER_MIRROR_AUTOMATIC_LIVE_DISCOVERY',
+    "telegramOrderAuthority: 'NONE'",
+    'revalidateProductionTradingGateConflicts',
+  ]);
+  assert.ok(workflow.indexOf('Run fail-fast Automation/Research policy and wiring preflight')
+    < workflow.indexOf('Fail closed on Production project, origins or missing scoped Staging credentials'));
+});
 test('Staging browser restores the real isolated admin password session without inventing login metadata', () => {
   requireAll(spec, [
     'restoreStagingAdminSession',

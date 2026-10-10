@@ -172,6 +172,9 @@ requireText(runner, "comprehensive|account|credential|member", 'MEMBER_QA_RUNNER
 requireText(contextBuilder, 'activeConflictingTradingGates: conflicts', 'POSTDEPLOY_GATE_CONFLICT_CONTEXT_MISSING');
 requireText(contextBuilder, 'verifyPostDeployMainLineage', 'POSTDEPLOY_MAIN_LINEAGE_HELPER_MISSING');
 requireText(contextBuilder, 'isActiveProductionTradingGateRun', 'POSTDEPLOY_EXECUTING_GATE_FILTER_MISSING');
+requireText(contextBuilder, 'revalidateProductionTradingGateConflicts', 'POSTDEPLOY_TRANSIENT_GATE_REVALIDATION_MISSING');
+requireText(contextBuilder, 'POSTDEPLOY_CONTEXT_ACTIVE_TRADING_GATE_CONFLICT', 'POSTDEPLOY_PERSISTENT_GATE_ERROR_MISSING');
+requireText(evidenceBuilder, 'stabilizationMs = 10_000', 'POSTDEPLOY_GATE_STABILIZATION_WINDOW_MISSING');
 requireText(contextBuilder, '/compare/${normalizedTarget}...${currentMainSha}', 'POSTDEPLOY_GITHUB_ANCESTRY_VERIFICATION_MISSING');
 requireText(evidenceBuilder, 'POSTDEPLOY_QA_MAIN_LINEAGE_UNVERIFIED', 'POSTDEPLOY_UNVERIFIED_MAIN_GUARD_MISSING');
 requireText(contextBuilder, "mode === 'inline'", 'INLINE_DEPLOY_CONTEXT_MODE_MISSING');
