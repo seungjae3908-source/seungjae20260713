@@ -3,6 +3,7 @@ import { computeSearchQualityMetrics } from "./search-quality-metrics-v1.js";
 // Research-only bridge: a minute OHLC crossing is an INTERVAL, not a tick timestamp.
 // This does not change the canonical OMS, Paper, or settlement execution engines.
 const MINUTE_MS = 60_000;
+const UTC_DAY_MS = 86_400_000;
 const VENUE = Object.freeze({
   KR_STOCK: "KRX",
   US_STOCK: "US_SIP",
@@ -151,12 +152,17 @@ function verifyMinutePartition({ symbol, session, receipt, series, intervalMs })
 /**
  * Raw venue-native 1m bar -> bounded first-crossing observations.
  * Separate from actual market-wide 1D opportunities: "baseline" is ONLY the
- * opening trade of this fully observed sample window (NOT previous-day close).
+ * opening trade of this fully observed sample window by default.
+ * Optional UTC-day mode uses the actual preceding UTC day's final closed
+ * one-minute candle from a contiguous SAME-VENUE 60-minute history prefix.
+ * It does not prove historical scanner feed delivery or executable quotes.
  * Never creates synthetic historical scanner signals or tradable fills.
  */
 export function auditNativeObservedMinuteWindowV1({
   market, venue, source, symbol, startMs, endMs, bars,
   pageWindowTraversed = false,
+  baselineMode = "FIRST_WINDOW_OPEN",
+  preWindowBars = [],
 } = {}) {
   if (!(market === "CRYPTO_SPOT" || market === "CRYPTO_FUTURES")
       || venue !== VENUE[market]
@@ -176,6 +182,26 @@ export function auditNativeObservedMinuteWindowV1({
       expectedMinuteCount:slots,receivedMinuteCount:bars.length,
     });
   }
+  const isDayMode = baselineMode === "PREVIOUS_UTC_DAY_LAST_MINUTE_CLOSE";
+  if (!Array.isArray(preWindowBars)
+      || !["FIRST_WINDOW_OPEN","PREVIOUS_UTC_DAY_LAST_MINUTE_CLOSE"].includes(baselineMode)
+      || (isDayMode && (startMs%UTC_DAY_MS!==0 || slots!==1440 || preWindowBars.length!==60))
+      || (!isDayMode && preWindowBars.length!==0)) {
+    return blocked(market,"SAMPLE_BASELINE_HISTORY_INVALID");
+  }
+  const normalizedPriorHour=[];
+  if (isDayMode) {
+    for (const [index,raw] of preWindowBars.entries()) {
+      const time=startMs-(60-index)*MINUTE_MS;
+      const {open,high,low,close,volume}=raw ?? {};
+      if (raw?.timestamp!==time || ![open,high,low,close].every(finitePositive)
+          || typeof volume!=="number" || !Number.isFinite(volume) || volume<0
+          || high<Math.max(open,close) || low>Math.min(open,close) || low>high) {
+        return blocked(market,"PRIOR_UTC_HOUR_CANDLE_INVALID",{index});
+      }
+      normalizedPriorHour.push({timestampMs:time,open,high,low,close,volume});
+    }
+  }
   const normalized=[];
   let prevTime=startMs-MINUTE_MS;
   for(const [index,raw] of bars.entries()) {
@@ -191,7 +217,8 @@ export function auditNativeObservedMinuteWindowV1({
     normalized.push({timestampMs:time,open,high,low,close,volume});
     prevTime=time;
   }
-  const baselinePrice=normalized[0].open;
+  const baselinePrice=isDayMode ? normalizedPriorHour.at(-1).close : normalized[0].open;
+  const historicalContext=isDayMode ? [...normalizedPriorHour,...normalized] : normalized;
   const directions=market==="CRYPTO_FUTURES"?["LONG","SHORT"]:["LONG"];
   const opportunities=[];
   for(const direction of directions) {
@@ -204,7 +231,7 @@ export function auditNativeObservedMinuteWindowV1({
       if(!crossing) continue;
       const snapshots=Object.fromEntries(WINDOWS_MIN.map(min=>{
         const cutoff=crossing.timestampMs - min*MINUTE_MS;
-        const earlier=normalized.findLast(bar=>bar.timestampMs+MINUTE_MS<=cutoff);
+        const earlier=historicalContext.findLast(bar=>bar.timestampMs+MINUTE_MS<=cutoff);
         return ["T_MINUS_"+min,earlier?{
           cutoffMs:cutoff,barStartMs:earlier.timestampMs,
           lastObservedClose:earlier.close,
@@ -218,6 +245,8 @@ export function auditNativeObservedMinuteWindowV1({
         firstCrossingBarStartMs:crossing.timestampMs,
         firstCrossingBarEndMs:crossing.timestampMs+MINUTE_MS,
         exactTradeTimestampMs:null,
+        openedAlreadyBeyondThreshold:direction==="LONG"
+          ? normalized[0].open>=target : normalized[0].open<=target,
         tMinusObservedReconstruction:snapshots,
         firstSeenByHistoricalScannerAtMs:null,
         historicalScannerLeadMs:null,
@@ -229,8 +258,16 @@ export function auditNativeObservedMinuteWindowV1({
     schemaVersion:"native-observed-minute-opportunity-window-v1",
     status:"OBSERVED_WINDOW_ONLY",market,venue,source,symbol,
     windowStartMs:startMs,windowEndMs:endMs,timeframe:"1m",
-    baselineDefinition:"FIRST_OBSERVED_WINDOW_OPEN_NOT_PREVIOUS_DAY_CLOSE",
-    baselinePrice,observedMinuteCount:slots,missingMinuteCount:0,
+    baselineDefinition:isDayMode
+      ? "PREVIOUS_UTC_DAY_FINAL_1M_CLOSE_SAME_VENUE"
+      : "FIRST_OBSERVED_WINDOW_OPEN_NOT_PREVIOUS_DAY_CLOSE",
+    baselinePrice,
+    priorUtcDayFinalMinuteStartMs:isDayMode ? startMs-MINUTE_MS : null,
+    priorHourObservedMinuteCount:normalizedPriorHour.length,
+    retrospectivelyReconstructedPriorUtcClose:isDayMode,
+    historicalScannerAsOfAvailabilityVerified:false,
+    openingGapPct:(normalized[0].open/baselinePrice-1)*100,
+    observedMinuteCount:slots,missingMinuteCount:0,
     opportunities:Object.freeze(opportunities),
     observedCrossingCount:opportunities.length,
     crossingThresholdsPcts:THRESHOLDS_PCT,
