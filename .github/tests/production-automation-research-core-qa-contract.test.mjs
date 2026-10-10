@@ -20,6 +20,7 @@ test('dedicated release command selects scoped Staging and only the five request
     "? 'staging-trading-core-only.yml'",
     "? 'automation_research'",
     "qa_scope: qaScope",
+    'delegated_by_run_id: String(context.runId)',
   ]) assert.ok(command.includes(marker), marker);
   for (const marker of [
     '- automation_research',
