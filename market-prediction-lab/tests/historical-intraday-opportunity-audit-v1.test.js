@@ -17,11 +17,39 @@ function universe(symbols=["A","B"], overrides={}) {
     ...overrides,
   };
 }
-function coverage(symbols=["A","B"], status="VERIFIED_COMPLETE") {
-  return symbols.map((symbol) => ({
-    symbol,status,sourceId:"test-only-provider-fixture",
-    startMs:S,endMs:E,noTradeGapsChecked:true,
-  }));
+function defaultBars() {
+  return [
+    candle("A",0),
+    candle("A",10,{open:101,high:104,low:100,close:102}),
+    candle("A",20,{open:105,high:111,low:103,close:108}),
+    candle("A",30,{open:108,high:122,low:107,close:120}),
+    candle("B",0),
+    candle("B",20),
+  ];
+}
+// Test fixtures ONLY: the empty minutes below are invented intentionally and
+// never treated as real data or an archive-backed market-wide denominator.
+function coverage(symbols=["A","B"], status="VERIFIED_COMPLETE", bars=defaultBars()) {
+  const sourceId="test-only-provider-fixture";
+  return symbols.map((symbol) => {
+    const candleStarts=[...new Set(bars.filter((row)=>row.symbol===symbol).map((row)=>row.timestampMs))].sort((a,b)=>a-b);
+    const verifiedEmptyRanges=[];
+    let cursor=S;
+    for (const start of [...candleStarts,E]) {
+      if (start>cursor) {
+        verifiedEmptyRanges.push({
+          startMs:cursor,endMs:start,reason:"NO_TRADES",
+          sourceId,evidenceId:"synthetic-fixture-"+symbol+"-"+cursor,
+          exhaustiveSourcePagesVerified:true,
+        });
+      }
+      cursor=Math.max(cursor,start+M);
+    }
+    return {
+      symbol,status,sourceId,startMs:S,endMs:E,noTradeGapsChecked:true,
+      verifiedEmptyRanges,
+    };
+  });
 }
 function candle(symbol,min,{open=100,high=101,low=99,close=100,volume=100,delay=0}={}) {
   return {symbol,timestampMs:S+min*M,availableAtMs:S+(min+1)*M+delay,
@@ -32,17 +60,14 @@ function observation(symbol,direction,state,atMin,signalId) {
     dataCutoffMs:S+(atMin-1)*M,signalId};
 }
 function run(market="US_STOCK", options={}) {
+  const uni=options.universe ?? universe();
+  const barRows=options.bars ?? defaultBars();
   return audit({
     market,venue:VENUES[market],session:SESSION,
-    universe:universe(),coverage:coverage(),watchedSymbols:["A","B"],
-    bars:[
-      candle("A",0),
-      candle("A",10,{open:101,high:104,low:100,close:102}),
-      candle("A",20,{open:105,high:111,low:103,close:108}),
-      candle("A",30,{open:108,high:122,low:107,close:120}),
-      candle("B",0),
-      candle("B",20),
-    ],
+    universe:uni,
+    coverage:options.coverage ?? coverage(uni.symbols.map((r)=>r.symbol),"VERIFIED_COMPLETE",barRows),
+    watchedSymbols:["A","B"],
+    bars:barRows,
     scannerObservations:[
       observation("A","LONG","CANDIDATE",12,"sA"),
       observation("B","LONG","CANDIDATE",12,"sB"),
@@ -127,7 +152,6 @@ test("scanner future cutoff is rejected and late-discovered signals cannot earn 
 test("futures SHORT is scored independently, and stock/spot SHORT is forbidden", () => {
   const result=run("CRYPTO_FUTURES",{
     universe:universe(["BTCUSDT"]),
-    coverage:coverage(["BTCUSDT"]),
     watchedSymbols:["BTCUSDT"],
     bars:[candle("BTCUSDT",0),candle("BTCUSDT",20,{open:99,high:100,low:89,close:92})],
     scannerObservations:[observation("BTCUSDT","SHORT","CANDIDATE",12,"btc-short")],
@@ -161,7 +185,6 @@ test("primary missed-opportunity reasons distinguish watchlist, signal and entry
 test("opening gap beyond threshold is labeled rather than credited as early entry", () => {
   const result=run("KR_STOCK",{
     universe:universe(["A"]),
-    coverage:coverage(["A"]),
     bars:[candle("A",0,{open:111,high:115,low:110,close:112})],
     scannerObservations:[],
   });
@@ -216,4 +239,76 @@ test("scanner signal ID collision across symbols or directions is rejected", () 
 
 test("unexpected inherited market keys are rejected",()=>{
   assert.throws(()=>audit({market:"toString"}),/MARKET_INVALID/);
+});
+
+
+test("missing minute between bars cannot be treated as no trades without proof", () => {
+  const receipts=coverage();
+  const a=receipts.find((r)=>r.symbol==="A");
+  const incomplete={...a,verifiedEmptyRanges:a.verifiedEmptyRanges.slice(1)};
+  const result=run("CRYPTO_SPOT",{coverage:[incomplete,receipts.find((r)=>r.symbol==="B")]});
+  assert.equal(result.status,"BLOCKED_DATA");
+  assert.equal(result.reason,"UNVERIFIED_ONE_MINUTE_GAP");
+  assert.equal(result.quality,null);
+  assert.equal(result.observedOpportunityCount,null);
+  assert.equal(result.details.symbol,"A");
+});
+
+test("an empty-range label cannot overlap a real trade candle", () => {
+  const receipts=coverage();
+  const a=receipts.find((r)=>r.symbol==="A");
+  const doubleBooked={
+    ...a, verifiedEmptyRanges:[
+      ...a.verifiedEmptyRanges,
+      {startMs:S+20*M,endMs:S+21*M,reason:"NO_TRADES",
+       sourceId:a.sourceId,evidenceId:"contradiction",exhaustiveSourcePagesVerified:true},
+    ],
+  };
+  const result=run("KR_STOCK",{coverage:[doubleBooked,receipts.find((r)=>r.symbol==="B")]});
+  assert.equal(result.reason,"MINUTE_BAR_EMPTY_RANGE_CONFLICT");
+});
+
+test("unproven page gaps or unverified empty minute reasons fail closed", () => {
+  const base=coverage();
+  const a=base.find((r)=>r.symbol==="A");
+  for(const invalid of [
+    {...a.verifiedEmptyRanges[0],exhaustiveSourcePagesVerified:false},
+    {...a.verifiedEmptyRanges[0],reason:"GUESSED_NOTRADE"},
+    {...a.verifiedEmptyRanges[0],evidenceId:""},
+  ]) {
+    const result=run("US_STOCK",{coverage:[
+      {...a,verifiedEmptyRanges:[invalid,...a.verifiedEmptyRanges.slice(1)]},
+      base.find((r)=>r.symbol==="B"),
+    ]});
+    assert.equal(result.reason,"UNVERIFIED_EMPTY_MINUTE_RANGE");
+  }
+});
+
+test("a fully evidenced no-trade day is not a data outage or fake trade", () => {
+  const result=run("CRYPTO_SPOT",{
+    universe:universe(["Z"]),
+    watchedSymbols:["Z"], bars:[],
+    coverage:coverage(["Z"],"VERIFIED_NO_TRADES",[]),
+    scannerObservations:[],
+  });
+  assert.equal(result.status,"OBSERVED_COHORT_ONLY");
+  assert.equal(result.observedOpportunityCount,0);
+  assert.equal(result.verifiedCandleMinutes,0);
+  assert.equal(result.verifiedEmptyMinutes,120);
+  assert.equal(result.actualFillCount,null);
+  assert.equal(result.trueMarketWideRecall,null);
+});
+
+test("a candidate's actual last stage wins over later negative scan entries", () => {
+  const result=run("US_STOCK",{
+    scannerObservations:[
+      observation("A","LONG","CANDIDATE",12,"sA"),
+      observation("A","LONG","RANK_EXCLUDED",13,"sA"),
+      observation("A","LONG","OBSERVED_NO_SIGNAL",14),
+    ],
+  });
+  const ten=result.opportunities.find((e)=>e.thresholdPct===10);
+  assert.equal(ten.discoveredBeforeCrossing,true);
+  assert.equal(ten.missingOrEntryReason,"RANK_EXCLUDED");
+  assert.equal(ten.firstPreCrossingSignalAtMs,S+12*M);
 });
