@@ -2,6 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import {
+  automaticPaperFuturesLeverageBlockers,
+  scopeAutomaticPaperFuturesRiskPolicy,
+} from './paper-futures-mode-policy.service';
 import type { TradingRepository } from './trade-automation.repository';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
@@ -191,7 +195,16 @@ export class TradeAutomationService {
       };
     }
 
-    const riskDecision = evaluateTradingPlan(input, policy, {
+    const executionMode = policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual';
+    const paperLeverageBlockers = automaticPaperFuturesLeverageBlockers(input, executionMode);
+    if (paperLeverageBlockers.length) {
+      return {
+        plan: null, duplicate: false,
+        decision: { allowed: false, blockCodes: paperLeverageBlockers, warnings: [] },
+      };
+    }
+    const riskPolicy = scopeAutomaticPaperFuturesRiskPolicy(policy, input, executionMode);
+    const riskDecision = evaluateTradingPlan(input, riskPolicy, {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: serverLiveEnabledForPlan(input, policy),
     });
@@ -204,7 +217,7 @@ export class TradeAutomationService {
     const now = new Date();
     const plan: TradingPlan = {
       ...input,
-      executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
+      executionMode,
       id: randomUUID(), userId, idempotencyKey,
       state: 'APPROVAL_PENDING',
       version: 0,
@@ -238,8 +251,17 @@ export class TradeAutomationService {
       && (storedPolicy.mode !== 'automatic' || !storedPolicy.automaticEnabled)) {
       throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
     }
-    const policy = await resolveRulePackPilotDynamicCapPolicy(
+    const basePolicy = await resolveRulePackPilotDynamicCapPolicy(
       this.repository, userId, plan, storedPolicy,
+    );
+    const paperLeverageBlockers = automaticPaperFuturesLeverageBlockers(
+      plan, plan.executionMode === 'automatic' ? 'automatic' : 'manual',
+    );
+    if (paperLeverageBlockers.length) {
+      throw new Error(`AUTOMATIC_PAPER_LEVERAGE_RECHECK_FAILED:${paperLeverageBlockers.join(',')}`);
+    }
+    const policy = scopeAutomaticPaperFuturesRiskPolicy(
+      basePolicy, plan, plan.executionMode === 'automatic' ? 'automatic' : 'manual',
     );
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, storedPolicy),
@@ -282,8 +304,17 @@ export class TradeAutomationService {
       || plan.executionMode !== 'automatic') {
       throw new Error('USER_APPROVAL_REQUIRED');
     }
-    const policy = await resolveRulePackPilotDynamicCapPolicy(
+    const basePolicy = await resolveRulePackPilotDynamicCapPolicy(
       this.repository, userId, plan, storedPolicy,
+    );
+    const paperLeverageBlockers = automaticPaperFuturesLeverageBlockers(
+      plan, plan.executionMode === 'automatic' ? 'automatic' : 'manual',
+    );
+    if (paperLeverageBlockers.length) {
+      throw new Error(`AUTOMATIC_PAPER_LEVERAGE_RECHECK_FAILED:${paperLeverageBlockers.join(',')}`);
+    }
+    const policy = scopeAutomaticPaperFuturesRiskPolicy(
+      basePolicy, plan, plan.executionMode === 'automatic' ? 'automatic' : 'manual',
     );
     const intelligence = await this.marketIntelligenceDecision(plan);
     if (!intelligence.allowed) {
