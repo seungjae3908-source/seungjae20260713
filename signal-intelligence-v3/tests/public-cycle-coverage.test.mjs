@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PUBLIC_CYCLE_COVERAGE_POLICY_VERSION,
+  PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
 } from '../src/public-cycle-coverage.mjs';
@@ -30,6 +31,7 @@ test('partial current KRX eligible roster stays BLOCKED_DATA but advances attemp
   assert.equal(decision.reason, 'BLOCKED_RESEARCH_ROTATION_ONLY');
   assert.equal(evidence.cards.length, 0);
   assert.equal(PUBLIC_CYCLE_COVERAGE_POLICY_VERSION, 'public-cycle-coverage-v1');
+  assert.equal(PUBLIC_V3_SPOT_STAGE_TWO_LIMIT, 5, 'V3 must not request twenty deep Upbit symbols per strategy');
 });
 test('partial but provider errors, timeouts, stale or incomplete batch cannot advance', () => {
   const variants = [

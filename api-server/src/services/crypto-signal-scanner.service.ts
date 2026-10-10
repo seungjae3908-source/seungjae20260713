@@ -869,13 +869,11 @@ export function createCryptoSignalScannerService(
 
       const requestedBatchSize = Math.floor(request.batchSize) || 24;
       const forwardPublicSpot = request.market === 'spot'
-        && (request.memberId === 'forward-observer-public-only'
-          || request.memberId === 'signal-intelligence-v3-public-only');
-      // Both the Forward and independent Signal V3 PUBLIC-only observers
-      // produce multiple candle/context requests per symbol. Bound expensive
-      // per-symbol work to five while bulk market discovery remains all-symbol.
-      // This does not restrict normal member lookup or Bitget futures scanning,
-      // and cannot relax any signal quality or execution admission gate.
+        && request.memberId === 'forward-observer-public-only';
+      // The Forward 60m Spot lane loads a primary candle series plus a context
+      // candle series per symbol. Keep that public-only cycle at five symbols so
+      // it performs at most ten Upbit candle-group requests before advancing the
+      // cursor, without relaxing provider timeouts or Forward admission gates.
       const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
       const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
       const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));

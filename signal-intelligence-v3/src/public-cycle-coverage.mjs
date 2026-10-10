@@ -5,6 +5,10 @@
  * its fully attempted eligible pages need not starve forever at cursor 0.
  */
 export const PUBLIC_CYCLE_COVERAGE_POLICY_VERSION = 'public-cycle-coverage-v1';
+// The Signal V3 research-only Spot cycle makes several public Upbit
+// candle/context/book reads per symbol. This is the bounded stage-2 budget,
+// NOT the all-eligible-KRW ticker roster size (discovered independently).
+export const PUBLIC_V3_SPOT_STAGE_TWO_LIMIT = 5;
 const TRUSTED_ROSTER_SOURCES = new Set([
   'krx-symbol-master', 'finnhub-symbol-master',
   'nasdaq-trader-public-directory', 'upbit-public', 'bitget-public',
