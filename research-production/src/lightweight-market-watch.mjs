@@ -43,6 +43,16 @@ function symbol(value) {
   const s = String(value ?? '').trim().toUpperCase();
   return /^[A-Z0-9][A-Z0-9._-]{0,31}$/.test(s) ? s : null;
 }
+function stockSymbol(value, market) {
+  const code = symbol(value);
+  if (!code) return null;
+  // Market-specific labels prevent cross-market false candidates. KRX short
+  // codes are six alphanumeric characters; US may use class share suffixes.
+  if (market === 'KR_STOCK') return /^[A-Z0-9]{6}$/.test(code) ? code : null;
+  if (market === 'US_STOCK') return /^[A-Z][A-Z0-9]{0,14}(?:[.-][A-Z0-9]{1,6})?$/.test(code)
+    ? code : null;
+  return null;
+}
 function validAge(timestamp, nowMs) {
   return Number.isFinite(timestamp) && timestamp > 0
     && timestamp <= nowMs + 5_000
@@ -189,7 +199,7 @@ export function normalizeStockFeed(raw, market, nowMs) {
   if (!validAge(observed, nowMs)) throw new Error('STOCK_PUBLIC_FEED_STALE');
   const quotes = [];
   for (const row of raw.quotes) {
-    const ticker = symbol(row?.symbol);
+    const ticker = stockSymbol(row?.symbol, market);
     const price = number(row?.price);
     const turnover = number(row?.turnover24h);
     const percent = number(row?.change24hPercent);
@@ -205,13 +215,12 @@ export function normalizeStockFeed(raw, market, nowMs) {
     }));
   }
   if (!quotes.length) throw new Error('STOCK_PUBLIC_FEED_EMPTY');
+  // Self-declared completeUniverse in this same local payload is not
+  // independent licensed/provider/roster evidence of complete market coverage.
+  // Until a separately validated source binding exists, no stock market may
+  // turn READY solely on a file-supplied flag or a one-ticker sample.
   return sourceResult(
-    market, raw.source,
-    raw.completeUniverse && quotes.length === raw.quotes.length
-      && new Set(quotes.map((row) => row.symbol)).size === quotes.length
-      && quotes.length <= WATCH_LIMITS.maxSymbolsPerMarket
-      ? 'READY' : 'PARTIAL_UNIVERSE',
-    raw.quotes.length, quotes,
+    market, raw.source, 'PARTIAL_UNIVERSE', raw.quotes.length, quotes,
   );
 }
 export function evaluateWatchBudget(telemetry) {

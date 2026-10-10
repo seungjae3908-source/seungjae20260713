@@ -96,6 +96,29 @@ test('a valid stock source label survives producer to sanitized status without p
   assert.equal(JSON.stringify(readback).includes('005930'), false);
 });
 
+test('self-reported KR complete universe stays PARTIAL through sanitized readback', () => {
+  const stock = normalizeStockFeed({
+    schemaVersion: 'research-stock-public-snapshot-v1',
+    market: 'KR_STOCK', source: 'KR_SOURCE_TEST',
+    asOf: new Date(NOW - 2_000).toISOString(),
+    completeUniverse: true,
+    quotes: [{ symbol: '005930', price: 100, turnover24h: 2e9,
+      change24hPercent: 1.2, asOf: new Date(NOW - 3_000).toISOString() }],
+  }, 'KR_STOCK', NOW);
+  assert.equal(stock.status, 'PARTIAL_UNIVERSE');
+  const state = evidence();
+  state.markets[0] = {
+    market: stock.market, source: stock.source, status: stock.status,
+    listedCount: stock.listedCount, observedCount: stock.quotes.length,
+    newCandidates: 0, executionAuthority: 'NONE',
+  };
+  const result = summarizeLightweightMarketWatch(state, NOW, SHA);
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.marketCoverageCount, 2);
+  assert.equal(result.markets[0].status, 'PARTIAL_UNIVERSE');
+  assert.equal(result.executionAuthority, 'NONE');
+});
+
 test('stale and future state do not show current 24-hour observation', () => {
   const stale = evidence();
   stale.observedAt = new Date(NOW - 8 * 60_000).toISOString();

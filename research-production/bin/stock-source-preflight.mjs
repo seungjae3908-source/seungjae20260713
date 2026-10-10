@@ -81,7 +81,9 @@ export async function inspectStockInputs(root, nowMs = Date.now()) {
       const quote = normalizeStockFeed(raw, market, nowMs);
       markets.push({
         market,
-        status: quote.status === 'READY'
+        // Preserve the untrusted producer's flag only as an unverified label:
+        // the watch itself does NOT upgrade this to complete-market READY.
+        status: raw.completeUniverse === true
           ? 'FRESH_COMPLETE_CLAIM_UNVERIFIED' : 'FRESH_SUBSET_UNVERIFIED',
         source: quote.source, listedCount: quote.listedCount,
         observedCount: quote.quotes.length,

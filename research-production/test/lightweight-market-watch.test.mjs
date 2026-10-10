@@ -255,7 +255,7 @@ test('incomplete Bitget tickers cannot be labeled full-universe READY', () => {
   assert.equal(snapshot.quotes.length, 1);
 });
 
-test('stock full-universe claims require unique current quotes and no cap truncation', () => {
+test('self-declared stock full-universe cannot become READY without independent verification', () => {
   const base = { schemaVersion: 'research-stock-public-snapshot-v1',
     market: 'US_STOCK', source: 'verified-feed-v1',
     asOf: new Date(NOW - 1_000).toISOString(), completeUniverse: true };
@@ -264,7 +264,9 @@ test('stock full-universe claims require unique current quotes and no cap trunca
   const complete = normalizeStockFeed({
     ...base, quotes: [q],
   }, 'US_STOCK', NOW);
-  assert.equal(complete.status, 'READY');
+  assert.equal(complete.status, 'PARTIAL_UNIVERSE');
+  assert.equal(complete.listedCount, 1);
+  assert.equal(complete.quotes.length, 1);
   const duplicate = normalizeStockFeed({
     ...base, quotes: [q, q],
   }, 'US_STOCK', NOW);
@@ -275,6 +277,32 @@ test('stock full-universe claims require unique current quotes and no cap trunca
   }, 'US_STOCK', NOW);
   assert.equal(capped.status, 'PARTIAL_UNIVERSE');
   assert.equal(capped.quotes.length, WATCH_LIMITS.maxSymbolsPerMarket);
+});
+
+test('KR/US stock identifiers cannot be cross-labeled to fabricate another market', () => {
+  const base = {
+    schemaVersion: 'research-stock-public-snapshot-v1',
+    source: 'PUBLIC_TEST_V1',
+    asOf: new Date(NOW - 1_000).toISOString(),
+    completeUniverse: false,
+  };
+  const q = {
+    price: 300, turnover24h: 3e9, change24hPercent: 1.5,
+    asOf: new Date(NOW - 1_000).toISOString(),
+  };
+  assert.equal(normalizeStockFeed({
+    ...base, market: 'KR_STOCK', quotes: [{ ...q, symbol: '005930' }],
+  }, 'KR_STOCK', NOW).quotes[0].symbol, '005930');
+  assert.equal(normalizeStockFeed({
+    ...base, market: 'US_STOCK', quotes: [{ ...q, symbol: 'BRK.B' }],
+  }, 'US_STOCK', NOW).quotes[0].symbol, 'BRK.B');
+  for (const [market, invalidSymbol] of [
+    ['KR_STOCK', 'AAPL'], ['US_STOCK', '005930'], ['KR_STOCK', 'BRK.B'],
+  ]) {
+    assert.throws(() => normalizeStockFeed({
+      ...base, market, quotes: [{ ...q, symbol: invalidSymbol }],
+    }, market, NOW), /STOCK_PUBLIC_FEED_EMPTY/, market + ':' + invalidSymbol);
+  }
 });
 
 test('bounded public JSON parser refuses status errors, oversized and malformed payloads', async () => {
