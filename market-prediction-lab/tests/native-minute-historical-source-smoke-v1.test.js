@@ -141,3 +141,80 @@ test("cross-venue historical substitution is always BLOCKED_DATA",()=>{
   assert.equal(result.status,"BLOCKED_DATA");
   assert.equal(result.reason,"SAMPLE_SOURCE_PROVENANCE_OR_WINDOW_INVALID");
 });
+
+test("native Upbit sparse 1m can use exact public latest-trade gap corroboration without fake candles",()=>{
+  const sample=fullMinuteFixtures({upPct:22,spikeAt:90});
+  const {startMs,endMs}=HISTORICAL_SAMPLE_WINDOW_V1;
+  const missing=42,ts=startMs+missing*60_000;
+  sample.candles.splice(missing,1);
+  const r=auditNativeObservedMinuteWindowV1({
+    market:"CRYPTO_SPOT",venue:"UPBIT_KRW",source:sample.source,
+    symbol:"KRW-BTC",startMs,endMs,bars:sample.candles,
+    verifiedNoTradeMinutes:[{
+      symbol:"KRW-BTC",venue:"UPBIT_KRW",source:"UPBIT_PUBLIC_TRADES_TICKS",
+      timestampMs:ts,utcMinute:new Date(ts).toISOString(),
+      latestTickAtMs:ts-3000,
+      outcome:"PUBLIC_LATEST_TICK_PRECEDES_MISSING_MINUTE",
+      errorCode:null,
+    }],pageWindowTraversed:true,
+  });
+  assert.equal(r.status,"OBSERVED_UPBIT_SPARSE_WITH_PUBLIC_TICKS_ONLY");
+  assert.equal(r.expectedMinuteCount,120);
+  assert.equal(r.observedMinuteCount,119);
+  assert.equal(r.missingMinuteCount,1);
+  assert.equal(r.sameVenuePublicTickCorroboratedEmptyMinutes,1);
+  assert.deepEqual(r.opportunities.map(e=>e.thresholdPct),[5,10,20]);
+  assert.equal(r.opportunities[0].firstCrossingBarStartMs,startMs+90*60_000);
+  assert.equal(r.allNativeCandleMinutesObserved,false);
+  assert.equal(r.tickCorroborationIsNotIndependentHistoricalTape,true);
+  assert.equal(r.trueMarketWideRecall,null);
+  assert.equal(r.profitabilityProven,false);
+  assert.equal(r.executionAuthority,"NONE");
+});
+test("sparse missing minute without tick proof and phantom tick inside minute fail closed",()=>{
+  const sample=fullMinuteFixtures({upPct:22});
+  const {startMs,endMs}=HISTORICAL_SAMPLE_WINDOW_V1;
+  const t=startMs+42*60_000;
+  sample.candles.splice(42,1);
+  const base={
+    market:"CRYPTO_SPOT",venue:"UPBIT_KRW",source:sample.source,
+    symbol:"KRW-BTC",startMs,endMs,bars:sample.candles,pageWindowTraversed:true,
+  };
+  assert.equal(auditNativeObservedMinuteWindowV1(base).reason,"SAMPLE_MINUTE_COVERAGE_INCOMPLETE");
+  const good={
+    symbol:"KRW-BTC",venue:"UPBIT_KRW",source:"UPBIT_PUBLIC_TRADES_TICKS",
+    timestampMs:t,utcMinute:new Date(t).toISOString(),
+    latestTickAtMs:t-1,
+    outcome:"PUBLIC_LATEST_TICK_PRECEDES_MISSING_MINUTE",errorCode:null,
+  };
+  assert.equal(auditNativeObservedMinuteWindowV1({
+    ...base,verifiedNoTradeMinutes:[{...good,latestTickAtMs:t+1}],
+  }).reason,"SAMPLE_SPARSE_TICK_EVIDENCE_INVALID");
+  assert.equal(auditNativeObservedMinuteWindowV1({
+    ...base,verifiedNoTradeMinutes:[{...good,symbol:"KRW-SOL"}],
+  }).reason,"SAMPLE_SPARSE_TICK_EVIDENCE_INVALID");
+  assert.equal(auditNativeObservedMinuteWindowV1({
+    ...base,verifiedNoTradeMinutes:[{...good,timestampMs:t+60_000,
+      utcMinute:new Date(t+60_000).toISOString()}],
+  }).reason,"SAMPLE_SPARSE_TICK_CONTRADICTS_BAR");
+  assert.equal(auditNativeObservedMinuteWindowV1({
+    ...base,verifiedNoTradeMinutes:[{...good,outcome:"PUBLIC_TICK_IN_MISSING_CANDLE_MINUTE"}],
+  }).reason,"SAMPLE_SPARSE_TICK_EVIDENCE_INVALID");
+});
+test("futures cannot reuse a spot no-trade gap receipt",()=>{
+  const sample=fullMinuteFixtures({market:"CRYPTO_FUTURES"});
+  const {startMs,endMs}=HISTORICAL_SAMPLE_WINDOW_V1;
+  sample.candles.splice(42,1);
+  const r=auditNativeObservedMinuteWindowV1({
+    market:"CRYPTO_FUTURES",venue:"BITGET_USDT_FUTURES",
+    source:"bitget-public-v2",symbol:"BTCUSDT",
+    startMs,endMs,bars:sample.candles,pageWindowTraversed:true,
+    verifiedNoTradeMinutes:[{
+      symbol:"BTCUSDT",venue:"UPBIT_KRW",source:"UPBIT_PUBLIC_TRADES_TICKS",
+      timestampMs:startMs+42*60_000,latestTickAtMs:startMs+41*60_000,
+      outcome:"PUBLIC_LATEST_TICK_PRECEDES_MISSING_MINUTE",
+    }],
+  });
+  assert.equal(r.reason,"SAMPLE_MINUTE_COVERAGE_INCOMPLETE");
+  assert.equal(r.trueMarketWideRecall,null);
+});
