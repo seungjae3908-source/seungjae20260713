@@ -105,6 +105,122 @@ export function diagnoseUpbitMinuteRangeV1({symbol,source}={}){
     profitabilityProven:false,executionAuthority:"NONE",
   });
 }
+
+/**
+ * Bounded independent public-API re-query of each exact absent 1m slot.
+ * This diagnoses whether a candle appears on a narrow native request. An
+ * absent response is NOT a trade-history/NO_TRADES attestation, and a candle
+ * recovered here is NOT silently spliced into the original source hash.
+ */
+export async function recheckMissingUpbitMinuteSlotsV1({
+  symbol,diagnostic,fetchImpl=globalThis.fetch,
+  maxChecks=24,minIntervalMs=250,
+}={}){
+  const invalid=()=>Object.freeze({
+    status:"BLOCKED_RECHECK_INVALID_DIAGNOSTIC",
+    requestedGapMinutes:null,checkedGapMinutes:0,
+    presentOnRequery:null,absentOnRequery:null,failedRequeries:null,
+    observations:[],noTradeProof:false,completeRecheck:false,
+  });
+  if(!PAIRS.includes(symbol)
+     ||diagnostic?.symbol!==symbol
+     ||diagnostic?.status!=="BLOCKED_UNVERIFIED_ONE_MINUTE_GAPS"
+     ||!Number.isSafeInteger(diagnostic.missingMinuteCount)
+     ||diagnostic.missingMinuteCount<1
+     ||!Array.isArray(diagnostic.missingIntervals)
+     ||typeof fetchImpl!=="function"
+     ||!Number.isSafeInteger(maxChecks)||maxChecks<1||maxChecks>24
+     ||!Number.isSafeInteger(minIntervalMs)||minIntervalMs<0||minIntervalMs>2000)
+    return invalid();
+  const requested=diagnostic.missingMinuteCount;
+  if(requested>maxChecks||diagnostic.omittedIntervals!==0)
+    return Object.freeze({
+      status:"BLOCKED_RECHECK_BUDGET_EXCEEDED",
+      requestedGapMinutes:requested,checkedGapMinutes:0,
+      presentOnRequery:null,absentOnRequery:null,failedRequeries:null,
+      observations:[],noTradeProof:false,completeRecheck:false,
+    });
+  const missing=diagnostic.missingIntervals.flatMap(range=>
+    Array.from({length:range.minutes},(_,i)=>range.startMs+i*M));
+  if(missing.length!==requested || new Set(missing).size!==requested
+     ||missing.some(ms=>!Number.isSafeInteger(ms)||ms%M!==0
+       ||ms<DAY.historyStartMs||ms>=DAY.utcDayEndMs))
+    return invalid();
+  const observations=[];
+  for(const [index,ms] of missing.entries()){
+    let outcome="REQUERY_SOURCE_ERROR",rawMatchedCandleSha256=null;
+    let errorCode=null;
+    try{
+      // to is EXCLUSIVE in Upbit's native API. A 1m candle starting
+      // at ms must be among candles strictly before ms+60_000.
+      const to=new Date(ms+M).toISOString();
+      const url="https://api.upbit.com/v1/candles/minutes/1"
+        +"?market="+encodeURIComponent(symbol)
+        +"&to="+encodeURIComponent(to)+"&count=4";
+      const response=await fetchImpl(url,{
+        signal:AbortSignal.timeout(12_000),
+        headers:{accept:"application/json",
+          "user-agent":"seungjae-prediction-lab/1.0"},
+      });
+      if(!response?.ok)throw new Error("UPBIT_REQUERY_HTTP_"+(response?.status??"UNKNOWN"));
+      const rows=await response.json();
+      if(!Array.isArray(rows)||rows.length>4)
+        throw new Error("UPBIT_REQUERY_INVALID_ROWS");
+      const normalized=rows.map(row=>{
+        const t=Date.parse(String(row?.candle_date_time_utc??"")+"Z");
+        if(row?.market!==symbol||!Number.isSafeInteger(t)||t%M!==0
+           ||t>=ms+M)
+          throw new Error("UPBIT_REQUERY_PROVENANCE_INVALID");
+        return {timestamp:t,raw:row};
+      });
+      const seen=new Set(normalized.map(r=>r.timestamp));
+      if(seen.size!==normalized.length)
+        throw new Error("UPBIT_REQUERY_DUPLICATE_CANDLE");
+      const match=normalized.find(r=>r.timestamp===ms)?.raw;
+      if(match){
+        const values=[
+          Number(match.opening_price),Number(match.high_price),
+          Number(match.low_price),Number(match.trade_price),
+          Number(match.candle_acc_trade_volume),
+        ];
+        const [open,high,low,close,volume]=values;
+        if(!values.every(Number.isFinite)||Math.min(open,high,low,close)<=0
+           ||volume<0||high<Math.max(open,close)
+           ||low>Math.min(open,close)||low>high)
+          throw new Error("UPBIT_REQUERY_BAR_INVALID");
+        outcome="NATIVE_CANDLE_PRESENT_ON_REQUERY";
+        rawMatchedCandleSha256=createHash("sha256")
+          .update([ms,...values].join(",")+"\\n").digest("hex");
+      }else{
+        outcome="NATIVE_CANDLE_ABSENT_ON_REQUERY";
+      }
+    }catch(error){
+      errorCode=String(error?.message??error).slice(0,100);
+    }
+    observations.push(Object.freeze({
+      timestampMs:ms,utcMinute:new Date(ms).toISOString(),
+      outcome,rawMatchedCandleSha256,errorCode,
+    }));
+    if(index<missing.length-1 && minIntervalMs>0)
+      await new Promise(resolve=>setTimeout(resolve,minIntervalMs));
+  }
+  const present=observations.filter(x=>
+    x.outcome==="NATIVE_CANDLE_PRESENT_ON_REQUERY").length;
+  const absent=observations.filter(x=>
+    x.outcome==="NATIVE_CANDLE_ABSENT_ON_REQUERY").length;
+  const failed=requested-present-absent;
+  return Object.freeze({
+    status:failed?"TARGETED_NATIVE_RECHECK_INCOMPLETE":"TARGETED_NATIVE_RECHECK_COMPLETE",
+    requestedGapMinutes:requested,checkedGapMinutes:observations.length,
+    presentOnRequery:present,absentOnRequery:absent,failedRequeries:failed,
+    observations,sourceMissingMinuteCauseVerified:false,
+    originalRawCandleSha256Unchanged:true,
+    noTradeProof:false,completeRecheck:failed===0,
+    sourceWindowComplete:false,trueMarketWideRecall:null,
+    profitabilityProven:false,executionAuthority:"NONE",
+  });
+}
+
 export async function diagnosePublicUpbitMinuteGapsV1({
   fetchImpl=globalThis.fetch,
 }={}){
@@ -118,7 +234,12 @@ export async function diagnosePublicUpbitMinuteGapsV1({
         requireFullWindow:true,fetchImpl,
         signal:AbortSignal.timeout(60_000),
       });
-      markets[symbol]=diagnoseUpbitMinuteRangeV1({symbol,source:collected});
+      const sourceDiagnostic=diagnoseUpbitMinuteRangeV1({symbol,source:collected});
+      const targetedRecheck=sourceDiagnostic.status==="BLOCKED_UNVERIFIED_ONE_MINUTE_GAPS"
+        ?await recheckMissingUpbitMinuteSlotsV1({
+          symbol,diagnostic:sourceDiagnostic,fetchImpl,
+        }):null;
+      markets[symbol]=Object.freeze({...sourceDiagnostic,targetedRecheck});
     }catch(error){
       if(classifyPublicSourceFailure(error)!=="BLOCKED_DATA")throw error;
       markets[symbol]=blocked(symbol,
@@ -159,7 +280,13 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
         bars:x.observedMinuteRows,missing:x.missingMinuteCount,
         missingIntervals:x.missingIntervals,
         priorCloseAvailable:x.priorUTCClosingMinuteReceived??null,
-        reason:x.reason},
+        reason:x.reason,
+        targetedRecheck:x.targetedRecheck?{
+          status:x.targetedRecheck.status,
+          recovered:x.targetedRecheck.presentOnRequery,
+          stillAbsent:x.targetedRecheck.absentOnRequery,
+          errors:x.targetedRecheck.failedRequeries,
+        }:null},
     ])),
     fullMarketOpportunityDenominatorVerified:false,
     trueMarketWideRecall:null,executionAuthority:"NONE",
