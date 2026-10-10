@@ -5,15 +5,24 @@ import {
   adminPaperMarketFromPlan,
   adminMarketCurrentEpochSettlementScope,
   inspectAdminFourMarketPaperWallets,
+  inspectMemberFourMarketPaperWallets,
   projectAdminMarketCapital,
+  projectMemberMarketCapital,
+  type FourMarketPaperWalletRole,
   type AdminPaperMarket,
 } from './admin-four-market-paper-capital.service';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
 
-type MarketCapital = ReturnType<typeof projectAdminMarketCapital>;
-function quarantined(market: AdminPaperMarket, error: string, nowMs: number): MarketCapital {
-  const neutral = projectAdminMarketCapital(market, [], nowMs);
+type MarketCapital = ReturnType<typeof projectAdminMarketCapital>
+  | ReturnType<typeof projectMemberMarketCapital>;
+function quarantined(
+  market: AdminPaperMarket, error: string, nowMs: number,
+  role: FourMarketPaperWalletRole,
+): MarketCapital {
+  const neutral = role === 'admin'
+    ? projectAdminMarketCapital(market, [], nowMs)
+    : projectMemberMarketCapital(market, [], nowMs);
   return Object.freeze({
     ...neutral, newEntriesAllowed: false, settlementReady: false,
     blockers: Object.freeze([error]),
@@ -25,14 +34,18 @@ function quarantined(market: AdminPaperMarket, error: string, nowMs: number): Ma
  * the authenticated admin UI. Original wallets are immutable seed evidence,
  * not live trading equity and never proof of a settled reserve.
  */
-export function adminFourMarketPaperCapitalReadback(input: {
+function fourMarketPaperCapitalReadback(input: {
   ownerId: string;
   records: readonly StoredPaperJournalRecord[];
   plans: readonly TradingPlan[];
   orders: readonly TradingOrder[];
   nowMs: number;
-}) {
-  const wallets = inspectAdminFourMarketPaperWallets(input.records, input.nowMs);
+}, role: FourMarketPaperWalletRole) {
+  const wallets = role === 'admin'
+    ? inspectAdminFourMarketPaperWallets(input.records, input.nowMs)
+    : inspectMemberFourMarketPaperWallets(input.records, input.nowMs);
+  const prefix = role === 'admin' ? 'ADMIN' : 'MEMBER';
+  const code = (suffix: string) => `${prefix}_PAPER_${suffix}`;
   const capital = {} as Record<AdminPaperMarket, MarketCapital>;
   const fullHistory = input.orders.length >= 500 || input.plans.length >= 200
     || input.records.length >= 500;
@@ -70,27 +83,29 @@ export function adminFourMarketPaperCapitalReadback(input: {
 
   for (const market of ADMIN_FOUR_PAPER_MARKETS) {
     const wallet = wallets.marketWallets[market];
-    const fallback = (code: string) => { capital[market] = quarantined(market, code, input.nowMs); };
+    const fallback = (error: string) => {
+      capital[market] = quarantined(market, error, input.nowMs, role);
+    };
     if (!wallets.ready || wallet.openedAtMs == null) {
-      fallback('ADMIN_PAPER_WALLET_NOT_READY'); continue;
+      fallback(code('WALLET_NOT_READY')); continue;
     }
     if (fullHistory || orphan || ownerScopeInvalid) {
-      fallback(fullHistory ? 'ADMIN_PAPER_LEDGER_HISTORY_TRUNCATED'
-        : ownerScopeInvalid ? 'ADMIN_PAPER_OWNER_SCOPE_MISMATCH'
-          : 'ADMIN_PAPER_ORPHAN_FILLED_ORDER');
+      fallback(fullHistory ? code('LEDGER_HISTORY_TRUNCATED')
+        : ownerScopeInvalid ? code('OWNER_SCOPE_MISMATCH')
+          : code('ORPHAN_FILLED_ORDER'));
       continue;
     }
     if (lateLegacyRetryMarkets.has(market)) {
-      fallback('ADMIN_PAPER_LEGACY_RETRY_AFTER_NEW_EPOCH'); continue;
+      fallback(code('LEGACY_RETRY_AFTER_NEW_EPOCH')); continue;
     }
     const scoped = adminMarketCurrentEpochSettlementScope({
       market, plans: input.plans, orders: input.orders,
       openedAtMs: wallet.openedAtMs, nowMs: input.nowMs,
     });
-    if (!scoped.valid) { fallback('ADMIN_PAPER_WALLET_EPOCH_INVALID'); continue; }
+    if (!scoped.valid) { fallback(code('WALLET_EPOCH_INVALID')); continue; }
     if (scoped.orders.some(order => ['FILLED','PARTIALLY_FILLED'].includes(order.state)
       && (!(order.filledQuantity > 0) || !(Number(order.averageFillPrice) > 0)))) {
-      fallback('ADMIN_PAPER_FILL_EXECUTION_EVIDENCE_INCOMPLETE'); continue;
+      fallback(code('FILL_EXECUTION_EVIDENCE_INCOMPLETE')); continue;
     }
     // If a new-epoch order has only an unknown plan ID the global guard
     // above quarantines every market before this projection is attempted.
@@ -101,20 +116,23 @@ export function adminFourMarketPaperCapitalReadback(input: {
       const journal = buildUnifiedTradeJournal(raw, { source: 'APP_PAPER', range: 'ALL' },
         new Date(input.nowMs));
       if (journal.integrityIssues.length) {
-        fallback('ADMIN_PAPER_JOURNAL_INTEGRITY_REQUIRED'); continue;
+        fallback(code('JOURNAL_INTEGRITY_REQUIRED')); continue;
       }
       const closed = journal.trades.filter(trade => trade.source === 'APP_PAPER'
         && trade.status === 'CLOSED');
-      capital[market] = projectAdminMarketCapital(market, closed.map(trade => ({
+      const settlements = closed.map(trade => ({
         id: trade.id, market, closedAt: trade.closedAt ?? '',
         netPnlKrw: trade.netPnl ?? Number.NaN,
         fullCostsVerified: trade.costEvidence.status === 'READY'
           && typeof trade.fees === 'number' && Number.isFinite(trade.fees)
           && typeof trade.tax === 'number' && Number.isFinite(trade.tax),
         closeTimeFxVerified: trade.currency === 'KRW',
-      })), input.nowMs);
+      }));
+      capital[market] = role === 'admin'
+        ? projectAdminMarketCapital(market, settlements, input.nowMs)
+        : projectMemberMarketCapital(market, settlements, input.nowMs);
     } catch {
-      fallback('ADMIN_PAPER_SETTLEMENT_READBACK_UNAVAILABLE');
+      fallback(code('SETTLEMENT_READBACK_UNAVAILABLE'));
     }
   }
   const marketReadback = Object.fromEntries(ADMIN_FOUR_PAPER_MARKETS.map(market => {
@@ -137,10 +155,19 @@ export function adminFourMarketPaperCapitalReadback(input: {
     settledTrades: number | null;
   }>;
   return Object.freeze({
+    role,
     walletReady: wallets.ready,
     marketReadback,
     capital,
     realOrdersPlaced: false as const,
     reserveTransferred: false as const,
   });
+}
+
+type FourMarketReadbackInput = Parameters<typeof fourMarketPaperCapitalReadback>[0];
+export function adminFourMarketPaperCapitalReadback(input: FourMarketReadbackInput) {
+  return fourMarketPaperCapitalReadback(input, 'admin');
+}
+export function memberFourMarketPaperCapitalReadback(input: FourMarketReadbackInput) {
+  return fourMarketPaperCapitalReadback(input, 'member');
 }
