@@ -369,7 +369,12 @@ export function assembleHistoricalPITDayChunksV1({
     // An explicit caller may keep this locally (0600, create-only) for
     // the canonical opportunity_coverage_audit_v1.py, never in public CI.
     ...(includePrivateNativeDayRows && audit.sourceAttestedFullSymbolDayPriceJoin
-      ? {privateNativeDaySource:dailySource}:{}),
+      ? {privateNativeDaySource:{
+          ...dailySource,
+          // Exact JS serialization used by rowsSha256; Python verifies its
+          // hash without lossy float-to-string reserialization.
+          canonicalRowsJSON:JSON.stringify(dailySource.rows),
+        }}:{}),
     privateNativeDayRowsEmitted:
       includePrivateNativeDayRows && audit.sourceAttestedFullSymbolDayPriceJoin,
     // Do not leak paid/personal archives to an app or a public CI artifact.
