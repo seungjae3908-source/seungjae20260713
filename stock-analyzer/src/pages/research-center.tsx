@@ -249,12 +249,13 @@ function LoadingState() {
   );
 }
 
-function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
+function OverviewTab({ overview, promotion, cards, selected, onSelect, readbackFailed }: {
   overview: ResearchCenterOverview;
   promotion: StrategyPromotionResponse | null;
   cards: ResearchPipelineCard[];
   selected: ResearchPipelineKey;
   onSelect: (key: ResearchPipelineKey) => void;
+  readbackFailed: boolean;
 }) {
   const selectedCard = cards.find((card) => card.key === selected) ?? cards[0]!;
   const paper = cards.find((card) => card.key === 'paper')!;
@@ -386,6 +387,7 @@ function OverviewTab({ overview, promotion, cards, selected, onSelect }: {
       <ResearchLightweightMarketWatchPanel
         watch={overview.dataFactory?.lightweightMarketWatch}
         cadence={overview.dataFactory?.lightweightMarketWatchCadence}
+        readbackFailed={readbackFailed}
       />
 
       {!promotion ? (
@@ -807,6 +809,10 @@ export default function ResearchCenterPage() {
     queryKey: ['admin', 'research-center', 'overview'],
     queryFn: ({ signal }) => fetchResearchCenterOverview(signal),
     staleTime: 30_000,
+    // Public watcher runs roughly every 120 seconds; keep the visible
+    // read-only Research Center current without background tab polling.
+    refetchInterval: 120_000,
+    refetchIntervalInBackground: false,
     retry: 1,
   });
   const promotionQuery = useQuery({
@@ -903,7 +909,7 @@ export default function ResearchCenterPage() {
 
         {overview && cards.length ? (
           <>
-            {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} onSelect={selectCard} /> : null}
+            {tab === 'overview' ? <OverviewTab overview={overview} promotion={promotion} cards={cards} selected={selected} onSelect={selectCard} readbackFailed={overviewQuery.isError} /> : null}
             {tab === 'ai-lab' ? <AiLabTab overview={overview} cards={cards} /> : null}
             {tab === 'evidence' ? <EvidenceTab overview={overview} promotion={promotion} cards={cards} /> : null}
             {tab === 'paper' ? (
