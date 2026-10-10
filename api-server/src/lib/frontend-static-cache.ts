@@ -2,6 +2,7 @@ import {
   closeSync,
   existsSync,
   openSync,
+  readFileSync,
   readdirSync,
   readSync,
   statSync,
@@ -22,7 +23,29 @@ const MUST_REVALIDATE_FILES = new Set([
   'manifest.webmanifest',
 ]);
 const WARMABLE_ASSET_EXTENSIONS = new Set(['.js', '.css']);
-const CRITICAL_WARMUP_CHUNK = /(ai-chart|backtests|paper-trading)/i;
+// The cold AI Chart requires the route, UnifiedChart renderer and Vite's
+// sizable lightweight-charts vendor bundle. They must not be displaced by
+// alphabetically earlier research/other lazy routes under the 128-file cap.
+const CORE_AI_CHART_CHUNK = /^(?:ai-chart-(?!position-panel|v2-intelligence-panel)[A-Za-z0-9_-]+|unified-analysis-chart-[A-Za-z0-9_-]+|pattern-aware-unified-chart-canvas-[A-Za-z0-9_-]+|lightweight-charts(?:\.production)?-[A-Za-z0-9_-]+)\.js$/i;
+const CRITICAL_WARMUP_CHUNK = /(ai-chart|unified-analysis-chart|pattern-aware-unified-chart-canvas|lightweight-charts|backtests|paper-trading)/i;
+
+// Only same-origin fingerprinted JS/CSS files in the local Vite assets
+// directory may acquire HTML-entry priority. Ignore URLs, querystrings,
+// traversal, source maps and anything outside the installed asset directory.
+function htmlEntrypointAssets(indexPath: string): Set<string> {
+  if (!existsSync(indexPath)) return new Set();
+  try {
+    const html = readFileSync(indexPath, 'utf8');
+    const found = new Set<string>();
+    for (const match of html.matchAll(/(?:src|href)=["']\/assets\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:js|css))["']/gu)) {
+      found.add(match[1]!);
+    }
+    return found;
+  } catch {
+    // Warmup must not block server startup if the HTML file is inaccessible.
+    return new Set();
+  }
+}
 
 type FrontendWarmupOptions = {
   maxFiles?: number;
@@ -81,12 +104,21 @@ export function planFrontendStaticWarmup(
   const maxFiles = Math.max(1, Math.floor(options.maxFiles ?? FRONTEND_WARMUP_MAX_FILES));
   const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? FRONTEND_WARMUP_MAX_BYTES));
   const indexPath = path.join(frontendDist, 'index.html');
+  const htmlAssets = htmlEntrypointAssets(indexPath);
+  const warmupPriority = (filePath: string): number => {
+    if (filePath === indexPath) return 0;
+    const basename = path.basename(filePath);
+    if (htmlAssets.has(basename)) return 1;
+    if (CORE_AI_CHART_CHUNK.test(basename)) return 2;
+    if (CRITICAL_WARMUP_CHUNK.test(basename)) return 3;
+    return 4;
+  };
   const candidates = [
     ...(existsSync(indexPath) ? [indexPath] : []),
     ...listWarmableAssets(path.join(frontendDist, 'assets')),
   ].sort((left, right) => {
-    const leftPriority = left === indexPath ? 0 : CRITICAL_WARMUP_CHUNK.test(path.basename(left)) ? 1 : 2;
-    const rightPriority = right === indexPath ? 0 : CRITICAL_WARMUP_CHUNK.test(path.basename(right)) ? 1 : 2;
+    const leftPriority = warmupPriority(left);
+    const rightPriority = warmupPriority(right);
     return leftPriority - rightPriority || left.localeCompare(right);
   });
 
