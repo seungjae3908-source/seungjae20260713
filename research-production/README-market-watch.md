@@ -19,7 +19,7 @@ installation scripts enable or start it.
 
 The continuous scanner is **stage 1 discovery only**:
 - Upbit: all eligible KRW markets advertised by the public market/ticker APIs.
-- Bitget: public USDT-futures ticker aggregate (not proof of historical delistings).
+- Bitget: two bounded READ-ONLY public V2 endpoints per cycle, current USDT-futures contracts plus all tickers. READY requires fresh source parity for each current non-off contract, not just tickers self-matching. Historical listing/delisting is NOT certified.
 - KR/US stocks: strictly optional, fresh public snapshot files under the research
   state root. When not connected, each stock market is explicitly `BLOCKED`.
 - Watch: two consecutive fresh snapshots from the **same source**, >=0.7% price movement,
@@ -29,7 +29,7 @@ The continuous scanner is **stage 1 discovery only**:
   model PASS, future signal, approved trading strategy, Paper or Live authority.
   Downward spot/stock movements are *observations*, never SHORT instructions.
 - A missing/stale source is a visible gap; zero activity is not claimed as success.
-- A subset of usable Bitget tickers is explicitly PARTIAL_TICKERS, not READY.
+- Missing/stale/extra Bitget quotes produce PARTIAL_TICKERS; invalid rosters BLOCKED, same-timestamp contradictory prices rejected. Current-contract source parity is NOT historical PIT, independent 24-hour uptime, executable fills or profit proof.
 - Public HTTP JSON is streamed with a 4 MB decompressed payload ceiling.
 - The observation time is measured after each collection cycle, not before HTTP requests.
 - Daily cycle/discovery counters are **diagnostic only**, not 24-hour uptime proof.
