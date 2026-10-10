@@ -115,6 +115,10 @@ const groups = {
     path.join(root, 'src/services/formula-ai-auto-rehearsal.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-fx.service.test.ts'),
     path.join(root, 'src/services/member-auto-trading-background-worker.service.test.ts'),
+    path.join(root, 'src/services/member-auto-trading-readiness.service.test.ts'),
+    path.join(root, 'src/services/admin-four-market-paper-capital.service.test.ts'),
+    path.join(root, 'src/services/admin-four-market-paper-readback.service.test.ts'),
+    path.join(root, 'src/services/member-four-market-paper-wallet-migration.test.ts'),
     // 500k high-water compound/reserve, settled KRW, page-completeness and
     // daily-loss gates are live-order safety contracts, not optional tests.
     path.join(root, 'src/services/trade-rule-pack-pilot-capital.service.test.ts'),
@@ -135,6 +139,7 @@ const groups = {
     path.join(root, 'src/services/trade-split-order-materializer.test.ts'),
     path.join(root, 'src/services/trade-split-order-execution.test.ts'),
     path.join(root, 'src/routes/trade-automation.smoke.test.ts'),
+    path.join(root, 'src/routes/paper-journal.smoke.test.ts'),
     path.join(root, 'src/routes/stocks-legacy-auto-trade-guard.test.ts'),
     path.join(root, 'src/routes/trade-automation-split.smoke.test.ts'),
     path.join(root, 'src/routes/trade-automation-recovery.smoke.test.ts'),

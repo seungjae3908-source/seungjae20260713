@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_TRADING_POLICY,
+  PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW,
 } from './trade-automation.types';
 import { normalizeTradingPolicy } from './trade-automation-risk.service';
 import { InMemoryTradingRepository } from './trade-automation.repository';
@@ -22,6 +24,11 @@ import {
 } from './trade-rule-pack-pilot-capital.service';
 
 const NOW = Date.parse('2026-10-08T00:00:00.000Z');
+
+test('LIVE role baselines are per market: member 4x500k and admin 4x1m', () => {
+  assert.equal(PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW, 2_000_000);
+  assert.equal(PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW, 4_000_000);
+});
 
 function state(overrides: Partial<RulePackPilotCapitalState> = {}): RulePackPilotCapitalState {
   return Object.freeze({
@@ -175,29 +182,43 @@ test('administrator pilot starts at 1M and verified 50% compounding raises the n
   });
   assert.equal(eligible.allowed, true);
   assert.equal(eligible.effectiveMaxEntryKrw, 1_025_000);
+  const adminPolicy = normalizeTradingPolicy({
+    ...DEFAULT_TRADING_POLICY,
+    totalCapitalKrw: 1_000_000,
+    maxOrderKrw: 1_000_000,
+    maxInstrumentKrw: 1_000_000,
+    maxAssetClassKrw: {
+      domestic_stock: 1_000_000, us_stock: 1_000_000,
+      crypto_spot: 1_000_000, crypto_futures: 1_000_000,
+    },
+  }, PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW);
+  const projected = deriveRulePackPilotExecutionPolicy(
+    adminPolicy, snapshot, 'domestic_stock',
+  );
+  assert.equal(projected.totalCapitalKrw, 4_025_000);
+  assert.equal(projected.maxOrderKrw, 1_025_000);
+  assert.equal(projected.maxAssetClassKrw.domestic_stock, 1_025_000);
+  assert.equal(projected.maxAssetClassKrw.us_stock, 1_000_000);
 });
 
-test('four-market settlements share a single 500k ledger and compound only new highs after loss recovery', () => {
+test('member LIVE starts four independent 500k ledgers and never cross-subsidizes compound gains', () => {
   const steps = [
-    closed('kr', '005930', 50_000, '2026-10-07T17:00:00.000Z'),
-    closed('us', 'AAPL', -20_000, '2026-10-07T18:00:00.000Z'),
-    closed('spot', 'KRW-BTC', 20_000, '2026-10-07T19:00:00.000Z'),
-    closed('futures', 'BTCUSDT', 30_000, '2026-10-07T20:00:00.000Z'),
+    { ...closed('kr', '005930', 50_000, '2026-10-07T17:00:00.000Z'), market: 'domestic_stock' as const },
+    { ...closed('us', 'AAPL', -20_000, '2026-10-07T18:00:00.000Z'), market: 'us_stock' as const },
+    { ...closed('spot', 'KRW-BTC', 20_000, '2026-10-07T19:00:00.000Z'), market: 'crypto_spot' as const },
+    { ...closed('futures', 'BTCUSDT', 30_000, '2026-10-07T20:00:00.000Z'), market: 'crypto_futures' as const },
   ];
-  const first = deriveRulePackPilotCapitalFromTrades(steps.slice(0, 1), new Date(NOW));
-  assert.equal(first.operatingCapitalKrw, 525_000);
-  assert.equal(first.reserveKrw, 25_000);
-  const afterLoss = deriveRulePackPilotCapitalFromTrades(steps.slice(0, 2), new Date(NOW));
-  assert.equal(afterLoss.operatingCapitalKrw, 505_000);
-  assert.equal(afterLoss.reserveKrw, 25_000);
-  const afterRecovery = deriveRulePackPilotCapitalFromTrades(steps.slice(0, 3), new Date(NOW));
-  assert.equal(afterRecovery.operatingCapitalKrw, 525_000);
-  assert.equal(afterRecovery.reserveKrw, 25_000);
-  const final = deriveRulePackPilotCapitalFromTrades(steps, new Date(NOW));
-  assert.equal(final.operatingCapitalKrw, 540_000);
-  assert.equal(final.reserveKrw, 40_000);
-  assert.equal(final.highWaterMarkKrw, 580_000);
-  assert.equal(final.settledTradeCount, 4);
+  const kr = deriveRulePackPilotCapitalFromTrades(steps, new Date(NOW), 500_000, 'domestic_stock');
+  const us = deriveRulePackPilotCapitalFromTrades(steps, new Date(NOW), 500_000, 'us_stock');
+  const spot = deriveRulePackPilotCapitalFromTrades(steps, new Date(NOW), 500_000, 'crypto_spot');
+  const futures = deriveRulePackPilotCapitalFromTrades(steps, new Date(NOW), 500_000, 'crypto_futures');
+  assert.deepEqual(
+    [kr.operatingCapitalKrw, us.operatingCapitalKrw, spot.operatingCapitalKrw, futures.operatingCapitalKrw],
+    [525_000, 480_000, 510_000, 515_000],
+  );
+  assert.deepEqual([kr.reserveKrw, us.reserveKrw, spot.reserveKrw, futures.reserveKrw],
+    [25_000, 0, 10_000, 15_000]);
+  assert.ok([kr, us, spot, futures].every((lane) => lane.settledTradeCount === 1));
 });
 
 test('reserve never auto-replenishes the 500k floor after drawdown and new entries fail closed', () => {
@@ -241,11 +262,12 @@ test('dynamic capital policy expands only verified earned capital, never lower i
       crypto_spot: 500_000, crypto_futures: 300_000,
     },
   });
-  const projected = deriveRulePackPilotExecutionPolicy(base, gained);
-  assert.equal(projected.totalCapitalKrw, 525_000);
+  const projected = deriveRulePackPilotExecutionPolicy(base, gained, 'domestic_stock');
+  assert.equal(projected.totalCapitalKrw, 2_025_000);
   assert.equal(projected.maxOrderKrw, 525_000);
   assert.equal(projected.maxInstrumentKrw, 525_000);
   assert.equal(projected.maxAssetClassKrw.domestic_stock, 525_000);
+  assert.equal(projected.maxAssetClassKrw.us_stock, 500_000);
   assert.equal(projected.maxAssetClassKrw.crypto_futures, 300_000);
   assert.equal(projected.pilotStage, 'formula-ai-exception');
   assert.equal(projected.automaticEnabled, true);
@@ -499,6 +521,7 @@ test('dynamic policy recheck fails closed on unsigned, too-large or revoked auto
     const rechecked = await resolveRulePackPilotDynamicCapPolicy(
       repository, user, signed500, policy, new Date(NOW), 0,
     );
+    assert.equal(rechecked.totalCapitalKrw, 2_000_000);
     assert.equal(rechecked.maxOrderKrw, 500_000);
     const signed525 = makePlan(issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_000), NOW));
     await assert.rejects(
@@ -661,6 +684,15 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
     assert.equal(pilot.realizedNetPnlKrw, 50_000);
     assert.equal(pilot.operatingCapitalKrw, 525_000);
     assert.equal(pilot.reserveKrw, 25_000);
+    const spotOnly = await readRulePackPilotCapitalState(
+      repository, user, new Date(NOW), 500_000, 'crypto_spot',
+    );
+    const domesticOnly = await readRulePackPilotCapitalState(
+      repository, user, new Date(NOW), 500_000, 'domestic_stock',
+    );
+    assert.equal(spotOnly.operatingCapitalKrw, 525_000);
+    assert.equal(domesticOnly.operatingCapitalKrw, 500_000,
+      'spot profit cannot enlarge the domestic-stock LIVE lane');
     const signed = issueRulePackPilotDynamicCapReceipt(user, pilotReceiptInput(525_000), NOW);
     const proposed = {
       ...signed, id: 'signed-after-close', userId: user,
@@ -672,7 +704,7 @@ test('closed canonical KRW spot fill grows signed rechecked order cap to 525k, n
     const projected = await resolveRulePackPilotDynamicCapPolicy(
       repository, user, proposed, base, new Date(NOW), 0,
     );
-    assert.equal(projected.totalCapitalKrw, 525_000);
+    assert.equal(projected.totalCapitalKrw, 2_025_000);
     assert.equal(projected.maxOrderKrw, 525_000);
     assert.equal(projected.maxInstrumentKrw, 525_000);
     assert.equal(base.maxOrderKrw, 500_000);

@@ -1105,39 +1105,49 @@ router.get('/paper-runtime-readiness', async (req: AuthenticatedRequest, res) =>
           .getRecord(userId, 'account', AUTOMATIC_PAPER_ACCOUNT_ID)
         : Promise.reject(new Error('LOGIN_REQUIRED'));
     const administratorFourMarket = Boolean(req.member && hasCapability(req.member, 'canManageMembers'));
-    const adminRecordsRead = administratorFourMarket
-      ? paperRuntimeRecordsReaderForTests
-        ? paperRuntimeRecordsReaderForTests(userId)
+    const marketRecordsRead = paperRuntimeRecordsReaderForTests
+      ? paperRuntimeRecordsReaderForTests(userId)
+      : paperRuntimeWalletReaderForTests
+        ? Promise.resolve([] as StoredPaperJournalRecord[])
         : req.accessToken
           ? createSupabasePaperJournalRepository(req.accessToken, userId).listSnapshot(userId)
-          : Promise.reject(new Error('LOGIN_REQUIRED'))
-      : Promise.resolve([] as StoredPaperJournalRecord[]);
-    const adminGuardRead = administratorFourMarket
-      ? (async () => {
+          : Promise.reject(new Error('LOGIN_REQUIRED'));
+    const [policy, globalStopped, wallet, marketWalletRecords] = await Promise.all([
+      repository.getPolicy(userId),
+      repository.getGlobalEmergencyStop(),
+      walletRead,
+      marketRecordsRead,
+    ]);
+    // The authenticated member role determines the required V2 namespace.
+    // Never infer the role from whether wallet rows happen to exist: doing so
+    // made a missing four-market wallet silently skip the database guard and
+    // report that guard as ready.
+    const fourMarketWalletRole = administratorFourMarket
+      ? 'admin' as const : 'member' as const;
+    const marketGuardRead = (async () => {
         try {
           if (paperRuntimeAdminGuardReaderForTests) {
             return await paperRuntimeAdminGuardReaderForTests(userId) === true;
           }
           if (!req.accessToken) return false;
           const { data, error } = await getUserSupabase(req.accessToken)
-            .rpc('admin_four_paper_wallet_rls_guard_ready');
+            .rpc('four_market_paper_wallet_rls_guard_ready');
           return !error && data === true;
         } catch {
           return false;
         }
-      })()
-      : Promise.resolve(true);
-    const [policy, globalStopped, wallet, adminMarketWalletRecords, adminDatabaseGuardReady] = await Promise.all([
-      repository.getPolicy(userId),
-      repository.getGlobalEmergencyStop(),
-      walletRead, adminRecordsRead, adminGuardRead,
-    ]);
+      })();
+    const fourMarketDatabaseGuardReady = await marketGuardRead;
     const readiness = memberAutomaticPaperReadiness({
       policy,
       wallet,
       administratorFourMarket,
-      adminMarketWalletRecords,
-      adminDatabaseGuardReady,
+      adminMarketWalletRecords: administratorFourMarket ? marketWalletRecords : [],
+      adminDatabaseGuardReady: administratorFourMarket
+        ? fourMarketDatabaseGuardReady : undefined,
+      fourMarketWalletRole,
+      fourMarketWalletRecords: marketWalletRecords,
+      fourMarketDatabaseGuardReady,
       workerHealth: readMemberAutoTradingBackgroundRuntimeHealth(),
       workerMode: memberAutoTradingWorkerMode(),
       globalStopped: globalStopped || process.env.TRADING_EMERGENCY_STOP === 'true',
