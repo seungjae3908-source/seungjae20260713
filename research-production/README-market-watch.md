@@ -167,9 +167,17 @@ The existing 2-vCPU watcher still processes at most **8,000 distinct fresh
 quotes per market** and emits at most **12 provisional candidates per market
 per two-minute cycle**. The caps protect the app server and were NOT raised.
 
-- `sourceCappedCount`: the number of valid distinct supplied symbols
-  left out by top-turnover 8k selection, never checked for signals. They
-  are NOT verified missed moves and unprovided/delisted symbols remain unknown.
+- Within a capped market: hold the top **6,000** high-turnover quotes, plus
+  **1,000 lexically selected source symbols** in the current 30-minute window
+  and **1,000 from the previous window** for overlap. Fill partial tail windows
+  without exceeding 8,000, so samples outside the former permanent top 8k
+  can eventually receive two independent time-ordered observations.
+  The window is UTC-time deterministic and does **not** rank by same-cycle
+  price increase. No extra HTTP calls or larger per-cycle state are required.
+- `sourceCappedCount`: valid distinct supplied symbols not inspected **in
+  this cycle** after the 8k bound; these still may remain unobserved for long
+  periods. It is NOT a measured missed-trade count or a promise of 2-minute
+  complete-universe capture. Source-omitted/delisted symbols remain UNKNOWN.
 - `qualifyingCandidateCount`: among the retained symbols, the number
   that pass comparable-timestamp, price, liquidity and cooldown gates.
 - `candidateCappedCount`: such qualified provisional candidates
@@ -184,6 +192,11 @@ per two-minute cycle**. The caps protect the app server and were NOT raised.
   These counts are **per cycle**, not unique daily false negatives.
 
 The live PC Research Center has not been modified to display these fields.
+Rotating coverage is inherently **partial and delayed**: a 30,000-name input
+has 24 rotating 1,000-name tail cohorts, and observing every supplied name
+may take up to 12 hours under a stable source roster. Tail 20-minute studies
+can still fail when cohorts change; time-varying roster/turnover may extend
+or reset coverage. No turnover-gap count is proof of false-negative recall.
 At two-minute resolution intermediate spikes may still be missed. Complete
 historical PIT universe, independent originals, one-minute prices, sharding,
 order feasibility/OOS/full costs and 24-hour host attestation remain pending.
