@@ -203,6 +203,10 @@ export interface ResearchLightweightMarketWatch {
     listedCount: number;
     observedCount: number;
     newCandidates: number;
+    // Null is unavailable old-release evidence, not a measured zero.
+    sourceCappedCount: number | null;
+    qualifyingCandidateCount: number | null;
+    candidateCappedCount: number | null;
   }>;
   cyclesToday: number | null;
   candidatesToday: number | null;
