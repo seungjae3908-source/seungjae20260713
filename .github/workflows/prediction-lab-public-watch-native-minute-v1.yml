@@ -1,0 +1,76 @@
+name: Prediction Lab Native Price to Public Watch Ledger QA V1
+
+on:
+  push:
+    branches:
+      - research/four-market-daily-opportunity-scanner-3y-v1-20260930
+    paths:
+      - market-prediction-lab/src/public-watch-native-minute-reconcile-v1.js
+      - market-prediction-lab/tests/public-watch-native-minute-reconcile-v1.test.js
+      - market-prediction-lab/scripts/report-public-watch-native-minute-v1.mjs
+      - .github/workflows/prediction-lab-public-watch-native-minute-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-public-watch-native-minute-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  watch-native-crossing:
+    name: Corroborate only genuine positive public-watch events
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      REAL_ORDER_ENABLED: "false"
+      PRIVATE_TRADING_API_ALLOWED: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate original 2-minute watcher hash and date contracts
+        run: |
+          node --test market-prediction-lab/tests/public-watch-native-minute-reconcile-v1.test.js
+      - name: Collect bounded original 2025 native 1m price study (public read-only)
+        timeout-minutes: 4
+        run: |
+          node market-prediction-lab/scripts/probe-native-utc-day-historical-v1.mjs \
+            market-prediction-lab/docs/native-utc-day-opportunity-v1.json \
+            market-prediction-lab/docs/native-utc-day-raw-1m-v1.json
+      - name: Report missing original 2025 public-watch observation ledger honestly
+        run: |
+          node market-prediction-lab/scripts/report-public-watch-native-minute-v1.mjs \
+            market-prediction-lab/docs/native-utc-day-opportunity-v1.json \
+            market-prediction-lab/docs/public-watch-native-minute-receipt-v1.json
+      - name: Fail closed without as-of watcher events and cadence
+        run: |
+          node --input-type=module -e '
+          import {readFileSync} from "node:fs";
+          const x=JSON.parse(readFileSync("market-prediction-lab/docs/public-watch-native-minute-receipt-v1.json","utf8"));
+          if(x.executionAuthority!=="NONE" ||
+             x.profitabilityProven!==false ||
+             x.historicalMarketWideRecall!==null ||
+             x.originalHistoricalScannerAsOfAvailabilityVerified!==false ||
+             x.originalWatchEventRowsSupplied!==0 ||
+             x.originalCadenceRowsSupplied!==0 ||
+             x.actualFillCount!==null || x.realOrders!==false)process.exit(1);
+          for(const p of Object.values(x.markets)){
+            if(p.status!=="BLOCKED_DATA" ||
+               p.corroboratedPositiveWatchEvents!==null ||
+               p.verifiedFalseNegativeCount!==null ||
+               p.marketWideEarlyRecall!==null)process.exit(1);
+          }
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-public-watch-evidence-gap-${{ github.sha }}
+          path: |
+            market-prediction-lab/docs/native-utc-day-opportunity-v1.json
+            market-prediction-lab/docs/public-watch-native-minute-receipt-v1.json
+          retention-days: 14
+          if-no-files-found: error
