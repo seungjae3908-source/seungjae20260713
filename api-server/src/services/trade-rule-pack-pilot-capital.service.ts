@@ -4,8 +4,10 @@ import type {
   TradingAssetClass, TradingOrder, TradingPlan, TradingPlanInput, TradingPolicy,
 } from './trade-automation.types';
 import {
+  PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW,
+  PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW,
   PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW,
   PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW,
 } from './trade-automation.types';
@@ -62,6 +64,12 @@ function supportedPilotInitialCapital(value: unknown) {
   return value === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     ? PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
     : PRODUCTION_MEMBER_MAX_SINGLE_ENTRY_KRW;
+}
+
+export function rulePackPilotDiscoveryEntryCap(initialOperatingCapitalKrw: number) {
+  return initialOperatingCapitalKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+    ? PRODUCTION_ADMIN_DISCOVERY_MAX_SINGLE_ENTRY_KRW
+    : PRODUCTION_MEMBER_DISCOVERY_MAX_SINGLE_ENTRY_KRW;
 }
 
 export function rulePackPilotInitialCapitalForPolicy(
@@ -224,6 +232,7 @@ export type RulePackPilotEntryGuardInput = Readonly<{
   policyTotalCapitalKrw: number;
   openLivePositions: number;
   nowMs: number;
+  discoveryEntryCapRequired?: boolean;
 }>;
 
 export type RulePackPilotEntryGuardDecision = Readonly<{
@@ -254,7 +263,12 @@ export function evaluateRulePackPilotEntryGuard(
   if (input.pilot.initialOperatingCapitalKrw !== initial) add('BACKGROUND_PILOT_CAPITAL_TIER_INVALID');
   const growth = Math.max(0, operatingCapital - initial);
   const dynamicPolicyCap = policyMaxOrder >= initial ? policyMaxOrder + growth : policyMaxOrder;
-  const effectiveMaxEntryKrw = Math.min(operatingCapital, pilotMaxEntry, dynamicPolicyCap);
+  const discoveryEntryCap = input.discoveryEntryCapRequired === true
+    ? rulePackPilotDiscoveryEntryCap(initial)
+    : Number.POSITIVE_INFINITY;
+  const effectiveMaxEntryKrw = Math.min(
+    operatingCapital, pilotMaxEntry, dynamicPolicyCap, discoveryEntryCap,
+  );
 
   if (!finite(input.policyTotalCapitalKrw) || input.policyTotalCapitalKrw < initial) {
     add('BACKGROUND_PILOT_BASE_POLICY_CAPITAL_REQUIRED');
@@ -271,8 +285,10 @@ export function evaluateRulePackPilotEntryGuard(
   if (input.pilot.dailyLosingTrades >= RULE_PACK_PILOT_PROFILE.maxDailyLosingTrades) {
     add('BACKGROUND_PILOT_DAILY_LOSS_COUNT_LIMIT');
   }
-  if (input.pilot.dailyRealizedPnlKrw <= -RULE_PACK_PILOT_PROFILE.dailyLossStopKrw) {
-    add('BACKGROUND_PILOT_DAILY_LOSS_KRW_LIMIT');
+  const dailyLossStopKrw = operatingCapital
+    * RULE_PACK_PILOT_PROFILE.dailyLossStopPercent / 100;
+  if (input.pilot.dailyRealizedPnlKrw <= -dailyLossStopKrw) {
+    add('BACKGROUND_PILOT_DAILY_LOSS_PERCENT_LIMIT');
   }
   if (input.pilot.consecutiveLosses >= RULE_PACK_PILOT_PROFILE.maxConsecutiveLosses) {
     add('BACKGROUND_PILOT_CONSECUTIVE_LOSS_LIMIT');
@@ -309,6 +325,7 @@ export function deriveRulePackPilotExecutionPolicy(
   policy: TradingPolicy,
   pilot: RulePackPilotCapitalState,
   targetMarket?: TradingAssetClass,
+  discoveryEntryCapRequired = false,
 ): TradingPolicy {
   const initial = supportedPilotInitialCapital(pilot.initialOperatingCapitalKrw);
   if (pilot.initialOperatingCapitalKrw !== initial) {
@@ -330,6 +347,9 @@ export function deriveRulePackPilotExecutionPolicy(
     ? PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW
     : PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW;
   const portfolioCapitalKrw = roundKrw(portfolioInitialCapitalKrw + growth);
+  const discoveryEntryCap = discoveryEntryCapRequired
+    ? rulePackPilotDiscoveryEntryCap(initial)
+    : Number.POSITIVE_INFINITY;
   const growingCap = (original: number) => roundKrw(Math.min(
     laneCapital,
     original >= initial ? original + growth : original,
@@ -337,7 +357,7 @@ export function deriveRulePackPilotExecutionPolicy(
   return {
     ...policy,
     totalCapitalKrw: portfolioCapitalKrw,
-    maxOrderKrw: growingCap(policy.maxOrderKrw),
+    maxOrderKrw: Math.min(growingCap(policy.maxOrderKrw), discoveryEntryCap),
     maxInstrumentKrw: growingCap(policy.maxInstrumentKrw),
     maxAssetClassKrw: {
       domestic_stock: targetMarket == null || targetMarket === 'domestic_stock'
@@ -526,11 +546,14 @@ export async function resolveRulePackPilotDynamicCapPolicy(
     openLivePositions: Number.isSafeInteger(openLivePositions) && openLivePositions >= 0
       ? openLivePositions : Number.POSITIVE_INFINITY,
     nowMs: now.getTime(),
+    discoveryEntryCapRequired: true,
   });
   if (!decision.allowed) {
     throw new Error(decision.blockers[0] ?? 'BACKGROUND_PILOT_DYNAMIC_CAP_RISK_BLOCKED');
   }
-  return deriveRulePackPilotExecutionPolicy(policy, pilot, rulePackPilotMarketForPlan(plan));
+  return deriveRulePackPilotExecutionPolicy(
+    policy, pilot, rulePackPilotMarketForPlan(plan), true,
+  );
 }
 
 // A numeric fee is not a KRW/quote-currency cost unless the broker recorded

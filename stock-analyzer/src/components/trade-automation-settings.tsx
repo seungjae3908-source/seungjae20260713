@@ -39,6 +39,7 @@ type UiPolicy = Omit<Policy, 'marketEnabled' | 'stockBrokerByMarket'> & {
 type Status = {
   policy: Policy;
   initialMaxOrderKrw?: number;
+  discoveryMaxOrderKrw?: number;
   administratorOrderBaseline?: boolean;
   maximumBitgetLeverage?: 3 | 7;
   administratorLeveragePolicy?: boolean;
@@ -164,10 +165,10 @@ const DEFAULT_POLICY: UiPolicy = {
   enabledStrategies: [],
   totalCapitalKrw: 1_000_000,
   maxOrderKrw: 500_000,
-  dailyLossLimitPercent: 5,
+  dailyLossLimitPercent: 3,
   maxAssetPercent: 30,
   maxOpenPositions: 5,
-  maxDailyOrders: 10,
+  maxDailyOrders: 0,
   maxConsecutiveLosses: 3,
   bitgetLeverage: 2,
   pilotStage: 'approval-20',
@@ -470,6 +471,8 @@ export function TradeAutomationSettings({
   const initialMaxOrderKrw = status?.initialMaxOrderKrw
     ?? (canManagePilot ? 1_000_000 : 500_000);
   const initialMaxOrderLabel = initialMaxOrderKrw === 1_000_000 ? '100만원' : '50만원';
+  const discoveryMaxOrderKrw = status?.discoveryMaxOrderKrw
+    ?? (canManagePilot ? 500_000 : 100_000);
   const activeMarkets = (Object.keys(MARKET_LABELS) as Market[]).filter((market) => draft.marketEnabled[market]);
   const visibleMarkets: Market[] = selectedMarket ? [selectedMarket] : (Object.keys(MARKET_LABELS) as Market[]);
   const visibleExchanges: Exchange[] = selectedMarket === 'crypto_futures'
@@ -636,12 +639,13 @@ export function TradeAutomationSettings({
       <NumberField label="최대 보유비중" value={draft.maxAssetPercent} onChange={(value) => updateNumber('maxAssetPercent', value)} suffix="%" />
       <NumberField label="일일 손실한도" value={draft.dailyLossLimitPercent} onChange={(value) => updateNumber('dailyLossLimitPercent', value)} suffix="%" />
       <NumberField label="동시 보유 수" value={draft.maxOpenPositions} onChange={(value) => updateNumber('maxOpenPositions', value)} suffix="개" />
-      <NumberField label="일일 주문 수" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
+      <NumberField label="일일 주문 수 (0=기회 기반)" value={draft.maxDailyOrders} onChange={(value) => updateNumber('maxDailyOrders', value)} suffix="회" />
       <NumberField label="연속 손실 제한" value={draft.maxConsecutiveLosses} onChange={(value) => updateNumber('maxConsecutiveLosses', value)} suffix="회" />
     </div>
     <p className="mt-2 text-[11px] font-semibold text-muted-foreground">
       {initialMaxOrderKrw === 1_000_000 ? '관리자' : '회원'} 초기 기준은 {initialMaxOrderLabel}이며,
       확정 순수익의 50%만 재투자되어 다음 주문 가능액이 증가합니다. 미확정 손익은 반영하지 않습니다.
+      일일 주문 수 0은 횟수 채우기나 강제 진입 없이 검증된 기회만 처리한다는 뜻이며, 중복 주문·손실·동시 보유 안전장치는 계속 적용됩니다.
     </p>
 
     <label className="mt-3 block rounded-2xl border border-card-border bg-background p-3 text-xs font-extrabold">
@@ -716,7 +720,9 @@ export function TradeAutomationSettings({
             </span>}
       </div>
       <p className="mt-2 leading-5 text-muted-foreground">
-        이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 수식+AI 예외 신호만 별도 운영 위험검사를 통과할 수 있습니다.
+        이 작업은 Pilot 단계만 준비하며 AUTO/LIVE나 실주문을 켜지 않습니다. 활성화 후에는 주문별 수동 승인 없이
+        수식+AI·비용·위험검사를 통과한 신호만 자동 처리하며, 발견 단계 1회 주문은
+        최대 {discoveryMaxOrderKrw.toLocaleString('ko-KR')}원으로 제한됩니다.
       </p>
     </div> : null}
 
