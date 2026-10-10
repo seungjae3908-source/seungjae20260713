@@ -5,6 +5,9 @@ on:
     branches:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
+      - market-prediction-lab/src/us-asof-all-stock-grouped-daily-v1.js
+      - market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
+      - market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs
       - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
       - market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
       - market-prediction-lab/src/krx-dated-all-stock-ohlcv-v1.js
@@ -53,6 +56,7 @@ jobs:
           node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
           node --test market-prediction-lab/tests/krx-dated-all-stock-ohlcv-v1.test.js
           node --test market-prediction-lab/tests/krx-two-dated-all-stock-sources-v1.test.js
+          node --test market-prediction-lab/tests/us-asof-all-stock-grouped-daily-v1.test.js
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -61,6 +65,21 @@ jobs:
           python -m pip install --disable-pip-version-check --timeout 30 --retries 2 \
             "numpy==2.2.6" "pandas==2.2.3"
           python market-prediction-lab/scripts/report-native-pit-daily-opportunity-v1.py --self-test
+      - name: Verify US point-in-time whole-date source blocks if no approved provider key
+        run: |
+          node market-prediction-lab/scripts/run-us-asof-grouped-source-v1.mjs \
+            --date 2025-02-03 --output "$RUNNER_TEMP/us-pit-source-blocked.json"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync(process.env.RUNNER_TEMP+"/us-pit-source-blocked.json","utf8"));
+            if(r.source.status!=="BLOCKED_DATA" ||
+               r.source.reason!=="US_PROVIDER_HISTORICAL_AUTH_NOT_CONNECTED" ||
+               r.source.providerReadOnlyGETs!==0 ||
+               r.source.asOfProviderTickerCount!==null ||
+               r.source.trueMarketWideRecall!==null ||
+               r.source.profitabilityProven!==false ||
+               r.source.executionAuthority!=="NONE")process.exit(1);
+          '
       - name: Verify CLI no-PIT network fail-closed and no-orders policy
         run: |
           node market-prediction-lab/scripts/run-native-pit-daily-batch-v1.mjs \
