@@ -10,6 +10,7 @@ The existing ObservedDailyOpportunityAudit owns all 5/10/20 scoring.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -99,6 +100,19 @@ def native_pit_daily_labels_v1(raw: dict) -> dict:
        or not HEX_SHA.fullmatch(str(receipt.get("rowsSha256", ""))) \
        or receipt.get("rowsSha256") != r.get("nativeRowsSha256"):
         return blocked("NATIVE_PIT_PRIVATE_SOURCE_WINDOW_OR_DIGEST_INVALID", market)
+    # Verify the exact JSON bytes that Node hashed; reserializing a decoded
+    # Python float could change scientific exponent notation (e.g. 1e-8).
+    # This detects accidental/stale file mutation, not forged provider origin.
+    canonical_text = receipt.get("canonicalRowsJSON")
+    if not isinstance(canonical_text, str) or len(canonical_text) > 8*1024*1024:
+        return blocked("NATIVE_PIT_PRIVATE_SOURCE_SERIALIZATION_MISSING", market)
+    if hashlib.sha256(canonical_text.encode("utf-8")).hexdigest() != receipt["rowsSha256"]:
+        return blocked("NATIVE_PIT_PRIVATE_SOURCE_HASH_MISMATCH", market)
+    try:
+        if json.loads(canonical_text) != receipt["rows"]:
+            return blocked("NATIVE_PIT_PRIVATE_SOURCE_ROWS_CHANGED", market)
+    except (ValueError, TypeError):
+        return blocked("NATIVE_PIT_PRIVATE_SOURCE_SERIALIZATION_INVALID", market)
     rows = receipt["rows"]
     name_count = r.get("sourceAttestedHistoricalActiveSymbols")
     if not isinstance(name_count, int) or isinstance(name_count, bool) \
@@ -216,6 +230,8 @@ def self_test() -> None:
             "sourceId": "TEST_ARCHIVE", "evidenceSha256": "a"*64,
             "nativeProviderRowDigestSha256": "b"*64,
         }]
+        canonical = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         return {
             "schemaVersion": "native-historic-pit-day-read-only-cli-v1",
             "executionAuthority": "NONE",
@@ -232,13 +248,14 @@ def self_test() -> None:
                 "sourceAttestedFullSymbolDayPriceJoin": True,
                 "sourceAttestedHistoricalActiveSymbols": count,
                 "sourceAttestedDailyBars": count,
-                "nativeRowsSha256": "c"*64,
+                "nativeRowsSha256": digest,
                 "privateNativeDaySource": {
                     "sourceClass": "TEST_FIXTURE", "sourceId": "TEST_ARCHIVE",
                     "market": market, "venue": venue,
                     "dayStartMs": day, "dayEndMs": day + DAY,
                     "sourcePriceConvention": "NATIVE_UNADJUSTED",
-                    "rows": rows, "rowsSha256": "c"*64,
+                    "rows": rows, "rowsSha256": digest,
+                    "canonicalRowsJSON": canonical,
                 },
             },
         }
@@ -262,6 +279,16 @@ def self_test() -> None:
     missing = fixture("CRYPTO_FUTURES")
     del missing["result"]["privateNativeDaySource"]
     assert native_pit_daily_labels_v1(missing)["status"] == "BLOCKED_DATA"
+    modified = fixture("CRYPTO_FUTURES")
+    modified["result"]["privateNativeDaySource"]["rows"][0]["high"] += 40.
+    assert native_pit_daily_labels_v1(modified)["reason"] == (
+        "NATIVE_PIT_PRIVATE_SOURCE_ROWS_CHANGED"
+    )
+    digest_forged = fixture("CRYPTO_FUTURES")
+    digest_forged["result"]["privateNativeDaySource"]["canonicalRowsJSON"] += " "
+    assert native_pit_daily_labels_v1(digest_forged)["reason"] == (
+        "NATIVE_PIT_PRIVATE_SOURCE_HASH_MISMATCH"
+    )
     print("FOUR_MARKET_PIT_NATIVE_DAILY_EVENT_SCORER_SELF_TEST_PASS")
 
 
