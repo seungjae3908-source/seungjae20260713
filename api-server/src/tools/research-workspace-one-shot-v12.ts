@@ -20,12 +20,11 @@ type Dependencies={env?:Record<string,string|undefined>;fetchImpl?:typeof fetch;
 const fail=(code:string):never=>{throw Object.assign(new Error(code),{code});};
 const iso=(x:unknown):x is string=>typeof x==='string'&&Number.isFinite(Date.parse(x))&&new Date(x).toISOString()===x;
 const safeCode=(x:unknown)=>typeof x==='string'&&/^[A-Z][A-Z0-9_]{2,95}$/.test(x)?x:'ONE_SHOT_RUNTIME_UNAVAILABLE';
-const posixModeUnsafe=(mode:number)=>process.platform!=='win32'&&(mode&0o077)!==0;
 
 async function privateRoot(path:string):Promise<string>{
   if(typeof path!=='string'||!isAbsolute(path)||resolve(path)!==path)fail('ONE_SHOT_ROOT_INVALID');
   const st=await lstat(path);
-  if(!st.isDirectory()||st.isSymbolicLink()||(typeof process.getuid==='function'&&st.uid!==process.getuid())||posixModeUnsafe(st.mode))fail('ONE_SHOT_ROOT_UNSAFE');
+  if(!st.isDirectory()||st.isSymbolicLink()||(typeof process.getuid==='function'&&st.uid!==process.getuid())||(st.mode&0o077))fail('ONE_SHOT_ROOT_UNSAFE');
   const real=await realpath(path);if(real!==path)fail('ONE_SHOT_ROOT_UNSAFE');return real;
 }
 async function readJson(path:string,limit=512*1024):Promise<any>{
@@ -33,7 +32,7 @@ async function readJson(path:string,limit=512*1024):Promise<any>{
   const h=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{
     const a=await h.stat();
-    if(!a.isFile()||a.nlink!==1||a.size<=0||a.size>limit||(typeof process.getuid==='function'&&a.uid!==process.getuid())||posixModeUnsafe(a.mode))fail('ONE_SHOT_INPUT_UNSAFE');
+    if(!a.isFile()||a.nlink!==1||a.size<=0||a.size>limit||(typeof process.getuid==='function'&&a.uid!==process.getuid())||(a.mode&0o077))fail('ONE_SHOT_INPUT_UNSAFE');
     const bytes=Buffer.alloc(a.size);let n=0;
     while(n<bytes.length){const r=await h.read(bytes,n,bytes.length-n,n);if(!r.bytesRead)break;n+=r.bytesRead;}
     const b=await h.stat();
@@ -46,16 +45,7 @@ async function exclusive(path:string,value:unknown|Buffer):Promise<void>{
   try{await h.writeFile(Buffer.isBuffer(value)?value:JSON.stringify(value,null,2)+'\n');await h.sync();}finally{await h.close();}
 }
 async function syncDir(path:string):Promise<void>{
-  const h=await open(path,constants.O_RDONLY|constants.O_DIRECTORY);
-  try{
-    try{await h.sync();}
-    catch(cause:any){
-      // Windows does not implement fsync for directory handles (EPERM).
-      // Each newly created file is already fsynced by exclusive(); retain the
-      // stronger directory-entry durability barrier on POSIX filesystems.
-      if(process.platform!=='win32'||cause?.code!=='EPERM')throw cause;
-    }
-  }finally{await h.close();}
+  const h=await open(path,constants.O_RDONLY|constants.O_DIRECTORY);try{await h.sync();}finally{await h.close();}
 }
 function manifestMatches(input:any,recomputed:ResearchOneShotManifestV12):boolean{
   return input?.schemaVersion==='research-one-shot-manifest-v12'

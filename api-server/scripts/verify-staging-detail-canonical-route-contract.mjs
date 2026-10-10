@@ -4,19 +4,18 @@ import path from 'node:path';
 const root = path.basename(process.cwd()) === 'api-server'
   ? path.resolve(process.cwd(), '..')
   : path.resolve(process.cwd());
-const normalizeNewlines = (value) => value.replace(/\r\n/g, '\n');
-const spec = normalizeNewlines(await readFile(
+const spec = await readFile(
   path.join(root, 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
   'utf8',
-));
-const navigation = normalizeNewlines(await readFile(
+);
+const navigation = await readFile(
   path.join(root, 'stock-analyzer/src/lib/asset-navigation.ts'),
   'utf8',
-));
-const app = normalizeNewlines(await readFile(
+);
+const app = await readFile(
   path.join(root, 'stock-analyzer/src/App.tsx'),
   'utf8',
-));
+);
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-detail-canonical-route-contract] ${message}`);

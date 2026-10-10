@@ -34,6 +34,8 @@ const formulaAiExceptionTest = read('api-server/src/services/formula-ai-live-exc
 const formulaAiException = read('api-server/src/services/formula-ai-live-exception.service.ts');
 const pilotCapitalTest = read('api-server/src/services/trade-rule-pack-pilot-capital.service.test.ts');
 const pilotCapital = read('api-server/src/services/trade-rule-pack-pilot-capital.service.ts');
+const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-paper-capital.service.ts');
+const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
 const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
@@ -47,6 +49,8 @@ const forbid = (source, pattern, code) => {
 
 requireText(tradeTypes, 'PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE = 3', 'AUTO_GATE_MEMBER_LEVERAGE_LIMIT_MISSING');
 requireText(tradeTypes, 'PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE = 7', 'AUTO_GATE_ADMIN_LEVERAGE_LIMIT_MISSING');
+requireText(tradeTypes, 'PRODUCTION_MEMBER_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_MEMBER_FOUR_MARKET_LIVE_TOTAL_MISSING');
+requireText(tradeTypes, 'PRODUCTION_ADMIN_FOUR_MARKET_INITIAL_KRW', 'AUTO_GATE_ADMIN_FOUR_MARKET_LIVE_TOTAL_MISSING');
 requireText(tradeRisk, 'Math.min(leverage, maximumBitgetLeverage)', 'AUTO_GATE_ROLE_LEVERAGE_NORMALIZATION_MISSING');
 requireText(tradeAutomationRoute, "error: 'BITGET_LEVERAGE_ROLE_LIMIT'", 'AUTO_GATE_ROLE_LEVERAGE_SAVE_GUARD_MISSING');
 requireText(paperWorker, 'member.policy.bitgetLeverage > maximumLeverage', 'AUTO_GATE_WORKER_ROLE_LEVERAGE_GUARD_MISSING');
@@ -59,7 +63,8 @@ for (const [input, token, code] of [
   [paperWorker, "AUTOMATIC_PAPER_ACCOUNT_ID = 'automatic-paper-account-v1'", 'AUTO_PAPER_WALLET_ID_MISSING'],
   [paperWorker, 'selectAutomaticPaperAccountEquity(records)', 'AUTO_PAPER_DEDICATED_EQUITY_MISSING'],
   [paperWorker, 'inspectAdminFourMarketPaperWallets(records, nowMs)', 'ADMIN_FOUR_MARKET_PAPER_WALLET_INTEGRITY_MISSING'],
-  [paperWorker, 'adminMarketPaperRiskBudget({', 'ADMIN_FOUR_MARKET_PAPER_MARKET_BUDGET_MISSING'],
+  [paperWorker, 'adminMarketPaperRiskBudget(marketBudgetInput)', 'ADMIN_FOUR_MARKET_PAPER_MARKET_BUDGET_MISSING'],
+  [paperWorker, 'memberMarketPaperRiskBudget(marketBudgetInput)', 'MEMBER_FOUR_MARKET_PAPER_MARKET_BUDGET_MISSING'],
   [paperWorker, 'marketWallets.marketWallets[market].equityKrw', 'ADMIN_MARKET_EQUITY_SEPARATION_MISSING'],
   [paperWorker, "if (accounts.length !== 1 || accounts[0]!.deletedAt != null) return null;", 'AUTO_PAPER_INVALID_WALLET_BLOCK_MISSING'],
   [tradeAutomationRoute, 'automaticPaperWalletBootstrap: automaticPaperWalletBootstrapReadiness(orders, plans)', 'AUTO_PAPER_READONLY_BOOTSTRAP_MISSING'],
@@ -71,6 +76,16 @@ for (const [input, token, code] of [
   [autoTradingPage, 'data-testid="automatic-paper-wallet-readiness"', 'AUTO_PAPER_READY_UI_MISSING'],
   [autoTradingPage, 'body.automaticPaperWalletBootstrap?.safeToInitialize === true', 'AUTO_PAPER_SERVER_EVIDENCE_MISSING'],
   [autoTradingPage, 'result.orderSubmitted !== false || result.exchangeRequestSent !== false', 'AUTO_PAPER_ZERO_BROKER_IO_MISSING'],
+]) requireText(input, token, code);
+
+for (const [input, token, code] of [
+  [fourMarketPaperCapital, 'MEMBER_MARKET_INITIAL_KRW = 1_000_000', 'MEMBER_PAPER_MARKET_1M_BASELINE_MISSING'],
+  [fourMarketPaperCapital, 'compoundShare: 0.5, reserveShare: 0.5', 'FOUR_MARKET_PAPER_COMPOUND_SPLIT_MISSING'],
+  [fourMarketPaperCapital, 'reserveWithdrawalAutomatic: false', 'FOUR_MARKET_PAPER_WITHDRAWAL_GUARD_MISSING'],
+  [pilotCapital, 'portfolioInitialCapitalKrw', 'LIVE_FOUR_MARKET_PORTFOLIO_PROJECTION_MISSING'],
+  [pilotCapital, 'rulePackPilotMarketForPlan(plan)', 'LIVE_MARKET_LOCAL_COMPOUND_READBACK_MISSING'],
+  [memberPaperMigration, 'member_four_market_paper_seed_contract', 'MEMBER_PAPER_DATABASE_SEED_GUARD_MISSING'],
+  [memberPaperMigration, 'four_market_paper_wallet_rls_guard_ready()', 'MEMBER_PAPER_DATABASE_READINESS_GUARD_MISSING'],
 ]) requireText(input, token, code);
 
 for (const [input, token, code] of [
