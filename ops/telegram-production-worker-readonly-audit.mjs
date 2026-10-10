@@ -29,6 +29,14 @@ function sanitizedErrorCode(value) {
   return /^[A-Z0-9_]{1,64}$/u.test(valueString) ? valueString : null;
 }
 
+// Never copy a raw timestamp from an HTTP health payload into a public QA receipt.
+function sanitizedIsoTime(value) {
+  if (typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? value : null;
+}
+
 function emptyState(status) {
   return {
     status, recordCount: 0, recent24hCount: 0, lastEvidenceAt: null,
@@ -161,7 +169,7 @@ export async function readHealthOnce({ getImpl = httpGet } = {}) {
             tickOk: worker.tickOk === true,
             lastTickAt: typeof worker.lastTickAt === 'string' ? worker.lastTickAt : null,
             deliveryConfirmed: worker.deliveryConfirmed === true,
-            lastConfirmedDeliveryAt: typeof worker.lastConfirmedDeliveryAt === 'string' ? worker.lastConfirmedDeliveryAt : null,
+            lastConfirmedDeliveryAt: sanitizedIsoTime(worker.lastConfirmedDeliveryAt),
             errorCode: sanitizedErrorCode(worker.errorCode),
           });
         });
@@ -299,8 +307,9 @@ export async function observeProductionTelegram({
       tickFresh: recent,
       tickOk: result.tickOk === true,
       lastTickAt: Number.isFinite(lastTickMs) ? new Date(lastTickMs).toISOString() : null,
-      deliveryConfirmed: result.deliveryConfirmed === true,
-      lastConfirmedDeliveryAt: result.lastConfirmedDeliveryAt ?? null,
+      deliveryConfirmed: result.deliveryConfirmed === true
+        && sanitizedIsoTime(result.lastConfirmedDeliveryAt) !== null,
+      lastConfirmedDeliveryAt: sanitizedIsoTime(result.lastConfirmedDeliveryAt),
       errorCode: sanitizedErrorCode(result.errorCode),
     };
     receipt.marketBrief = state(runtime.TELEGRAM_INTELLIGENCE_STATE_PATH,

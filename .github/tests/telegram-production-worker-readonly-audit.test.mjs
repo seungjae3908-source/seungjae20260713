@@ -139,7 +139,7 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
         userTelegramDelivery:{
           enabled:true,tickOk:false,deliveryConfirmed:false,
           lastTickAt:new Date(now).toISOString(),
-          lastConfirmedDeliveryAt:null,errorCode:'TELEGRAM_DELIVERY_UNCONFIRMED',
+          lastConfirmedDeliveryAt:'PRIVATE_SECRET_IN_TIME_FIELD',errorCode:'TELEGRAM_DELIVERY_UNCONFIRMED',
           chatId:'DO_NOT_LOG_CHAT_ID',
         },
       })));
@@ -150,9 +150,36 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
   const r=await readHealthOnce({getImpl});
   assert.equal(r.nodeSha,deployed);
   assert.equal(r.deliveryConfirmed,false);
+  assert.equal(r.lastConfirmedDeliveryAt,null);
   const printed=JSON.stringify(r);
   assert.ok(!printed.includes('PRIVATE_USER_DATA'));
   assert.ok(!printed.includes('DO_NOT_LOG_CHAT_ID'));
+  assert.ok(!printed.includes('PRIVATE_SECRET_IN_TIME_FIELD'));
+});
+
+test('production receipt rejects non-ISO personal time and preserves only valid UTC evidence',async()=>{
+  const bad=await observeProductionTelegram({
+    mainSha:current,deployedSha:deployed,nowMs:now,
+    snapshot:observed,
+    health:async()=>({...await health(),deliveryConfirmed:true,
+      lastConfirmedDeliveryAt:'PRIVATE_SECRET_MASQUERADING_AS_DATE'}),
+    signalSource:async()=>({status:'NOT_CHECKED',eventCount:0,safetyValidated:false}),
+    state:()=>inspectDeliveryStateText(state({}),'market',now),
+  });
+  assert.equal(bad.personal.deliveryConfirmed,false);
+  assert.equal(bad.personal.lastConfirmedDeliveryAt,null);
+  assert.ok(!JSON.stringify(bad).includes('PRIVATE_SECRET_MASQUERADING_AS_DATE'));
+  const validTimestamp=new Date(now-60_000).toISOString();
+  const good=await observeProductionTelegram({
+    mainSha:current,deployedSha:deployed,nowMs:now,
+    snapshot:observed,
+    health:async()=>({...await health(),deliveryConfirmed:true,
+      lastConfirmedDeliveryAt:validTimestamp}),
+    signalSource:async()=>({status:'NOT_CHECKED',eventCount:0,safetyValidated:false}),
+    state:()=>inspectDeliveryStateText(state({}),'market',now),
+  });
+  assert.equal(good.personal.deliveryConfirmed,true);
+  assert.equal(good.personal.lastConfirmedDeliveryAt,validTimestamp);
 });
 
 
