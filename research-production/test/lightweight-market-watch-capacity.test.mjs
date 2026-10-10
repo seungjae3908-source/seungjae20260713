@@ -83,6 +83,21 @@ test('cadence gap stays unknown even when every day has a discovery file',()=>{
  assert.equal(x.status,'INSUFFICIENT_HISTORY');
  assert.equal(x.lastSevenCompletedDaysAverageBytes,null);
 });
+test('private capped candidate archive increases measured runway cost without faking uptime',()=>{
+ assert.deepEqual(WATCH_CAPACITY_POLICY.categories,
+  ['events','outcomes','cadence','capped']);
+ const cadence=lastSeven(1024,'cadence');
+ const capped=lastSeven(4096,'capped');
+ const x=run([...cadence,...capped]);
+ assert.equal(x.fileCount,14);
+ assert.equal(x.datedDayCount,7);
+ assert.equal(x.lastSevenCompletedDaysAverageBytes,5120);
+ assert.equal(x.cadenceCompletedDays,7);
+ assert.equal(x.continuous24hProven,false);
+ assert.equal(x.profitabilityProven,false);
+ assert.equal(x.executionAuthority,'NONE');
+});
+
 test('daily ceiling never amounts to automatic deletion or order permission',()=>{
  const x=run([file('2026-10-09',WATCH_CAPACITY_POLICY.maxFileBytes,'cadence')]);
  assert.equal(x.profitabilityProven,false);
