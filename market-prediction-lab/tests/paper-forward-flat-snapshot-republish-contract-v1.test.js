@@ -157,7 +157,10 @@ test('schema and safety labels are stable', () => {
 });
 
 test('snapshot republish contract test stays registered in bounded validation paths', async () => {
-  const workflow = await readFile('.github/workflows/paper-forward-schedule-validation.yml', 'utf8');
+  const workflow = await readFile(
+    new URL('../../.github/workflows/paper-forward-schedule-validation.yml', import.meta.url),
+    'utf8',
+  );
   const testPath = 'market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js';
   assert.equal(workflow.split(testPath).length - 1, 2);
 });
