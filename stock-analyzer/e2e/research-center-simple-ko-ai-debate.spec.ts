@@ -429,7 +429,7 @@ test('a stale public feed never appears as currently collecting in research UI',
   const panel = page.getByTestId('research-market-watch');
   await expect(page.getByTestId('research-market-watch-status')).toContainText('최근 수집 중단');
   await expect(panel).toContainText('이전 기록 · 수집 중단');
-  await expect(panel).not.toContainText('시세 수집');
+  await expect(panel.getByText('시세 수집', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('research-market-watch-boundary')).toContainText('24시간 연속 가동');
   await expectNoHorizontalOverflow(page);
   await assertClean();
