@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// One-command RESEARCH-ONLY local preflight: three previously audited
-// read-only CLIs. No server activation, network, private trading API or order.
+// One-command RESEARCH-ONLY local preflight: four audited local read-only
+// CLIs, including explicit KR/US stock input quality. No server activation,
+// network, private trading API, permission changes, or orders.
 import { spawnSync } from 'node:child_process';
 import { isAbsolute, resolve } from 'node:path';
 
@@ -9,6 +10,7 @@ const EXPECTED = Object.freeze([
   ['marketWatch', 'lightweight-market-watch-status.mjs', 'lightweight-market-watch-readback/v1'],
   ['cadence', 'lightweight-market-watch-cadence-status.mjs', 'public-watch-cadence-diagnostic-v1'],
   ['capacity', 'lightweight-market-watch-capacity-status.mjs', 'public-watch-capacity-planning-v1'],
+  ['stockSources', 'stock-source-preflight.mjs', 'public-stock-source-input-preflight-v1'],
 ]);
 const SOURCE_FLAGS = Object.freeze({
   deploymentApproved: false,
@@ -53,12 +55,47 @@ function readLocalHelper(script, contract, env) {
 }
 
 export function summarizeWatchReadOnlyPreflight(reports) {
-  if (!reports || !['marketWatch','cadence','capacity'].every(k =>
+  if (!reports || !['marketWatch','cadence','capacity','stockSources'].every(k =>
     reports[k] && typeof reports[k].status === 'string'))
     throw new Error('WATCH_PREFLIGHT_REPORTS_MISSING');
   const watch = reports.marketWatch;
   const cadence = reports.cadence;
   const capacity = reports.capacity;
+  const stocks = reports.stockSources;
+  // The additional stock helper verifies only local file safety and freshness.
+  // It cannot authenticate a vendor, its license, or complete real-time coverage.
+  const stockMarkets = ['KR_STOCK', 'US_STOCK'];
+  if (stocks.contract !== 'public-stock-source-input-preflight-v1'
+    || !['FORMAT_VALID_ONLY','INCOMPLETE','INVALID'].includes(stocks.status)
+    || stocks.independentProviderVerified !== false
+    || stocks.marketDataRightsVerified !== false
+    || stocks.fullUniverseVerified !== false
+    || stocks.continuous24hProven !== false
+    || stocks.paperExecutionProven !== false
+    || stocks.profitabilityProven !== false
+    || stocks.executionAuthority !== 'NONE'
+    || !Array.isArray(stocks.markets) || stocks.markets.length !== 2
+    || stocks.markets.some((market, index) => !market
+      || market.market !== stockMarkets[index]
+      || !['FRESH_SUBSET_UNVERIFIED','FRESH_COMPLETE_CLAIM_UNVERIFIED',
+        'MISSING','STALE','INVALID'].includes(market.status)
+      || (market.status.startsWith('FRESH_')
+        ? !Number.isSafeInteger(market.observedCount)
+          || market.observedCount < 1 || market.observedCount > 8_000
+          || !Number.isSafeInteger(market.listedCount)
+          || market.listedCount < market.observedCount
+          || market.listedCount > 30_000
+          || typeof market.source !== 'string'
+          || !/^[A-Za-z0-9_-]{3,64}$/u.test(market.source)
+        : market.observedCount !== null
+          || market.listedCount !== null || market.source !== null))
+    || (stocks.status === 'FORMAT_VALID_ONLY'
+      && !stocks.markets.every(m => m.status.startsWith('FRESH_')))
+    || (stocks.status === 'INVALID'
+      && !stocks.markets.some(m => m.status === 'INVALID'))
+    || (stocks.status === 'INCOMPLETE'
+      && stocks.markets.every(m => m.status.startsWith('FRESH_'))))
+    throw new Error('WATCH_STOCK_SOURCE_PREFLIGHT_UNTRUSTED');
   if (capacity.retentionApplied !== false
     || capacity.archiveVerified !== false
     || capacity.deletionAllowed !== false
@@ -71,9 +108,20 @@ export function summarizeWatchReadOnlyPreflight(reports) {
     marketWatch: watch.status,
     cadence: cadence.status,
     capacity: capacity.status,
+    stockSources: stocks.status,
   };
   const problems = [];
   for (const [section,status] of Object.entries(statuses)) {
+    // Local input format without independently verified vendor and rights is
+    // NEVER stock-feed authorization or complete four-market readiness.
+    if (section === 'stockSources' && status === 'FORMAT_VALID_ONLY') {
+      problems.push('STOCKSOURCES_UPSTREAM_UNVERIFIED');
+      continue;
+    }
+    if (section === 'stockSources' && status === 'INCOMPLETE') {
+      problems.push('STOCKSOURCES_NOT_CONNECTED');
+      continue;
+    }
     if (status === 'INVALID') problems.push(section.toUpperCase()+'_INVALID');
     else if (status === 'MISSING'||status === 'INSUFFICIENT_HISTORY')
       problems.push(section.toUpperCase()+'_MISSING_EVIDENCE');
@@ -99,6 +147,10 @@ export function summarizeWatchReadOnlyPreflight(reports) {
     capacityProjectedDays: Number.isSafeInteger(capacity.projectedDaysAboveFloor)
       && capacity.projectedDaysAboveFloor >= 0
       ? capacity.projectedDaysAboveFloor : null,
+    // Aggregate only: never expose stock symbols, quotes or raw provider data.
+    stockInputMarkets: stocks.markets.map(m => ({ market: m.market, status: m.status,
+      observedCount: m.observedCount, listedCount: m.listedCount })),
+    stockInputFreshFormatCount: stocks.markets.filter(m => m.status.startsWith('FRESH_')).length,
     ...SOURCE_FLAGS,
   });
 }
