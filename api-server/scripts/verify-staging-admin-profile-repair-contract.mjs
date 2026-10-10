@@ -21,6 +21,8 @@ for (const marker of [
   'application-ci/verified', 'browser-ui/verified', 'database-rls/verified',
   'security-integration/verified', 'ai-privacy/verified', 'futures-public-network-smoke/verified',
   'Required statuses do not share one exact Application CI provenance run.',
+  'Install server dependencies with frozen lockfile',
+  'pnpm install --frozen-lockfile --filter @workspace/api-server...',
   'node api-server/scripts/repair-staging-admin-profile.mjs',
   'node api-server/scripts/staging-trading-core-admin-profile.mjs',
 ]) requireText(workflow, marker);
@@ -46,5 +48,10 @@ for (const marker of [
   'auth.admin.createuser', 'auth.admin.updateuserbyid', 'auth.admin.deleteuser',
   '.insert(', '.upsert(', '.delete(', '.rpc(', 'execute_sql', 'postgresql://',
 ]) forbid(repair.toLowerCase(), marker.toLowerCase());
+
+if (workflow.indexOf('Install server dependencies with frozen lockfile')
+    > workflow.indexOf('Verify script, transition tests and workflow safety')) {
+  throw new Error('STAGING_ADMIN_PROFILE_REPAIR_CONTRACT_INSTALL_ORDER_INVALID');
+}
 
 console.log('STAGING_ADMIN_PROFILE_REPAIR_CONTRACT_PASS');
