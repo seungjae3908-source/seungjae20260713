@@ -297,7 +297,8 @@ test('watch cap diagnostics are bounded, aggregate-only, and legacy missing coun
   assert.equal(good.paperExecutionProven, false);
   assert.equal(good.executionAuthority, 'NONE');
   for (const invalid of [
-    { sourceCappedCount: 5 }, { sourceCappedCount: -1 },
+    // 20 listed - 15 observed = at most 5 unprocessed; 6 is forged.
+    { sourceCappedCount: 6 }, { sourceCappedCount: -1 },
     { sourceCappedCount: '3' }, { sourceCappedCount: true },
     { qualifyingCandidateCount: 13 }, { candidateCappedCount: 9000 },
   ]) {
