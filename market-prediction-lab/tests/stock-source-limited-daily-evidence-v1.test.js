@@ -46,6 +46,8 @@ const usRow=i=>({
 function receipt(market,n=2){
  const kr=market==="KR_STOCK",rows=Array.from({length:n},(_,i)=>kr?krRow(i):usRow(i));
  return {
+  schemaVersion:kr?"krx-authorized-two-session-all-stock-intake-v1":
+    "us-two-dated-asof-all-stocks-price-source-v1",
   market,venue:kr?"KRX":"US_SIP",
   status:kr?"SOURCE_LIMITED_TWO_KRX_DATES_JOINED_ONLY":
    "SOURCE_LIMITED_TWO_US_ASOF_DATES_JOINED_ONLY",
@@ -239,4 +241,16 @@ test("CLI refuses to use a stock source as its own output or fill missing argume
   "--market","CRYPTO_SPOT","--input","/tmp/a.json",
   "--output","/tmp/b.json",
  ]),/STOCK_EVIDENCE_CLI_PRIVATE_INPUT_OUTPUT_REQUIRED/);
+});
+
+test("Receipt schema must match historical KR/US adapter, not a foreign or omitted source",()=>{
+ for(const market of ["KR_STOCK","US_STOCK"]){
+  const missing=receipt(market);
+  delete missing.schemaVersion;
+  assert.equal(pack({market,source:missing}).reason,
+    "STOCK_ALL_NAME_TWO_DATE_SOURCE_NOT_COMPLETE");
+  const foreign=receipt(market);
+  foreign.schemaVersion="unrelated-provider-schema";
+  assert.equal(pack({market,source:foreign}).status,"BLOCKED_DATA");
+ }
 });

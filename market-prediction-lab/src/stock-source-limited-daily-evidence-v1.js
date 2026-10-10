@@ -64,6 +64,8 @@ function safeSource(source,market){
  const expected=kr?"SOURCE_LIMITED_TWO_KRX_DATES_JOINED_ONLY":
    "SOURCE_LIMITED_TWO_US_ASOF_DATES_JOINED_ONLY";
  if(!object(source)||source.market!==market||source.venue!==VENUE[market]
+    ||source.schemaVersion!==(kr?"krx-authorized-two-session-all-stock-intake-v1":
+      "us-two-dated-asof-all-stocks-price-source-v1")
     ||source.status!==expected||source.executionAuthority!=="NONE"
     ||source.profitabilityProven!==false
     ||source.trueMarketWideRecall!==null
