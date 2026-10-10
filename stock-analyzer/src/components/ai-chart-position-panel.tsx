@@ -12,6 +12,8 @@ type Props = {
   symbol: string;
   chartPrice: number | null;
   pricePlan?: AnalysisPricePlan;
+  initialCockpitOpen?: boolean;
+  initialCockpitTab?: 'entry' | 'orders' | 'exit';
   onOverlayChange: (
     overlay: import('./ai-chart-position-panel-impl').AiChartPositionOverlay | null,
   ) => void;
