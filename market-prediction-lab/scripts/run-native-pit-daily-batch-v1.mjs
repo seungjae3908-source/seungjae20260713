@@ -9,7 +9,8 @@
  * 2. Fetch public native day data only with explicit --read-public:
  * node ... --mode fetch --market CRYPTO_SPOT --day 2025-10-09
  *   --manifest /private/pit.json --offset 0 --limit 20
- *   --read-public --output /private/chunk-0.json
+ *   --expected-pit-sha <SHA_FROM_PLAN> --read-public
+ *   --output /private/chunk-0.json
  * 3. Assemble all chunks from the SAME PIT roster:
  * node ... --mode assemble --market CRYPTO_SPOT --day 2025-10-09
  *   --manifest /private/pit.json --chunks /private/chunk-0.json,/private/chunk-20.json
@@ -67,6 +68,10 @@ export function parseNativePITBatchArgsV1(args=[]){
   const expectedSHA=kv["--expected-pit-sha"]??null;
   if(expectedSHA!=null&&!SHA.test(expectedSHA))
     throw new TypeError("PIT_CLI_SOURCE_SHA_INVALID");
+  // Never start or resume a historical all-name fetch without the exact
+  // previously inspected PIT manifest digest (optimistic read lease).
+  if(mode==="fetch" && (!kv["--manifest"]||expectedSHA==null))
+    throw new TypeError("PIT_CLI_FETCH_ROSTER_AND_SHA_REQUIRED");
   const chunks=kv["--chunks"]==null?[]:kv["--chunks"].split(",");
   if(chunks.length>5000||chunks.some(x=>!x.trim())
      ||new Set(chunks).size!==chunks.length)
@@ -77,6 +82,46 @@ export function parseNativePITBatchArgsV1(args=[]){
     offset,limit,expectedSHA,chunks,allowPublicReadOnlyFetch,
   });
 }
+export function verifyNativePITChunkEnvelopeV1(
+  raw,{market,dayStartMs,expectedRosterDigestSha256}={}
+){
+  const piece=raw?.result;
+  const expectedVenue={
+    KR_STOCK:"KRX",US_STOCK:"US_SIP",
+    CRYPTO_SPOT:"UPBIT_KRW",CRYPTO_FUTURES:"BITGET_USDT_FUTURES",
+  }[market];
+  if(raw?.schemaVersion!=="native-historic-pit-day-read-only-cli-v1"
+     ||raw?.executionAuthority!=="NONE"
+     ||raw?.provenanceIndependentAuthentication!==false
+     ||raw?.dataUsage!=="RESEARCH_ONLY_NO_COMMERCIAL_REPUBLICATION_AUTHORIZED"
+     ||piece?.status!=="PIT_NATIVE_DAY_CHUNK_OBSERVED"
+     ||piece?.chunkComplete!==true
+     ||piece?.executionAuthority!=="NONE"
+     ||piece?.profitabilityProven!==false
+     ||piece?.realOrders!==false
+     ||piece?.market!==market||piece?.venue!==expectedVenue
+     ||piece?.dayStartMs!==dayStartMs
+     ||piece?.dayEndMs!==dayStartMs+86_400_000
+     ||!SHA.test(piece?.rosterDigestSha256??"")
+     ||piece?.rosterDigestSha256!==expectedRosterDigestSha256
+     ||!Number.isSafeInteger(piece?.chunkOffset)||piece.chunkOffset<0
+     ||!Number.isSafeInteger(piece?.requestedHistoricalActiveMembers)
+     ||piece.requestedHistoricalActiveMembers<1
+     ||!Number.isSafeInteger(piece?.requestedChunkCount)
+     ||piece.requestedChunkCount<1||piece.requestedChunkCount>20
+     ||!Array.isArray(piece?.rows)
+     ||piece.rows.length!==piece.requestedChunkCount
+     ||!Array.isArray(piece?.requestedSymbolIds)
+     ||piece.requestedSymbolIds.length!==piece.rows.length
+     ||piece?.sourceAttestedPriceRows!==piece.rows.length
+     ||piece?.requestsPerformed!==piece.rows.length
+     ||piece?.fullMarketPITUniverseVerified!==false
+     ||piece?.actualMarketWideOpportunityCount!==null
+     ||piece?.trueMarketWideRecall!==null)
+    throw new TypeError("PIT_CLI_CHUNK_ENVELOPE_OR_PROVENANCE_INVALID");
+  // Never feed a saved CLI envelope directly to the raw-chunk assembler.
+  return piece;
+}
 function readBoundedJson(file){
   const p=resolve(file),stat=lstatSync(p);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1
@@ -84,11 +129,25 @@ function readBoundedJson(file){
     throw new Error("PIT_CLI_UNSAFE_OR_OVERSIZED_INPUT");
   return JSON.parse(readFileSync(p,"utf8"));
 }
-export async function runNativePITBatchCliV1(config){
+export async function runNativePITBatchCliV1(config,{
+  upbitFetch=globalThis.fetch,bitgetClient=null,sleepImpl=null,
+}={}){
   const manifest=config.manifestPath?readBoundedJson(config.manifestPath):null;
   let report;
   if(config.mode==="assemble"){
-    const chunks=config.chunks.map(readBoundedJson);
+    // The saved files have a strict CLI envelope {result:{...}}.
+    // Validate that each file belongs to exactly this market/day/PIT SHA
+    // before passing only its raw result to the existing assembler.
+    const digest=manifest?.rawMembershipDigestSha256;
+    if(!SHA.test(digest??""))
+      throw new TypeError("PIT_CLI_ASSEMBLY_ROSTER_DIGEST_REQUIRED");
+    if(config.expectedSHA!=null && config.expectedSHA!==digest)
+      throw new TypeError("PIT_CLI_ASSEMBLY_ROSTER_CHANGED");
+    const chunks=config.chunks.map(file=>
+      verifyNativePITChunkEnvelopeV1(readBoundedJson(file),{
+        market:config.market,dayStartMs:config.dayStartMs,
+        expectedRosterDigestSha256:digest,
+      }));
     report=assembleHistoricalPITDayChunksV1({
       market:config.market,dayStartMs:config.dayStartMs,
       manifest,chunks,
@@ -99,10 +158,12 @@ export async function runNativePITBatchCliV1(config){
       manifest,offset:config.offset,limit:config.limit,
       allowPublicReadOnlyFetch:config.allowPublicReadOnlyFetch,
       expectedRosterDigestSha256:config.expectedSHA,
+      upbitFetch,
       bitgetClient:config.allowPublicReadOnlyFetch
-        ?new BitgetPublicClient({
+        ?(bitgetClient??new BitgetPublicClient({
           maxRetries:1,minIntervalMs:220,timeoutMs:12_000,
-        }):null,
+        })):null,
+      ...(sleepImpl?{sleepImpl}:{}),
       minBetweenSymbolsMs:220,
     });
   }
@@ -124,6 +185,7 @@ export async function runNativePITBatchCliV1(config){
     sourceAttestedFullSymbolDayPriceJoin:
       report.sourceAttestedFullSymbolDayPriceJoin??false,
     nextOffset:report.nextOffset??null,
+    rosterDigestSha256:report.rosterDigestSha256??null,
     fullMarketOpportunityDenominatorVerified:false,
     trueMarketWideRecall:null,profitabilityProven:false,
     executionAuthority:"NONE",
