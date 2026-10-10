@@ -18,8 +18,16 @@ const proofs = ['trading-core-desktop','trading-core-mobile'].map(project => {
     || !Number.isInteger(receipt.walletCount) || receipt.walletCount < 0 || receipt.walletCount > 4
     || typeof receipt.stagingWalletReady !== 'boolean'
     || typeof receipt.paperWorkerReady !== 'boolean'
+    || !Array.isArray(receipt.walletBlockers)
+    || !Array.isArray(receipt.workerBlockers)
+    || receipt.walletBlockers.some(entry => typeof entry !== 'string' || !/^[A-Z][A-Z0-9_]{1,90}$/.test(entry))
+    || receipt.workerBlockers.some(entry => typeof entry !== 'string' || !/^[A-Z][A-Z0-9_]{1,90}$/.test(entry))
     || receipt.automaticTradingReadinessVerified !== true
-    || receipt.automaticPaperTradingReadinessVerified !== true
+    || typeof receipt.automaticPaperTradingReadinessVerified !== 'boolean'
+    || receipt.automaticPaperTradingReadinessVerified !== receipt.paperWorkerReady
+    || (receipt.paperWorkerReady === false && receipt.workerBlockers.length === 0)
+    || ((receipt.stagingWalletReady === false || receipt.walletCount !== 4)
+      && receipt.walletBlockers.length === 0 && receipt.workerBlockers.length === 0)
     || receipt.researchCenterReady !== true
     || receipt.backtesterReady !== true
     || receipt.telegramTradeJournalReady !== true
