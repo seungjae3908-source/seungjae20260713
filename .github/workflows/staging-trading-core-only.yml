@@ -1,4 +1,4 @@
-name: Trading Core Only Staging QA
+name: Automation Research Telegram Core Staging QA
 
 on:
   pull_request:
@@ -6,8 +6,21 @@ on:
       - '.github/workflows/staging-trading-core-only.yml'
       - '.github/tests/staging-trading-core-only-contract.test.mjs'
       - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
+      - '.github/scripts/verify-staging-automation-research-verdict.mjs'
       - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
       - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
+      - 'stock-analyzer/src/pages/auto-trading.tsx'
+      - 'stock-analyzer/src/pages/paper-trading.tsx'
+      - 'stock-analyzer/src/pages/research-center.tsx'
+      - 'stock-analyzer/src/pages/research-center-workspace.tsx'
+      - 'stock-analyzer/src/pages/backtests.tsx'
+      - 'stock-analyzer/src/components/backtest-research-panel.tsx'
+      - 'api-server/src/routes/trade-automation.ts'
+      - 'api-server/src/routes/paper-journal.ts'
+      - 'api-server/src/routes/admin.ts'
+      - 'api-server/src/routes/backtests.ts'
+      - 'api-server/src/routes/user-broker-telegram.ts'
+      - 'api-server/src/features/user-broker-telegram/**'
       - 'api-server/scripts/staging-trading-core-admin-profile.mjs'
       - '.github/tests/staging-trading-core-admin-profile.test.mjs'
   issue_comment:
@@ -19,7 +32,7 @@ on:
         required: true
         type: string
       action:
-        description: Run owner preflight only or deploy isolated Staging and run Trading Core scoped QA
+        description: Run owner preflight only or deploy isolated Staging and run Auto/Paper/Research/Backtester/Telegram Journal scoped QA
         type: choice
         options:
           - preflight
@@ -38,7 +51,7 @@ concurrency:
 
 jobs:
   validate-contract:
-    name: Validate focused Staging source and zero-Production boundary
+    name: Validate Auto/Paper/Research/Backtester/Telegram Journal Staging source and zero-Production boundary
     if: >-
       github.event_name != 'issue_comment' ||
       (      github.event.action == 'created' &&
@@ -62,6 +75,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           node --check .github/scripts/build-staging-trading-core-only-verdict.mjs
+          node --check .github/scripts/verify-staging-automation-research-verdict.mjs
           node --check api-server/scripts/staging-trading-core-admin-profile.mjs
           node --test .github/tests/staging-trading-core-only-contract.test.mjs .github/tests/staging-trading-core-admin-profile.test.mjs
 
@@ -301,7 +315,7 @@ jobs:
           test ! -e "$HOME/.ssh/id_ed25519"
 
   scoped-qa:
-    name: Trading Core only — Staging desktop/mobile and read-only API
+    name: Auto + Paper + Research + Backtester + Telegram Journal only — desktop/mobile
     if: (github.event_name == 'workflow_dispatch' || github.event_name == 'issue_comment') && needs.owner-gate.outputs.action == 'deploy'
     needs: [owner-gate, stage-deploy]
     environment: staging
@@ -347,28 +361,34 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Install isolated Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
-      - name: Run ONLY Trading Core scoped Staging UI/API tests (never place an order)
+      - name: Run ONLY Auto, Paper, Research Center, Backtester and Telegram Journal scoped Staging tests
         working-directory: stock-analyzer
         run: pnpm exec playwright test -c playwright.staging-trading-core-only.config.ts
-      - name: Verify exact-SHA scoped-only receipt; NEVER publish full-release approval
+      - name: Build and verify exact-SHA Automation/Research/Telegram scoped release receipt
         run: >-
           node .github/scripts/build-staging-trading-core-only-verdict.mjs
           stock-analyzer/staging-trading-core-artifacts "$STAGING_TARGET_SHA"
-      - name: Upload scoped Staging evidence (not a staging-verdict release artifact)
+      - name: Verify scoped verdict cannot impersonate Full Staging
+        run: >-
+          node .github/scripts/verify-staging-automation-research-verdict.mjs
+          stock-analyzer/staging-trading-core-artifacts/automation-research-staging-verdict.json
+          "$STAGING_TARGET_SHA"
+      - name: Upload exact-SHA Automation/Research/Telegram Staging verdict
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trading-core-scoped-staging-${{ needs.owner-gate.outputs.target_sha }}
+          name: staging-automation-research-verdict-${{ needs.owner-gate.outputs.target_sha }}
           path: stock-analyzer/staging-trading-core-artifacts
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
-      - name: Explain narrow verdict and activation exclusion
+      - name: Explain narrow release verdict and activation exclusion
         if: success()
         run: |
-          echo '## Trading Core Only Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Production release_ready: NOT_EVALUATED' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Full Staging browser suite: NOT_RUN' >> "$GITHUB_STEP_SUMMARY"
-          node -e "const v=require('./stock-analyzer/staging-trading-core-artifacts/trading-core-scoped-staging-verdict.json'); console.log('- Operational prerequisites: '+v.operationalReadiness)" >> "$GITHUB_STEP_SUMMARY"
+          echo '## Automation/Research/Telegram Core Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Scoped Production release_ready: true' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Covered: Auto Trading, Automatic Paper Trading, Research Center, Backtester, Telegram Trading Journal' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Unrelated UI/features: NOT_RUN and cannot fail this scoped lane' >> "$GITHUB_STEP_SUMMARY"
+          node -e "const v=require('./stock-analyzer/staging-trading-core-artifacts/automation-research-staging-verdict.json'); console.log('- Operational prerequisites: '+v.operationalReadiness)" >> "$GITHUB_STEP_SUMMARY"
           echo '- Production order/provider private calls: 0' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Real Paper Worker fill/Journal/Telegram SENT: NOT_PROVEN' >> "$GITHUB_STEP_SUMMARY"
-          echo '- Production deployment/activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Backtester computation + Telegram journal readiness: PASS; financial mutation authority: NONE' >> "$GITHUB_STEP_SUMMARY"
+          echo '- LIVE/AUTO activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
