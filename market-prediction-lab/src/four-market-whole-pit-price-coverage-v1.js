@@ -11,6 +11,13 @@ import {auditHistoricalPITVenueUniverseV1} from "./historical-pit-venue-universe
  * NEVER proof of exchange completeness or an as-of scanner observation.
  */
 const DAY=86_400_000;
+// Fixed 3-year denominator, independent of caller-selected or fetched days.
+// Stock official trading session calendar is a separate required source.
+export const WHOLE_MARKET_BENCHMARK_WINDOW_V1=Object.freeze({
+  startMs:Date.parse("2023-09-26T00:00:00.000Z"),
+  endExclusiveMs:Date.parse("2026-09-26T00:00:00.000Z"),
+  expectedCryptoUtcDayCount:1096,
+});
 export const FOUR_MARKET_WHOLE_SCOPE_V1=Object.freeze({
   KR_STOCK:Object.freeze({
     venue:"KRX",scope:"ALL_HISTORIC_KOSPI_KOSDAQ_KONEX",
@@ -207,6 +214,7 @@ export function auditFourMarketHistoricalWholeUniverseV1({
   if(!object(requestedTradingDaysByMarket)||!object(dailyReceiptsByMarket))
     throw new TypeError("WHOLE_FOUR_MARKET_INPUT_INVALID");
   const results={};
+  const benchmark=WHOLE_MARKET_BENCHMARK_WINDOW_V1;
   for(const market of MARKETS){
     const days=requestedTradingDaysByMarket[market];
     if(!Array.isArray(days)||!days.length||days.length>1100
@@ -214,9 +222,31 @@ export function auditFourMarketHistoricalWholeUniverseV1({
       results[market]={
         ...blocked(market,"HISTORICAL_TRADING_SESSION_CALENDAR_NOT_CONNECTED"),
         requestedTradingDays:null,sourceAttestedPriceJoinedDays:0,days:[],
+        benchmarkCalendarStatus:"REQUESTED_CALENDAR_MISSING_OR_INVALID",
+        benchmarkPeriodSourceAttestedPriceJoined:false,
+        fullBenchmarkDateCoverage:false,sourceAttestedMonthlyCoverage:{},
+        incompleteDaysPreview:[],blockedReasonCounts:{},
       };
       continue;
     }
+    if(days.some(d=>d<benchmark.startMs||d>=benchmark.endExclusiveMs)){
+      results[market]={
+        ...blocked(market,"REQUESTED_DATE_OUTSIDE_FIXED_THREE_YEAR_BENCHMARK"),
+        requestedTradingDays:null,sourceAttestedPriceJoinedDays:0,days:[],
+        benchmarkCalendarStatus:"REQUESTED_DATES_OUTSIDE_FIXED_BENCHMARK",
+        benchmarkPeriodSourceAttestedPriceJoined:false,
+        fullBenchmarkDateCoverage:false,sourceAttestedMonthlyCoverage:{},
+        incompleteDaysPreview:[],blockedReasonCounts:{},
+      };
+      continue;
+    }
+    const crypto=market==="CRYPTO_SPOT"||market==="CRYPTO_FUTURES";
+    const exactCryptoCalendar=crypto&&
+      days.length===benchmark.expectedCryptoUtcDayCount&&
+      days.every((day,i)=>day===benchmark.startMs+i*DAY);
+    const calendarStatus=crypto
+      ?(exactCryptoCalendar?"FULL_1096_UTC_DAYS":"PARTIAL_FIXED_CRYPTO_UTC_CALENDAR")
+      :"STOCK_EXCHANGE_SESSION_CALENDAR_UNVERIFIED";
     const receipts=dailyReceiptsByMarket[market];
     const input=object(receipts)?receipts:{};
     const dayResults=days.map(dayStartMs=>{
@@ -227,12 +257,44 @@ export function auditFourMarketHistoricalWholeUniverseV1({
       });
     });
     const covered=dayResults.filter(r=>r.sourceAttestedFullSymbolDayPriceJoin).length;
+    const fixtureJoined=dayResults.filter(r=>
+      r.status==="TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY").length;
+    const completeNonFixture=dayResults.filter(r=>
+      r.status==="SOURCE_ATTESTED_FULL_NAME_DAILY_JOIN_ONLY").length;
+    const months={},reasonCounts={},incomplete=[];
+    for(let i=0;i<days.length;i++){
+      const month=new Date(days[i]).toISOString().slice(0,7);
+      const stats=months[month]??={requestedDays:0,sourceAttestedPriceJoinedDays:0,
+        fixtureJoinedDays:0,blockedOrIncompleteDays:0};
+      const receipt=dayResults[i];
+      stats.requestedDays++;
+      if(receipt.sourceAttestedFullSymbolDayPriceJoin){
+        stats.sourceAttestedPriceJoinedDays++;
+        if(receipt.status==="TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY")
+          stats.fixtureJoinedDays++;
+      }else{
+        stats.blockedOrIncompleteDays++;
+        reasonCounts[receipt.reason]=(reasonCounts[receipt.reason]??0)+1;
+        if(incomplete.length<15)
+          incomplete.push({dateUtc:new Date(days[i]).toISOString().slice(0,10),
+            reason:receipt.reason});
+      }
+    }
+    // Self-provided stock dates cannot prove an official 3-year calendar.
+    const benchmarkPeriodSourceAttestedPriceJoined=
+      exactCryptoCalendar&&completeNonFixture===days.length;
     results[market]={
       ...blocked(market,covered===days.length?
         "SOURCE_ATTESTED_NOT_INDEPENDENTLY_AUTHENTICATED":
         "SOME_HISTORIC_TRADING_SESSIONS_OR_NAMES_UNVERIFIED"),
       requestedTradingDays:days.length,sourceAttestedPriceJoinedDays:covered,
       blockedOrIncompleteDays:days.length-covered,
+      benchmarkCalendarStatus:calendarStatus,
+      fullBenchmarkDateCoverage:exactCryptoCalendar,
+      benchmarkPeriodSourceAttestedPriceJoined,
+      fixtureJoinedDays:fixtureJoined,
+      sourceAttestedMonthlyCoverage:months,
+      incompleteDaysPreview:incomplete,blockedReasonCounts:reasonCounts,
       days:dayResults.map(r=>({
         dateUtc:new Date(r.dayStartMs??0).toISOString().slice(0,10),
         status:r.status,reason:r.reason,
@@ -249,6 +311,10 @@ export function auditFourMarketHistoricalWholeUniverseV1({
     markets:results,allMarketsSourceAttestedPriceJoined:
       MARKETS.every(m=>results[m].requestedTradingDays!=null
         &&results[m].sourceAttestedPriceJoinedDays===results[m].requestedTradingDays),
+    allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined:
+      MARKETS.every(m=>results[m].benchmarkPeriodSourceAttestedPriceJoined===true),
+    fixedBenchmarkStartUtc:"2023-09-26",
+    fixedBenchmarkEndInclusiveUtc:"2026-09-25",
     historicalFullMarketOpportunityDenominatorVerified:false,
     historicalScannerRecall:null,actualFillCount:null,
     trueMarketWideRecall:null,netProfitPct:null,OOSPassCount:0,

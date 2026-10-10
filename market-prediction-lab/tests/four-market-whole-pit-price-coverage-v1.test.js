@@ -1,11 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
+import {mkdtempSync,writeFileSync,readFileSync,statSync,chmodSync,existsSync,rmSync}
+ from "node:fs";
+import {tmpdir} from "node:os";
+import {join,resolve,dirname} from "node:path";
+import {fileURLToPath} from "node:url";
+import {spawnSync} from "node:child_process";
 import {fixedHistoricalCryptoUtcDatesV1,THREE_YEAR_UTC_DATE_SCOPE_V1,
  reportFourWholePITReadinessV1} from "../scripts/report-four-market-whole-pit-readiness-v1.mjs";
 import {
   FOUR_MARKET_WHOLE_SCOPE_V1 as SCOPE,
-  digestWholeVenueDailyRowsV1,
+  digestWholeVenueDailyRowsV1,WHOLE_MARKET_BENCHMARK_WINDOW_V1,
   auditWholeVenuePITDailyCoverageV1 as audit,
   auditFourMarketHistoricalWholeUniverseV1 as four,
 } from "../src/four-market-whole-pit-price-coverage-v1.js";
@@ -196,4 +202,86 @@ test("two non-overlapping lives of one ticker within the same date cannot collap
  assert.equal(r.reason,"PIT_SAME_DAY_IDENTIFIER_REUSE_REQUIRES_SESSION_PROOF");
  assert.equal(r.actualMarketWideOpportunityCount,null);
  assert.equal(r.trueMarketWideRecall,null);
+});
+
+test("one dated price snapshot cannot replace 1096 crypto benchmark days",()=>{
+ const r=reportFourWholePITReadinessV1({
+   requestedTradingDaysByMarket:{
+     CRYPTO_SPOT:[START],CRYPTO_FUTURES:[START],
+     KR_STOCK:[START],US_STOCK:[START],
+   },
+   dailyReceiptsByMarket:{CRYPTO_SPOT:{[String(START)]:source("CRYPTO_SPOT")}},
+ });
+ assert.equal(r.markets.CRYPTO_SPOT.requestedTradingDays,1096);
+ assert.equal(r.markets.CRYPTO_FUTURES.requestedTradingDays,1096);
+ assert.equal(r.markets.CRYPTO_SPOT.sourceAttestedPriceJoinedDays,1);
+ assert.equal(r.markets.CRYPTO_SPOT.fixtureJoinedDays,1);
+ assert.equal(r.markets.CRYPTO_SPOT.blockedOrIncompleteDays,1095);
+ assert.equal(r.markets.CRYPTO_SPOT.benchmarkCalendarStatus,"FULL_1096_UTC_DAYS");
+ assert.equal(r.markets.CRYPTO_SPOT.benchmarkPeriodSourceAttestedPriceJoined,false);
+ assert.equal(r.markets.US_STOCK.benchmarkCalendarStatus,
+   "STOCK_EXCHANGE_SESSION_CALENDAR_UNVERIFIED");
+ assert.equal(r.allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined,false);
+ assert.equal(r.partialCallerCryptoCalendarIgnored.CRYPTO_SPOT,true);
+ assert.equal(r.partialCallerCryptoCalendarIgnored.CRYPTO_FUTURES,true);
+ assert.equal(r.trueMarketWideRecall,null);
+ assert.equal(r.profitabilityProven,false);
+});
+test("monthly source gap ledger retains missing days as BLOCKED, never zero events",()=>{
+ const x=reportFourWholePITReadinessV1();
+ for(const market of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  const m=x.markets[market];
+  assert.equal(m.sourceAttestedPriceJoinedDays,0);
+  assert.equal(m.benchmarkPeriodSourceAttestedPriceJoined,false);
+  assert.equal(m.fullBenchmarkDateCoverage,true);
+  assert.equal(m.blockedReasonCounts.PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED,1096);
+  assert.equal(m.sourceAttestedMonthlyCoverage["2023-09"].requestedDays,5);
+  assert.equal(m.sourceAttestedMonthlyCoverage["2026-09"].requestedDays,25);
+  assert.equal(m.incompleteDaysPreview.length,15);
+  assert.equal(m.incompleteDaysPreview[0].dateUtc,"2023-09-26");
+  assert.equal(m.actualMarketWideOpportunityCount,null);
+ }
+ assert.equal(WHOLE_MARKET_BENCHMARK_WINDOW_V1.expectedCryptoUtcDayCount,1096);
+ assert.equal(x.allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined,false);
+});
+test("outside fixed 3-year window cannot enter denominator",()=>{
+ const other=Date.parse("2026-10-09T00:00:00Z");
+ const r=four({requestedTradingDaysByMarket:{CRYPTO_SPOT:[other]}});
+ assert.equal(r.markets.CRYPTO_SPOT.reason,
+   "REQUESTED_DATE_OUTSIDE_FIXED_THREE_YEAR_BENCHMARK");
+ assert.equal(r.markets.CRYPTO_SPOT.requestedTradingDays,null);
+ assert.equal(r.markets.CRYPTO_SPOT.actualMarketWideOpportunityCount,null);
+});
+test("PIT readiness file inputs are private, report is immutable create-only",()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-benchmark-readiness-"));
+ try{
+  const input=join(folder,"source.json"),output=join(folder,"report.json");
+  writeFileSync(input,JSON.stringify({
+   requestedTradingDaysByMarket:{CRYPTO_SPOT:[START]},
+   dailyReceiptsByMarket:{},
+  }),{mode:0o600});
+  const cli=resolve(dirname(fileURLToPath(import.meta.url)),
+   "../scripts/report-four-market-whole-pit-readiness-v1.mjs");
+  const run=()=>spawnSync(process.execPath,[cli,input,output],{
+    encoding:"utf8",maxBuffer:3*1024*1024,timeout:20000,
+  });
+  chmodSync(input,0o644);
+  let res=run();
+  assert.notEqual(res.status,0);
+  assert.match(res.stderr,/PIT_CHUNK_PRIVATE_INPUT_UNSAFE/);
+  assert.equal(existsSync(output),false);
+  chmodSync(input,0o600);
+  res=run();
+  assert.equal(res.status,0,res.stderr);
+  const report=JSON.parse(readFileSync(output,"utf8"));
+  assert.equal(report.markets.CRYPTO_SPOT.requestedTradingDays,1096);
+  assert.equal(report.markets.CRYPTO_SPOT.sourceAttestedPriceJoinedDays,0);
+  assert.equal(report.allMarketsFullBenchmarkPeriodSourceAttestedPriceJoined,false);
+  assert.equal(statSync(output).mode&0o077,0);
+  const before=readFileSync(output);
+  res=run();
+  assert.notEqual(res.status,0);
+  assert.match(res.stderr,/EEXIST/);
+  assert.deepEqual(readFileSync(output),before);
+ }finally{rmSync(folder,{recursive:true,force:true});}
 });
