@@ -46,8 +46,15 @@ jobs:
             if(r.scope!=="ALL_HISTORIC_SYMBOLS_NOT_SIX_SELECTED_ALTS" ||
                Object.keys(r.markets).length!==4||
                names.some(m=>r.markets[m]?.status!=="BLOCKED_WHOLE_MARKET_COVERAGE" ||
-                 r.markets[m]?.requestedTradingDays!==null ||
                  r.markets[m]?.actualMarketWideOpportunityCount!==null) ||
+               r.markets.KR_STOCK.requestedTradingDays!==null ||
+               r.markets.US_STOCK.requestedTradingDays!==null ||
+               r.markets.CRYPTO_SPOT.requestedTradingDays!==1096 ||
+               r.markets.CRYPTO_FUTURES.requestedTradingDays!==1096 ||
+               r.markets.CRYPTO_SPOT.days.some(x=>
+                 x.reason!=="PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED") ||
+               r.markets.CRYPTO_FUTURES.days.some(x=>
+                 x.reason!=="PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED") ||
                r.markets.CRYPTO_SPOT.venue!=="UPBIT_KRW" ||
                r.markets.CRYPTO_FUTURES.venue!=="BITGET_USDT_FUTURES" ||
                JSON.stringify(r.markets.CRYPTO_FUTURES.allowedDirections)!=="[\"LONG\",\"SHORT\"]"||
