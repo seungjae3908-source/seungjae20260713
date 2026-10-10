@@ -19,6 +19,10 @@ export const ROOMS = Object.freeze([
 export const BIND_KEYS = Object.freeze([...ROOMS, 'TELEGRAM_OWNER_MEMBER_ID']);
 export const TRADING_BOOLEAN_GATES = Object.freeze([
   'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED','PRIVATE_TRADING_API_ALLOWED',
+  // Alternate legacy/provider switches must not become active during a PM2-only bind.
+  'LIVE_TRADING_ENABLED','AUTO_TRADING_ENABLED',
+  'TOSS_ORDER_ENABLED','KIWOOM_ORDER_ENABLED','UPBIT_ORDER_ENABLED',
+  'BITGET_ORDER_ENABLED','TRANSFER_ENABLED','WITHDRAWAL_ENABLED',
   'ORDER_EXECUTION_ENABLED','LIVE_TRADING_ACTIVATION_APPROVED',
   'SPOT_LIVE_LIMITED_ACTIVATION_APPROVED','LIVE_AUTOMATIC_TRADING_ENABLED',
   'FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED','BITGET_FUTURES_LIVE_ORDER_ENABLED',
@@ -33,6 +37,8 @@ export const TRADING_AUTHORITY_KEYS = Object.freeze([
   'executionAuthority','FUTURES_LIVE_EXECUTION_AUTHORITY',
 ]);
 export const TELEGRAM_RUNTIME_FLAGS = Object.freeze([
+  // Server starts workers by default unless this global switch is explicitly false.
+  'BACKGROUND_WORKERS_ENABLED',
   'LIVE_TELEGRAM_ACTIVATION_APPROVED',
   'TELEGRAM_INTELLIGENCE_WORKER_ENABLED',
   'PERSONAL_TELEGRAM_WORKER_ENABLED',
@@ -128,7 +134,8 @@ export function preflightBinding({mode='plan',mainSha,deployedSha,pm2Sha,markerS
   if (!receipt.tradingSafe) {
     receipt.classification='FINANCIAL_AUTHORITY_NOT_OFF'; return receipt;
   }
-  if (runtime?.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true'
+  if (runtime?.BACKGROUND_WORKERS_ENABLED === 'false'
+    || runtime?.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true'
     || runtime?.TELEGRAM_INTELLIGENCE_WORKER_ENABLED !== 'true'
     || runtime?.PERSONAL_TELEGRAM_WORKER_ENABLED !== 'true') {
     receipt.classification='TELEGRAM_WORKER_GATE_INACTIVE'; return receipt;
