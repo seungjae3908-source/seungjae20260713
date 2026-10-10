@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
+import {fixedHistoricalCryptoUtcDatesV1,THREE_YEAR_UTC_DATE_SCOPE_V1,
+ reportFourWholePITReadinessV1} from "../scripts/report-four-market-whole-pit-readiness-v1.mjs";
 import {
   FOUR_MARKET_WHOLE_SCOPE_V1 as SCOPE,
   digestWholeVenueDailyRowsV1,
@@ -154,4 +156,28 @@ test("bad market, non-date and invented calendar order do not get as-of credit",
  const r=four({requestedTradingDaysByMarket:{KR_STOCK:[START,START]}});
  assert.equal(r.markets.KR_STOCK.requestedTradingDays,null);
  assert.equal(r.markets.KR_STOCK.status,"BLOCKED_WHOLE_MARKET_COVERAGE");
+});
+
+test("three-year crypto days cover the entire FIXED benchmark, not a chosen day",()=>{
+ const dates=fixedHistoricalCryptoUtcDatesV1();
+ assert.equal(dates.CRYPTO_SPOT.length,1096);
+ assert.equal(dates.CRYPTO_FUTURES.length,1096);
+ assert.equal(dates.CRYPTO_SPOT[0],THREE_YEAR_UTC_DATE_SCOPE_V1.startMs);
+ assert.equal(dates.CRYPTO_SPOT.at(-1),
+  THREE_YEAR_UTC_DATE_SCOPE_V1.endExclusiveMs-D);
+ assert.deepEqual(dates.CRYPTO_FUTURES,dates.CRYPTO_SPOT);
+ assert.ok(dates.CRYPTO_SPOT.every((day,i)=>
+  i===0||day===dates.CRYPTO_SPOT[i-1]+D));
+ const r=reportFourWholePITReadinessV1();
+ assert.equal(r.markets.CRYPTO_SPOT.requestedTradingDays,1096);
+ assert.equal(r.markets.CRYPTO_FUTURES.requestedTradingDays,1096);
+ assert.equal(r.markets.CRYPTO_SPOT.sourceAttestedPriceJoinedDays,0);
+ assert.equal(r.markets.CRYPTO_SPOT.days[0].reason,
+  "PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED");
+ assert.equal(r.markets.CRYPTO_FUTURES.days.at(-1).reason,
+  "PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED");
+ assert.equal(r.markets.KR_STOCK.requestedTradingDays,null);
+ assert.equal(r.markets.US_STOCK.requestedTradingDays,null);
+ assert.equal(r.trueMarketWideRecall,null);
+ assert.equal(r.profitabilityProven,false);
 });
