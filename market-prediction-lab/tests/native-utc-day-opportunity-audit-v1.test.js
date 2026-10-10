@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { BitgetPublicApiError } from "../src/bitget-public-client.js";
 import { auditNativeObservedMinuteWindowV1 as audit } from "../src/historical-intraday-opportunity-audit-v1.js";
 import { UTC_DAY_SAMPLE_V1, nativeDayResultFromCollectedV1,
   probeNativeUtcDayHistoricalV1 } from "../scripts/probe-native-utc-day-historical-v1.mjs";
@@ -100,7 +101,7 @@ test("bad provider / venue / private metadata cannot be promoted",()=>{
 test("all 4 market outage receipts preserve NULL not fake 0% PnL",async()=>{
   const r=await probeNativeUtcDayHistoricalV1({
     upbitFetch:async()=>({ok:false,status:451}),
-    bitgetClient:{get:async()=>{const e=new Error("public network unavailable");e.name="BitgetPublicApiError";throw e;}},
+    bitgetClient:{get:async()=>{throw new BitgetPublicApiError("public network unavailable");}},
   });
   assert.equal(r.profitabilityProven,false);
   assert.equal(r.executionAuthority,"NONE");
