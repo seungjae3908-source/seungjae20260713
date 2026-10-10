@@ -275,8 +275,8 @@ test('watch cap diagnostics are bounded, aggregate-only, and legacy missing coun
   const base = marketWatch();
   const legacy = sanitizeMarketWatchReadback(base);
   assert.equal(legacy.status, 'PARTIAL');
-  assert.equal(legacy.markets[2].sourceCappedCount, null);
-  assert.equal(legacy.markets[2].candidateCappedCount, null);
+  assert.equal(legacy.markets[2]?.sourceCappedCount, null);
+  assert.equal(legacy.markets[2]?.candidateCappedCount, null);
   const withCaps = {
     ...base,
     markets: base.markets.map((m, i) => i === 2 ? {
@@ -289,10 +289,10 @@ test('watch cap diagnostics are bounded, aggregate-only, and legacy missing coun
   };
   const good = sanitizeMarketWatchReadback(withCaps);
   assert.equal(good.status, 'PARTIAL');
-  assert.equal(good.markets[2].sourceCappedCount, 3);
-  assert.equal(good.markets[2].qualifyingCandidateCount, 14);
-  assert.equal(good.markets[2].candidateCappedCount, 2);
-  assert.equal(good.markets[3].candidateCappedCount, null);
+  assert.equal(good.markets[2]?.sourceCappedCount, 3);
+  assert.equal(good.markets[2]?.qualifyingCandidateCount, 14);
+  assert.equal(good.markets[2]?.candidateCappedCount, 2);
+  assert.equal(good.markets[3]?.candidateCappedCount, null);
   assert.equal(JSON.stringify(good).includes('DO_NOT_PROJECT_TICKER'), false);
   assert.equal(good.paperExecutionProven, false);
   assert.equal(good.executionAuthority, 'NONE');

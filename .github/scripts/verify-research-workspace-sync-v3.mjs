@@ -530,16 +530,20 @@ function isCanonicalMemberFixtureOnlyChange(p){
 const researchCenterChanged=changed.filter((p)=>
  researchCenterIntegrationReviewed.includes(p)&&!isCanonicalMemberFixtureOnlyChange(p)
 );
-// Research market-watch DTO-only review: the exact original seven-path
-// exception remains bounded. A wider Python/UI cap readback change MUST
-// modify and execute the dedicated Research Center predeploy workflow.
+// Exact ten-file watch cap readback exception. The protected Paper schedule
+// is deliberately untouched: the Research Dashboard and Research Center
+// dedicated QA already run Python, backend and desktop/mobile tests.
+
 const publicWatchReadbackOnlyPaths=[
  '.github/scripts/verify-research-workspace-sync-v3.mjs',
  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
  'api-server/src/services/research-center-readonly-contract.service.ts',
  'api-server/src/services/research-center-readonly-contract.service.test.ts',
+ 'research-dashboard/lightweight_market_watch_readback.py',
+ 'research-dashboard/test/test_lightweight_market_watch_readback.py',
  'stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts',
  'stock-analyzer/src/components/research-lightweight-market-watch-panel.tsx',
+ 'stock-analyzer/src/lib/research-center.ts',
  'stock-analyzer/src/pages/research-center.tsx',
 ];
 function reviewedPublicWatchReadbackOnly(){
@@ -550,6 +554,11 @@ function reviewedPublicWatchReadbackOnly(){
  // Any modification to the protected workflow restores the original two-guard
  // requirement. It is not necessary to modify Paper's allowlist or tests.
  if(committed!==git('show',MAIN+':'+workflowPath))return false;
+ const dashboardWorkflowPath='.github/workflows/research-dashboard-validation.yml';
+ const dashboardWorkflow=git('show','HEAD:'+dashboardWorkflowPath);
+ if(dashboardWorkflow!==git('show',MAIN+':'+dashboardWorkflowPath)
+    ||!dashboardWorkflow.includes('python3 test/test_lightweight_market_watch_readback.py'))
+   return false;
  for(const evidence of [
   "'api-server/src/services/research-center-readonly-contract.service.ts'",
   "'api-server/src/services/research-center-readonly-contract.service.test.ts'",
@@ -563,6 +572,9 @@ function reviewedPublicWatchReadbackOnly(){
  const page=git('show','HEAD:stock-analyzer/src/pages/research-center.tsx');
  const backend=git('show','HEAD:api-server/src/services/research-center-readonly-contract.service.test.ts');
  const browser=git('show','HEAD:stock-analyzer/e2e/research-center-simple-ko-ai-debate.spec.ts');
+ const py=git('show','HEAD:research-dashboard/lightweight_market_watch_readback.py');
+ const pyTests=git('show','HEAD:research-dashboard/test/test_lightweight_market_watch_readback.py');
+ const frontendType=git('show','HEAD:stock-analyzer/src/lib/research-center.ts');
  const requireAll=(source,tokens)=>tokens.every(token=>source.includes(token));
  return requireAll(proof,[
    "market watch usable source reconciliation",
@@ -572,17 +584,33 @@ function reviewedPublicWatchReadbackOnly(){
    "bounded 2-minute Research overview polling",
    "no hidden-tab overview polling",
    "cached Research overview refetch error must propagate to watch",
+   "watch cap source parity",
+   "watch cap bounded dropped input",
+   "watch cap old-release unknown",
+ ])&&requireAll(py,[
+   "cap_keys = ('sourceCappedCount', 'qualifyingCandidateCount', 'candidateCappedCount')",
+   "source_cap > listed - observed",
+   "qualified != candidates + candidate_cap",
+ ])&&requireAll(pyTests,[
+   "test_cap_counters_are_bounded_aggregate_only_and_legacy_is_unknown",
+ ])&&requireAll(frontendType,[
+   "sourceCappedCount: number | null",
+   "candidateCappedCount: number | null",
  ])&&requireAll(dto,[
    "const usableCount = rows.filter(",
    "v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4)",
    "v.status === 'BLOCKED_DATA' && usableCount !== 0",
    "v.status === 'STALE' ? ageMs <= 360_000 : ageMs > 360_000",
    "profitabilityProven: false, executionAuthority: 'NONE'",
+   "capAllNull",
+   "qualifyingCandidateCount === newCandidates + candidateCappedCount",
  ])&&requireAll(panel,[
    "if (value.startsWith('BLOCKED_')) return '데이터 미연결';",
    "if (watchStatus === 'STALE') return '이전 기록 · 수집 중단';",
    "readbackFailed ? '최근 조회 실패 · 이전 기록'",
    "실주문 권한은 없습니다.",
+   "research-market-watch-cap-warning",
+   "후보 출력 상한 제외",
  ])&&requireAll(page,[
    "refetchInterval: 120_000,",
    "refetchIntervalInBackground: false,",
@@ -590,10 +618,12 @@ function reviewedPublicWatchReadbackOnly(){
  ])&&requireAll(backend,[
    "watcher source health states and staleness must agree",
    "status: 'BLOCKED_DATA'",
+   "watch cap diagnostics are bounded",
  ])&&requireAll(browser,[
    "four-market watch shows partial live public sources",
    "a stale public feed never appears as currently collecting",
    "market-watch overview polls every two minutes while visible",
+   "bounded source and candidate overflow stays observation-only",
  ]);
 }
 if(researchCenterChanged.length>0){
