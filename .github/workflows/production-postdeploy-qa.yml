@@ -326,7 +326,11 @@ jobs:
                   workflow_id: stagingWorkflow,
                   ref: 'main',
                   inputs: automationResearch
-                    ? { sha: target, action: 'deploy' }
+                    ? {
+                        sha: target,
+                        action: 'deploy',
+                        delegated_by_run_id: String(context.runId),
+                      }
                     : {
                         sha: target,
                         action: 'deploy',
