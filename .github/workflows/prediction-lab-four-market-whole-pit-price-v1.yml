@@ -85,6 +85,7 @@ jobs:
         run: |
           node --input-type=module -e '
             import {writeFileSync} from "node:fs";
+            import {createHash} from "node:crypto";
             import {prepareStockSourceLimitedDailyEvidenceV1 as pack} from "./market-prediction-lab/src/stock-source-limited-daily-evidence-v1.js";
             const safety={executionAuthority:"NONE",profitabilityProven:false,
               trueMarketWideRecall:null,actualMarketWideOpportunityCount:null,
@@ -100,6 +101,7 @@ jobs:
               status:"SOURCE_LIMITED_TWO_KRX_DATES_JOINED_ONLY",
               requestedTradingDates:["20250207","20250210"],
               recordSha256:"a".repeat(64),records:[krRow],
+              joinedSourceRowsSha256:createHash("sha256").update(JSON.stringify([krRow])).digest("hex"),
               observedCurrentSymbols:1,joinedPriorPriceSymbols:1,
               missingPreviousPriceCount:0,officialAdjacentTradingSessionCalendarVerified:false,
               corporateActionsAdjustedAndVerified:false,
@@ -121,6 +123,7 @@ jobs:
               status:"SOURCE_LIMITED_TWO_US_ASOF_DATES_JOINED_ONLY",
               requestedTradingDates:["2025-01-31","2025-02-03"],
               sourceRowsSha256:"b".repeat(64),rows:[usRow],
+              joinedSourceRowsSha256:createHash("sha256").update(JSON.stringify([usRow])).digest("hex"),
               observedCurrentAsOfTickerCount:1,joinedPriorDailyPriceCount:1,
               missingPriorPriceOrIdentityCount:0,
               adjacentStockTradingSessionsAuthenticated:false,

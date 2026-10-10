@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {mkdtempSync,writeFileSync,readFileSync,statSync,chmodSync,
  existsSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
@@ -125,6 +126,8 @@ test("authorized KRX two dated three-board GETs save a reusable local source rec
   assert.equal(r.sourceAttestedNameCount,3);
   const source=JSON.parse(readFileSync(out,"utf8"));
   assert.equal(source.records.length,3);
+  assert.equal(source.joinedSourceRowsSha256,
+    createHash("sha256").update(JSON.stringify(source.records)).digest("hex"));
   assert.deepEqual(source.requestedTradingDates,[KR_PRIOR,KR_NOW]);
   assert.equal(source.officialAdjacentTradingSessionCalendarVerified,false);
   assert.equal(source.fullMarketHistoricDelistedUniverseVerified,false);
@@ -145,6 +148,8 @@ test("authorized US two dated as-of roster with ET bars saves full provider coho
   assert.equal(r.sourceAttestedNameCount,2);
   const stored=JSON.parse(readFileSync(out,"utf8"));
   assert.deepEqual(stored.rows.map(row=>row.symbol),["AAA","BBB"]);
+  assert.equal(stored.joinedSourceRowsSha256,
+    createHash("sha256").update(JSON.stringify(stored.rows)).digest("hex"));
   assert.equal(stored.adjacentStockTradingSessionsAuthenticated,false);
   assert.equal(stored.actualMarketWideOpportunityCount,null);
   assert.equal(prepare({market:"US_STOCK",source:stored}).status,

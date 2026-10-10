@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import {collectKrxTwoDatedFullStockDailySourcesV1 as collect,
   KRX_TWO_DATED_SESSION_PRICE_POLICY_V1 as policy}
  from "../src/krx-two-dated-all-stock-sources-v1.js";
@@ -83,6 +84,8 @@ test("two chosen historical KRX source dates join all three boards and no weeken
  assert.equal(a.records.find(x=>x.symbol==="005930").priorCandidateTradingDateYmd,prior);
  assert.equal(a.records.find(x=>x.symbol==="005930").currentTradingDateYmd,current);
  assert.match(a.recordSha256,/^[a-f0-9]{64}$/);
+ assert.equal(a.joinedSourceRowsSha256,
+   createHash("sha256").update(JSON.stringify(a.records)).digest("hex"));
  assert.equal(a.officialAdjacentTradingSessionCalendarVerified,false);
  assert.equal(a.corporateActionsAdjustedAndVerified,false);
  assert.equal(a.fullMarketOpportunityDenominatorVerified,false);
