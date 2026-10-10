@@ -81,9 +81,11 @@ function createScopedPaperJournalRepository(
         user_id: authenticatedUserId, id: record.id, payload: record.payload,
         version: record.version, deleted_at: record.deletedAt, updated_at: serverTime,
       };
-      if (record.kind === 'account' && record.id.startsWith('automatic-paper-admin-v2:')) {
-        throw new PaperJournalError('ADMIN_MARKET_WALLET_SERVER_ONLY',
-          '관리자 시장별 모의계좌는 일반 동기화로 변경할 수 없습니다.', 403);
+      if (record.kind === 'account'
+        && (record.id.startsWith('automatic-paper-admin-v2:')
+          || record.id.startsWith('automatic-paper-member-v2:'))) {
+        throw new PaperJournalError('PAPER_FOUR_MARKET_WALLET_SERVER_ONLY',
+          '시장별 자동모의계좌는 일반 동기화로 변경할 수 없습니다.', 403);
       }
       const isAutoWallet = record.kind === 'account'
         && record.id === 'automatic-paper-account-v1';
@@ -172,10 +174,11 @@ function createScopedPaperJournalRepository(
       assertOwner(userId);
       const { data: reserved, error: checkError } = await client.from('paper_accounts')
         .select('id').eq('user_id', authenticatedUserId)
-        .like('id', 'automatic-paper-admin-v2:%').limit(1);
+        .or('id.like.automatic-paper-admin-v2:%,id.like.automatic-paper-member-v2:%')
+        .limit(1);
       if (checkError) throw databaseFailure();
       if (reserved?.length) {
-        throw new PaperJournalError('ADMIN_PAPER_CAMPAIGN_DELETE_FORBIDDEN',
+        throw new PaperJournalError('PAPER_FOUR_MARKET_CAMPAIGN_DELETE_FORBIDDEN',
           '시장별 독립 모의계좌와 보존 이력을 일괄 삭제할 수 없습니다.', 409);
       }
       return {
