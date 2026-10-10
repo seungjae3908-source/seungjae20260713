@@ -268,11 +268,36 @@ test('verdict verifies desktop and mobile immutable evidence, rejects missing or
     assert.equal(receipt.activationReady, true);
     assert.equal(receipt.features.researchCenter, 'PASS');
     assert.equal(receipt.features.telegramTradeJournal, 'PASS');
-    write('trading-core-mobile', { paperWorkerReady: false, workerBlockers: ['WORKER_OFF'] });
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: false,
+      workerBlockers: ['WORKER_OFF'],
+    });
     result = exec();
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8')).operationalReadiness, 'PREACTIVATION_BLOCKERS_RECORDED');
     assert.equal(JSON.parse(readFileSync(path.join(dir, 'automation-research-staging-verdict.json'), 'utf8')).activationReady, false);
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: true,
+      workerBlockers: ['WORKER_OFF'],
+    });
+    result = exec();
+    assert.notEqual(result.status, 0);
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: false,
+      workerBlockers: [],
+    });
+    result = exec();
+    assert.notEqual(result.status, 0);
+    write('trading-core-mobile', {
+      paperWorkerReady: false,
+      automaticPaperTradingReadinessVerified: false,
+      workerBlockers: ['unsafe blocker details'],
+    });
+    result = exec();
+    assert.notEqual(result.status, 0);
     write('trading-core-mobile', { paperWorkerReady: true, workerBlockers: [], productionReleaseReady: false });
     result = exec();
     assert.notEqual(result.status, 0);
