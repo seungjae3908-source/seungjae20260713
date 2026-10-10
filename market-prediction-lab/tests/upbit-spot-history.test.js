@@ -133,3 +133,43 @@ test("Upbit 1m partial maximum-page range fails closed", async () => {
     fetchImpl:async()=>response(all),
   }),/UPBIT_HISTORY_RANGE_INCOMPLETE/);
 });
+
+test("Upbit 1d venue-native history reuses page collector and exact UTC day candles",async()=>{
+  const D=86_400_000,day=Date.UTC(2025,9,9),start=day-D,end=day+D;
+  const native=[row(day,105),row(day-D,100)].map(x=>({...x,market:"KRW-ETH"}));
+  let calls=0;
+  const result=await collectUpbitSpotHistory({
+    symbol:"KRW-ETH",timeframe:"1d",startTime:start,endTime:end,
+    minCandles:2,maxPages:2,minIntervalMs:0,
+    requireFullWindow:true,requireMarketIdentity:true,
+    fetchImpl:async(url)=>{
+      calls++;
+      const u=new URL(url);
+      assert.equal(u.pathname,"/v1/candles/days");
+      assert.equal(u.searchParams.get("market"),"KRW-ETH");
+      const cutoff=Date.parse(u.searchParams.get("to"));
+      return response(native.filter(x=>Date.parse(x.candle_date_time_utc+"Z")<cutoff));
+    },
+  });
+  assert.equal(result.candleCount,2);
+  assert.equal(result.candles[0].timestamp,start);
+  assert.equal(result.candles[1].timestamp,day);
+  assert.equal(result.rawPageWindowTraversed,true);
+  assert.equal(result.historicPointInTimeListingComplete,false);
+  assert.equal(result.actualFillProven,false);
+  assert.ok(calls>=1);
+});
+test("Upbit all-name native 1d intake rejects wrong or missing response market",async()=>{
+  const D=86_400_000,day=Date.UTC(2025,9,9);
+  for(const payload of [
+    [{...row(day),market:"KRW-SOL"}],
+    [row(day)],
+  ]) {
+    await assert.rejects(()=>collectUpbitSpotHistory({
+      symbol:"KRW-ETH",timeframe:"1d",
+      startTime:day-D,endTime:day+D,minCandles:2,minIntervalMs:0,
+      requireMarketIdentity:true,
+      fetchImpl:async()=>response(payload),
+    }),/UPBIT_HISTORY_MARKET_IDENTITY_UNVERIFIED/);
+  }
+});
