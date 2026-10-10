@@ -221,32 +221,10 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
   let memberAutoResumePrepared = false;
   let integrationBefore: ApiResult<any>;
   try {
-    if (prepareMemberAutoPolicy) {
-      const prepared = await appApi<any>(
-        page,
-        '/api/trade-automation/policy',
-        'PUT',
-        preparedMemberAutoPolicy(statusBefore.body.policy),
-      );
-      expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
-      expect(prepared.body?.ok).toBe(true);
-      preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
-      expect(preparedPolicyReadiness.ready).toBe(true);
-
-      statusBefore = await appApi<any>(page, '/api/trade-automation/status');
-      expect(statusBefore.ok).toBe(true);
-      expect(statusBefore.body?.ok).toBe(true);
-      preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
-      expect(preparedPolicyReadiness.ready).toBe(true);
-      for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
-        expect(
-          statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
-          `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
-        ).toBe(false);
-      }
-      memberAutoPolicyPrepared = true;
-    }
-
+    // External Telegram readiness must be proven before any reversible member
+    // policy preparation. A blocked bot/chat (HTTP 403), stale recovery state,
+    // or stopped worker is not caused by the deployment and must fail before
+    // this QA writes even a temporary Paper policy.
     integrationBefore = await appApi<any>(page, '/api/user-integrations');
     expect(integrationBefore.ok).toBe(true);
     expect(integrationBefore.body?.ok).toBe(true);
@@ -267,10 +245,37 @@ test('Trading Core: provider -> Paper Auto -> Journal -> Telegram closes with ze
         throw new Error('PRODUCTION_TRADING_CORE_TELEGRAM_WORKER_NOT_READY');
       }
     }
+
+    if (prepareMemberAutoPolicy) {
+      const prepared = await appApi<any>(
+        page,
+        '/api/trade-automation/policy',
+        'PUT',
+        preparedMemberAutoPolicy(statusBefore.body.policy),
+      );
+      expect(prepared.ok, JSON.stringify(prepared.body)).toBe(true);
+      expect(prepared.body?.ok).toBe(true);
+      // From this point every later failure must restore the captured policy.
+      memberAutoPolicyPrepared = true;
+      preparedPolicyReadiness = memberAutoPolicyReadiness(prepared.body?.policy);
+      expect(preparedPolicyReadiness.ready).toBe(true);
+
+      statusBefore = await appApi<any>(page, '/api/trade-automation/status');
+      expect(statusBefore.ok).toBe(true);
+      expect(statusBefore.body?.ok).toBe(true);
+      preparedPolicyReadiness = memberAutoPolicyReadiness(statusBefore.body?.policy);
+      expect(preparedPolicyReadiness.ready).toBe(true);
+      for (const provider of ['toss', 'kiwoom', 'upbit', 'bitget']) {
+        expect(
+          statusBefore.body?.liveAutomaticExecutionServerEnabled?.[provider],
+          `Member policy preparation must not grant LIVE AUTO server authority: ${provider}`,
+        ).toBe(false);
+      }
+    }
   } catch (preflightError) {
     // Member policy preparation may have resumed STOP before later assertions fail.
     // Restore the exact captured policy even when the main canary never starts.
-    if (prepareMemberAutoPolicy) {
+    if (memberAutoPolicyPrepared) {
       try {
         const restored = await appApi<any>(page, '/api/trade-automation/policy', 'PUT', {
           ...originalPolicy,
