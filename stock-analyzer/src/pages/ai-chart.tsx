@@ -182,7 +182,12 @@ function strategyModeLabel(mode: AiChartStrategyMode): string {
 
 function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
   return chartSelectionKey(left) === chartSelectionKey(right)
-    && left.displayName === right.displayName;
+    && left.displayName === right.displayName
+    && left.signalId === right.signalId
+    && left.searchRunId === right.searchRunId
+    && left.signalScore === right.signalScore
+    && left.action === right.action
+    && left.selectedAt === right.selectedAt;
 }
 
 function supportedSelection(value: AnalysisSelection | null): AnalysisSelection | null {
@@ -887,7 +892,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
                     selection={selection}
                     market={selection.market}
                     symbol={selection.symbol || selection.ticker}
-                    chartPrice={null}
+                    chartPrice={typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null}
                     pricePlan={selection.pricePlan}
                     onOverlayChange={ignorePositionOverlay}
                   />

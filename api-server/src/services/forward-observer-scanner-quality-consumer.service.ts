@@ -73,9 +73,30 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+/**
+ * Immutable OOS/WF quality lookup identity, NOT trade execution authority.
+ * Stock/spot remains symbol-keyed for its one permitted long direction.
+ * Crypto futures MUST include LONG/SHORT: a symbol-only record must never
+ * promote the opposite side, including when both candidates share a symbol.
+ */
+export function scannerBacktestLookupKey(
+  card: Pick<ScannerSignalCard, 'assetClass' | 'symbol' | 'direction'>,
+): string | null {
+  const symbol = typeof card.symbol === 'string' ? card.symbol.trim().toUpperCase() : '';
+  if (!symbol) return null;
+  if (card.assetClass === 'coin_futures') {
+    if (card.direction !== 'LONG' && card.direction !== 'SHORT') return null;
+    return JSON.stringify(['coin_futures', symbol, card.direction]);
+  }
+  // Stocks and spot are LONG-only; never lend a BUY result to a SHORT card.
+  return card.direction === 'LONG' ? symbol : null;
+}
+
+
 function normalizeDirection(action: ScannerTradeAction | undefined, lane: ForwardObserverLane): Exclude<ScannerTradeAction, 'NONE'> | null {
   if (lane.market === 'CRYPTO_FUTURES') return action === 'LONG' || action === 'SHORT' ? action : null;
-  return action === 'BUY' || action === 'SELL' ? action : null;
+  // Stocks and spot cannot promote short-selling evidence on a LONG-only lane.
+  return action === 'BUY' ? action : null;
 }
 
 function artifactSafetyValid(value: unknown): value is ForwardObserverScannerQualityArtifact['safety'] {
@@ -236,24 +257,39 @@ export function selectForwardObserverScannerBacktests(input: Readonly<{
   const blockers: Array<{ code: string; symbol: string | null; details?: Readonly<Record<string, unknown>> }> = [];
   const backtests: Record<string, ScannerBacktestQualitySummary> = {};
   const matchedSymbols: string[] = [];
-  const cardsBySymbol = new Map<string, ScannerSignalCard[]>();
+  const grouped = new Map<string, { symbol: string; cards: ScannerSignalCard[] }>();
   for (const card of input.cards) {
     const symbol = card.symbol.trim().toUpperCase();
-    const rows = cardsBySymbol.get(symbol) ?? [];
-    rows.push(card);
-    cardsBySymbol.set(symbol, rows);
+    const lookupKey = scannerBacktestLookupKey(card);
+    const expectedAssetClass = input.lane.market === 'CRYPTO_FUTURES'
+      ? 'coin_futures' : input.lane.market === 'CRYPTO_SPOT' ? 'coin_spot' : 'stock';
+    if (!lookupKey || card.assetClass !== expectedAssetClass) {
+      blockers.push({
+        code: 'SCANNER_QUALITY_DIRECTION_OR_MARKET_NOT_PERMITTED',
+        symbol: symbol || null,
+      });
+      continue;
+    }
+    const group = grouped.get(lookupKey) ?? { symbol, cards: [] };
+    group.cards.push(card);
+    grouped.set(lookupKey, group);
   }
 
-  for (const [symbol, cards] of cardsBySymbol.entries()) {
-    const directions = [...new Set(cards.map((card) => normalizeDirection(card.action, input.lane)).filter(Boolean))] as Array<Exclude<ScannerTradeAction, 'NONE'>>;
+  // Group by immutable instrument AND direction for futures. A verified
+  // LONG OOS artifact is never indexed under the SHORT candidate's key.
+  for (const [lookupKey, { symbol, cards }] of grouped) {
+    const directions = [...new Set(cards
+      .map(card => normalizeDirection(card.action, input.lane))
+      .filter((direction): direction is Exclude<ScannerTradeAction, 'NONE'> => direction !== null))];
     if (directions.length !== 1) {
-      blockers.push({ code: 'SCANNER_QUALITY_SYMBOL_DIRECTION_AMBIGUOUS', symbol, details: Object.freeze({ directions }) });
+      blockers.push({ code: 'SCANNER_QUALITY_SYMBOL_DIRECTION_AMBIGUOUS', symbol,
+        details: Object.freeze({ directions }) });
       continue;
     }
     const direction = directions[0]!;
     const promotion = expectedPromotionIdentity(input.lane, direction, researchCodeSha);
     if (!promotion) {
-      blockers.push({ code: 'SCANNER_QUALITY_PROMOTION_IDENTITY_REQUIRED', symbol });
+      blockers.push({ code: 'SCANNER_QUALITY_PROMOTION_IDENTITY_REQUIRED', symbol, details: Object.freeze({ direction }) });
       continue;
     }
     const matches = input.artifact.entries.filter((entry) =>
@@ -275,11 +311,11 @@ export function selectForwardObserverScannerBacktests(input: Readonly<{
     }
     const quality = matches[0]!.quality;
     if (!passesMinimumBacktestQuality(quality)) {
-      blockers.push({ code: 'SCANNER_QUALITY_MINIMUM_GATE_FAILED', symbol });
+      blockers.push({ code: 'SCANNER_QUALITY_MINIMUM_GATE_FAILED', symbol, details: Object.freeze({ direction }) });
       continue;
     }
-    backtests[symbol] = quality;
-    matchedSymbols.push(symbol);
+    backtests[lookupKey] = quality;
+    if (!matchedSymbols.includes(symbol)) matchedSymbols.push(symbol);
   }
 
   const status = matchedSymbols.length === 0

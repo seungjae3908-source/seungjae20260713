@@ -122,3 +122,19 @@ test('membership labels use the requested Korean names', () => {
   assert.equal(memberTierLabel('regular'), '정회원');
   assert.equal(memberTierLabel('admin'), '관리자');
 });
+
+test('conflicting canonical and camelCase active flags never re-enable a disabled member', () => {
+  for (const profile of [
+    { membership_level: 'admin', status: 'approved', is_active: false, isActive: true },
+    { membership_level: 'admin', status: 'approved', is_active: true, isActive: false },
+    { membership_level: 'associate', status: 'approved', is_active: false, isActive: true },
+    { membership_level: 'regular', status: 'approved', is_active: null, isActive: false },
+  ]) {
+    assert.equal(deriveMemberTier(profile), 'pending');
+    assert.equal(hasCapability(profile, 'canAccessBasicInfo'), false);
+    assert.equal(hasCapability(profile, 'canManageMembers'), false);
+  }
+  assert.equal(deriveMemberTier({
+    membership_level: 'associate', status: 'approved', is_active: true, isActive: true,
+  }), 'associate');
+});

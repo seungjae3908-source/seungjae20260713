@@ -308,6 +308,100 @@ test('all four markets continue from canonical signal identity to AI Chart with 
   expect(mutations).toEqual([]);
 });
 
+test('futures same-symbol LONG and SHORT remain separate candidates in all three direction tabs', async ({ page }) => {
+  const mutations: string[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && forbiddenRequest.test(path)) mutations.push(path);
+  });
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', (route) => fulfill(route, scannerResponse()));
+  await page.route('**/api/scanner/crypto/futures**', async (route) => {
+    const result = scannerResponse({
+      market: 'BITGET_USDT_FUTURES',
+      assetClass: 'coin_futures',
+      symbol: 'BTCUSDT',
+      name: 'BTCUSDT',
+      timeframe: '5m',
+    });
+    const short = { ...result.cards[0], signalId: 'signal:BTCUSDT:SHORT', direction: 'SHORT', action: 'SHORT' };
+    const long = { ...short, signalId: 'signal:BTCUSDT:LONG', direction: 'LONG', action: 'LONG' };
+    result.cards = [long, short, { ...long, signalId: 'signal:BTCUSDT:LONG:duplicate' }];
+    result.execution.finalDisplayedCount = 3;
+    result.execution.requestedCount = 3;
+    result.execution.completedCount = 3;
+    result.universe.totalCount = 3;
+    return fulfill(route, result);
+  });
+
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^코인 선물/ }).click();
+  const cards = page.getByTestId('scanner-signal-card');
+  const tabs = page.getByTestId('scanner-futures-direction-filter');
+  await expect(cards).toHaveCount(2);
+  await expect(page.getByTestId('scanner-visible-count')).toHaveText('2');
+  await expect(tabs.getByRole('tab', { name: '전체 2' })).toBeVisible();
+  await expect(tabs.getByRole('tab', { name: '롱 1' })).toBeVisible();
+  await expect(tabs.getByRole('tab', { name: '숏 1' })).toBeVisible();
+  await tabs.getByRole('tab', { name: '롱 1' }).click();
+  await expect(cards).toHaveCount(1);
+  await expect(page.getByTestId('scanner-visible-count')).toHaveText('1');
+  await expect(cards.first().getByTestId('scanner-card-direction')).toContainText('롱');
+  await tabs.getByRole('tab', { name: '숏 1' }).click();
+  await expect(cards).toHaveCount(1);
+  await expect(page.getByTestId('scanner-visible-count')).toHaveText('1');
+  await expect(cards.first().getByTestId('scanner-card-direction')).toContainText('숏');
+  await tabs.getByRole('tab', { name: '전체 2' }).click();
+  await expect(cards).toHaveCount(2);
+  expect(mutations).toEqual([]);
+});
+
+
+test('futures watch-only LONG and SHORT remain visible in their direction tabs without orders', async ({ page }) => {
+  const mutations: string[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && forbiddenRequest.test(path)) mutations.push(path);
+  });
+  await installBaseMocks(page, []);
+  await page.route('**/api/scanner/crypto/futures**', async (route) => {
+    const result = scannerResponse({
+      market: 'BITGET_USDT_FUTURES',
+      assetClass: 'coin_futures',
+      symbol: 'BTCUSDT',
+      name: 'BTCUSDT',
+      timeframe: '5m',
+    });
+    const source = result.cards[0];
+    result.cards = [
+      { ...source, signalId: 'signal:BTCUSDT:long-watch', name: 'LONG 관찰 후보', direction: 'LONG', action: 'NONE' },
+      { ...source, signalId: 'signal:BTCUSDT:short-watch', name: 'SHORT 관찰 후보', direction: 'SHORT', action: 'NONE' },
+    ];
+    result.execution.finalDisplayedCount = 2;
+    result.execution.requestedCount = 2;
+    result.execution.completedCount = 2;
+    result.universe.totalCount = 2;
+    await fulfill(route, result);
+  });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^코인 선물/ }).click();
+  const tabs = page.getByTestId('scanner-futures-direction-filter');
+  const cards = page.getByTestId('scanner-signal-card');
+  await expect(tabs.getByRole('tab', { name: '전체 2' })).toBeVisible();
+  await expect(tabs.getByRole('tab', { name: '롱 1' })).toBeVisible();
+  await expect(tabs.getByRole('tab', { name: '숏 1' })).toBeVisible();
+  await tabs.getByRole('tab', { name: '롱 1' }).click();
+  await expect(cards).toHaveCount(1);
+  await expect(cards.first()).toContainText('LONG 관찰 후보');
+  await expect(cards.first().getByTestId('scanner-card-direction')).toContainText('롱 · 거래 안 함');
+  await tabs.getByRole('tab', { name: '숏 1' }).click();
+  await expect(cards).toHaveCount(1);
+  await expect(cards.first()).toContainText('SHORT 관찰 후보');
+  await expect(cards.first().getByTestId('scanner-card-direction')).toContainText('숏 · 거래 안 함');
+  await expect(page.getByTestId('scanner-visible-count')).toHaveText('1');
+  expect(mutations).toEqual([]);
+});
+
 test('actual-provider semantics with zero signals remains a valid flow fixture', async ({ page }) => {
   await installBaseMocks(page, []);
   await page.route('**/api/market/scan**', (route) => fulfill(route, validZeroScannerResponse()));

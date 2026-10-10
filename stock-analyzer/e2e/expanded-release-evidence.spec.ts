@@ -247,7 +247,7 @@ test('projects the existing scanner concurrency, polling, freshness, and four-ma
   expect(readinessSpec).toContain('unexpectedRequestFailures');
 });
 
-test('PricePlan positive values survive same-instrument route merge and do not cross instruments', () => {
+test('PricePlan survives exact timeframe identity but cannot leak to different timeframes or instruments', () => {
   const selectedAt = '2026-08-10T00:00:00.000Z';
   const stored = normalizeAnalysisSelection({
     assetType: 'stock',
@@ -273,7 +273,7 @@ test('PricePlan positive values survive same-instrument route merge and do not c
     symbol: '005930',
     ticker: '005930',
     displayName: '삼성전자',
-    timeframe: '5m',
+    timeframe: '1D',
     selectedAt: '2026-08-10T00:01:00.000Z',
   });
   const sameMerged = mergeChartRouteSelection(sameRoute, stored);
@@ -282,6 +282,17 @@ test('PricePlan positive values survive same-instrument route merge and do not c
   expect(sameMerged?.pricePlan?.stopLoss).toBe(68500);
   expect(sameMerged?.pricePlan?.targets).toEqual([73000, 75000]);
   expect(sameMerged?.pricePlan?.riskReward).toBe(2.25);
+
+  // The old price plan belongs to the 1D signal and must not be passed
+  // to a fresh 5m scanner/AI-chart context simply because ticker matches.
+  const differentTimeframe = normalizeAnalysisSelection({
+    ...sameRoute,
+    timeframe: '5m',
+    selectedAt: '2026-08-10T00:01:30.000Z',
+  });
+  const differentMerged = mergeChartRouteSelection(differentTimeframe, stored);
+  expect(differentMerged?.pricePlan).toBeUndefined();
+  expect(differentMerged?.timeframe).toBe('5m');
 
   const usRoute = normalizeAnalysisSelection({
     assetType: 'stock',
