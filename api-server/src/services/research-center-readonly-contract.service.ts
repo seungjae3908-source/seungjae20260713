@@ -6,6 +6,15 @@ const V3_INDEPENDENCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'PRESENT']);
 const CANDIDATE_PERFORMANCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'BLOCKED', 'PRESENT']);
 const TEMPORAL_COLLECTION_STATUS_SET = new Set(['MISSING', 'INVALID', 'complete', 'partial_failure']);
 const TEMPORAL_SYMBOL_STATUS_SET = new Set(['success', 'failed']);
+const FORMULA_READBACK_STATUS_SET = new Set(['MISSING', 'INVALID', 'WAITING_INPUT', 'TRAIN_ONLY']);
+const FORMULA_READBACK_COUNTS = ['PASS', 'HOLD', 'RESERVE', 'EXCLUDE'] as const;
+const FORMULA_BLOCKERS = Object.freeze({
+  MISSING: 'FORMULA_QUEUE_INPUT_MISSING',
+  INVALID: 'FORMULA_QUEUE_READBACK_INVALID',
+  WAITING_INPUT: 'FORMULA_QUEUE_INPUT_MISSING',
+  TRAIN_ONLY: 'FORMULA_QUEUE_PRODUCER_AND_OOS_UNATTESTED',
+});
+
 const FACTORY_RUNTIME_STATUS_SET = new Set([
   'MISSING',
   'INVALID',
@@ -642,11 +651,251 @@ function sanitizeShadowGroup(value: unknown) {
   return { name, total, settled, pending, collapsed, macroF1, balancedAccuracy, bullRecall, bearRecall, neutralRecall };
 }
 
+function emptyFormulaBacktestReadback(status: 'MISSING' | 'INVALID' = 'MISSING') {
+  return {
+    present: status === 'INVALID', status,
+    inboxCount: null, scanned: null,
+    counts: Object.fromEntries(FORMULA_READBACK_COUNTS.map((key) => [key, null])),
+    paperRegisteredCount: null,
+    producerBound: false, paperConsumerBound: false,
+    validationComplete: false, oosComplete: false, fullCostReady: false,
+    liveTrading: false, autoTrading: false, executionAuthority: 'NONE' as const,
+    firstBlocker: FORMULA_BLOCKERS[status],
+  };
+}
+
+function sanitizeFormulaBacktestReadback(value: unknown) {
+  const input = record(value);
+  if (!input) return emptyFormulaBacktestReadback();
+  const invalid = () => emptyFormulaBacktestReadback('INVALID');
+  const status = input.status;
+  if (typeof status !== 'string' || !FORMULA_READBACK_STATUS_SET.has(status)
+    || input.present !== (status !== 'MISSING')
+    || input.producerBound !== false || input.paperConsumerBound !== false
+    || input.validationComplete !== false || input.oosComplete !== false
+    || input.fullCostReady !== false
+    || input.liveTrading !== false || input.autoTrading !== false
+    || input.executionAuthority !== 'NONE'
+    || input.firstBlocker !== FORMULA_BLOCKERS[status as keyof typeof FORMULA_BLOCKERS]) return invalid();
+
+  const counts = record(input.counts);
+  if (!counts) return invalid();
+  if (status === 'MISSING' || status === 'INVALID') {
+    if (input.scanned !== null || input.inboxCount !== null
+      || input.paperRegisteredCount !== null
+      || FORMULA_READBACK_COUNTS.some((key) => counts[key] !== null)) return invalid();
+    return emptyFormulaBacktestReadback(status);
+  }
+  const scanned = countOrNull(input.scanned);
+  const inboxCount = countOrNull(input.inboxCount);
+  const registered = countOrNull(input.paperRegisteredCount);
+  const cleanCounts = Object.fromEntries(FORMULA_READBACK_COUNTS.map((key) => [key, countOrNull(counts[key])]));
+  if (scanned == null || scanned > 50 || inboxCount == null || scanned > inboxCount
+    || registered !== 0
+    || FORMULA_READBACK_COUNTS.some((key) => cleanCounts[key] == null)
+    || cleanCounts.PASS !== 0
+    || FORMULA_READBACK_COUNTS.reduce((sum, key) => sum + cleanCounts[key]!, 0) > scanned
+    || (status === 'WAITING_INPUT' && scanned !== 0)
+    || (status === 'TRAIN_ONLY' && scanned === 0)) return invalid();
+  return {
+    present: true, status,
+    inboxCount, scanned, counts: cleanCounts, paperRegisteredCount: 0,
+    producerBound: false, paperConsumerBound: false,
+    validationComplete: false, oosComplete: false, fullCostReady: false,
+    liveTrading: false, autoTrading: false, executionAuthority: 'NONE' as const,
+    firstBlocker: FORMULA_BLOCKERS[status as keyof typeof FORMULA_BLOCKERS],
+  };
+}
+
 /**
  * Builds the only browser-facing Research DTO from an explicit allowlist.
  * Unknown upstream fields are intentionally dropped so a future state-file,
  * account, credential, or filesystem field cannot leak through object spread.
  */
+const MARKET_WATCH_READBACK_CONTRACT = 'lightweight-market-watch-readback/v1';
+const MARKET_WATCH_STATES = new Set(['MISSING', 'INVALID', 'STALE', 'HOLD', 'THROTTLED', 'BLOCKED_DATA', 'OBSERVING', 'PARTIAL']);
+const WATCH_MARKETS = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
+const WATCH_HEALTHY_SOURCE = new Set(['READY', 'PARTIAL_TICKERS', 'PARTIAL_UNIVERSE']);
+const WATCH_BLOCKED_SOURCE = /^BLOCKED_[A-Z0-9_]{1,100}$/u;
+
+function emptyMarketWatch(status: 'MISSING' | 'INVALID' = 'MISSING', present = false) {
+  return {
+    contract: MARKET_WATCH_READBACK_CONTRACT,
+    status, present, researchSha: null, observedAt: null, ageMs: null,
+    marketCoverageCount: null, markets: [] as unknown[],
+    cyclesToday: null, candidatesToday: null, cyclesSinceRelease: null,
+    prospectiveSampleStudy: null,
+    continuous24hProven: false, formulaCandidateProduced: false,
+    oosProven: false, paperExecutionProven: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  };
+}
+function watchSafeCount(value: unknown, upper: number) {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    && value >= 0 && value < upper ? value : null;
+}
+export function sanitizeMarketWatchReadback(value: unknown) {
+  if (value == null) return emptyMarketWatch();
+  const v = record(value);
+  if (!v || v.contract !== MARKET_WATCH_READBACK_CONTRACT
+    || typeof v.status !== 'string' || !MARKET_WATCH_STATES.has(v.status)
+    || typeof v.present !== 'boolean' || v.executionAuthority !== 'NONE'
+    || v.continuous24hProven !== false || v.formulaCandidateProduced !== false
+    || v.oosProven !== false || v.paperExecutionProven !== false
+    || v.profitabilityProven !== false) return emptyMarketWatch('INVALID', true);
+  if (v.status === 'MISSING') return v.present === false
+    ? emptyMarketWatch() : emptyMarketWatch('INVALID', true);
+  if (v.status === 'INVALID') return emptyMarketWatch('INVALID', true);
+  if (v.present !== true
+    || typeof v.researchSha !== 'string' || !SHA_PATTERN.test(v.researchSha)
+    || !Array.isArray(v.markets) || v.markets.length !== WATCH_MARKETS.length) {
+    return emptyMarketWatch('INVALID', true);
+  }
+  const observedAt = finiteOrNull(v.observedAt);
+  const ageMs = watchSafeCount(v.ageMs, 1_000_000_000);
+  const coverage = watchSafeCount(v.marketCoverageCount, 5);
+  const cyclesToday = watchSafeCount(v.cyclesToday, 1_000_000_000_000);
+  const candidatesToday = watchSafeCount(v.candidatesToday, 1_000_000_000_000);
+  const cyclesSinceRelease = watchSafeCount(v.cyclesSinceRelease, 1_000_000_000_000);
+  if (observedAt == null || observedAt <= 0 || ageMs == null || coverage == null
+    || cyclesToday == null || cyclesToday < 1 || candidatesToday == null
+    || cyclesSinceRelease == null || cyclesSinceRelease < cyclesToday) {
+    return emptyMarketWatch('INVALID', true);
+  }
+  // A public ticker excursion is NOT a fill, formula PASS, OOS sample or PnL.
+  let prospectiveSampleStudy: null | {
+    status: 'PUBLIC_PRICE_OBSERVATION_ONLY';
+    pendingCount: number; observedCoarseToday: number;
+    blockedToday: number; untrackedThisCycle: number;
+    economicEvidenceCredit: 0; paperCredit: 0; oosCredit: 0;
+  } = null;
+  if (v.prospectiveSampleStudy != null) {
+    const row = record(v.prospectiveSampleStudy);
+    const pending = watchSafeCount(row?.pendingCount, 1025);
+    const observed = watchSafeCount(row?.observedCoarseToday, 1_000_000_000_000);
+    const blocked = watchSafeCount(row?.blockedToday, 1_000_000_000_000);
+    const untracked = watchSafeCount(row?.untrackedThisCycle, 49);
+    if (!row || row.status !== 'PUBLIC_PRICE_OBSERVATION_ONLY'
+      || pending == null || observed == null || blocked == null
+      || untracked == null || row.economicEvidenceCredit !== 0
+      || row.paperCredit !== 0 || row.oosCredit !== 0) {
+      return emptyMarketWatch('INVALID', true);
+    }
+    prospectiveSampleStudy = {
+      status: 'PUBLIC_PRICE_OBSERVATION_ONLY', pendingCount: pending,
+      observedCoarseToday: observed, blockedToday: blocked,
+      untrackedThisCycle: untracked,
+      economicEvidenceCredit: 0, paperCredit: 0, oosCredit: 0,
+    };
+  }
+  const rows = v.markets.map((raw, index) => {
+    const row = record(raw);
+    const status = row?.status;
+    const source = row?.source;
+    const listedCount = watchSafeCount(row?.listedCount, 30_001);
+    const observedCount = watchSafeCount(row?.observedCount, 8_001);
+    const newCandidates = watchSafeCount(row?.newCandidates, 13);
+    const blocked = typeof status === 'string' && WATCH_BLOCKED_SOURCE.test(status);
+    const healthy = typeof status === 'string' && WATCH_HEALTHY_SOURCE.has(status);
+    if (!row || row.market !== WATCH_MARKETS[index]
+      || typeof source !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/u.test(source)
+      || !(blocked || healthy) || (blocked && source !== 'NONE')
+      || (healthy && source === 'NONE') || listedCount == null
+      || observedCount == null || newCandidates == null || observedCount > listedCount
+      || newCandidates > observedCount || row.executionAuthority !== 'NONE'
+      || (status === 'READY' && listedCount !== observedCount)
+      || (blocked && (newCandidates !== 0 || observedCount !== 0))) return null;
+    return { market: WATCH_MARKETS[index], status, source, listedCount, observedCount, newCandidates };
+  });
+  if (rows.some((row) => row == null)
+    || rows.filter((row) => row?.status === 'READY').length !== coverage
+    || (v.status === 'OBSERVING' && coverage !== 4)) {
+    return emptyMarketWatch('INVALID', true);
+  }
+  return {
+    contract: MARKET_WATCH_READBACK_CONTRACT,
+    status: v.status, present: true, researchSha: v.researchSha.toLowerCase(),
+    observedAt, ageMs, marketCoverageCount: coverage, markets: rows,
+    cyclesToday, candidatesToday, cyclesSinceRelease, prospectiveSampleStudy,
+    continuous24hProven: false, formulaCandidateProduced: false,
+    oosProven: false, paperExecutionProven: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  };
+}
+
+
+const WATCH_CADENCE_CONTRACT = 'public-watch-cadence-admin-readback-v1';
+const WATCH_CADENCE_STATES = new Set([
+  'MISSING', 'INVALID', 'INCOMPLETE_OR_INTERRUPTED', 'PUBLIC_CADENCE_OBSERVED',
+]);
+
+function emptyWatchCadence(status: 'MISSING' | 'INVALID' = 'MISSING', present = false) {
+  return {
+    contract: WATCH_CADENCE_CONTRACT, status, present,
+    sampleCount: null, duplicateRows: null, maxGapMs: null,
+    latestAgeMs: null, hostHoldCycles: null,
+    hostThrottledCycles: null, blockedDataCycles: null,
+    allFourMarketReadyCycles: null, filesRead: null,
+    cadenceWindowObserved: false, continuous24hProven: false,
+    completeFourMarketCoverageProven: false,
+    economicEvidenceCredit: 0, oosCredit: 0, paperCredit: 0,
+    profitabilityProven: false, formulaCandidateProduced: false,
+    executionAuthority: 'NONE',
+  };
+}
+
+export function sanitizeMarketWatchCadenceReadback(value: unknown) {
+  if (value == null) return emptyWatchCadence();
+  const v = record(value);
+  if (!v || v.contract !== WATCH_CADENCE_CONTRACT
+    || typeof v.status !== 'string' || !WATCH_CADENCE_STATES.has(v.status)
+    || typeof v.present !== 'boolean' || v.executionAuthority !== 'NONE'
+    || v.continuous24hProven !== false
+    || v.completeFourMarketCoverageProven !== false
+    || v.profitabilityProven !== false || v.formulaCandidateProduced !== false
+    || v.economicEvidenceCredit !== 0 || v.oosCredit !== 0
+    || v.paperCredit !== 0 || typeof v.cadenceWindowObserved !== 'boolean') {
+    return emptyWatchCadence('INVALID', true);
+  }
+  if (v.status === 'MISSING') return v.present === false && v.cadenceWindowObserved === false
+    ? emptyWatchCadence() : emptyWatchCadence('INVALID', true);
+  if (v.status === 'INVALID') return v.cadenceWindowObserved === false
+    ? emptyWatchCadence('INVALID', true) : emptyWatchCadence('INVALID', true);
+  if (v.present !== true) return emptyWatchCadence('INVALID', true);
+  const sampleCount = watchSafeCount(v.sampleCount, 4_001);
+  const duplicateRows = watchSafeCount(v.duplicateRows, 4_001);
+  const maxGapMs = watchSafeCount(v.maxGapMs, 86_400_001);
+  const latestAgeMs = watchSafeCount(v.latestAgeMs, 86_400_001);
+  const hostHoldCycles = watchSafeCount(v.hostHoldCycles, 4_001);
+  const hostThrottledCycles = watchSafeCount(v.hostThrottledCycles, 4_001);
+  const blockedDataCycles = watchSafeCount(v.blockedDataCycles, 4_001);
+  const allFourMarketReadyCycles = watchSafeCount(v.allFourMarketReadyCycles, 4_001);
+  const filesRead = watchSafeCount(v.filesRead, 3);
+  if (sampleCount == null || sampleCount < 1 || duplicateRows == null
+    || maxGapMs == null || latestAgeMs == null
+    || hostHoldCycles == null || hostThrottledCycles == null
+    || blockedDataCycles == null || allFourMarketReadyCycles == null
+    || filesRead == null || filesRead < 1
+    || hostHoldCycles + hostThrottledCycles > sampleCount
+    || blockedDataCycles > sampleCount || allFourMarketReadyCycles > sampleCount
+    || v.cadenceWindowObserved !== (v.status === 'PUBLIC_CADENCE_OBSERVED')
+    || (v.cadenceWindowObserved && (
+      sampleCount < 600 || maxGapMs > 360_000 || latestAgeMs > 360_000
+      || hostHoldCycles !== 0 || hostThrottledCycles !== 0
+    ))) return emptyWatchCadence('INVALID', true);
+  return {
+    contract: WATCH_CADENCE_CONTRACT, status: v.status, present: true,
+    sampleCount, duplicateRows, maxGapMs, latestAgeMs,
+    hostHoldCycles, hostThrottledCycles, blockedDataCycles,
+    allFourMarketReadyCycles, filesRead,
+    cadenceWindowObserved: v.cadenceWindowObserved,
+    continuous24hProven: false, completeFourMarketCoverageProven: false,
+    economicEvidenceCredit: 0, oosCredit: 0, paperCredit: 0,
+    profitabilityProven: false, formulaCandidateProduced: false,
+    executionAuthority: 'NONE',
+  };
+}
+
 export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | null {
   const payload = record(value);
   const state = record(payload?.state);
@@ -664,6 +913,9 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const temporalCryptoFutures = sanitizeTemporalCryptoSummary(dataFactory?.temporalCryptoFutures);
   const records = record(shadow?.records);
   const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
+  const formulaBacktest = sanitizeFormulaBacktestReadback(research?.formulaBacktest);
+  const lightweightMarketWatch = sanitizeMarketWatchReadback(dataFactory?.lightweightMarketWatch);
+  const lightweightMarketWatchCadence = sanitizeMarketWatchCadenceReadback(dataFactory?.lightweightMarketWatchCadence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
     || !paper || !shadow || !profitability || !runtime || !ledger || !candidatePerformance || !temporalCryptoFutures || !factory || !runtimeLiveness || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
@@ -697,8 +949,8 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       authorityEvidenceComplete: safety.authorityEvidenceComplete,
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
-    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
-    dataFactory: { temporalCryptoFutures },
+    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence, formulaBacktest },
+    dataFactory: { temporalCryptoFutures, lightweightMarketWatch, lightweightMarketWatchCadence },
     factory,
     paper: { runtime, ledger, candidatePerformance },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
