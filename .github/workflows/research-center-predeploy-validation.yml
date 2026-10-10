@@ -125,6 +125,14 @@ jobs:
           node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
           node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
 
+      - name: Assert formula queue missing producer and Paper consumer do not appear ready
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Fq "if counts['PASS'] or registered:" research-dashboard/server.py
+          grep -Fq "input.producerBound !== false || input.paperConsumerBound !== false" api-server/src/services/research-center-readonly-contract.service.ts
+          grep -Fq 'Paper 미연결' stock-analyzer/src/pages/research-center.tsx
+
       - name: Backend and frontend semantic typecheck
         run: |
           set -Eeuo pipefail
