@@ -1,5 +1,6 @@
 import test from "node:test";
 import {mkdtempSync,readFileSync,statSync,writeFileSync} from "node:fs";
+import {createHash} from "node:crypto";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {parseNativePITBatchArgsV1,runNativePITBatchCliV1,
@@ -355,6 +356,11 @@ test("native source-attested whole-day output requires explicit private-row opt-
  assert.equal(privateResult.status,"TEST_FIXTURE_FULL_NAME_DAILY_JOIN_ONLY");
  assert.equal(privateResult.privateNativeDayRowsEmitted,true);
  assert.equal(privateResult.privateNativeDaySource.rows.length,1);
+ assert.equal(createHash("sha256")
+   .update(privateResult.privateNativeDaySource.canonicalRowsJSON).digest("hex"),
+   privateResult.privateNativeDaySource.rowsSha256);
+ assert.deepEqual(JSON.parse(privateResult.privateNativeDaySource.canonicalRowsJSON),
+   privateResult.privateNativeDaySource.rows);
  const row=privateResult.privateNativeDaySource.rows[0];
  assert.equal(row.priorBarTimestampMs,T-D);
  assert.equal(row.priorBarOpen,100);
