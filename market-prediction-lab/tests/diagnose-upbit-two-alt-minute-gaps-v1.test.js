@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
  diagnoseUpbitMinuteRangeV1 as audit,
  diagnosePublicUpbitMinuteGapsV1 as probe,
+ recheckMissingUpbitMinuteSlotsV1 as recheck,
 } from "../scripts/diagnose-upbit-two-alt-minute-gaps-v1.mjs";
 import {WATCH_MATCHED_UTC_DAY_V1 as DAY}
   from "../scripts/probe-watch-matching-utc-day-v1.mjs";
@@ -80,4 +81,68 @@ test("public HTTP outage is NOT a market with zero observed opportunities",async
  assert.equal(r.trueMarketWideRecall,null);
  assert.equal(r.profitabilityProven,false);
  assert.equal(r.executionAuthority,"NONE");
+});
+
+function nativeRequeryRow(symbol,ms){
+ return {market:symbol,candle_date_time_utc:new Date(ms).toISOString().slice(0,19),
+  opening_price:100,high_price:101,low_price:99,trade_price:100,
+  candle_acc_trade_volume:3};
+}
+test("narrow native re-query distinguishes source absence from pagination recovery",async()=>{
+ const symbol="KRW-ETH",ms=DAY.historyStartMs+423*M;
+ const diagnostic=audit({symbol,source:sample(symbol,{missing:[423]})});
+ const calls=[];
+ const present=await recheck({symbol,diagnostic,minIntervalMs:0,
+   fetchImpl:async(url)=>{
+     calls.push(new URL(url));
+     return response([nativeRequeryRow(symbol,ms)]);
+   }});
+ assert.equal(present.status,"TARGETED_NATIVE_RECHECK_COMPLETE");
+ assert.equal(present.presentOnRequery,1);
+ assert.equal(present.absentOnRequery,0);
+ assert.equal(present.observations[0].outcome,"NATIVE_CANDLE_PRESENT_ON_REQUERY");
+ assert.match(present.observations[0].rawMatchedCandleSha256,/^[0-9a-f]{64}$/);
+ assert.equal(calls[0].searchParams.get("to"),new Date(ms+M).toISOString());
+ assert.equal(present.noTradeProof,false);
+ assert.equal(present.sourceWindowComplete,false);
+ assert.equal(present.trueMarketWideRecall,null);
+ const absent=await recheck({symbol,diagnostic,minIntervalMs:0,
+   fetchImpl:async()=>response([nativeRequeryRow(symbol,ms-M)])});
+ assert.equal(absent.absentOnRequery,1);
+ assert.equal(absent.presentOnRequery,0);
+ assert.equal(absent.sourceMissingMinuteCauseVerified,false);
+ assert.equal(absent.observations[0].outcome,"NATIVE_CANDLE_ABSENT_ON_REQUERY");
+});
+test("narrow re-query HTTP failures remain blocked, not no-trade proof",async()=>{
+ const symbol="KRW-SOL";
+ const diagnostic=audit({symbol,source:sample(symbol,{missing:[350]})});
+ const r=await recheck({symbol,diagnostic,minIntervalMs:0,
+   fetchImpl:async()=>response([],429)});
+ assert.equal(r.status,"TARGETED_NATIVE_RECHECK_INCOMPLETE");
+ assert.equal(r.failedRequeries,1);
+ assert.equal(r.completeRecheck,false);
+ assert.equal(r.noTradeProof,false);
+ assert.equal(r.profitabilityProven,false);
+ assert.match(r.observations[0].errorCode,/UPBIT_REQUERY_HTTP_429/);
+});
+test("bounded re-query never fans out across an unbounded missing window",async()=>{
+ const symbol="KRW-ETH";
+ const diagnostic=audit({symbol,source:sample(symbol,{
+   missing:Array.from({length:25},(_,i)=>i+100),
+ })});
+ let calls=0;
+ const r=await recheck({symbol,diagnostic,minIntervalMs:0,
+   fetchImpl:async()=>{calls++;return response([])}});
+ assert.equal(r.status,"BLOCKED_RECHECK_BUDGET_EXCEEDED");
+ assert.equal(calls,0);
+ assert.equal(r.noTradeProof,false);
+});
+test("invalid re-query response never becomes an accepted minute",async()=>{
+ const symbol="KRW-SOL",ms=DAY.historyStartMs+105*M;
+ const diagnostic=audit({symbol,source:sample(symbol,{missing:[105]})});
+ const r=await recheck({symbol,diagnostic,minIntervalMs:0,
+   fetchImpl:async()=>response([nativeRequeryRow("KRW-ETH",ms)])});
+ assert.equal(r.failedRequeries,1);
+ assert.equal(r.presentOnRequery,0);
+ assert.equal(r.observations[0].outcome,"REQUERY_SOURCE_ERROR");
 });
