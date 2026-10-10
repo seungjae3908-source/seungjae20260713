@@ -289,14 +289,15 @@ test('invalid short stop direction is rejected', () => {
   assert.ok(result.order?.rejectionCodes.includes('INVALID_STOP_LOSS'));
 });
 
-test('app leverage limit is enforced', () => {
-  const result = place(undefined, { request: { leverage: 11 }, risk: { leverage: 11 } });
-  assert.ok(result.order?.rejectionCodes.includes('LEVERAGE_EXCEEDS_APP_LIMIT'));
+test('manual Paper 125x hard ceiling is enforced before risk calculation', () => {
+  assert.throws(() => place(undefined, { request: { leverage: 126 }, risk: { leverage: 126 } }), /1~125/);
 });
 
-test('exchange leverage limit is enforced', () => {
+test('manual Paper can hypothetically exceed a real provider contract limit without a broker call', () => {
   const result = place(undefined, { request: { leverage: 6 }, risk: { leverage: 6 }, rules: { maximumLeverage: 5 } });
-  assert.ok(result.order?.rejectionCodes.includes('LEVERAGE_EXCEEDS_EXCHANGE_LIMIT'));
+  assert.equal(result.order?.status, 'filled', JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
 });
 
 test('minimum quantity is enforced', () => {
