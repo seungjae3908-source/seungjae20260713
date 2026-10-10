@@ -62,6 +62,17 @@ hard link. Example (the numbers are **illustrative**, not actual quotes):
 }
 ```
 
+The `source` identifier must be 3–64 ASCII characters drawn only from
+letters, digits, `_`, or `-`. It cannot be the reserved value `NONE`, a
+filesystem path, or a dotted identifier such as `KRX.V1`. Those names are
+rejected before publication because the bounded Node/Python Research
+Dashboard readers use the same source-ID allowlist. A rejected input becomes
+an explicit `BLOCKED` market source; it must not invalidate the whole
+four-market dashboard after publication. This is a **format contract**, not
+independent evidence of a market-data license, complete coverage, or source
+authenticity. Publisher identities must still be separately verified before
+claiming usable KR/US stock collection.
+
 `completeUniverse=true` may only be set when the real provider feed supplies
 a verifiable, complete current eligible universe. Historical PIT universe,
 corporate actions, pre/post-market coverage, subscribed real-time market
