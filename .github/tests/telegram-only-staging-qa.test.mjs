@@ -6,6 +6,7 @@ import {
   SAFE_NETWORK_STATUSES,
   STAGING_REQUIRED_STATUS,
   probeStagingTelegramNetwork,
+  readStagingLoopbackHealth,
   runStagingReadOnlyProbe,
   stagingTelegramVerdict,
 } from '../../ops/telegram-only-staging-readonly.mjs';
@@ -48,10 +49,14 @@ test('Staging transport is fail-closed on a stale PM2 or deploy marker', async (
       return sha;
     },
     network: async () => 'IPV4_TLS_READY',
+    health: async () => ({ runtimeSha:sha, markerSha:sha, identityMatch:true }),
   };
   const accepted = await runStagingReadOnlyProbe(common);
   assert.equal(accepted.classification, STAGING_REQUIRED_STATUS);
   assert.equal(accepted.scope, 'TELEGRAM_ONLY_STAGING_NETWORK');
+  assert.equal(accepted.runtimeSha, sha);
+  assert.equal(accepted.healthMarkerSha, sha);
+  assert.equal(accepted.healthIdentityMatch, true);
   assert.equal(accepted.botIdentityVerified, false);
   assert.equal(accepted.roomPostingVerified, false);
   assert.equal(accepted.telegramSends, 0);
@@ -61,11 +66,23 @@ test('Staging transport is fail-closed on a stale PM2 or deploy marker', async (
 
   assert.equal((await runStagingReadOnlyProbe({
     ...common, pm2Exec: () => fakeProcess('b'.repeat(40)),
-  })).classification, 'STAGING_RUNTIME_SHA_MISMATCH');
+  })).classification, 'STAGING_PM2_ENV_CONFLICT');
   assert.equal((await runStagingReadOnlyProbe({
     ...common, pm2Exec: () => fakeProcess('b'.repeat(40)),
     fileRead: () => 'b'.repeat(40),
+    health: async () => ({
+      runtimeSha:'b'.repeat(40), markerSha:'b'.repeat(40), identityMatch:true,
+    }),
   })).classification, 'STAGING_RUNTIME_NOT_AT_MAIN');
+  assert.equal((await runStagingReadOnlyProbe({
+    ...common, pm2Exec: () => fakeProcess(null),
+  })).classification, STAGING_REQUIRED_STATUS);
+  assert.equal((await runStagingReadOnlyProbe({
+    ...common, health: async () => null,
+  })).classification, 'STAGING_RUNTIME_HEALTH_UNAVAILABLE');
+  assert.equal((await runStagingReadOnlyProbe({
+    ...common, fileRead: () => 'b'.repeat(40),
+  })).classification, 'STAGING_RUNTIME_SHA_MISMATCH');
   assert.equal((await runStagingReadOnlyProbe({
     ...common, network: async () => 'IPV4_TLS_TIMEOUT',
   })).classification, 'STAGING_TELEGRAM_NETWORK_BLOCKED');
@@ -116,6 +133,7 @@ test('read-only staging probe never reads Production path and never records secr
   const unavailable = await runStagingReadOnlyProbe({
     target:sha, pm2Exec:()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
     fileRead:()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
+    health:async()=> { throw new Error('SENSITIVE_EXCEPTION_MARKER_123'); },
     network:async()=> 'IPV4_DNS_FAILED',
   });
   assert.equal(unavailable.classification, 'STAGING_PM2_OFFLINE');
@@ -155,4 +173,68 @@ test('owner command is exact-current-main, protected in isolated staging environ
   assert.ok(workflow.includes('node --test'));
   assert.ok(workflow.includes('api-server/src/features/user-broker-telegram/**'));
   assert.ok(workflow.includes('secretValuesRecorded !== false'));
+});
+
+test('local Staging health proves Node env-loaded SHA but never returns its full payload', async () => {
+  const input = {
+    ok:true,service:'api-server',route:'/api/health',deploySha:sha,
+    processDeploySha:sha,deployMarkerSha:sha,identityMatch:true,
+    secretPotentiallyInWorkerState:'DO_NOT_EXPOSE_THIS_VALUE',
+  };
+  const read = await readStagingLoopbackHealth({
+    getImpl: (url, opts, onResponse) => {
+      assert.equal(url, 'http://127.0.0.1:18083/api/health');
+      assert.equal(opts.timeout, 5000);
+      const request = new EventEmitter();
+      request.destroy = () => {};
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        onResponse(response);
+        response.emit('data', Buffer.from(JSON.stringify(input)));
+        response.emit('end');
+      });
+      return request;
+    },
+  });
+  assert.deepEqual(read, {runtimeSha:sha, markerSha:sha, identityMatch:true});
+  assert.equal(JSON.stringify(read).includes('DO_NOT_EXPOSE_THIS_VALUE'), false);
+});
+
+test('Staging health rejects invalid endpoint or untrusted process SHA', async () => {
+  const simulate = body => readStagingLoopbackHealth({
+    getImpl: (_url, _opts, onResponse) => {
+      const request = new EventEmitter();
+      request.destroy = () => {};
+      queueMicrotask(() => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        onResponse(response);
+        response.emit('data', Buffer.from(JSON.stringify(body)));
+        response.emit('end');
+      });
+      return request;
+    },
+  });
+  assert.equal(await simulate({
+    ok:true,service:'unknown',route:'/api/health',
+    deploySha:sha,processDeploySha:sha,deployMarkerSha:sha,identityMatch:true,
+  }), null);
+  assert.equal(await simulate({
+    ok:true,service:'api-server',route:'/api/health',
+    deploySha:sha,processDeploySha:'invalid',deployMarkerSha:sha,identityMatch:true,
+  }), null);
+  const redacted = await readStagingLoopbackHealth({
+    getImpl: () => { throw new Error('DO_NOT_PUBLISH_RAW_HTTP_ERROR'); },
+  });
+  assert.equal(redacted, null);
+});
+
+test('Staging QA reports health runtime SHA separately from supervisor environment', () => {
+  assert.ok(source.includes("http://127.0.0.1:18083/api/health"));
+  assert.ok(source.includes("const STAGING_PM2 = 'seungjae-staging'"));
+  assert.ok(workflow.includes("'runtimeSha','healthMarkerSha','healthIdentityMatch'"));
+  assert.ok(workflow.includes("Actual running Staging app SHA: "));
+  assert.ok(workflow.includes("TELEGRAM_STAGING_SCOPE_NOT_READY"));
+  assert.ok(!source.includes("http://0.0.0.0"));
 });
