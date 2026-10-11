@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {fileURLToPath} from 'node:url';
-const migration=readFileSync(fileURLToPath(new URL(
-  '../../supabase/migrations/2026101101_manual_four_market_paper_wallet_guard.sql',
-  import.meta.url,
-)),'utf8');
+import path from 'node:path';
+const apiRoot=path.basename(process.cwd())==='api-server'
+  ? process.cwd():path.join(process.cwd(),'api-server');
+const migration=readFileSync(path.join(apiRoot,
+  'supabase/migrations/2026101101_manual_four_market_paper_wallet_guard.sql'),'utf8');
 
 test('manual 4-market Paper migration is transactional, follows V2 guards and has immutable 1m seeds',()=>{
   assert.match(migration,/^begin;/m);
