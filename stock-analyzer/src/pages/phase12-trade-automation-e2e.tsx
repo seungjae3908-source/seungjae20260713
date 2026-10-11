@@ -1,5 +1,6 @@
 import AutoTradingPage from '@/pages/auto-trading';
 import type { TradeAutomationStatus } from '@/components/trade-automation-settings';
+import { useSearch } from 'wouter';
 
 const FIXTURE: TradeAutomationStatus = {
   policy: {
@@ -37,5 +38,7 @@ const FIXTURE: TradeAutomationStatus = {
 };
 
 export default function Phase12TradeAutomationE2EPage() {
-  return <AutoTradingPage fixture={FIXTURE} />;
+  const search = useSearch();
+  const initialMode = new URLSearchParams(search).get('mode') === 'paper' ? 'paper' : 'auto';
+  return <AutoTradingPage fixture={FIXTURE} initialMode={initialMode} />;
 }

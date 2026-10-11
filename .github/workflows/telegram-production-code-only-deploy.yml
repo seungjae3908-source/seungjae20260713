@@ -80,7 +80,8 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT,'sha='+match[1]+'\n');
           NODE
 
-      - name: Require exact main and post-merge full-CI provenance
+      - name: Require only the immutably pinned Telegram ancestor with full-CI provenance
+        id: provenance
         uses: actions/github-script@v7
         env:
           EXPECTED_SHA: ${{ steps.target.outputs.sha }}
@@ -92,7 +93,28 @@ jobs:
             const main=(await github.rest.repos.getBranch({
               owner:context.repo.owner,repo:context.repo.repo,branch:'main',
             })).data.commit.sha;
-            if(main!==target){core.setFailed('TELEGRAM_RELEASE_MAIN_MOVED');return;}
+            const telegramTarget='ceade3d9fb4cbb4bfcea42d548233aec79653e92';
+            const interveningAuto='67c198a8358e22626495d7c7a5b239e9a40e7c0a';
+            if(target!==telegramTarget){
+              core.setFailed('TELEGRAM_RELEASE_TARGET_NOT_APPROVED_IMMUTABLE_SOURCE');return;
+            }
+            const [autoPR,workflowPR,autoCommit,operatorCommit]=await Promise.all([
+              github.rest.pulls.get({owner:context.repo.owner,repo:context.repo.repo,pull_number:1826}),
+              github.rest.pulls.get({owner:context.repo.owner,repo:context.repo.repo,pull_number:1828}),
+              github.rest.git.getCommit({owner:context.repo.owner,repo:context.repo.repo,commit_sha:interveningAuto}),
+              github.rest.git.getCommit({owner:context.repo.owner,repo:context.repo.repo,commit_sha:main}),
+            ]);
+            if(autoPR.data.merged!==true||autoPR.data.merge_commit_sha!==interveningAuto
+              ||workflowPR.data.merged!==true||workflowPR.data.merge_commit_sha!==main
+              ||autoCommit.data.parents?.length!==1
+              ||autoCommit.data.parents[0].sha!==target
+              ||operatorCommit.data.parents?.length!==1
+              ||operatorCommit.data.parents[0].sha!==interveningAuto){
+              core.setFailed('TELEGRAM_PINNED_ANCESTOR_RELEASE_LINEAGE_CHANGED');return;
+            }
+            // Main is the exact workflow squash commit after one known auto change.
+            // Deploy source stays at the older Telegram-only verified commit.
+            core.setOutput('operator_sha',main);
             const statuses=await github.paginate(github.rest.repos.listCommitStatusesForRef,{
               owner:context.repo.owner,repo:context.repo.repo,ref:target,per_page:100,
             });
@@ -102,7 +124,7 @@ jobs:
               owner:context.repo.owner,repo:context.repo.repo,run_id:evidence.runId,
             })).data;
             const verified=evaluatePostMergeStatusProvenance({
-              targetSha:target,currentMainSha:main,statuses,run,
+              targetSha:target,currentMainSha:target,statuses,run,
             });
             if(!verified.ok)core.setFailed('TELEGRAM_POSTMERGE_PROVENANCE_REJECTED');
 
@@ -215,6 +237,7 @@ jobs:
         env:
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
           EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+          OPERATOR_SHA: ${{ steps.provenance.outputs.operator_sha }}
         with:
           script: |
             const {pathToFileURL}=require('node:url');
@@ -224,7 +247,7 @@ jobs:
               owner:context.repo.owner,repo:context.repo.repo,
               base:process.env.PREVIOUS_SHA,head:process.env.EXPECTED_SHA,per_page:100,
             });
-            const verdict=module.classifyTelegramCodeOnlyDiff(response.data);
+            const verdict=module.classifyTelegramCodeOnlyDiff(response.data,{pinnedAncestor:true});
             if(!verdict.ok){core.setFailed(verdict.code);return;}
             const pinnedFiles={
               '.github/tests/telegram-production-worker-readonly-audit.test.mjs':'d440d93a9ed7a9266bcab87f3d84452c3f18f40d',
@@ -242,7 +265,8 @@ jobs:
             for(const [path,sha] of Object.entries(pinnedFiles)){
               const result=await github.rest.repos.getContent({
                 owner:context.repo.owner,repo:context.repo.repo,
-                path,ref:process.env.EXPECTED_SHA,
+                path,ref:path==='ops/deploy-production.sh'
+                  ?process.env.OPERATOR_SHA:process.env.EXPECTED_SHA,
               });
               if(Array.isArray(result.data)||result.data?.sha!==sha){
                 core.setFailed('TELEGRAM_PINNED_RELEASE_SOURCE_CHANGED');return;
@@ -253,22 +277,23 @@ jobs:
       - name: Revalidate immutable main immediately before Production mutation
         uses: actions/github-script@v7
         env:
-          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+          OPERATOR_SHA: ${{ steps.provenance.outputs.operator_sha }}
         with:
           script: |
             const main=(await github.rest.repos.getBranch({
               owner:context.repo.owner,repo:context.repo.repo,branch:'main',
             })).data.commit.sha;
-            if(main!==process.env.EXPECTED_SHA)
-              core.setFailed('TELEGRAM_RELEASE_MAIN_MOVED_AT_DEPLOY_BOUNDARY');
+            if(main!==process.env.OPERATOR_SHA)
+              core.setFailed('TELEGRAM_RELEASE_OPERATOR_MAIN_MOVED_AT_DEPLOY_BOUNDARY');
 
       - name: Deploy exact code using existing canary, PM2 and rollback script
         env:
           APPROVED_SHA: ${{ steps.target.outputs.sha }}
           EXPECTED_PRE_SHA: ${{ steps.previous.outputs.sha }}
+          OPERATOR_SHA: ${{ steps.provenance.outputs.operator_sha }}
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PREVIOUS_SHA=%q' "$APPROVED_SHA" "$REPOSITORY_URL" "$EXPECTED_PRE_SHA")"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PREVIOUS_SHA=%q OPERATOR_SHA=%q' "$APPROVED_SHA" "$REPOSITORY_URL" "$EXPECTED_PRE_SHA" "$OPERATOR_SHA")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
@@ -295,11 +320,18 @@ jobs:
           git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
           test -f "$SOURCE_DIR/ops/deploy-production.sh"
           test -f "$SOURCE_DIR/ops/production-verification-diagnostics.sh"
+          # This pinned operator script disables canary-only background workers;
+          # archived application bytes come exclusively from the older TARGET_SHA.
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$OPERATOR_SHA"
+          operator_blob="$(git -C "$SOURCE_DIR" rev-parse "$OPERATOR_SHA:ops/deploy-production.sh")"
+          [[ "$operator_blob" == "9e39633c553100c9c5d3b0d8cd151785895ffb78" ]] || exit 1
+          git -C "$SOURCE_DIR" show "$OPERATOR_SHA:ops/deploy-production.sh" > "$SOURCE_DIR/ops/deploy-telegram-operator.sh"
+          chmod 700 "$SOURCE_DIR/ops/deploy-telegram-operator.sh"
           BASH_ENV="$SOURCE_DIR/ops/production-verification-diagnostics.sh" \
             SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME=stock-app LIVE_PORT=8080 \
             CANARY_PORT=18081 DATA_PROBE_PATH=/api/healthz/data-plane \
             PUBLIC_BASE_URL=https://lsj119.com \
-            bash "$SOURCE_DIR/ops/deploy-production.sh" "$TARGET_SHA"
+            bash "$SOURCE_DIR/ops/deploy-telegram-operator.sh" "$TARGET_SHA"
           REMOTE
 
       - name: Read back exact Production application and worker health, no message send

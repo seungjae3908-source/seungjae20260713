@@ -26,10 +26,12 @@ export const TELEGRAM_CODE_ONLY_ALLOWED_FILES = Object.freeze([
   'ops/deploy-production.sh',
   'docs/telegram-production-code-only-deploy.md',
 ]);
+export const TELEGRAM_VERIFIED_APP_TARGET_SHA = 'ceade3d9fb4cbb4bfcea42d548233aec79653e92';
+export const TELEGRAM_INTERVENING_AUTO_MERGE_SHA = '67c198a8358e22626495d7c7a5b239e9a40e7c0a';
 const safe = new Set(TELEGRAM_CODE_ONLY_ALLOWED_FILES);
 
 /** Require exact ancestor relationship, a bounded file list and no other scope. */
-export function classifyTelegramCodeOnlyDiff(diff) {
+export function classifyTelegramCodeOnlyDiff(diff, { pinnedAncestor = false } = {}) {
   if (!diff || diff.status !== 'ahead' || diff.behind_by !== 0
     || !Number.isSafeInteger(diff.ahead_by) || diff.ahead_by < 1 || diff.ahead_by > 30
     || !Number.isSafeInteger(diff.total_commits)
@@ -48,8 +50,10 @@ export function classifyTelegramCodeOnlyDiff(diff) {
     'api-server/src/services/telegram-intelligence-worker.service.ts',
     'api-server/src/services/signal-intelligence-telegram-subscriber.service.ts',
     'api-server/src/index.ts',
-    '.github/workflows/telegram-production-code-only-deploy.yml',
-    'ops/deploy-production.sh',
+    ...(pinnedAncestor ? [] : [
+      '.github/workflows/telegram-production-code-only-deploy.yml',
+      'ops/deploy-production.sh',
+    ]),
   ];
   if (!mustContain.every(name => names.includes(name)))
     return Object.freeze({ ok:false,code:'TELEGRAM_SCOPE_REQUIRED_FILE_ABSENT' });

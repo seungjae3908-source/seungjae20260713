@@ -60,3 +60,31 @@ Paper trading execution flag is enabled, the existing pre-deploy gate refuses
 promotion. The scoped deployment workflow also pins the exact SHA of this shared
 script, so unreviewed edits fail closed. No SQL migrations or Bot API proof sends
 are included in the code-only workflow.
+
+
+## Single pinned Telegram-only app source despite unrelated later main
+
+The authorized app artifact is exactly `ceade3d9fb4cbb4bfcea42d548233aec79653e92`
+(merged PR #1825, original complete Full CI and Staging QA). New main
+`67c198a8358e22626495d7c7a5b239e9a40e7c0a` also contains independent
+automatic trading PR #1826. Shipping newer main would violate the Telegram-only scope.
+
+The guarded code-only workflow therefore requires a **fixed one-time history**:
+approved Telegram target -> exact unrelated auto squash commit -> squash merge
+of this release-control workflow PR #1828, with no additional main commits.
+The deployed **application** comes only from the Telegram target; the newer
+automatic-trading changes are never included. Protected workflow and canary
+script are fetched from the operator main commit and checked against the
+pinned deployment-script Git blob SHA. The existing Production -> app target
+diff still must contain only the exact fixed Telegram allowlist.
+
+Same-SHA successful PostgreSQL authentication and complete Staging QA are
+required for the Telegram app artifact, not the unrelated operator main.
+A verified historic postmerge CI receipt for that exact app target is checked.
+The immutable parent-chain verification replaces broad exact-current-main
+only for this single specified Telegram release, not for any other commit.
+Any other main history or SHA fails closed before Production mutation.
+
+This one-time exception must receive separate release-control code review
+before Ready/Merge, then requires protected Production human approval.
+No SQL migrations or direct Telegram Bot API sends are part of the path.
