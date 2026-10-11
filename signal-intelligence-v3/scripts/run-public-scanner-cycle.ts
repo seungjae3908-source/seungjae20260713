@@ -21,6 +21,8 @@ import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } fr
 import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/public-roster-integrity.mjs';
 import {createPublicV3CryptoProviders} from '../src/public-v3-crypto-providers.mjs';
 import {createPublicStockSourceAudit} from '../src/public-stock-source-audit.mjs';
+import {createPublicKrAlphaHistoricalDailyFeed} from '../src/public-kr-alpha-historical-daily.mjs';
+import {includeProvisionalKrAlphanumericRoster} from '../src/public-kr-provisional-roster.mjs';
 import {
   classifyPublicCycleLaneStatus,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
@@ -37,6 +39,16 @@ const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
 const PUBLIC_PROFILE_MODE = String(process.env.SIGNAL_INTELLIGENCE_PUBLIC_PROFILE_MODE ?? 'RESEARCH_V3').trim();
+// Disabled by default; requires a dedicated read-only QA invocation.
+// Never changes member scanning, Paper authority or canonical listing claims.
+const KR_ALPHA_MODE = String(process.env.SIGNAL_INTELLIGENCE_KR_ALPHA_RESEARCH_MODE ?? 'NONE').trim();
+if (!['NONE','PILOT'].includes(KR_ALPHA_MODE)) throw new Error('KR_ALPHA_RESEARCH_MODE_INVALID');
+if (KR_ALPHA_MODE === 'PILOT'
+  && (process.env.SIGNAL_INTELLIGENCE_KR_ALPHA_RESEARCH_QA !== 'true'
+    || process.env.SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY !== 'NONE'
+    || process.env.LIVE_TRADING !== 'false'))
+  throw new Error('KR_ALPHA_PUBLIC_QA_EXPLICIT_READONLY_GATE_REQUIRED');
+const KR_ALPHA_DAILY_FEED = createPublicKrAlphaHistoricalDailyFeed();
 if (PUBLIC_PROFILE_MODE === 'MEMBER_UI' && process.env.SIGNAL_INTELLIGENCE_MEMBER_UI_QA !== 'true')
   throw new Error('SIGNAL_INTELLIGENCE_MEMBER_UI_QA_EXPLICIT_FLAG_REQUIRED');
 const NASDAQ_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
@@ -263,8 +275,13 @@ async function withStockPublicOnly(lane, operation) {
     }
   } else {
     targetUniverse = await originalUniverseGet.call(universe, 'KR');
+    if (lane.timeframe === '1D' && KR_ALPHA_MODE === 'PILOT')
+      targetUniverse = includeProvisionalKrAlphanumericRoster(targetUniverse,'PILOT');
   }
 
+  const researchAlpha = (ticker,entry) => KR_ALPHA_MODE === 'PILOT'
+    && lane.market === 'KR_STOCK' && lane.timeframe === '1D'
+    && entry?.publicResearchProvisional === true && ticker === '0193W0';
   // ScannerProviderHealthTracker reads getCandlesMeta, not getCandles. Route
   // BOTH entrypoints (and quote/roster) through the same public Yahoo source.
   // Never accidentally fall through to the app's private/cache providers.
@@ -272,16 +289,27 @@ async function withStockPublicOnly(lane, operation) {
     marketData, scannerUniverse: universe,
     scannerMarket: lane.scannerMarket, targetUniverse,
     readPublicCandles: async (ticker, timeframe, entry) => {
-      const symbols = yahooProviderCandidates(lane, ticker, entry);
-      try{
+      try {
+        if (researchAlpha(ticker,entry)) {
+          if (timeframe !== '1D') throw new Error('KR_ALPHA_PUBLIC_SOURCE_INTRADAY_NOT_VERIFIED');
+          const candles=await KR_ALPHA_DAILY_FEED.getCandles(ticker,timeframe);
+          audit.recordCandles(timeframe,candles);
+          return {candles,provider:'naver-public-dayCandle'};
+        }
+        const symbols = yahooProviderCandidates(lane, ticker, entry);
         const candles=await withProviderFallback(symbols, (symbol) => yahoo.getCandles(symbol, timeframe));
         audit.recordCandles(timeframe,candles);
-        return candles;
-      }catch(error){audit.candleError(timeframe,error);throw error;}
+        return {candles,provider:'yahoo-public'};
+      } catch(error){audit.candleError(timeframe,error);throw error;}
     },
     readPublicQuote: async (ticker, entry) => {
-      const symbols = yahooProviderCandidates(lane, ticker, entry);
-      try{
+      try {
+        if (researchAlpha(ticker,entry)) {
+          const quote=await KR_ALPHA_DAILY_FEED.getQuote(ticker);
+          audit.recordQuote(quote);
+          return quote;
+        }
+        const symbols = yahooProviderCandidates(lane, ticker, entry);
         const quote=await withProviderFallback(symbols, (symbol) => yahoo.getQuote(symbol));
         audit.recordQuote(quote);
         return quote;
@@ -309,7 +337,15 @@ async function scanStock(lane, cursor) {
         ...scanned.universe,
         rosterDigest: hashPublicStockSourceRoster(lane.market,targetUniverse.source,targetUniverse.entries,createHash),
       },
-      cards: scanned.cards.map((card) => ({ ...card, dataSources: [...new Set([...card.dataSources, 'yahoo-public'])] })),
+      cards: scanned.cards
+        // An UNKNOWN listing with one public historical sample is NOT a
+        // signal candidate. Keep it visible in coverage/audit evidence only.
+        .filter((card) => !targetUniverse.entries.some((entry) =>
+          entry.ticker === card.symbol && entry.publicResearchProvisional === true))
+        .map((card) => ({
+          ...card,
+          dataSources: [...new Set([...card.dataSources, 'yahoo-public'])],
+        })),
     });
   });
 }
