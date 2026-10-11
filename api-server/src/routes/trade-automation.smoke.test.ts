@@ -350,6 +350,53 @@ test.beforeEach(async () => {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
 });
+
+test('manual/AUTO isolation endpoint is owner-scoped, zero-mutation and exposes counts only', async () => {
+  const local = new InMemoryTradingRepository();
+  await local.saveConnection({ userId: USER, exchange: 'upbit', accountMode: 'live', configured: true,
+    encryptedCredentials: encryptTradingCredentials({ accessKey: 'isolation-test-key', secretKey: 'isolation-test-secret' }),
+    lastVerifiedAt: new Date().toISOString(), lastErrorCode: null, updatedAt: new Date().toISOString() });
+  setTradeAutomationRepositoryFactoryForTests((owner) => {
+    assert.equal(owner, USER);
+    return local;
+  });
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(url.origin, 'https://api.upbit.com');
+    assert.equal(String(init?.method ?? 'GET'), 'GET');
+    providerCalls += 1;
+    return Response.json(url.pathname === '/v1/accounts' ? [
+      { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+      { currency: 'BTC', balance: '0.2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+      { currency: 'ETH', balance: '2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+    ] : []);
+  }) as typeof fetch;
+  const { server, baseUrl } = await startServer(true, 'admin');
+  try {
+    const response = await originalFetch(baseUrl + '/api/trade-automation/live-position-isolation/upbit');
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control')!, /no-store/);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.ready, true);
+    assert.equal(body.manualProtectedPositionCount, 2);
+    assert.equal(body.automaticOwnedPositionCount, 0);
+    assert.equal(body.manualEntryBlocked, true);
+    assert.equal(body.canonicalExitOnly, true);
+    assert.equal(body.liveTradingAuthorityGranted, false);
+    assert.equal(body.autoTradingAuthorityGranted, false);
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) assert.equal(body[key], 0);
+    for (const key of ['positions', 'balances', 'orders', 'userId', 'accountRef', 'encryptedCredentials']) assert.equal(key in body, false);
+    assert.doesNotMatch(JSON.stringify(body), /isolation-test|BTC|ETH/);
+    assert.ok(providerCalls > 0);
+    assert.equal((await local.listOrders(USER)).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
   setTradePaperRuntimeWalletReaderForTests(null);

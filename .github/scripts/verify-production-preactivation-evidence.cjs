@@ -6,6 +6,7 @@ const {
   ZERO_COUNTERS,
   ZERO_SAFETY_COUNTERS,
   assertAccountReceipt,
+  assertAutomaticPositionIsolationReceipt,
   assertAutoLiveReceipt,
   assertAutoLiveSignalReceipt,
   assertComprehensiveReceipt,
@@ -14,7 +15,8 @@ const {
 } = require('./production-postdeploy-qa-evidence.cjs');
 const { findUniqueEvidenceFile } = require('./production-preactivation-evidence-paths.cjs');
 
-const args = process.argv.slice(2);
+const requirePositionIsolation = process.argv.includes('--require-automatic-position-isolation');
+const args = process.argv.slice(2).filter((arg) => arg !== '--require-automatic-position-isolation');
 if (args.length < 4) {
   throw new Error('Usage: verify-production-preactivation-evidence.cjs <sha> <run-id> <deployment-boundary> <evidence-dir|comprehensive> [account credential activation-ready]');
 }
@@ -71,6 +73,7 @@ if (qaScope === 'trading_core') {
   assertComprehensiveReceipt(comprehensive, context);
 }
 assertAccountReceipt(account, context);
+if (qaScope === 'auto_live' || requirePositionIsolation) assertAutomaticPositionIsolationReceipt(account);
 assertCredentialReceipt(credential, context);
 
 const boundary = Date.parse(String(boundaryText ?? ''));
@@ -120,7 +123,8 @@ if ((!v3Full && !v4Scoped)
   || activation?.duplicateWorkerExecutionCount !== 0
   || activation?.pm2FlagDriftCount !== 0
   || activation?.legacyCryptoAutoAuthorityGranted !== false
-  || (qaScope === 'auto_live' && activation?.memberAutoLivePilotReady !== true)
+  || (qaScope === 'auto_live' && (activation?.memberAutoLivePilotReady !== true
+    || activation?.automaticPositionIsolation !== 'PASS'))
   || activation?.activationReady !== true) {
   throw new Error('PREACTIVATION_ACTIVATION_READY_RECEIPT_INVALID');
 }
