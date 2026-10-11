@@ -21,6 +21,8 @@ import {
   parsePublicRetryAfterMs,
   publicUpbitGroupForUrl,
   createPublicUpbitGroupPacer,
+  publicBitgetMarketEndpoint,
+  createPublicBitgetMarketPacer,
 } from '../src/public-cycle-coverage.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
@@ -335,8 +337,35 @@ async function scanCryptoRaw(lane, cursor) {
   });
 }
 
+
+async function withBitgetPublicPacing(operation) {
+  const originalFetch = globalThis.fetch;
+  const pacer = createPublicBitgetMarketPacer();
+  globalThis.fetch = async (input, init = {}) => {
+    const rawUrl = typeof input === 'string' || input instanceof URL
+      ? String(input) : String(input?.url ?? '');
+    const endpoint = publicBitgetMarketEndpoint(rawUrl);
+    if (endpoint === null) return originalFetch(input, init);
+    const signal = init?.signal ?? (typeof input === 'object' ? input?.signal : undefined);
+    // Bitget public market has a shared IP budget. Serializing request starts
+    // (not responses) to 10/sec protects 1D after earlier 15m/60m scans.
+    const response = await pacer.schedule(() => originalFetch(input, init), signal);
+    if (response.status === 429 || response.status === 418) {
+      // Never turn an exchange rejection into a success and never retry to
+      // pass. A provider cooldown applies to all subsequent V3 market reads.
+      const retryAfter = parsePublicRetryAfterMs(response.headers.get('retry-after'));
+      const cooldown = retryAfter == null ? 1000
+        : Number.isFinite(retryAfter) ? Math.max(1000, retryAfter) : 30000;
+      pacer.cooldown(Math.min(30000, cooldown));
+    }
+    return response;
+  };
+  try { return await operation(); } finally { globalThis.fetch = originalFetch; }
+}
+
 async function scanCrypto(lane, cursor) {
   if (lane.scannerMarket === 'spot') return withUpbitPacing(() => scanCryptoRaw(lane, cursor));
+  if (lane.scannerMarket === 'futures') return withBitgetPublicPacing(() => scanCryptoRaw(lane, cursor));
   return scanCryptoRaw(lane, cursor);
 }
 
