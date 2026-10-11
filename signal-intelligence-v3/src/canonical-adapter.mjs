@@ -139,6 +139,64 @@ function validateCostPolicy(policy, { market, costPolicyId }, blockers) {
   return blockers.length === 0;
 }
 
+/**
+ * A READY profit number alone never proves that the corresponding scanner
+ * formula has survived OOS, walk-forward and all-in cost validation.
+ * Require exact same-candidate immutable lineage and measurable genuine
+ * backtest dimensions. This is a structural check, NOT proof of the external
+ * evaluator's independence or an OOS PASS by itself.
+ */
+function validateBacktestLineage(card, identity, profit, blockers) {
+  if (!identity) return;
+  const quality = card?.backtestQuality;
+  if (!quality || quality.status !== 'verified') {
+    addBlocker(blockers, 'BACKTEST_QUALITY_VERIFICATION_REQUIRED');
+    return;
+  }
+  if (quality.oos !== true || quality.walkForward !== true)
+    addBlocker(blockers, 'OOS_AND_WALK_FORWARD_EVIDENCE_REQUIRED');
+  if (quality.costsIncluded !== true || quality.slippageIncluded !== true)
+    addBlocker(blockers, 'ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED');
+  if (quality.lookaheadGuarded !== true || quality.survivorshipGuarded !== true)
+    addBlocker(blockers, 'PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED');
+  const lineage = {
+    signalId: identity.signalId,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    researchCodeSha: identity.researchCodeSha,
+    costPolicyId: identity.costPolicyVersion,
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    direction: identity.direction,
+  };
+  if (!quality.canonicalLineage || typeof quality.canonicalLineage !== 'object'
+    || Object.entries(lineage).some(([key, value]) =>
+      quality.canonicalLineage[key] !== value))
+    addBlocker(blockers, 'BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED');
+  const verifiedSamples =
+    Number.isSafeInteger(quality.tradeCount) && quality.tradeCount > 0
+    && Number.isSafeInteger(quality.minimumTradeCount) && quality.minimumTradeCount > 0
+    && quality.tradeCount >= quality.minimumTradeCount
+    && Number.isSafeInteger(quality.oosTradeCount) && quality.oosTradeCount > 0
+    && Number.isSafeInteger(quality.walkForwardTradeCount)
+    && quality.walkForwardTradeCount > 0
+    && Number.isSafeInteger(profit?.sampleSize) && profit.sampleSize > 0;
+  if (!verifiedSamples)
+    addBlocker(blockers, 'BACKTEST_OOS_WALK_FORWARD_SAMPLE_EVIDENCE_REQUIRED');
+  if (!(typeof quality.netReturnPercent === 'number'
+      && Number.isFinite(quality.netReturnPercent)
+      && quality.netReturnPercent > 0)
+    || !(typeof quality.expectancyPercent === 'number'
+      && Number.isFinite(quality.expectancyPercent)
+      && quality.expectancyPercent > 0)
+    || !(typeof quality.profitFactor === 'number'
+      && Number.isFinite(quality.profitFactor)
+      && quality.profitFactor > 1))
+    addBlocker(blockers, 'BACKTEST_NET_ECONOMIC_EVIDENCE_REQUIRED');
+}
+
 function canonicalProfitEvidence(input, card, context) {
   const blockers = [];
   const identity = validatePaperIdentity(input?.paperIdentity, { card, ...context }, blockers);
@@ -162,6 +220,7 @@ function canonicalProfitEvidence(input, card, context) {
 
   const costPolicyId = nonEmpty(profit?.costPolicyId) ? profit.costPolicyId : null;
   validateCostPolicy(input?.costPolicy, { market: context.market, costPolicyId }, blockers);
+  validateBacktestLineage(card, identity, profit, blockers);
 
   const stopPct = stopDistancePercent(card);
   if (stopPct == null || stopPct <= 0) addBlocker(blockers, 'STOP_DISTANCE_REQUIRED_FOR_EDGE_NORMALIZATION');
