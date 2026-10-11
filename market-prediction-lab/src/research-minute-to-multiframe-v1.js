@@ -52,7 +52,9 @@ function getIntervals(timeframes){
    throw new TypeError("RESEARCH_MULTITIMEFRAME_SELECTION_INVALID");
  return timeframes.map(name=>{
   if(typeof name!=="string")throw new TypeError("RESEARCH_INTERVAL_INVALID");
-  let duration=TIMEFRAME_MS[name];
+  // Reject Object.prototype keys masquerading as supported timeframes.
+  let duration=Object.prototype.hasOwnProperty.call(TIMEFRAME_MS,name)
+    ?TIMEFRAME_MS[name]:null;
   if(!duration){
    const match=/^([1-9]\d{0,3})m$/.exec(name);
    const minutes=match?Number(match[1]):0;
@@ -128,8 +130,8 @@ export function deriveResearchTimeframesFromMinuteSourceV1({
   prev=bar.timestampMs;
  }
  const nativeByMs=new Map(minuteBars.map(r=>[r.timestampMs,r]));
- const frames={};
- let produced=0,totalMissing=0,totalOpen=0;
+ const frames=Object.create(null);
+ let produced=0,totalMissing=0,totalOpen=0,totalUnavailable=0;
  for(const spec of intervals){
   if(spec.name==="1d"&&!crypto)
    throw new TypeError("STOCK_DAILY_REQUIRES_OFFICIAL_SESSION_AND_CORPORATE_ACTION_BARS");
@@ -166,6 +168,7 @@ export function deriveResearchTimeframesFromMinuteSourceV1({
   }
   const tail=(session.endMs-session.startMs)%widthMs/MINUTE;
   produced+=bars.length;totalMissing+=missing;totalOpen+=openBuckets;
+  totalUnavailable+=unavailable;
   frames[name]=Object.freeze({
    timeframe:name,intervalMinutes:minutes,
    bars:Object.freeze(bars),barsSha256:sha(bars),
@@ -183,14 +186,17 @@ export function deriveResearchTimeframesFromMinuteSourceV1({
   sessionKind:session.kind,sessionTimeZone:session.timeZone,
   sourceMinuteRowsSha256,
   sourceMinuteRows:minuteBars.length,sourceMinuteIntegrityVerified:true,
-  status:totalMissing?"SOURCE_LIMITED_PARTIAL_MULTI_TIMEFRAME_BARS":
-    "SOURCE_LIMITED_DERIVED_MULTI_TIMEFRAME_BARS_ONLY",
+  status:totalMissing||totalUnavailable
+    ?"SOURCE_LIMITED_PARTIAL_MULTI_TIMEFRAME_BARS"
+    :"SOURCE_LIMITED_DERIVED_MULTI_TIMEFRAME_BARS_ONLY",
   reason:totalMissing?"UNVERIFIED_MISSING_ONE_MINUTE_SOURCE_NOT_FILLED":
+    totalUnavailable?"MINUTE_SOURCE_NOT_AVAILABLE_AT_CUTOFF":
     "RESEARCH_ONLY_NO_INDEPENDENT_MARKET_OR_SCANNER_PROOF",
   asOfMs,intervalsRequested:intervals.map(x=>x.name),
   intervalData:frames,derivedCandleCount:produced,
   missingUnverifiedBucketsAcrossRequestedIntervals:totalMissing,
   notYetClosedBucketsAcrossRequestedIntervals:totalOpen,
+  dataUnavailableAtCutoffBucketsAcrossRequestedIntervals:totalUnavailable,
   sourceTimeframe:"1m",sourceDataNotRepublished:true,
  });
 }
