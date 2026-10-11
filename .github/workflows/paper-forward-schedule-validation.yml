@@ -613,7 +613,6 @@ jobs:
             api-server/test.mjs
             stock-analyzer/src/components/paper-trading-panel.tsx
             stock-analyzer/src/lib/paper-trading.ts
-            # Exact manual Paper archive/analytics files, no shared LIVE extension.
             stock-analyzer/src/lib/paper-trading-storage.ts
             stock-analyzer/src/lib/paper-trading-storage.test.ts
             stock-analyzer/src/lib/paper-trade-review.ts
