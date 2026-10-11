@@ -550,7 +550,16 @@ export async function serverPaperFillCostEvidence(
   let settlementFxEvidence: TradingOrder['settlementFxEvidence'] = null;
   if (plan.accountMode === 'paper') {
     try {
-      const fx = await (providers.fxQuote ?? resolveMemberAutoTradingKrwRate)(market, { nowMs });
+      // Generic Paper HTTP orders must never acquire new implicit public
+      // network dependencies. Native KRW=1 is deterministic; USD and USDT
+      // require an explicit quote supplied by the already-verifying server
+      // Paper Worker. Missing proof leaves FX null and settlement blocked.
+      const reader = providers.fxQuote ?? (
+        market === 'KR_STOCK' || market === 'CRYPTO_SPOT'
+          ? resolveMemberAutoTradingKrwRate : null
+      );
+      if (!reader) throw new Error('PAPER_NON_NATIVE_FX_SERVER_WITNESS_REQUIRED');
+      const fx = await reader(market, { nowMs });
       const observedMs = Date.parse(fx.observedAt);
       if (fx.market === market && fx.stale === false && fx.source === expectedFxSource
         && typeof fx.krwPerQuoteCurrency === 'number'
