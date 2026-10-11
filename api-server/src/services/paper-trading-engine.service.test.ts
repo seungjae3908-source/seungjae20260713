@@ -368,6 +368,20 @@ test('manual Paper partial closing does not consume the five-trade daily loss bu
   assert.equal(allowed.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
 });
 
+test('manual Paper daily realized-loss budget resets at KST midnight without touching LIVE settings', () => {
+  const before=new Date('2026-08-02T14:59:00.000Z');
+  const after=new Date('2026-08-02T15:01:00.000Z');
+  const { normalizedRiskState, dayKey } = require('./paper-trading-core.service');
+  assert.equal(dayKey(before),'2026-08-02');
+  assert.equal(dayKey(after),'2026-08-03');
+  const state=createPaperTradingState(10_000,before);
+  state.riskState.dailyRealizedPnl=-100;
+  const normalized=normalizedRiskState(state.riskState,after);
+  assert.equal(normalized.dailyRealizedPnl,0);
+  assert.equal(normalized.dayKey,'2026-08-03');
+  assert.equal(normalized.weeklyRealizedPnl,0);
+});
+
 test('manual Paper 5-loss gate respects KST midnight rather than UTC midnight', () => {
   const now=new Date('2026-08-02T15:00:00.000Z'); // 2026-08-03 00:00 KST
   const state=createPaperTradingState(10_000,now);
