@@ -38,6 +38,38 @@ function parseSeoulDay(value){
  }
  return null;
 }
+export function inspectPublicKrAlphaDailyShape(payload){
+ const items=Array.isArray(payload?.priceInfos)?payload.priceInfos:[];
+ const days=new Map();
+ let parseable=0,malformed=0,identical=0,conflicting=0,distinctTimes=0;
+ const minuteModes=new Map();
+ for(const row of items){
+   const raw=String(row?.localDateTime??'').trim();
+   const parsed=parseSeoulDay(raw);
+   if(!parsed){malformed++;continue;}
+   parseable++;
+   const day=raw.slice(0,8),time=/^[0-9]{14}$/u.test(raw)?raw.slice(8):'UNSPECIFIED';
+   minuteModes.set(time,(minuteModes.get(time)??0)+1);
+   const values=['openPrice','highPrice','lowPrice','currentPrice','accumulatedTradingVolume'].map(k=>number(row?.[k]));
+   const key=JSON.stringify(values);
+   if(!days.has(day)){days.set(day,{times:new Set([time]),values:new Set([key]),rows:1});continue;}
+   const existing=days.get(day);
+   if(!existing.times.has(time))distinctTimes++;
+   if(existing.values.has(key))identical++;else conflicting++;
+   existing.times.add(time);existing.values.add(key);existing.rows++;
+ }
+ return Object.freeze({
+   rawRows:items.length,parseableRows:parseable,unparseableRows:malformed,
+   distinctDays:days.size,repeatedDays:[...days.values()].filter(x=>x.rows>1).length,
+   byteEquivalentRepeatedRows:identical,conflictingRepeatedRows:conflicting,
+   differentTimesWithinDay:distinctTimes,
+   maxRowsPerDay:Math.max(0,...[...days.values()].map(x=>x.rows)),
+   timeOfDayBuckets:Object.freeze([...minuteModes.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8)
+     .map(([time,count])=>({time,count}))),
+   rawPricesRedacted:true,fullMarketSupported:false,
+ });
+}
+
 export function normalizePublicKrAlphaDaily(payload,requestedCode,nowMs=Date.now()){
  const code=krAlphaDailyCode(requestedCode);
  if(!payload||typeof payload!=='object'||Array.isArray(payload)
@@ -98,6 +130,7 @@ export function createPublicKrAlphaDailyFeed({
   ||!Number.isInteger(minStartMs)||minStartMs<200||minStartMs>5000)
   throw Error('KR_ALPHA_DAILY_PROVIDER_OPTIONS_INVALID');
  const cache=new Map(),CACHE_MS=60000;
+ let lastIntegrity=null;
  let tail=Promise.resolve(),nextAt=0;
  async function fetchOne(code){
    // Shared bounded public start pacing prevents untrusted mass endpoint load.
@@ -117,6 +150,7 @@ export function createPublicKrAlphaDailyFeed({
      if(!String(response.headers?.get?.('content-type')??'').toLowerCase().includes('json'))
        throw Error('KR_ALPHA_DAILY_NONJSON');
      const data=await response.json();
+     lastIntegrity=inspectPublicKrAlphaDailyShape(data);
      return normalizePublicKrAlphaDaily(data,code,now());
    }finally{clearTimeout(timer);}
  }
@@ -135,7 +169,8 @@ export function createPublicKrAlphaDailyFeed({
      const code=krAlphaDailyCode(value);
      return publicKrAlphaDailyQuote(code,await candles(code,'1D'));
    },
-   clear:()=>cache.clear(),
+   clear:()=>{cache.clear();lastIntegrity=null;},
+   readLastIntegrity:()=>lastIntegrity,
    // No broker credentials, authentication, redistribution or LIVE support.
    executionAuthority:'NONE',
    permittedTimeframes:Object.freeze(['1D']),

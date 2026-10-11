@@ -295,6 +295,7 @@ jobs:
             ||evidence.licensedMarketRedistribution!==false
             ||evidence.intradayAlphanumericSupported!==false)process.exit(1);
           console.log('KR_ALPHA_DAILY_CANARY '+evidence.alphanumericDailyCanary.result+' reason='+(evidence.alphanumericDailyCanary.reason??'NONE'));
+          console.log('KR_ALPHA_DAILY_SOURCE_SHAPE '+JSON.stringify(evidence.sourceShapeIntegrity??null));
           NODE
       - name: Diagnose a few public read-only sources, never promote result
         run: |
