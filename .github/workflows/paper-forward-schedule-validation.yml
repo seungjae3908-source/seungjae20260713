@@ -263,6 +263,7 @@ on:
       - stock-analyzer/src/lib/manual-four-market-paper-status.ts
       - stock-analyzer/src/lib/paper-trading-storage.test.ts
       - stock-analyzer/src/pages/paper-trading.tsx
+      - api-server/src/services/paper-journal-service-role.repository.test.ts
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -600,6 +601,7 @@ jobs:
             stock-analyzer/src/lib/manual-four-market-paper-status.ts
             stock-analyzer/src/lib/paper-trading-storage.test.ts
             stock-analyzer/src/pages/paper-trading.tsx
+            api-server/src/services/paper-journal-service-role.repository.test.ts
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
