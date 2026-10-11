@@ -15,6 +15,7 @@ var EPSILON = 1e-8;
 var finite = (value) => typeof value === "number" && Number.isFinite(value);
 var positive = (value) => finite(value) && value > 0;
 var nonNegative = (value) => finite(value) && value >= 0;
+var KST_OFFSET_MS = 9 * 60 * 6e4;
 function isFresh(updatedAt, now, limitMs) {
   const timestamp4 = Date.parse(updatedAt);
   return Number.isFinite(timestamp4) && now.getTime() >= timestamp4 && now.getTime() - timestamp4 <= limitMs;
@@ -119,7 +120,10 @@ function buildRiskInput(state, request, market, rules, supplied, entryPrice, now
     contractRulesStatus: rulesStatus,
     dailyRealizedPnl: state.riskState.dailyRealizedPnl,
     weeklyRealizedPnl: state.riskState.weeklyRealizedPnl,
-    consecutiveLosses: state.riskState.consecutiveLosses,
+    // LIVE's 3-loss streak guard does not govern this hypothetical manual
+    // simulation. Its own KST-day five-losing-trades gate is checked at
+    // simulated order admission, without changing shared LIVE risk policy.
+    consecutiveLosses: 0,
     openExposure: openExposure(state),
     sameDirectionExposure: sameDirectionExposure(state, request.side),
     dataStatus: marketStatus,
