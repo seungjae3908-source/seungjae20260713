@@ -129,7 +129,8 @@ test('a thrown source failure retains sanitized diagnostic counters without rela
  });
  delete row.cursorRotatedBlockedOnly;
  // The audit now comes from the SAME failed scan, not a second provider call.
- const quote={fetched:0,errors:0,invalidPrice:0};
+ const quote={fetched:0,errors:0,invalidPrice:0,
+  missingTimestamp:0,expiredTimestamp:6,futureTimestamp:0};
  const candle={fetched:0,errors:0,empty:0,shortLt20:0,shortLt40:0,
   invalidOhlc:0,hasLateOrFuture:0,lastBarLagGteOneDay:0,lastBarLagGteFiveDays:0};
  row.publicStockSourceAudit={
@@ -146,6 +147,7 @@ test('a thrown source failure retains sanitized diagnostic counters without rela
  assert.equal(outcome.krWholeUniverseVerified,false);
  assert.equal(outcome.lanes[0].result,'PROVIDER_FAILED_CURSOR_HELD');
  assert.equal(outcome.lanes[0].sourceHttp429Count,5);
+ assert.equal(outcome.lanes[0].sourceExpiredQuoteCount,6);
  assert.equal(outcome.lanes[0].cursorHeld,true);
  assert.equal(outcome.tradingAuthority,'NONE');
  const illegal=[

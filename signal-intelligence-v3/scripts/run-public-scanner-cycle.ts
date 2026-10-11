@@ -303,7 +303,7 @@ async function withStockPublicOnly(lane, operation) {
       if (researchAlpha(ticker,entry)) {
         try {
           const quote=publicKrAlphaDailyQuote(ticker,(await KR_ALPHA_DAILY_FEED.read(ticker)).candles);
-          audit.recordQuote(quote);
+          audit.recordQuote(quote,lane.timeframe);
           return quote;
         }catch(error){audit.quoteError(error);throw error;}
       }
@@ -311,7 +311,7 @@ async function withStockPublicOnly(lane, operation) {
       return choosePublicStockQuote({
         symbols,timeframe:lane.timeframe,now:Date.now(),
         load:(symbol)=>yahoo.getQuote(symbol),
-        onSource:(quote)=>audit.recordQuote(quote),
+        onSource:(quote)=>audit.recordQuote(quote,lane.timeframe),
         onError:(error)=>audit.quoteError(error),
       });
     },
