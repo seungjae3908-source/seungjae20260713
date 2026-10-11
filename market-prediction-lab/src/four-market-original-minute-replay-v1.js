@@ -98,7 +98,8 @@ function normalize(input){
     ||digestPITMembershipRowsV1(manifest.memberships)!==manifest.rawMembershipDigestSha256)
     fail("PRIVATE_REPLAY_HISTORIC_PIT_ROSTER_REQUIRED");
   const period=resolveSelectedResearchWindowV1(researchWindow);
-  const calendar=validateSessions(market,period,stockCalendar,sessionSources);
+  const calendar=validateSessions(market,symbol,manifest,period,
+    stockCalendar,sessionSources);
   const quote=QUOTE_CURRENCY[market];
   const needsFX=quote!=="KRW";
   if(fxRateKRWPerQuote!=null
@@ -112,7 +113,7 @@ function normalize(input){
     costs,leverage,riskFraction,initialCapitalKRW,quote,
     fxMissing:needsFX&&fx==null,fxRateKRWPerQuote:fx};
 }
-function validateSessions(market,period,stockCalendar,sources){
+function validateSessions(market,symbol,manifest,period,stockCalendar,sources){
   const stock=market.endsWith("STOCK");
   if(stock){
     if(!stockCalendar||stockCalendar.market!==market
@@ -128,12 +129,66 @@ function validateSessions(market,period,stockCalendar,sources){
         fail("PRIVATE_REPLAY_STOCK_TRADING_DATES_INVALID");
       prev=date;
     }
-  }else if(stockCalendar!=null)fail("PRIVATE_REPLAY_CRYPTO_STOCK_CALENDAR_FORBIDDEN");
-  const required=stock
-    ?stockCalendar.tradingDates.filter(d=>d>=period.startDate&&d<=period.endDate)
+  }else if(stockCalendar!=null)
+    fail("PRIVATE_REPLAY_CRYPTO_STOCK_CALENDAR_FORBIDDEN");
+
+  // Ticker reuse must be accompanied by an immutable security identity.
+  // This format only contains symbols: NEVER silently mix two different
+  // instruments with the same trading code across delisting/relisting.
+  const members=manifest.memberships.filter(row=>
+    String(row?.symbol??"").trim().toUpperCase()===symbol);
+  if(members.length!==1)
+    fail("PRIVATE_REPLAY_SYMBOL_LIFECYCLE_MISSING_OR_AMBIGUOUS");
+  const member=members[0],removed=member.removedAtMs??Infinity;
+  if(!Number.isSafeInteger(member.listedAtMs)||member.listedAtMs<=0
+    ||removed!==Infinity&&(!Number.isSafeInteger(removed)
+      ||removed<=member.listedAtMs)
+    ||!Array.isArray(member.halts))
+    fail("PRIVATE_REPLAY_SYMBOL_LIFECYCLE_INVALID");
+  const coveredSession=(start,end)=>{
+    if(member.listedAtMs>=end||removed<=start)return false;
+    // Intraday listing/delisting/halts need independently dated bars and a
+    // narrower trading session. Do not pretend a full old-market session.
+    if(member.listedAtMs>start||removed<end)
+      fail("PRIVATE_REPLAY_INTRADAY_LISTING_OR_DELISTING_UNVERIFIED");
+    if(member.halts.some(row=>row.startMs<end&&row.endMs>start))
+      fail("PRIVATE_REPLAY_HALT_INTERVAL_SOURCE_REQUIRED");
+    return true;
+  };
+
+  const selectedDates=stock
+    ?stockCalendar.tradingDates.filter(date=>
+      date>=period.startDate&&date<=period.endDate)
     :Array.from({length:period.requestedUtcDayCount},
       (_,i)=>utc(period.startMs+i*DAY));
-  if(!required.length)return {required,events:[],missing:required};
+  const expectedAll=stock
+    ?validateResearchStockSessionsForDateV1(market,stockCalendar,
+      period.startDate,period.endDate)
+    :[];
+  const eligibleExpected=stock
+    ?expectedAll.filter(session=>
+      coveredSession(session.startMs,session.endMs))
+    :[];
+  const hasCalendarDate=new Set(expectedAll.map(x=>x.tradingDateLocal));
+  const activeCalendarDate=new Set(eligibleExpected.map(x=>x.tradingDateLocal));
+  const required=stock
+    ?selectedDates.filter(date=>{
+      // If a supposedly open day has no dated session evidence, a member
+      // active through its UTC day must remain BLOCKED, not "zero candles".
+      const start=Date.parse(date+"T00:00:00Z");
+      return activeCalendarDate.has(date)
+        ||!hasCalendarDate.has(date)
+          &&member.listedAtMs<start+DAY&&removed>start;
+    })
+    :selectedDates.filter(date=>{
+      const start=Date.parse(date+"T00:00:00Z");
+      return coveredSession(start,start+DAY);
+    });
+  if(!required.length)
+    return {required,events:[],missing:[],missingSessions:0,
+      requestedSessionCount:0,
+      historicalLifecycleExcludedTradingDates:selectedDates.length,
+      symbolActiveInSelectedPeriod:false};
   let prevStart=-1;
   const events=[];
   for(const row of sources){
@@ -150,8 +205,11 @@ function validateSessions(market,period,stockCalendar,sources){
       fail("PRIVATE_REPLAY_SOURCE_SESSION_INVALID");
     prevStart=row.startMs;
     if(!stock&&(row.startMs!==Date.parse(row.date+"T00:00:00Z")
-      ||row.endMs!==row.startMs+DAY))fail("PRIVATE_REPLAY_CRYPTO_UTC_DAY_INVALID");
+      ||row.endMs!==row.startMs+DAY))
+      fail("PRIVATE_REPLAY_CRYPTO_UTC_DAY_INVALID");
     if(row.date<period.startDate||row.date>period.endDate)continue;
+    if(!coveredSession(row.startMs,row.endMs))
+      fail("PRIVATE_REPLAY_SOURCE_OUTSIDE_HISTORIC_LISTING");
     events.push(row);
   }
   if(stock){
@@ -161,39 +219,35 @@ function validateSessions(market,period,stockCalendar,sources){
         kind:x.kind,timeZone:x.zone,
       })),
     },period.startDate,period.endDate);
-    if(validated.length!==events.length)fail("PRIVATE_REPLAY_STOCK_CALENDAR_SESSION_MISMATCH");
+    if(validated.length!==events.length)
+      fail("PRIVATE_REPLAY_STOCK_CALENDAR_SESSION_MISMATCH");
   }
   const found=new Set(events.map(x=>x.date));
   const valid=new Set(required);
-  if(events.some(x=>!valid.has(x.date)))fail("PRIVATE_REPLAY_UNEXPECTED_TRADING_DATE");
+  if(events.some(x=>!valid.has(x.date)))
+    fail("PRIVATE_REPLAY_UNEXPECTED_TRADING_DATE");
   const missing=required.filter(x=>!found.has(x));
-  // A stock date may contain premarket, regular, after-hours, and halts.
-  // Matching only the calendar DATE falsely marks a partially supplied day
-  // complete. Compare the entire expected exchange-local session schedule.
-  const expected=stock
-    ?validateResearchStockSessionsForDateV1(market,stockCalendar,
-      period.startDate,period.endDate)
-    :[];
   let missingSessions=0;
   if(stock){
     const key=x=>[x.tradingDateLocal??x.date,
       x.startMs,x.endMs,x.kind].join(":");
-    const expectedSet=new Set(expected.map(key));
+    const expectedSet=new Set(eligibleExpected.map(key));
     const suppliedSet=new Set(events.map(key));
     if(suppliedSet.size!==events.length
       ||events.some(x=>!expectedSet.has(key(x))))
       fail("PRIVATE_REPLAY_UNEXPECTED_OR_DUPLICATE_STOCK_SESSION");
-    missingSessions=expected.filter(x=>!suppliedSet.has(key(x))).length;
-    if(expected.some(x=>!valid.has(x.tradingDateLocal)))
+    missingSessions=eligibleExpected.filter(x=>
+      !suppliedSet.has(key(x))).length;
+    if(eligibleExpected.some(x=>!valid.has(x.tradingDateLocal)))
       fail("PRIVATE_REPLAY_CALENDAR_SESSION_DATE_NOT_SELECTED");
-    // Trading dates explicitly demanded by the caller cannot be marked
-    // complete when no session provenance was supplied for those dates.
-    if(required.some(date=>!expected.some(x=>x.tradingDateLocal===date)))
-      missingSessions+=required.filter(date=>
-        !expected.some(x=>x.tradingDateLocal===date)).length;
+    const expectedDates=new Set(eligibleExpected.map(x=>x.tradingDateLocal));
+    missingSessions+=required.filter(date=>!expectedDates.has(date)).length;
   }
   return {required,events,missing,missingSessions,
-    requestedSessionCount:stock?expected.length:required.length};
+    requestedSessionCount:stock?eligibleExpected.length:required.length,
+    historicalLifecycleExcludedTradingDates:
+      selectedDates.length-required.length,
+    symbolActiveInSelectedPeriod:true};
 }
 function historicPITDay({manifest,market,symbol,date,startMs,endMs}){
   // Whole-date membership is validated, including relistings and halts.
@@ -334,6 +388,9 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     quoteCurrency:cfg.quote,modeledFxRateKRWPerQuote:cfg.fxRateKRWPerQuote,
     fxEvidenceStatus:"STATIC_FX_MODEL_ONLY_NOT_HISTORICAL",
     requestedTradingDays:cfg.calendar.required.length,
+    historicalLifecycleExcludedTradingDates:
+      cfg.calendar.historicalLifecycleExcludedTradingDates,
+    historicalMemberLifespanSelfAttestedNotIndependentlyVerified:true,
     expectedSessions:cfg.calendar.requestedSessionCount,
     providedSessions:cfg.calendar.events.length,
     missingExpectedStockSessions:cfg.calendar.missingSessions,
@@ -343,6 +400,11 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     sourceDaysRead:0,sourceSessionsRead:0,retrospectiveUnavailableRows:0,
     missingSourceDays:cfg.calendar.missing.length,
     ignoredOutOfWindowSourceDays:input.sessionSources.length-cfg.calendar.events.length};
+  if(!cfg.calendar.symbolActiveInSelectedPeriod)
+    return safe({...response,
+      reason:"HISTORIC_SYMBOL_NOT_ACTIVE_IN_SELECTED_PERIOD",
+      modeledTradeCount:null,modeledReturnPercent:null,
+      modeledNetPnlKRW:null});
   if(cfg.fxMissing)return safe({...response,
     reason:"HISTORICAL_QUOTE_TO_KRW_FX_MISSING",
     modeledTradeCount:null,modeledReturnPercent:null,
