@@ -54,3 +54,18 @@ The exact-HEAD PIT dedicated workflow also runs these. Application Fast CI cover
 KR/US licensed all-security native 1m, independent historic PIT listings and delistings, complete Upbit/Bitget history, authoritative calendars/no-trade evidence and dated FX/cost/fill data, prospective original-time scanner validation, independent OOS/full-cost profitability, current-main long-history backtester integration and real automatic Paper→settlement→Journal→Telegram closure are still **not independently established** by this readback.
 
 Published results remain `executionAuthority=NONE`, `profitabilityProven=false`, `OOSPassCount=0`, `actualFillCount=null`, `trueMarketWideRecall=null`, `paperAdmissionAllowed=false`. No Replit; no Drift/Ready/Merge/deploy/Live/Paper activation without new approval.
+## Research result -> existing profitability/Paper acceptance gates (still blocked)
+
+- New pure module `four-market-original-minute-candidate-review-v1.js` checks a retrospective original native 1m PERIOD receipt and an optional same-market/same-window PIT SWEEP. It calls both existing `evaluateUnifiedProfitabilityPromotion` and `resolveCanonicalPaperAdmissionBridgeCandidate` with honest missing independent evidence; no trial policy or Paper bundle is fabricated.
+- Result status remains `RESEARCH_HOLD` with explicit missing historical full-PIT roster, source rights, original-time T-minus scanner, independent frozen OOS/walk-forward, dated full costs/fill quality, real future signal and Paper→settlement→Journal→Telegram blockers.
+- New `CANDIDATE_REVIEW` mode of the private CLI writes a create-only read-only review receipt. It creates **no** canonical candidate, strategy promotion, Paper order, trade, API request or Telegram message.
+- The administrator's retrospective PERIOD summary displays localized blockers returned by the *same* pure review module. Paper/Live is never enabled by reading or publishing a model.
+- Even a modeled positive 100,000% return or apparently complete local member/date source receipts cannot satisfy independently observed forward evidence, profitable OOS or a current-time canonical Paper admission bundle.
+
+Fixture-only regression command:
+
+```sh
+node --test market-prediction-lab/tests/four-market-original-minute-candidate-review-v1.test.js
+```
+
+STOP BEFORE DRIFT: Only after genuinely independent live-time, dataset, OOS and Paper evidence and a fresh explicit owner approval may a later stage consider promotion. This Draft bridge issues no trading authority.

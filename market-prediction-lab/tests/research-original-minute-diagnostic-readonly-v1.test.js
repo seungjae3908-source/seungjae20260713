@@ -69,6 +69,15 @@ test("only period model summary is returned; secrets, original bars, paths and P
     assert.equal(r.report.originalHistoricalSignalVerified,false);
     assert.equal(r.report.paperCandidatePASS,false);
     assert.equal(r.report.executionAuthority,"NONE");
+    assert.equal(r.report.canonicalPaperResearchReview.status,"RESEARCH_HOLD");
+    assert.equal(r.report.canonicalPaperResearchReview.canonicalProfitabilityStatus,"RESEARCH_HOLD");
+    assert.equal(r.report.canonicalPaperResearchReview.canonicalPaperBridgeStatus,"BLOCKED");
+    assert.equal(r.report.canonicalPaperResearchReview.paperAdmissionAllowed,false);
+    assert.equal(r.report.canonicalPaperResearchReview.executionAuthority,"NONE");
+    assert.ok(r.report.canonicalPaperResearchReview.blockers.includes(
+      "HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED"));
+    assert.ok(r.report.canonicalPaperResearchReview.canonicalPaperBridgeBlockers
+      .includes("ADMISSION_EVIDENCE_BUNDLE_REQUIRED"));
     assert.equal(r.profitabilityProven,false);
     assert.equal(r.actualFillCount,null);
     assert.equal(r.financialMutationCount,0);
