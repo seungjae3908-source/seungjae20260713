@@ -64,6 +64,20 @@ disable_timers() {
       return 1
     fi
   done
+  # Timer stop alone leaves an in-flight previous-release one-shot running.
+  "${SUDO[@]}" systemctl stop "${services[@]}" >/dev/null 2>&1 || true
+  for service in "${services[@]}"; do
+    local active_state load_state
+    active_state="$("${SUDO[@]}" systemctl show "$service" -p ActiveState --value 2>/dev/null || true)"
+    load_state="$("${SUDO[@]}" systemctl show "$service" -p LoadState --value 2>/dev/null || true)"
+    [[ "$load_state" == 'loaded' || "$load_state" == 'masked' || "$load_state" == 'not-found' ]] || {
+      echo "AI_RESEARCH_WORKLOAD_STATE_UNKNOWN:$service" >&2; return 1
+    }
+    case "$active_state" in
+      inactive|failed) ;;
+      *) echo "AI_RESEARCH_WORKLOAD_NOT_STOPPED:$service:$active_state" >&2; return 1 ;;
+    esac
+  done
 }
 
 research_sha() {
