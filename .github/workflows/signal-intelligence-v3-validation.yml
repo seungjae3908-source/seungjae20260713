@@ -201,3 +201,66 @@ jobs:
           path: ${{ runner.temp }}/deploy
           retention-days: 30
           if-no-files-found: error
+
+  # Exact-member-timeframe smoke. This is separate from the canonical 15m/60m
+  # research service and cannot assert authenticated UI, Williams overlay,
+  # 24h whole-universe coverage, Paper, profitability or any trade authority.
+  member-timeframe-public-qa:
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'drift/scanner-stock-roster-v3-integration-20261011' }}
+    needs: producer-bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Download exact-head read-only producer
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-intelligence-v3-deploy-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/member-timeframe
+      - name: Run bounded member-timeframe 5m 4H 1D public-only scanner
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SIGNAL_INTELLIGENCE_STATE_DIR: ${{ runner.temp }}/signal-intelligence-member-qa
+          SIGNAL_INTELLIGENCE_STATE_FILE: ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
+          SIGNAL_INTELLIGENCE_PUBLIC_PROFILE_MODE: MEMBER_UI
+          SIGNAL_INTELLIGENCE_MEMBER_UI_QA: 'true'
+          SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true'
+          LIVE_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          set -Eeuo pipefail
+          test "$(cat "$RUNNER_TEMP/member-timeframe/SERVICE_SHA")" = "$SIGNAL_INTELLIGENCE_SERVICE_SHA"
+          node "$RUNNER_TEMP/member-timeframe/public-cycle.mjs" | tee "$RUNNER_TEMP/member-timeframe-public-cycle.log"
+          node - <<'NODE' "$SIGNAL_INTELLIGENCE_STATE_FILE"
+          const fs=require('node:fs');
+          const data=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(data.serviceSha!==process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || data.publicDataOnly!==true
+            || data.safety?.executionAuthority!=='NONE'
+            || data.profile?.surface!=='MEMBER_UI'
+            || JSON.stringify(data.profile.timeframes)!==JSON.stringify(['5m','4H','1D'])
+            || data.coverage?.length!==12
+            || data.coverage.some(x=>!['CANDIDATES_AVAILABLE','VALID_NO_TRADE','SEARCH_FAILURE','BLOCKED_DATA'].includes(x.status)))
+            process.exit(1);
+          const summary=data.coverage.map(x=>({market:x.market,strategy:x.strategy,timeframe:x.timeframe,status:x.status,providerErrors:x.providerErrors,timeouts:x.timeouts,insufficientDataCount:x.insufficientDataCount}));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Member timeframes: read-only first-page QA (not app acceptance)\\n\\n'
+            + 'Status: not certified for deployment\\n');
+          console.log(JSON.stringify({memberTimeframeProbeOnly:true,fullMarketVerified:false,memberAuthVerified:false,summary},null,2));
+          NODE
+      - name: Upload member-timeframe observation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-intelligence-v3-member-timeframe-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
+            ${{ runner.temp }}/signal-intelligence-member-qa/cycle-state.json
+            ${{ runner.temp }}/member-timeframe-public-cycle.log
+          retention-days: 30
+          if-no-files-found: warn
