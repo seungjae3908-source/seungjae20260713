@@ -36,6 +36,7 @@ const unavailable=(market,reason)=>Object.freeze({
   originalScannerAsOfAvailabilityVerified:false,
   historicalPITUniverseIndependentlyAuthenticated:false,
   fullMarketOpportunityDenominatorVerified:false,
+  actualMarketWideOpportunityCount:null,
   trueMarketWideRecall:null,actualFillCount:null,netProfitPct:null,
   profitabilityProven:false,executionAuthority:"NONE",
   liveTrading:false,autoTrading:false,realOrders:false,
@@ -145,7 +146,8 @@ export async function readResearchPITMinuteCoverageV1({
     originalScannerAsOfAvailabilityVerified:false,
     historicalPITUniverseIndependentlyAuthenticated:false,
     fullMarketOpportunityDenominatorVerified:false,
-    trueMarketWideRecall:null,actualFillCount:null,netProfitPct:null,
+    actualMarketWideOpportunityCount:null,
+  trueMarketWideRecall:null,actualFillCount:null,netProfitPct:null,
     profitabilityProven:false,executionAuthority:"NONE",
     liveTrading:false,autoTrading:false,realOrders:false,
   });
