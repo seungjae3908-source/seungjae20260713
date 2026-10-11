@@ -141,7 +141,8 @@ test('automatic Paper cost issuer is protected, market-scoped and blocks unknown
   assert.ok(worker.includes('costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs)'));
   assert.ok(execution.includes('MEMBER_AUTO_PAPER_COST_RULES_V1'));
   assert.ok(execution.includes("plan.executionMode !== 'automatic'"));
-  assert.ok(execution.includes('if (seen.has(identity)) return null'));
+  assert.ok(execution.includes('if (seen.has(identity) || policyIds.has(candidate.policyId)) return null'));
+  assert.ok(execution.includes('policyIds.add(candidate.policyId)'));
   assert.ok(execution.includes('return matches.length === 1 ? matches[0]! : null'));
   assert.ok(execution.includes("taxAmount == null ? null : costPolicy?.policyId"));
 });
