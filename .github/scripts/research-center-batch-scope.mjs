@@ -137,6 +137,23 @@ const pinnedPaperPaths = new Set([
 ]);
 const uiPaths = new Set(RESEARCH_CENTER_BATCH_PATHS.filter((file) => file.startsWith('stock-analyzer/')));
 export function isResearchCenterBatchUi(file) { return uiPaths.has(file); }
+/** Only these exact research-navigation substitutions may coexist with the
+ * main-owned Trading UI review. Any additional edit restores its full gate. */
+export function isResearchOnlyNavigationDiff(file, diff) {
+  const pairs = file === 'stock-analyzer/src/lib/app-navigation.ts' ? [
+    ["      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },",
+     "      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canAccessBasicInfo' },"],
+  ] : file === 'stock-analyzer/e2e/full-product-browser-flow.spec.ts' ? [
+    ["  await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');", "  await expect(page.getByTestId('research-workspace-tabs').getByRole('button')).toHaveCount(6);"],
+    ["  await page.getByRole('button', { name: '상세', exact: true }).click();", "  await page.getByRole('button', { name: '연구', exact: true }).click();"],
+    ["  await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');", "  await expect(page.getByRole('button', { name: '연구', exact: true })).toHaveAttribute('aria-pressed', 'true');"],
+    ["  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toBeVisible();", "  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toHaveCount(0);"],
+  ] : null;
+  if (!pairs || typeof diff !== 'string') return false;
+  const edits = diff.split(/\r?\n/u).filter(line => /^[+-]/u.test(line) && !/^(?:\+\+\+|---)/u.test(line));
+  const expected = pairs.flatMap(([before, after]) => ['-' + before, '+' + after]);
+  return JSON.stringify(edits.sort()) === JSON.stringify(expected.sort());
+}
 export function isPreservedPaperIntegrationPath(file, readBlob) {
   if (!pinnedPaperPaths.has(file)) return false;
   try {
