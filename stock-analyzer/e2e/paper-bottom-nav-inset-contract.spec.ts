@@ -12,7 +12,8 @@ const tradingSource = fs.readFileSync(
 );
 
 test('Paper Trading delegates to the unified shell and preserves a real BottomNav safe-area inset', () => {
-  expect(paperSource).toContain('<AutoTradingPage initialMode="paper" />');
+  expect(paperSource).toContain('<AutoTradingPage key={search} initialMode="paper"');
+  expect(paperSource).toContain("paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'}");
   expect(tradingSource).toContain("initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'");
   expect(tradingSource).toContain('pb-[calc(6rem+env(safe-area-inset-bottom))]');
   expect(tradingSource).toContain('<BottomNav />');
