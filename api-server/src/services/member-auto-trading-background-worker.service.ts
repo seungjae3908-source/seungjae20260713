@@ -1,3 +1,4 @@
+import { issueProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -1663,6 +1664,7 @@ async function executeAutomaticPlan(input: {
       // Only a protected, versioned server schedule may attest Paper tax;
       // a research-supplied cost guess can never certify settlement.
       costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs),
+      fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope),
     })
     : new TradeExecutionService(input.repository);
   const created = await automation.createPlan(

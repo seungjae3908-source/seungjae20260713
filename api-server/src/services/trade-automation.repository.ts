@@ -82,6 +82,7 @@ function normalizedOrder(order: TradingOrder): TradingOrder {
     taxAmount: order.taxAmount ?? null,
     taxCurrency: order.taxCurrency ?? null,
     settlementFxEvidence: order.settlementFxEvidence ?? null,
+    paperFundingSettlementEvidence: order.paperFundingSettlementEvidence ?? null,
     exchangeCreatedAt: order.exchangeCreatedAt ?? null,
     exchangeUpdatedAt: order.exchangeUpdatedAt ?? null,
     cancelable: order.cancelable ?? null,
