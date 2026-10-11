@@ -21,6 +21,22 @@ const integer = (value) => Number.isSafeInteger(value) && value >= 0;
 const nonNegative = (value) => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
 
+// HTTP Retry-After is either nonnegative delay seconds or an HTTP date.
+// Invalid/overflow provider instructions must stop retries, never cause a
+// high-rate fallback burst after a public HTTP 429.
+export function parsePublicRetryAfterMs(value, nowMs = Date.now()) {
+  if (value == null || String(value).trim() === '') return null;
+  if (!Number.isFinite(nowMs) || nowMs < 0)
+    throw new Error('PUBLIC_RETRY_AFTER_CLOCK_INVALID');
+  const raw = String(value).trim();
+  if (/^(?:0|[1-9]\\d*)(?:\\.\\d+)?$/u.test(raw)) {
+    const delay = Math.ceil(Number(raw) * 1000);
+    return Number.isSafeInteger(delay) ? delay : Number.POSITIVE_INFINITY;
+  }
+  const date = /^.+ GMT$/iu.test(raw) ? Date.parse(raw) : NaN;
+  return Number.isFinite(date) ? Math.max(0, date - nowMs) : Number.POSITIVE_INFINITY;
+}
+
 // A full/no-trade classification requires proof that the requested source
 // page was actually completed. A page that silently skips instruments must
 // not be advertised as a completed zero-opportunity scan.

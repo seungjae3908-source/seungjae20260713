@@ -5,6 +5,7 @@ import {
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
+  parsePublicRetryAfterMs,
 } from '../src/public-cycle-coverage.mjs';
 
 function result(changes={}) {
@@ -163,4 +164,18 @@ test('contradictory card count and declared outcome fail closed without candidat
     assert.equal(status, 'SEARCH_FAILURE');
     assert.equal(decidePublicCycleCursor({ response, status, cursor: 0 }).nextCursor, 0);
   }
+});
+
+test('HTTP Retry-After seconds, dates and malformed values honor conservative 429 backpressure', () => {
+  const now = Date.parse('2026-10-11T01:00:00.000Z');
+  assert.equal(parsePublicRetryAfterMs(null, now), null);
+  assert.equal(parsePublicRetryAfterMs('2', now), 2000);
+  assert.equal(parsePublicRetryAfterMs('0.5', now), 500);
+  assert.equal(parsePublicRetryAfterMs('0', now), 0);
+  assert.equal(parsePublicRetryAfterMs(new Date(now + 15000).toUTCString(), now), 15000);
+  assert.equal(parsePublicRetryAfterMs(new Date(now - 2000).toUTCString(), now), 0);
+  for (const value of ['-1', 'not-a-date', 'Infinity', '999999999999999999999999']) {
+    assert.equal(parsePublicRetryAfterMs(value, now), Number.POSITIVE_INFINITY, value);
+  }
+  assert.throws(() => parsePublicRetryAfterMs('2', Number.NaN), /CLOCK_INVALID/);
 });
