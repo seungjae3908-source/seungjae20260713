@@ -20,7 +20,9 @@ import {
   bindPublicStockCandleSource,
   enforcePublicStockRosterCoverage,
   createPublicStockQualityCounter,
+  withPublicStockProviderFallback,
 } from '../src/public-stock-candle-binding.mjs';
+import {publicYahooProviderCandidates} from '../src/public-yahoo-symbol-candidates.mjs';
 import {
   createPublicStockSessionGapAudit,
   summarizePublicKrExclusions,
@@ -168,38 +170,12 @@ async function usPublicUniverse() {
   return usPublicUniversePromise;
 }
 
-function yahooProviderCandidates(lane, ticker, entry) {
-  const clean = String(ticker ?? '').trim().toUpperCase();
-  if (!clean) return [];
-  if (lane.market === 'KR_STOCK' && /^\d{6}$/u.test(clean)) {
-    const exchange = String(entry?.exchange ?? '').toUpperCase();
-    const kosdaq = /KOSDAQ|코스닥/u.test(exchange);
-    const primary = `${clean}.${kosdaq ? 'KQ' : 'KS'}`;
-    const alternate = `${clean}.${kosdaq ? 'KS' : 'KQ'}`;
-    return [primary, alternate];
-  }
-  if (lane.market === 'US_STOCK') {
-    const canonical = /^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean) ? clean.replace(/\./gu, '-') : clean;
-    const candidates = [canonical];
-    if (canonical.includes('-')) candidates.push(canonical.replace(/-/gu, '.'));
-    return [...new Set(candidates)];
-  }
-  return [clean];
+// Isolated module helpers: exact exchange routing and fail-closed empty candles.
+function yahooProviderCandidates(lane,ticker,entry){
+  return publicYahooProviderCandidates(lane.market,ticker,entry);
 }
-
-async function withProviderFallback(candidates, operation) {
-  let lastError;
-  for (const candidate of candidates) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await operation(candidate);
-      } catch (error) {
-        lastError = error;
-        if (attempt < 3) await sleep(150 * attempt);
-      }
-    }
-  }
-  throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
+async function withProviderFallback(candidates,operation){
+  return withPublicStockProviderFallback(candidates,operation,{pause:sleep});
 }
 
 async function withUpbitPacing(operation) {

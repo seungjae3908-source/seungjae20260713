@@ -112,3 +112,40 @@ export function createPublicStockQualityCounter() {
     },
   });
 }
+
+/** Try alternate public stock symbols only when the earlier source returned
+ * no usable bars or failed. An empty candle array is NOT a success.
+ * Never calls the app provider fallback or expands private trade authority.
+ * All attempts are serial, capped, and injectable for bounded tests.
+ */
+export async function withPublicStockProviderFallback(
+  candidates, operation, { retryCount = 3, pause = async () => {} } = {},
+) {
+  if(!Array.isArray(candidates)||candidates.length===0
+    ||candidates.length>2
+    ||candidates.some(x=>typeof x!=='string'||x.length<1||x.length>40)
+    ||typeof operation!=='function'
+    ||!Number.isSafeInteger(retryCount)||retryCount<1||retryCount>3
+    ||typeof pause!=='function'){
+    throw new TypeError('PUBLIC_STOCK_FALLBACK_INVALID');
+  }
+  let lastError=null;
+  for(const candidate of candidates){
+    for(let attempt=1;attempt<=retryCount;attempt++){
+      try{
+        const value=await operation(candidate);
+        if(Array.isArray(value)&&value.length===0){
+          // No candles is deterministic for this response. Skip useless
+          // identical retries and inspect the next allowed venue instead.
+          lastError=new Error('PUBLIC_STOCK_EMPTY_CANDLES');
+          break;
+        }
+        return value;
+      }catch(error){
+        lastError=error;
+        if(attempt<retryCount)await pause(150*attempt);
+      }
+    }
+  }
+  throw lastError ?? new Error('PUBLIC_STOCK_NO_VALID_PROVIDER');
+}
