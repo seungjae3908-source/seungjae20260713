@@ -39,3 +39,12 @@ test('unknown Korean exchange fails closed without trying another exchange or pr
   await assert.rejects(withPublicStockProvider(deps, () => deps.marketData.getCandlesMeta('247540', '1D')), /EXCHANGE_MAPPING_UNAVAILABLE/);
   assert.equal(deps.calls.length, 0);
 });
+
+test('actual KRX 유가증권 label maps to KOSPI without accepting arbitrary exchange strings', async () => {
+  const deps = dependencies(); deps.entries[0].exchange = '유가증권';
+  await withPublicStockProvider(deps, () => deps.marketData.getCandlesMeta('247540', '1D'));
+  assert.equal(deps.calls[0][0], '247540.KS');
+  deps.entries[0].exchange = 'NOT_KOSPI'; deps.calls.length = 0;
+  await assert.rejects(withPublicStockProvider(deps, () => deps.marketData.getCandlesMeta('247540', '1D')), /EXCHANGE_MAPPING_UNAVAILABLE/);
+  assert.equal(deps.calls.length, 0);
+});

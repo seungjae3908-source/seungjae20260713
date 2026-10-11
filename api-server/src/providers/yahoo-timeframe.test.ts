@@ -32,8 +32,9 @@ test('Korean scanner uses the roster exchange, never a guessed KOSPI alias', asy
   });
   await getCandles('247540', '1D', { purpose: 'scanner', exchange: 'KOSDAQ' });
   await getCandles('005930', '1D', { purpose: 'scanner', exchange: 'KOSPI' });
+  await getCandles('000020', '1D', { purpose: 'scanner', exchange: '유가증권' });
   await assert.rejects(getCandles('247540', '1D', { purpose: 'scanner', exchange: 'KONEX' }), /EXCHANGE_MAPPING_UNAVAILABLE/);
-  assert.deepEqual(symbols, ['247540.KQ', '005930.KS']);
+  assert.deepEqual(symbols, ['247540.KQ', '005930.KS', '000020.KS']);
 });
 
 test('Yahoo rejects cross-symbol evidence and never invents missing prices', async t => {
