@@ -1,3 +1,6 @@
+// Only known classification tokens, never arbitrary provider messages or secret values.
+export const READONLY_RUNTIME_ERROR_PATTERN = '^(?:(?:BACKGROUND_LIVE_|BITGET_|UPBIT_|KIWOOM_|TOSS_|ACCOUNT_READONLY_|EXCHANGE_|TRADING_CREDENTIAL_)[A-Z0-9_]{1,80}|ACCOUNT_NOT_CONFIGURED|CREDENTIALS_UNAVAILABLE|AUTH_FAILED|RATE_LIMITED|PROVIDER_TIMEOUT|PROVIDER_UNAVAILABLE|READONLY_REQUEST_REJECTED)$';
+
 export type SanitizedBitgetReadonlyDiagnostic = {
   provider: 'bitget';
   requestMethod: 'GET';

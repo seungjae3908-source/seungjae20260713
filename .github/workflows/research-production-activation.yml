@@ -397,6 +397,7 @@ jobs:
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: production
     env:
       ACTIVATION_MODE: ${{ needs.authorize.outputs.activation_mode }}
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
