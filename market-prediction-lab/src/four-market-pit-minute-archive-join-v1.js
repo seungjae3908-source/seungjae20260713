@@ -84,6 +84,9 @@ function count(report) {
     revisionConflictSessionCount: report.revisionConflictSessionCount,
     unreadableSessionCount: report.unreadableSessionCount,
     verifiedLocalOriginalOneMinuteRows: report.originalOneMinuteRows,
+    retrospectiveSourceSessionCount: report.retrospectiveSourceSessionCount,
+    retrospectiveUnavailableOneMinuteRows:
+      report.retrospectiveUnavailableOneMinuteRows,
   };
 }
 
@@ -199,6 +202,7 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
     sourceLimitedMembers: 0, revisedSourceMembers: 0,
     unreadableMembers: 0, lifecycleBlockedMembers: 0,
     sourceMinuteRows: 0, sourceSessionsCovered: 0,
+    retrospectiveSourceMembers: 0, retrospectiveMinuteRows: 0,
   };
   const members = [], missingSourcePlan = [];
   for (const row of selected) {
@@ -232,6 +236,10 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
     if (r.unreadableSessionCount > 0) counters.unreadableMembers++;
     if (r.sourceLimitedSessionCount > 0) counters.sourceLimitedMembers++;
     if (r.archivedSessionCount > 0) counters.archivedMembers++;
+    if (r.retrospectiveSourceSessionCount > 0)
+      counters.retrospectiveSourceMembers++;
+    counters.retrospectiveMinuteRows +=
+      r.retrospectiveUnavailableOneMinuteRows;
     counters.sourceMinuteRows += r.originalOneMinuteRows;
     counters.sourceSessionsCovered += r.archivedSessionCount;
     const status = r.missingSessionCount
@@ -242,6 +250,8 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
       ? "UNREADABLE_OR_INVALID_SOURCE" :
       r.sourceLimitedSessionCount
       ? "SOURCE_LIMITED_MINUTE_INTERVALS" :
+      r.retrospectiveSourceSessionCount
+      ? "SOURCE_MINUTE_SLOTS_PRESENT_RETROSPECTIVE_ONLY" :
       "SOURCE_MINUTE_SESSIONS_PRESENT_ONLY";
     members.push({ symbol, status, reason: null,
       ...count(r) });
@@ -269,6 +279,7 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
     completeRequestedMarketDayChecked: nextOffset === null
       && offset === 0,
     stockCalendarIndependentlyAuthenticated: false,
+    retrospectiveOriginalRowsAreNotScannerAsOfEvidence: true,
     actualMarketWideOpportunityCount: null,
     trueMarketWideRecall: null, profitabilityProven: false,
     executionAuthority: "NONE",

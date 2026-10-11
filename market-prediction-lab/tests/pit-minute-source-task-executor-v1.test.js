@@ -171,6 +171,34 @@ test("one Upbit PIT source gap task persists retrospectively without false histo
     assert.equal(calls.length,1);
   }finally{rmSync(t.root,{recursive:true,force:true});}
 });
+test("stale proposed GET cannot redownload full retrospective original 1m source",async()=>{
+  const t=await setup("CRYPTO_SPOT",2),calls=[];
+  try{
+    const symbol=t.planning.candidateTasks[0].symbol;
+    const source=retainedOriginal(t.market,symbol);
+    source.minuteBars=Array.from({length:1440},(_,i)=>({
+      ...source.minuteBars[0],
+      timestampMs:START+i*MIN,
+      availableAtMs:NOW,
+    }));
+    source.sourceMinuteRowsSha256=sha(source.minuteBars);
+    source.asOfMs=NOW;
+    await persist({root:t.root,source});
+    // The previous page proposal still says "missing"; the native archive
+    // itself is rechecked under the exclusive writer lock before GET.
+    const response=await execute(request(t,{
+      allowPublicReadOnlyFetch:true,upbitFetchImpl:upbitFetch(calls),
+    }));
+    assert.equal(response.status,"BLOCKED_DATA");
+    assert.equal(response.reason,"ALREADY_RETAINED_COMPLETE_1M_SOURCE");
+    assert.equal(calls.length,0);
+    assert.equal(response.executionAuthority,"NONE");
+    const old=await derive({root:t.root,market:t.market,symbol,
+      sessionStartMs:START,asOfMs:START+DAY,timeframes:["1m"]});
+    assert.equal(old.intervalData["1m"].completeBarCount,0);
+    assert.equal(existsSync(join(t.root,".pit-native-minute-task.lock")),false);
+  }finally{rmSync(t.root,{recursive:true,force:true});}
+});
 test("Bitget USDT futures gap executes the Bitget native public 1m collector only",async()=>{
   const t=await setup("CRYPTO_FUTURES",2),calls=[];
   try{

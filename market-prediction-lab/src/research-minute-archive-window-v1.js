@@ -2,7 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 import {
   resolveSelectedResearchWindowV1, UTC_DAY_MS_V1 as DAY,
 } from "./research-selected-window-v1.js";
-import { deriveArchivedResearchTimeframesV1 } from "./research-minute-archive-v1.js";
+import { inspectArchivedResearchMinuteSessionV1 } from "./research-minute-archive-v1.js";
 
 /**
  * Read-only, bounded source-inventory audit for ONE market/symbol per call.
@@ -168,6 +168,8 @@ export async function auditResearchMinuteArchiveWindowV1({
     missingSessionCount: 0, revisionConflictSessionCount: 0,
     unreadableSessionCount: 0, originalOneMinuteRows: 0,
     sourceUnverifiedOneMinuteSlots: 0,
+    retrospectiveSourceSessionCount: 0,
+    retrospectiveUnavailableOneMinuteRows: 0,
   };
   const missingCollectionPlan = [], warnings = [], monthly = Object.create(null);
   for (const session of selectedSessions) {
@@ -175,13 +177,13 @@ export async function auditResearchMinuteArchiveWindowV1({
     const bucket = monthly[month] ??= {
       requestedSessions: 0, sourcePresent: 0, sourceLimited: 0,
       missing: 0, revisionConflict: 0, unreadable: 0,
+      retrospectiveSourceSessions: 0,
     };
     bucket.requestedSessions++;
     let result;
     try {
-      result = await deriveArchivedResearchTimeframesV1({
+      result = await inspectArchivedResearchMinuteSessionV1({
         root, market, symbol, sessionStartMs: session.startMs,
-        asOfMs: session.endMs, timeframes: ["1m"],
       });
     } catch (error) {
       totals.unreadableSessionCount++; bucket.unreadable++;
@@ -213,12 +215,15 @@ export async function auditResearchMinuteArchiveWindowV1({
       }
       continue;
     }
-    const frame = result.intervalData?.["1m"];
-    if (!frame || result.sourceMinuteIntegrityVerified !== true
+    if (result.sourceMinuteIntegrityVerified !== true
       || result.market !== market || result.symbol !== symbol
       || result.sessionKind !== session.kind
       || result.sessionTimeZone !== session.timeZone
-      || result.archiveSessionEndMs !== session.endMs) {
+      || result.archiveSessionEndMs !== session.endMs
+      || !Number.isSafeInteger(result.missingUnverifiedSourceMinuteSlots)
+      || !Number.isSafeInteger(result.originalRowsUnavailableBySessionEnd)
+      || result.missingUnverifiedSourceMinuteSlots < 0
+      || result.originalRowsUnavailableBySessionEnd > result.sourceMinuteRows) {
       totals.unreadableSessionCount++; bucket.unreadable++;
       warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
         reason: "ARCHIVE_SESSION_PROVENANCE_MISMATCH" });
@@ -226,9 +231,17 @@ export async function auditResearchMinuteArchiveWindowV1({
     }
     totals.archivedSessionCount++; bucket.sourcePresent++;
     totals.originalOneMinuteRows += result.sourceMinuteRows;
+    // Presence of an original OHLCV row is distinct from its historical
+    // as-of availability. Never relabel later-fetched rows as missing files.
     totals.sourceUnverifiedOneMinuteSlots +=
-      frame.missingUnverifiedSourceBuckets;
-    if (!frame.sourceSessionCoverageComplete) {
+      result.missingUnverifiedSourceMinuteSlots;
+    totals.retrospectiveUnavailableOneMinuteRows +=
+      result.originalRowsUnavailableBySessionEnd;
+    if (result.originalMinuteObservationTimesRetrospective) {
+      totals.retrospectiveSourceSessionCount++;
+      bucket.retrospectiveSourceSessions++;
+    }
+    if (!result.nativeMinuteSlotInventoryComplete) {
       totals.sourceLimitedSessionCount++; bucket.sourceLimited++;
     }
   }
@@ -247,6 +260,7 @@ export async function auditResearchMinuteArchiveWindowV1({
     additionalWarningsOmitted: Math.max(0, warnings.length - 50),
     monthlyCoverage: Object.fromEntries(Object.entries(monthly)),
     noTradeMinuteEvidenceVerified: false,
+    sourceSlotInventoryIsNotAsOfScannerAvailabilityProof: true,
     originalScannerEarlyDiscoveryVerified: false,
   });
 }
