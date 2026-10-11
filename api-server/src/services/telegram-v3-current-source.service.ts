@@ -123,3 +123,35 @@ export async function boundedTelegramV3Json(response:Response,maxBytes=8*1024*10
  try{return JSON.parse(Buffer.concat(parts,total).toString('utf8'));}
  catch{throw Error('TELEGRAM_V3_JSON_INVALID');}
 }
+
+/**
+ * Number of independently complete current public source pages.
+ * This is diagnostic only: a valid 200 envelope with zero NEW_CANDIDATE
+ * events and 12 blocked lanes is not source-ready for Telegram.
+ * This metric is NEVER a historical all-market coverage or profit PASS.
+ */
+export function verifiedTelegramV3PageCount(snapshot:unknown):number{
+ const s=OBJ(snapshot);
+ if(!s||!Array.isArray(s.coverage)||s.coverage.length!==12)return 0;
+ return s.coverage.filter((raw:unknown)=>{
+  const lane=OBJ(raw),proof=OBJ(lane?.publicExecutionDiagnostic);
+  if(!lane||!proof
+    ||!['CANDIDATES_AVAILABLE','VALID_NO_TRADE'].includes(lane.status)
+    ||lane.lastGoodPreserved!==false||lane.cursorRotatedBlockedOnly===true
+    ||lane.universePartial!==false||lane.universeStale!==false
+    ||lane.responseDataState!=='complete'
+    ||lane.providerErrors!==0||lane.timeouts!==0
+    ||lane.universeProviderErrors!==0
+    ||proof.state!=='PAGE_EXECUTION_COMPLETE'
+    ||proof.partial!==false||proof.timedOut!==false
+    ||proof.providerErrors!==0||proof.timeouts!==0
+    ||proof.failuresObserved!==0||!NUM(proof.requested)||proof.requested===0
+    ||proof.started!==proof.requested||proof.completed!==proof.requested
+    ||!NUM(lane.cursorBefore)||!NUM(lane.cursorAfter)
+    ||!NUM(lane.totalUniverse)||lane.totalUniverse===0)
+    return false;
+  const end=lane.cursorBefore+proof.requested;
+  return end<=lane.totalUniverse
+    &&lane.cursorAfter===(end===lane.totalUniverse?0:end);
+ }).length;
+}
