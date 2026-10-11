@@ -30,6 +30,13 @@ function card(overrides = {}) {
       status: 'verified', expectancyPercent: 1, profitFactor: 1.4, tradeCount: 80, minimumTradeCount: 50,
       maxDrawdownPercent: 8, costsIncluded: true, slippageIncluded: true,
       lookaheadGuarded: true, survivorshipGuarded: true, oos: true, walkForward: true,
+      netReturnPercent: 1.8, oosTradeCount: 40, walkForwardTradeCount: 40,
+      canonicalLineage: {
+        signalId: 'sig-1', strategyId: 'scanner-swing-v1',
+        strategyVersion: 'scanner-swing-v1', parameterHash: 'params-sha256:scanner-swing-v1',
+        researchCodeSha: RESEARCH_SHA, costPolicyId: 'runtime-cost-v1',
+        market: 'KR_STOCK', symbol: '005930', timeframe: '1D', direction: 'BUY',
+      },
     },
     ...overrides,
   };
@@ -138,7 +145,16 @@ test('cash SELL is excluded from new-entry scanner', () => {
 });
 
 test('futures LONG and SHORT preserve canonical directions only with market-matched evidence', () => {
-  const base = card({ assetClass: 'coin_futures', market: 'futures', symbol: 'BTCUSDT' });
+  const base = card({ assetClass: 'coin_futures', market: 'futures', symbol: 'BTCUSDT',
+    backtestQuality: {
+      ...card().backtestQuality,
+      canonicalLineage:{
+        ...card().backtestQuality.canonicalLineage,
+        strategyId:'futures-scalping-v1',strategyVersion:'futures-scalping-v1',
+        market:'CRYPTO_FUTURES',symbol:'BTCUSDT',timeframe:'15m',direction:'LONG',
+      },
+    },
+  });
   const commonIdentity = { market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', timeframe: '15m', horizon: 4, strategyId: 'futures-scalping-v1', strategyVersion: 'futures-scalping-v1' };
   const commonProfit = { market: 'CRYPTO_FUTURES', timeframe: '15m', strategyVersion: 'futures-scalping-v1' };
   const long = adaptCanonicalScannerCard({
@@ -149,7 +165,11 @@ test('futures LONG and SHORT preserve canonical directions only with market-matc
     costPolicy: costPolicy('CRYPTO_FUTURES'),
   }, { nowMs: NOW });
   const short = adaptCanonicalScannerCard({
-    card: { ...base, action: 'SHORT', direction: 'SHORT' },
+    card: { ...base, action: 'SHORT', direction: 'SHORT',
+      backtestQuality:{...base.backtestQuality,
+        canonicalLineage:{...base.backtestQuality.canonicalLineage,direction:'SHORT'},
+      },
+    },
     timeframe: '15m',
     paperIdentity: paperIdentity({ ...commonIdentity, direction: 'SHORT' }),
     profitEvidence: profitEvidence({ ...commonProfit, direction: 'SHORT' }),
@@ -194,4 +214,44 @@ test('canonical AI veto can only abstain after deterministic gates pass', () => 
 
 test('stop distance derives from entry midpoint and stop loss', () => {
   assert.equal(stopDistancePercent(card()), 5);
+});
+
+
+test('READY ProfitEvidence cannot reuse another strategy, symbol or OOS dataset',()=>{
+  for(const changes of [
+    {status:'missing'},
+    {oos:false},
+    {walkForward:false},
+    {costsIncluded:false},
+    {slippageIncluded:false},
+    {lookaheadGuarded:false},
+    {survivorshipGuarded:false},
+    {oosTradeCount:0},
+    {walkForwardTradeCount:0},
+    {netReturnPercent:-1},
+    {canonicalLineage:{...card().backtestQuality.canonicalLineage,
+      strategyVersion:'unrelated-winning-strategy'}},
+    {canonicalLineage:{...card().backtestQuality.canonicalLineage,
+      symbol:'000660'}},
+    {canonicalLineage:{...card().backtestQuality.canonicalLineage,
+      researchCodeSha:'b'.repeat(40)}},
+    {canonicalLineage:{...card().backtestQuality.canonicalLineage,
+      parameterHash:'other-hyperparams'}},
+  ]){
+    const testCard=card({backtestQuality:{...card().backtestQuality,...changes}});
+    const adapted=adaptCanonicalScannerCard(canonicalInput(testCard),{nowMs:NOW});
+    assert.equal(adapted.profitEligible,false,JSON.stringify(changes));
+    assert.ok(adapted.provenance.profitBlockers.some(reason=>
+      reason.startsWith('BACKTEST_')),JSON.stringify(changes));
+    const snapshot=runSignalIntelligenceV3([adapted]);
+    assert.equal(snapshot.lists.krBuy.length,0);
+  }
+});
+test('matching source lineage is necessary but never upgrades a missing canonical profit receipt',()=>{
+  const adapted=adaptCanonicalScannerCard({card:card(),timeframe:'1D'},{
+    nowMs:NOW,
+  });
+  assert.equal(adapted.profitEligible,false);
+  assert.ok(adapted.provenance.profitBlockers.includes('CANONICAL_PROFIT_EVIDENCE_REQUIRED'));
+  assert.equal(runSignalIntelligenceV3([adapted]).lists.krBuy.length,0);
 });
