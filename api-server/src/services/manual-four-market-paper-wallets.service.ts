@@ -106,6 +106,8 @@ export function inspectManualFourMarketWallets(
   const foreign=records.some(r=>r.kind==='account' && isManualPaperWalletId(r.id)
     && !r.id.startsWith(`manual-paper-${role}-v1:`));
   if (foreign) add('MANUAL_PAPER_ROLE_WALLET_CONFLICT');
+  if (records.some(r=>r.kind==='account' && r.id.startsWith('manual-paper-')
+    && !isManualPaperWalletId(r.id))) add('MANUAL_PAPER_RESERVED_UNKNOWN_WALLET');
   const lanes={} as Record<AdminPaperMarket,ManualMarketWalletStatus>;
   const timestamps:number[]=[];
   for (const market of ADMIN_FOUR_PAPER_MARKETS) {
@@ -144,7 +146,7 @@ export function inspectManualFourMarketWallets(
 export function manualWalletCreationReadiness(
   role:ManualWalletRole,records:readonly StoredPaperJournalRecord[],nowMs=Date.now(),
 ) {
-  const found=records.filter(r=>r.kind==='account' && isManualPaperWalletId(r.id));
+  const found=records.filter(r=>r.kind==='account' && r.id.startsWith('manual-paper-'));
   const existing=inspectManualFourMarketWallets(role, records, nowMs);
   const blockers:string[]=[];
   if(found.length) blockers.push(
