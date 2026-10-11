@@ -15,13 +15,17 @@ import {runFourMarketOriginalMinutePeriodV1} from
   "../src/four-market-original-minute-period-v1.js";
 import {runFourMarketOriginalMinuteSweepV1} from
   "../src/four-market-original-minute-sweep-v1.js";
+import {importStockNativeMinuteOfflineV1} from
+  "../src/stock-native-minute-offline-intake-v1.js";
 
 /**
- * ONE PRIVATE read-only source job per invocation. No background timers,
+ * ONE private local research job per invocation. No background timers,
  * no data-provider HTTP, no Paper orders, no LIVE execution, no DB.
- * Input mode: PLAN, REPLAY, PERIOD, OPPORTUNITIES, BATCH or SWEEP. Output 0600,
- * create-only, never overwritten. The PERIOD mode discovers immutable native
- * sessions automatically and models one cross-session per-symbol strategy.
+ * PLAN / REPLAY / PERIOD / OPPORTUNITIES / BATCH / SWEEP remain READ-ONLY.
+ * STOCK_IMPORT is the sole explicitly opted-in OFFLINE immutable archive
+ * writer, limited to caller-provided KR/US original 1m plus PIT/session and
+ * local retention-rights evidence. It never touches trading systems.
+ * Result output 0600, create-only, never overwritten.
  */
 const fail=x=>{throw new TypeError(x);};
 const PRIVATE_FILE_MAX=8*1024*1024,OUT_MAX=2*1024*1024;
@@ -63,7 +67,7 @@ async function readPrivate(path){
     try{data=JSON.parse(raw);}catch{fail("RESEARCH_REPLAY_INPUT_JSON_INVALID");}
     refuseCredentials(data);
     if(!data||typeof data!=="object"||Array.isArray(data)
-      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP"].includes(data.mode))
+      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP","STOCK_IMPORT"].includes(data.mode))
       fail("RESEARCH_REPLAY_INPUT_MODE_INVALID");
     return data;
   }finally{await file?.close();}
@@ -103,7 +107,9 @@ export async function runOriginalReplayPrivateJobV1({input,output}={}){
           ?await runFourMarketOriginalMinutePeriodV1(task)
           :mode==="SWEEP"
             ?await runFourMarketOriginalMinuteSweepV1(task)
-            :await runFourMarketOriginalMinuteReplayV1(task);
+            :mode==="STOCK_IMPORT"
+              ?await importStockNativeMinuteOfflineV1(task)
+              :await runFourMarketOriginalMinuteReplayV1(task);
   if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
     ||result.realOrders!==false||result.actualFillCount!==null
     ||result.trueMarketWideRecall!==null)
