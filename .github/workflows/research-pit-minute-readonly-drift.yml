@@ -1,0 +1,45 @@
+name: Research PIT Minute Read-Only Drift QA
+
+on:
+  pull_request:
+    paths:
+      - market-prediction-lab/src/research-selected-window-v1.js
+      - market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js
+      - market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js
+      - market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+      - api-server/src/routes/research-workspace.ts
+      - api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts
+      - stock-analyzer/src/components/research-pit-minute-coverage.tsx
+      - stock-analyzer/src/lib/research-pit-minute-coverage-period.ts
+      - stock-analyzer/src/pages/research-center.tsx
+      - .github/workflows/research-pit-minute-readonly-drift.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-pit-minute-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-source-readonly:
+    name: Private Compact PIT Source Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      LIVE_TRADING: "false"
+      AUTO_TRADING: "false"
+      EXECUTION_AUTHORITY: "NONE"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Prove no trading authority and test private original-source receipts
+        run: |
+          test "$LIVE_TRADING" = "false"
+          test "$AUTO_TRADING" = "false"
+          test "$EXECUTION_AUTHORITY" = "NONE"
+          node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
