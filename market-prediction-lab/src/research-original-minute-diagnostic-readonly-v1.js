@@ -67,6 +67,8 @@ function verifyRaw(raw,market){
     ||raw.historicalPITAndCalendarIndependentProof===true
     ||raw.historicalPITAndMinuteDataIndependentlyVerified===true
     ||raw.fullMarketOpportunityDenominatorVerified===true
+    ||(raw.sourceModelDigestSha256!==undefined
+      &&!SHA.test(raw.sourceModelDigestSha256))
     ||typeof raw.status!=="string"||!STATUS.test(raw.status)
     ||!["BLOCKED_DATA","SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY",
       "LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY"]
@@ -85,6 +87,8 @@ function verifyRaw(raw,market){
   }
   const available=raw.status!=="BLOCKED_DATA";
   if(raw.schemaVersion===PERIOD){
+    if(available&&raw.status!=="SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY")
+      throw new TypeError("NATIVE_DIAGNOSTIC_PERIOD_STATUS_SCHEMA_MISMATCH");
     if(!SYMBOL.test(raw.symbol??"")
       ||(available&&(!count(raw.indexedPrivateSessions)
         ||!count(raw.verifiedNativeMinuteSessions)
@@ -115,6 +119,9 @@ function verifyRaw(raw,market){
     return available?report:null;
   }
   if(raw.schemaVersion===SWEEP){
+    if(available
+      &&raw.status!=="LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY")
+      throw new TypeError("NATIVE_DIAGNOSTIC_SWEEP_STATUS_SCHEMA_MISMATCH");
     if((available&&(!count(raw.pageCountSelfAttested)
       ||!count(raw.sourceOnlyCompletePages)
       ||raw.sourceBlockedPages!==0
