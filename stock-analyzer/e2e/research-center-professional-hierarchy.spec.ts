@@ -353,3 +353,47 @@ test('historical 1m coverage UI fails closed after 403 or an unsafe response, wi
   await expect(panel.getByRole('alert')).toContainText('검증되지 않은 응답은 표시하지 않습니다.');
   await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
 });
+
+
+test('same-window admin recheck revokes previously displayed source totals after a new 403', async ({ page }) => {
+  await installRuntime(page);
+  let calls = 0;
+  await page.route('**/api/research/video/evidence/workspace/pit-minute-coverage?*', async route => {
+    calls += 1;
+    if (calls > 1) return fulfill(route, { error: 'CAPABILITY_REQUIRED' }, 403);
+    return fulfill(route, {
+      schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+      available: true,
+      status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+      reason: 'SOURCE_PARTIAL',
+      executionAuthority: 'NONE', profitabilityProven: false,
+      report: {
+        status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+        reason: 'SOURCE_PARTIAL',
+        inspectedStartDate: '2026-09-18', inspectedEndDate: '2026-09-19',
+        nextCursorDate: null, expectedHistoricalTradingDays: 2,
+        missingSourceDays: 1, partialSourceDays: 1,
+        locallyCompleteMinuteSourceDays: 0,
+        retrospectiveMinuteRows: 0, sourceMinuteRows: 240,
+        dailyReadiness: [{ date: '2026-09-18',
+          status: 'INCOMPLETE_SOURCE_ATTESTED_DAY_MINUTE_INVENTORY',
+          originalMinuteRows: 240 }],
+        originalScannerAsOfEvidenceVerified: false,
+        fullMarketOpportunityDenominatorVerified: false,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      },
+    });
+  });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  const panel = page.getByTestId('research-pit-minute-coverage');
+  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await expect(panel).toContainText('240');
+  await expect(panel.getByText('보관된 1분봉')).toBeVisible();
+  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await expect(panel.getByRole('alert')).toContainText('관리자 권한이 필요한 자료입니다.');
+  await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
+  await expect(panel.getByText('240', { exact: true })).toHaveCount(0);
+  expect(calls).toBe(2);
+});
