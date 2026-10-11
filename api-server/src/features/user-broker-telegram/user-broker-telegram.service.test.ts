@@ -403,6 +403,60 @@ test('historical Telegram 403 after the latest link is exposed and blocks new de
   assert.equal((await repository.listDeliveries('user-a')).length, 1);
 });
 
+test('relink after historical 403 only delivers a fresh event once', async () => {
+  const { service, repository, transport } = fixture();
+  const beforeReconnect = new Date('2026-08-11T23:00:00.000Z');
+  await link(service, 'user-a', 'chat-a', 'tg-user-a', beforeReconnect);
+
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_HTTP_403';
+  const historical = manualPortfolioEvent({
+    id: 'relink-old-403', userId: 'user-a', symbol: 'BTC', market: 'spot',
+    quantity: 0.01, price: 100000000, occurredAt: '2026-08-11T23:01:00.000Z',
+  });
+  const oldQueue = await service.recordEvent(historical, new Date('2026-08-11T23:02:00.000Z'), 'associate');
+  assert.equal(oldQueue.deliveryQueued, true);
+  const oldResult = await service.processDelivery('user-a', oldQueue.deliveryId!, new Date('2026-08-11T23:03:00.000Z'));
+  assert.equal(oldResult.state, 'DEAD_LETTER');
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'REVOKED');
+  assert.equal(transport.sent.length, 1);
+
+  // A user explicitly reconnects after the old forbidden response. Never
+  // replay historical dead letters or backfill a pre-link execution.
+  transport.fail = false;
+  await link(service, 'user-a', 'chat-a', 'tg-user-a', new Date('2026-08-12T00:00:00.000Z'));
+  const state = await service.getState('user-a');
+  assert.equal(state.telegram.connected, true);
+  assert.equal(state.telegram.recoveryRequired, false);
+
+  const preLink = manualPortfolioEvent({
+    id: 'pre-relink-execution', userId: 'user-a', symbol: 'BTC', market: 'spot',
+    quantity: 0.01, price: 100000000, occurredAt: '2026-08-11T23:50:00.000Z',
+  });
+  const oldAttempt = await service.recordEvent(preLink, new Date('2026-08-12T00:00:30.000Z'), 'associate');
+  assert.equal(oldAttempt.deliveryQueued, false);
+  assert.equal(transport.sent.length, 1);
+
+  const fresh = manualPortfolioEvent({
+    id: 'fresh-post-relink-execution', userId: 'user-a', symbol: '005930', market: 'KR',
+    quantity: 1, price: 72000, occurredAt: '2026-08-12T00:01:00.000Z',
+  });
+  const queued = await service.recordEvent(fresh, new Date('2026-08-12T00:01:05.000Z'), 'associate');
+  assert.equal(queued.deliveryQueued, true);
+  const sent = await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:01:10.000Z'));
+  assert.equal(sent.state, 'SENT');
+
+  const duplicate = await service.recordEvent(fresh, new Date('2026-08-12T00:01:15.000Z'), 'associate');
+  assert.equal(duplicate.deliveryQueued, false);
+  const stored = await repository.listDeliveries('user-a');
+  assert.equal(stored.length, 2);
+  assert.equal(stored.find(item => item.id === oldQueue.deliveryId)?.state, 'DEAD_LETTER');
+  assert.equal(stored.find(item => item.id === oldQueue.deliveryId)?.lastErrorCode, 'TELEGRAM_HTTP_403');
+  assert.equal(stored.find(item => item.id === queued.deliveryId)?.state, 'SENT');
+  assert.equal(transport.sent.length, 2); // 1 historical forbidden + 1 new accepted mock
+  assert.equal(transport.sent[1].chatId, 'chat-a');
+});
+
 test('revoked Telegram connection cannot receive a queued event', async () => {
   const { service, repository, transport } = fixture();
   await link(service, 'user-a', 'chat-a');
