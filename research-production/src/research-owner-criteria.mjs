@@ -46,3 +46,26 @@ export function researchOwnerExposureBounds(market, direction, capitalKrw) {
     executionAuthority: 'NONE',
   });
 }
+
+/** Exact approved reference input for the existing DSL validator. This does not
+ * mint a FormulaCandidate, data/cost receipt, backtest result or Paper admission. */
+export function buildOwnerApprovedReferenceDsl(market, direction) {
+  const criteria = researchOwnerMarketCriteria(market, direction);
+  const fixed = (name, domain, value, valueType = 'INTEGER') => ({
+    name, domain, valueType, min: value, max: value, step: valueType === 'INTEGER' ? 1 : value,
+  });
+  return {
+    market, timeframe: criteria.timeframe, direction, availableDataFields: ['close'],
+    entryDsl: { action: direction, rules: [{ kind: 'OPERATOR', operator: criteria.entryOperator, operands: [
+      { kind: 'INDICATOR', name: 'EMA', input: 'close', parameters: { period: 'fast' } },
+      { kind: 'INDICATOR', name: 'EMA', input: 'close', parameters: { period: 'slow' } },
+    ] }] },
+    exitDsl: { rules: [
+      { type: 'FIXED_STOP', distanceParameter: 'stop' },
+      { type: 'TIME_EXIT', barsParameter: 'holding' },
+    ] },
+    parameterSpace: [fixed('fast', 'PERIOD', criteria.fastEmaPeriod), fixed('slow', 'PERIOD', criteria.slowEmaPeriod),
+      fixed('holding', 'BAR_COUNT', criteria.timeExitBars), fixed('stop', 'PRICE_FRACTION', criteria.stopPriceDistanceFraction, 'NUMBER')],
+    limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
+  };
+}
