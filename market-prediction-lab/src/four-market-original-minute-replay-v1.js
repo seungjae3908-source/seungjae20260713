@@ -273,6 +273,10 @@ function createReplay(initialCapitalKRW){
     previousClose:null,observations:0,position:null,pending:null,
     trades:0,wins:0,losses:0,modeledCostKRW:0,
     modeledNetPnlKRW:0,detail:[],days:[],bySplit:{train:0,validation:0,test:0},
+    splitModels:Object.fromEntries(["train","validation","test"].map(name=>[
+      name,{modeledTradeCount:0,modeledWinCount:0,modeledLossCount:0,
+        modeledNetPnlKRW:0,modeledTotalCostKRW:0},
+    ])),
     previousEndMs:-1,lossesByDate:new Map(),
     horizons:Object.fromEntries(HORIZONS.map(([key])=>[key,{
       modeledTradeCount:0,modeledNetPnlKRW:0,modeledTotalCostKRW:0,
@@ -317,6 +321,16 @@ function recordClose(state,p,b,price,reason,config){
     (config.period.endExclusiveMs-config.period.startMs);
   const split=fraction<0.6?"train":fraction<0.8?"validation":"test";
   state.bySplit[split]++;
+  // All modeled PnL is allocated to the time of the CLOSED signal.
+  // This is a retrospective diagnostics partition, not independent OOS:
+  // the model and cost inputs are neither frozen before the holdout nor
+  // independently authenticated by an as-of provider receipt.
+  const stage=state.splitModels[split];
+  stage.modeledTradeCount++;
+  stage.modeledWinCount+=Number(net>0);
+  stage.modeledLossCount+=Number(net<0);
+  stage.modeledNetPnlKRW+=net;
+  stage.modeledTotalCostKRW+=cost;
   if(state.detail.length<100)state.detail.push(Object.freeze({
     side:p.side,signalMs:p.signalMs,entryMs:p.entryMs,
     exitMs:b.endMs,exitReason:reason,
@@ -479,6 +493,29 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     modeledMaximumDrawdownPercent:state.maxDrawdownPercent,
     modeledTradePreview:state.detail,
     modeledTrainValidationTestTradeCounts:state.bySplit,
+    modeledTrainValidationTestDiagnostics:Object.fromEntries(
+      ["train","validation","test"].map(name=>{
+        const item=state.splitModels[name];
+        return [name,{
+          ...item,
+          modeledReturnPercent:100*item.modeledNetPnlKRW/cfg.initialCapitalKRW,
+          modeledWinRatePercent:item.modeledTradeCount
+            ?100*item.modeledWinCount/item.modeledTradeCount:null,
+          sourceAndHistoricalPITIndependentlyVerified:false,
+          independentlyFrozenHoldoutParametersVerified:false,
+          timeStampedFullCostAndFillEvidenceVerified:false,
+          independentOOSProven:false,
+          paperCandidatePASS:false,
+          executionAuthority:"NONE",
+        }];
+      }),
+    ),
+    modeledSplitContract:{
+      ratio:[60,20,20],stageMembershipBy:"SIGNAL_CLOSE_TIME",
+      modeledOnly:true,historicalDataAvailabilityNotIndependent:true,
+      independentlyProvenOOS:false,profitabilityProven:false,
+      paperAdmissionAllowed:false,
+    },
     modeledPeriodReturns:Object.fromEntries(HORIZONS.map(([key,days])=>{
       const value=state.horizons[key];
       const supported=cfg.period.requestedUtcDayCount>=days;

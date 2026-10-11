@@ -83,6 +83,8 @@ function blockedRow(task,reason){
     modeledNetPnlKRW:null,modeledReturnPercent:null,
     retrospectiveObservedPriceEventCount:null,
     sourceSessionCount:null,sourceLineageSha256:null,
+    modeledTrainValidationTestDiagnostics:null,
+    modeledStageOnlyNotIndependentOOS:true,
     paperAdmissionAllowed:false});
 }
 /**
@@ -240,6 +242,9 @@ export async function runFourMarketOriginalMinuteBatchV1({
       modeledTradeCount:replay.modeledTradeCount,
       modeledNetPnlKRW:replay.modeledNetPnlKRW,
       modeledReturnPercent:replay.modeledReturnPercent,
+      modeledTrainValidationTestDiagnostics:
+        replay.modeledTrainValidationTestDiagnostics,
+      modeledStageOnlyNotIndependentOOS:true,
       retrospectiveObservedPriceEventCount:
         inspectOpportunities?observedLabels:null,
       sourceSessionCount:replay.sourceSessionsRead,

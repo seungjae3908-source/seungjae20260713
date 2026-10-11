@@ -497,3 +497,93 @@ test('PIT period parser rejects incorrect counters, untrusted statuses and wrong
     } }),
   )).rejects.toThrow('다음 페이지');
 });
+
+
+test('admin private 1m model summary uses one authenticated GET and revocation hides modeled returns', async ({ page }) => {
+  await installRuntime(page);
+  const reads: Array<{ method: string; token: string; market: string | null; unsafeParam: boolean }> = [];
+  let attempts = 0;
+  await page.route('**/api/research/video/evidence/workspace/original-minute-diagnostics?*', async route => {
+    attempts += 1;
+    const req = route.request();
+    const url = new URL(req.url());
+    reads.push({
+      method: req.method(), token: req.headers().authorization ?? '',
+      market: url.searchParams.get('market'),
+      unsafeParam: [...url.searchParams.keys()].some(key =>
+        /root|file|path|token|secret|account|provider/i.test(key)),
+    });
+    if (attempts > 1) return fulfill(route, { error: 'CAPABILITY_REVOKED' }, 403);
+    return fulfill(route, {
+      schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
+      market: 'US_STOCK', available: true,
+      status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
+      reason: 'RETROSPECTIVE_MODEL_ONLY_NOT_LIVE_OR_OOS',
+      readOnly: true, privateSourcePathsDisclosed: false,
+      providerGETCount: 0, financialMutationCount: 0,
+      fullMarketOpportunityDenominatorVerified: false,
+      actualMarketWideOpportunityCount: null,
+      trueMarketWideRecall: null,
+      actualFillCount: null, OOSPassCount: 0,
+      profitabilityProven: false, executionAuthority: 'NONE',
+      paperAdmissionAllowed: false, orderSubmitted: false, realOrders: false,
+      report: {
+        kind: 'PERIOD', status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
+        selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
+        symbol: 'AAPL', timeframe: '5m',
+        sourceSessionsVerified: 350, modeledTradeCount: 12,
+        modeledReturnPercent: 3.25, modeledNetPnlKRW: 32500,
+        actualFillCount: null, profitabilityProven: false,
+        independentOOSProven: false, independentFullCostProven: false,
+        originalHistoricalSignalVerified: false, paperCandidatePASS: false,
+        executionAuthority: 'NONE',
+      },
+    });
+  });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  const panel = page.getByTestId('research-original-minute-diagnostics');
+  await expect(panel).toBeVisible();
+  await panel.getByLabel('원본 연구 결과 시장').selectOption('US_STOCK');
+  await panel.getByRole('button', { name: '비공개 연구 요약 조회' }).click();
+  await expect(panel).toContainText('AAPL');
+  await expect(panel).toContainText('3.25%');
+  await expect(panel).toContainText('독립 OOS 미검증');
+  await expect(panel).toContainText('실제 수익성 미증명');
+  expect(reads).toHaveLength(1);
+  expect(reads[0]).toMatchObject({
+    method: 'GET', market: 'US_STOCK', unsafeParam: false,
+  });
+  expect(reads[0].token.startsWith('Bearer ')).toBe(true);
+  await panel.getByRole('button', { name: '비공개 연구 요약 조회' }).click();
+  await expect(panel.getByRole('alert')).toContainText('관리자 로그인과 연구 자료 조회 권한이 필요합니다.');
+  await expect(panel.getByText('AAPL')).toHaveCount(0);
+  await expect(panel.getByText('3.25%')).toHaveCount(0);
+  expect(attempts).toBe(2);
+});
+
+test('offline native minute research response cannot self-certify OOS/Paper or show false profitable data', async ({ page }) => {
+  await installRuntime(page);
+  await page.route('**/api/research/video/evidence/workspace/original-minute-diagnostics?*', async route =>
+    fulfill(route, {
+      schemaVersion: 'research-original-minute-diagnostic-readonly-v1',
+      market: 'CRYPTO_SPOT', available: true,
+      status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
+      readOnly: true, privateSourcePathsDisclosed: false,
+      providerGETCount: 0, financialMutationCount: 0,
+      fullMarketOpportunityDenominatorVerified: false,
+      actualMarketWideOpportunityCount: null, trueMarketWideRecall: null,
+      actualFillCount: null, OOSPassCount: 0,
+      profitabilityProven: true, executionAuthority: 'LIVE',
+      paperAdmissionAllowed: true, realOrders: true,
+      report: { kind: 'PERIOD', modeledReturnPercent: 999 },
+    }));
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
+  const panel = page.getByTestId('research-original-minute-diagnostics');
+  await panel.getByRole('button', { name: '비공개 연구 요약 조회' }).click();
+  await expect(panel.getByRole('alert')).toContainText('검증되지 않은 연구 결과');
+  await expect(panel.getByText('999%')).toHaveCount(0);
+});

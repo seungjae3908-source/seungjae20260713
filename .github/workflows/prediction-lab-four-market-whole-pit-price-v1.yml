@@ -58,6 +58,9 @@ on:
       - market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js
       - market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.d.ts
       - market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+      - market-prediction-lab/src/research-original-minute-diagnostic-readonly-v1.js
+      - market-prediction-lab/src/research-original-minute-diagnostic-readonly-v1.d.ts
+      - market-prediction-lab/tests/research-original-minute-diagnostic-readonly-v1.test.js
       - market-prediction-lab/src/four-market-original-minute-replay-v1.js
       - market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js
       - market-prediction-lab/src/four-market-pit-replay-work-queue-v1.js
@@ -75,6 +78,8 @@ on:
       - api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts
       - api-server/test.mjs
       - stock-analyzer/src/components/research-pit-minute-coverage.tsx
+      - stock-analyzer/src/components/research-original-minute-diagnostics.tsx
+      - stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts
       - stock-analyzer/src/pages/research-center.tsx
       - market-prediction-lab/src/timeframes.js
       - market-prediction-lab/src/four-market-pit-daily-ledger-v1.js
@@ -138,6 +143,7 @@ jobs:
           node --test market-prediction-lab/tests/four-market-pit-minute-selected-window-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-minute-compact-selected-window-v1.test.js
           node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
+          node --test market-prediction-lab/tests/research-original-minute-diagnostic-readonly-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-replay-work-queue-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-replay-cli-v1.test.js
