@@ -844,3 +844,29 @@ test('max-length escaping never truncates inside Telegram HTML tag/entity',()=>{
   assert.equal((output.match(/<b>/gu)||[]).length,(output.match(/<\/b>/gu)||[]).length);
   assert.doesNotMatch(output,/&(?:a|am|amp|l|lt|g|gt|quo|quot|#|#3|#39)$/u);
 });
+
+test('weekend exchange close/premarket Telegram plans never fire as regular session reports', () => {
+  const audience={membership:'admin' as const};
+  for(const now of [
+    '2026-10-11T07:00:00.000Z', // Sunday 16:00 Seoul (TODAY)
+    '2026-10-10T07:00:00.000Z', // Saturday 16:00 Seoul
+  ]){
+    const kinds=dueTelegramIntelligenceReports(new Date(now),audience).map(x=>x.kind);
+    assert.ok(!kinds.includes('KR_CLOSING'),now);
+  }
+  for(const now of [
+    '2026-10-11T12:00:00.000Z', // Sunday 08:00 New York EDT
+    '2026-10-10T12:00:00.000Z', // Saturday 08:00 New York EDT
+    '2026-01-11T13:00:00.000Z', // Sunday 08:00 New York EST
+  ]){
+    const kinds=dueTelegramIntelligenceReports(new Date(now),audience).map(x=>x.kind);
+    assert.ok(!kinds.includes('US_PREMARKET'),now);
+  }
+  // Daily market-condition briefing is still permitted on weekends,
+  // but it can only use data-available/N/A, not synthetic weekend trades.
+  const sundayMorning=dueTelegramIntelligenceReports(
+    new Date('2026-10-10T23:00:00.000Z'),audience);
+  assert.deepEqual(sundayMorning.map(x=>x.kind),['MORNING']);
+  assert.ok(sundayMorning.every(x=>x.orderSubmitted===false &&
+    x.liveTradingAuthority===false));
+});
