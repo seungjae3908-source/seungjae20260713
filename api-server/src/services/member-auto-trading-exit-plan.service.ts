@@ -43,6 +43,8 @@ export function buildAutomaticExitPlanInput(input: {
   fx: MemberAutoTradingFxQuote;
   reason: MemberAutoTradingExitReason;
   remainingQuantity?: number;
+  /** Injection point for deterministic validation tests; worker uses its run-clock. */
+  nowMs?: number;
 }): TradingPlanInput {
   const { entryPlan, entryOrder, mark, fx, reason } = input;
   // This is a simulated/live *reducing exit*, never authority to close a
@@ -59,9 +61,13 @@ export function buildAutomaticExitPlanInput(input: {
   if (quantity > entryOrder.filledQuantity + Math.max(1e-9, entryOrder.filledQuantity * 1e-8)) {
     throw new Error('BACKGROUND_EXIT_OVERFILLED_QUANTITY_FORBIDDEN');
   }
+  const usStock = ['NASDAQ', 'NYSE', 'AMEX'].includes(
+    String(entryPlan.stockExchange ?? '').toUpperCase(),
+  ) || ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX']
+    .includes(String(entryPlan.market).toUpperCase());
   const expectedMarket = entryPlan.exchange === 'upbit' ? 'CRYPTO_SPOT'
     : entryPlan.exchange === 'bitget' ? 'CRYPTO_FUTURES'
-      : entryPlan.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
+      : usStock ? 'US_STOCK' : 'KR_STOCK';
   if (!positive(mark.price) || mark.market !== expectedMarket) {
     throw new Error('BACKGROUND_EXIT_MARK_IDENTITY_MISMATCH');
   }
@@ -78,11 +84,32 @@ export function buildAutomaticExitPlanInput(input: {
     || !Number.isFinite(Date.parse(fx.observedAt))) {
     throw new Error('BACKGROUND_EXIT_FX_IDENTITY_MISMATCH');
   }
-  const estimatedKrw = quantity * mark.price * fx.krwPerQuoteCurrency;
-  if (!positive(estimatedKrw)) throw new Error('BACKGROUND_EXIT_ORDER_KRW_INVALID');
+  const nativeKrw = expectedMarket === 'KR_STOCK' || expectedMarket === 'CRYPTO_SPOT';
+  const expectedFxSource = nativeKrw ? 'NATIVE_KRW'
+    : expectedMarket === 'US_STOCK' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+  if (fx.source !== expectedFxSource
+    || (nativeKrw && fx.krwPerQuoteCurrency !== 1)) {
+    throw new Error('BACKGROUND_EXIT_FX_SOURCE_UNVERIFIED');
+  }
+  // Public readers validate at acquisition. Recheck just before creating an
+  // exit intent so delayed workers cannot submit based on stale/future quotes.
+  const now = input.nowMs ?? Date.now();
+  if (!Number.isFinite(now) || now <= 0) throw new Error('BACKGROUND_EXIT_CLOCK_INVALID');
   const observedMs = Date.parse(mark.observedAt);
   if (!Number.isFinite(observedMs)) throw new Error('BACKGROUND_EXIT_MARK_TIMESTAMP_REQUIRED');
-  const now = Date.now();
+  const maxMarkAgeMs = expectedMarket === 'KR_STOCK' || expectedMarket === 'US_STOCK'
+    ? 60_000 : 30_000;
+  if (observedMs > now + 5_000 || now - observedMs > maxMarkAgeMs) {
+    throw new Error('BACKGROUND_EXIT_MARK_NOT_FRESH');
+  }
+  const quoteAtMs = Date.parse(fx.observedAt);
+  const maxFxAgeMs = expectedMarket === 'US_STOCK' ? 24 * 60 * 60_000
+    : expectedMarket === 'CRYPTO_FUTURES' ? 10 * 60_000 : 5 * 60_000;
+  if (quoteAtMs > now + 5_000 || now - quoteAtMs > maxFxAgeMs) {
+    throw new Error('BACKGROUND_EXIT_FX_NOT_FRESH');
+  }
+  const estimatedKrw = quantity * mark.price * fx.krwPerQuoteCurrency;
+  if (!positive(estimatedKrw)) throw new Error('BACKGROUND_EXIT_ORDER_KRW_INVALID');
   const delay = Math.max(0, now - observedMs);
   return {
     exchange: entryPlan.exchange,
