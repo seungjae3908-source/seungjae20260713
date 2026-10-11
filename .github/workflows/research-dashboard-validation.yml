@@ -229,3 +229,127 @@ jobs:
           grep -q "'ORDER_AUTHORITY=false'" "$activate"
 
           ! grep -R -E 'ORDER_SUBMISSION_ENABLED=true|PRIVATE_API_ENABLED=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true' research-dashboard
+
+  combined-market-watch:
+    name: Four-market Research combined Draft QA (no deploy)
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 1791 &&
+      github.event.pull_request.draft == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      READBACK_SHA: ${{ github.event.pull_request.head.sha }}
+      WATCH_SHA: '0c2e230a7f0c2dd3016896712526d6e2971575b9'
+      BASE_SHA: 'ea5281cf16b552b03562e3e1e1cb9f2a90762784'
+      LIVE_TRADING: 'false'
+      AUTO_TRADING: 'false'
+      REAL_ORDER_ENABLED: 'false'
+      PRIVATE_TRADING_API_ALLOWED: 'false'
+    steps:
+      - name: Checkout exact Draft readback HEAD without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.READBACK_SHA }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Stage immutable cross-PR overlay only inside runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$READBACK_SHA"
+          test -z "$(git symbolic-ref --quiet --short HEAD || true)"
+          test "$(git rev-parse refs/remotes/origin/main)" = "$BASE_SHA"
+          test "$(git rev-parse refs/remotes/origin/drift/research-market-watch-stock-source-parity-20261010)" = "$WATCH_SHA"
+          git cat-file -e "$WATCH_SHA^{commit}"
+          git merge-base --is-ancestor "$BASE_SHA" "$READBACK_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" "$WATCH_SHA"
+          test -z "$(git status --porcelain=v1)"
+          if git diff --name-only "$BASE_SHA" "$WATCH_SHA" | grep -v '^research-production/'; then
+            echo 'WATCH_PR_MODIFIES_OUTSIDE_RESEARCH_PRODUCTION' >&2
+            exit 1
+          fi
+          if [[ -n "$(git diff --name-only "$BASE_SHA" "$READBACK_SHA" -- research-production/)" ]]; then
+            echo 'CROSS_PR_FILE_OVERLAP_OR_BASE_DRIFT' >&2
+            exit 1
+          fi
+          expected_count="$(git diff --name-only "$BASE_SHA" "$WATCH_SHA" -- research-production/ | wc -l | tr -d ' ')"
+          test "$expected_count" -eq 15
+          git diff --binary "$BASE_SHA" "$WATCH_SHA" -- research-production/ | git apply --index
+          actual_count="$(git diff --cached --name-only | wc -l | tr -d ' ')"
+          test "$actual_count" -eq "$expected_count"
+          if git diff --cached --name-only | grep -v '^research-production/'; then
+            echo 'COMBINED_QA_MUTATION_OUTSIDE_WATCH_PATHS' >&2
+            exit 1
+          fi
+          git diff --cached --check
+          virtual_tree="$(git write-tree)"
+          {
+            echo '## Isolated 4-market combined Draft QA'
+            echo "- Base main: $BASE_SHA"
+            echo "- Readback Draft #1791: $READBACK_SHA"
+            echo "- Watch Draft #1794: $WATCH_SHA"
+            echo "- Ephemeral combined tree: $virtual_tree"
+            echo "- Watch files overlaid locally: $actual_count"
+            echo '- No branch update, main merge, deployment or order authority.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "COMBINED_TREE=$virtual_tree" >> "$GITHUB_ENV"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install immutable workspace dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run combined watcher and Python Dashboard regression suites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm --prefix research-production test
+          python3 -m py_compile research-dashboard/lightweight_market_watch_readback.py
+          python3 research-dashboard/test/test_lightweight_market_watch_readback.py
+          node api-server/scripts/verify-research-center-predeploy-contract.mjs
+
+      - name: Typecheck combined API and web readback contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server run typecheck
+          pnpm --dir stock-analyzer run typecheck
+
+      - name: Test combined backend read-only API sanitizer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild src/services/research-center-readonly-contract.service.test.ts --bundle --platform=node --format=cjs --target=node22 --outfile="$RUNNER_TEMP/combined-market-watch-api.test.cjs"
+          node --test "$RUNNER_TEMP/combined-market-watch-api.test.cjs"
+
+      - name: Install Chromium for combined browser QA
+        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+
+      - name: Run combined Research Center browser regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts e2e/research-center-simple-ko-ai-debate.spec.ts
+
+      - name: Record Draft-only authority boundary
+        if: always()
+        shell: bash
+        run: |
+          printf '%s\n' 'COMBINED_QA=EPHEMERAL_ONLY' 'READY=false' 'MERGE_MAIN=false' 'STAGING_DEPLOY=false' 'PRODUCTION_DEPLOY=false' 'LIVE_TRADING=false' 'PAPER_ORDER=false' 'ORDER_AUTHORITY=NONE'
