@@ -6,8 +6,10 @@
     "channel": "DIRECT_HUMAN_CONVERSATION",
     "scope": "RESEARCH_AND_PAPER_ONLY",
     "statement": "국내주식/해외주식/코인현물은 1배 (매수만), 코인선물은 7배(롱/숏), 나머지 정책은 제안한 기준",
-    "githubApprovalIssue": null,
-    "githubApprovalCommentId": null
+    "futuresLeverageReconfirmation": "모의매매는 7배니 새기준으로 인정해서 해",
+    "githubApprovalIssue": 1555,
+    "githubApprovalCommentId": 6107837053,
+    "githubRecordSource": "DIRECT_CONVERSATION_RECORDED_BY_CODEX"
   },
   "evidenceCredit": 0,
   "profitabilityProven": false,
@@ -45,7 +47,9 @@
     "maximumConcurrentPositions": 1,
     "stopLossPriceFraction": 0.01,
     "maximumCapitalRiskFraction": 0.005,
-    "preserveStricterExistingLimits": true
+    "paperFuturesDecisionPath": "market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v2.json",
+    "supersedesPriorFuturesLeverageLimits": true,
+    "preserveOtherStricterExistingLimits": true
   },
   "requiredActualInputs": [
     "APPROVED_CANONICAL_STRATEGY_FILE",

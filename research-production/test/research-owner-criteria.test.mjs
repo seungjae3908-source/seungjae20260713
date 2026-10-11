@@ -54,7 +54,12 @@ test('approval artifact matches market rules but grants no fabricated runtime ev
   const p = JSON.parse(readFileSync(new URL('../../docs/research-center-criteria-draft.json', import.meta.url)));
   assert.equal(p.approval.channel, 'DIRECT_HUMAN_CONVERSATION');
   assert.equal(p.runtimeActivationAllowed, false); assert.equal(p.evidenceCredit, 0);
-  assert.equal(p.approval.githubApprovalCommentId, null);
+  const decision = JSON.parse(readFileSync(new URL('../../' + p.proposedPaperRisk.paperFuturesDecisionPath, import.meta.url)));
+  assert.equal(p.approval.githubApprovalIssue, decision.approvalIssue);
+  assert.equal(p.approval.githubApprovalCommentId, decision.approvalCommentId);
+  assert.equal(decision.requestedLeverage, 7); assert.equal(decision.maximumLeverage, 7);
+  assert.equal(p.proposedPaperRisk.supersedesPriorFuturesLeverageLimits, true);
+  assert.equal(p.proposedPaperRisk.preserveOtherStricterExistingLimits, true);
   for (const [market, rule] of Object.entries(p.proposedPaperRisk.marketRules)) {
     for (const direction of rule.directions) {
       const c = researchOwnerMarketCriteria(market, direction);
