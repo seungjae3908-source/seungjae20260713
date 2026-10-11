@@ -31,6 +31,9 @@ async function loadSnapshot() {
     if (cache.snapshot && cache.mtimeMs === metadata.mtimeMs) return cache;
     const parsed = JSON.parse(await readFile(STATE_FILE, 'utf8'));
     assertSignalIntelligenceV3Snapshot(parsed);
+    // Never present a previous release's snapshot under this service SHA.
+    // The current public producer stamps every snapshot with its exact head.
+    if (parsed.serviceSha !== SERVICE_SHA) throw new Error('SNAPSHOT_SERVICE_SHA_MISMATCH');
     cache = { mtimeMs: metadata.mtimeMs, snapshot: parsed, loadedAt: new Date().toISOString(), error: null };
     return cache;
   } catch (error) {
