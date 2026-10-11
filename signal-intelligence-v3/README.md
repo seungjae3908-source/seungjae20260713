@@ -103,3 +103,15 @@ research-only cursor. This does not exclude an eligible stock from future
 research, does not suppress provider errors, and never creates a trading
 candidate or economic credit from the omitted stocks. Resolving complete
 KR coverage requires a provider capability for the excluded symbols.
+
+## Draft: diagnose intraday quality using existing exact-cycle candles
+
+When a KR/US public lane is `BLOCKED_DATA`, the V3 producer now records
+coarse `STALE_TIMESTAMP`, `MISSING_CANDLE`, `INVALID_OHLC`,
+`ABNORMAL_SPIKE`, etc. issue-code counts and trusted/degraded/untrusted
+counts from **the same already-fetched primary Yahoo candle arrays**.
+The diagnostic window matches the Scanner mode's recent quality window
+(240/320/400 candles), with session-aware checks. It adds zero provider
+requests and omits all symbols, timestamps, OHLCV rows and raw exception
+messages. It is diagnostic evidence only, never a trading signal, PASS or
+excuse to bypass incomplete roster coverage.
