@@ -9,7 +9,7 @@ const lanes = ['KR', 'US', 'SPOT', 'FUTURES'].flatMap(m =>
   ['SCALPING_15M', 'SWING_60M', 'MID_LONG_1D'].map(p => `${m}_${p}`));
 const marketForLane = lane => ({ KR: 'KR_STOCK', US: 'US_STOCK', SPOT: 'CRYPTO_SPOT', FUTURES: 'CRYPTO_FUTURES' })[lane?.split('_')[0]];
 
-export function publicCyclePageDecision(response, market, cursor) {
+export function publicCyclePageDecision(response, market, cursor, expectedRosterId) {
   const hold = (status, reason) => ({ status, nextCursor: cursor, blockedObservationOnly: false, reason });
   const u = response?.universe, e = response?.execution;
   if (!count(cursor) || !u || !e || !Array.isArray(response.cards) || !Array.isArray(response.failures)) {
@@ -27,6 +27,16 @@ export function publicCyclePageDecision(response, market, cursor) {
   const floor = market === 'KR_STOCK' ? 500 : market === 'US_STOCK' ? 1_000 : 1;
   if (!trustedSource || !count(u.totalCount) || u.totalCount < floor) {
     return hold('BLOCKED_DATA', 'ROSTER_NOT_ATTESTED');
+  }
+  // New producers bind a numeric cursor to the exact ordered roster. A list
+  // insertion/removal/source change cannot silently skip or repeat symbols.
+  // The three-argument legacy diagnostic remains non-authoritative; current
+  // full-profile publication requires the binding contract below.
+  if (expectedRosterId !== undefined) {
+    if (!/^[a-f0-9]{64}$/.test(u.rosterId ?? '')) return hold('BLOCKED_DATA', 'ROSTER_ID_UNAVAILABLE');
+    if (cursor > 0 && expectedRosterId !== u.rosterId) {
+      return { status: 'BLOCKED_DATA', nextCursor: 0, blockedObservationOnly: true, reason: 'ROSTER_CHANGED_RESTART' };
+    }
   }
   // A listing removal can leave the persisted cursor beyond the current roster.
   if (cursor >= u.totalCount && u.cursor === u.totalCount
@@ -59,12 +69,13 @@ export function publicCyclePageDecision(response, market, cursor) {
 export function currentPublicCyclePublication(snapshot) {
   const empty = () => ({ lists: Object.fromEntries(Object.keys(snapshot?.lists ?? {}).map(k => [k, []])), events: [], currentPageReady: false });
   const coverage = snapshot?.coverage, cycle = snapshot?.sourceCycleId;
-  if (typeof cycle !== 'string' || !cycle || !Array.isArray(coverage) || coverage.length !== 12
+  if (snapshot?.rosterBindingVersion !== 1 || typeof cycle !== 'string' || !cycle || !Array.isArray(coverage) || coverage.length !== 12
     || new Set(coverage.map(r => r?.laneId)).size !== 12 || coverage.some(r => !lanes.includes(r?.laneId))) return empty();
   const verified = coverage.filter(r => {
     const e = r.pageExecution;
     const expectedEnd = r.cursorBefore + e?.requestedCount;
     return r.sourceCycleId === cycle && marketForLane(r.laneId) === r.market
+      && /^[a-f0-9]{64}$/.test(r.rosterId ?? '') && r.cursorRotationReason !== 'ROSTER_CHANGED_RESTART'
       && sources[r.market]?.includes(r.universeSource)
       && ['CANDIDATES_AVAILABLE', 'VALID_NO_TRADE'].includes(r.status)
       && r.universePartial === false && r.universeStale === false && r.responseDataState === 'complete'
@@ -80,7 +91,7 @@ export function currentPublicCyclePublication(snapshot) {
   const byLane = new Map(verified.map(r => [r.laneId, r]));
   const allowed = new Set((snapshot.rows ?? []).filter(row => {
     const p = row?.provenance, lane = byLane.get(p?.laneId);
-    return lane && row.market === lane.market && p.sourceCycleId === cycle && p.cursor === lane.cursorBefore;
+    return lane && row.market === lane.market && p.sourceCycleId === cycle && p.cursor === lane.cursorBefore && p.rosterId === lane.rosterId;
   }).map(row => row.id));
   return {
     lists: Object.fromEntries(Object.entries(snapshot.lists ?? {}).map(([key, rows]) => [key, rows.filter(row => allowed.has(row.id))])),

@@ -549,9 +549,11 @@ test('static catalog, stale cache and mixed provider lists stay explicitly parti
   assert.equal(lastGood.stale, true);
 });
 
-test('missing US provider token uses UNKNOWN curated fallback; cursor pagination never disguises it as full universe', async () => {
+test('missing US token AND unavailable public directory use UNKNOWN fallback; pagination never disguises it as full universe', async () => {
   const keys = ['FINNHUB_API_KEY', 'VITE_FINNHUB_API_KEY', 'FINNHUB_KEY'] as const;
   const before = Object.fromEntries(keys.map((key) => [key, process.env[key]])) as Record<string, string | undefined>;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('OFFLINE_PUBLIC_DIRECTORY_UNAVAILABLE'); };
   try {
     keys.forEach((key) => delete process.env[key]);
     clearUsUniverseCacheForTests();
@@ -584,6 +586,7 @@ test('missing US provider token uses UNKNOWN curated fallback; cursor pagination
     assert.ok(paged.every((ticker) => curated.has(ticker)));
     assert.ok(paged.length <= curated.size);
   } finally {
+    globalThis.fetch = originalFetch;
     for (const key of keys) {
       if (before[key] === undefined) delete process.env[key];
       else process.env[key] = before[key];

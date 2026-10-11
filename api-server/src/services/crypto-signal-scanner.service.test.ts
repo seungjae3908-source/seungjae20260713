@@ -58,6 +58,11 @@ test('changing 24h volume rank cannot skip or duplicate symbols between cursor p
   const names = [...first.cards, ...second.cards].map((row) => row.symbol);
   assert.equal(new Set(names).size, 6);
   assert.equal(names.length, 6);
+  assert.match(first.universe.rosterId!, /^[a-f0-9]{64}$/);
+  assert.equal(first.universe.rosterId, second.universe.rosterId);
+  rows.push(ticker('NEW_LISTING'));
+  const changed = await service.scan({ ...request('spot'), batchSize: 5 });
+  assert.notEqual(changed.universe.rosterId, first.universe.rosterId);
 });
 
 test('normalization excludes an unfinished bucket but cannot hide bad OHLC, duplicates or future bars', () => {

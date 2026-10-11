@@ -22,6 +22,20 @@ const trustedQuality = {
   lastTimestamp: new Date(NOW).toISOString(),
 };
 
+test('quant core keeps an empty separate context empty even when primary and AI facts are strong', () => {
+  const result = runScannerQuantStrategy({ ...input('scalping'), contextCandles: [],
+    aiValidation: { status: 'PASS', provider: 'test', counterEvidence: [], missingData: [], risks: [], explanation: 'fixture only' } });
+  assert.equal(result.context.close, null);
+  assert.equal(result.context.ema60, null);
+  assert.equal(result.strongSignalEligible, false);
+  assert.ok(!['S', 'A'].includes(result.grade));
+  assert.ok(result.warnings.includes('CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE'));
+  const shortHistory = runScannerQuantStrategy({ ...input('scalping'), contextCandles: trendCandles().slice(-1) });
+  assert.equal(shortHistory.strongSignalEligible, false);
+  assert.ok(!['S', 'A'].includes(shortHistory.grade));
+  assert.ok(shortHistory.warnings.includes('CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT'));
+});
+
 function trendCandles(count = 140, volumeMultiplier = 1): ScannerQualityCandle[] {
   return Array.from({ length: count }, (_, index) => {
     const base = 90 + index * 0.15;

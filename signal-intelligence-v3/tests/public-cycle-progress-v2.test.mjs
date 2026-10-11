@@ -48,14 +48,15 @@ function snapshot() {
   const coverage = Object.entries(markets).flatMap(([prefix, [market, source]]) =>
     ['SCALPING_15M', 'SWING_60M', 'MID_LONG_1D'].map(p => ({
       laneId: `${prefix}_${p}`, market, sourceCycleId: 'now', status: 'VALID_NO_TRADE', universeSource: source,
+      rosterId: 'a'.repeat(64),
       universePartial: false, universeStale: false, universeProviderErrors: 0, responseDataState: 'complete',
       providerErrors: 0, timeouts: 0, cursorBefore: 0, cursorAfter: 5, totalUniverse: 2000,
       pageExecution: { requestedCount: 5, startedCount: 5, completedCount: 5, failuresObserved: 0,
         partial: false, timedOut: false, cancelled: false },
     })));
   const rows = ['now', 'old'].map(cycle => ({ id: cycle, market: 'KR_STOCK',
-    provenance: { laneId: 'KR_SCALPING_15M', cursor: 0, sourceCycleId: cycle } }));
-  return { sourceCycleId: 'now', coverage, rows, lists: { krBuy: rows }, events: rows.map(r => ({ id: r.id })) };
+    provenance: { laneId: 'KR_SCALPING_15M', cursor: 0, sourceCycleId: cycle, rosterId: 'a'.repeat(64) } }));
+  return { rosterBindingVersion: 1, sourceCycleId: 'now', coverage, rows, lists: { krBuy: rows }, events: rows.map(r => ({ id: r.id })) };
 }
 
 test('retained historical rows cannot be reissued as current signals or events even at the same cursor', () => {
@@ -69,4 +70,24 @@ test('retained historical rows cannot be reissued as current signals or events e
   assert.deepEqual(currentPublicCyclePublication(s).lists.krBuy, []);
   s.coverage[0] = s.coverage[1];
   assert.deepEqual(currentPublicCyclePublication(s).events, []);
+});
+
+test('a changed or previously unbound roster restarts the cursor without publishing a page', () => {
+  const p = page(); p.universe.rosterId = 'a'.repeat(64); p.universe.cursor = 20; p.universe.nextCursor = 25;
+  assert.equal(publicCyclePageDecision(p, 'KR_STOCK', 20, 'a'.repeat(64)).nextCursor, 25);
+  for (const previous of [null, 'b'.repeat(64)]) {
+    const decision = publicCyclePageDecision(p, 'KR_STOCK', 20, previous);
+    assert.equal(decision.nextCursor, 0); assert.equal(decision.status, 'BLOCKED_DATA');
+    assert.equal(decision.reason, 'ROSTER_CHANGED_RESTART');
+  }
+  delete p.universe.rosterId;
+  assert.equal(publicCyclePageDecision(p, 'KR_STOCK', 20, 'a'.repeat(64)).reason, 'ROSTER_ID_UNAVAILABLE');
+});
+
+test('current publication requires current roster binding, not just matching cycle and numeric cursor', () => {
+  const s = snapshot(); s.rows[0].provenance.rosterId = 'b'.repeat(64);
+  assert.deepEqual(currentPublicCyclePublication(s).events, []);
+  delete s.rosterBindingVersion;
+  assert.equal(currentPublicCyclePublication(s).currentPageReady, false);
+  assert.deepEqual(currentPublicCyclePublication(s).lists.krBuy, []);
 });

@@ -3,15 +3,18 @@ import { CATALOG, type CatalogEntry } from '../data/catalog';
 import { getKrUniverse } from '../providers/krx';
 import { isKiwoomConfigured } from '../providers/kiwoom';
 import { getUsUniverse } from '../providers/us-universe';
+import { createHash } from 'node:crypto';
 
 export type ScannerListingStatus = 'LISTED' | 'UNKNOWN';
 export type ScannerUniverseSource =
   | 'krx-symbol-master'
   | 'finnhub-symbol-master'
+  | 'nasdaq-trader-public-directory'
   | 'last-good-cache'
   | 'curated-fallback';
 
 export interface ScannerUniverseEntry extends CatalogEntry {
+  sourceAsOf?: string;
   assetType: AssetType;
   exchange: string | null;
   listingStatus: ScannerListingStatus;
@@ -44,6 +47,7 @@ export interface ScannerUniverseBatch extends ScannerUniverseResult {
   cursor: number;
   nextCursor: number | null;
   batchSize: number;
+  rosterId: string;
 }
 
 type MarketScope = 'KR' | 'US';
@@ -65,8 +69,8 @@ export function classifyScannerUniverseSource(
   market: MarketScope,
   entries: readonly ScannerUniverseEntry[],
 ): Readonly<{ source: ScannerUniverseSource; partial: boolean; stale: boolean; providerErrorCount: number }> {
-  const expected: ScannerUniverseSource =
-    market === 'KR' ? 'krx-symbol-master' : 'finnhub-symbol-master';
+  const expected: ScannerUniverseSource = market === 'KR' ? 'krx-symbol-master'
+    : entries[0]?.source === 'nasdaq-trader-public-directory' ? 'nasdaq-trader-public-directory' : 'finnhub-symbol-master';
   const allExpected = entries.length > 0 && entries.every((row) =>
     row.market === market && row.listingStatus === 'LISTED' && row.source === expected);
   if (allExpected && entries.length >= SCANNER_PROVIDER_ROSTER_MINIMUM[market]) {
@@ -245,6 +249,7 @@ async function liveUniverse(market: MarketScope, signal?: AbortSignal): Promise<
     // cache row is not an authenticated/current LISTED symbol.
     listingStatus: row.listingStatus,
     source: row.source === 'static-catalog' ? 'curated-fallback' : row.source,
+    sourceAsOf: row.sourceAsOf,
   }));
 }
 
@@ -258,17 +263,24 @@ export const ScannerUniverseService = {
     signal?: AbortSignal,
     deadlineMs?: number,
   ): Promise<ScannerUniverseResult> {
+    if (signal?.aborted) throw signal.reason ?? new Error('SCAN_UNIVERSE_ABORTED');
     const now = Date.now();
     const cached = lastGood.get(market);
-    if (cached && now - cached.at < CACHE_MS) {
+    if (cached && now >= cached.at && now - cached.at < CACHE_MS && cached.entries.every(row => row.sourceAsOf == null
+      || (Number.isFinite(Date.parse(row.sourceAsOf)) && Date.parse(row.sourceAsOf) <= now + 5 * 60_000
+        && now - Date.parse(row.sourceAsOf) <= 7 * 24 * 60 * 60_000))) {
+      // The current provider capability may differ from the one that loaded
+      // the cache. Reapply exclusions; a credential/capability change cannot
+      // turn unsupported KRX symbols into successful public data requests.
+      const capability = publicOnlyCapability(market, cached.entries);
       return {
-        entries: cached.entries,
-        totalCount: cached.entries.length,
+        entries: capability.entries.map(row => ({ ...row })),
+        totalCount: capability.entries.length,
         rawTotalCount: cached.rawTotalCount,
-        explainedExcludedCount: cached.explainedExclusions.length,
-        explainedExclusions: cached.explainedExclusions,
+        explainedExcludedCount: capability.exclusions.length,
+        explainedExclusions: capability.exclusions.map(row => ({ ...row })),
         source: cached.source,
-        partial: false,
+        partial: capability.exclusions.length > 0,
         stale: false,
         providerErrorCount: 0,
         loadedAt: new Date(cached.at).toISOString(),
@@ -304,10 +316,10 @@ export const ScannerUniverseService = {
         if (!evidence.partial) {
           lastGood.set(market, {
             at: now,
-            entries: live,
+            entries: live.map(row => ({ ...row })),
             source: evidence.source,
             rawTotalCount: capability.rawTotalCount,
-            explainedExclusions: capability.exclusions,
+            explainedExclusions: capability.exclusions.map(row => ({ ...row })),
           });
         }
         return {
@@ -364,12 +376,15 @@ export const ScannerUniverseService = {
     deadlineMs?: number,
   ): Promise<ScannerUniverseBatch> {
     const universe = await this.get(market, signal, deadlineMs);
+    const rosterId = createHash('sha256').update(JSON.stringify([market, universe.source,
+      universe.rawTotalCount ?? universe.totalCount, universe.partial,
+      universe.entries.map(row => [row.ticker, row.market, row.exchange, row.assetType, row.listingStatus])])).digest('hex');
     const batchSize = Math.max(10, Math.min(200, Math.floor(batchSizeValue) || 120));
     const cursor = Math.max(0, Math.min(universe.totalCount, Math.floor(cursorValue) || 0));
     const entries = universe.entries.slice(cursor, cursor + batchSize);
     const nextCursor = cursor + entries.length < universe.totalCount
       ? cursor + entries.length
       : null;
-    return { ...universe, entries, cursor, nextCursor, batchSize };
+    return { ...universe, entries, cursor, nextCursor, batchSize, rosterId };
   },
 };

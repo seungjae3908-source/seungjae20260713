@@ -43,6 +43,27 @@ valid zero trades. Provider failures/timeouts, missing execution fields and
 cursor evidence mismatches hold the cursor. Roster floors only detect anomalous
 truncation, not full-market or historical/PIT coverage.
 
+The normal US app path and public runner share the strict Nasdaq Trader
+`nasdaqlisted.txt` / `otherlisted.txt` parser when a configured Finnhub roster
+is unavailable. Both schemas, final creation-time footers and source timeliness
+must validate; HTML, tiny/truncated pairs and unknown fallback catalogs do not
+become verified current rosters. The footer's New York time remains the search
+index basis time, distinct from the download time. This current listing source
+does not supply delisted/PIT history, corporate actions or licensed minute bars.
+
+Producer state schema 3 binds each lane cursor to a SHA-256 of the ordered
+eligible roster. Listing/source/order changes reset the lane to zero before
+publication. Snapshot roster-binding version 1 also requires matching current
+page and row provenance. Dynamic price/volume changes do not change this binding.
+
+The stock scanner excludes open intraday candles and daily bars before regular
+exchange-local close (US DST-aware); early-close calendars remain outside this
+contract. Requested upper-timeframe candles receive their own OHLC/time/volume
+quality checks and need 60 bars for the existing EMA60 context. Missing, stale,
+invalid or insufficient context cannot be silently replaced by primary candles
+or authorize an S/A plan. A blocked empty page is data-quality rejection, not a
+verified zero-signal result.
+
 Current lists/events require this cycle's page provenance; retained history is
 kept in research rows, not reissued as fresh signals. Health distinguishes a
 recent file timestamp from twelve verified current pages. Neither proves that
