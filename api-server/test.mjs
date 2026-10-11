@@ -31,8 +31,6 @@ const groups = {
   phase6: [
     path.join(root, 'src/services/paper-trading-engine.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-trading-storage.test.ts'),
-    // Owner-only four-market Paper status never authorizes LIVE or fabricated PnL.
-    path.join(repositoryRoot, 'stock-analyzer/src/lib/four-market-paper-status.test.ts'),
   ],
   phase7: [
     path.join(root, 'src/services/paper-journal-sync.service.test.ts'),

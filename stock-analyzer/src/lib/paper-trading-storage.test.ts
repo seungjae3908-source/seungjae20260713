@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './paper-flat-recovery-backend.test';
+// GET-only four-market Paper evidence readback, never LIVE or order authority.
+import './four-market-paper-status.test';
 import { applyPaperTradingAction, createPaperTradingState } from '../../../api-server/src/services/paper-trading-engine.service';
 import { manualCanonicalFixture } from '../../../api-server/src/services/manual-paper-canonical-contract.fixture';
 import { manualPaperEvidenceSha256 } from '../../../api-server/src/services/manual-paper-canonical-contract.service';
