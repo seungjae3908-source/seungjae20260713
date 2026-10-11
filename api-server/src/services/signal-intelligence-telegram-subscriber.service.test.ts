@@ -124,3 +124,29 @@ test('a 14-day V3 Telegram dedupe receipt expires even without any other send', 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('V3 Telegram ledger never writes through a preexisting temporary symlink', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'signal-telegram-trap-'));
+  try {
+    const ledger = path.join(directory, 'delivered.json');
+    const unrelated = path.join(directory, 'private-note.txt');
+    const trap = `${ledger}.${process.pid}.tmp`;
+    const prior = 'SENSITIVE_LOCAL_FILE_MUST_NOT_CHANGE';
+    await writeFile(unrelated, prior, 'utf8');
+    await symlink(unrelated, trap);
+    const state = new SignalIntelligenceTelegramDeliveryState(ledger);
+    const key='signal-intelligence-v3:'+'a'.repeat(40)
+      +':NEW_CANDIDATE:US_STOCK|AAPL|SWING|60m|BUY::CANDIDATE';
+    const when=new Date('2026-10-11T06:00:00.000Z');
+    await assert.rejects(state.mark(key,when),
+      /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(unrelated,'utf8'),prior,
+      'preexisting temporary symlink must never overwrite an unrelated file');
+    await assert.rejects(state.mark(key,when),
+      /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/,
+      'blocked process cannot attempt another send after ambiguous persistence');
+    assert.equal(await readFile(unrelated,'utf8'),prior);
+  } finally {
+    await rm(directory,{recursive:true,force:true});
+  }
+});

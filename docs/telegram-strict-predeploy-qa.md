@@ -240,3 +240,27 @@ during a race is a hard failure; a genuinely absent initial ledger
 remains valid. Existing at-most-once after-commit failure semantics
 and all production dedupe state files remain intact. Tests are
 offline mocks/temp files; no Bot API, DB or runtime changes.
+
+## Draft: exclusive, synced Telegram ledger temp files + redacted rich-source errors
+
+Both the scheduled market-brief and Signal V3 dedupe ledgers used
+`writeFile(ledger + "." + pid + ".tmp")`, which follows a preexisting
+symbolic link at this predictable path. This could overwrite an
+unrelated local file before `rename`, regardless of later
+`O_NOFOLLOW` protection on the input ledger. Both writers now
+create the temporary file with **O_CREAT | O_EXCL | O_NOFOLLOW |
+O_WRONLY**, write and `fsync` its descriptor, close it and only
+then atomically rename it. Any preexisting symlink/stale temp is a
+fail-closed ledger error, not an occasion to erase/retry/ignore data.
+Offline regression tests precreate a symlink to an unrelated file
+and assert that target remains byte-for-byte unchanged and the
+worker blocks further sends. Actual Telegram ledgers are untouched.
+
+The scheduled rich-market-brief collector previously passed raw
+`error.message` from untrusted external providers into logger
+warnings, which could expose a private query string/token. The log
+now emits only fixed `TELEGRAM_BRIEF_TIMEOUT` or
+`TELEGRAM_BRIEF_SOURCE_UNAVAILABLE` codes; tests simulate an exception
+containing a private URL/token and verify that the worker still sends
+only the safely generated mock fallback. No production send/deploy,
+DB update or trading authority is introduced.

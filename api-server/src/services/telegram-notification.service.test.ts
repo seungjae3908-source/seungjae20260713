@@ -25,6 +25,7 @@ import {
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
   readTelegramIntelligenceWorkerHealth,
+  safeTelegramBriefFailureCode,
 } from './telegram-intelligence-worker.service';
 import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
 import {
@@ -891,5 +892,55 @@ test('scheduled Telegram market-brief ledger refuses linked files and preserves 
     // Same fail-closed behavior on a genuine corrupt file is covered above.
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('scheduled Telegram report never overwrites a separate file through a temporary symlink', async () => {
+  const dir=await mkdtemp(path.join(tmpdir(),'telegram-brief-trap-'));
+  try {
+    const ledger=path.join(dir,'market.json');
+    const unrelated=path.join(dir,'private-note.txt');
+    const trap=`${ledger}.${process.pid}.tmp`;
+    const original='DO_NOT_WRITE_PRIVATE_MATERIAL';
+    await writeFile(unrelated,original,'utf8');
+    await symlink(unrelated,trap);
+    const store=new FileTelegramIntelligenceStateStore(ledger);
+    await assert.rejects(store.markDelivered(
+      'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock',
+      new Date('2026-10-11T00:00:00.000Z')),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(unrelated,'utf8'),original);
+    await assert.rejects(store.has('telegram-intelligence:anything'),
+      /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test('scheduled market brief errors keep sensitive provider messages out of sanitized log classification', async () => {
+  const sensitive=Error('TELEGRAM_BOT_TOKEN=PRIVATE_SECRET https://private.example/key');
+  const code=safeTelegramBriefFailureCode(sensitive);
+  assert.equal(code,'TELEGRAM_BRIEF_SOURCE_UNAVAILABLE');
+  assert.equal(JSON.stringify({code}).includes('PRIVATE_SECRET'),false);
+  const timedOut=Error('CONFIDENTIAL_DETAILS');
+  timedOut.name='AbortError';
+  assert.equal(safeTelegramBriefFailureCode(timedOut),'TELEGRAM_BRIEF_TIMEOUT');
+  const before=process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+  let sent=0,fetches=0;
+  try{
+    process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED='true';
+    const worker=new TelegramIntelligenceWorker(
+      new MemoryTelegramIntelligenceStateStore(),
+      async()=>{sent+=1;return {ok:true as const,attempts:1};},
+      room=>room==='KR_STOCK_ROOM'?'mock-kr-room':null,
+      async()=>{fetches+=1;throw sensitive;},
+    );
+    const result=await worker.runOnce(new Date('2026-10-12T07:00:00.000Z'));
+    assert.equal(fetches,1);
+    assert.equal(result.delivered,1);
+    assert.equal(sent,1);
+    assert.equal(result.liveTradingAuthority,false);
+    assert.equal(result.orderSubmitted,false);
+  }finally{
+    if(before===undefined)delete process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED;
+    else process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED=before;
   }
 });
