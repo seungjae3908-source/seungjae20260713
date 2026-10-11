@@ -61,7 +61,10 @@ export function summarizePublicProviderFailureReasons(failures) {
 }
 
 function statusFor(rows) {
-  if (rows.some(row => row.status === 'SEARCH_FAILURE')) return 'PROVIDER_BLOCKED';
+  if (rows.some(row => row.status === 'SEARCH_FAILURE'
+    || Number(row.publicProviderFailureSummary?.categories?.INVALID_DATA ?? 0) > 0
+    || Number(row.publicProviderFailureSummary?.categories?.SYMBOL_MAPPING ?? 0) > 0))
+    return 'PROVIDER_BLOCKED';
   if (rows.some(row => row.status === 'BLOCKED_DATA')) return 'PARTIAL_OR_UNTRUSTED';
   return 'CURRENT_BATCHES_ONLY';
 }
@@ -135,7 +138,29 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
       failures:null, symbolFailureDetailsNotCaptured:true,
     });
   });
+  // Contract green is not equivalent to a complete member scanner release.
+  const memberUiProfileObserved = snapshot.profile?.surface === 'MEMBER_UI'
+    && JSON.stringify(snapshot.profile?.timeframes) === JSON.stringify(['5m','4H','1D']);
+  const blockers = [
+    ...rows.filter(row => row.status !== 'CURRENT_BATCHES_ONLY')
+      .map(row => `MARKET_${row.market}_${row.status}`),
+    'WHOLE_UNIVERSE_QUOTE_ROUNDTRIP_NOT_PROVEN',
+    'CONTINUOUS_24H_ROTATION_NOT_PROVEN',
+    ...(memberUiProfileObserved ? [] : ['MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED']),
+    'CANONICAL_OOS_FULL_COST_PASS_NOT_PROVEN',
+    'PROSPECTIVE_PAPER_FILL_NOT_PROVEN',
+  ];
   return Object.freeze({
+    releaseReadiness: Object.freeze({
+      status: 'BLOCKED',
+      ready: false,
+      memberUiFirstBatchObserved: memberUiProfileObserved,
+      profileSurface: snapshot.profile?.surface ?? 'RESEARCH_V3',
+      observedTimeframes: Object.freeze([...new Set(snapshot.profile?.timeframes ?? [])]),
+      blockers: Object.freeze(blockers),
+      fullUniverseRealQuotesVerified: false,
+      continuous24hVerified: false,
+    }),
     schemaVersion:PUBLIC_PROVIDER_CYCLE_DIAGNOSTIC_VERSION,
     generatedAt:new Date(nowMs).toISOString(),
     observedCycleAt:new Date(at).toISOString(),

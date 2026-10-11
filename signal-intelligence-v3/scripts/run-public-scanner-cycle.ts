@@ -14,6 +14,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
+import { getPublicScannerProfileSet } from '../src/public-scanner-profiles.mjs';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -30,16 +31,15 @@ const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './s
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
+const PUBLIC_PROFILE_MODE = String(process.env.SIGNAL_INTELLIGENCE_PUBLIC_PROFILE_MODE ?? 'RESEARCH_V3').trim();
+if (PUBLIC_PROFILE_MODE === 'MEMBER_UI' && process.env.SIGNAL_INTELLIGENCE_MEMBER_UI_QA !== 'true')
+  throw new Error('SIGNAL_INTELLIGENCE_MEMBER_UI_QA_EXPLICIT_FLAG_REQUIRED');
 const NASDAQ_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
 const OTHER_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
-const strategyProfiles = Object.freeze([
-  Object.freeze({ label: 'SCALPING', strategyMode: 'scalping', timeframe: '15m' }),
-  Object.freeze({ label: 'SWING', strategyMode: 'swing', timeframe: '60m' }),
-  Object.freeze({ label: 'MID_LONG', strategyMode: 'position', timeframe: '1D' }),
-]);
+const strategyProfiles = getPublicScannerProfileSet(PUBLIC_PROFILE_MODE);
 const marketProfiles = Object.freeze([
   Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 }),
   Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 }),
@@ -56,6 +56,7 @@ function freshState() {
   return {
     schemaVersion: 2,
     serviceSha: SERVICE_SHA,
+    profileMode: PUBLIC_PROFILE_MODE,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
     retained: {},
     updatedAt: new Date(0).toISOString(),
@@ -94,6 +95,8 @@ function clearScannedWindow(state, laneId, cursor) {
 }
 
 function fallbackExpiry(lane, nowMs) {
+  if (lane.timeframe === '5m') return new Date(nowMs + 15 * 60_000).toISOString();
+  if (lane.timeframe === '4H') return new Date(nowMs + 12 * 60 * 60_000).toISOString();
   if (lane.timeframe === '15m') return new Date(nowMs + 45 * 60_000).toISOString();
   if (lane.timeframe === '60m') return new Date(nowMs + 3 * 60 * 60_000).toISOString();
   return new Date(nowMs + 3 * 24 * 60 * 60_000).toISOString();
@@ -376,7 +379,8 @@ function laneStatus(response) {
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
-  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2;
+  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2
+    || persistedState?.profileMode !== PUBLIC_PROFILE_MODE;
   const state = releaseChanged ? freshState() : persistedState;
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
@@ -474,7 +478,12 @@ async function main() {
   const snapshot = {
     ...baseSnapshot,
     serviceSha: SERVICE_SHA,
-    profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
+    profile: {
+      strategies: ['SCALPING', 'SWING', 'MID_LONG'],
+      timeframes: strategyProfiles.map((row) => row.timeframe),
+      fullStrategyCoverage: true,
+      surface: PUBLIC_PROFILE_MODE,
+    },
     coverage,
     publicDataOnly: true,
     releaseStateReset: releaseChanged,
