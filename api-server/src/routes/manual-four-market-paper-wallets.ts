@@ -153,14 +153,9 @@ export function createManualFourMarketWalletRouter(
       return res.status(400).json(fail('MANUAL_PAPER_RESEARCH_SELECTION_INVALID',
         '시장·종목·수식·방향·레버리지·가상금액을 다시 확인하세요.'));
     }
-    if(raw.market==='crypto_futures'&&!hasCapability(req.member,'canAccessFutures')){
-      return res.status(403).json(fail('MANUAL_PAPER_FUTURES_CAPABILITY_REQUIRED',
-        '선물모의매매 이용 권한이 없습니다.'));
-    }
-    if(raw.market==='crypto_spot'&&!hasCapability(req.member,'canAccessSpot')){
-      return res.status(403).json(fail('MANUAL_PAPER_SPOT_CAPABILITY_REQUIRED',
-        '현물모의매매 이용 권한이 없습니다.'));
-    }
+    // Approved members with PaperTrading access may study *simulated*
+    // futures and spot without gaining the separate LIVE futures trading
+    // capability. This Paper-only route never calls a private provider API.
     if(raw.market!=='crypto_futures'&&(raw.side!=='BUY'||raw.leverage!==1)){
       return res.status(400).json(fail('MANUAL_PAPER_NONFUTURES_LONG_ONLY',
         '주식·코인현물은 레버리지 없이 매수만 허용됩니다.'));
