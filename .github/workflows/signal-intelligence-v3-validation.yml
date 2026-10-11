@@ -172,8 +172,12 @@ jobs:
           }
           const krRows = p.coverage.filter((row) => row.market === 'KR_STOCK');
           if (krRows.length !== 3) process.exit(1);
-          if (krRows.some((row) => row.status === 'SEARCH_FAILURE' || Number(row.providerErrors ?? 0) > 0 || Number(row.timeouts ?? 0) > 0)) process.exit(1);
           NODE
+          # The public-only research SOURCE failure is real and must remain a
+          # SEARCH_FAILURE/held cursor. Require explicit invalid-OHLC evidence,
+          # no provider errors, no candidates, and a BLOCKED product verdict;
+          # never convert a source deficit into VALID_NO_TRADE or profitable PASS.
+          node ../signal-intelligence-v3/scripts/verify-kr-source-truth.mjs "$SIGNAL_INTELLIGENCE_STATE_FILE"
       - name: Run a single public KR alpha historical daily Scanner canary without signal promotion
         working-directory: api-server
         env:
