@@ -294,7 +294,7 @@ jobs:
           if(evidence.executionAuthority!=='NONE'||evidence.wholeKrMarketProven!==false
             ||evidence.licensedMarketRedistribution!==false
             ||evidence.intradayAlphanumericSupported!==false)process.exit(1);
-          console.log('KR_ALPHA_DAILY_CANARY '+evidence.alphanumericDailyCanary.result);
+          console.log('KR_ALPHA_DAILY_CANARY '+evidence.alphanumericDailyCanary.result+' reason='+(evidence.alphanumericDailyCanary.reason??'NONE'));
           NODE
       - name: Diagnose a few public read-only sources, never promote result
         run: |
@@ -309,7 +309,7 @@ jobs:
             +file.samples.map(s=>'- '+s.id+': '+s.status+' (HTTP '+(s.httpStatus??'?')+')\n').join('')+'\n');
           console.log(file.samples.map(s=>JSON.stringify({
             id:s.id,status:s.status,count:s.discoveredCount??null,
-            rootKeys:s.rootKeys??[],firstDailyRowKeys:s.firstDailyRowKeys??[]
+            rootKeys:s.rootKeys??[],firstDailyRowKeys:s.firstDailyRowKeys??[],dailyTimestampFormat:s.dailyTimestampFormat??null,dailyValueTypes:s.dailyValueTypes??null
           })).join('\n'));
           NODE
       - name: Upload bounded diagnostic metadata only
