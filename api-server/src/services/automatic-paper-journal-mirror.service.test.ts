@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   AUTOMATIC_PAPER_JOURNAL_MIRROR_VERSION,
   reconcileCanonicalPaperJournalMirrors,
+  reconcileScopedExternalJournalHistory,
 } from './automatic-paper-journal-mirror.service';
 
 function canonical(id: string, overrides: Record<string, unknown> = {}) {
@@ -98,4 +99,50 @@ test('partial fill mirror does not manufacture a second fill when canonical orde
   const actual = reconcileCanonicalPaperJournalMirrors([row],[canonical('partial')]);
   assert.equal(actual.payloads.length,1);
   assert.equal(actual.audit.persistedMirrorsSuppressed,1);
+});
+
+test('external history is deduped only with exact real broker, account, market, ID and economic evidence', () => {
+  const cached=canonical('live',{source:'APP_AUTO',broker:'UPBIT',accountIdMasked:'UPBIT-****-ABC'});
+  const provider={...cached,source:'UPBIT_API'};
+  const result=reconcileScopedExternalJournalHistory([cached],[provider]);
+  assert.equal(result.payloads.length,0);
+  assert.equal(result.audit.suppressedVerifiedDuplicateCount,1);
+  assert.equal(result.audit.financialMutationCount,0);
+  assert.equal(result.audit.executionAuthority,'NONE');
+});
+
+test('broker collisions, account boundaries and simulated orders never erase provider history', () => {
+  const row=canonical('same',{source:'APP_AUTO',broker:'UPBIT',accountIdMasked:'UPBIT-****-ABC'});
+  const foreign=[
+    {...row,source:'KIWOOM_API',broker:'KIWOOM'},
+    {...row,source:'UPBIT_API',market:'US_STOCK'},
+    {...row,source:'UPBIT_API',accountIdMasked:'UPBIT-****-DIFFERENT'},
+    {...row,source:'UPBIT_API',accountIdMasked:'UPBIT-****-UNAVAILABLE'},
+  ];
+  const a=reconcileScopedExternalJournalHistory([row],foreign);
+  assert.equal(a.payloads.length,4);
+  const paper=canonical('same',{source:'APP_PAPER',broker:'UPBIT',accountIdMasked:'UPBIT-****-ABC'});
+  const b=reconcileScopedExternalJournalHistory([paper],[{...row,source:'UPBIT_API'}]);
+  assert.equal(b.payloads.length,1);
+});
+
+test('external final fill or new cost evidence cannot be hidden by older cached trade', () => {
+  const row=canonical('refresh',{source:'APP_AUTO',accountIdMasked:'UPBIT-****-ABC',
+    status:'PARTIALLY_FILLED',filledQuantity:0.5,fees:null,tax:null});
+  const provider={...row,source:'UPBIT_API',status:'FILLED',filledQuantity:1,fees:0.1,tax:0};
+  const next=reconcileScopedExternalJournalHistory([row],[provider]);
+  assert.equal(next.payloads.length,1);
+  assert.equal(next.audit.suppressedVerifiedDuplicateCount,0);
+  const sameState={...row,source:'UPBIT_API',fees:0.1,tax:0};
+  assert.equal(reconcileScopedExternalJournalHistory([row],[sameState]).payloads.length,1);
+});
+
+test('conflicting symbol or trade side within exact provider account and order scope blocks display', () => {
+  const row=canonical('conflict',{source:'APP_AUTO',accountIdMasked:'UPBIT-****-ABC'});
+  for(const changed of [{symbol:'ETH'},{side:'SELL'},{currency:'USD'}]) {
+    assert.throws(()=>reconcileScopedExternalJournalHistory(
+      [row],[{...row,...changed,source:'UPBIT_API'}]),
+      /JOURNAL_EXTERNAL_SCOPE_IDENTITY_CONFLICT/,
+    );
+  }
 });
