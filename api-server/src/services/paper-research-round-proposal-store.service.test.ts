@@ -4,6 +4,7 @@ import type {PaperRoundSnapshot} from './paper-research-round-lifecycle.service'
 import {
   MANUAL_RESEARCH_ROUND_OWNER_CONFIRMATION,
   recordPaperResearchRoundProposal,
+  samePaperRoundProposalEvidence,
   type PaperRoundProposalRow,
 } from './paper-research-round-proposal-store.service';
 
@@ -121,4 +122,40 @@ test('lost proposal insert returns a blocker instead of fake success or seed cre
   assert.equal(r.status,'BLOCKED');
   assert.deepEqual(r.blockers,['PAPER_ROUND_APPEND_NOT_VERIFIED']);
   assert.equal(r.newWalletCreated,false);
+});
+
+test('same-round idempotency requires byte-equivalent immutable economic evidence, not any unique violation',async()=>{
+  let receipt:PaperRoundProposalRow|null=null;
+  const owner={ownerId:USER,ownerRole:'member' as const,mode:'automatic' as const,market:'crypto_futures' as const};
+  const result=await recordPaperResearchRoundProposal(owner,{
+    enabled:()=>true,readProtectedSnapshot:async()=>fixture(),
+    appendProposal:async row=>{receipt=row;return 'INSERTED';},
+  });
+  assert.equal(result.status,'PROPOSAL_RECORDED');
+  assert.ok(receipt);
+  const exact=receipt! as PaperRoundProposalRow;
+  const dbRow={
+    ...exact,
+    proposed_seed_krw:'1000000.00',previous_operating_capital_krw:'0.00',
+    previous_locked_reserve_krw:'80000.00',
+    observed_at:exact.observed_at.replace('Z','+00:00'),
+  };
+  assert.equal(samePaperRoundProposalEvidence(exact,dbRow),true);
+  const mismatches:Record<string,unknown>[]=[
+    {proposal_id:'paper-round-v1:'+'f'.repeat(64)},
+    {user_id:'22222222-2222-2222-2222-222222222222'},
+    {owner_role:'admin'},{trading_mode:'manual'},{market:'us_stock'},
+    {current_epoch_id:'fake-epoch'},{next_round_number:3},
+    {previous_settlement_digest_sha256:'b'.repeat(64)},
+    {ending_cause:'BELOW_VERIFIED_MINIMUM'},
+    {proposed_seed_krw:2000000},{previous_operating_capital_krw:1},
+    {previous_locked_reserve_krw:0},{minimum_entry_krw:1000},
+    {observed_at:'2026-10-11T04:00:00.000Z'},{status:'SETTLED'},
+    {execution_authority:'LIVE'},{financial_mutation_allowed:true},
+    {reserve_transfer_allowed:true},{historical_record_deletion_allowed:true},
+  ];
+  for(const patch of mismatches){
+    assert.equal(samePaperRoundProposalEvidence(exact,{...dbRow,...patch}),false,
+      JSON.stringify(patch));
+  }
 });
