@@ -140,6 +140,9 @@ function certifiedAutoPaperPair(input: {
   entryPrice: number; exitPrice: number;
   entryFx: number; exitFx: number;
   fxSource: string; tax?: number | null;
+  /** Explicit server funding certificate in KRW; undefined in this fixture
+   * means a provably complete zero-funding settlement, not a live default. */
+  fundingKrw?: number;
 }) {
   const start = new Date(NOW - 90_000).toISOString();
   const close = new Date(NOW - 30_000).toISOString();
@@ -194,6 +197,18 @@ function certifiedAutoPaperPair(input: {
         krwPerQuoteCurrency: exit ? input.exitFx : input.entryFx,
         source: input.fxSource, observedAt: stamp,
       },
+      // Paper funding is a cumulative position-lifetime cost/rebate, issued
+      // on the FINAL exit only. The production backend does NOT mint this
+      // certificate automatically; these are contract test fixtures.
+      paperFundingSettlementEvidence: input.exchange === 'bitget' && exit ? {
+        source:'SERVER_PAPER_FUNDING_LEDGER_V1',
+        underlyingCurrency:'USDT',
+        netFundingKrw: input.fundingKrw ?? 0,
+        entryBrokerOrderId:input.id+'-entry-exchange',
+        exitBrokerOrderId:plan.id+'-exchange',
+        coveredFromAt:start,coveredThroughAt:close,
+        attestedAt:close,complete:true,
+      } : null,
       fills: [], retryCount: 0, nextRetryAt: null, lastErrorCode: null,
     };
   };
@@ -361,4 +376,72 @@ test('member Paper readback uses the same four-market verified FX/cost quarantin
   assert.equal(incomplete.marketReadback.us_stock.operatingCapitalKrw,null);
   assert.equal(incomplete.marketReadback.us_stock.reserveKrw,null);
   assert.equal(incomplete.marketReadback.us_stock.newEntriesAllowed,false);
+});
+
+test('futures funding cannot silently be treated as zero without a complete server certificate',()=>{
+  const pair=certifiedAutoPaperPair({
+    id:'funding-required',exchange:'bitget',market:'USDT-FUTURES',symbol:'BTCUSDT',
+    entrySide:'long',exitSide:'short',entryPrice:100,exitPrice:110,
+    entryFx:1300,exitFx:1350,fxSource:'UPBIT:KRW-USDT',fundingKrw:270,
+  });
+  const ready=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans:pair.plans,orders:pair.orders,nowMs:NOW,
+  });
+  assert.equal(ready.marketReadback.crypto_futures.settlementReady,true);
+  // 10 USDT native PnL x 1350 KRW/USDT less 270 KRW paid funding.
+  assert.equal(ready.marketReadback.crypto_futures.operatingCapitalKrw,1_006_615);
+  assert.equal(ready.marketReadback.crypto_futures.reserveKrw,6_615);
+  const missing=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans:pair.plans,
+    orders:pair.orders.map((order,index)=>index===1
+      ? {...order,paperFundingSettlementEvidence:null} : order),nowMs:NOW,
+  });
+  assert.equal(missing.marketReadback.crypto_futures.settlementReady,false);
+  assert.equal(missing.marketReadback.crypto_futures.reserveKrw,null);
+  assert.equal(missing.marketReadback.crypto_futures.newEntriesAllowed,false);
+});
+
+test('forged, incomplete or mismatched perpetual funding receipts are rejected',()=>{
+  const pair=certifiedAutoPaperPair({
+    id:'funding-forgery',exchange:'bitget',market:'USDT-FUTURES',symbol:'BTCUSDT',
+    entrySide:'long',exitSide:'short',entryPrice:100,exitPrice:110,
+    entryFx:1300,exitFx:1350,fxSource:'UPBIT:KRW-USDT',
+  });
+  for (const bogus of [
+    {complete:false},
+    {source:'BROWSER_ESTIMATE'},
+    {underlyingCurrency:'USD'},
+    {netFundingKrw:Number.NaN},
+    {netFundingKrw:Number.POSITIVE_INFINITY},
+    {entryBrokerOrderId:'some-other-entry'},
+    {exitBrokerOrderId:'some-other-exit'},
+    {coveredFromAt:'2026-09-01T00:00:00.000Z'},
+    {coveredThroughAt:'2026-09-01T00:00:00.000Z'},
+    {attestedAt:'2026-10-12T00:00:00.000Z'},
+  ]) {
+    const orders=pair.orders.map((order,index)=>index===1
+      ? {...order,paperFundingSettlementEvidence:{
+          ...order.paperFundingSettlementEvidence!,...bogus,
+        } as TradingOrder['paperFundingSettlementEvidence']}
+      : order);
+    const status=adminFourMarketPaperCapitalReadback({
+      ownerId:'owner-only',records:records(),plans:pair.plans,orders,nowMs:NOW,
+    });
+    assert.equal(status.marketReadback.crypto_futures.settlementReady,false,
+      'forged funding must never release 50/50 Paper reserve');
+    assert.equal(status.marketReadback.crypto_futures.operatingCapitalKrw,null);
+  }
+});
+
+test('negative signed funding represents a verified rebate, not a fictitious fee',()=>{
+  const pair=certifiedAutoPaperPair({
+    id:'funding-rebate',exchange:'bitget',market:'USDT-FUTURES',symbol:'BTCUSDT',
+    entrySide:'long',exitSide:'short',entryPrice:100,exitPrice:110,
+    entryFx:1300,exitFx:1350,fxSource:'UPBIT:KRW-USDT',fundingKrw:-100,
+  });
+  const status=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans:pair.plans,orders:pair.orders,nowMs:NOW,
+  });
+  assert.equal(status.marketReadback.crypto_futures.settlementReady,true);
+  assert.equal(status.marketReadback.crypto_futures.reserveKrw,6800);
 });
