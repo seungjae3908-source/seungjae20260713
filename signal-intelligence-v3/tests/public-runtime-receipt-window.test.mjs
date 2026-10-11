@@ -99,3 +99,28 @@ test('stale or future prior-cycle snapshot cannot be credited as a new successfu
  assert.equal(failure.producerSucceeded,false);
  assert.equal(failure.status,'PRODUCER_OR_SNAPSHOT_FAILED');
 });
+
+
+test('each read-only receipt accounts for all four markets without raw symbols',()=>{
+ const r=receipt(START);
+ assert.deepEqual(Object.keys(r.marketEvidence),MARKETS);
+ assert.equal(r.marketEvidence.KR_STOCK.verifiedBatches,3);
+ assert.equal(r.marketEvidence.CRYPTO_FUTURES.failedBatches,0);
+ assert.equal(JSON.stringify(r).includes('SHOULD_NOT_LEAK'),false);
+ const samples=Array.from({length:721},(_,i)=>receipt(START+i*120000));
+ const a=auditPublicReadOnly24hReceiptWindow({
+  observations:samples,serviceSha:SHA,asOfMs:START+86400000,
+ });
+ assert.equal(a.marketEvidence.CRYPTO_SPOT.verifiedBatches,720);
+ assert.equal(a.marketEvidence.US_STOCK.providerErrors,0);
+ assert.equal(a.real24hInfrastructureAttested,false);
+ const tampered={...r,marketEvidence:{...r.marketEvidence,
+  KR_STOCK:{...r.marketEvidence.KR_STOCK,verifiedBatches:9999}}};
+ assert.throws(()=>auditPublicReadOnly24hReceiptWindow({
+  observations:[tampered],serviceSha:SHA,asOfMs:START+86400000,
+ }),/UNTRUSTED/);
+ const injected={...r,rawSymbol:'005930'};
+ assert.throws(()=>auditPublicReadOnly24hReceiptWindow({
+  observations:[injected],serviceSha:SHA,asOfMs:START+86400000,
+ }),/UNTRUSTED/);
+});

@@ -9,6 +9,20 @@ const SHA=/^[a-f0-9]{40}$/u;
 const MARKETS=['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'];
 const HOUR=3600000,DAY=24*HOUR;
 const integer=x=>Number.isSafeInteger(x)&&x>=0;
+const MARKET_COUNTS=['verifiedBatches','blockedBatches','failedBatches','providerErrors','timeouts'];
+const RECEIPT_KEYS=[
+ 'schemaVersion','serviceSha','startedAtMs','finishedAtMs','observedAt',
+ 'status','producerSucceeded','observedLanes','blockedOrFailedLanes',
+ 'providerErrors','timeouts','marketEvidence','publicReadOnly',
+ 'sourcePayloadRedacted','rawSymbolsLogged','wholeMarketCoverageProven',
+ 'licensedForRedistribution','independentUptimeAttested','executionAuthority',
+ 'paperOrdersAllowed','realOrdersAllowed',
+];
+function exactNumericFields(value,fields){
+ return value&&typeof value==='object'&&!Array.isArray(value)
+  &&Object.keys(value).length===fields.length
+  &&fields.every(field=>integer(value[field]));
+}
 
 export function createPublicReadOnlyRuntimeReceipt({
   serviceSha,startedAtMs,finishedAtMs,producerSucceeded=false,snapshot=null,
@@ -32,6 +46,9 @@ export function createPublicReadOnlyRuntimeReceipt({
   const providerErrors=MARKETS.reduce((sum,key)=>sum+(totals[key]?.providerErrors??0),0);
   const timeouts=MARKETS.reduce((sum,key)=>sum+(totals[key]?.timeouts??0),0);
   const blocked=(health?.buckets?.blocked??0)+(health?.buckets?.failed??0);
+  const marketEvidence=health?Object.freeze(Object.fromEntries(
+    MARKETS.map(market=>[market,Object.freeze(Object.fromEntries(
+      MARKET_COUNTS.map(field=>[field,totals[market][field]])))]))):null;
   return Object.freeze({
     schemaVersion:PUBLIC_RUNTIME_RECEIPT_SCHEMA,
     serviceSha,startedAtMs,finishedAtMs,
@@ -39,7 +56,7 @@ export function createPublicReadOnlyRuntimeReceipt({
     status:!health?'PRODUCER_OR_SNAPSHOT_FAILED':
       blocked||providerErrors||timeouts?'SUCCEEDED_WITH_SOURCE_BLOCKERS':'SUCCEEDED_BATCHES_ONLY',
     producerSucceeded:Boolean(health),observedLanes:health?12:0,
-    blockedOrFailedLanes:blocked,providerErrors,timeouts,
+    blockedOrFailedLanes:blocked,providerErrors,timeouts,marketEvidence,
     publicReadOnly:true,sourcePayloadRedacted:true,
     rawSymbolsLogged:false,wholeMarketCoverageProven:false,
     licensedForRedistribution:false,independentUptimeAttested:false,
@@ -48,7 +65,10 @@ export function createPublicReadOnlyRuntimeReceipt({
 }
 
 function validateReceipt(row,sha){
-  if(!row||row.schemaVersion!==PUBLIC_RUNTIME_RECEIPT_SCHEMA
+  if(!row||typeof row!=='object'||Array.isArray(row)
+    ||Object.keys(row).length!==RECEIPT_KEYS.length
+    ||RECEIPT_KEYS.some(key=>!Object.hasOwn(row,key))
+    ||row.schemaVersion!==PUBLIC_RUNTIME_RECEIPT_SCHEMA
     ||row.serviceSha!==sha||!integer(row.startedAtMs)
     ||!integer(row.finishedAtMs)||row.startedAtMs===0
     ||row.finishedAtMs<row.startedAtMs
@@ -69,7 +89,16 @@ function validateReceipt(row,sha){
     ||row.rawSymbolsLogged!==false||row.wholeMarketCoverageProven!==false
     ||row.licensedForRedistribution!==false||row.independentUptimeAttested!==false
     ||row.executionAuthority!=='NONE'
-    ||row.paperOrdersAllowed!==false||row.realOrdersAllowed!==false)
+    ||row.paperOrdersAllowed!==false||row.realOrdersAllowed!==false
+    ||(row.producerSucceeded&&(
+      !row.marketEvidence||typeof row.marketEvidence!=='object'
+      ||Object.keys(row.marketEvidence).length!==MARKETS.length
+      ||MARKETS.some(market=>!exactNumericFields(row.marketEvidence[market],MARKET_COUNTS))
+      ||MARKETS.reduce((n,market)=>n+row.marketEvidence[market].providerErrors,0)!==row.providerErrors
+      ||MARKETS.reduce((n,market)=>n+row.marketEvidence[market].timeouts,0)!==row.timeouts
+      ||MARKETS.reduce((n,market)=>n+row.marketEvidence[market].blockedBatches
+          +row.marketEvidence[market].failedBatches,0)!==row.blockedOrFailedLanes))
+    ||(!row.producerSucceeded&&row.marketEvidence!==null))
     throw Error('PUBLIC_RUNTIME_RECEIPT_UNTRUSTED');
 }
 
@@ -100,6 +129,14 @@ export function auditPublicReadOnly24hReceiptWindow({
   const blocked=receiptsInWindow.reduce((sum,r)=>sum+r.blockedOrFailedLanes,0);
   const providerErrors=receiptsInWindow.reduce((sum,r)=>sum+r.providerErrors,0);
   const timeouts=receiptsInWindow.reduce((sum,r)=>sum+r.timeouts,0);
+  const perMarket=Object.freeze(Object.fromEntries(MARKETS.map(market=>{
+    const summary=Object.fromEntries(MARKET_COUNTS.map(field=>[field,0]));
+    for(const receipt of receiptsInWindow){
+      if(receipt.marketEvidence)
+        for(const field of MARKET_COUNTS)summary[field]+=receipt.marketEvidence[market][field];
+    }
+    return [market,Object.freeze(summary)];
+  })));
   const hasStart=firstAt!==null&&firstAt<=start+maxSilenceMs;
   const hasEnd=lastAt!==null&&asOfMs-lastAt<=maxSilenceMs;
   const noLargeGap=longestSilenceMs<=maxSilenceMs;
@@ -116,6 +153,7 @@ export function auditPublicReadOnly24hReceiptWindow({
     missingWindowStart:!hasStart,missingWindowEnd:!hasEnd,
     oversizedObservationGap:!noLargeGap,failedProducerCycles:failed,
     blockedOrFailedSourceLanes:blocked,providerErrors,timeouts,
+    marketEvidence:perMarket,
     receiptWindowStructurallyContinuous:structurallyContinuous,
     observedBatchesWithoutProviderErrors:structurallyContinuous
       &&blocked===0&&providerErrors===0&&timeouts===0,
