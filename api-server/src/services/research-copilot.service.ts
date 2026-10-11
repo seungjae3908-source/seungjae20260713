@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createSafeStrategyDslV1 } from '../../../market-prediction-lab/src/autonomous-strategy-formula-generator-v1.js';
-import { answerAiChat } from './ai-chat.service';
+import { invokeResearchFreeAi, resolveResearchFreeAiPolicy } from '../../../research-production/src/research-ai-review-worker.mjs';
+import { readResearchFreeConfirmation } from '../../../research-production/src/research-free-policy-confirmation.mjs';
 import { bindCanonicalStrategyHealth } from './strategy-health-research-adapter.service';
 import { createDefaultStrategyPromotionService, type StrategyPromotionList, type PromotionStageEvidence } from './strategy-promotion.service';
 import { runResearchDualFreeAiReview, ResearchDualFreeAiError, type ResearchFreeAiProvider, type ResearchAiInvoker } from './research-dual-free-ai.service';
@@ -18,15 +19,15 @@ export const COPILOT_AUTHORITY = Object.freeze({
 const TASKS = new Set<CopilotTask>(['propose_candidates', 'interpret_evidence', 'compare_strategies', 'explain_health']);
 const STAGES: Array<[string, string, RegExp]> = [
   ['candidate', '전략 후보', /formula|candidate/i],
-  ['dsl', 'DSL / Formula 검증', /dsl|formula.*valid/i],
+  ['dsl', '전략식 검증', /dsl|formula.*valid/i],
   ['backtest', '백테스트', /backtest|historical/i],
-  ['oos', 'OOS', /\boos\b|out.of.sample/i],
-  ['walk-forward', 'Purged Walk Forward', /walk.forward/i],
-  ['holdout', 'Final Holdout', /holdout/i],
+  ['oos', '미사용 표본 검증', /\boos\b|out.of.sample/i],
+  ['walk-forward', '누수 제거 순차 검증', /walk.forward/i],
+  ['holdout', '최종 보류 표본', /holdout/i],
   ['leakage', '과최적화 / 누수 검증', /firewall|leakage|overfit/i],
   ['comparison', '전략 비교', /tournament|comparison/i],
-  ['shadow', 'Shadow / Forward 인계', /shadow|forward/i],
-  ['health', 'Strategy Health', /strategy.health/i],
+  ['shadow', '관찰·전진 검증', /shadow|forward/i],
+  ['health', '전략 상태', /strategy.health/i],
 ];
 const CANONICAL_STAGE: Record<string, string> = {
   backtest: 'HISTORICAL_BACKTEST', oos: 'OUT_OF_SAMPLE',
@@ -144,19 +145,9 @@ export function validateCopilotDsl(value: unknown): DslValidation {
 }
 
 export function researchProviderPolicy(env: NodeJS.ProcessEnv): { provider: ResearchFreeAiProvider | null; reason: string } {
-  // Billing entitlement is not inferred from a model's name or a credential.
-  if (env.RESEARCH_AI_FREE_TIER_CONFIRMED !== 'true') return { provider: null, reason: 'FREE_TIER_NOT_CONFIRMED' };
-  const selected = env.AI_CHAT_PROVIDER?.trim().toLowerCase();
-  if (selected === 'groq') {
-    const model = env.AI_CHAT_MODEL?.trim() || env.GROQ_MODEL?.trim() || 'openai/gpt-oss-20b';
-    if (model === 'openai/gpt-oss-20b' && (env.AI_CHAT_API_KEY?.trim() || env.GROQ_API_KEY?.trim())) return { provider: 'groq', reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' };
-  }
-  if (selected === 'gemini' || selected === 'google' || selected === 'google-gemini') {
-    const model = env.AI_CHAT_MODEL?.trim() || env.GEMINI_MODEL?.trim() || 'gemini-3.1-flash-lite';
-    // Require provider isolation; do not relabel a fallback as the primary provider.
-    if (!env.GROQ_API_KEY?.trim() && model === 'gemini-3.1-flash-lite' && (env.AI_CHAT_API_KEY?.trim() || env.GEMINI_API_KEY?.trim() || env.GOOGLE_API_KEY?.trim())) return { provider: 'gemini', reason: 'CONFIGURED_FREE_ONLY_QUOTA_UNKNOWN' };
-  }
-  return { provider: null, reason: 'ISOLATED_FREE_PROVIDER_REQUIRED' };
+  const { provider, reason } = resolveResearchFreeAiPolicy(env);
+  // Never expose the policy's server-only API key through the snapshot DTO.
+  return { provider, reason };
 }
 
 type Dependencies = {
@@ -164,7 +155,7 @@ type Dependencies = {
   promotions: () => StrategyPromotionList;
   now: () => number;
   policy: () => ReturnType<typeof researchProviderPolicy>;
-  invoke: ResearchAiInvoker;
+  invoke: (message: string, provider?: ResearchFreeAiProvider) => ReturnType<ResearchAiInvoker>;
 };
 export class ResearchCopilotService {
   private cache = new Map<string, { until: number; result: CopilotReview }>();
@@ -228,7 +219,7 @@ export class ResearchCopilotService {
       evidenceDigest: snapshot.evidenceDigest,
       // No free-form user text, account context, holdout outcomes or metric values leave the server.
       evidenceSummary: JSON.stringify({ task, freshness: snapshot.freshness, missing: snapshot.missing_data, evidenceScope: 'Runtime task observations only; no strategy performance receipts. Discuss research design and missing evidence, not empirical conclusions.' }),
-    }, this.deps.invoke);
+    }, (message) => this.deps.invoke(message, provider));
     const expectedModel = provider === 'groq' ? 'openai/gpt-oss-20b' : 'gemini-3.1-flash-lite';
     if (review.model !== expectedModel) throw new ResearchDualFreeAiError('PROVIDER_IDENTITY_MISMATCH', 'provider identity did not match the approved free route');
     return {
@@ -244,18 +235,22 @@ export class ResearchCopilotService {
 
 export function createResearchCopilotService(): ResearchCopilotService {
   const promotionService = createDefaultStrategyPromotionService();
+  const policyEnvironment = () => readResearchFreeConfirmation(String(process.env.DEPLOY_SHA ?? ''))
+    ? { ...process.env, RESEARCH_AI_FREE_TIER_CONFIRMED: 'true' } : process.env;
   return new ResearchCopilotService({
-    now: Date.now, policy: () => researchProviderPolicy(process.env), promotions: () => promotionService.list(),
+    now: Date.now, policy: () => researchProviderPolicy(policyEnvironment()), promotions: () => promotionService.list(),
     loadOverview: async (signal) => {
       const timeout = AbortSignal.timeout(5_000);
       const response = await fetch('http://127.0.0.1:18090/api/research/overview', { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
       if (!response.ok) throw new ResearchDualFreeAiError('RESEARCH_SOURCE_UNAVAILABLE', 'canonical research overview unavailable');
       return response.json();
     },
-    invoke: async (message) => {
-      const result = await answerAiChat({ message }, fetch, undefined, 15_000);
-      if (result.kind !== 'answer' || !result.model) throw new ResearchDualFreeAiError('AI_RESEARCH_UNAVAILABLE', 'canonical AI transport unavailable');
-      return { answer: result.answer, model: result.model };
+    invoke: async (message, expectedProvider) => {
+      const policy = resolveResearchFreeAiPolicy(policyEnvironment());
+      if (!expectedProvider || policy.provider !== expectedProvider) throw new ResearchDualFreeAiError('AI_RESEARCH_UNAVAILABLE', 'confirmed free provider changed');
+      // Same reviewed transport as the worker: exact provider, fixed allowlisted
+      // model, structured JSON, bounded timeout, no generic chat fallback.
+      return invokeResearchFreeAi({ policy, prompt: message, timeoutMs: 15_000 });
     },
   });
 }
