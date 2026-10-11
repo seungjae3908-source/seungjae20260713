@@ -37,6 +37,17 @@ export function summarizePublicProbePayload(id,payload) {
   return Object.freeze({
     id, payloadJsonObject:obj!==null,rootKeys:probeKeys(obj),
     firstDailyRowKeys:chart?probeKeys(firstInfo):[],
+    dailyTimestampFormat:chart?(typeof firstInfo?.localDateTime==='number'?'number'
+      :typeof firstInfo?.localDateTime==='string'
+        ? /^\d{8}$/u.test(firstInfo.localDateTime)?'yyyymmdd'
+          : /^\d{12}$/u.test(firstInfo.localDateTime)?'yyyymmddhhmm'
+          : /^\d{14}$/u.test(firstInfo.localDateTime)?'yyyymmddhhmmss'
+          : /^\d{4}-\d{2}-\d{2}/u.test(firstInfo.localDateTime)?'iso_or_date'
+          :'other_string'
+        :'absent'):null,
+    dailyValueTypes:chart&&firstInfo?Object.freeze(Object.fromEntries(
+      ['currentPrice','openPrice','highPrice','lowPrice','accumulatedTradingVolume'].map(k=>[k,typeof firstInfo[k]])
+    )):null,
     discoveredCount:chart?(infos?.length??null):yahoo?closes.length:null,
     hasPriceBoolean:quote?Boolean(hasPrice):null,
     latestTimestampValid:yahoo?Number.isFinite(latest)&&latest>0&&latest<=Date.now()+300000:null,
