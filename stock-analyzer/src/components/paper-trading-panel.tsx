@@ -159,6 +159,9 @@ export function PaperTradingPanel({
       return blocks;
     }
     const price = market?.askPrice ?? market?.bidPrice ?? market?.markPrice ?? market?.price ?? null;
+    if (!Number.isInteger(form.leverage) || form.leverage < 1 || form.leverage > 125) {
+      blocks.push('수동 모의 선물 레버리지는 정수 1~125배만 허용됩니다.');
+    }
     if (!market || market.status !== 'live') blocks.push('시장 데이터가 live가 아닙니다.');
     if (!rules || rules.status !== 'live') blocks.push('계약 규칙이 live가 아닙니다.');
     if (price == null) blocks.push('진입 기준가격이 없습니다.');
@@ -299,7 +302,7 @@ export function PaperTradingPanel({
           <Field label="롱·숏"><select className={inputClass} value={form.side} onChange={(e) => changeSide(e.target.value as FormValues['side'])}><option value="long">롱</option><option value="short">숏</option></select></Field>
           <Field label="주문 유형"><select className={inputClass} value={form.orderType} onChange={(e) => update('orderType', e.target.value as FormValues['orderType'])}><option value="market">시장가</option><option value="limit">지정가</option><option value="stop_market">스탑 시장가</option></select></Field>
           <Field label="수량 (비우면 추천)"><input className={inputClass} type="number" min="0" step="any" value={form.quantity} onChange={(e) => update('quantity', e.target.value)} /></Field>
-          <Field label="레버리지"><input className={inputClass} type="number" min="1" max="10" value={form.leverage} onChange={(e) => update('leverage', Number(e.target.value))} /></Field>
+          <Field label="레버리지 (수동 모의 전용 1~125배)"><input className={inputClass} type="number" min="1" max="125" step="1" value={form.leverage} onChange={(e) => update('leverage', Number(e.target.value))} /></Field>
           {form.orderType === 'limit' ? <Field label="지정가"><input className={inputClass} type="number" min="0" step="any" value={form.requestedPrice} onChange={(e) => update('requestedPrice', e.target.value)} /></Field> : null}
           {form.orderType === 'stop_market' ? <Field label="트리거 가격"><input className={inputClass} type="number" min="0" step="any" value={form.triggerPrice} onChange={(e) => update('triggerPrice', e.target.value)} /></Field> : null}
           <Field label="손절가"><input className={inputClass} type="number" min="0" step="any" value={form.stopLossPrice} onChange={(e) => update('stopLossPrice', Number(e.target.value))} /></Field>
@@ -309,7 +312,10 @@ export function PaperTradingPanel({
           <Field label="목표 2 비율"><input className={inputClass} type="number" min="0" max="100" value={form.targetClosePercent2} onChange={(e) => update('targetClosePercent2', Number(e.target.value))} /></Field>
           <Field label="거래당 위험률 %"><input className={inputClass} type="number" min="0.01" max="1" step="0.01" value={form.riskPercent} onChange={(e) => update('riskPercent', Number(e.target.value))} /></Field>
         </div>
-        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs"><div>시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
+        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs">
+          <div className="font-semibold text-amber-600 dark:text-amber-400">1~125배는 실제 거래소 허용 배수와 관계없는 가상 모의 설정입니다. 청산·갭·수수료·펀딩에 따라 전액 손실이 날 수 있습니다. 자동모의매매 7배 또는 실거래 설정을 변경하지 않습니다.</div>
+          {rules?.maximumLeverage != null && form.leverage > rules.maximumLeverage ? <div className="mt-1 text-amber-600">선택한 {form.leverage}배는 이 거래소 종목의 실제 허용 최대 {rules.maximumLeverage}배보다 높은 순수 가상 시나리오입니다.</div> : null}
+          <div className="mt-1">시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
         <button data-testid="paper-submit" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 font-bold text-primary-foreground disabled:opacity-50" disabled={busy || localBlocks.length > 0}>{busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : null}모의주문</button>
       </form> : null}
 

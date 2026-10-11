@@ -1,5 +1,9 @@
 import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import {
+  automaticPaperFuturesLeverageBlockers,
+  scopeAutomaticPaperFuturesRiskPolicy,
+} from './paper-futures-mode-policy.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
@@ -281,7 +285,14 @@ export class TradePreSubmissionRiskService {
     const effectivePolicy = await resolveRulePackPilotDynamicCapPolicy(
       this.repository, input.userId, refreshedPlan, policy, now, snapshot.openPositionCount,
     );
-    const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, effectivePolicy, {
+    const executionMode = refreshedPlan.executionMode === 'automatic' ? 'automatic' : 'manual';
+    blockCodes.push(...automaticPaperFuturesLeverageBlockers(refreshedPlan, executionMode));
+    // Pre-submission recheck is the last Paper safety boundary. The member's
+    // stored LIVE 3x ceiling remains unchanged even for a member Paper 7x fill.
+    const paperRiskPolicy = scopeAutomaticPaperFuturesRiskPolicy(
+      effectivePolicy, refreshedPlan, executionMode,
+    );
+    const baseDecision: TradingRiskDecision = evaluateTradingPlan(refreshedPlan, paperRiskPolicy, {
       emergencyStopped: policy.emergencyStopped
         || process.env.TRADING_EMERGENCY_STOP === 'true'
         || await this.repository.getGlobalEmergencyStop(),

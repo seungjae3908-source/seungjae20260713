@@ -1,3 +1,4 @@
+import { issueProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -9,6 +10,9 @@ import {
 } from '../../../market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import {
+  AUTOMATIC_PAPER_FUTURES_LEVERAGE,
+} from './paper-futures-mode-policy.service';
+import {
   createServiceRoleTradingRepository,
   type TradingRepository,
 } from './trade-automation.repository';
@@ -17,7 +21,7 @@ import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
 import { liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { canonicalAiReviewEvidenceValid } from './member-auto-trading-ai-review-evidence.service';
 import { TradeAutomationService } from './trade-automation.service';
-import { TradeExecutionService } from './trade-execution.service';
+import { TradeExecutionService, protectedAutomaticPaperCostPolicyV1 } from './trade-execution.service';
 import {
   createServiceRolePaperJournalRepository,
 } from './paper-journal-supabase.repository';
@@ -597,10 +601,12 @@ function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
   return { stop, targets };
 }
 
-function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
+export function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
-  const rate = Number(cost?.[key]);
-  return finite(rate) && rate >= 0 ? rate * 100 : null;
+  // No coercion: null, strings, whitespace, false and arrays are not
+  // attested numeric policy rates. Only an explicit finite number qualifies.
+  const rate = cost?.[key];
+  return finite(rate) && rate >= 0 && rate <= 1 ? rate * 100 : null;
 }
 
 // Only canonical, signal-bound upstream AI evidence may authorize the formula
@@ -1284,20 +1290,17 @@ function buildPlanInput(
   let leverage: 2 | 3 | 4 | 5 | 6 | 7 | null = null;
   let marginMode: 'crossed' | 'isolated' | null = null;
   if (mapping.exchange === 'bitget') {
-    const maximumLeverage = hasCapability(member.profile, 'canManageMembers')
-      ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE
-      : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE;
-    if (!Number.isInteger(leverageEvidence)
-      || leverageEvidence < 2
-      || leverageEvidence > maximumLeverage
-      || member.policy.bitgetLeverage > maximumLeverage
-      || leverageEvidence !== member.policy.bitgetLeverage) {
-      throw new Error('BACKGROUND_LEVERAGE_EVIDENCE_MISMATCH');
+    // Automatic PAPER is 7x for every member. Never read the 3x/7x
+    // LIVE role limit as a simulated-money entitlement. Require the
+    // upstream signed/public handoff itself to prove the exact 7x margin.
+    // Missing or older 2x/3x evidence blocks; never rewrite a signed quote.
+    if (leverageEvidence !== AUTOMATIC_PAPER_FUTURES_LEVERAGE) {
+      throw new Error('BACKGROUND_AUTOMATIC_PAPER_SEVENFOLD_EVIDENCE_REQUIRED');
     }
     if (marginModeEvidence !== 'isolated') {
       throw new Error('BACKGROUND_ISOLATED_MARGIN_EVIDENCE_REQUIRED');
     }
-    leverage = leverageEvidence as 2 | 3 | 4 | 5 | 6 | 7;
+    leverage = AUTOMATIC_PAPER_FUTURES_LEVERAGE;
     marginMode = 'isolated';
   }
 
@@ -1645,9 +1648,25 @@ async function executeAutomaticPlan(input: {
   planInput: TradingPlanInput;
   policy: TradingPolicy;
   emergencyStopped: boolean;
+  verifiedPaperFxQuote?: MemberAutoTradingFxQuote;
 }) {
   const automation = new TradeAutomationService(input.repository);
-  const execution = new TradeExecutionService(input.repository);
+  // Only the Paper worker can supply an independently server-read quote.
+  // Live execution remains on the original, independently protected path.
+  const execution = input.planInput.accountMode === 'paper' && input.verifiedPaperFxQuote
+    ? new TradeExecutionService(input.repository, undefined, undefined, {
+      fxQuote: async (market) => {
+        if (input.verifiedPaperFxQuote!.market !== market) {
+          throw new Error('BACKGROUND_PAPER_FX_MARKET_MISMATCH');
+        }
+        return input.verifiedPaperFxQuote!;
+      },
+      // Only a protected, versioned server schedule may attest Paper tax;
+      // a research-supplied cost guess can never certify settlement.
+      costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs),
+      fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope),
+    })
+    : new TradeExecutionService(input.repository);
   const created = await automation.createPlan(
     input.userId, input.planInput, input.policy, input.emergencyStopped,
   );
@@ -1692,6 +1711,7 @@ async function processAutomaticExit(input: {
     fx,
     reason: initialReason,
     remainingQuantity: input.position.remainingQuantity,
+    nowMs: input.now.getTime(),
   });
   let privateRequests = 0;
 
@@ -1734,6 +1754,7 @@ async function processAutomaticExit(input: {
     userId: input.member.userId,
     planInput: exitInput,
     policy: input.member.policy,
+    verifiedPaperFxQuote: input.live ? undefined : fx,
     emergencyStopped: input.member.policy.emergencyStopped
       || persistentStop
       || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -2215,6 +2236,7 @@ export class MemberAutoTradingBackgroundWorker {
                 userId: member.userId,
                 planInput: paperInput,
                 policy: paperEntryPolicy,
+                verifiedPaperFxQuote: fx,
                 emergencyStopped: member.policy.emergencyStopped
                   || persistentStop
                   || process.env.TRADING_EMERGENCY_STOP === 'true',

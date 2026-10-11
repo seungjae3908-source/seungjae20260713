@@ -1,7 +1,7 @@
 import { floorQuantityToRules } from './trading-risk-engine.service';
 import type { ClosePaperPositionAction, PaperCandle, PaperFill, PaperFillReason, PaperOrder, PaperPosition, PaperTradingActionResult, PaperTradingState, ProcessPaperCandleAction } from './paper-trading.types';
 import { EPSILON, MARKET_FRESHNESS_MS, MODE, PaperTradingError, adverseFillPrice, finite, isFresh, limitFillPrice, positive, referencePrice, toIso, unique } from './paper-trading-core.service';
-import { closePositionInternal, createPositionFromOrder, recalculateAccount, updateExcursions } from './paper-trading-position.service';
+import { closePositionInternal, createPositionFromOrder, estimatedManualPaperLiquidationPrice, recalculateAccount, updateExcursions } from './paper-trading-position.service';
 
 function pendingOrderTrigger(order: PaperOrder, candle: PaperCandle) {
   if (order.orderType === 'limit') {
@@ -71,6 +71,23 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   for (const position of state.positions.filter((item) => item.status !== 'closed' && item.symbol === candle.symbol)) {
     position.currentPrice = candle.close;
     updateExcursions(position, candle.high, candle.low);
+    // Conservative intrabar ordering: a hypothetical 1..125x isolated
+    // liquidation wins over a favorable stop or target when one OHLC candle
+    // touches both. Never infer a precise tick sequence from candle extrema.
+    const liquidation = position.canonicalPaper ? null : estimatedManualPaperLiquidationPrice(position);
+    const liquidationHit = liquidation != null && (position.side === 'long'
+      ? candle.low <= liquidation : candle.high >= liquidation);
+    if (liquidationHit && liquidation != null) {
+      const reference = position.side === 'long'
+        ? Math.min(candle.open, liquidation)
+        : Math.max(candle.open, liquidation);
+      fills.push(closePositionInternal(
+        state, position, position.remainingQuantity, reference,
+        'liquidation', `${action.eventId}:${position.id}:liquidation`, at,
+      ));
+      lastPosition = position;
+      continue;
+    }
     if (openedPositionIds.has(position.id)) continue;
 
     const stopHit = position.side === 'long'

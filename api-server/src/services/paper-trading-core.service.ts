@@ -1,4 +1,9 @@
-import { TRADING_RISK_POLICY, type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
+import { type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
+// Keep the authoritative Paper runtime bundle dependency graph unchanged.
+const MANUAL_PAPER_FUTURES_MAX_LEVERAGE = 125 as const;
+const validateManualPaperFuturesLeverage = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value)
+  && value >= 1 && value <= MANUAL_PAPER_FUTURES_MAX_LEVERAGE;
 import type { PaperRiskState, PaperTradingState, PaperOrderRequest, PaperMarketData, PaperSide, PaperContractRules, PlacePaperOrderAction, PaperOrderStatus, PaperOrder } from './paper-trading.types';
 
 export class PaperTradingError extends Error {
@@ -156,8 +161,14 @@ export function validateOrderRequest(request: PaperOrderRequest) {
   if (!['market', 'limit', 'stop_market'].includes(request.orderType)) {
     throw new PaperTradingError('INVALID_ORDER_TYPE', '모의주문 유형이 올바르지 않습니다.');
   }
-  if (!positive(request.leverage) || !positive(request.stopLossPrice)) {
-    throw new PaperTradingError('INVALID_ORDER_INPUT', '레버리지와 손절가는 0보다 커야 합니다.');
+  if (!validateManualPaperFuturesLeverage(request.leverage)) {
+    throw new PaperTradingError(
+      'MANUAL_PAPER_LEVERAGE_OUT_OF_RANGE',
+      '수동 선물 모의매매 레버리지는 정수 1~125배만 설정할 수 있습니다.',
+    );
+  }
+  if (!positive(request.stopLossPrice)) {
+    throw new PaperTradingError('INVALID_ORDER_INPUT', '손절가는 0보다 커야 합니다.');
   }
   if (request.orderType === 'limit' && !positive(request.requestedPrice)) {
     throw new PaperTradingError('INVALID_LIMIT_PRICE', '지정가 모의주문에는 지정가가 필요합니다.');
@@ -290,8 +301,12 @@ export function buildRiskInput(
     minimumQuantity: rules.minimumQuantity,
     minimumNotional: rules.minimumNotional,
     maintenanceMarginRate: rules.maintenanceMarginRate,
-    maximumLeverage: rules.maximumLeverage,
-    appMaximumLeverage: TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage,
+    // Manual Paper is an explicitly hypothetical simulation. Exchange contract
+    // leverage ceilings still appear as warnings in the UI, but no private
+    // leverage or order request may be submitted. Keep live risk untouched.
+    maximumLeverage: MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
+    appMaximumLeverage: MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
+    manualPaperSimulationOnly: true,
     contractRulesStatus: rulesStatus,
     dailyRealizedPnl: state.riskState.dailyRealizedPnl,
     weeklyRealizedPnl: state.riskState.weeklyRealizedPnl,
@@ -325,6 +340,7 @@ export function makeOrder(
     triggerPrice: request.triggerPrice ?? null,
     quantity,
     leverage: request.leverage,
+    maintenanceMarginRate: action.contractRules.maintenanceMarginRate,
     stopLossPrice: request.stopLossPrice,
     takeProfitPrice1: request.takeProfitPrice1 ?? null,
     takeProfitPrice2: request.takeProfitPrice2 ?? null,
