@@ -63,7 +63,7 @@ test('Toss existing-order history uses CLOSED read-only endpoint', () => {
   assert.ok(source.includes('REAL_ACCOUNT_HISTORY_NOT_PERSISTED'));
 });
 
-test('four-market automatic gate couples live auto and paper worker and consumes QA v3', () => {
+test('four-market automatic gate keeps live auto independent from Paper runtime and consumes QA v3', () => {
   const handoff = read('market-prediction-lab/src/member-auto-trading-paper-handoff-v1.js');
   const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
   const index = read('api-server/src/index.ts');
@@ -99,10 +99,14 @@ test('four-market automatic gate couples live auto and paper worker and consumes
   assert.ok(postdeployEvidence.includes('reconciliationPassed !== true'));
   assert.ok(preactivationEvidence.includes('assertAccountReceipt(account, context);'));
   assert.ok(preactivationEvidence.includes('assertCredentialReceipt(credential, context);'));
-  assert.ok(gate.includes('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED'));
-  assert.ok(gate.includes('paper-forward-no-deploy-'));
-  assert.ok(gate.includes('validateMemberAutoTradingPaperHandoff'));
-  assert.ok(gate.includes('PAPER_FORWARD_LAST_INVOCATION_STALE'));
+  assert.ok(!gate.includes('AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED'));
+  assert.ok(!gate.includes('paper-forward-no-deploy-'));
+  assert.ok(!gate.includes('validateMemberAutoTradingPaperHandoff'));
+  assert.ok(!gate.includes('PAPER_FORWARD_LAST_INVOCATION_STALE'));
+  assert.ok(verifier.includes('paperBackgroundWorkerCoupled: false'));
+  assert.ok(worker.includes('!liveModeRequested'));
+  assert.ok(gate.includes('PAPER_AUTOMATIC_EXECUTION: false'));
+  assert.ok(gate.includes('optional_telegram_state_preserved=true'));
   assert.ok(paperReadiness.includes('production-paper-forward-runtime-readiness-v1'));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));
   assert.ok(gate.includes("MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED: enabled ? 'true' : 'false'"));

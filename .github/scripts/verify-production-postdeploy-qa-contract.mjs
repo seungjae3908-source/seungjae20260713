@@ -92,6 +92,7 @@ for (const [name, workflow] of Object.entries({ comprehensive, account, credenti
 
 requireText(command, '/run-production-postdeploy-qa <40-char-sha>', 'POSTDEPLOY_OWNER_COMMAND_MISSING');
 requireText(command, '/run-production-trading-core-release <40-char-sha>', 'TRADING_CORE_OWNER_COMMAND_MISSING');
+requireText(command, '/run-production-auto-live-release <40-char-sha>', 'AUTO_LIVE_OWNER_COMMAND_MISSING');
 requireText(command, '/run-production-member-release <40-char-sha>', 'MEMBER_OWNER_COMMAND_MISSING');
 requireText(command, '/run-staging-trading-core <40-char-sha>', 'TRADING_CORE_STAGING_COMMAND_MISSING');
 requireText(command, "workflow_id: 'staging-readiness.yml'", 'TRADING_CORE_STAGING_DISPATCH_MISSING');
@@ -126,9 +127,16 @@ requireText(deploy, 'qa_scope:', 'PRODUCTION_QA_SCOPE_INPUT_MISSING');
 requireText(deploy, "inputs.qa_scope == 'trading_core'", 'TRADING_CORE_INLINE_QA_CONDITION_MISSING');
 requireText(deploy, "inputs.qa_scope == 'member'", 'MEMBER_INLINE_QA_CONDITION_MISSING');
 requireText(deploy, "inputs.qa_scope == 'automation_research'", 'AUTOMATION_RESEARCH_INLINE_QA_CONDITION_MISSING');
+requireText(deploy, "inputs.qa_scope == 'auto_live'", 'AUTO_LIVE_INLINE_QA_CONDITION_MISSING');
 requireText(deploy, '1M · Member-only Production read-only QA', 'MEMBER_INLINE_QA_STEP_MISSING');
 requireText(deploy, "run-production-readonly-qa.sh member", 'MEMBER_INLINE_QA_RUNNER_MISSING');
-requireText(deploy, "inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research'", 'SCOPED_PROVIDER_QA_BOUNDARY_MISSING');
+requireText(deploy, "inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research'", 'SCOPED_PROVIDER_QA_BOUNDARY_MISSING');
+requireText(deploy, 'Automatic LIVE-only Production read-only QA', 'AUTO_LIVE_INLINE_QA_STEP_MISSING');
+requireText(deploy, 'playwright.production-auto-live-only.config.ts', 'AUTO_LIVE_PLAYWRIGHT_MISSING');
+requireText(deploy, 'playwright.production-auto-live-policy-prepare.config.ts', 'AUTO_LIVE_POLICY_PREPARE_MISSING');
+requireText(command, "prepare_admin_auto_live_policy: autoLive ? 'true' : 'false'", 'AUTO_LIVE_POLICY_DISPATCH_MISSING');
+requireText(deploy, 'production-auto-live-', 'AUTO_LIVE_ARTIFACT_MISSING');
+requireText(command, "release_scope: autoLive ? 'auto_live' : 'automation_research'", 'AUTO_LIVE_STAGING_SCOPE_MISSING');
 requireText(deploy, '1T · Prepare safe member ALL4 policy and run Focused Trading Core Production QA', 'TRADING_CORE_INLINE_QA_STEP_MISSING');
 requireText(deploy, "PRODUCTION_TRADING_CORE_PREPARE_POLICY: 'true'", 'TRADING_CORE_MEMBER_POLICY_PREPARATION_MISSING');
 requireText(deploy, '1AR · Auto, Paper, Research and Backtester Production pre-activation QA', 'AUTOMATION_RESEARCH_INLINE_QA_STEP_MISSING');
@@ -207,6 +215,7 @@ console.log(JSON.stringify({
   runtimeEnvironmentAndSecretMutationRemoved: true,
   ownerCommand: '/run-production-postdeploy-qa <40-char-sha>',
   tradingCoreOwnerCommand: '/run-production-trading-core-release <40-char-sha>',
+  autoLiveOwnerCommand: '/run-production-auto-live-release <40-char-sha>',
   automationResearchBacktesterOwnerCommand: '/run-production-automation-research-backtester-release <40-char-sha>',
   memberOwnerCommand: '/run-production-member-release <40-char-sha>',
   tradingCoreStagingCommand: '/run-staging-trading-core <40-char-sha>',
