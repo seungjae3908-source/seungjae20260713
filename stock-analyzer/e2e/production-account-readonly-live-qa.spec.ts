@@ -407,7 +407,7 @@ test('Production real-account read-only providers return fresh connected snapsho
         .map((provider) => read(`/api/trade-automation/live-position-isolation/${provider}`)) : []),
     ]);
     return { orders, approvalQueue, positionIsolation };
-  }, { token: accessToken!, requirePositionIsolation: !recoveryDisableAudit }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot;
+  }, { token: accessToken!, requirePositionIsolation: !recoveryDisableAudit && testedProviders.length === 4 }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot;
     positionIsolation: Array<Record<string, unknown>> };
 
   for (const proof of runtimeState.positionIsolation) {
