@@ -32,7 +32,8 @@ test('scanner manual polling visibility and unchanged-condition consumers share 
   expect(source).toMatch(/window\.setInterval\(\(\) => \{\s*if \(document\.visibilityState === 'visible'\) setRefreshToken\(\(value\) => value \+ 1\);\s*\}, 30_000\);/);
   expect(source).toContain("document.addEventListener('visibilitychange', refreshWhenVisible)");
   expect(source).toContain('onClick={() => setRefreshToken((value) => value + 1)}');
-  expect(source).toContain('fetchSignalScanner(request, controller.signal)');
+  expect(source).toContain('fetchSignalScanner(request, controller.signal, memberScope)');
+  expect(source).toContain('JSON.stringify([request, memberScope])');
 
   await page.goto('/');
   const result = await page.evaluate(async () => {
