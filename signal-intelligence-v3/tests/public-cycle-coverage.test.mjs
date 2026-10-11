@@ -418,7 +418,7 @@ test('search cursor reason separates invalid candle evidence from HTTP, timeout,
   [{...seed,execution:{...seed.execution,providerErrorCount:1}},'PROVIDER_FAILURE'],
   [{...seed,execution:{...seed.execution,timeoutCount:1}},'REQUEST_TIMEOUT'],
   [{...seed,failures:[{reason:'invalid_data',message:'source malformed'}]},'INSUFFICIENT_CANDLE_DATA'],
-  [{...seed,dataState:'stale'},'STALE_CANDLE_HOLD'],
+  [{...seed,dataState:'stale',universe:{...seed.universe,stale:true}},'STALE_CANDLE_HOLD'],
   [{...seed,outcome:'FRONTEND_RENDER_FAILURE'},'UNVERIFIED_SEARCH_FAILURE'],
  ];
  for(const [row,expected] of cases){
