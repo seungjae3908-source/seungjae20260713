@@ -364,6 +364,32 @@ export async function readSignalV3HealthOnce({
   });
 }
 
+/**
+ * PM2 opportunity through today's Korea 07:50–08:10 briefing window.
+ * This cannot establish worker execution or any Telegram delivery.
+ */
+export function morningWindowProcessCoverage(startedAt, nowMs = Date.now()) {
+  if (!sanitizedIsoTime(startedAt) || !Number.isSafeInteger(nowMs)) return 'UNKNOWN';
+  const now = new Date(nowMs);
+  if (Number.isNaN(now.getTime())) return 'UNKNOWN';
+  const startedMs = Date.parse(startedAt);
+  if (startedMs > nowMs + 5000) return 'UNKNOWN';
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now).filter(part => part.type !== 'literal')
+    .map(part => [part.type, part.value]));
+  const year = Number(dateParts.year);
+  const month = Number(dateParts.month);
+  const day = Number(dateParts.day);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return 'UNKNOWN';
+  const endUtc = Date.UTC(year, month - 1, day, -1, 10); // 08:10 KST
+  const startUtc = endUtc - 20 * 60_000; // 07:50 KST
+  if (nowMs < endUtc) return 'NOT_ELAPSED';
+  if (startedMs <= startUtc) return 'FULL_WINDOW';
+  if (startedMs <= endUtc) return 'PARTIAL_WINDOW';
+  return 'MISSED_WINDOW';
+}
+
 function safePm2StartAt(raw, nowMs) {
   const milliseconds = Number(raw);
   if (!Number.isSafeInteger(milliseconds) || milliseconds < 946684800000
@@ -387,7 +413,7 @@ export async function observeProductionTelegram({
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
-    pm2StartedAt: null,
+    pm2StartedAt: null, morningWindowCoverage: 'UNKNOWN',
     activationEnabled: false, marketWorkerConfigured: false, personalWorkerConfigured: false,
     roomBindingsValid: false, personal: {
       healthAvailable: false, enabled: false, tickFresh: false, tickOk: false,
@@ -429,6 +455,7 @@ export async function observeProductionTelegram({
               : 'PRODUCTION_IDENTITY_MISMATCH';
       return receipt;
     }
+    receipt.morningWindowCoverage = morningWindowProcessCoverage(receipt.pm2StartedAt, nowMs);
     const ids = ROOM_KEYS.map(key => String(runtime[key] ?? '').trim());
     receipt.roomBindingsValid = ids.every(id => /^-100[0-9]{8,15}$/u.test(id))
       && new Set(ids).size === ROOM_KEYS.length;
