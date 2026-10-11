@@ -27,7 +27,10 @@ import {
   readTelegramIntelligenceWorkerHealth,
   safeTelegramBriefFailureCode,
 } from './telegram-intelligence-worker.service';
-import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
+import {
+  buildSignalIntelligenceTelegramInput,
+  SignalIntelligenceTelegramDeliveryState,
+} from './signal-intelligence-telegram-subscriber.service';
 import {
   addTelegramSignalFreshness,
   deliverScannerTelegramAlerts,
@@ -841,6 +844,41 @@ test('ambiguous scheduled Telegram POST is persisted as unconfirmed and never au
     assert.equal(sends, 1);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('concurrent Telegram ledger readers await initial persistence before dedupe and uncertain checks', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'telegram-concurrent-load-'));
+  try {
+    const at = new Date('2026-10-11T10:00:00.000Z');
+    const prefix = 'signal-intelligence-v3:' + 'a'.repeat(40);
+    const v3Sent = prefix + ':candidate:confirmed';
+    const v3Unknown = prefix + ':candidate:uncertain';
+    const v3Path = path.join(dir, 'v3.json');
+    const v3Writer = new SignalIntelligenceTelegramDeliveryState(v3Path);
+    await v3Writer.mark(v3Sent, at);
+    await v3Writer.markUnconfirmed(v3Unknown, at);
+    const v3Reader = new SignalIntelligenceTelegramDeliveryState(v3Path);
+    const [confirmed, unknown] = await Promise.all([
+      v3Reader.has(v3Sent, at), v3Reader.hasUnconfirmed(v3Unknown, at),
+    ]);
+    assert.equal(confirmed, true, 'parallel V3 reader must not skip pending file load');
+    assert.equal(unknown, true, 'parallel V3 reader must not forget uncertain outcome');
+
+    const marketSent = 'telegram-intelligence:MORNING:2026-10-11:KR_STOCK_ROOM:mock-one';
+    const marketUnknown = 'telegram-intelligence:MORNING:2026-10-11:US_STOCK_ROOM:mock-two';
+    const marketPath = path.join(dir, 'market.json');
+    const marketWriter = new FileTelegramIntelligenceStateStore(marketPath);
+    await marketWriter.markDelivered(marketSent, at);
+    await marketWriter.markUnconfirmed(marketUnknown, at);
+    const marketReader = new FileTelegramIntelligenceStateStore(marketPath);
+    const [briefConfirmed, briefUnknown] = await Promise.all([
+      marketReader.has(marketSent), marketReader.hasUnconfirmed(marketUnknown),
+    ]);
+    assert.equal(briefConfirmed, true, 'parallel brief reader must wait for ledger load');
+    assert.equal(briefUnknown, true, 'parallel brief reader must preserve unknown send');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
