@@ -170,7 +170,7 @@ jobs:
           ];
           const safe = [
             'NOT_CHECKED','IPV4_DNS_FAILED','IPV4_DNS_TIMEOUT','IPV4_TLS_READY',
-            'IPV4_TLS_TIMEOUT','IPV4_TLS_CERT_FAILED','IPV4_TLS_CONNECT_FAILED',
+            'IPV4_TCP_TIMEOUT','IPV4_TLS_TIMEOUT','IPV4_TLS_CERT_FAILED','IPV4_TLS_CONNECT_FAILED',
           ];
           if (JSON.stringify(Object.keys(r).sort()) !== JSON.stringify(expected.sort())
             || r.schemaVersion !== 'telegram-only-staging-readonly-v1'

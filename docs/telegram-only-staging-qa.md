@@ -52,3 +52,20 @@ separately authorized Telegram-only delivery receipts remain necessary.
 
 Only GitHub-protected owners can request the isolated Staging job. Never
 interpret a green scoped contract test as live six-room operational success.
+
+## 2026-10-11: isolate intermittent IPv4 connection failure, without retry-to-pass
+
+The previous probe performed one IPv4 DNS preflight then handed the hostname
+back to `tls.connect`, making a second lookup possible and conflating TCP
+reachability timeouts with TLS handshake timeouts. The probe now connects
+to the **validated IPv4 answer from the first lookup**, while continuing to
+verify the `api.telegram.org` TLS certificate and SNI identity.
+It classifies `IPV4_TCP_TIMEOUT` separately from `IPV4_TLS_TIMEOUT`.
+Only one bounded (6.5-second) attempt is allowed; no retries, no bot token,
+no Bot API calls, no messages, and no network addresses in audit receipts.
+
+This improves diagnostic fidelity; it does not claim that an intermittent
+remote firewall, route, or provider network fault is resolved. The protected
+Staging QA retains the exact-current-main and exact-runtime identity gate,
+and execution needs separate approved merger/deployment before it can attest
+any new live network outcome.
