@@ -5,6 +5,7 @@ import { BoundedWorkTimeoutError } from '../lib/bounded-work-pool';
 import type { SignalContext } from '../sample/accumulation';
 import type { Candle, Quote } from '../sample/types';
 import { MarketDataService } from './market-data.service';
+import { scannerUniverseCoveragePartial } from './scanner-universe.service';
 import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   ScanProviderUnavailableError,
@@ -463,4 +464,15 @@ test('request abort rejects instead of producing a late success', async () => {
   });
   setTimeout(() => controller.abort(new ScanRequestAbortedError()), 10);
   await assert.rejects(pending, ScanRequestAbortedError);
+});
+
+test('public KRX listed exclusions are never silently reported as complete roster', () => {
+  assert.equal(scannerUniverseCoveragePartial(6847,4010,2837),true);
+  assert.equal(scannerUniverseCoveragePartial(4010,4010,0),false);
+  assert.equal(scannerUniverseCoveragePartial(6847,4010,0),true,
+    'raw and eligible discrepancy must fail closed even with missing exclusions');
+  assert.equal(scannerUniverseCoveragePartial(6847,4010,2800),true);
+  assert.equal(scannerUniverseCoveragePartial(4010,6847,0),true);
+  assert.equal(scannerUniverseCoveragePartial(NaN,4010,0),true);
+  assert.equal(scannerUniverseCoveragePartial(0,0,0),false);
 });
