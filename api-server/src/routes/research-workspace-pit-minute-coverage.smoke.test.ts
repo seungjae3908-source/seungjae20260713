@@ -327,6 +327,47 @@ test('research original minute model report: admin GET only, sanitized period an
     assert.equal(readPublished.actualFillCount, null);
     assert.equal(readPublished.profitabilityProven, false);
     assert.equal(readPublished.executionAuthority, 'NONE');
+    const originalSweep = {
+      schemaVersion: 'four-market-original-minute-sweep-v1',
+      market: 'CRYPTO_SPOT',
+      selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
+      status: 'LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY',
+      reason: 'RETROSPECTIVE_LOCAL_PAGES_NOT_INDEPENDENT_PIT_OOS_OR_FILL',
+      pageCountSelfAttested: 45, sourceOnlyCompletePages: 45,
+      sourceBlockedPages: 0, sourceTasksSelfAttested: 270,
+      sourceOnlyObservedPriceEventLabels: 123,
+      localPageTraversalReachedEnd: true, pageChainSha256: 'a'.repeat(64),
+      executionAuthority: 'NONE', profitabilityProven: false,
+      actualFillCount: null, trueMarketWideRecall: null, OOSPassCount: 0,
+      actualMarketWideOpportunityCount: null, netProfitPct: null,
+      fullMarketOpportunityDenominatorVerified: false,
+      paperAdmissionAllowed: false, realOrders: false,
+      liveTrading: false, autoTrading: false,
+      apiKey: 'PAIRED_PRIVATE_KEY_MUST_NOT_LEAK',
+    };
+    const privateSweepFile = join(root, 'completed-sweep-offline.json');
+    writeFileSync(privateSweepFile, JSON.stringify(originalSweep), { mode: 0o600 });
+    assert.equal((await publishResearchOriginalMinuteDiagnosticV1({
+      sourceResultPath: privateSweepFile, reportRoot: root,
+      market: 'CRYPTO_SPOT', allowLocalReportPublish: true,
+    })).published, true);
+    const pairedResponse = await fetch(base + endpoint + query, { headers: admin });
+    assert.equal(pairedResponse.status, 200);
+    const pairedText = await pairedResponse.text();
+    assert.doesNotMatch(pairedText, /PAIRED_PRIVATE_KEY_MUST_NOT_LEAK/);
+    const paired = JSON.parse(pairedText);
+    assert.equal(paired.report.kind, 'PERIOD');
+    assert.equal(paired.supplementarySweepReport.kind, 'SWEEP');
+    assert.equal(paired.supplementarySweepWindowMatches, true);
+    assert.equal(paired.supplementarySweepReport.sourceOnlyObservedPriceEventLabels, 123);
+    assert.ok(!paired.report.canonicalPaperResearchReview.blockers.includes(
+      'HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED'));
+    assert.equal(paired.report.canonicalPaperResearchReview.paperAdmissionAllowed, false);
+    assert.equal(paired.profitabilityProven, false);
+    const sidecar = join(root, 'CRYPTO_SPOT.SWEEP.json');
+    chmodSync(sidecar, 0o644);
+    assert.equal((await fetch(base + endpoint + query, { headers: admin })).status, 503);
+    chmodSync(sidecar, 0o600);
     chmodSync(file, 0o644);
     const denied = await fetch(base + endpoint + query, { headers: admin });
     assert.equal(denied.status, 503);

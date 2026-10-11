@@ -530,6 +530,16 @@ test('admin private 1m model summary uses one authenticated GET and revocation h
       reportPublishedAtMs: Date.parse('2026-10-10T12:00:00Z'),
       publicationAgeStatus: 'LOCAL_PUBLICATION_ONLY',
       publicationTimeIndependentlyAttested: false,
+      supplementarySweepReport: {
+        kind: 'SWEEP', status: 'LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY',
+        selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
+        pageCountSelfAttested: 45, sourceOnlyObservedPriceEventLabels: 123,
+        actualFillCount: null, profitabilityProven: false,
+        independentOOSProven: false, independentFullCostProven: false,
+        originalHistoricalSignalVerified: false, paperCandidatePASS: false,
+        executionAuthority: 'NONE',
+      },
+      supplementarySweepWindowMatches: true,
       report: {
         kind: 'PERIOD', status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
         selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
@@ -569,6 +579,10 @@ test('admin private 1m model summary uses one authenticated GET and revocation h
   await expect(panel).toContainText('3.25%');
   await expect(panel).toContainText('독립 OOS 미검증');
   await expect(panel).toContainText('결과 발행 시각(서버 로컬 기록)');
+  await expect(panel.getByTestId('research-native-sweep-companion'))
+    .toContainText('기간 일치');
+  await expect(panel.getByTestId('research-native-sweep-companion'))
+    .toContainText('사후 가격 이벤트 123개');
   await expect(panel.getByTestId('research-native-paper-blockers'))
     .toContainText('RESEARCH_HOLD');
   await expect(panel.getByTestId('research-native-paper-blockers'))
