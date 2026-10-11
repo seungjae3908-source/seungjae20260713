@@ -22,6 +22,7 @@ import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/p
 import {createPublicV3CryptoProviders} from '../src/public-v3-crypto-providers.mjs';
 import {createPublicStockSourceAudit} from '../src/public-stock-source-audit.mjs';
 import {createPublicKrAlphaHistoricalDailyFeed} from '../src/public-kr-alpha-historical-daily.mjs';
+import {publicKrAlphaDailyQuote} from '../src/public-kr-alpha-daily.mjs';
 import {includeProvisionalKrAlphanumericRoster} from '../src/public-kr-provisional-roster.mjs';
 import {
   classifyPublicCycleLaneStatus,
@@ -305,7 +306,7 @@ async function withStockPublicOnly(lane, operation) {
     readPublicQuote: async (ticker, entry) => {
       try {
         if (researchAlpha(ticker,entry)) {
-          const quote=await KR_ALPHA_DAILY_FEED.getQuote(ticker);
+          const quote=publicKrAlphaDailyQuote(ticker,(await KR_ALPHA_DAILY_FEED.read(ticker)).candles);
           audit.recordQuote(quote);
           return quote;
         }
