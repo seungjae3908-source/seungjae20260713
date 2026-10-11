@@ -86,7 +86,9 @@ function exactSeed(row: StoredPaperJournalRecord, role: ManualWalletRole,
     && Number.isFinite(created) && Number.isFinite(updated)
     && created>=0 && created<=nowMs+5_000
     && updated>=created-5_000 && updated<=nowMs+5_000
-    && p.createdAt===row.createdAt;
+    && typeof p.createdAt==='string'
+    && Number.isFinite(Date.parse(p.createdAt))
+    && Math.abs(Date.parse(p.createdAt)-created)<=5_000;
 }
 
 /** Owner-scoped records must come from the authenticated DB reader. This
