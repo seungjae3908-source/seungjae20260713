@@ -129,7 +129,9 @@ test('application routes keep unified search capability-gated and separate from 
   assert.match(appSource, /function UnifiedAssetSearchAccess\(\) \{ return gated\('canAccessBasicInfo', builder\('ASSET_SEARCH', <UnifiedAssetSearchPage \/>\)\); \}/);
   assert.match(appSource, /<Route path="\/stocks" component=\{UnifiedAssetSearchAccess\} \/>/);
   assert.match(appSource, /<Route path="\/search" component=\{UnifiedAssetSearchAccess\} \/>/);
-  assert.match(appSource, /<Route path="\/market-rankings" component=\{SearchPage\} \/>/);
+  assert.match(appSource, /const loadMarketRankingsPage = \(\) => import\('@\/pages\/search'\);/);
+  assert.match(appSource, /const MarketRankingsPage = lazy\(loadMarketRankingsPage\);/);
+  assert.match(appSource, /<Route path="\/market-rankings" component=\{MarketRankingsPage\} \/>/);
   assert.match(appSource, /<Route path="\/market-browser" component=\{StocksPage\} \/>/);
   assert.doesNotMatch(appSource, /<Route path="\/search" component=\{SearchPage\} \/>/);
 });

@@ -137,3 +137,77 @@ test('Express serves fingerprinted assets as immutable while the SPA shell reval
   assert.equal(shellResponse.status, 200);
   assert.equal(shellResponse.headers.get('cache-control'), FRONTEND_REVALIDATE_CACHE_CONTROL);
 });
+
+test('Production warmup prioritizes direct Vite HTML dependencies and the complete AI Chart renderer graph before unrelated lazy chunks', async (context) => {
+  const runtimeDist = await mkdtemp(path.join(tmpdir(), 'frontend-ai-chart-critical-'));
+  const assetsDir = path.join(runtimeDist, 'assets');
+  await mkdir(assetsDir);
+  context.after(() => rm(runtimeDist, { recursive: true, force: true }));
+  await writeFile(path.join(runtimeDist, 'index.html'), [
+    '<html><head>',
+    '<link rel="stylesheet" href="/assets/index-style-aaa.css">',
+    '<script type="module" crossorigin src="/assets/index-start-bbb.js"></script>',
+    '</head><body></body></html>',
+  ].join('\n'));
+  for (const [name, contents] of [
+    ['index-style-aaa.css', 'p{color:inherit}'],
+    ['index-start-bbb.js', 'import "./ai-chart-abc123.js"'],
+    ['ai-chart-abc123.js', 'export const page=true'],
+    ['unified-analysis-chart-abc123.js', 'export const render=true'],
+    ['lightweight-charts.production-Bh68vz78.js', 'export const candles=true'],
+    ['backtests-bbbb.js', 'export const backtest=true'],
+    ['paper-trading-cccc.js', 'export const paper=true'],
+    ['ai-chart-position-panel-impl-cccc.js', 'export const optional=true'],
+    ['aaa-other-cccc.js', 'export const a=true'],
+    ['zzz-other-cccc.js', 'export const z=true'],
+  ] as Array<[string, string]>) {
+    await writeFile(path.join(assetsDir, name), contents);
+  }
+  const result = planFrontendStaticWarmup(runtimeDist, { maxFiles: 6, maxBytes: 10_000 });
+  assert.deepEqual(result.files.map((entry) => path.basename(entry)), [
+    'index.html', 'index-start-bbb.js', 'index-style-aaa.css',
+    'ai-chart-abc123.js', 'lightweight-charts.production-Bh68vz78.js',
+    'unified-analysis-chart-abc123.js',
+  ]);
+  assert.equal(result.truncated, true);
+  assert.equal(result.criticalFiles, 3);
+  assert.equal(result.files.some((entry) => entry.includes('backtests')), false);
+  assert.equal(result.files.some((entry) => entry.includes('ai-chart-position-panel-impl')), false);
+  const warmed = warmFrontendStaticFiles(runtimeDist, { maxFiles: 6, maxBytes: 10_000 });
+  assert.equal(warmed.warmedFiles, 6);
+  assert.equal(warmed.warmedBytes, warmed.plannedBytes);
+  assert.equal(warmed.errors, 0);
+});
+
+test('AI Chart warmup stays bounded, does not prioritize unsafe URL attributes and preserves immutable asset cache', async (context) => {
+  const runtimeDist = await mkdtemp(path.join(tmpdir(), 'frontend-ai-chart-budget-'));
+  const assetsDir = path.join(runtimeDist, 'assets');
+  await mkdir(assetsDir);
+  context.after(() => rm(runtimeDist, { recursive: true, force: true }));
+  await writeFile(path.join(runtimeDist, 'index.html'), [
+    '<script src="https://other.example/assets/fake-external.js"></script>',
+    '<script src="/assets/../secrets.js"></script>',
+    '<script src="/assets/index-entry-xyz.js?token=private"></script>',
+    '<script type="module" src="/assets/index-entry-xyz.js"></script>',
+  ].join('\n'));
+  await writeFile(path.join(assetsDir, 'index-entry-xyz.js'), 'I'.repeat(10));
+  await writeFile(path.join(assetsDir, 'lightweight-charts.production-xyz.js'), 'L'.repeat(40));
+  await writeFile(path.join(assetsDir, 'ai-chart-xyz.js'), 'A'.repeat(11));
+  await writeFile(path.join(assetsDir, 'fake-external.js'), 'E'.repeat(5));
+  await writeFile(path.join(assetsDir, 'secrets.js'), 'S'.repeat(5));
+
+  const tiny = planFrontendStaticWarmup(runtimeDist, { maxFiles: 3, maxBytes: 500 });
+  assert.deepEqual(tiny.files.map((entry) => path.basename(entry)), [
+    'index.html', 'index-entry-xyz.js', 'ai-chart-xyz.js',
+  ]);
+  assert.equal(tiny.truncated, true);
+  assert.equal(tiny.criticalFiles, 1);
+
+  const htmlBytes = Buffer.byteLength(await (await import('node:fs/promises')).readFile(path.join(runtimeDist, 'index.html')));
+  const byteBudget = htmlBytes + 10 + 11 + 39;
+  const capped = planFrontendStaticWarmup(runtimeDist, { maxFiles: 5, maxBytes: byteBudget });
+  assert.ok(capped.plannedBytes <= byteBudget);
+  assert.equal(capped.truncated, true);
+  assert.equal(capped.files.some((entry) => entry.endsWith('lightweight-charts.production-xyz.js')), false);
+  assert.equal(frontendStaticCacheControl(runtimeDist, path.join(assetsDir, 'ai-chart-xyz.js')), FRONTEND_IMMUTABLE_CACHE_CONTROL);
+});

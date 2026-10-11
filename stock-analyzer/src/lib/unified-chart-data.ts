@@ -2,6 +2,7 @@ import {
   normalizeChartCandles,
   type ChartCandleNormalizationResult,
   type ChartCandleTimeframe,
+  type NormalizedChartCandle,
 } from './chart-candle-normalizer';
 import type { AnalysisAssetType, AnalysisMarket } from './analysis-selection';
 import { type UnifiedChartTimeframe } from './unified-chart-metadata';
@@ -126,6 +127,69 @@ export function buildUnifiedChartUrls(input: {
   return [
     `/api/crypto/futures/candles?symbol=${encodedSymbol}&granularity=${encodedFrame}&limit=300`,
   ];
+}
+
+/** Fetch one preceding page, leaving fast initial chart loading untouched. */
+export function buildUnifiedChartHistoryUrl(input: {
+  market: AnalysisMarket;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  beforeTime: number;
+}): string {
+  const symbol = normalizeUnifiedSymbol(input.market, input.symbol);
+  if (!symbol || !Number.isSafeInteger(input.beforeTime) || input.beforeTime <= 0) {
+    throw new UnifiedChartDataError('과거 캔들 요청 정보가 올바르지 않습니다.', 'client', 400, false);
+  }
+  const beforeMs = input.beforeTime * 1_000;
+  if (input.market === 'UPBIT') {
+    const params = new URLSearchParams({ symbol, count: '200', before: new Date(beforeMs).toISOString() });
+    const unit = upbitUnit(input.timeframe);
+    if (unit == null) params.set('tf', '1D');
+    else params.set('unit', String(unit));
+    return `/api/crypto/spot/candles?${params.toString()}`;
+  }
+  if (input.market === 'BITGET') {
+    const params = new URLSearchParams({ symbol, granularity: input.timeframe, limit: '200', before: String(beforeMs) });
+    return `/api/crypto/futures/candles?${params.toString()}`;
+  }
+  return `/api/stocks/${encodeURIComponent(symbol)}/history-candles?tf=${encodeURIComponent(input.timeframe)}&before=${beforeMs}`;
+}
+
+export async function fetchUnifiedChartHistoryPage(input: {
+  market: AnalysisMarket;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  beforeTime: number;
+  signal?: AbortSignal;
+  fetcher?: UnifiedChartFetch;
+}): Promise<NormalizedChartCandle[]> {
+  const url = buildUnifiedChartHistoryUrl(input);
+  const fetcher = input.fetcher ?? configuredUnifiedChartFetch ?? globalThis.fetch.bind(globalThis);
+  const controller = createLinkedSignal(input.signal, 12_000);
+  try {
+    const response = await fetcher(url, { cache: 'no-store', signal: controller.signal });
+    const payload = await parsePayload(response);
+    if (!response.ok) throw httpError(response.status, payload);
+    if (payload.ok !== true || !Array.isArray(payload.candles)) {
+      throw new UnifiedChartDataError('과거 캔들 응답 형식이 올바르지 않습니다.', 'malformed-response', response.status, false);
+    }
+    const rawRows = candleRows(payload);
+    const normalized = normalizeChartCandles(rawRows, input.timeframe as ChartCandleTimeframe);
+    const older = normalized.candles.filter((candle) => candle.time < input.beforeTime);
+    // A nonempty provider page that consists solely of invalid/overlapping
+    // rows is NOT proof of history exhaustion. Keep the retry path open.
+    if (rawRows.length > 0 && older.length === 0) {
+      throw new UnifiedChartDataError(
+        '과거 캔들 응답에 요청 시점보다 오래된 유효 봉이 없습니다. 공급자 데이터를 다시 확인하세요.',
+        'malformed-response',
+        response.status,
+        true,
+      );
+    }
+    return older;
+  } finally {
+    controller.cleanup();
+  }
 }
 
 function candleRows(payload: Record<string, unknown>): Record<string, unknown>[] {

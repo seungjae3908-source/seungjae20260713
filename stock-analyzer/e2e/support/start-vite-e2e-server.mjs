@@ -7,6 +7,8 @@ const allowedConfigs = new Set([
 ]);
 
 const config = process.argv[2] ?? 'vite.config.ts';
+const localPort = Number(process.env.APP_E2E_PORT ?? 4173);
+if (!Number.isInteger(localPort) || localPort < 1024 || localPort > 65535) throw new Error('Invalid APP_E2E_PORT');
 
 if (!allowedConfigs.has(config)) {
   console.error(`Unsupported E2E Vite config: ${config}`);
@@ -20,11 +22,11 @@ const viteCli = path.join(
 
 const child = spawn(
   process.execPath,
-  [viteCli, '--config', config, '--host', '127.0.0.1', '--port', '4173'],
+  [viteCli, '--config', config, '--host', '127.0.0.1', '--port', String(localPort), '--strictPort'],
   {
     env: {
       ...process.env,
-      VITE_SUPABASE_URL: 'http://127.0.0.1:4173/__e2e-supabase',
+      VITE_SUPABASE_URL: `http://127.0.0.1:${localPort}/__e2e-supabase`,
       VITE_SUPABASE_ANON_KEY: 'e2e-public-anon-key',
       VITE_PHASE4_E2E: 'true',
       VITE_PHASE5_E2E: 'true',

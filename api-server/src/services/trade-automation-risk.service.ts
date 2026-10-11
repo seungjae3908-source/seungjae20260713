@@ -203,7 +203,7 @@ export function isAlignedToStep(value: number, step: number) {
 export function evaluateTradingPlan(
   plan: TradingPlanInput,
   policy: TradingPolicy,
-  options: { emergencyStopped: boolean; serverLiveEnabled: boolean },
+  options: { emergencyStopped: boolean; serverLiveEnabled: boolean; manualUserOrder?: boolean },
 ): TradingRiskDecision {
   const blockCodes: string[] = [];
   const warnings: string[] = [];
@@ -295,7 +295,7 @@ export function evaluateTradingPlan(
     // A blank list is NOT a wildcard for automatic Paper or Live plans.
     // Require an explicit server-stored allowlist even when a caller bypasses
     // the member background Worker and invokes the canonical order API.
-    if (policy.enabledStrategies.length === 0 || !policy.enabledStrategies.includes(plan.strategyId)) {
+    if (!options.manualUserOrder && (policy.enabledStrategies.length === 0 || !policy.enabledStrategies.includes(plan.strategyId))) {
       add(blockCodes, 'STRATEGY_NOT_ENABLED');
     }
     if (plan.accountMode !== 'paper' && plan.accountMode !== 'live' && !plan.economics) add(blockCodes, 'AUTOMATIC_ECONOMICS_REQUIRED');
@@ -354,7 +354,7 @@ export function evaluateTradingPlan(
   const hasOptimizationContext = !riskReducing && (plan.accountMode === 'live'
     || plan.economics != null || plan.entryPrice != null || plan.entryZoneLow != null
     || plan.entryZoneHigh != null || plan.estimatedSlippagePercent != null || plan.averageSpreadPercent != null);
-  const optimization = hasOptimizationContext ? evaluateTradingOptimization(plan, policy) : undefined;
+  const optimization = hasOptimizationContext ? evaluateTradingOptimization(plan, policy, Date.now(), { manualUserOrder: options.manualUserOrder }) : undefined;
   if (optimization) {
     for (const code of optimization.blockCodes) add(blockCodes, code);
     for (const warning of optimization.warnings) if (!warnings.includes(warning)) warnings.push(warning);
