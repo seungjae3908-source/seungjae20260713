@@ -143,3 +143,28 @@ test('a reused cursor from an older cycle never publishes historical alerts',()=
   assert.equal(currentPublicV3CycleReady(forged),false);
   assert.deepEqual(currentPagePublication(input(),forged).events,[]);
 });
+
+
+test('Spot trusted research-only rows cannot publish even if a later lane receipt appears green',()=>{
+  const laneId='SPOT_SCALPING_15M',source=freshRow('SPOT_RESEARCH_ONLY',laneId,10,{
+    provenance:{laneId,cursor:10,sourceCycleId:CYCLE_ID,
+      blockedPageResearchOnly:true,publicationEligible:false,
+      economicAuthority:'NONE'},
+  });
+  const snapshot={rows:[source],lists:{
+    krBuy:[],usBuy:[],spotBuy:[source],futuresLong:[],futuresShort:[],
+  },events:[{id:source.id,type:'NEW_CANDIDATE'}]};
+  const lanes=receipt(); // intentionally forged healthy current lane
+  const view=currentPagePublication(snapshot,lanes);
+  assert.deepEqual(view.allowedIds,[]);
+  assert.deepEqual(view.lists.spotBuy,[]);
+  assert.deepEqual(view.events,[]);
+  // Without the research-only mark, canonical pages retain existing policy.
+  const ordinary=freshRow('ORDINARY',laneId);
+  const normal=currentPagePublication({
+    rows:[ordinary],lists:{...snapshot.lists,spotBuy:[ordinary]},
+    events:[{id:ordinary.id,type:'NEW_CANDIDATE'}],
+  },lanes);
+  assert.deepEqual(normal.allowedIds,['ORDINARY']);
+  assert.equal(normal.events.length,1);
+});

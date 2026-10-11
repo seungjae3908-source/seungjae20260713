@@ -100,6 +100,11 @@ export function currentPagePublication(snapshot,coverage){
     const origin=row?.provenance;
     const lane=lanes.get(origin?.laneId);
     if(!validSource(lane)||!verifiedCurrentLane(lane)
+      // Research-only cards from a globally BLOCKED_DATA source can never
+      // obtain publication authority, even if future code accidentally
+      // confuses their lane's page receipt with an eligible one.
+      ||origin?.blockedPageResearchOnly===true
+      ||origin?.publicationEligible===false
       ||origin?.sourceCycleId!==lane.sourceCycleId
       ||origin.cursor!==lane.cursorBefore
       ||!row?.id||row.state!=='CANDIDATE'||row.dataStatus!=='READY')
