@@ -44,6 +44,34 @@ Run #38096662006 sent zero messages and made zero DB/PM2/financial mutations.
 A new exact-main protected audit run and human production-environment review remain
 necessary to establish fresh market, signal and personal-delivery observations.
 
+## Follow-up: natural worker evidence, not only configuration
+
+The first corrected protected Production audit ([Run #38097651870](https://github.com/seungjae3908-source/seungjae20260713/actions/runs/38097651870))
+confirmed PM2 exact deployed identity, six valid Telegram room bindings, a fresh personal
+worker tick, and zero mutations. It also found no market brief delivery ledger, no signal
+subscriber ledger, a loopback V3 signal source classified UNREACHABLE, and **no personal SENT proof**.
+This is a successful observation, **not** successful automatic Telegram delivery.
+
+The follow-up adds two narrow observations with no server configuration changes:
+
+- A sanitized PM2 process start timestamp and whether the **same process** was already
+  alive before the 08:10 KST end of today's 07:50–08:10 morning briefing window.
+  An elapsed window is an opportunity to run, not proof that the worker ticked, that
+  the Bot API accepted a message, or that a user received it.
+- A separate bounded, GET-only call to the V3 **same-origin loopback** `/health`
+  endpoint, after validating the configured `/v1/signals` URL. Only fixed status
+  codes are emitted: READY, MISSING_SNAPSHOT, STALE_SNAPSHOT, UNREACHABLE,
+  HTTP_UNAVAILABLE, INVALID_RESPONSE or UNSAFE_ENDPOINT. The HTTP response body,
+  signal payloads, strategy data, secrets and personal identifiers are never published.
+
+This read-only evidence can distinguish an unreachable service from an available service
+whose snapshot is stale or missing. If the service is unreachable, a separate owner-approved
+sidecar activation or runtime repair is required; this audit will not start a service.
+
+**The audit does not claim that any auto-briefing, signal notification, or personal delivery
+succeeded.** Existing 403 dead letters must not be replayed, and personal SENT verification
+requires a fresh legitimate member event and a durable receipt.
+
 ## Interpretation
 
 - A market report ledger entry means accepted OR duplicate-suppressed, not proof of a fresh Bot API message. Proof level is PERSISTED_LEDGER_ONLY.
