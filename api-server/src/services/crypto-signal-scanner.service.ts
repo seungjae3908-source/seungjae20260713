@@ -835,34 +835,6 @@ function staleFallback(response: ScannerResponse, message: string, now: number):
   };
 }
 
-
-// V3 public research only: volume-ranked source lists change order between
-// scans and silently skip/duplicate offset-page instruments. Freeze a stable
-// symbol-index order with a source roster digest. Ordinary member/Forward
-// ranking, timeouts and trading/Paper paths remain byte-for-byte unchanged.
-export function stableV3CryptoResearchUniverse(
-  source: CryptoUniverse,
-  memberId: string,
-): { rows: CryptoTicker[]; rosterDigest: string | undefined } {
-  if (memberId !== 'signal-intelligence-v3-public-only') {
-    return { rows: source.rows, rosterDigest: undefined };
-  }
-  const rows = [...source.rows].sort((a, b) => {
-    const sa = String(a.symbol ?? '').trim().toUpperCase();
-    const sb = String(b.symbol ?? '').trim().toUpperCase();
-    return sa < sb ? -1 : sa > sb ? 1 : 0;
-  });
-  const symbols = rows.map((row) => String(row.symbol ?? '').trim().toUpperCase());
-  if (symbols.length === 0 || symbols.some((s) => !s)
-    || new Set(symbols).size !== symbols.length) {
-    throw new CryptoScannerProviderError('CRYPTO_V3_ROSTER_MISSING_OR_DUPLICATED_SYMBOL');
-  }
-  const rosterDigest = createHash('sha256')
-    .update(JSON.stringify([source.source, ...symbols]))
-    .digest('hex');
-  return { rows, rosterDigest };
-}
-
 export interface CryptoSignalScanner {
   scan(request: CryptoSignalScanRequest): Promise<ScannerResponse>;
   clearCache(): void;
@@ -895,8 +867,6 @@ export function createCryptoSignalScannerService(
           : new CryptoScannerProviderError(error instanceof Error ? error.message : 'CRYPTO_UNIVERSE_UNAVAILABLE');
       }
 
-      const v3Universe = stableV3CryptoResearchUniverse(universe, request.memberId);
-      const scanUniverseRows = v3Universe.rows;
       const requestedBatchSize = Math.floor(request.batchSize) || 24;
       const forwardPublicSpot = request.market === 'spot'
         && request.memberId === 'forward-observer-public-only';
@@ -906,9 +876,9 @@ export function createCryptoSignalScannerService(
       // cursor, without relaxing provider timeouts or Forward admission gates.
       const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
       const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
-      const cursor = Math.max(0, Math.min(scanUniverseRows.length, Math.floor(request.cursor) || 0));
-      const batch = scanUniverseRows.slice(cursor, cursor + batchSize);
-      const nextCursor = cursor + batch.length < scanUniverseRows.length ? cursor + batch.length : null;
+      const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
+      const batch = universe.rows.slice(cursor, cursor + batchSize);
+      const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
       const work = await runBoundedWorkPool(
         batch,
         async (ticker, _index, signal) => {
@@ -1023,10 +993,9 @@ export function createCryptoSignalScannerService(
           maxConcurrency: work.maxConcurrency,
         },
         universe: {
-          totalCount: scanUniverseRows.length,
+          totalCount: universe.rows.length,
           cursor,
           nextCursor,
-          ...(v3Universe.rosterDigest ? { rosterDigest: v3Universe.rosterDigest } : {}),
           source: universe.source,
           partial: universe.providerErrorCount > 0,
           stale: false,
