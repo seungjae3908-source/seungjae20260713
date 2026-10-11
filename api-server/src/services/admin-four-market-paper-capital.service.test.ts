@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import './manual-four-market-paper-wallets.service.test';
+import './manual-four-market-paper-wallet-migration.test';
 import type { StoredPaperJournalRecord, PaperJournalSyncRecord } from './paper-journal.types';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
 import {
