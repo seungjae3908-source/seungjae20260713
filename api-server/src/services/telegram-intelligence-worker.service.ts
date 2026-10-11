@@ -28,18 +28,22 @@ const MAX_LEDGER_BYTES = 1_048_576;
 
 export interface TelegramIntelligenceStateStore {
   has(key: string): Promise<boolean>;
+  hasUnconfirmed(key: string): Promise<boolean>;
   markDelivered(key: string, deliveredAt: Date): Promise<void>;
+  markUnconfirmed(key: string, attemptedAt: Date): Promise<void>;
 }
 
 type PersistedState = {
   version: 1;
   delivered: Record<string, string>;
+  unconfirmed?: Record<string, string>;
 };
 
 export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceStateStore {
   private loaded = false;
   private blocked = false;
   private delivered = new Map<string, string>();
+  private unconfirmed = new Map<string, string>();
 
   constructor(private readonly statePath: string) {}
 
@@ -93,7 +97,18 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
         key.length > 1024 || typeof value !== 'string' || !Number.isFinite(Date.parse(value)))) {
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       }
+      const pending = parsed.unconfirmed === undefined ? {} : parsed.unconfirmed;
+      if (!pending || typeof pending !== 'object' || Array.isArray(pending))
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const unconfirmedEntries = Object.entries(pending);
+      if (entries.length + unconfirmedEntries.length > 10000
+        || unconfirmedEntries.some(([key, value]) =>
+          !key.startsWith('telegram-intelligence:') || key.length > 1024
+          || typeof value !== 'string' || !Number.isFinite(Date.parse(value))
+          || Object.prototype.hasOwnProperty.call(parsed.delivered, key)))
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       for (const [key, value] of entries) this.delivered.set(key, value);
+      for (const [key, value] of unconfirmedEntries) this.unconfirmed.set(key, value);
     } catch (error) {
       // An initially absent ledger can legitimately start empty. But a
       // ledger that disappears AFTER a successful lstat is a dangerous
@@ -102,6 +117,7 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
         && !originalLedgerObserved) return;
       this.blocked = true;
       this.delivered.clear();
+      this.unconfirmed.clear();
       logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
         'telegram intelligence persisted dedupe state unreadable; scheduled sends blocked');
       throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
@@ -112,46 +128,59 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
     await this.ensureLoaded();
     return this.delivered.has(key);
   }
-
+  async hasUnconfirmed(key: string): Promise<boolean> {
+    await this.ensureLoaded();
+    return this.unconfirmed.has(key);
+  }
   async markDelivered(key: string, deliveredAt: Date): Promise<void> {
+    return this.persist(key, deliveredAt, true);
+  }
+  async markUnconfirmed(key: string, attemptedAt: Date): Promise<void> {
+    return this.persist(key, attemptedAt, false);
+  }
+  private async persist(key: string, at: Date, confirmed: boolean): Promise<void> {
     await this.ensureLoaded();
     try {
       if (!key.startsWith('telegram-intelligence:') || key.length > 1024
-        || !Number.isFinite(deliveredAt.getTime())) {
+        || !Number.isFinite(at.getTime())) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const nextDelivered = new Map(this.delivered);
+      const nextUnconfirmed = new Map(this.unconfirmed);
+      const cutoff = at.getTime() - MAX_STATE_AGE_MS;
+      for (const ledger of [nextDelivered, nextUnconfirmed]) {
+        for (const [candidate, timestamp] of ledger)
+          if (Date.parse(timestamp) < cutoff) ledger.delete(candidate);
+      }
+      if (confirmed) {
+        nextUnconfirmed.delete(key);
+        nextDelivered.set(key, at.toISOString());
+      } else {
+        if (nextDelivered.has(key)) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+        nextUnconfirmed.set(key, at.toISOString());
+      }
+      if (nextDelivered.size + nextUnconfirmed.size > 10000)
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
-      }
-      // Never mutate the active in-memory dedupe state before durable rename.
-      // If Bot API already accepted the message but persistence fails, the
-      // worker must stop rather than silently claim a successful receipt.
-      const next = new Map(this.delivered);
-      const cutoff = deliveredAt.getTime() - MAX_STATE_AGE_MS;
-      for (const [candidate, timestamp] of next) {
-        if (Date.parse(timestamp) < cutoff) next.delete(candidate);
-      }
-      next.set(key, deliveredAt.toISOString());
-      if (next.size > 10000) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
-      const payload: PersistedState = { version: 1, delivered: Object.fromEntries(next) };
+      const payload: PersistedState = { version: 1,
+        delivered: Object.fromEntries(nextDelivered),
+        unconfirmed: Object.fromEntries(nextUnconfirmed) };
       const serialized = `${JSON.stringify(payload, null, 2)}\n`;
       if (Buffer.byteLength(serialized, 'utf8') > MAX_LEDGER_BYTES)
         throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       await mkdir(path.dirname(this.statePath), { recursive: true });
       const temporary = `${this.statePath}.${process.pid}.tmp`;
-      // Pre-existing temp names (including symlinks) are never trusted.
-      // fsync the new fd before atomic rename; stop on any ambiguity.
       const fd = await open(temporary,
         fileConstants.O_WRONLY | fileConstants.O_CREAT
           | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
       try {
-        await fd.writeFile(serialized,{encoding:'utf8'});
+        await fd.writeFile(serialized, { encoding: 'utf8' });
         await fd.sync();
-      } finally {
-        await fd.close();
-      }
+      } finally { await fd.close(); }
       await rename(temporary, this.statePath);
-      this.delivered = next;
+      this.delivered = nextDelivered;
+      this.unconfirmed = nextUnconfirmed;
     } catch {
       this.blocked = true;
       this.delivered.clear();
+      this.unconfirmed.clear();
       logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
         'telegram intelligence dedupe write failed; further scheduled sends blocked');
       throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
@@ -161,13 +190,16 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
 
 export class MemoryTelegramIntelligenceStateStore implements TelegramIntelligenceStateStore {
   readonly delivered = new Set<string>();
-
-  async has(key: string): Promise<boolean> {
-    return this.delivered.has(key);
-  }
-
+  readonly unconfirmed = new Set<string>();
+  async has(key: string): Promise<boolean> { return this.delivered.has(key); }
+  async hasUnconfirmed(key: string): Promise<boolean> { return this.unconfirmed.has(key); }
   async markDelivered(key: string): Promise<void> {
+    this.unconfirmed.delete(key);
     this.delivered.add(key);
+  }
+  async markUnconfirmed(key: string): Promise<void> {
+    if (this.delivered.has(key)) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
+    this.unconfirmed.add(key);
   }
 }
 
@@ -280,6 +312,10 @@ export class TelegramIntelligenceWorker {
             result.deduped += 1;
             continue;
           }
+          if (await this.store.hasUnconfirmed(deliveryKey)) {
+            result.failed += 1;
+            continue;
+          }
           result.attempted += 1;
           const alert = briefSnapshot
             ? buildTelegramMarketBriefInput({
@@ -310,6 +346,10 @@ export class TelegramIntelligenceWorker {
             result.deduped += 1;
           } else if (delivered.skipped === 'NOT_CONFIGURED') {
             result.notConfigured += 1;
+          } else if (delivered.skipped === 'OUTCOME_UNCONFIRMED'
+            || delivered.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED') {
+            await this.store.markUnconfirmed(deliveryKey, now);
+            result.failed += 1;
           } else {
             result.failed += 1;
           }
