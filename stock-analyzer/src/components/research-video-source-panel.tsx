@@ -54,6 +54,41 @@ type SnapshotProvenance = {
   executionAuthority: 'NONE';
 };
 
+type DiscoveryAutomation = {
+  schemaVersion: 'research-video-discovery-scan-v1';
+  status: 'COMPLETE' | 'BLOCKED' | 'WAITING_CONFIGURATION';
+  observedAt: string;
+  researchSha: string;
+  query: string | null;
+  sourceCount: number | null;
+  snapshotDigest: string | null;
+  providerNetworkCalls: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+  reason: string | null;
+  nextRequiredStep: string;
+  snapshotBound: boolean;
+};
+
+type AiReviewStatus = {
+  status: 'WAITING_FOR_FREE_AI' | 'PARTIAL_AI_UNAVAILABLE' | 'COMPLETE' | 'NO_NEW_EVIDENCE';
+  observedAt: number;
+  researchSha: string;
+  provider: 'groq' | 'gemini' | null;
+  model: 'openai/gpt-oss-20b' | 'gemini-3.1-flash-lite' | null;
+  reason: string;
+  providerNetworkCalls: number;
+  cacheHits: number;
+  reviewCount: number;
+  proposerReviewCount: number;
+  criticReviewCount: number;
+  missingProfileCount: number;
+  blockedProfileCount: number;
+  deferredProfileCount: number;
+  invocationMode: 'MANUAL' | 'SYSTEMD_TIMER';
+  scheduledInvocationObserved: boolean;
+};
+
 type RuntimeEvidence = {
   available: true;
   dataState: 'MEASURED';
@@ -84,6 +119,8 @@ type RuntimeEvidence = {
     transcriptDownloadEnabled: false;
   };
   snapshotProvenance: SnapshotProvenance;
+  automation: DiscoveryAutomation | null;
+  aiReview: AiReviewStatus | null;
   economicEvidenceCredit: 0;
   profitabilityCredit: 0;
   executionAuthority: 'NONE';
@@ -105,6 +142,46 @@ function canonicalIsoTimestamp(value: unknown): value is string {
 
 function canonicalYoutubeUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+}
+
+function parseDiscoveryAutomation(value: unknown): DiscoveryAutomation | null {
+  if (value == null) return null;
+  if (!isRecord(value) || value.schemaVersion !== 'research-video-discovery-scan-v1') return null;
+  if (value.status !== 'COMPLETE' && value.status !== 'BLOCKED' && value.status !== 'WAITING_CONFIGURATION') return null;
+  if (!canonicalIsoTimestamp(value.observedAt)
+    || typeof value.researchSha !== 'string' || !/^[0-9a-f]{40}$/u.test(value.researchSha)
+    || (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER')
+    || typeof value.scheduledInvocationObserved !== 'boolean'
+    || typeof value.providerNetworkCalls !== 'number' || !Number.isSafeInteger(value.providerNetworkCalls)
+    || value.providerNetworkCalls < 0 || value.providerNetworkCalls > 1
+    || (value.query !== null && (typeof value.query !== 'string' || !value.query.trim() || value.query.length > 120))
+    || (value.sourceCount !== null && (typeof value.sourceCount !== 'number' || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 0 || value.sourceCount > 5))
+    || (value.snapshotDigest !== null && (typeof value.snapshotDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(value.snapshotDigest)))
+    || (value.reason !== null && (typeof value.reason !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.reason)))
+    || typeof value.nextRequiredStep !== 'string' || !/^[A-Z0-9_:-]{1,160}$/u.test(value.nextRequiredStep)
+    || typeof value.snapshotBound !== 'boolean') return null;
+  return value as unknown as DiscoveryAutomation;
+}
+
+function parseAiReview(value: unknown): AiReviewStatus | null {
+  if (value == null) return null;
+  if (!isRecord(value)) return null;
+  const statuses = new Set(['WAITING_FOR_FREE_AI','PARTIAL_AI_UNAVAILABLE','COMPLETE','NO_NEW_EVIDENCE']);
+  if (!statuses.has(String(value.status ?? ''))) return null;
+  if (typeof value.observedAt !== 'number' || !Number.isSafeInteger(value.observedAt) || value.observedAt <= 0) return null;
+  if (typeof value.researchSha !== 'string' || !/^[0-9a-f]{40}$/u.test(value.researchSha)) return null;
+  if (value.provider !== null && value.provider !== 'groq' && value.provider !== 'gemini') return null;
+  if (value.model !== null && value.model !== 'openai/gpt-oss-20b' && value.model !== 'gemini-3.1-flash-lite') return null;
+  if (typeof value.reason !== 'string' || !/^[A-Z0-9_.:-]{1,160}$/u.test(value.reason)) return null;
+  if (value.invocationMode !== 'MANUAL' && value.invocationMode !== 'SYSTEMD_TIMER') return null;
+  if (typeof value.scheduledInvocationObserved !== 'boolean') return null;
+  const keys = ['providerNetworkCalls','cacheHits','reviewCount','proposerReviewCount','criticReviewCount','missingProfileCount','blockedProfileCount','deferredProfileCount'] as const;
+  if (keys.some((key) => typeof value[key] !== 'number' || !Number.isSafeInteger(value[key]) || (value[key] as number) < 0 || (value[key] as number) > 3)) return null;
+  const reviewCount = value.reviewCount as number;
+  const proposerReviewCount = value.proposerReviewCount as number;
+  const criticReviewCount = value.criticReviewCount as number;
+  if (proposerReviewCount + criticReviewCount !== reviewCount) return null;
+  return value as unknown as AiReviewStatus;
 }
 
 function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
@@ -129,6 +206,9 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
   if (typeof provenance.sourceHeadSha !== 'string' || !/^[0-9a-f]{40}$/u.test(provenance.sourceHeadSha)) return null;
   if (!canonicalIsoTimestamp(provenance.observedAt)) return null;
   if (provenance.economicEvidenceCredit !== 0 || provenance.profitabilityCredit !== 0 || provenance.executionAuthority !== 'NONE') return null;
+  const automation = parseDiscoveryAutomation(value.automation);
+  const aiReview = parseAiReview(value.aiReview);
+  if ((value.automation != null && !automation) || (value.aiReview != null && !aiReview)) return null;
 
   for (const record of value.records) {
     if (!isRecord(record)) return null;
@@ -142,7 +222,27 @@ function parseRuntimeEvidence(value: unknown): RuntimeEvidence | null {
     if (typeof record.sourceTrustTier !== 'string' || !SOURCE_TRUST_TIERS.has(record.sourceTrustTier)) return null;
     if (record.contentAuthority !== 'UNTRUSTED_EXTERNAL_DATA' || record.economicEvidenceCredit !== 0 || record.profitabilityCredit !== 0 || record.executionAuthority !== 'NONE') return null;
   }
-  return value as unknown as RuntimeEvidence;
+  return { ...(value as unknown as RuntimeEvidence), automation, aiReview };
+}
+
+function formatEpochTime(value: number) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '시간 미확인';
+  return new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Asia/Seoul',
+  }).format(date);
+}
+
+function formatAutomationTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '시간 미확인';
+  return new Intl.DateTimeFormat('ko-KR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'Asia/Seoul',
+  }).format(date);
 }
 
 function uniqueSorted(values: string[]) {
@@ -207,6 +307,8 @@ const truthBadges = [
 
 export function ResearchVideoPanel() {
   const [runtimeEvidence, setRuntimeEvidence] = useState<RuntimeEvidence | null>(null);
+  const [automationReadback, setAutomationReadback] = useState<DiscoveryAutomation | null>(null);
+  const [aiReviewReadback, setAiReviewReadback] = useState<AiReviewStatus | null>(null);
   const [readerSettled, setReaderSettled] = useState(false);
 
   useEffect(() => {
@@ -219,203 +321,79 @@ export function ResearchVideoPanel() {
       .then(async (response) => response.ok ? response.json() as Promise<unknown> : null)
       .then((payload) => {
         if (controller.signal.aborted) return;
-        setRuntimeEvidence(parseRuntimeEvidence(payload));
+        const measured = parseRuntimeEvidence(payload);
+        setRuntimeEvidence(measured);
+        setAutomationReadback(isRecord(payload) ? parseDiscoveryAutomation(payload.automation) : null);
+        setAiReviewReadback(isRecord(payload) ? parseAiReview(payload.aiReview) : null);
         setReaderSettled(true);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
         setRuntimeEvidence(null);
+        setAutomationReadback(null);
+        setAiReviewReadback(null);
         setReaderSettled(true);
       });
     return () => controller.abort();
   }, []);
 
-  const runtimeState = runtimeEvidence
-    ? `MEASURED · sanitized reader connected · ${runtimeEvidence.sourceCount} source${runtimeEvidence.sourceCount === 1 ? '' : 's'}`
-    : readerSettled
-      ? 'UNKNOWN — sanitized runtime snapshot unavailable'
-      : 'UNKNOWN — sanitized runtime evidence loading';
-  const sourceCountState = runtimeEvidence
-    ? `${runtimeEvidence.sourceCount} — measured sanitized public-provider result`
-    : 'UNKNOWN — missing runtime snapshot != 0';
-  const strategyMiningState = describeStrategyMiningState(runtimeEvidence);
-  const transcriptAccessState = describeTranscriptAccessState(runtimeEvidence);
-  const transcriptSegmentState = describeTranscriptSegmentState(runtimeEvidence);
-  const sourceAuthorityState = describeSourceAuthorityState(runtimeEvidence);
-  const compilerState = runtimeEvidence?.records.some((record) => record.transcriptStatus === 'AVAILABLE')
-    ? 'NOT_EVALUATED — source-bound TESTABLE strategy evidence required'
-    : 'BLOCKED — authorized transcript required before strategy extraction/compiler';
-
-  const statusRows = [
-    ['Video discovery', '수동 / 공식 public API runtime'],
-    ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.provider} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
-    ['Runtime evidence', runtimeState],
-    ['Transcript access', transcriptAccessState],
-    ['Economic Evidence', '0'],
-    ['Execution Authority', 'NONE'],
-  ] as const;
-
-  const phase2Sections = [
-    {
-      title: 'Discovery',
-      testId: 'video-discovery-state',
-      rows: [
-        ['검색 경로', 'YouTube Data API 공식/public metadata'],
-        ['Provider runtime', runtimeEvidence ? `${runtimeEvidence.providerAccess} / ${runtimeEvidence.requestMode}` : 'UNKNOWN — sanitized runtime snapshot unavailable'],
-        ['Browser credential', 'NOT_EXPOSED'],
-        ['최근 discovery evidence', runtimeEvidence ? `${runtimeEvidence.status} · ${runtimeEvidence.query}` : runtimeState],
-        ['자동 수집', 'OFF'],
-        ['Schedule', 'INACTIVE'],
-        ['Quota', runtimeEvidence?.quotaState ?? 'UNKNOWN — sanitized runtime snapshot unavailable'],
-      ],
-    },
-    {
-      title: 'Transcript',
-      testId: 'video-transcript-state',
-      rows: [
-        ['상태', runtimeEvidence ? transcriptAccessState : 'UNKNOWN — authorized transcript evidence 없음'],
-        ['권한', '승인된 transcript만 ingest'],
-        ['Segment', transcriptSegmentState],
-        ['Timestamp coverage', 'UNKNOWN_TIMESTAMP'],
-        ['우회 다운로드', 'DISABLED'],
-      ],
-    },
-    {
-      title: 'Strategy',
-      testId: 'video-strategy-state',
-      rows: [
-        ['Strategy mining', strategyMiningState],
-        ['Strategy family', 'UNKNOWN'],
-        ['Market / Side / Timeframe', 'UNSPECIFIED'],
-        ['Entry / Exit', 'UNSPECIFIED'],
-        ['SL / TP', 'UNSPECIFIED'],
-        ['Testability', strategyMiningState],
-      ],
-    },
-    {
-      title: 'Evidence',
-      testId: 'video-evidence-state',
-      rows: [
-        ['Video sources', sourceCountState],
-        ['Independent sources', 'UNKNOWN — economic N 아님'],
-        ['Academic / official', 'NOT_CHECKED'],
-        ['Contradictions', 'UNKNOWN'],
-        ['Source authority', sourceAuthorityState],
-        ['Snapshot provenance', runtimeEvidence ? `${runtimeEvidence.snapshotProvenance.schemaVersion} · ${runtimeEvidence.snapshotProvenance.sourceHeadSha.slice(0, 12)} · ${runtimeEvidence.snapshotProvenance.observedAt}` : 'UNKNOWN — sanitized provenance unavailable'],
-      ],
-    },
-    {
-      title: 'Validation',
-      testId: 'video-validation-state',
-      rows: [
-        ['Cross-validation', 'NOT_CHECKED'],
-        ['Compiler', compilerState],
-        ['Backtester candidate', 'NOT_EVALUATED'],
-        ['Economic Evidence', '0'],
-        ['Profitability Credit', '0'],
-      ],
-    },
-  ] as const;
-
+  const automation = automationReadback ?? runtimeEvidence?.automation ?? null;
+  const aiReview = aiReviewReadback ?? runtimeEvidence?.aiReview ?? null;
+  const collectionLabel = !automation ? '미확인'
+    : automation.status !== 'COMPLETE' ? '설정·자료 확인 필요'
+      : !automation.snapshotBound ? '기록 연결 확인 필요'
+        : automation.scheduledInvocationObserved ? '자동 실행 확인' : '수동 실행 확인';
+  const aiLabel = !aiReview ? '미확인'
+    : aiReview.status === 'WAITING_FOR_FREE_AI' ? '연결 대기'
+      : aiReview.status === 'PARTIAL_AI_UNAVAILABLE' ? '부분 오류'
+        : aiReview.status === 'NO_NEW_EVIDENCE' ? '새 자료 대기'
+          : aiReview.reviewCount > 0 ? '검토 기록 있음' : '분석기 실행 · 검토 0건';
+  const transcriptLabel = (status: string) => status === 'AVAILABLE' ? '전사본 준비됨'
+    : status === 'NOT_AUTHORIZED' ? '전사본 사용 권한 필요'
+      : status === 'RATE_LIMITED' || status === 'QUOTA_EXCEEDED' ? '조회 한도 대기'
+        : status === 'PROVIDER_NOT_CONFIGURED' ? '제공자 연결 필요' : '전사본 없음';
   return (
-    <section className="h-full overflow-y-auto bg-background px-3 py-4 sm:px-4" data-testid="research-video-panel">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
-        <header className="rounded-2xl border border-card-border bg-card p-4 sm:p-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-lg font-bold sm:text-xl">영상 연구</h1>
-            <span className="rounded-full border px-2 py-1 text-[11px] font-semibold text-muted-foreground">Research Source Only</span>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            공식/public metadata와 승인된 transcript만 연구 입력으로 사용합니다. 영상·강의의 주장은 아이디어 소스이며 수익성·OOS·Forward·Paper 증거로 승격되지 않습니다.
-          </p>
-        </header>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" data-testid="research-video-safety-grid">
-          {statusRows.map(([label, value]) => (
-            <div key={label} className="min-w-0 rounded-2xl border border-card-border bg-card p-3">
-              <div className="text-xs text-muted-foreground">{label}</div>
-              <div className="mt-1 break-words text-sm font-semibold">{value}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="rounded-2xl border border-card-border bg-card p-4" data-testid="video-truth-legend">
-          <h2 className="font-semibold">Fact / Inference / Unknown</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {truthBadges.map(([label, description]) => (
-              <span key={label} className="max-w-full rounded-full border border-card-border bg-muted px-3 py-1 text-xs">
-                <strong>{label}</strong> · {description}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3" data-testid="research-video-phase2-grid">
-          {phase2Sections.map((section) => (
-            <article key={section.title} className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid={section.testId}>
-              <h2 className="font-semibold">{section.title}</h2>
-              <dl className="mt-3 space-y-2 text-sm">
-                {section.rows.map(([label, value]) => (
-                  <div key={label} className="grid min-w-0 gap-1 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)] sm:gap-3">
-                    <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="min-w-0 break-words font-medium">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </article>
-          ))}
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-detail-empty-state">
-            <h2 className="font-semibold">Video detail</h2>
-            {runtimeEvidence?.records.length ? (
-              <div className="mt-3 space-y-3">
-                {runtimeEvidence.records.map((record, index) => (
-                  <div key={record.videoId} className="rounded-xl border border-card-border bg-muted/30 p-3" data-testid={`video-detail-record-${index}`}>
-                    <div className="text-xs text-muted-foreground">Source {index + 1} / {runtimeEvidence.sourceCount}</div>
-                    <dl className="mt-2 space-y-2 text-sm">
-                      <div><dt className="text-muted-foreground">Title</dt><dd className="break-words font-medium">{record.title}</dd></div>
-                      <div><dt className="text-muted-foreground">Channel / Publisher</dt><dd className="break-words font-medium">{record.channelOrPublisher ?? 'UNKNOWN'}</dd></div>
-                      <div><dt className="text-muted-foreground">Transcript</dt><dd className="font-medium">{record.transcriptStatus}</dd></div>
-                      <div><dt className="text-muted-foreground">Source authority</dt><dd className="break-words font-medium">{record.sourceTrustTier}</dd></div>
-                      <div><dt className="text-muted-foreground">Strategy mining</dt><dd className="break-words font-medium">{describeRecordStrategyMiningState(record)}</dd></div>
-                      <div><dt className="text-muted-foreground">Provenance</dt><dd className="break-words font-medium">{runtimeEvidence.providerAccess} · {record.contentAuthority} · {runtimeEvidence.snapshotProvenance.schemaVersion} · {runtimeEvidence.snapshotProvenance.sourceHeadSha.slice(0, 12)}</dd></div>
-                    </dl>
-                  </div>
-                ))}
-              </div>
-            ) : runtimeEvidence ? (
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                bounded official/public discovery가 완료되어 sourceCount 0이 실제 측정되었습니다. 이 0은 missing 추론이 아니라 연결된 sanitized runtime 결과입니다.
-              </p>
-            ) : (
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                sanitized runtime evidence reader는 연결됐지만 현재 읽을 수 있는 snapshot이 없습니다. 실제 영상 레코드 존재 여부를 0으로 단정하지 않고 UNKNOWN으로 유지합니다.
-              </p>
-            )}
-            <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
-              Transcript unavailable은 빈 문자열이나 0이 아니라 UNAVAILABLE / NOT_AUTHORIZED / NOT_PROVIDED / UNKNOWN 같은 명시 상태로 유지합니다.
-            </div>
+    <section className="mx-auto w-full max-w-5xl space-y-3 p-3 [overflow-wrap:anywhere] sm:p-5" data-testid="research-video-panel">
+      <header className="flex items-center justify-between gap-3">
+        <h1 className="text-xl font-black">영상 연구</h1>
+        <span className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">연구 전용</span>
+      </header>
+      {!readerSettled ? <p role="status">영상 자료를 불러오는 중…</p> : null}
+      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {[
+          ['영상', runtimeEvidence ? `${runtimeEvidence.sourceCount}개` : '미확인', 'video-source-count'],
+          ['자동 수집', collectionLabel, 'video-discovery-state'],
+          ['AI 분석', aiLabel, 'video-validation-state'],
+          ['분석 기록', aiReview ? `${aiReview.reviewCount}건` : '미확인', 'video-review-count'],
+        ].map(([label, value, id]) => <div key={label} data-testid={id} className="min-w-0 rounded-xl border border-card-border bg-card p-3"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-2 text-sm font-bold">{value}</dd></div>)}
+      </dl>
+      <section aria-label="영상 자료" className="space-y-2" data-testid="video-detail-empty-state">
+        {runtimeEvidence?.records.length ? runtimeEvidence.records.map((record, index) => (
+          <article key={record.videoId} data-testid={`video-detail-record-${index}`} className="rounded-xl border border-card-border bg-card p-4">
+            <a href={record.canonicalUrl} target="_blank" rel="noopener noreferrer" className="font-bold text-primary underline">{record.title}</a>
+            <p className="mt-2 text-xs text-muted-foreground">{record.channelOrPublisher ?? '발행자 미확인'} · {record.publishedAt ? formatAutomationTime(record.publishedAt) : '발행일 미확인'}</p>
+            <p className="mt-2 text-sm">{transcriptLabel(record.transcriptStatus)}</p>
+            <details className="mt-2 text-xs"><summary className="min-h-11 cursor-pointer py-3">출처 확인</summary>
+              <p>원문 상태 · {record.transcriptStatus}</p><p>출처 등급 · {record.sourceTrustTier}</p>
+              <p>전략 추출 · {record.transcriptStatus === 'AVAILABLE' ? '연결 기록 미확인' : '사용 가능한 전사본 필요'}</p>
+            </details>
           </article>
-
-          <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4" data-testid="video-cluster-empty-state">
-            <h2 className="font-semibold">Strategy cluster</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              {runtimeEvidence
-                ? `${strategyMiningState}. Strategy mining evidence가 없으면 cluster count는 0으로 만들지 않고 UNKNOWN으로 유지합니다.`
-                : 'sanitized runtime evidence가 없으므로 strategy cluster 존재 여부도 UNKNOWN입니다. missing을 0으로 만들지 않습니다.'}
-            </p>
-            <div className="mt-3 rounded-xl bg-muted p-3 text-xs">
-              Independent source count는 경제적 표본 N이 아닙니다. Economic Evidence Credit = 0을 유지합니다.
-            </div>
-          </article>
-        </div>
-
-        <footer className="rounded-2xl border border-card-border bg-card p-4 text-xs leading-5 text-muted-foreground" data-testid="video-phase2-safety-footer">
-          Official public provider only · Browser credential NOT_EXPOSED · Automatic discovery OFF · Schedule OFF · No downloader bypass · No new Backtester · Existing canonical compiler only · Economic Evidence Credit 0 · Execution Authority NONE
-        </footer>
-      </div>
+        )) : <p className="rounded-xl border border-dashed border-card-border p-4 text-sm text-muted-foreground">{runtimeEvidence ? '수집된 영상이 없습니다.' : '영상 수집 결과를 아직 확인하지 못했습니다.'}</p>}
+      </section>
+      <details className="rounded-xl border border-card-border bg-card p-3">
+        <summary className="min-h-11 cursor-pointer py-3 text-sm font-bold">수집·분석 기록</summary>
+        <dl className="space-y-2 text-xs">
+          <div><dt>마지막 수집</dt><dd>{automation ? formatAutomationTime(automation.observedAt) : '미확인'}</dd></div>
+          <div><dt>마지막 AI 분석</dt><dd>{aiReview ? formatEpochTime(aiReview.observedAt) : '미확인'}</dd></div>
+          <div><dt>자료 소스 버전</dt><dd className="break-all">{runtimeEvidence?.snapshotProvenance.sourceHeadSha ?? '미확인'}</dd></div>
+          <div><dt>진단 코드</dt><dd className="break-all">{automation?.reason ?? aiReview?.reason ?? '미확인'}</dd></div>
+          <div><dt>자료 연결</dt><dd>{runtimeEvidence ? '측정 자료 연결됨' : '미확인'}</dd></div>
+          <div><dt>자료 지문</dt><dd className="break-all">{automation?.snapshotDigest ?? '미확인'}</dd></div>
+          <div><dt>분석기 실행</dt><dd>{aiReview ? aiReview.scheduledInvocationObserved ? '자동 실행 확인' : '수동 실행 확인' : '미확인'}</dd></div>
+          <div><dt>제안 검토 / 반대 검토</dt><dd>{aiReview ? `${aiReview.proposerReviewCount} / ${aiReview.criticReviewCount}` : '미확인'}</dd></div>
+          <div><dt>실행 권한</dt><dd>없음 · 수익성 증거로 사용하지 않음</dd></div>
+        </dl>
+      </details>
     </section>
   );
 }

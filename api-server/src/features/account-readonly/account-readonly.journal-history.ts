@@ -7,8 +7,14 @@ import {
   type PreparedExchangeRequest,
   type UpbitCredentials,
 } from '../../services/trade-exchange-adapters.service';
+import {
+  createTossReadonlyTransport,
+  TossReadonlyProvider,
+  TossTokenManager,
+  type TossCredentials,
+} from './providers/toss-readonly.provider';
 import { decryptTradingCredentials } from '../../services/trade-credential-vault.service';
-import type { TradeRange } from '../../services/unified-trade-journal.service';
+import { normalizeTossOrderContract, type TossOrderContract, type TradeRange } from '../../services/unified-trade-journal.service';
 import { AccountReadonlyError } from './account-readonly.errors';
 import {
   createAccountReadonlyCredentialRepository,
@@ -17,8 +23,8 @@ import {
 import { accountReadFlags } from './account-readonly.route';
 import { KiwoomReadonlyProvider, type KiwoomReadonlyCredentials } from './providers/kiwoom-readonly.provider';
 
-type HistoryProvider = 'upbit' | 'bitget' | 'kiwoom';
-type SignedHistoryProvider = Exclude<HistoryProvider, 'kiwoom'>;
+type HistoryProvider = 'toss' | 'upbit' | 'bitget' | 'kiwoom';
+type SignedHistoryProvider = 'upbit' | 'bitget';
 type RepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 type CredentialDecryptor = (payload: string) => Record<string, string>;
 
@@ -77,6 +83,7 @@ export type AccountJournalHistoryOptions = {
   fetchImpl?: typeof fetch;
   flags?: Partial<Record<HistoryProvider, boolean>>;
   providerTimeoutMs?: number;
+  maxTossOrders?: number;
   maxUpbitOrders?: number;
   maxBitgetPages?: number;
   maxKiwoomDomesticDates?: number;
@@ -85,6 +92,7 @@ export type AccountJournalHistoryOptions = {
 const DAY_MS = 86_400_000;
 const UPBIT_WINDOW_MS = 7 * DAY_MS;
 const DEFAULT_TIMEOUT_MS = 25_000;
+const DEFAULT_MAX_TOSS_ORDERS = 100;
 const DEFAULT_MAX_UPBIT_ORDERS = 60;
 const DEFAULT_MAX_BITGET_PAGES = 5;
 const DEFAULT_MAX_KIWOOM_DOMESTIC_DATES = 23;
@@ -302,6 +310,86 @@ function normalizedTimeout(value: number | undefined) {
   if (value == null) return DEFAULT_TIMEOUT_MS;
   if (!Number.isFinite(value) || value <= 0) throw new Error('ACCOUNT_JOURNAL_HISTORY_TIMEOUT_INVALID');
   return Math.min(60_000, Math.max(1_000, Math.trunc(value)));
+}
+
+function tossRecords(value: unknown, preferredKey?: string) {
+  const root = objectRecord(value);
+  const result = objectRecord(root?.result);
+  const preferred = preferredKey ? root?.[preferredKey] ?? result?.[preferredKey] : undefined;
+  const candidate = preferred ?? root?.result ?? root?.data ?? value;
+  if (Array.isArray(candidate)) return candidate.map(objectRecord).filter((row): row is Record<string, unknown> => row !== null);
+  const single = objectRecord(candidate);
+  return single ? [single] : [];
+}
+
+function selectTossHistoryAccount(accountsRaw: unknown, requested?: string) {
+  const rows = tossRecords(accountsRaw, 'accounts');
+  const normalized = rows.flatMap((row) => {
+    const accountSeq = requiredText(row.accountSeq);
+    return accountSeq ? [{ row, accountSeq }] : [];
+  });
+  if (requested?.trim()) {
+    const exact = normalized.find((entry) => entry.accountSeq === requested.trim());
+    if (!exact) throw new AccountReadonlyError('TOSS_ACCOUNT_NOT_FOUND');
+    return exact.accountSeq;
+  }
+  const brokerage = normalized.filter(({ row }) => String(row.accountType ?? '').toLowerCase() === 'brokerage');
+  if (brokerage.length === 1) return brokerage[0]!.accountSeq;
+  if (normalized.length === 1) return normalized[0]!.accountSeq;
+  if (normalized.length === 0) throw new AccountReadonlyError('TOSS_ACCOUNT_NOT_FOUND');
+  throw new AccountReadonlyError('TOSS_ACCOUNT_SELECTION_REQUIRED');
+}
+
+async function readToss(
+  rawCredentials: Record<string, string>,
+  userId: string,
+  startMs: number,
+  endMs: number,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+  counter: { value: number },
+  maxOrders: number,
+) {
+  const credentials: TossCredentials = {
+    clientId: requiredCredential(rawCredentials, 'clientId'),
+    clientSecret: requiredCredential(rawCredentials, 'clientSecret'),
+    accountSeq: String(rawCredentials.accountSeq ?? '').trim() || undefined,
+  };
+  const countedFetch: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input.toString() : input.url);
+    if (url.pathname.startsWith('/api/v1/')) counter.value += 1;
+    return fetchImpl(input, init);
+  };
+  const transport = createTossReadonlyTransport(countedFetch);
+  const provider = new TossReadonlyProvider(transport, new TossTokenManager(transport));
+  const accountsRaw = await provider.request('/api/v1/accounts', credentials, signal);
+  const accountSeq = selectTossHistoryAccount(accountsRaw, credentials.accountSeq);
+  const listRaw = await provider.request('/api/v1/orders', credentials, signal, accountSeq, 'status=CLOSED');
+  const rows = tossRecords(listRaw, 'orders');
+  const selected = rows.slice(-maxOrders);
+  const observedAt = new Date(endMs).toISOString();
+  const payloads: Record<string, unknown>[] = [];
+  let normalizationFailures = 0;
+  for (const row of selected) {
+    try {
+      const normalized = normalizeTossOrderContract(row as unknown as TossOrderContract, accountSeq, observedAt);
+      const time = Date.parse(normalized.filledAt ?? normalized.orderedAt);
+      if (Number.isFinite(time) && time >= startMs && time <= endMs && normalized.filledQuantity > 0) {
+        payloads.push({
+          ...normalized,
+          warnings: [...normalized.warnings, 'REAL_ACCOUNT_HISTORY_NOT_PERSISTED'],
+        });
+      }
+    } catch {
+      normalizationFailures += 1;
+    }
+  }
+  return {
+    payloads,
+    realizedEvidence: [] as AccountJournalRealizedEvidence[],
+    truncated: rows.length > maxOrders,
+    normalizationFailures,
+  };
 }
 
 async function upbitFailureName(response: Response) {
@@ -722,11 +810,13 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
   const fetchImpl = options.fetchImpl ?? fetch;
   const defaultFlags = accountReadFlags();
   const flags = {
+    toss: options.flags?.toss ?? defaultFlags.toss,
     upbit: options.flags?.upbit ?? defaultFlags.upbit,
     bitget: options.flags?.bitget ?? defaultFlags.bitget,
     kiwoom: options.flags?.kiwoom ?? defaultFlags.kiwoom,
   };
   const timeoutMs = normalizedTimeout(options.providerTimeoutMs);
+  const maxTossOrders = Math.max(1, Math.min(500, Math.trunc(options.maxTossOrders ?? DEFAULT_MAX_TOSS_ORDERS)));
   const maxUpbitOrders = Math.max(1, Math.min(200, Math.trunc(options.maxUpbitOrders ?? DEFAULT_MAX_UPBIT_ORDERS)));
   const maxBitgetPages = Math.max(1, Math.min(10, Math.trunc(options.maxBitgetPages ?? DEFAULT_MAX_BITGET_PAGES)));
   const maxKiwoomDomesticDates = Math.max(1, Math.min(31, Math.trunc(options.maxKiwoomDomesticDates ?? DEFAULT_MAX_KIWOOM_DOMESTIC_DATES)));
@@ -771,11 +861,13 @@ export function createAccountJournalHistoryReader(options: AccountJournalHistory
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new Error('PROVIDER_TIMEOUT')), timeoutMs);
         try {
-          const result = provider === 'upbit'
-            ? await readUpbit(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxUpbitOrders)
-            : provider === 'bitget'
-              ? await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages)
-              : await readKiwoom(loaded.credentials, userId, endMs, days, fetchImpl, controller.signal, counter, maxKiwoomDomesticDates);
+          const result = provider === 'toss'
+            ? await readToss(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxTossOrders)
+            : provider === 'upbit'
+              ? await readUpbit(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxUpbitOrders)
+              : provider === 'bitget'
+                ? await readBitget(loaded.credentials, userId, startMs, endMs, fetchImpl, controller.signal, counter, maxBitgetPages)
+                : await readKiwoom(loaded.credentials, userId, endMs, days, fetchImpl, controller.signal, counter, maxKiwoomDomesticDates);
           payloads.push(...result.payloads);
           const providerRealizedEvidence: AccountJournalRealizedEvidence[] =
             'realizedEvidence' in result && Array.isArray(result.realizedEvidence)

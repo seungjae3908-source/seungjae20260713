@@ -1,9 +1,9 @@
-export type CanonicalTradingProvider = 'toss' | 'upbit' | 'bitget';
+export type CanonicalTradingProvider = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 export type CanonicalTradingMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 
 export const CANONICAL_PROVIDER_BY_MARKET: Readonly<Record<CanonicalTradingMarket, CanonicalTradingProvider>> = Object.freeze({
   KR_STOCK: 'toss',
-  US_STOCK: 'toss',
+  US_STOCK: 'kiwoom',
   CRYPTO_SPOT: 'upbit',
   CRYPTO_FUTURES: 'bitget',
 });

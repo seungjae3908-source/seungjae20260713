@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test, type APIResponse, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Request, type TestInfo } from '@playwright/test';
 import {
   installProductionReadOnlyPolicy,
   isIgnorableProductionRequestFailure,
@@ -63,6 +63,19 @@ const SEARCH_MARKET_PARAMS: Record<keyof typeof SEARCH_MATRIX, 'KR' | 'US' | 'sp
   '코인 현물': 'spot',
   '코인 선물': 'futures',
 };
+
+function minimumExpectedSearchDispatchMs(
+  marketLabel: keyof typeof SEARCH_MATRIX,
+  rawQuery: string,
+) {
+  const market = SEARCH_MARKET_PARAMS[marketLabel];
+  const query = rawQuery.trim().toUpperCase();
+  if (market === 'KR' && /^\d{6}$/.test(query)) return 0;
+  if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;
+  if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;
+  if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;
+  return 150;
+}
 
 const TIMEFRAMES = ['1m','3m','5m','15m','30m','1H','4H','1D'] as const;
 const CHART_MARKETS = ['KR','US','UPBIT','BITGET'] as const;
@@ -177,7 +190,6 @@ async function installSafety(page: Page, blocked: Diagnostic[]) {
 const LOGIN_READY_BUDGET_MS = 15_000;
 const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;
 const LOGIN_INTERACTIVE_COLD_RETRIES = 1;
-const CACHED_AUTH_TIMEOUT_RETRIES = 1;
 type CachedAuthState = Awaited<ReturnType<BrowserContext['storageState']>>;
 const authStateByViewport = new Map<string, CachedAuthState>();
 
@@ -251,32 +263,28 @@ function accessTokenFromStorageState(state: CachedAuthState) {
   throw new Error('PRODUCTION_QA_ACCESS_TOKEN_UNAVAILABLE');
 }
 
-async function validateCachedAuthState(page: Page, state: CachedAuthState) {
+function accessTokenExpiresAtMs(token: string): number | null {
+  const payloadPart = token.split('.')[1];
+  if (!payloadPart) return null;
+  try {
+    const normalized = payloadPart.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as { exp?: unknown };
+    const expSeconds = Number(payload.exp);
+    return Number.isFinite(expSeconds) && expSeconds > 0 ? expSeconds * 1_000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateCachedAuthState(state: CachedAuthState) {
   const token = accessTokenFromStorageState(state);
-  let response: APIResponse | null = null;
-  for (let attempt = 0; attempt <= CACHED_AUTH_TIMEOUT_RETRIES; attempt += 1) {
-    try {
-      response = await page.request.get(new URL('/api/auth/profile', baseUrl).toString(), {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        timeout: LOGIN_READY_BUDGET_MS,
-        failOnStatusCode: false,
-      });
-      break;
-    } catch (error) {
-      const timeoutOnly = isPlaywrightTimeout(error);
-      if (!timeoutOnly || attempt >= CACHED_AUTH_TIMEOUT_RETRIES) throw error;
-    }
+  const expiresAtMs = accessTokenExpiresAtMs(token);
+  if (expiresAtMs === null) {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_TOKEN_INVALID');
   }
-  if (!response) throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_UNAVAILABLE');
-  if (response.status() !== 200) {
-    throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`);
-  }
-  const payload = await response.json().catch(() => null);
-  if (!payload || typeof payload !== 'object' || typeof (payload as Record<string, unknown>).id !== 'string') {
-    throw new Error('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  if (expiresAtMs <= Date.now() + 30_000) {
+    throw new Error('PRODUCTION_QA_CACHED_SESSION_TOKEN_EXPIRED');
   }
 }
 
@@ -296,15 +304,15 @@ async function login(
     if (cached) {
       // Validate the real password-login path once per viewport, then reuse the
       // exact in-memory authenticated browser state for later read-only tests.
-      // Cached-session auth/status failures remain fail-closed. Only a transport
-      // timeout gets one bounded repeat of the same read-only profile proof.
+      // Cached state is checked locally for a valid, non-expiring access token;
+      // each real target route/API then proves server-side acceptance fail-closed.
       await restoreCachedAuthState(page, cached);
       // Do not add a second root-page navigation before every read-only test.
       // The first test in each viewport proves the real password-login path;
       // later tests restore that exact state and let their target route prove
       // whether the session is still accepted. This remains fail-closed while
       // avoiding a redundant / navigation that previously timed out under load.
-      await validateCachedAuthState(page, cached);
+      validateCachedAuthState(cached);
       // The new page is still about:blank here. restoreCachedAuthState installs
       // the Production-origin localStorage seed for the next navigation, but it
       // has not materialized that origin yet. Recapturing storageState now can
@@ -622,8 +630,24 @@ async function auditRoute(page: Page, route: string, testInfo: TestInfo): Promis
 }
 
 async function ensureSearchPage(page: Page) {
-  await page.goto('/stocks', { waitUntil: 'domcontentloaded', timeout: 15_000 });
-  await expect(page.getByTestId('unified-asset-search-page')).toBeVisible({ timeout: 10_000 });
+  const searchPage = page.getByTestId('unified-asset-search-page');
+  let lastNavigationError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await page.goto('/stocks', { waitUntil: 'domcontentloaded', timeout: 15_000 });
+    } catch (error) {
+      lastNavigationError = error;
+    }
+
+    if (await searchPage.isVisible({ timeout: 5_000 }).catch(() => false)) return;
+    if (attempt === 0) await page.waitForTimeout(500);
+  }
+
+  if (lastNavigationError) {
+    console.warn('[production-comprehensive] /stocks navigation remained slow after one bounded retry');
+  }
+  await expect(searchPage).toBeVisible({ timeout: 10_000 });
 }
 
 async function searchMatrix(
@@ -959,9 +983,10 @@ test.describe('Production comprehensive read-only QA', () => {
       'search request did not complete exactly once with HTTP 200').toEqual([]);
     expect(audits.filter((item) => item.requests.some((request) => request.market !== SEARCH_MARKET_PARAMS[item.market])),
       'search request used the wrong market route').toEqual([]);
-    expect(audits.flatMap((item) => item.requests)
-      .filter((request) => request.startedAfterInputMs < 150 || request.startedAfterInputMs > 1_000),
-    'search debounce delayed or dispatched the request outside its bounded window').toEqual([]);
+    expect(audits.filter((item) => item.requests.some((request) =>
+      request.startedAfterInputMs < minimumExpectedSearchDispatchMs(item.market, item.query)
+      || request.startedAfterInputMs > 1_000)),
+    'search dispatch fell outside the product fast-path/debounce contract').toEqual([]);
     expect(diagnostics.filter((item) => item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'),
       'search browser failures detected').toEqual([]);
     expect(diagnostics.filter((item) => item.kind === 'http'

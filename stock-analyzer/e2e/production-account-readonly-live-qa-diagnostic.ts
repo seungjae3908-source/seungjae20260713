@@ -1,3 +1,6 @@
+// Only known classification tokens, never arbitrary provider messages or secret values.
+export const READONLY_RUNTIME_ERROR_PATTERN = '^(?:(?:BACKGROUND_LIVE_|BITGET_|UPBIT_|KIWOOM_|TOSS_|ACCOUNT_READONLY_|EXCHANGE_|TRADING_CREDENTIAL_)[A-Z0-9_]{1,80}|ACCOUNT_NOT_CONFIGURED|CREDENTIALS_UNAVAILABLE|AUTH_FAILED|RATE_LIMITED|PROVIDER_TIMEOUT|PROVIDER_UNAVAILABLE|READONLY_REQUEST_REJECTED)$';
+
 export type SanitizedBitgetReadonlyDiagnostic = {
   provider: 'bitget';
   requestMethod: 'GET';
@@ -19,12 +22,34 @@ export type SanitizedBitgetReadonlyDiagnostic = {
 
 type RecordValue = Record<string, unknown>;
 
+// Account connectivity is not proof that the automatic worker can own every
+// existing position. Retain only counts, never holdings, quantities or values.
+export function summarizeAutomaticWarmupPositions(snapshot: {
+  provider: string;
+  positions: Array<{ symbol: string; quantity: number | null }> | null;
+} | undefined) {
+  if (!Array.isArray(snapshot?.positions)) {
+    return { positionsPresent: false, nonCashPositionCount: null, unknownPositionQuantityCount: null };
+  }
+  const positions = snapshot.positions.filter((position) =>
+    !(snapshot.provider === 'upbit' && String(position.symbol).trim().toUpperCase() === 'KRW'));
+  return {
+    positionsPresent: true,
+    nonCashPositionCount: positions.filter((position) =>
+      typeof position.quantity === 'number' && Number.isFinite(position.quantity)
+      && Math.abs(position.quantity) > 0.00000001).length,
+    unknownPositionQuantityCount: positions.filter((position) =>
+      typeof position.quantity !== 'number' || !Number.isFinite(position.quantity)).length,
+  };
+}
+
 const requestPaths = new Set([
   '/api/v3/account/settings',
   '/api/v3/account/info',
   '/api/v3/account/assets',
   '/api/v3/position/current-position',
   '/api/v3/trade/unfilled-orders',
+  '/api/v2/mix/account/account',
   '/api/v2/mix/account/accounts',
   '/api/v2/mix/position/all-position',
   '/api/v2/mix/order/orders-pending',
@@ -47,6 +72,10 @@ const classifications = new Set([
   'BITGET_TRANSPORT_CONNECT',
   'BITGET_TRANSPORT_TIMEOUT',
   'BITGET_TRANSPORT_NETWORK',
+  'BITGET_RESPONSE_SHAPE_INVALID',
+  'BITGET_RESPONSE_IDENTITY_INVALID',
+  'BITGET_RESPONSE_VALUE_INVALID',
+  'BITGET_RESPONSE_DUPLICATE_IDENTITY',
 ]);
 
 function record(value: unknown): value is RecordValue {
@@ -82,7 +111,7 @@ export function parseBitgetReadonlyDiagnosticHeader(
     || typeof raw.probe !== 'string'
     || !probes.has(raw.probe)
     || (raw.httpStatus !== null
-      && (!Number.isInteger(raw.httpStatus) || Number(raw.httpStatus) < 100 || Number(raw.httpStatus) > 599))
+      && (typeof raw.httpStatus !== 'number' || !Number.isInteger(raw.httpStatus) || raw.httpStatus < 100 || raw.httpStatus > 599))
     || (raw.applicationCode !== null
       && (typeof raw.applicationCode !== 'string' || !/^\d+$/.test(raw.applicationCode)))
     || typeof raw.sanitizedClassification !== 'string'

@@ -7,7 +7,7 @@ const NOW='2026-09-26T01:30:00.000Z',TOKEN='TEST_ONLY_TOKEN';
 type Dependencies = NonNullable<Parameters<typeof requireAuthenticated>[3]>;
 function fixture(){
  const state:{profile:MemberProfile;configured:boolean;userId:string;authError:unknown;profileError:unknown;userCalls:number;profileCalls:number;freshChecks:number;tokens:string[];ids:string[]}={
-  profile:{id:'TEST_ADMIN',login_name:'test',display_name:'TEST ONLY',role:'admin',status:'approved',membership_level:'admin',is_active:true},configured:true,userId:'TEST_ADMIN',authError:null,profileError:null,userCalls:0,profileCalls:0,freshChecks:0,tokens:[],ids:[],
+  profile:{id:'TEST_ADMIN',login_name:'test',display_name:'TEST ONLY',role:'admin',status:'approved',membership_level:'admin',is_active:true,permissions_updated_at:NOW},configured:true,userId:'TEST_ADMIN',authError:null,profileError:null,userCalls:0,profileCalls:0,freshChecks:0,tokens:[],ids:[],
  };
  const dependencies={isSupabaseConfigured:()=>state.configured,
   getSupabase:()=>({auth:{getUser:async(token:string)=>{state.userCalls++;state.tokens.push(token);return {data:{user:{id:state.userId,user_metadata:{role:'admin'}}},error:state.authError};}}}),

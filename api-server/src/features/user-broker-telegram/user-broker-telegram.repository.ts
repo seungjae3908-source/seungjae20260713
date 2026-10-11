@@ -24,6 +24,7 @@ export interface UserBrokerTelegramRepository {
   savePreferences(userId: string, preferences: NotificationPreferences, updatedAt: string): Promise<void>;
   insertExecutionEvent(event: UserExecutionEvent): Promise<boolean>;
   getExecutionEvent(userId: string, eventId: string): Promise<UserExecutionEvent | null>;
+  getExecutionEventBySource(userId: string, sourceEventId: string): Promise<UserExecutionEvent | null>;
   enqueueDelivery(delivery: NotificationDelivery): Promise<boolean>;
   getDelivery(userId: string, deliveryId: string): Promise<NotificationDelivery | null>;
   listDeliveries(userId: string): Promise<NotificationDelivery[]>;
@@ -164,6 +165,12 @@ export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramR
 
   async getExecutionEvent(userId: string, eventId: string) {
     const value = this.events.get(`${userId}:${eventId}`);
+    return value ? copy(value) : null;
+  }
+
+  async getExecutionEventBySource(userId: string, sourceEventId: string) {
+    const value = [...this.events.values()].find((event) =>
+      event.userId === userId && event.sourceEventId === sourceEventId);
     return value ? copy(value) : null;
   }
 
@@ -336,6 +343,8 @@ function memberProfile(row: Record<string, unknown>): MemberAccessProfile {
     membership_level: typeof row.membership_level === 'string' ? row.membership_level : null,
     is_active: typeof row.is_active === 'boolean' ? row.is_active : null,
     role: typeof row.role === 'string' ? row.role : null,
+    membership_expires_at: typeof row.membership_expires_at === 'string' ? row.membership_expires_at : null,
+    permissions_updated_at: typeof row.permissions_updated_at === 'string' ? row.permissions_updated_at : null,
   };
 }
 
@@ -366,7 +375,7 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
 
     async getPersonalTelegramMemberProfile(userId) {
       const { data, error } = await secureClient().from('profiles')
-        .select('status,membership_level,is_active,role')
+        .select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')
         .eq('id', userId)
         .maybeSingle();
       if (error) throw databaseError();
@@ -436,6 +445,16 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
     async getExecutionEvent(userId, eventId) {
       const { data, error } = await secureClient().from('user_execution_events').select('payload')
         .eq('user_id', userId).eq('id', eventId).maybeSingle();
+      if (error) throw databaseError();
+      return data?.payload ? data.payload as UserExecutionEvent : null;
+    },
+
+    async getExecutionEventBySource(userId, sourceEventId) {
+      const { data, error } = await secureClient().from('user_execution_events')
+        .select('payload')
+        .eq('user_id', userId)
+        .eq('source_event_id', sourceEventId)
+        .maybeSingle();
       if (error) throw databaseError();
       return data?.payload ? data.payload as UserExecutionEvent : null;
     },

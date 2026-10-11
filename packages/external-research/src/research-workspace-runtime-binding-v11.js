@@ -13,6 +13,9 @@ const sha=x=>createHash('sha256').update(JSON.stringify(canonical(x))).digest('h
 const freeze=x=>{if(x&&typeof x==='object'&&!Object.isFrozen(x)){Object.values(x).forEach(freeze);Object.freeze(x);}return x;};
 const SAFE=Object.freeze({executionAuthority:'NONE',automaticActivation:false,automaticAdoption:false,profitabilityProven:false});
 const REQUIRED=['ENTRY','EXIT','STOP_LOSS','POSITION_SIZING','EXECUTION_ASSUMPTION'];
+const MARKET_SIDE_POLICY=Object.freeze({
+  KR_STOCK:new Set(['LONG']),US_STOCK:new Set(['LONG']),CRYPTO_SPOT:new Set(['LONG']),CRYPTO_FUTURES:new Set(['LONG','SHORT']),
+});
 
 function acceptedClaims(geminiReceipt,groqReview){
   if(!Array.isArray(geminiReceipt?.observations)||!Array.isArray(groqReview?.findings))fail('RUNTIME_BINDING_EVIDENCE_INVALID');
@@ -53,6 +56,8 @@ function tournamentSummary(plan,result){
 export function createResearchRuntimeBindingV11(rawConfig,{backtestDependencies={}}={}){
   const config=requireConfig(rawConfig),compiled=new Map();
   const compileCanonical=async({plan,geminiReceipt,groqReview,ruleAssessment})=>{
+    const market=String(config.trustedContext.market??'').toUpperCase(),side=String(config.trustedContext.side??'').toUpperCase();
+    if(!MARKET_SIDE_POLICY[market]?.has(side))return {status:'REVIEW_REQUIRED',reason:'MARKET_DIRECTION_POLICY_VIOLATION'};
     if(ruleAssessment?.status!=='COMPLETE')return {status:'REVIEW_REQUIRED',reason:'RULE_COMPLETENESS_REQUIRED'};
     const claims=acceptedClaims(geminiReceipt,groqReview),observedKinds=new Set(claims.map(x=>x.kind));
     if(REQUIRED.some(k=>!observedKinds.has(k)))return {status:'REVIEW_REQUIRED',reason:'ACCEPTED_RULES_INCOMPLETE'};

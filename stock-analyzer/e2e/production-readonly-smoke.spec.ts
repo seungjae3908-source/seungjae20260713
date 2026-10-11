@@ -179,7 +179,7 @@ async function openRoute(page: Page, evidence: Evidence, route: string, testInfo
   await waitForFinitePageState(page, evidence, route, testInfo);
   if (route === '/paper-trading') {
     await expect(page.getByTestId('paper-trading-shell')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('trading-mode-paper')).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 });
+    await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
     await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('paper-trading-route-skeleton')).toHaveCount(0);
   }

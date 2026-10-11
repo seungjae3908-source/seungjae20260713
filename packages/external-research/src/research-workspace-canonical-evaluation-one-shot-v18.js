@@ -105,6 +105,25 @@ function validateRuntimeDependencyProofV18(proof,{currentSha,now}={}){
 }
 
 export function canonicalEvaluationRequestDigestV18(value){return sha(value);}
+export function createCanonicalEvaluationExecutionRequestV18({evaluationId,requestedAt,expiresAt,currentSha,decision,config,preflight,runtimeProof}={}){
+  if(!id(evaluationId)||!iso(requestedAt)||!iso(expiresAt)||!sha40(currentSha)||!object(decision)||!object(config)
+    ||!object(preflight)||!object(runtimeProof))throw new Error('CANONICAL_EVALUATION_V18_REQUEST_INPUT_INVALID');
+  const phase17ReceiptDigest=sha(preflight);
+  const reservationCore={schemaVersion:'research-canonical-evaluation-one-shot-reservation-v18',evaluationId,sourceSha:currentSha,
+    decisionDigest:decision.decisionDigest,configDigest:config.configDigest,phase17ReceiptDigest,runtimeProofDigest:runtimeProof.proofDigest};
+  const core={
+    schemaVersion:'research-canonical-evaluation-one-shot-request-v18',evaluationId,requestedAt,expiresAt,sourceSha:currentSha,
+    decisionDigest:decision.decisionDigest,configDigest:config.configDigest,phase17ReceiptDigest,
+    runtimeProofDigest:runtimeProof.proofDigest,oneShotReservationId:sha(reservationCore),
+    compiler:{ownerRef:COMPILER.ownerRef,capability:COMPILER.capability,maxRuns:1,finalHoldoutAccessAllowed:false,arbitraryExecutableCodeAllowed:false},
+    backtester:{ownerRef:BACKTESTER.ownerRef,capability:BACKTESTER.capability,maxRuns:1,executionEquivalentRequired:true,
+      finalHoldoutAccessPolicy:'FINAL_ONLY_AFTER_SELECTION_FREEZE',selectionFeedbackAllowed:false},
+    statisticalFirewall:{ownerRef:FIREWALL.ownerRef,capability:FIREWALL.capability,required:true,bypassAllowed:false},
+    resultPolicy:{...RESULT},authority:{...AUTH},
+  };
+  return freeze({...core,requestDigest:sha(core)});
+}
+
 
 export function validateCanonicalEvaluationExecutionRequestV18(request,{currentSha,review,decision,config,preflight,runtimeProof,now=new Date().toISOString()}={}){
   const reasons=[];

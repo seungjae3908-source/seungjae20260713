@@ -66,9 +66,9 @@ function verifyStaticContract() {
 
   assert(workflow.includes('ops/production-trade-schema-readonly-audit.sh'), 'workflow does not invoke trade schema audit');
   assert(workflow.includes('ops/verify-production-trade-schema-readonly-audit.mjs --static'), 'static audit verification missing');
-  assert(workflow.includes('Require canonical Production trade schema before application mutation'), 'pre-deploy schema gate step missing');
+  assert(workflow.includes('Require canonical Production trade schema and journal privileges before application mutation'), 'pre-deploy schema gate step missing');
   assert(
-    workflow.indexOf('Require canonical Production trade schema before application mutation')
+    workflow.indexOf('Require canonical Production trade schema and journal privileges before application mutation')
       < workflow.indexOf('Deploy exact approved revision'),
     'trade schema gate must execute before application deployment',
   );

@@ -325,8 +325,10 @@ assert(
   'retry recovery must not use the polling-heavy home route as its bootstrap fixture',
 );
 assert(
-  retryRecoveryTestBlock.includes("await page.getByRole('button', { name: '다시 시도', exact: true }).click();"),
-  'retry recovery must exercise the explicit retry action',
+  retryRecoveryTestBlock.includes("const retryAlert = page.getByTestId('account-bootstrap-error');")
+    && retryRecoveryTestBlock.includes("await retryAlert.getByRole('button', { name: '다시 확인', exact: true }).click();")
+    && retryRecoveryTestBlock.includes("await expect(page.getByTestId('account-bootstrap-error')).toHaveCount(0);"),
+  'retry recovery must exercise and clear the current account-scoped retry action',
 );
 assert(
   retryRecoveryTestBlock.includes("expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);"),

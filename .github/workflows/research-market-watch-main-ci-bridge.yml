@@ -1,0 +1,134 @@
+name: Research Market Watch Exact-Main CI Dispatch (No Deploy)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-market-watch-main-ci-bridge.yml'
+      - 'research-production/test/lightweight-market-watch-main-ci-bridge.test.mjs'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-market-watch-main-ci-bridge
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify owner-only main CI bridge does not touch production
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --test research-production/test/lightweight-market-watch-main-ci-bridge.test.mjs
+
+  dispatch-main-ci:
+    name: Dispatch immutable current-main Application CI only
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.number == 1102 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/validate-market-watch-main ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+      actions: write
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Authorize owner, latest exact main, merged sources, no duplicate run
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const raw=String(context.payload.comment?.body??'').trim();
+            const match=/^\/validate-market-watch-main ([0-9a-f]{40})$/i.exec(raw);
+            if(!match){core.setFailed('WATCH_CI_COMMAND_INVALID');return;}
+            const target=match[1].toLowerCase();
+            const branch=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha.toLowerCase();
+            if(branch!==target){core.setFailed('WATCH_CI_MAIN_SHA_MISMATCH');return;}
+            for(const n of [1743,1764]){
+              const pr=(await github.rest.pulls.get({
+                owner:context.repo.owner,repo:context.repo.repo,pull_number:n,
+              })).data;
+              if(!pr.merged||!pr.merge_commit_sha){
+                core.setFailed('WATCH_CI_RESEARCH_PR_UNMERGED_'+n);return;
+              }
+              const ancestry=(await github.rest.repos.compareCommits({
+                owner:context.repo.owner,repo:context.repo.repo,
+                base:pr.merge_commit_sha,head:target,
+              })).data.status;
+              if(!['ahead','identical'].includes(ancestry)){
+                core.setFailed('WATCH_CI_RESEARCH_ANCESTRY_MISMATCH_'+n);return;
+              }
+            }
+            const runs=await github.paginate(github.rest.actions.listWorkflowRunsForRepo,{
+              owner:context.repo.owner,repo:context.repo.repo,
+              head_sha:target,per_page:100,
+            });
+            const active=runs.filter(r=>r.head_sha.toLowerCase()===target
+              &&r.path==='.github/workflows/futures-public-network-smoke.yml'
+              &&['workflow_dispatch','push'].includes(r.event))
+              .sort((a,b)=>Number(b.id)-Number(a.id));
+            if(active.length){
+              core.info('EXACT_MAIN_APPLICATION_CI_ALREADY_PRESENT: '+active[0].id
+                +' '+active[0].status+'/'+active[0].conclusion);
+              core.setOutput('dispatched','false');
+              core.setOutput('existing_run_id',String(active[0].id));
+              return;
+            }
+            const next=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha.toLowerCase();
+            if(next!==target){core.setFailed('WATCH_CI_MAIN_MOVED');return;}
+            await github.rest.actions.createWorkflowDispatch({
+              owner:context.repo.owner,repo:context.repo.repo,
+              workflow_id:'futures-public-network-smoke.yml',
+              ref:'main',
+              inputs:{target_sha:target},
+            });
+            core.setOutput('dispatched','true');
+            core.setOutput('existing_run_id','');
+            core.info('EXACT_MAIN_APPLICATION_CI_DISPATCHED_FOR: '+target);
+
+      - name: Record read-only command result
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ github.event.comment.body }}
+          DISPATCHED: ${{ steps.gate.outputs.dispatched }}
+          EXISTING_RUN_ID: ${{ steps.gate.outputs.existing_run_id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1102,
+              body:['[RESEARCH_MARKET_WATCH_MAIN_CI]',
+                'status: '+(process.env.DISPATCHED==='true'?'dispatched':'already_exists'),
+                'command: '+String(process.env.SOURCE_SHA||'').trim(),
+                'existing_run_id: '+String(process.env.EXISTING_RUN_ID||''),
+                'source_run: '+context.runId,
+                'production_deployed: false','research_service_activated: false',
+                'real_orders: 0','paper_orders: 0','replit_used: false'].join('\n'),
+            });

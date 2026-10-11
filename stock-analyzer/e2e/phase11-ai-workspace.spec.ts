@@ -196,7 +196,7 @@ test('technical workspace routes auto trading to the canonical surface with zero
   await page.goto('/__phase11-ai-workspace-e2e');
   await page.getByRole('button', { name: '자동매매', exact: true }).click();
 
-  await expect(page).toHaveURL(/\/auto-trading$/);
+  await expect(page).toHaveURL(/\/auto-trading\?market=domestic_stock$/);
   await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '조건 주문 실행', exact: true })).toHaveCount(0);
   expect(legacyOrderMutations).toBe(0);
