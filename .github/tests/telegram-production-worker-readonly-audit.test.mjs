@@ -412,7 +412,7 @@ test('fixed systemd Signal V3 statuses are whitelisted and no service actions oc
 });
 
 test('V3 health only classifies safe loopback snapshot status and never copies error contents',async()=>{
-  const responseFor=(status,ready,fresh,currentPageSourceReady)=>(target,opts,respond)=>{
+  const responseFor=(status,ready,fresh,currentPageSourceReady,sourceError='PRIVATE_DO_NOT_PUBLISH')=>(target,opts,respond)=>{
     assert.equal(target.protocol,'http:');
     assert.equal(target.hostname,'127.0.0.1');
     assert.equal(target.pathname,'/health');
@@ -430,7 +430,7 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
           snapshotCurrentPageSourceReady:currentPageSourceReady,
           snapshotAgeMs:ready?60_000:null,
           executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
-          snapshotError:'PRIVATE_DO_NOT_PUBLISH',secret:'PRIVATE_TOKEN',
+          snapshotError:sourceError,secret:'PRIVATE_TOKEN',
         })));
         res.emit('end');
       }
@@ -455,6 +455,18 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
   assert.ok(!JSON.stringify(blocked).includes('PRIVATE_TOKEN'));
   const missing=await readSignalV3HealthOnce({getImpl:responseFor(200,false,false)});
   assert.equal(missing.status,'SNAPSHOT_MISSING');
+  const wrongRelease=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,false,false,null,'SNAPSHOT_SERVICE_SHA_MISMATCH'),
+  });
+  assert.equal(wrongRelease.status,'SNAPSHOT_SHA_MISMATCH');
+  assert.equal(wrongRelease.snapshotFresh,false);
+  assert.equal(wrongRelease.snapshotReady,false);
+  assert.equal(wrongRelease.snapshotAgeBand,'UNKNOWN');
+  assert.ok(!JSON.stringify(wrongRelease).includes('snapshotError'));
+  const contradictory=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,true,true,null,'SNAPSHOT_SERVICE_SHA_MISMATCH'),
+  });
+  assert.equal(contradictory.status,'INVALID_RESPONSE');
   const notReady=await readSignalV3HealthOnce({getImpl:responseFor(503,false,false)});
   assert.equal(notReady.status,'HTTP_503');
   const refused=await readSignalV3HealthOnce({getImpl:()=>{throw Error('SECRET_ON_ERROR')}});
@@ -591,6 +603,8 @@ test('fixed read-only V3 state evidence is safe and classifies stale writer vs t
     startedAgeBand:'UNDER_5M'},stale,timer),'RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT');
   assert.equal(v3StalenessHypothesis(health,{lastResult:'FAILED'},
     stale,timer),'CYCLE_FAILED_SUSPECT');
+  assert.equal(v3StalenessHypothesis({status:'SNAPSHOT_SHA_MISMATCH'},
+    {},{status:'UNREADABLE'},{}),'SHA_OR_READ_PATH_MISMATCH_SUSPECT');
   assert.equal(v3StalenessHypothesis(health,{lastResult:'RUNNING',
     startedAgeBand:'OVER_60M'},stale,timer),'CYCLE_RUNNING_OVER_60M_SUSPECT');
   assert.equal(v3StalenessHypothesis(health,{lastResult:'RUNNING',

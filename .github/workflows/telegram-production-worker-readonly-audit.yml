@@ -183,7 +183,8 @@ jobs:
             ||r.signalSource.eventCount>10000
             ||typeof r.signalSource.safetyValidated!=='boolean'
             ||!r.signalHealth ||!['NOT_CHECKED','READY','SNAPSHOT_MISSING',
-              'SNAPSHOT_STALE','SOURCE_DATA_BLOCKED','HTTP_503','HTTP_ERROR','INVALID_RESPONSE',
+              'SNAPSHOT_SHA_MISMATCH','SNAPSHOT_STALE','SOURCE_DATA_BLOCKED',
+              'HTTP_503','HTTP_ERROR','INVALID_RESPONSE',
               'UNREACHABLE','TIMEOUT','UNSAFE_ENDPOINT'].includes(r.signalHealth.status)
             ||!safeSha(r.signalHealth.serviceSha)
             ||typeof r.signalHealth.snapshotReady!=='boolean'
