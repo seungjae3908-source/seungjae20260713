@@ -29,6 +29,9 @@ export function formatChartMoney(value: number | null | undefined, market: Analy
   if (amount == null) return value == null || !Number.isFinite(value) ? '미제공' : '환율 미제공';
   const currency = nativeChartCurrency(market) === 'KRW' || display === 'KRW' ? 'KRW' : nativeChartCurrency(market);
   const digits = Math.abs(amount) < 1 ? 8 : currency === 'KRW' ? 0 : 2;
-  const formatted = amount.toLocaleString('ko-KR', { maximumFractionDigits: digits });
+  const formatted = amount.toLocaleString('ko-KR', {
+    minimumFractionDigits: currency === 'USD' ? 2 : 0,
+    maximumFractionDigits: digits,
+  });
   return currency === 'KRW' ? `${formatted}원` : currency === 'USD' ? `$${formatted}` : `${formatted} USDT`;
 }
