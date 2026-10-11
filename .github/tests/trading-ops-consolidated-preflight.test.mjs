@@ -45,7 +45,17 @@ test('canonical app execution ledger is projected into journal without provider-
     'APP_TRADE_AUTOMATION_LEDGER_PROJECTION',
   ]) assert.ok(adapter.includes(marker), marker);
   assert.ok(route.includes('readTradeAutomationJournalPayloads'));
-  assert.ok(route.includes('knownBrokerOrderIds'));
+  const mirror = read('api-server/src/services/automatic-paper-journal-mirror.service.ts');
+  assert.ok(route.includes('reconcileCanonicalPaperJournalMirrors'));
+  assert.ok(route.includes('reconcileScopedExternalJournalHistory'));
+  assert.ok(route.includes('externalHistoryDedupAudit'));
+  assert.ok(!route.includes('knownBrokerOrderIds'));
+  for (const marker of [
+    'LIVE_HISTORY_SOURCES', 'accountIdMasked', 'brokerOrderId',
+    'verifiedLiveKey', 'exactEconomicDuplicate',
+    'JOURNAL_EXTERNAL_SCOPE_IDENTITY_CONFLICT',
+    "executionAuthority:'NONE'",
+  ]) assert.ok(mirror.includes(marker), marker);
   assert.ok(route.includes('BROKER_HISTORY_IMPORTED_PERSISTENTLY'));
   assert.ok(!route.includes("...payload.warnings.filter((item): item is string => typeof item === 'string'), 'BROKER_HISTORY_IMPORTED_PERSISTENTLY'"));
   assert.ok(route.includes('/paper-journal/import-account-history'));
@@ -122,4 +132,37 @@ test('four-market automatic gate keeps live auto independent from Paper runtime 
   assert.ok(worker.includes('readMarketMark'));
   assert.ok(worker.includes('paperExitOrders'));
   assert.ok(worker.includes('liveExitOrders'));
+});
+
+
+test('automatic Paper cost issuer is protected, market-scoped and blocks unknown settlement', () => {
+  const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const execution = read('api-server/src/services/trade-execution.service.ts');
+  assert.ok(worker.includes('costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs)'));
+  assert.ok(execution.includes('MEMBER_AUTO_PAPER_COST_RULES_V1'));
+  assert.ok(execution.includes("plan.executionMode !== 'automatic'"));
+  assert.ok(execution.includes('if (seen.has(identity) || policyIds.has(candidate.policyId)) return null'));
+  assert.ok(execution.includes('policyIds.add(candidate.policyId)'));
+  assert.ok(execution.includes('return matches.length === 1 ? matches[0]! : null'));
+  assert.ok(execution.includes("taxAmount == null ? null : costPolicy?.policyId"));
+});
+
+test('Bitget simulated funding certificate is issued only by bounded server readers', () => {
+  const source = read('api-server/src/services/paper-futures-funding-certificate.service.ts');
+  const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const execution = read('api-server/src/services/trade-execution.service.ts');
+  const automation = read('api-server/src/services/trade-automation.service.ts');
+  const capital = read('api-server/src/services/admin-four-market-paper-readback.service.ts');
+  const repository = read('api-server/src/services/trade-automation.repository.ts');
+  for (const marker of [
+    'BitgetPublicClient', 'collectBitgetFundingCostOnlyHistory',
+    'readHistoricalUpbitUsdtKrwMinute', 'historicalFx',
+    'eventDigest', 'eventCount', 'issued.add(certificate)',
+  ]) assert.ok(source.includes(marker), marker);
+  assert.ok(worker.includes('fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope)'));
+  assert.ok(execution.includes('this.paperCostEvidenceProviders.fundingReceipt'));
+  assert.ok(automation.includes('isProtectedPaperFundingCertificate(funding)'));
+  assert.ok(repository.includes('paperFundingSettlementEvidence: order.paperFundingSettlementEvidence ?? null'));
+  assert.ok(capital.includes('funding.netFundingKrw'));
+  assert.ok(capital.includes("funding.eventDigest"));
 });
