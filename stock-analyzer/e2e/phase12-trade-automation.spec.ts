@@ -186,10 +186,66 @@ test('paper mode exposes the same four-market navigation without enabling live a
     await expect(page.getByTestId(`trading-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
   }
 
-  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('실자동매매 권한과 분리');
+  await expect(page.getByTestId('trading-paper-modes')).toContainText('자동모의매매');
+  await expect(page.getByTestId('trading-paper-modes')).toContainText('수동모의매매');
+  await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveCount(0);
   expectNoBrowserFailures(failures);
 });
 
+for (const width of [360, 390, 768, 1024, 1440]) {
+  test('holdings popup uses saved entry evidence and protects manual assets at ' + width + 'px', async ({ page }) => {
+    const failures = captureBrowserFailures(page);
+    const mutations: string[] = [];
+    page.on('request', request => {
+      if (new URL(request.url()).pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(request.method())) mutations.push(request.url());
+    });
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/__phase12-trade-automation-e2e?holdings=true');
+    const holdings = page.getByTestId('trading-holdings');
+    const samsung = holdings.getByRole('button', { name: /삼성전자/ }).filter({ visible: true });
+    await samsung.click();
+    const popup = page.getByTestId('holding-detail-dialog');
+    await expect(popup).toBeVisible();
+    expect(await popup.evaluate(element => getComputedStyle(element).backgroundColor)).not.toMatch(/rgba\(|transparent/);
+    await expect(popup).toContainText('기존 보유 — AUTO 진입 기록 없음');
+    await expect(popup).toContainText('미설정');
+    await expect(popup.getByRole('button', { name: /매도|주문|승인/ })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(popup).not.toBeVisible();
+    await expect(samsung).toBeFocused();
+    await holdings.getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+    await expect(popup).toContainText('거래량 증가 + 돌파 조건 충족');
+    await expect(popup).toContainText('200,000 KRW');
+    await expect(popup).toContainText('목표가 · 저장된 계획');
+    await popup.getByText('근거 더 보기', { exact: true }).click();
+    await expect(popup).toContainText('진입 당시 저장된 추세 정렬 근거');
+    await expect(popup).toContainText('test-signal');
+    const box = await popup.boundingBox();
+    expect(box!.width).toBeLessThanOrEqual(width);
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await popup.getByRole('button', { name: '종목상세', exact: true }).click();
+    await expect(page).toHaveURL(/\/stock-info\?.*ticker=000660/);
+    await page.goto('/__phase12-trade-automation-e2e?holdings=true');
+    await page.getByTestId('trading-holdings').getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+    await page.getByTestId('holding-detail-dialog').getByRole('button', { name: 'AI차트', exact: true }).click();
+    await expect(page).toHaveURL(/\/ai-chart\?.*market=KR.*ticker=000660/);
+    expect(mutations).toEqual([]);
+    expect(failures.pageErrors).toEqual([]);
+  });
+}
+
+
+test('holding popup never substitutes the broker average for missing canonical fill-price evidence', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e?holdings=true&missingFillPrice=true');
+  await page.getByTestId('trading-holdings').getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+  const popup = page.getByTestId('holding-detail-dialog');
+  await expect(popup).toBeVisible();
+  await expect(popup.getByText('진입가 · 실제 체결').locator('..')).toContainText('미설정 / 미확인');
+  await expect(popup).not.toContainText('200,000 KRW');
+  await expect(popup).toContainText('거래량 증가 + 돌파 조건 충족');
+  await expect(popup.getByRole('button', { name: /매도|주문|승인/ })).toHaveCount(0);
+});
 
 test('auto-trading rehearsal tab proves the safe four-market chain and displays zero real orders', async ({ page }) => {
   await page.unroute(/\/api\/user-integrations(?:\?.*)?$/);

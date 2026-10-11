@@ -241,16 +241,9 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       {
         id: 'auto-trading',
         href: APP_ROUTES.autoTrading,
-        label: '자동매매',
+        label: '기술매매',
         icon: 'power',
         capability: 'canAccessAutoTrading',
-      },
-      {
-        id: 'paper-trading',
-        href: APP_ROUTES.paperTrading,
-        label: '모의매매',
-        icon: 'power',
-        capability: 'canAccessPaperTrading',
       },
       {
         id: 'backtests',
@@ -364,6 +357,7 @@ export function navigationGroupMatches(group: NavigationGroup, location: string)
 }
 
 export function navigationMenuItemMatches(item: NavigationMenuItem, location: string): boolean {
+  if (item.id === 'auto-trading' && cleanAppPath(location) === APP_ROUTES.paperTrading) return true;
   return cleanAppPath(location) === item.href;
 }
 
