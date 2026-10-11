@@ -20,6 +20,13 @@ on:
       - market-prediction-lab/src/historical-pit-venue-universe-gate-v1.js
       - market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
       - market-prediction-lab/src/four-market-whole-pit-price-coverage-v1.js
+      - market-prediction-lab/src/research-selected-window-v1.js
+      - market-prediction-lab/tests/research-selected-window-v1.test.js
+      - market-prediction-lab/src/research-minute-to-multiframe-v1.js
+      - market-prediction-lab/tests/research-minute-to-multiframe-v1.test.js
+      - market-prediction-lab/scripts/build-research-multitimeframe-v1.mjs
+      - market-prediction-lab/tests/research-multitimeframe-cli-v1.test.js
+      - market-prediction-lab/src/timeframes.js
       - market-prediction-lab/src/four-market-pit-daily-ledger-v1.js
       - market-prediction-lab/scripts/audit-four-market-pit-receipt-ledger-v1.mjs
       - market-prediction-lab/tests/four-market-pit-daily-ledger-v1.test.js
@@ -67,6 +74,9 @@ jobs:
           node --test market-prediction-lab/tests/historical-pit-venue-universe-gate-v1.test.js
           node --test market-prediction-lab/tests/four-market-whole-pit-price-coverage-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-daily-ledger-v1.test.js
+          node --test market-prediction-lab/tests/research-selected-window-v1.test.js
+          node --test market-prediction-lab/tests/research-minute-to-multiframe-v1.test.js
+          node --test market-prediction-lab/tests/research-multitimeframe-cli-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
           node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js

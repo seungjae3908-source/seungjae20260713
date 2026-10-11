@@ -309,3 +309,88 @@ test("native PIT fetch -> full-name day assembly -> compact ledger receipt is di
    /PIT_LEDGER_CLI_INPUT_OR_SCOPE_INVALID/);
  }finally{rmSync(folder,{recursive:true,force:true});}
 });
+
+test("custom 2022 research window outside legacy 3 years accepts only its 5 historical source days",()=>{
+ const start=Date.parse("2022-06-01T00:00:00Z");
+ const m=provider(spot);
+ m.coverageStartMs=start-60*D;
+ m.coverageEndMs=start+20*D;
+ m.retrievedAtMs=start+25*D;
+ m.memberships[0]={...m.memberships[0],listedAtMs:start-30*D};
+ m.memberships[1]={...m.memberships[1],
+   listedAtMs:start-30*D,removedAtMs:start+2*D};
+ m.rawMembershipDigestSha256=digestPITMembershipRowsV1(m.memberships);
+ const receipts=Array.from({length:5},(_,i)=>make(spot,start+i*D,m));
+ assert.ok(receipts.every(x=>x.status==="SOURCE_ATTESTED_PIT_PRICE_JOIN_ONLY"));
+ const r=ledger({
+  market:spot,dayReceipts:receipts,
+  researchWindow:{startDate:"2022-06-01",endDate:"2022-06-05"},
+ });
+ assert.equal(r.status,"SOURCE_ATTESTED_COMPACT_SELECTED_WINDOW_ONLY");
+ assert.equal(r.requestedTradingDays,5);
+ assert.equal(r.sourceAttestedPriceJoinedDays,5);
+ assert.equal(r.sourceArchiveFullSelectedWindowCovered,true);
+ assert.equal(r.sourceAttestedFullSelectedWindowReceiptCoverage,true);
+ assert.equal(r.selectedResearchStartUtc,"2022-06-01");
+ assert.equal(r.selectedResearchEndInclusiveUtc,"2022-06-05");
+ assert.equal(r.researchRangeSelectionMode,"USER_SELECTED");
+ assert.equal(r.actualMarketWideOpportunityCount,null);
+ assert.equal(r.trueMarketWideRecall,null);
+ assert.equal(r.profitabilityProven,false);
+});
+test("select ten years on empty saved archive to see missing days, NOT zero opportunities",()=>{
+ const a=ledger({market:futures,
+  researchWindow:{startDate:"2016-01-01",endDate:"2025-12-31"},
+ });
+ assert.ok(a.requestedTradingDays>3650);
+ assert.equal(a.sourceAttestedPriceJoinedDays,0);
+ assert.equal(a.missingDayReceiptCount,a.requestedTradingDays);
+ assert.equal(a.sourceAttestedFullSelectedWindowReceiptCoverage,false);
+ assert.equal(a.sourceObservedPriceEvents,null);
+ assert.equal(a.actualMarketWideOpportunityCount,null);
+ assert.equal(a.trueMarketWideRecall,null);
+ assert.equal(a.monthlyCoverage["2016-01"].requestedDays,31);
+});
+test("stock calendar is limited to selected range and remains independently unverified",()=>{
+ const start=Date.parse("2025-02-03T00:00:00Z");
+ assert.throws(()=>ledger({market:"US_STOCK",expectedStockDays:[start],
+   researchWindow:{startDate:"2022-01-01",endDate:"2022-01-31"},
+ }),/PIT_LEDGER_STOCK_CALENDAR_INVALID/);
+ const x=ledger({market:"KR_STOCK",expectedStockDays:[start],
+  dayReceipts:[make("KR_STOCK",start)],
+  researchWindow:{startDate:"2025-02-03",endDate:"2025-02-03"},
+ });
+ assert.equal(x.requestedTradingDays,1);
+ assert.equal(x.sourceAttestedPriceJoinedDays,1);
+ assert.equal(x.sourceAttestedFullSelectedWindowReceiptCoverage,false);
+ assert.equal(x.stockOfficialTradingCalendarIndependentlyVerified,false);
+ assert.equal(x.actualMarketWideOpportunityCount,null);
+});
+test("private CLI --start/--end accepts dynamic one-day job, never rewrites original receipt",()=>{
+ const folder=mkdtempSync(join(tmpdir(),"pit-dynamic-window-"));
+ try{
+  const d=WINDOW.startMs,p=join(folder,"receipt.json");
+  writeFileSync(p,JSON.stringify(make(spot,d)),{mode:0o600});
+  const index=join(folder,"index.json"),output=join(folder,"out.json");
+  writeFileSync(index,JSON.stringify({dayReceiptFiles:[p]}),{mode:0o600});
+  const config=parseArgs([
+   "--mode","ledger","--market",spot,
+   "--start",utc(d),"--end",utc(d),
+   "--input",index,"--output",output,
+  ]);
+  assert.deepEqual(config.researchWindow,{
+   startDate:utc(d),endDate:utc(d)});
+  const r=cli(config);
+  assert.equal(r.status,"SOURCE_ATTESTED_COMPACT_SELECTED_WINDOW_ONLY");
+  assert.equal(r.requestedTradingDays,1);
+  const saved=JSON.parse(readFileSync(output,"utf8"));
+  assert.equal(saved.selectedResearchStartUtc,utc(d));
+  assert.equal(saved.actualMarketWideOpportunityCount,null);
+  assert.equal(statSync(output).mode&0o077,0);
+  assert.throws(()=>cli(config),/PIT_LEDGER_DESTINATION_ALREADY_EXISTS/);
+  assert.throws(()=>parseArgs([
+   "--mode","ledger","--market",spot,
+   "--start","2025-01-01","--input",index,"--output",output,
+  ]),/PIT_LEDGER_CLI_INPUT_OR_SCOPE_INVALID/);
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});

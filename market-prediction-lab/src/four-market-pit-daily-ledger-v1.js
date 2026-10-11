@@ -2,8 +2,12 @@ import {createHash} from "node:crypto";
 import {
  auditWholeVenuePITDailyCoverageV1,
  FOUR_MARKET_WHOLE_SCOPE_V1,
- WHOLE_MARKET_BENCHMARK_WINDOW_V1,
 } from "./four-market-whole-pit-price-coverage-v1.js";
+import {
+ isValidHistoricalUtcDayV1,
+ resolveSelectedResearchWindowV1,
+ RESEARCH_WINDOW_MAX_UTC_DAYS_V1,
+} from "./research-selected-window-v1.js";
 
 /**
  * Bounded inventory of ALREADY audited date-native PIT+OHLC sources. The
@@ -17,12 +21,10 @@ import {
  */
 const DAY=86_400_000, SHA=/^[0-9a-f]{64}$/;
 const VENUES=FOUR_MARKET_WHOLE_SCOPE_V1;
-const WINDOW=WHOLE_MARKET_BENCHMARK_WINDOW_V1;
 const own=(x,k)=>Object.prototype.hasOwnProperty.call(x,k);
 const obj=x=>x!=null&&typeof x==="object"&&!Array.isArray(x);
 const hash=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
-const day=x=>Number.isSafeInteger(x)&&x>=WINDOW.startMs
- &&x<WINDOW.endExclusiveMs&&x%DAY===0;
+const day=isValidHistoricalUtcDayV1;
 const crypto=x=>x==="CRYPTO_SPOT"||x==="CRYPTO_FUTURES";
 
 function safety(data={}){
@@ -80,24 +82,34 @@ export function auditOnePITDayIntoCompactReceiptV1({
 }
 
 export function auditCompactPITReceiptLedgerV1({
- market,dayReceipts=[],expectedStockDays=null,
+ market,dayReceipts=[],expectedStockDays=null,researchWindow=null,
 }={}){
- if(!own(VENUES,market)||!Array.isArray(dayReceipts)||dayReceipts.length>1100)
+ if(!own(VENUES,market)||!Array.isArray(dayReceipts)
+    ||dayReceipts.length>RESEARCH_WINDOW_MAX_UTC_DAYS_V1)
    throw new TypeError("PIT_LEDGER_MARKET_OR_SOURCE_LIMIT_INVALID");
+ const window=resolveSelectedResearchWindowV1(researchWindow);
  if(expectedStockDays!=null&&(!Array.isArray(expectedStockDays)
-    ||expectedStockDays.length<1||expectedStockDays.length>1100
-    ||expectedStockDays.some((d,i)=>!day(d)||(i>0&&d<=expectedStockDays[i-1]))))
+    ||expectedStockDays.length<1
+    ||expectedStockDays.length>RESEARCH_WINDOW_MAX_UTC_DAYS_V1
+    ||expectedStockDays.some((d,i)=>!day(d)
+      ||d<window.startMs||d>=window.endExclusiveMs
+      ||(i>0&&d<=expectedStockDays[i-1]))))
    throw new TypeError("PIT_LEDGER_STOCK_CALENDAR_INVALID");
  if(crypto(market)&&expectedStockDays!=null)
    throw new TypeError("PIT_LEDGER_CRYPTO_CANNOT_SUPPLY_STOCK_CALENDAR");
  const days=crypto(market)
-   ?Array.from({length:WINDOW.expectedCryptoUtcDayCount},
-      (_,i)=>WINDOW.startMs+i*DAY)
+   ?Array.from({length:window.requestedUtcDayCount},
+      (_,i)=>window.startMs+i*DAY)
    :expectedStockDays;
  const base=safety({
   schemaVersion:"four-market-compact-pit-receipt-ledger-v1",
   market,venue:VENUES[market].venue,
-  fixedStartUtc:"2023-09-26",fixedEndUtcInclusive:"2026-09-25",
+  fixedStartUtc:window.selectedByUser?null:"2023-09-26",
+  fixedEndUtcInclusive:window.selectedByUser?null:"2026-09-25",
+  selectedResearchStartUtc:window.startDate,
+  selectedResearchEndInclusiveUtc:window.endDate,
+  selectedResearchUtcDayCount:window.requestedUtcDayCount,
+  researchRangeSelectionMode:window.selectionMode,
   intendedMarketScope:VENUES[market].scope,
   stockOfficialTradingCalendarIndependentlyVerified:false,
   requestedTradingDays:days?.length??null,
@@ -106,8 +118,10 @@ export function auditCompactPITReceiptLedgerV1({
   missingDayReceiptCount:null,blockedDayReceiptCount:null,
   completeRequestedDayReceiptCoverage:false,
   sourceAttestedFullBenchmarkReceiptCoverage:false,
+  sourceAttestedFullSelectedWindowReceiptCoverage:false,
   sourceArchiveLineageConsistent:false,
   sourceArchiveFullBenchmarkWindowCovered:false,
+  sourceArchiveFullSelectedWindowCovered:false,
   dailyReceiptsAreCompactIntegrityProofOnly:true,
   sourceDailyRawOHLCAllLoadedInOneFile:false,
   sourceObservedPriceEvents:null,
@@ -184,22 +198,28 @@ export function auditCompactPITReceiptLedgerV1({
    rec.archiveMembershipSha256,rec.archiveSourceId,rec.sourceClass]);
   sources.add(lineage);
   joined.add(rec.dailySourceRowsSha256);
-  if(rec.archiveCoverageStartMs>WINDOW.startMs
-     ||rec.archiveCoverageEndMs<WINDOW.endExclusiveMs)
+  if(rec.archiveCoverageStartMs>window.startMs
+     ||rec.archiveCoverageEndMs<window.endExclusiveMs)
    fullSpan=false;
  }
  const allSource=sourceCount===days.length;
  const stableLineage=sources.size===1&&sourceCount+fixtureCount>0;
  const full=crypto(market)&&allSource&&stableLineage&&fullSpan;
- const status=full?"SOURCE_ATTESTED_COMPACT_3Y_LEDGER_ONLY":
+ const status=full?(window.selectedByUser
+   ?"SOURCE_ATTESTED_COMPACT_SELECTED_WINDOW_ONLY"
+   :"SOURCE_ATTESTED_COMPACT_3Y_LEDGER_ONLY"):
    "INCOMPLETE_OR_SOURCE_LIMITED_PIT_LEDGER";
- const reason=full?"ONE_SOURCE_ATTESTED_PIT_ARCHIVE_WITH_ALL_DATES":
+ const reason=full?(window.selectedByUser
+   ?"ONE_SOURCE_ATTESTED_PIT_ARCHIVE_WITH_ALL_SELECTED_DATES"
+   :"ONE_SOURCE_ATTESTED_PIT_ARCHIVE_WITH_ALL_DATES"):
    !crypto(market)?"STOCK_EXCHANGE_CALENDAR_NOT_INDEPENDENTLY_VERIFIED":
    missingCount?"MISSING_HISTORICAL_DAY_RECEIPTS":
    blockedCount?"BLOCKED_DAY_SOURCES":
    fixtureCount?"TEST_FIXTURE_DAYS_CANNOT_PROVE_SOURCE":
    !stableLineage?"PIT_SOURCE_LINEAGE_CHANGED":
-   !fullSpan?"PIT_SOURCE_NOT_FULL_THREE_YEAR_WINDOW":
+   !fullSpan?(window.selectedByUser
+     ?"PIT_SOURCE_NOT_FULL_SELECTED_WINDOW"
+     :"PIT_SOURCE_NOT_FULL_THREE_YEAR_WINDOW"):
    "INCOMPLETE_DATE_RECEIPT_COVERAGE";
  return Object.freeze(safety({
   ...base,status,reason,
@@ -209,7 +229,9 @@ export function auditCompactPITReceiptLedgerV1({
   completeRequestedDayReceiptCoverage:records.size===days.length,
   sourceArchiveLineageConsistent:stableLineage,
   sourceArchiveFullBenchmarkWindowCovered:fullSpan&&sources.size>0,
+  sourceArchiveFullSelectedWindowCovered:fullSpan&&sources.size>0,
   sourceAttestedFullBenchmarkReceiptCoverage:full,
+  sourceAttestedFullSelectedWindowReceiptCoverage:full,
   archiveLineageCount:sources.size,
   distinctDailyPriceSourceDigestCount:joined.size,
   dayPreview:preview,monthlyCoverage:months,blockedReasonCounts:reasons,
