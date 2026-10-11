@@ -12,7 +12,7 @@ These observations do not establish that 403 continues or that post-reconnect pe
 
 ## Scope
 
-This Draft does not modify an existing worker or deploy the application. It adds:
+This audit does not modify an existing worker or deploy the application. It includes:
 - ops/telegram-production-worker-readonly-audit.mjs: one-shot read of exact PM2 metadata, deploy marker, whitelisted loopback /api/health fields, existing Telegram market report state and signal subscriber state, plus one bounded GET to the configured local-only signal source to validate its public non-trading envelope and count events without returning contents.
 - .github/workflows/telegram-production-worker-readonly-audit.yml: owner-only Release Control #1555 protected production workflow.
 - tests for redaction, stale SHA failure, bounded file reads and no-send behavior.
@@ -25,6 +25,25 @@ The workflow then requires a separate GitHub protected production review. The Dr
 
 State may contain Telegram chat IDs and signal identifiers. This audit publishes no raw keys, IDs, paths, HTTP bodies, tokens or credentials. It reports only safe classifications, counts, timestamps, booleans and error codes. A signal source status READY means a validated local safe public signal envelope, not a signal-to-Telegram delivery. It rejects unsafe file locations and oversized/symlinked files.
 
+## Production root regression (2026-10-11)
+The first protected Production audit run #38096662006 reached PM2 safely, verified the online process
+and matching deployed PM2/marker SHA, but returned PRODUCTION_IDENTITY_MISMATCH before reading
+health or ledgers. The audit incorrectly required PM2 cwd to be /opt/stock-app/api-server;
+the existing Production deployment and six-room PM2 binding both require /opt/stock-app.
+
+The fixed diagnostic requires BOTH the canonical /opt/stock-app PM2 cwd and
+/opt/stock-app/api-server/dist/index.mjs entrypoint, plus exact deployed SHA and marker.
+Default market-brief and signal-subscriber ledger paths now follow the actual PM2 cwd
+(/opt/stock-app/.runtime), with constrained read-only allowlists for this directory,
+the historical api-server/.runtime directory, and /opt/stock-app-data. Source files,
+env files, secrets and other paths remain disallowed. Error classifications distinguish
+PM2_NOT_ONLINE, PRODUCTION_SHA_MISMATCH, PM2_CWD_MISMATCH, and PM2_ENTRYPOINT_MISMATCH
+without exposing raw paths or process environment values.
+
+Run #38096662006 sent zero messages and made zero DB/PM2/financial mutations.
+A new exact-main protected audit run and human production-environment review remain
+necessary to establish fresh market, signal and personal-delivery observations.
+
 ## Interpretation
 
 - A market report ledger entry means accepted OR duplicate-suppressed, not proof of a fresh Bot API message. Proof level is PERSISTED_LEDGER_ONLY.
@@ -35,4 +54,7 @@ State may contain Telegram chat IDs and signal identifiers. This audit publishes
 
 ## Authorization boundary
 
-Replit and Replit Agent are prohibited. No Ready/Merge/Production or Staging deployment, no LIVE or AUTO authority changes. The work remains Draft pending explicit user approval and exact-HEAD CI evidence.
+Replit and Replit Agent are prohibited. The audit requires separate code-review/merge approval
+and a protected production-environment approval for each invocation. No Staging/Production app
+deployment, LIVE/AUTO authority change, financial action, Telegram send, database write or PM2 restart
+is authorized by running this audit.
