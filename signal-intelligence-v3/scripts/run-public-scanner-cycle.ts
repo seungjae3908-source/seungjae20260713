@@ -12,7 +12,7 @@ import { rankScannerCandidates } from '../../api-server/src/services/scanner-can
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
 import { withScannerOutcome } from '../../api-server/src/services/scanner-signal.types';
 import * as yahoo from '../../api-server/src/providers/yahoo';
-import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/public-coverage-audit-v1.js';
+import { getUsPublicUniverse } from '../../api-server/src/providers/us-universe';
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
@@ -22,8 +22,6 @@ const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './s
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
-const NASDAQ_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
-const OTHER_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
@@ -46,9 +44,10 @@ const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.
 
 function freshState() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     serviceSha: SERVICE_SHA,
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
+    rosterIds: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
     retained: {},
     updatedAt: new Date(0).toISOString(),
   };
@@ -111,55 +110,12 @@ function createStartScheduler(minIntervalMs) {
   };
 }
 
-async function fetchText(url) {
-  let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error('PUBLIC_DIRECTORY_TIMEOUT')), 8_000);
-    try {
-      const response = await fetch(url, {
-        headers: { accept: 'text/plain', 'user-agent': 'signal-intelligence-v3/1.0' },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw Object.assign(new Error(`PUBLIC_DIRECTORY_HTTP_${response.status}`), { status: response.status });
-      return await response.text();
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) await sleep(250 * attempt);
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-  throw lastError;
-}
-
-let usPublicUniversePromise;
 async function usPublicUniverse() {
-  if (!usPublicUniversePromise) {
-    usPublicUniversePromise = Promise.all([fetchText(NASDAQ_LISTED_URL), fetchText(OTHER_LISTED_URL)])
-      .then(([nasdaqText, otherText]) => {
-        const parsed = parseNasdaqTraderDirectories({ nasdaqText, otherText });
-        if (!parsed || parsed.partial === true || !Array.isArray(parsed.entries) || parsed.entries.length < 1_000) {
-          throw new Error('NASDAQ_TRADER_UNIVERSE_INCOMPLETE');
-        }
-        return {
-          entries: parsed.entries,
-          totalCount: parsed.entries.length,
-          source: parsed.source,
-          partial: false,
-          stale: false,
-          providerErrorCount: 0,
-          loadedAt: new Date().toISOString(),
-          rawTotal: parsed.rawTotal,
-          exclusionReasons: parsed.exclusionReasons,
-        };
-      })
-      .catch((error) => {
-        usPublicUniversePromise = undefined;
-        throw error;
-      });
-  }
-  return usPublicUniversePromise;
+  // Same strict two-source/footer validation as the normal app. No alternate
+  // permissive parser or paid-provider call is used by the public producer.
+  const entries = await getUsPublicUniverse();
+  return { entries, totalCount: entries.length, source: 'nasdaq-trader-public-directory',
+    partial: false, stale: false, providerErrorCount: 0, loadedAt: new Date().toISOString() };
 }
 
 function yahooProviderCandidates(lane, ticker, entry) {
@@ -343,7 +299,7 @@ async function scanCrypto(lane, cursor) {
 async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   const persistedState = await readJson(CYCLE_STATE_FILE, null);
-  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 2;
+  const releaseChanged = persistedState?.serviceSha !== SERVICE_SHA || persistedState?.schemaVersion !== 3;
   const state = releaseChanged ? freshState() : persistedState;
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
@@ -358,7 +314,11 @@ async function main() {
       const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
-      const decision = publicCyclePageDecision(response, lane.market, cursor);
+      const decision = publicCyclePageDecision(response, lane.market, cursor, state.rosterIds?.[lane.id] ?? null);
+      const rosterId = response.universe.rosterId ?? null;
+      if (['VERIFIED_BATCH', 'BLOCKED_RESEARCH_ROTATION_ONLY', 'ROSTER_CHANGED_RESTART', 'ROSTER_SHRUNK_RESTART'].includes(decision.reason)) {
+        state.rosterIds[lane.id] = rosterId;
+      }
       const status = decision.status;
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
@@ -379,7 +339,7 @@ async function main() {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
           state.retained[retainedKey(input)] = {
-            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor, sourceCycleId } },
+            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor, sourceCycleId, rosterId } },
             expiresAt: card?.expiresAt ?? fallbackExpiry(lane, nowMs),
             laneId: lane.id,
             cursor,
@@ -390,6 +350,7 @@ async function main() {
       coverage.push({
         laneId: lane.id,
         sourceCycleId,
+        rosterId,
         cursorRotatedBlockedOnly: decision.blockedObservationOnly,
         cursorRotationReason: decision.reason,
         pageExecution: { requestedCount: response.execution.requestedCount, startedCount: response.execution.startedCount,
@@ -441,6 +402,7 @@ async function main() {
   const snapshot = {
     ...baseSnapshot,
     sourceCycleId,
+    rosterBindingVersion: 1,
     serviceSha: SERVICE_SHA,
     profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,

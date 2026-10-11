@@ -3659,7 +3659,9 @@ function gradeFor(score, factors, input, aiValidation, direction) {
 }
 function runScannerQuantStrategy(input) {
   const primary = buildScannerIndicatorSnapshot(input.candles, input.sessionTimeZone ?? "UTC");
-  const context = buildScannerIndicatorSnapshot(input.contextCandles.length ? input.contextCandles : input.candles, input.sessionTimeZone ?? "UTC");
+  const context = buildScannerIndicatorSnapshot(input.contextCandles, input.sessionTimeZone ?? "UTC");
+  const contextMissing = input.contextCandles.length === 0;
+  const contextInsufficient = input.contextCandles.length < 60;
   const aiValidation = input.aiValidation ?? DEFAULT_AI_VALIDATION;
   const factors = input.mode === "scalping" ? scalpingFactors(primary, context, input) : input.mode === "position" ? positionFactors(primary, context, input) : swingFactors(primary, context, input);
   const limits = limitsFor(input.mode);
@@ -3669,8 +3671,9 @@ function runScannerQuantStrategy(input) {
   if (input.dataQuality.state === "DATA_UNTRUSTED") score = Math.min(score, 49);
   if (aiValidation.status === "VETO") score = Math.min(score, 49);
   if (aiValidation.status === "PARTIAL") score = Math.min(score, 79);
+  if (contextInsufficient) score = Math.min(score, 74);
   const independentSignalEvidence = hasIndependentSignalEvidence(factors, direction);
-  const strongSignalEligible = direction !== "NEUTRAL" && independentSignalEvidence && score >= limits.strongScore && input.dataQuality.state !== "DATA_UNTRUSTED" && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore && (input.riskScore ?? 101) <= limits.maxRiskScore && factors.liquidity >= limits.minLiquidityFactor && factors.volatility >= limits.minVolatilityFactor && aiValidation.status !== "VETO";
+  const strongSignalEligible = !contextInsufficient && direction !== "NEUTRAL" && independentSignalEvidence && score >= limits.strongScore && input.dataQuality.state !== "DATA_UNTRUSTED" && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore && (input.riskScore ?? 101) <= limits.maxRiskScore && factors.liquidity >= limits.minLiquidityFactor && factors.volatility >= limits.minVolatilityFactor && aiValidation.status !== "VETO";
   const grade = gradeFor(score, factors, input, aiValidation, direction);
   const reasons = [
     `전략 ${input.mode}`,
@@ -3689,7 +3692,9 @@ function runScannerQuantStrategy(input) {
     ...input.dataQuality.issues.map((issue) => `${issue.code}: ${issue.message}`),
     ...aiValidation.counterEvidence.map((reason) => `AI 반대근거: ${reason}`),
     ...aiValidation.missingData.map((reason) => `AI 데이터부족: ${reason}`),
-    ...aiValidation.risks.map((reason) => `AI 위험: ${reason}`)
+    ...aiValidation.risks.map((reason) => `AI 위험: ${reason}`),
+    ...contextMissing ? ["CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE"] : [],
+    ...!contextMissing && contextInsufficient ? ["CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT"] : []
   ];
   return { mode: input.mode, score, grade, direction, factors, primary, context, strongSignalEligible, reasons, warnings, aiValidation };
 }
@@ -3777,7 +3782,7 @@ function futuresPublicContext(card) {
 function applyScannerQuantHardening(input) {
   const strategyMode = input.strategyMode ?? scannerStrategyForTimeframe(input.timeframe);
   const qualityCandles = recentQualityCandles(input.candles, strategyMode);
-  const quality = evaluateScannerDataQuality({
+  const primaryQuality = evaluateScannerDataQuality({
     symbol: input.card.symbol,
     timeframe: input.timeframe,
     candles: qualityCandles,
@@ -3790,12 +3795,49 @@ function applyScannerQuantHardening(input) {
   });
   const contextMissing = input.contextCandles !== void 0 && input.contextCandles.length === 0;
   const contextCandles = input.contextCandles ?? input.candles;
+  const contextTimeframe = input.contextTimeframe ?? scannerContextTimeframe(strategyMode);
+  const contextQuality = !contextMissing && input.contextCandles !== void 0 && input.contextCandles !== input.candles ? evaluateScannerDataQuality({
+    symbol: input.card.symbol,
+    timeframe: contextTimeframe,
+    candles: recentQualityCandles(contextCandles, strategyMode),
+    now: input.now,
+    sessionAware: input.sessionAware,
+    sessionTimeZone: input.card.market === "US" ? "America/New_York" : "Asia/Seoul"
+  }) : null;
+  const contextInsufficient = input.contextCandles !== void 0 && !contextMissing && contextCandles.length < 60;
+  const contextRestricted = contextMissing || contextInsufficient || contextQuality != null && !contextQuality.strongSignalAllowed;
+  const contextInvalid = contextQuality?.state === "DATA_UNTRUSTED";
+  const quality = {
+    ...primaryQuality,
+    state: contextInvalid ? "DATA_UNTRUSTED" : contextRestricted && primaryQuality.state === "TRUSTED" ? "DEGRADED" : primaryQuality.state,
+    score: Math.min(primaryQuality.score, contextQuality?.score ?? primaryQuality.score),
+    strongSignalAllowed: !contextRestricted && primaryQuality.strongSignalAllowed,
+    issues: [
+      ...primaryQuality.issues,
+      ...contextQuality?.issues.map((issue) => ({
+        ...issue,
+        message: `상위 시간봉 ${contextTimeframe}: ${issue.message}`
+      })) ?? [],
+      ...contextMissing ? [{
+        code: "MISSING_CANDLE",
+        severity: "warning",
+        message: "상위 시간봉 자료가 없어 강신호와 진입 계획을 차단했습니다."
+      }] : [],
+      ...contextInsufficient ? [{
+        code: "MISSING_CANDLE",
+        severity: "warning",
+        message: "상위 시간봉 EMA60 확인에 필요한 60개 봉이 없어 강신호와 진입 계획을 차단했습니다."
+      }] : []
+    ]
+  };
   const quant = runScannerQuantStrategy({
     sessionTimeZone: input.card.assetClass === "stock" ? input.card.market === "US" ? "America/New_York" : "Asia/Seoul" : "UTC",
     mode: strategyMode,
     timeframe: input.timeframe,
     candles: input.candles,
-    contextCandles,
+    // Invalid higher-timeframe facts must not affect technical direction or
+    // rank as if they were valid. The quant core never substitutes primary bars.
+    contextCandles: contextInvalid ? [] : contextCandles,
     price: input.card.price,
     tradingValue: input.card.tradingValue,
     spreadPercent: input.card.spreadPercent,
@@ -3805,11 +3847,11 @@ function applyScannerQuantHardening(input) {
   });
   const dataCompleteness = completenessFromMarketData(input.card, qualityCandles.length, quality.score);
   const directionChanged = quant.direction !== input.card.direction;
-  const dataTrustedForPlan = !contextMissing && quality.state !== "DATA_UNTRUSTED" && quality.strongSignalAllowed;
+  const dataTrustedForPlan = !contextRestricted && quality.state !== "DATA_UNTRUSTED" && quality.strongSignalAllowed;
   const pricePlan2 = directionChanged || !dataTrustedForPlan ? EMPTY_PRICE_PLAN : input.card.pricePlan;
   const planEligible = dataTrustedForPlan && !directionChanged && pricePlan2.riskReward != null && pricePlan2.riskReward >= 1.5;
   const strongSignalEligible = quality.state !== "DATA_UNTRUSTED" && quant.strongSignalEligible && planEligible && input.card.listingStatus === "LISTED" && dataCompleteness >= 75;
-  const dataState = quality.state === "DATA_UNTRUSTED" ? "untrusted" : quality.state === "DEGRADED" || contextMissing ? input.card.dataState === "complete" ? "partial" : input.card.dataState : input.card.dataState;
+  const dataState = quality.state === "DATA_UNTRUSTED" ? "untrusted" : quality.state === "DEGRADED" || contextRestricted ? input.card.dataState === "complete" ? "partial" : input.card.dataState : input.card.dataState;
   const confidence = Math.round(Math.min(
     100,
     Math.max(0, quant.score),
@@ -3820,6 +3862,8 @@ function applyScannerQuantHardening(input) {
     ...input.card.warnings,
     ...quant.warnings,
     ...contextMissing ? ["CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE"] : [],
+    ...contextInsufficient ? ["CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT"] : [],
+    ...contextQuality?.issues.length ? ["CONTEXT_TIMEFRAME_EVIDENCE_REJECTED"] : [],
     ...directionChanged ? ["Quant 방향이 기존 후보 방향과 달라 기존 진입·손절·목표 가격을 폐기했습니다."] : [],
     ...quality.state === "DATA_UNTRUSTED" ? ["DATA_UNTRUSTED: 승인·실행 호환 가격정보를 폐기했습니다."] : []
   ];
@@ -3841,13 +3885,13 @@ function applyScannerQuantHardening(input) {
       observedAt: quality.lastTimestamp,
       reasons: quality.issues.length ? quality.issues.map((issue) => `${issue.code}: ${issue.message}`) : [`최근 ${qualityCandles.length}개 전략 관련 캔들의 timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.`]
     },
-    ...contextMissing ? [{
+    ...input.contextCandles !== void 0 ? [{
       key: "context-timeframe",
       label: "상위 시간봉 근거",
-      status: "unverified",
+      status: contextRestricted ? "unverified" : "matched",
       source: "scanner-context-timeframe",
-      observedAt: null,
-      reasons: ["상위 시간봉 자료를 확보하지 못했습니다. 기본 시간봉으로 대신 검증하지 않습니다."]
+      observedAt: contextQuality?.lastTimestamp ?? (contextMissing ? null : primaryQuality.lastTimestamp),
+      reasons: contextMissing ? ["상위 시간봉 자료를 확보하지 못했습니다. 기본 시간봉으로 대신 검증하지 않습니다."] : contextInsufficient ? ["EMA60 확인에 필요한 상위 시간봉 60개를 확보하지 못했습니다."] : contextQuality?.issues.length ? contextQuality.issues.map((issue) => `${issue.code}: ${issue.message}`) : [`${contextTimeframe} 실제 근거의 timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.`]
     }] : []
   ];
   const hardened = {
@@ -3860,16 +3904,12 @@ function applyScannerQuantHardening(input) {
     dataState,
     strongSignalEligible,
     strategyMode,
-    signalGrade: contextMissing && (quant.grade === "S" || quant.grade === "A") ? "B" : quant.grade,
+    signalGrade: contextRestricted && (quant.grade === "S" || quant.grade === "A") ? "B" : quant.grade,
     dataQuality: {
-      state: contextMissing && quality.state === "TRUSTED" ? "DEGRADED" : quality.state,
+      state: quality.state,
       score: quality.score,
-      strongSignalAllowed: !contextMissing && quality.strongSignalAllowed,
-      issues: [...quality.issues, ...contextMissing ? [{
-        code: "MISSING_CANDLE",
-        severity: "warning",
-        message: "상위 시간봉 자료가 없어 강신호와 진입 계획을 차단했습니다."
-      }] : []]
+      strongSignalAllowed: quality.strongSignalAllowed,
+      issues: quality.issues
     },
     quantScore: quant.factors,
     aiValidation: quant.aiValidation,
@@ -4578,6 +4618,11 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
       const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
       const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
       const orderedRows = [...universe.rows].sort((left, right) => left.symbol.localeCompare(right.symbol));
+      const rosterId = createHash4("sha256").update(JSON.stringify([
+        request.market,
+        universe.source,
+        orderedRows.map((row) => row.symbol)
+      ])).digest("hex");
       const cursor = Math.max(0, Math.min(orderedRows.length, Math.floor(request.cursor) || 0));
       const batch = orderedRows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
@@ -4602,6 +4647,7 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
             timeframe: request.timeframe,
             candles,
             contextCandles: contextCandles ?? candles,
+            contextTimeframe,
             strategyMode,
             allowShort: request.market === "futures",
             now: providers.now()
@@ -4666,6 +4712,7 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
           maxConcurrency: work.maxConcurrency
         },
         universe: {
+          rosterId,
           totalCount: universe.rows.length,
           cursor,
           nextCursor,
