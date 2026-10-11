@@ -94,6 +94,11 @@ function validateReceipt(row,sha){
       !row.marketEvidence||typeof row.marketEvidence!=='object'
       ||Object.keys(row.marketEvidence).length!==MARKETS.length
       ||MARKETS.some(market=>!exactNumericFields(row.marketEvidence[market],MARKET_COUNTS))
+      ||MARKETS.some(market=>{
+        const observed=row.marketEvidence[market];
+        return observed.verifiedBatches+observed.blockedBatches
+          +observed.failedBatches!==3;
+      })
       ||MARKETS.reduce((n,market)=>n+row.marketEvidence[market].providerErrors,0)!==row.providerErrors
       ||MARKETS.reduce((n,market)=>n+row.marketEvidence[market].timeouts,0)!==row.timeouts
       ||MARKETS.reduce((n,market)=>n+row.marketEvidence[market].blockedBatches
