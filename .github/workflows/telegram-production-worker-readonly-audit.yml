@@ -123,9 +123,10 @@ jobs:
           const fs=require('node:fs');
           const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           const keys=['schemaVersion','scope','mainSha','expectedDeployedSha',
-            'pm2Sha','markerSha','pm2Online','exactDeployedIdentity',
+            'pm2Sha','markerSha','pm2Online','exactDeployedIdentity','pm2StartedAt',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
             'roomBindingsValid','personal','marketBrief','signalSubscriber','signalSource',
+            'signalHealth','signalUnits',
             'proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
           const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
@@ -143,16 +144,29 @@ jobs:
             && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
             && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
           if(Object.keys(r).sort().join()!==keys.sort().join()
-            ||r.schemaVersion!=='telegram-production-worker-readonly-v1'
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v2'
             ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
-            ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)
+            ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)||!safeIso(r.pm2StartedAt)
             ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
             ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE','HTTP_503',
               'HTTP_ERROR','INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
             ||!Number.isInteger(r.signalSource.eventCount) ||r.signalSource.eventCount<0
             ||r.signalSource.eventCount>10000
             ||typeof r.signalSource.safetyValidated!=='boolean'
+            ||!r.signalHealth ||!['NOT_CHECKED','READY','SNAPSHOT_MISSING',
+              'SNAPSHOT_STALE','HTTP_503','HTTP_ERROR','INVALID_RESPONSE',
+              'UNREACHABLE','TIMEOUT','UNSAFE_ENDPOINT'].includes(r.signalHealth.status)
+            ||!safeSha(r.signalHealth.serviceSha)
+            ||typeof r.signalHealth.snapshotReady!=='boolean'
+            ||typeof r.signalHealth.snapshotFresh!=='boolean'
+            ||Object.keys(r.signalHealth).sort().join()!==
+              ['status','serviceSha','snapshotReady','snapshotFresh'].sort().join()
+            ||!r.signalUnits
+            ||Object.keys(r.signalUnits).sort().join()!=='cycle,server,timer'
+            ||!Object.values(r.signalUnits).every(v=>
+              ['NOT_CHECKED','ACTIVE','INACTIVE','FAILED','NOT_FOUND',
+               'UNKNOWN','UNAVAILABLE'].includes(v))
             ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
             ||!/^[A-Z_]+$/u.test(String(r.classification))
             ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)
@@ -186,6 +200,7 @@ jobs:
                 '- Exact main: '+r.mainSha,
                 '- Production PM2/marker: '+r.pm2Sha+' / '+r.markerSha,
                 '- PM2 online and exact identity: '+r.pm2Online+' / '+r.exactDeployedIdentity,
+                '- PM2 started at (UTC): '+(r.pm2StartedAt||'unknown'),
                 '- Telegram activation/market/personal/6 rooms: '+
                     [r.activationEnabled,r.marketWorkerConfigured,r.personalWorkerConfigured,
                      r.roomBindingsValid].join(' / '),
@@ -202,6 +217,11 @@ jobs:
                 '- Signal subscriber latest ledger evidence: '+(s.lastEvidenceAt||'none'),
                 '- Local signal source GET status/count/safety: '+
                   [r.signalSource.status,r.signalSource.eventCount,r.signalSource.safetyValidated].join(' / '),
+                '- Signal V3 systemd server/timer/cycle: '+
+                  [r.signalUnits.server,r.signalUnits.timer,r.signalUnits.cycle].join(' / '),
+                '- Signal V3 local health/status/snapshot ready/fresh/SHA: '+
+                  [r.signalHealth.status,r.signalHealth.snapshotReady,
+                   r.signalHealth.snapshotFresh,r.signalHealth.serviceSha||'none'].join(' / '),
                 '- Classification: '+r.classification+'; proof level: '+r.proofLevel,
                 '- State entries mean accepted-or-deduped, not confirmed Bot API delivery.',
                 '- Telegram sends / database writes / PM2 restarts / financial changes: 0 / 0 / 0 / 0',

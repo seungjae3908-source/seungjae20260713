@@ -256,6 +256,121 @@ export async function readSignalSourceOnce({
   });
 }
 
+
+const SIGNAL_UNITS = Object.freeze({
+  server: 'investment-signal-intelligence-v3.service',
+  timer: 'investment-signal-intelligence-v3-cycle.timer',
+  cycle: 'investment-signal-intelligence-v3-cycle.service',
+});
+
+// Read only three fixed systemd unit names, never journal data or unit env.
+// All returned statuses are whitelisted: no raw paths, usernames or secrets.
+export function readSignalV3Units({ execImpl = execFileSync } = {}) {
+  const inspect = (unit) => {
+    let value;
+    try {
+      value = execImpl('systemctl',
+        ['show', '--no-pager', '--property=LoadState,ActiveState', unit],
+        { encoding: 'utf8', timeout: 3500, maxBuffer: 8192,
+          stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch { return 'UNAVAILABLE'; }
+    if (typeof value !== 'string' || value.length > 8192) return 'UNAVAILABLE';
+    const load = /^LoadState=([a-z-]+)$/mu.exec(value)?.[1];
+    const active = /^ActiveState=([a-z-]+)$/mu.exec(value)?.[1];
+    if (load === 'not-found') return 'NOT_FOUND';
+    if (load !== 'loaded') return 'UNKNOWN';
+    if (active === 'active') return 'ACTIVE';
+    if (active === 'inactive') return 'INACTIVE';
+    if (active === 'failed') return 'FAILED';
+    return 'UNKNOWN';
+  };
+  return Object.fromEntries(Object.entries(SIGNAL_UNITS)
+    .map(([label, unit]) => [label, inspect(unit)]));
+}
+
+function emptySignalHealth(status) {
+  return { status, serviceSha: null, snapshotReady: false, snapshotFresh: false };
+}
+
+/** Only fixed loopback V3 /health. Never emit response body or snapshotError. */
+export async function readSignalV3HealthOnce({
+  sourceUrl = process.env.SIGNAL_INTELLIGENCE_URL?.trim() || 'http://127.0.0.1:8790/v1/signals',
+  getImpl = httpGet,
+} = {}) {
+  let target;
+  try { target = new URL(sourceUrl); } catch { return emptySignalHealth('UNSAFE_ENDPOINT'); }
+  if (target.protocol !== 'http:'
+    || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)
+    || target.pathname !== '/v1/signals' || target.search || target.hash
+    || target.username || target.password) return emptySignalHealth('UNSAFE_ENDPOINT');
+  target.pathname = '/health';
+  return await new Promise(resolve => {
+    let finished = false;
+    let req = null;
+    const done = status => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(status);
+    };
+    const timer = setTimeout(() => {
+      done(emptySignalHealth('TIMEOUT'));
+      req?.destroy?.();
+    }, 5000);
+    try {
+      req = getImpl(target, { method: 'GET', timeout: 4500 }, res => {
+        if (res.statusCode !== 200) {
+          res.resume?.();
+          done(emptySignalHealth(res.statusCode === 503 ? 'HTTP_503' : 'HTTP_ERROR'));
+          return;
+        }
+        const chunks = [];
+        let bytes = 0;
+        res.on('data', chunk => {
+          bytes += chunk.length;
+          if (bytes > 131072) {
+            done(emptySignalHealth('INVALID_RESPONSE'));
+            res.destroy?.();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('error', () => done(emptySignalHealth('UNREACHABLE')));
+        res.on('end', () => {
+          let payload;
+          try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+          const sha = safeSha(payload?.serviceSha);
+          if (payload?.ok !== true || payload?.service !== 'signal-intelligence-v3'
+            || payload?.executionAuthority !== 'NONE'
+            || payload?.privateTradingApiAllowed !== false || payload?.realOrderAllowed !== false
+            || !['127.0.0.1', '::1', 'localhost'].includes(payload?.bindHost)
+            || !sha || typeof payload.snapshotReady !== 'boolean'
+            || typeof payload.snapshotFresh !== 'boolean') {
+            done(emptySignalHealth('INVALID_RESPONSE'));
+            return;
+          }
+          const status = !payload.snapshotReady ? 'SNAPSHOT_MISSING'
+            : payload.snapshotFresh ? 'READY' : 'SNAPSHOT_STALE';
+          done({ status, serviceSha: sha, snapshotReady: payload.snapshotReady,
+            snapshotFresh: payload.snapshotFresh });
+        });
+      });
+      req.on('timeout', () => {
+        done(emptySignalHealth('TIMEOUT'));
+        req.destroy?.();
+      });
+      req.on('error', () => done(emptySignalHealth('UNREACHABLE')));
+    } catch { done(emptySignalHealth('UNREACHABLE')); }
+  });
+}
+
+function safePm2StartAt(raw, nowMs) {
+  const milliseconds = Number(raw);
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 946684800000
+    || milliseconds > nowMs + 5000) return null;
+  return new Date(milliseconds).toISOString();
+}
+
 export async function observeProductionTelegram({
   mainSha = process.env.TELEGRAM_AUDIT_MAIN_SHA,
   deployedSha = process.env.TELEGRAM_AUDIT_DEPLOYED_SHA,
@@ -263,13 +378,16 @@ export async function observeProductionTelegram({
   health = readHealthOnce,
   state = readStateFile,
   signalSource = readSignalSourceOnce,
+  signalHealth = readSignalV3HealthOnce,
+  signalUnits = readSignalV3Units,
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
-    schemaVersion: 'telegram-production-worker-readonly-v1',
+    schemaVersion: 'telegram-production-worker-readonly-v2',
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
+    pm2StartedAt: null,
     activationEnabled: false, marketWorkerConfigured: false, personalWorkerConfigured: false,
     roomBindingsValid: false, personal: {
       healthAvailable: false, enabled: false, tickFresh: false, tickOk: false,
@@ -278,6 +396,8 @@ export async function observeProductionTelegram({
     marketBrief: emptyState('NOT_CHECKED'),
     signalSubscriber: emptyState('NOT_CHECKED'),
     signalSource: emptySource('NOT_CHECKED'),
+    signalHealth: emptySignalHealth('NOT_CHECKED'),
+    signalUnits: { server: 'NOT_CHECKED', timer: 'NOT_CHECKED', cycle: 'NOT_CHECKED' },
     proofLevel: 'NO_DELIVERY_PROOF',
     classification: 'NOT_STARTED',
     telegramSends: 0, databaseWrites: 0, pm2Restarts: 0,
@@ -290,6 +410,7 @@ export async function observeProductionTelegram({
     const observed = snapshot();
     if (!observed) { receipt.classification = 'PM2_UNAVAILABLE'; return receipt; }
     const runtime = observed.runtime ?? {};
+    receipt.pm2StartedAt = safePm2StartAt(runtime.pm_uptime, nowMs);
     receipt.pm2Sha = safeSha(observed.pm2Sha);
     receipt.markerSha = safeSha(observed.markerSha);
     receipt.pm2Online = observed.online === true;
@@ -347,6 +468,8 @@ export async function observeProductionTelegram({
     receipt.signalSubscriber = state(runtime.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH,
       'signal-intelligence-telegram-state.json', 'signal', nowMs);
     receipt.signalSource = await signalSource({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
+    receipt.signalHealth = await signalHealth({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
+    receipt.signalUnits = signalUnits();
     // Saved state is dedupe-or-delivery evidence, never Bot API confirmation.
     receipt.proofLevel = receipt.marketBrief.recordCount > 0
       || receipt.signalSubscriber.recordCount > 0 ? 'PERSISTED_LEDGER_ONLY' : 'NO_DELIVERY_PROOF';
