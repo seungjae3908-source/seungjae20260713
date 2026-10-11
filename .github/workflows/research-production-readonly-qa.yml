@@ -1,0 +1,258 @@
+name: Research Production Read-Only QA
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/research-production-readonly-qa.yml
+      - .github/scripts/research-production-readonly-contract.cjs
+      - .github/tests/research-production-readonly-contract.test.mjs
+      - ops/research-activation-preflight.mjs
+      - research-production/test/research-activation-preflight.test.mjs
+      - stock-analyzer/playwright.production-research.config.ts
+      - stock-analyzer/e2e/production-research-center-readonly-qa.spec.ts
+      - research-production/deploy/activate-server.sh
+      - .github/workflows/research-dashboard-activation.yml
+      - .github/workflows/research-production-natural-paper-observability.yml
+      - .github/workflows/research-market-watch-runtime-audit.yml
+  workflow_dispatch:
+    inputs:
+      research_sha:
+        description: Exact current main Research activation target (not app redeploy)
+        type: string
+        required: true
+      app_sha:
+        description: Exact unchanged deployed shared app SHA
+        type: string
+        required: true
+      production_deploy_run_id:
+        description: Official successful shared app deployment Run ID
+        type: string
+        required: true
+      staging_run_id:
+        description: Official exact research_sha automation_research Staging Run ID
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  statuses: read
+
+concurrency:
+  group: research-production-readonly-qa
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test .github/tests/research-production-readonly-contract.test.mjs research-production/test/research-activation-preflight.test.mjs
+      - name: Validate isolated cutover shell
+        run: bash -n research-production/deploy/activate-server.sh
+
+  authorize:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESEARCH_TARGET_SHA: ${{ inputs.research_sha }}
+      EXPECTED_DEPLOY_SHA: ${{ inputs.app_sha }}
+      STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+      PRODUCTION_DEPLOY_RUN_ID: ${{ inputs.production_deploy_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.research_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Authorize immutable source pair, exact CI, Staging and no conflicting mutation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {assertResearchQaAuthorization} = require('./.github/scripts/research-production-readonly-contract.cjs');
+            const params = {owner: context.repo.owner, repo: context.repo.repo};
+            const researchSha = process.env.RESEARCH_TARGET_SHA;
+            const appSha = process.env.EXPECTED_DEPLOY_SHA;
+            const deployRunId = process.env.PRODUCTION_DEPLOY_RUN_ID;
+            const stagingRunId = process.env.STAGING_RUN_ID;
+            if (![researchSha, appSha].every(x => /^[a-f0-9]{40}$/.test(x))
+              || ![deployRunId, stagingRunId].every(x => /^[1-9][0-9]*$/.test(x))) throw new Error('RESEARCH_QA_INPUT_INVALID');
+            const currentMain = (await github.rest.repos.getBranch({...params, branch: 'main'})).data.commit.sha;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {...params, ref: researchSha, per_page: 100});
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {...params, per_page: 100, created: '>=' + new Date(Date.now() - 86400000).toISOString()});
+            const status = [...statuses].sort((a,b) => b.id-a.id).find(x => x.context === 'application-ci/verified');
+            const ciId = /\/actions\/runs\/(\d+)$/.exec(status?.target_url ?? '')?.[1];
+            if (!ciId) throw new Error('RESEARCH_QA_CI_MISSING');
+            const ciRun = (await github.rest.actions.getWorkflowRun({...params, run_id: Number(ciId)})).data;
+            const deployRun = (await github.rest.actions.getWorkflowRun({...params, run_id: Number(deployRunId)})).data;
+            const stagingRun = (await github.rest.actions.getWorkflowRun({...params, run_id: Number(stagingRunId)})).data;
+            const identity = assertResearchQaAuthorization({researchSha, appSha, deployRunId, stagingRunId,
+              currentMain, workflowSha: context.sha, statuses, ciRun, deployRun, stagingRun, runs});
+            require('node:fs').writeFileSync('research-qa-identity.json', JSON.stringify(identity));
+      - name: Verify source ancestry and exact scoped Staging verdict (not activation-ready claim)
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$RESEARCH_TARGET_SHA"
+          git merge-base --is-ancestor "$EXPECTED_DEPLOY_SHA" "$RESEARCH_TARGET_SHA"
+          gh run download "$STAGING_RUN_ID" -n "staging-automation-research-verdict-${RESEARCH_TARGET_SHA}" -D "$RUNNER_TEMP/research-stage"
+          node .github/scripts/verify-staging-automation-research-verdict.mjs "$RUNNER_TEMP/research-stage/automation-research-staging-verdict.json" "$RESEARCH_TARGET_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-qa-identity
+          path: research-qa-identity.json
+          retention-days: 7
+
+  browser:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCTION_BASE_URL: https://lsj119.com
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_READONLY_E2E: 'true'
+      PRODUCTION_RESEARCH_ONLY_QA: 'true'
+      RESEARCH_TARGET_SHA: ${{ inputs.research_sha }}
+      EXPECTED_DEPLOY_SHA: ${{ inputs.app_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.research_sha }}
+          persist-credentials: false
+      - name: Revalidate after approval and record sanitized app identity
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$RESEARCH_TARGET_SHA"
+          test -n "$PRODUCTION_QA_LOGIN" && test -n "$PRODUCTION_QA_PASSWORD"
+          echo "::add-mask::$PRODUCTION_QA_LOGIN"
+          echo "::add-mask::$PRODUCTION_QA_PASSWORD"
+          mkdir -p stock-analyzer/production-research-artifacts
+          curl -fsS --max-time 15 "$PRODUCTION_BASE_URL/api/health" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{const v=JSON.parse(s);if(!v.ok||v.deploySha!==process.env.EXPECTED_DEPLOY_SHA||v.identityMatch!==true)process.exit(1);console.log(JSON.stringify({ok:v.ok,deploySha:v.deploySha,identityMatch:v.identityMatch}));});' > stock-analyzer/production-research-artifacts/health-before.json
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium and run all six Research views at ten widths
+        working-directory: stock-analyzer
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test --config=playwright.production-research.config.ts
+      - name: Assert shared app identity still unchanged
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          curl -fsS --max-time 15 "$PRODUCTION_BASE_URL/api/health" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{const v=JSON.parse(s);if(!v.ok||v.deploySha!==process.env.EXPECTED_DEPLOY_SHA||v.identityMatch!==true)process.exit(1);console.log(JSON.stringify({ok:v.ok,deploySha:v.deploySha,identityMatch:v.identityMatch}));});' > stock-analyzer/production-research-artifacts/health-after.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-qa-browser
+          path: |
+            stock-analyzer/production-research-artifacts/*-coverage.json
+            stock-analyzer/production-research-artifacts/playwright-report.json
+            stock-analyzer/production-research-artifacts/health-before.json
+            stock-analyzer/production-research-artifacts/health-after.json
+          if-no-files-found: error
+          retention-days: 7
+
+  host-preflight:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESEARCH_TARGET_SHA: ${{ inputs.research_sha }}
+      EXPECTED_DEPLOY_SHA: ${{ inputs.app_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.research_sha }}
+          persist-credentials: false
+      - name: Configure pinned SSH on runner only
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST" && test -n "$SSH_USER" && test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Collect every independent activation prerequisite and functional missing input
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')" = "$RESEARCH_TARGET_SHA"
+          watch_unit_digest="$(sha256sum research-production/deploy/research-production-market-watch.service | cut -d ' ' -f1)"
+          remote_env="$(printf 'RESEARCH_TARGET_SHA=%q EXPECTED_DEPLOY_SHA=%q WATCH_UNIT_DIGEST=%q' "$RESEARCH_TARGET_SHA" "$EXPECTED_DEPLOY_SHA" "$watch_unit_digest")"
+          { cat ops/research-activation-preflight.mjs; printf '\nconsole.log(JSON.stringify(collectResearchActivationPreflight({researchSha:process.env.RESEARCH_TARGET_SHA,appSha:process.env.EXPECTED_DEPLOY_SHA,watchUnitDigest:process.env.WATCH_UNIT_DIGEST})));\n'; } |
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "sudo -n env $remote_env node --input-type=module" > research-preflight.json
+          node -e 'const v=require("./research-preflight.json");if(v.prerequisitesReady!==true)process.exit(2);'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: research-qa-preflight
+          path: research-preflight.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove runner credentials
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+  receipt:
+    needs: [authorize, browser, host-preflight]
+    if: always() && needs.authorize.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.research_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: research-qa-*
+          path: evidence
+          merge-multiple: true
+      - name: Summarize all missing checks, then validate the independent Research receipt
+        run: |
+          node <<'NODE'
+          const fs=require('node:fs');
+          const read=file=>JSON.parse(fs.readFileSync('evidence/'+file,'utf8'));
+          const preflight=read('research-preflight.json');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, ['## Research activation batch preflight','',
+            ...preflight.checks.map(x=>`- ${x.id}: ${x.status} (${x.phase})`),
+            '', 'Scope: no shared app redeploy; no trading settings, DB, private provider API or order changes.',
+            'This receipt does not replace the failed global comprehensive QA or prove a closed loop/profitability.',''].join('\n'));
+          const {buildResearchQaReceipt}=require('./.github/scripts/research-production-readonly-contract.cjs');
+          const coverage=fs.readdirSync('evidence').filter(x=>x.endsWith('-coverage.json')).map(read);
+          const receipt=buildResearchQaReceipt({identity:read('research-qa-identity.json'),preflight,coverage,
+            report:read('playwright-report.json'),healthBefore:read('health-before.json'),healthAfter:read('health-after.json')});
+          fs.writeFileSync('research-production-readonly-qa.json',JSON.stringify(receipt,null,2)+'\n');
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: research-production-readonly-qa-${{ inputs.research_sha }}
+          path: research-production-readonly-qa.json
+          if-no-files-found: error
+          retention-days: 7
