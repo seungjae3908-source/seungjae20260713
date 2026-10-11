@@ -263,66 +263,16 @@ jobs:
           [[ "$previous" =~ ^[a-f0-9]{40}$ ]] || exit 1
           echo "sha=$previous" >> "$GITHUB_OUTPUT"
 
-      # Read-only, fail-closed V3 check before any Production mutation.
+      # Run audited version from immutable operator checkout, not the older
+      # deployed app filesystem. Read-only fixed loopback/systemd checks.
       - name: Block release on stale Signal V3 or public endpoint HTTP 503
         run: |
           set -Eeuo pipefail
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" 'node -' <<'NODE'
-          const http=require('node:http');
-          const {execFileSync}=require('node:child_process');
-          const fail=()=>{throw Error('TELEGRAM_PREDEPLOY_SIGNAL_V3_NOT_READY');};
-          const active=unit=>{
-            try{
-              const s=execFileSync('systemctl',[
-                'show','--no-pager','--property=LoadState,ActiveState',unit
-              ],{encoding:'utf8',timeout:3500,maxBuffer:4096,
-                stdio:['ignore','pipe','pipe']});
-              return /^LoadState=loaded$/mu.test(s)&&/^ActiveState=active$/mu.test(s);
-            }catch{return false;}
-          };
-          const read=route=>new Promise((resolve,reject)=>{
-            const req=http.get('http://127.0.0.1:8790'+route,{timeout:5000},res=>{
-              if(res.statusCode!==200){res.resume();reject(Error('HTTP_NOT_READY'));return;}
-              const chunks=[];let size=0;
-              res.on('data',c=>{
-                size+=c.length;if(size>1_048_576){req.destroy(Error('TOO_LARGE'));return;}
-                chunks.push(c);
-              });
-              res.on('error',()=>reject(Error('READ_ERROR')));
-              res.on('end',()=>{
-                try{resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));}
-                catch{reject(Error('JSON_INVALID'));}
-              });
-            });
-            req.on('timeout',()=>req.destroy(Error('TIMEOUT')));
-            req.on('error',()=>reject(Error('UNREACHABLE')));
-          });
-          (async()=>{
-            if(!active('investment-signal-intelligence-v3.service')
-              ||!active('investment-signal-intelligence-v3-cycle.timer'))fail();
-            const health=await read('/health');
-            if(health.ok!==true||health.service!=='signal-intelligence-v3'
-              ||health.executionAuthority!=='NONE'
-              ||health.privateTradingApiAllowed!==false||health.realOrderAllowed!==false
-              ||health.snapshotReady!==true||health.snapshotFresh!==true
-              ||!Number.isFinite(health.snapshotAgeMs)
-              ||health.snapshotAgeMs<0||health.snapshotAgeMs>900000
-              ||!/^[a-f0-9]{40}$/u.test(String(health.serviceSha||'')))fail();
-            const result=await read('/v1/signals');
-            if(result.ok!==true||result.serviceSha!==health.serviceSha
-              ||result.executionAuthority!=='NONE'
-              ||result.snapshot?.safety?.executionAuthority!=='NONE'
-              ||result.snapshot?.safety?.privateTradingApiAllowed!==false
-              ||result.snapshot?.safety?.realOrderAllowed!==false
-              ||!Array.isArray(result.snapshot.events))fail();
-            console.log('TELEGRAM_PREDEPLOY_SIGNAL_V3_FRESH_PASS');
-          })().catch(()=>{
-            console.error('TELEGRAM_PREDEPLOY_SIGNAL_V3_NOT_READY');
-            process.exitCode=1;
-          });
-          NODE
+            "$SSH_USER@$SSH_HOST" \
+            'TELEGRAM_PREDEPLOY_REMOTE_READONLY=true node --input-type=module -' \
+            < ops/telegram-predeploy-signal-health.mjs
 
       - name: Reject unrelated files between actual Production and exact main
         uses: actions/github-script@v7

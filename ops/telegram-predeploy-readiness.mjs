@@ -6,6 +6,8 @@
  * originate from separately verified, same-SHA protected QA receipts:
  * an untrusted JSON file is not evidence provenance by itself.
  */
+import { verifiedSignalV3Coverage } from './telegram-predeploy-signal-health.mjs';
+
 export const REQUIRED_CI_CONTEXTS = Object.freeze([
   'application-ci/verified',
   'browser-ui/verified',
@@ -97,12 +99,15 @@ export function evaluateTelegramPredeploy(evidence,{expectedSha,nowMs}={}) {
     || v3.getHttpStatus !== 200 || v3.snapshotReady !== true
     || v3.snapshotFresh !== true
     || !Number.isSafeInteger(v3.snapshotAgeMs)
-    || v3.snapshotAgeMs < 0 || v3.snapshotAgeMs > MAX_SNAPSHOT_AGE_MS) {
+    || v3.snapshotAgeMs < 0 || v3.snapshotAgeMs > MAX_SNAPSHOT_AGE_MS
+    || !verifiedSignalV3Coverage(v3.snapshotCoverage)) {
     block('SIGNAL_V3_STALE_OR_HTTP_503');
   }
   if (!object(v3) || v3.serverUnit !== 'ACTIVE'
     || v3.timerUnit !== 'ACTIVE'
     || v3.lastCycleResult !== 'SUCCEEDED'
+    || (v3.lastCycleAgeBand != null
+      && !['UNDER_5M','UNDER_15M'].includes(v3.lastCycleAgeBand))
     || !inWindow(v3.lastCycleAt,nowMs,MAX_SNAPSHOT_AGE_MS)) {
     block('SIGNAL_V3_CYCLE_NOT_PROVEN');
   }
