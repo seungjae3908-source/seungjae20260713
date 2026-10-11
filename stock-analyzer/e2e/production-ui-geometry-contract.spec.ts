@@ -54,3 +54,16 @@ test('mobile technical workspace and orderbook controls reserve navigation geome
   expect(css).toContain('button[aria-label="읽기 전용 호가창 열기"]');
   expect(css).toContain('+ 4.5rem');
 });
+
+test('AI Chart aligns desktop card columns and keeps tablet/mobile fallbacks', () => {
+  const chart = source('src/pages/ai-chart.tsx');
+  const previewCss = source('src/ui-vnext-preview.css');
+
+  expect(chart).toContain('data-testid="ai-chart-responsive-board"');
+  expect(chart).toContain('max-w-7xl items-stretch');
+  expect(chart).toContain('data-testid="ai-chart-detail-card-stack"');
+  expect(previewCss).toContain("[data-testid='ai-chart-responsive-board'] > section");
+  expect(previewCss).toContain('align-items: stretch !important;');
+  expect(previewCss).toContain('@media (min-width: 768px) and (max-width: 1199px)');
+  expect(previewCss).toContain('@media (max-width: 767px)');
+});

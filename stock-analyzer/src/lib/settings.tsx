@@ -59,7 +59,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  theme: 'dark',
+  theme: 'light',
   fontScale: 1,
   aiVerbosity: 'medium',
   alertTypes: [...ALERT_TYPES],
@@ -67,6 +67,7 @@ const DEFAULTS: Settings = {
 };
 
 const STORAGE_KEY = 'sa-settings-v1';
+const UI_VNEXT_PREVIEW = import.meta.env.VITE_UI_VNEXT_PREVIEW === 'true';
 
 function load(): Settings {
   return { ...DEFAULTS, ...storage.getJSON<Partial<Settings>>(STORAGE_KEY, {}) };
@@ -82,17 +83,20 @@ const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(load);
+  const effectiveTheme: ThemeMode = UI_VNEXT_PREVIEW ? 'light' : settings.theme;
+  const effectiveSettings = effectiveTheme === settings.theme
+    ? settings
+    : { ...settings, theme: effectiveTheme };
 
   // Apply theme + typography + translucency to the document.
   useLayoutEffect(() => {
     const root = document.documentElement;
-    root.classList.toggle('dark', settings.theme === 'dark');
-    root.style.colorScheme = settings.theme;
+    root.classList.toggle('dark', effectiveTheme === 'dark');
+    root.style.colorScheme = effectiveTheme;
     root.style.fontSize = `${Math.round(16 * settings.fontScale)}px`;
-    // Cards float translucently over the app's dark gradient backdrop.
-    root.style.setProperty('--bg-alpha', '0');
-    root.style.setProperty('--card-alpha', '0.72');
-  }, [settings.theme, settings.fontScale]);
+    root.style.setProperty('--bg-alpha', effectiveTheme === 'light' ? '0.98' : '0');
+    root.style.setProperty('--card-alpha', effectiveTheme === 'light' ? '1' : '0.72');
+  }, [effectiveTheme, settings.fontScale]);
 
   useEffect(() => {
     storage.setJSON(STORAGE_KEY, settings);
@@ -103,7 +107,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const reset = () => setSettings(DEFAULTS);
 
   return (
-    <SettingsContext.Provider value={{ settings, update, reset }}>
+    <SettingsContext.Provider value={{ settings: effectiveSettings, update, reset }}>
       {children}
     </SettingsContext.Provider>
   );

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, BarChart3, ExternalLink, Newspaper, RefreshCw } from 'lucide-react';
+import { ArrowLeft, BarChart3, Building2, ExternalLink, Newspaper, RefreshCw, ShieldCheck, ShoppingCart } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -159,6 +159,7 @@ export default function DetailPage() {
   const marketCap = compactNumber(profileData.marketCap ?? quoteData.marketCap, currency === 'KRW' ? '원' : ` ${currency}`);
   const newsRows = ((news.data?.news ?? news.data?.items ?? []) as AnyObj[]).slice(0, 40);
   const summaryLoading = quote.isLoading || profile.isLoading;
+  const healthStatus = quote.isError ? '오류' : profile.isError ? '부분' : summaryLoading ? '확인 중' : price == null ? '부분' : '정상';
   const routeContextValid = validStockContext(ticker, market);
   const canonicalChartSelection = useMemo<AnalysisSelection>(() => ({
     assetType: 'stock',
@@ -176,6 +177,11 @@ export default function DetailPage() {
     analysisSelection.select(canonicalChartSelection);
   }, [analysisSelection.select, analysisSelection.selection, canonicalChartSelection, routeContextValid]);
 
+  const openLiveOrder = () => {
+    const tradingMarket = market === 'US' ? 'us_stock' : 'domestic_stock';
+    navigate(`/auto-trading?market=${tradingMarket}&section=orders`);
+  };
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="canonical-stock-analysis" data-ticker={ticker}>
       <CenteredPageHeader
@@ -187,8 +193,10 @@ export default function DetailPage() {
           </button>
         )}
       />
-      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
-        <ResponsiveTabs value={tab} options={DETAIL_TABS} onChange={setTab} ariaLabel="종목 상세 탭" testId="stock-detail-tabs" compact />
+      <div className="shrink-0 border-b border-card-border bg-background px-3 py-2 sm:px-4">
+        <div className="mx-auto w-full max-w-5xl">
+          <ResponsiveTabs value={tab} options={DETAIL_TABS} onChange={setTab} ariaLabel="종목 상세 탭" testId="stock-detail-tabs" compact fluid />
+        </div>
       </div>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-4">
@@ -211,28 +219,52 @@ export default function DetailPage() {
               </section>
             ) : null}
 
-            <section className="rounded-3xl border border-card-border bg-card p-4 sm:p-5">
-              <div className="text-center">
-                <p className="text-sm font-bold text-muted-foreground">{ticker}</p>
-                <p className="mt-2 text-3xl font-black tabular-nums">
-                  {price == null ? (summaryLoading ? '확인 중' : '미확인') : formatAppPrice(price, currency)}
-                </p>
-                <p className={`mt-2 text-sm font-black ${changePercent == null ? 'text-muted-foreground' : changePercent >= 0 ? 'text-emerald-500' : 'text-destructive'}`}>
-                  {changePercent == null ? (summaryLoading ? '등락 확인 중' : '등락 미확인') : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`}
-                </p>
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-2 sm:mt-5 sm:grid-cols-4">
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시장</p><p className="mt-1 truncate text-sm font-black">{exchange}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">업종</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && sector === '-' ? '확인 중' : sector}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시가총액</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && marketCap === '-' ? '확인 중' : marketCap}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">상태</p><p data-testid="stock-detail-health-status" className="mt-1 text-sm font-black">{quote.isError ? '오류' : profile.isError ? '부분' : summaryLoading ? '확인 중' : price == null ? '부분' : '정상'}</p></div>
-              </div>
-            </section>
+            <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)] lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]" data-testid="stock-detail-responsive-board">
+              <section className="flex min-h-full flex-col justify-between rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5">
+                <div>
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black">{name || ticker}</p>
+                      <p className="mt-1 text-xs font-semibold text-muted-foreground">{ticker} · {exchange}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${healthStatus === '정상' ? 'bg-emerald-500/10 text-emerald-700' : healthStatus === '오류' ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-700'}`}>
+                      {healthStatus}
+                    </span>
+                  </div>
+                  <p className="mt-5 text-3xl font-black tabular-nums sm:text-4xl">
+                    {price == null ? (summaryLoading ? '확인 중' : '미확인') : formatAppPrice(price, currency)}
+                  </p>
+                  <p className={`mt-2 text-base font-black ${changePercent == null ? 'text-muted-foreground' : changePercent >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                    {changePercent == null ? (summaryLoading ? '등락 확인 중' : '등락 미확인') : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`}
+                  </p>
+                </div>
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-card-border pt-3">
+                  <p className="text-xs font-semibold text-muted-foreground">공개 시세 · 주문 전 계좌와 위험한도를 다시 확인합니다.</p>
+                  <button type="button" onClick={() => void Promise.all([quote.refetch(), profile.refetch()])} disabled={quote.isFetching || profile.isFetching} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-card-border bg-background px-3 text-xs font-black disabled:opacity-50">
+                    <RefreshCw className={`h-4 w-4 ${(quote.isFetching || profile.isFetching) ? 'animate-spin' : ''}`} />새로고침
+                  </button>
+                </div>
+              </section>
 
-            <section className="grid grid-cols-3 gap-2" aria-label="종목 상세 빠른 실행">
-              <button type="button" onClick={() => setTab('chart')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary px-2 text-xs font-black text-primary-foreground"><BarChart3 className="h-5 w-5" /><span className="truncate">AI 차트</span></button>
-              <button type="button" onClick={() => setTab('news')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black"><Newspaper className="h-5 w-5 text-primary" /><span className="truncate">뉴스</span></button>
-              <button type="button" onClick={() => setTab('analysis')} className="flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black"><ExternalLink className="h-5 w-5 text-primary" /><span className="truncate">상세분석</span></button>
+              <section className="flex min-h-full flex-col rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5" aria-label="종목 기본 정보">
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-5 w-5 text-primary" />
+                  <h2 className="text-sm font-black">기본 정보</h2>
+                </div>
+                <div className="mt-3 grid flex-1 grid-cols-2 gap-2">
+                  <div className="min-w-0 rounded-2xl border border-card-border bg-background p-3"><p className="text-xs font-bold text-muted-foreground">시장</p><p className="mt-1 truncate text-sm font-black">{exchange}</p></div>
+                  <div className="min-w-0 rounded-2xl border border-card-border bg-background p-3"><p className="text-xs font-bold text-muted-foreground">업종</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && sector === '-' ? '확인 중' : sector}</p></div>
+                  <div className="min-w-0 rounded-2xl border border-card-border bg-background p-3"><p className="text-xs font-bold text-muted-foreground">시가총액</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && marketCap === '-' ? '확인 중' : marketCap}</p></div>
+                  <div className="min-w-0 rounded-2xl border border-card-border bg-background p-3"><p className="flex items-center gap-1 text-xs font-bold text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5" />데이터 상태</p><p data-testid="stock-detail-health-status" className="mt-1 text-sm font-black">{healthStatus}</p></div>
+                </div>
+              </section>
+            </div>
+
+            <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="종목 상세 빠른 실행" data-testid="stock-detail-action-grid">
+              <button type="button" onClick={() => setTab('chart')} className="flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary px-2 text-xs font-black text-primary-foreground shadow-sm"><BarChart3 className="h-5 w-5" /><span className="truncate">AI 차트</span></button>
+              <button type="button" onClick={() => setTab('news')} className="flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black shadow-sm"><Newspaper className="h-5 w-5 text-primary" /><span className="truncate">뉴스</span></button>
+              <button type="button" onClick={() => setTab('analysis')} className="flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-card-border bg-card px-2 text-xs font-black shadow-sm"><ExternalLink className="h-5 w-5 text-primary" /><span className="truncate">상세분석</span></button>
+              <button type="button" onClick={openLiveOrder} className="flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl border border-primary/30 bg-primary/5 px-2 text-xs font-black text-primary shadow-sm"><ShoppingCart className="h-5 w-5" /><span className="truncate">실전 주문</span></button>
             </section>
           </div>
         ) : null}
@@ -250,7 +282,7 @@ export default function DetailPage() {
         ) : null}
 
         {tab === 'news' ? (
-          <div className="mx-auto w-full max-w-4xl space-y-3" data-testid="stock-detail-news">
+          <div className="mx-auto grid w-full max-w-5xl gap-3 md:grid-cols-2" data-testid="stock-detail-news">
             {news.isLoading ? <LoadingStatus label="뉴스 확인 중" /> : null}
             {news.isError ? (
               <section className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm" role="alert">

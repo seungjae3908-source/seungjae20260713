@@ -104,6 +104,32 @@ for (const width of [360, 390, 430]) {
   });
 }
 
+for (const viewport of [
+  { name: 'mobile', width: 390, height: 844 },
+  { name: 'tablet', width: 820, height: 1180 },
+  { name: 'desktop', width: 1440, height: 960 },
+]) {
+  test(`live order workspace is responsive and fail-closed on ${viewport.name}`, async ({ page }) => {
+    const mutationRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.method() !== 'GET' && request.url().includes('/api/trade-automation/')) {
+        mutationRequests.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      }
+    });
+
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto('/__phase12-trade-automation-e2e?market=domestic_stock&section=orders');
+
+    await expect(page.getByTestId('live-order-workspace')).toBeVisible();
+    await expect(page.getByTestId('live-order-readiness-badge')).toHaveText('주문 전 점검 필요');
+    await expect(page.getByText('현재 실제 주문은 전송되지 않습니다.')).toBeVisible();
+    await expect(page.getByRole('button', { name: '실전 주문 설정' })).toBeVisible();
+    await expect(page.getByTestId('manual-live-order-entry')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(mutationRequests).toEqual([]);
+  });
+}
+
 test('automatic trading keeps standing authorization while settings follow one selected market', async ({ page }) => {
   const failures = captureBrowserFailures(page);
   await page.goto('/__phase12-trade-automation-e2e');

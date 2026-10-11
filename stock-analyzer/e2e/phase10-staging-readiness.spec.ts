@@ -1575,9 +1575,9 @@ async function runAuthenticatedSearchCertification(page: Page) {
 
   await input.fill('');
   await expect(input).toHaveValue('');
-  const usTab = page.getByRole('button', { name: '미국', exact: true });
+  const usTab = page.getByRole('tab', { name: '미국', exact: true });
   await usTab.click();
-  await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(usTab).toHaveAttribute('aria-selected', 'true');
   const selectionResponsePromise = page.waitForResponse((response) => {
     try {
       const url = new URL(response.url());
@@ -2522,10 +2522,10 @@ test.describe('real staging release readiness', () => {
     await expect(searchInput).toBeEditable();
     await searchInput.fill('');
     await expect(searchInput).toHaveValue('');
-    const usTab = page.getByRole('button', { name: '미국', exact: true });
+    const usTab = page.getByRole('tab', { name: '미국', exact: true });
     await expect(usTab).toBeVisible();
     await usTab.click();
-    await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+    await expect(usTab).toHaveAttribute('aria-selected', 'true');
     const searchResponsePromise = page.waitForResponse((response) => {
       try {
         const url = new URL(response.url());

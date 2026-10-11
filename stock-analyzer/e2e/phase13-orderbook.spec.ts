@@ -84,15 +84,17 @@ for (const width of [360, 390, 430]) {
     const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('읽기 전용')).toBeVisible();
-    await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('Best Ask')).toBeVisible();
-    await expect(dialog.getByText('Best Bid')).toBeVisible();
-    await expect(dialog.getByText('Spread %')).toBeVisible();
-    await expect(dialog.getByText('Cumulative')).toBeVisible();
+    await expect(dialog.getByText('최신', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('최우선 매도')).toBeVisible();
+    await expect(dialog.getByText('최우선 매수')).toBeVisible();
+    await expect(dialog.getByText('차이 비율')).toBeVisible();
+    await expect(dialog.getByText('누적', { exact: true })).toBeVisible();
     await expect(dialog.getByTestId('ask-level-1')).toContainText('70,100');
     await expect(dialog.getByTestId('bid-level-1')).toContainText('70,000');
-    await expect(dialog.getByText(/ORDERBOOK_IMBALANCE != TRADE_SIGNAL/)).toBeVisible();
-    await expect(dialog.getByRole('button', { name: /매수|매도|주문|취소|정정|잔고|포지션/ })).toHaveCount(0);
+    await expect(dialog.getByText(/매수·매도 잔량 차이는 참고용 통계/)).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '모의주문' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '실전 주문 화면' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /매수|매도|취소|정정|잔고|포지션/ })).toHaveCount(0);
 
     const box = await dialog.boundingBox();
     expect(box).not.toBeNull();
@@ -124,8 +126,8 @@ test('desktop displays stale status without promoting depth imbalance to a signa
 
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('Stale', { exact: true })).toBeVisible();
-  await expect(dialog.getByText(/Depth imbalance는 참고용 호가 통계이며 거래 신호가 아닙니다/)).toBeVisible();
+  await expect(dialog.getByText('지연', { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/매수·매도 잔량 차이는 참고용 통계이며 매수·매도 신호가 아닙니다/)).toBeVisible();
   expect(calls.every((call) => call.method === 'GET')).toBe(true);
 });
 
@@ -141,7 +143,7 @@ test('crossed book is fail-closed in the browser even if an upstream response re
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
-  await expect(dialog.getByText('Invalid')).toBeVisible();
+  await expect(dialog.getByText('표시 차단', { exact: true })).toBeVisible();
   await expect(dialog.getByText(/교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다/)).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
@@ -154,12 +156,12 @@ test('dialog owns focus, traps Tab, closes with Escape or outside click, and res
 
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
   const closeButton = dialog.getByRole('button', { name: '호가창 닫기' });
-  const refreshButton = dialog.getByRole('button', { name: '호가 새로고침' });
+  const paperOrderButton = dialog.getByRole('button', { name: '모의주문' });
   const opener = page.getByRole('button', { name: '읽기 전용 호가창 열기' });
   await expect(closeButton).toBeFocused();
 
   await page.keyboard.press('Tab');
-  await expect(refreshButton).toBeFocused();
+  await expect(paperOrderButton).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(closeButton).toBeFocused();
 
@@ -186,8 +188,8 @@ test('unsupported or unavailable orderbook displays no fabricated price levels',
   await page.goto('/__phase13-orderbook-e2e?ticker=AAPL&market=US&assetClass=stock');
 
   const dialog = page.getByRole('dialog', { name: /AAPL 호가창/ });
-  await expect(dialog.getByText('Unavailable', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('Provider unavailable')).toBeVisible();
+  await expect(dialog.getByText('조회 불가', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('시세 제공기관 연결 안 됨')).toBeVisible();
   await expect(dialog.getByText('표시 가능한 실제 호가가 없습니다.')).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
@@ -205,9 +207,9 @@ test('same-target provider failure uses only the last fresh book and marks it st
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
 
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
-  await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('최신', { exact: true })).toBeVisible();
   await expect.poll(() => calls, { timeout: 4_500 }).toBeGreaterThanOrEqual(2);
-  await expect(dialog.getByText('Stale', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('지연', { exact: true })).toBeVisible();
   await expect(dialog.getByTestId('ask-level-1')).toContainText('70,100');
   await expect(dialog.getByText(/마지막 정상 호가를 stale 상태로 표시합니다/)).toBeVisible();
 });
@@ -227,10 +229,10 @@ test('wrong response identity is fail-closed and never replaced with prior last-
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
   const dialog = page.getByRole('dialog', { name: /005930 호가창/ });
-  await expect(dialog.getByText('Fresh', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('최신', { exact: true })).toBeVisible();
   await expect.poll(() => calls, { timeout: 4_500 }).toBeGreaterThanOrEqual(2);
-  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('ORDERBOOK_IDENTITY_MISMATCH')).toBeVisible();
+  await expect(dialog.getByText('표시 차단', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('요청한 종목과 다른 호가가 반환되어 표시하지 않았습니다.')).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
@@ -331,7 +333,7 @@ test('query-only market switch aborts the old owner and applies only the new can
 
   const dialog = page.getByRole('dialog', { name: /BTC 호가창/ });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('Upbit public REST')).toBeVisible();
+  await expect(dialog.getByText('업비트 공개 시세')).toBeVisible();
   await expect(dialog.getByTestId('ask-level-1')).toContainText('100,100,000');
   await page.waitForTimeout(250);
   await expect(dialog.getByTestId('ask-level-1')).toContainText('100,100,000');
@@ -343,7 +345,7 @@ test('single polling owner issues one request per interval for the same key', as
   const calls = await mockOrderbook(page);
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
-  await expect.poll(() => calls.length, { timeout: 4_500 }).toBe(2);
+  await expect.poll(() => calls.length, { timeout: 8_000 }).toBe(2);
   await page.waitForTimeout(400);
   expect(calls.length).toBe(2);
 });
