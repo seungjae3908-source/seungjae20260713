@@ -15,7 +15,7 @@ function output(status,values={}){
     schemaVersion:'public-v3-stage-two-offpage-review-v1',
     status,selectedForReview:0,reviewedFromCurrentRoster:0,
     trustedPublicData:0,watchSideAgreed:0,
-    dataBlocked:0,sourceError:0,
+    dataBlocked:0,sourceError:0,staleWatchEvidenceSkipped:0,
     observedPublicHttpRequests:0,
     publicRequestCountProven:true,
     skippedCursorSymbols:0,
@@ -33,6 +33,7 @@ function wellFormed(reviews){
     if(!row||!MARKET.has(row.market)||seen.has(row.market)
       ||!SYMBOL.test(row.symbol??'')||!SHA256.test(row.watchEventId??'')
       ||row.status!=='RESEARCH_ONLY'||row.executionAuthority!=='NONE'
+      ||!Number.isSafeInteger(row.sourceAtMs)||row.sourceAtMs<=0
       ||(row.market==='CRYPTO_SPOT'&&row.direction!=='UP')
       ||(row.market==='CRYPTO_FUTURES'&&!['UP','DOWN'].includes(row.direction)))
       return false;
@@ -63,13 +64,19 @@ function trusted(review,resp){
   return Object.freeze({matches:card.direction===expected});
 }
 export async function runV3OutOfCursorResearch(
-  reviews,{enabled=false,scanOne}={},
+  reviews,{enabled=false,scanOne,nowMs=Date.now()}={},
 ){
   if(enabled!==true)return output('DISABLED');
-  if(!wellFormed(reviews)||typeof scanOne!=='function')
+  if(!wellFormed(reviews)||typeof scanOne!=='function'
+    ||!Number.isSafeInteger(nowMs)||nowMs<=0)
     return output('REJECTED_UNSAFE_REVIEW_INPUT');
-  let reviewed=0,good=0,agree=0,blocked=0,errors=0,requests=0;
+  let reviewed=0,good=0,agree=0,blocked=0,errors=0,requests=0,stale=0;
   for(const row of reviews){
+    // A fresh event at the start of a long 12-lane V3 cycle can expire.
+    // Never consume an old 'hot' symbol as a live Stage-2 research priority.
+    if(row.sourceAtMs>nowMs+5_000||nowMs-row.sourceAtMs>180_000){
+      stale+=1;continue;
+    }
     let receipt;
     try{receipt=await scanOne(row);}catch{
       errors+=1;continue;
@@ -92,10 +99,11 @@ export async function runV3OutOfCursorResearch(
     if(check.matches)agree+=1;
   }
   return output(reviews.length===0?'NO_OUT_OF_CURSOR_WATCH_CANDIDATE'
-    :errors||blocked?'RESEARCH_SOURCE_PARTIAL':'RESEARCH_DATA_OBSERVED',{
+    :errors||blocked||stale?'RESEARCH_SOURCE_PARTIAL':'RESEARCH_DATA_OBSERVED',{
     selectedForReview:reviews.length,reviewedFromCurrentRoster:reviewed,
     trustedPublicData:good,watchSideAgreed:agree,
     dataBlocked:blocked,sourceError:errors,
+    staleWatchEvidenceSkipped:stale,
     observedPublicHttpRequests:requests,
   });
 }
