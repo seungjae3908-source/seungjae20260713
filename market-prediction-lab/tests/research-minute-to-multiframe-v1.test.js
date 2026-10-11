@@ -172,3 +172,33 @@ test("reject unsupported intraday intervals and stock 1d without corporate-actio
  assert.throws(()=>run("CRYPTO_SPOT",d,d+DAY,bars("CRYPTO_SPOT",d,5),{
   timeframes:["5m","5m"]}),/RESEARCH_MULTITIMEFRAME_SELECTION_INVALID/);
 });
+
+test("prototype inherited labels are never a valid multi-timeframe selection",()=>{
+ const market="CRYPTO_SPOT",input=bars(market,d,10);
+ for(const label of ["__proto__","constructor","toString","valueOf"]){
+  assert.throws(()=>run(market,d,d+DAY,input,{
+   timeframes:[label],asOfMs:d+10*MIN,
+  }),/RESEARCH_INTERVAL_UNSUPPORTED/);
+ }
+ const valid=run(market,d,d+DAY,input,{
+  timeframes:["5m"],asOfMs:d+10*MIN,
+ });
+ assert.equal(valid.intervalData["5m"].completeBarCount,2);
+ assert.equal(Object.getPrototypeOf(valid.intervalData),null);
+ assert.equal(valid.trueMarketWideRecall,null);
+});
+test("delayed provider publication of a closed minute marks the whole 5m cohort PARTIAL",()=>{
+ const market="CRYPTO_SPOT",input=bars(market,d,10);
+ input[4].availableAtMs=d+30*MIN;
+ const r=run(market,d,d+DAY,input,{
+  timeframes:["5m"],asOfMs:d+10*MIN,
+ });
+ assert.equal(r.intervalData["5m"].completeBarCount,1);
+ assert.equal(r.intervalData["5m"].barDataUnavailableAtCutoffBuckets,1);
+ assert.equal(r.dataUnavailableAtCutoffBucketsAcrossRequestedIntervals,1);
+ assert.equal(r.status,"SOURCE_LIMITED_PARTIAL_MULTI_TIMEFRAME_BARS");
+ assert.equal(r.reason,"MINUTE_SOURCE_NOT_AVAILABLE_AT_CUTOFF");
+ assert.equal(r.intervalData["5m"].sourceSessionCoverageComplete,false);
+ assert.equal(r.actualFillCount,null);
+ assert.equal(r.profitabilityProven,false);
+});
