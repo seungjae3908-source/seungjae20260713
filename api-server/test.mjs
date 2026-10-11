@@ -187,6 +187,7 @@ const groups = {
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
   ],
   smoke: [
+    path.join(root, 'src/routes/research-workspace-pit-minute-coverage.smoke.test.ts'),
     path.join(root, 'src/routes/research-copilot.smoke.test.ts'),
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
