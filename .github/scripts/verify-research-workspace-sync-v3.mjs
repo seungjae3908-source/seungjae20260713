@@ -453,6 +453,9 @@ const memberTelegramReviewed=[
 // Exact Paper-only integration additions reviewed from Draft #1836/#1839/#1840.
 // NO wildcard: original LIVE/Production/RLS/research guards remain enabled.
 const paperFourModeIntegrationReviewed=[
+ // Keep both the exact bounded-path validator and its regression test under review.
+ '.github/scripts/check-paper-forward-bounded-diff.sh',
+ '.github/tests/pr-exact-head-paper-repair-checkout.test.mjs',
  'api-server/src/services/automatic-paper-v3-epoch.service.ts',
  'api-server/src/services/automatic-paper-v3-epoch.service.test.ts',
  'api-server/src/services/automatic-paper-v3-epoch-migration.test.ts',
