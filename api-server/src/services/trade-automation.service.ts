@@ -374,8 +374,7 @@ export class TradeAutomationService {
           String(paperPlan.market).toUpperCase(),
         ) || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(paperPlan.stockExchange ?? '').toUpperCase());
         const nativeCurrency = paperPlan.exchange === 'bitget' ? 'USDT'
-          : paperPlan.exchange === 'upbit' || (!usMarket && paperPlan.exchange !== 'bitget')
-            ? 'KRW' : 'USD';
+          : paperPlan.exchange === 'upbit' || !usMarket ? 'KRW' : 'USD';
         const expectedFx = nativeCurrency === 'KRW' ? 'NATIVE_KRW'
           : nativeCurrency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
         const receivedPolicy = metadata.trustedPaperCostPolicyId;
