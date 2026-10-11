@@ -148,7 +148,7 @@ const cycleEvidence:ManualPaperFourMarketCycleInput={
   } as ManualPaperFourMarketCycleInput['selected'],
   verifiedOwner:{
     ownerId:USER,accountId:'manual-paper-member-v1:crypto_futures',
-    market:'crypto_futures',strategyCandidateId:'validated-01',
+    market:'crypto_futures',strategyId:'user-strategy',strategyCandidateId:'validated-01',
     strategyValidatedAtMs:NOW.getTime()-120_000,
     strategySourceId:'verified-research-snapshot-1',
     walletReadbackReady:true,ownerRlsReady:true,
