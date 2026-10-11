@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {krAlphaDailyCode,normalizePublicKrAlphaDaily,publicKrAlphaDailyQuote,
+import {inspectPublicKrAlphaDailyShape,krAlphaDailyCode,normalizePublicKrAlphaDaily,publicKrAlphaDailyQuote,
   createPublicKrAlphaDailyFeed} from '../src/public-kr-alpha-daily.mjs';
 const day=(d,n)=>({localDateTime:d,openPrice:(n-1).toLocaleString('en-US'),
  highPrice:(n+2).toLocaleString('en-US'),lowPrice:(n-2).toLocaleString('en-US'),
@@ -59,4 +59,18 @@ test('two quote/candle readers coalesce the same public source and never request
  assert.equal(q.price,cs.at(-1).close);
  assert.equal(feed.executionAuthority,'NONE');
  assert.deepEqual(feed.permittedTimeframes,['1D']);
+});
+ 
+test('source shape diagnostics separate conflicting repeated days from silently fabricated history',()=>{
+ const vals=validRows();
+ const same={...vals[0]};
+ const different={...vals[0],currentPrice:101};
+ const info=inspectPublicKrAlphaDailyShape({priceInfos:[...vals,same,different]});
+ assert.equal(info.rawRows,42);
+ assert.equal(info.distinctDays,40);
+ assert.equal(info.repeatedDays,1);
+ assert.equal(info.byteEquivalentRepeatedRows,1);
+ assert.equal(info.conflictingRepeatedRows,1);
+ assert.equal(info.rawPricesRedacted,true);
+ assert.equal(JSON.stringify(info).includes('priceInfos'),false);
 });
