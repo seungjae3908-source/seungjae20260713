@@ -318,6 +318,10 @@ const formulaAiDriftReviewed=[
  'api-server/test.mjs',
 ];
 const automaticTradingDriftReviewed=[
+ // Manual holdings isolation is Trading-only; both activation guards below
+ // remain mandatory when either runtime or receipt validation changes.
+ '.github/scripts/verify-production-preactivation-evidence.cjs',
+ 'api-server/src/services/automatic-live-position-isolation.service.ts',
  '.github/scripts/production-postdeploy-qa-evidence.cjs',
  '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
  '.github/tests/production-telegram-active-readiness.test.mjs',
