@@ -96,7 +96,14 @@ export function assessPaperResearchRound(snapshot: PaperRoundSnapshot): PaperRou
     return defaultDecision('OPEN_EXPOSURE');
   }
 
-  const empty = snapshot.operatingCapitalKrw <= 0 || snapshot.availableToTradeKrw <= 0;
+  // Zero *available* cash is not evidence of bankruptcy while equity is
+  // still positive. Funds may be reserved, withheld by risk, or unsettled.
+  // Never mint another 1m round to bypass locked capital.
+  if (snapshot.operatingCapitalKrw > 0 && snapshot.availableToTradeKrw <= 0) {
+    block('PAPER_ROUND_POSITIVE_EQUITY_WITH_NO_AVAILABLE_CASH');
+    return defaultDecision('BLOCKED_EVIDENCE');
+  }
+  const empty = snapshot.operatingCapitalKrw <= 0;
   const minimumVerified = snapshot.verifiedMinimumEntryKrw !== null
     && Number.isFinite(snapshot.verifiedMinimumEntryKrw)
     && snapshot.verifiedMinimumEntryKrw > 0
@@ -107,8 +114,14 @@ export function assessPaperResearchRound(snapshot: PaperRoundSnapshot): PaperRou
     block('PAPER_ROUND_MINIMUM_ORDER_EVIDENCE_REQUIRED');
     return defaultDecision('BLOCKED_EVIDENCE');
   }
+  if (!empty && minimumVerified && snapshot.operatingCapitalKrw >= snapshot.verifiedMinimumEntryKrw!
+      && snapshot.availableToTradeKrw + 0.01 < snapshot.verifiedMinimumEntryKrw!) {
+    block('PAPER_ROUND_LOCKED_CAPITAL_NOT_BANKRUPTCY');
+    return defaultDecision('BLOCKED_EVIDENCE');
+  }
   const exhausted = empty
-    || (minimumVerified && snapshot.availableToTradeKrw + 0.01 < snapshot.verifiedMinimumEntryKrw!);
+    || (minimumVerified && snapshot.operatingCapitalKrw + 0.01 < snapshot.verifiedMinimumEntryKrw!
+      && snapshot.availableToTradeKrw + 0.01 < snapshot.verifiedMinimumEntryKrw!);
   if (!exhausted) return defaultDecision('ACTIVE');
   if (snapshot.roundNumber >= 100_000) {
     block('PAPER_ROUND_SEQUENCE_EXHAUSTED');
