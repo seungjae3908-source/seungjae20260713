@@ -30,14 +30,14 @@ const WORKSPACE_TABS = [
   { value: 'signal', label: 'AI 검색기' },
   { value: 'chart', label: 'AI 차트' },
   { value: 'backtest', label: '백테스트' },
-  { value: 'trade', label: '자동매매' },
+  { value: 'trade', label: '기술매매' },
 ] as const;
 
 const WORKSPACE_TITLES: Record<Workspace, string> = {
   signal: 'AI 검색기',
   chart: 'AI 차트',
   backtest: '백테스트',
-  trade: '자동매매',
+  trade: '기술매매',
 };
 
 const TECHNICAL_INFO_ITEMS = [
