@@ -154,11 +154,11 @@ function validateBacktestLineage(card, identity, profit, blockers) {
     return;
   }
   if (quality.oos !== true || quality.walkForward !== true)
-    addBlocker(blockers, 'OOS_AND_WALK_FORWARD_EVIDENCE_REQUIRED');
+    addBlocker(blockers, 'BACKTEST_OOS_AND_WALK_FORWARD_EVIDENCE_REQUIRED');
   if (quality.costsIncluded !== true || quality.slippageIncluded !== true)
-    addBlocker(blockers, 'ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED');
+    addBlocker(blockers, 'BACKTEST_ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED');
   if (quality.lookaheadGuarded !== true || quality.survivorshipGuarded !== true)
-    addBlocker(blockers, 'PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED');
+    addBlocker(blockers, 'BACKTEST_PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED');
   const lineage = {
     signalId: identity.signalId,
     strategyId: identity.strategyId,
