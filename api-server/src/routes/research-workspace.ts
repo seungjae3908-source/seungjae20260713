@@ -89,6 +89,18 @@ export function createResearchWorkspaceRouter(): IRouter {
     const startMs = dateMs(startDate);
     const endMs = dateMs(endDate);
     const cursorMs = cursorDate == null ? null : dateMs(cursorDate);
+    // Match the source reader's explicit 1970-01-02 .. 2099-12-31
+    // and 36,600-day maximum BEFORE checking the server data root.
+    // An invalid HTTP selection must return 400, not a misleading
+    // "root not configured" 200 or a private-source 503.
+    const requestedDays = startMs == null || endMs == null
+      ? Number.NaN : (endMs - startMs) / 86_400_000 + 1;
+    const validResearchWindow = startMs != null && endMs != null
+      && startMs >= Date.parse('1970-01-02T00:00:00.000Z')
+      && endMs < Date.parse('2100-01-01T00:00:00.000Z')
+      && startMs <= endMs
+      && Number.isSafeInteger(requestedDays)
+      && requestedDays >= 1 && requestedDays <= 36_600;
     const chunkDays = chunkDaysInput == null ? 7 :
       typeof chunkDaysInput === 'string'
         && /^(?:[1-9]|[12][0-9]|3[01])$/.test(chunkDaysInput)
@@ -98,7 +110,7 @@ export function createResearchWorkspaceRouter(): IRouter {
       || !markets.has(market as ResearchPITMarket)
       || typeof startDate !== 'string' || typeof endDate !== 'string'
       || (cursorDate != null && typeof cursorDate !== 'string')
-      || startMs == null || endMs == null || startMs > endMs
+      || !validResearchWindow
       || (cursorDate != null && (
         cursorMs == null || cursorMs < startMs || cursorMs > endMs))
       || !Number.isSafeInteger(chunkDays) || chunkDays < 1 || chunkDays > 31) {
