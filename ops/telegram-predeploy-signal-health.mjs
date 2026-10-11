@@ -46,7 +46,24 @@ export function verifiedSignalV3Coverage(snapshot) {
     const key=[row.market,row.strategy,row.timeframe].join('|');
     if(!expected.has(key)||seen.has(key))return false;
     seen.add(key);
-    if(!allowedStatuses.has(row.status)
+    const audit=row.publicExecutionDiagnostic;
+    const start=row.cursorBefore, requested=audit?.requested;
+    const end=Number.isSafeInteger(start)&&Number.isSafeInteger(requested)
+      ? start+requested : NaN;
+    // The 12 market×strategy slots represent verified CURRENT pages only,
+    // not proof that every listed instrument has ever been scanned.
+    // A forged/partial successful page cannot satisfy this gate.
+    const validPage= audit && typeof audit==='object'
+      && audit.state==='PAGE_EXECUTION_COMPLETE'
+      && nonNegative(requested)&&requested>0
+      && audit.started===requested&&audit.completed===requested
+      && audit.partial===false&&audit.timedOut===false
+      && audit.providerErrors===0&&audit.timeouts===0
+      && audit.failuresObserved===0
+      && end<=row.totalUniverse
+      && row.cursorAfter===(end===row.totalUniverse?0:end);
+    if(!validPage
+      ||!allowedStatuses.has(row.status)
       ||!SOURCES_BY_MARKET[row.market]?.has(row.universeSource)
       ||row.universePartial!==false
       ||row.universeStale!==false
@@ -67,6 +84,8 @@ export function verifiedSignalV3Coverage(snapshot) {
       ||row.universeProviderErrors!==0
       ||row.providerErrors!==0
       ||row.timeouts!==0
+      ||row.providerErrors!==audit.providerErrors
+      ||row.timeouts!==audit.timeouts
       ||(row.status==='VALID_NO_TRADE'
         &&(row.scannedCards!==0||row.retainedFromBatch!==0
           ||row.outcome==='CANDIDATES_AVAILABLE'))

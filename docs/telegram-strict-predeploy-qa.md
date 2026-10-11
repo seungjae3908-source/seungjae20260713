@@ -79,3 +79,24 @@ include these counterexamples, without external providers or writes.
 This is **not** a fix for the three observed KR/US `BLOCKED_DATA` lanes
 in PR #1816. Those remain NO-GO until independently verified provider,
 session and quality-source evidence succeeds; no quality gate is relaxed.
+
+## Draft: exact source-page execution provenance within 12 latest lanes
+
+In addition to the twelve unique 4-market × 3-mode lane names, the
+read-only predeploy source verifier now requires the V3 public producer's
+bounded `publicExecutionDiagnostic` for each lane. Exactly the requested
+number of stage-2 source items must have started **and completed**,
+with `partial=false`, `timedOut=false`, zero reported item failures,
+and cursor progression/wrap matching the completed count.
+A zero-error provider summary alone is insufficient if an unfinished
+scan reports an empty results list, as observed in Futures 60m.
+
+**Scope caveat:** a fully verified current batch is *not* historical
+or current all-symbol full-market coverage. The 12-lane predeploy check
+is a latest-batch/source-integrity veto, not a claim that 4,010 KR or 820
+Futures instruments were all scanned. Cumulative all-roster coverage
+and excluded KRX symbol remediation remain separate mandatory product
+acceptance evidence. This checker cannot turn that missing evidence into
+a deployment or trading authorization. The new receipt field requires
+a matching V3 producer revision (Draft #1816), which is currently
+unmerged and unapproved.
