@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PAPER_FOUR_MARKET_KEYS, parseFourPaperReadOnlyStatus } from './four-market-paper-status';
+import { PAPER_FOUR_MARKET_KEYS, parseFourPaperReadOnlyStatus, summarizeFourPaperReadOnlyStatus } from './four-market-paper-status';
 
 const fixture = () => ({
   ok:true, mode:'four-market-paper-readiness-only',
@@ -14,7 +14,7 @@ const fixture = () => ({
   transferAuthorityGranted:false, withdrawalAuthorityGranted:false,
   marketCapital:Object.fromEntries(PAPER_FOUR_MARKET_KEYS.map(({key}) => [key, {
     settlementReady:false, newEntriesAllowed:false,
-    operatingCapitalKrw:null,reserveKrw:null,dailyLosingTrades:null,
+    operatingCapitalKrw:null,reserveKrw:null,dailyLosingTrades:null,settledTrades:null,
     blockers:['MEMBER_PAPER_WALLET_NOT_READY'],
   }])),
 });
@@ -33,12 +33,13 @@ test('a verified 4-market immutable Paper readback can render without order auth
     state.marketCapital[key]={
       settlementReady:true, newEntriesAllowed:key!=='crypto_futures',
       operatingCapitalKrw:1_000_000,reserveKrw:0,
-      dailyLosingTrades:0,blockers:[],
+      dailyLosingTrades:0,settledTrades:0,blockers:[],
     };
   }
   const value=parseFourPaperReadOnlyStatus(state);
   assert.equal(value.marketCapital.us_stock.operatingCapitalKrw,1000000);
   assert.equal(value.marketCapital.crypto_futures.newEntriesAllowed,false);
+  assert.equal(summarizeFourPaperReadOnlyStatus(value), '정산 확인 · 일부 시장 신규진입 차단');
 });
 test('an invalid balance, missing protected RLS or impersonated mutation rights cannot be shown', () => {
   for(const change of [
@@ -54,4 +55,43 @@ test('an invalid balance, missing protected RLS or impersonated mutation rights 
     };
     assert.throws(() => parseFourPaperReadOnlyStatus(f));
   }
+});
+
+test('wallet existence alone never claims four-market settlement or entry readiness', () => {
+  const pending = fixture();
+  pending.ready = true;
+  pending.rlsGuardReady = true;
+  const verified = parseFourPaperReadOnlyStatus(pending);
+  assert.equal(summarizeFourPaperReadOnlyStatus(verified), '계좌 확인 · 일부 시장 정산 미확인');
+  assert.equal(summarizeFourPaperReadOnlyStatus(parseFourPaperReadOnlyStatus(fixture())), '회원 DB 보호 미적용');
+});
+test('malformed Paper admission is rejected even if individual fields look valid', () => {
+  const ready = fixture();
+  ready.ready = true;
+  ready.rlsGuardReady = true;
+  const settled = {
+    settlementReady: true, newEntriesAllowed: true,
+    operatingCapitalKrw: 1_000_000, reserveKrw: 0,
+    dailyLosingTrades: 0, settledTrades: 0, blockers: [],
+  };
+  for (const {key} of PAPER_FOUR_MARKET_KEYS) ready.marketCapital[key] = {...settled};
+  assert.equal(summarizeFourPaperReadOnlyStatus(parseFourPaperReadOnlyStatus(ready)), '4시장 계좌·정산·진입 검증됨');
+
+  const missingWallet = {...ready, ready:false, marketCapital:{...ready.marketCapital}};
+  assert.throws(() => parseFourPaperReadOnlyStatus(missingWallet));
+  const fifthLoss = {...ready, marketCapital:{
+    ...ready.marketCapital,
+    crypto_futures: {...settled, dailyLosingTrades:5},
+  }};
+  assert.throws(() => parseFourPaperReadOnlyStatus(fifthLoss));
+  const unverifiedCount = {...ready, marketCapital:{
+    ...ready.marketCapital,
+    us_stock: {...settled, settledTrades:undefined},
+  }};
+  assert.throws(() => parseFourPaperReadOnlyStatus(unverifiedCount));
+  const misleadingBlocker = {...ready, marketCapital:{
+    ...ready.marketCapital,
+    domestic_stock: {...settled, blockers:['COST_UNKNOWN']},
+  }};
+  assert.throws(() => parseFourPaperReadOnlyStatus(misleadingBlocker));
 });
