@@ -8,6 +8,8 @@ import {persistResearchMinuteSessionV1} from "../src/research-minute-archive-v1.
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
 import {runFourMarketOriginalMinuteBatchV1 as batch}
   from "../src/four-market-original-minute-batch-v1.js";
+import {runFourMarketOriginalMinutePeriodV1 as period}
+  from "../src/four-market-original-minute-period-v1.js";
 
 const DAY=86_400_000,MIN=60_000;
 const D=Date.parse("2026-09-18T00:00:00Z");
@@ -178,5 +180,86 @@ test("absent historical PIT plan retains unknown, not fictitious zero-return or 
    assert.equal(missing.actualMarketWideOpportunityCount,null);
    assert.equal(missing.profitabilityProven,false);
    assert.equal(missing.executionAuthority,"NONE");
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+
+test("all 4 markets discover native private 1m for one full user-selected research period",async()=>{
+ const folder=temp();
+ try{
+   for(const market of Object.keys(MARKETS)){
+     const cfg=input(market,folder);
+     const source=session(market,MARKETS[market].symbols[0]);
+     await persistResearchMinuteSessionV1({root:folder,source});
+     const {sourceSessions,discoverArchivedSessions,...args}=cfg;
+     const result=await period({...args,symbol:MARKETS[market].symbols[0]});
+     assert.equal(result.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY",market);
+     assert.equal(result.sessionIndexPagesRead,1,market);
+     assert.equal(result.indexedPrivateSessions,1,market);
+     assert.equal(result.verifiedNativeMinuteSessions,1,market);
+     assert.equal(result.sourceSessionIndexDigestSha256.length,64,market);
+     assert.equal(result.sourceSessionsRead,1,market);
+     assert.equal(result.historicalPITAndCalendarIndependentProof,false,market);
+     assert.equal(result.independentOOSAndForwardProven,false,market);
+     assert.equal(result.actualFillCount,null,market);
+     assert.equal(result.actualMarketWideOpportunityCount,null,market);
+     assert.equal(result.OOSPassCount,0,market);
+     assert.equal(result.profitabilityProven,false,market);
+     assert.equal(result.paperAdmissionAllowed,false,market);
+     assert.equal(result.automaticPaperExecution,false,market);
+     assert.equal(result.executionAuthority,"NONE",market);
+     assert.equal(result.providerGETCount,0,market);
+   }
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+test("two-day single-symbol replay cannot turn one absent day into a zero-return or PASS",async()=>{
+ const folder=temp(),market="CRYPTO_SPOT",cfg=input(market,folder);
+ const symbol=MARKETS[market].symbols[0];
+ const {sourceSessions,discoverArchivedSessions,...args}=cfg;
+ const selected={...args,symbol,researchWindow:{
+   startDate:"2026-09-18",endDate:"2026-09-19",
+ }};
+ try{
+   const first=session(market,symbol);
+   await persistResearchMinuteSessionV1({root:folder,source:first});
+   const incomplete=await period(selected);
+   assert.equal(incomplete.status,"BLOCKED_DATA");
+   assert.equal(incomplete.indexedPrivateSessions,1);
+   assert.equal(incomplete.reason,"PIT_SESSION_OR_CALENDAR_DATES_MISSING");
+   assert.equal(incomplete.modeledReturnPercent,null);
+   assert.equal(incomplete.actualFillCount,null);
+   assert.equal(incomplete.paperAdmissionAllowed,false);
+   const second=structuredClone(first);
+   second.session.startMs+=DAY;
+   second.session.endMs+=DAY;
+   second.asOfMs+=DAY;
+   second.minuteBars=second.minuteBars.map(row=>({
+     ...row,timestampMs:row.timestampMs+DAY,
+     availableAtMs:row.availableAtMs+DAY,
+   }));
+   second.sourceMinuteRowsSha256=sha(second.minuteBars);
+   await persistResearchMinuteSessionV1({root:folder,source:second});
+   const complete=await period(selected);
+   assert.equal(complete.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY");
+   assert.equal(complete.indexedPrivateSessions,2);
+   assert.equal(complete.verifiedNativeMinuteSessions,2);
+   assert.equal(complete.sourceSessionsRead,2);
+   assert.equal(complete.independentOOSAndForwardProven,false);
+   assert.equal(complete.profitabilityProven,false);
+   assert.equal(complete.executionAuthority,"NONE");
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+test("per-symbol whole-period archive refuses manually spoofed source indexes and expired or absent immutable roots",async()=>{
+ const folder=temp(),market="CRYPTO_FUTURES",cfg=input(market,folder);
+ const {sourceSessions,discoverArchivedSessions,...args}=cfg;
+ try{
+   await assert.rejects(()=>period({...args,
+     symbol:MARKETS[market].symbols[0],sourceSessions:[]}),
+     /PRIVATE_PERIOD_REPLAY_SOURCE_SCOPE_INVALID/);
+   const none=await period({...args,symbol:MARKETS[market].symbols[0]});
+   assert.equal(none.status,"BLOCKED_DATA");
+   assert.equal(none.modeledReturnPercent,null);
+   assert.equal(none.profitabilityProven,false);
+   assert.equal(none.executionAuthority,"NONE");
  }finally{rmSync(folder,{recursive:true,force:true});}
 });

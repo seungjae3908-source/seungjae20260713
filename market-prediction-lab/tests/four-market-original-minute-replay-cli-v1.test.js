@@ -202,5 +202,26 @@ test("private BATCH automatically discovers retained 1m sessions without a calle
   assert.equal(report.profitabilityProven,false);
   assert.equal(report.executionAuthority,"NONE");
   assert.equal(statSync(out).mode&0o077,0);
+  // Same immutable native archive, one continuous period strategy state.
+  const periodInput=join(root,"period-input.json");
+  const periodOutput=join(root,"period-output.json");
+  writePrivate(periodInput,{mode:"PERIOD",root,
+    market:"CRYPTO_SPOT",symbol:"KRW-BTC",manifest:roster(),
+    researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+    asOfMs:D+5*DAY,timeframe:"5m",direction:"LONG",
+    initialCapitalKRW:1_000_000,
+  });
+  const periodJob=await run({input:periodInput,output:periodOutput});
+  assert.equal(periodJob.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY");
+  const model=JSON.parse(readFileSync(periodOutput,"utf8"));
+  assert.equal(model.indexedPrivateSessions,1);
+  assert.equal(model.verifiedNativeMinuteSessions,1);
+  assert.equal(model.independentOOSAndForwardProven,false);
+  assert.equal(model.actualFillCount,null);
+  assert.equal(model.trueMarketWideRecall,null);
+  assert.equal(model.profitabilityProven,false);
+  assert.equal(model.paperAdmissionAllowed,false);
+  assert.equal(model.executionAuthority,"NONE");
+  assert.equal(statSync(periodOutput).mode&0o077,0);
  }finally{rmSync(root,{recursive:true,force:true});}
 });

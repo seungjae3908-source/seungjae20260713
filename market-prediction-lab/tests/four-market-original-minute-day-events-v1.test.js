@@ -13,6 +13,8 @@ import {auditFourMarketOriginalMinuteOpportunityV1 as sessionAudit,
   from "../src/four-market-original-minute-opportunities-v1.js";
 import {runFourMarketOriginalMinuteBatchV1 as batch}
   from "../src/four-market-original-minute-batch-v1.js";
+import {runFourMarketOriginalMinutePeriodV1 as period}
+  from "../src/four-market-original-minute-period-v1.js";
 
 const MIN=60_000,DAY=86_400_000,D=Date.parse("2026-09-18T00:00:00Z");
 const HASH=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
@@ -146,4 +148,33 @@ test("whole-day price labels fail closed if a declared stock session is omitted 
     assert.equal(sessionOmitted.observedPriceEvents.length,0);
     assert.equal(sessionOmitted.trueMarketWideRecall,null);
   }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test("full-day KR/US archive is replayed as ONE multi-session strategy with pre/regular gap preserved",async()=>{
+ const root=ROOT();
+ try{
+  for(const market of Object.keys(P)){
+   const c=context(market,root);
+   await save({root,source:c.pre});
+   await save({root,source:c.regular});
+   const x=await period({
+     root,market,symbol:P[market].symbol,manifest:c.manifest,
+     stockCalendar:c.stockCalendar,
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+     asOfMs:D+5*DAY,timeframe:"5m",direction:"LONG",
+     fxRateKRWPerQuote:market==="US_STOCK"?1300:null,
+   });
+   assert.equal(x.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY",market);
+   assert.equal(x.indexedPrivateSessions,2,market);
+   assert.equal(x.sourceSessionsRead,2,market);
+   assert.equal(x.sessionIndexPagesRead,1,market);
+   assert.equal(x.sourceSessionIndexDigestSha256.length,64,market);
+   assert.equal(x.originalHistoricalScannerAvailabilityVerified,false,market);
+   assert.equal(x.historicalPITAndCalendarIndependentProof,false,market);
+   assert.equal(x.actualFillCount,null,market);
+   assert.equal(x.profitabilityProven,false,market);
+   assert.equal(x.paperAdmissionAllowed,false,market);
+  }
+ }finally{rmSync(root,{recursive:true,force:true});}
 });

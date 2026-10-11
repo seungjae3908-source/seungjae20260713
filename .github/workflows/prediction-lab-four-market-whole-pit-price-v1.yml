@@ -68,6 +68,7 @@ on:
       - market-prediction-lab/tests/four-market-original-minute-opportunities-v1.test.js
       - market-prediction-lab/tests/four-market-original-minute-day-events-v1.test.js
       - market-prediction-lab/src/four-market-original-minute-batch-v1.js
+      - market-prediction-lab/src/four-market-original-minute-period-v1.js
       - market-prediction-lab/tests/four-market-original-minute-batch-v1.test.js
       - api-server/src/routes/research-workspace.ts
       - api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts
