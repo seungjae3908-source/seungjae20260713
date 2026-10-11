@@ -109,7 +109,7 @@ test('probe has no mutation, arbitrary execution, PM2 bootstrap, or provider net
 });
 test('core cutover freezes and rolls back every research watcher before switching SHA, never shared app units', () => {
   const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8').replaceAll('\r\n','\n');
-  assert.match(source, /declare -a WATCH_SERVICES=\(\s*research-production-market-watch\.service\s*\)/u);
+  assert.match(source, /declare -ga WATCH_SERVICES=\(\s*research-production-market-watch\.service\s*\)/u);
   for (const line of source.split('\n').filter(line=>line.includes('systemctl disable --now')&&line.includes('CORE_TIMERS'))) {
     assert.ok(line.includes('"${WATCH_SERVICES[@]}"'));
   }
@@ -124,6 +124,10 @@ test('core cutover stops in-flight research one-shots before any release switch 
   const source = readFileSync(new URL('../deploy/activate-server.sh', import.meta.url), 'utf8');
   assert.match(source, /systemctl stop "\$\{ONESHOT_SERVICES\[@\]\}"/u);
   assert.match(source, /RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  for (const name of ['CORE_TIMERS', 'AI_TIMERS', 'AI_DAEMONS', 'WATCH_SERVICES', 'ONESHOT_SERVICES']) {
+    assert.ok(source.includes('declare -ga ' + name + '=('), 'EXIT handler must retain ' + name);
+  }
+  assert.ok(source.includes('declare -gA WAS_ENABLED=()'), 'EXIT handler must retain previous enabled state');
   const freeze = source.indexOf('verify_timers_stopped "${CORE_TIMERS[@]}"');
   const stop = source.indexOf('stop_oneshot_workloads', freeze);
   const cutover = source.indexOf('mv -Tf -- "$NEXT_CURRENT" "$CURRENT"');

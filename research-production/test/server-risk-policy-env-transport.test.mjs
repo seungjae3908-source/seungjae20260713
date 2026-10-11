@@ -147,6 +147,9 @@ test('full activation harness blocks a still-running workload before installing 
   assert.match(result.stderr, /RESEARCH_PRODUCTION_ROLLBACK_BLOCKED_RUNNING_WORKLOAD=true/u);
   assert.equal(result.environment, null);
   assert.ok(result.events.some(event => event[0] === 'systemctl' && event[1] === 'stop'));
+  assert.ok(result.events.filter(event => event[0] === 'systemctl' && event[1] === 'stop')
+    .every(event => event.includes('research-production@fast-historical.service')));
+  assert.equal(result.events.some(event => ['ln', 'mv'].includes(event[0])), false);
   assert.equal(result.events.some(event => event[0] === 'install' && event.at(-1).endsWith('/research-production.env')), false);
 });
 
