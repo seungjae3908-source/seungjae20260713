@@ -288,10 +288,11 @@ jobs:
               if (!previous || Number(status.id) > Number(previous.id)) contexts.set(status.context, status);
             }
 
-            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              head_sha: targetSha,
+              workflow_id: 'futures-public-network-smoke.yml',
+              branch: 'main',
               per_page: 100,
             });
             const targetApplicationRuns = targetRuns

@@ -84,15 +84,24 @@ jobs:
               }
             }
 
-            const workflows = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head_sha: targetSha,
-              per_page: 100,
-            });
+            const [validationRuns, representativeRuns] = await Promise.all([
+              github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'signal-intelligence-v3-validation.yml',
+                per_page: 100,
+              }),
+              github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'signal-intelligence-v3-representative-validation.yml',
+                per_page: 100,
+              }),
+            ]);
 
-            const newestSuccessfulRun = (name) => {
+            const newestSuccessfulRun = (workflows, name) => {
               const runs = workflows
+                .filter((run) => run.head_sha.toLowerCase() === targetSha)
                 .filter((run) => run.name === name)
                 .sort((a, b) => Number(b.id) - Number(a.id));
               if (!runs.length) {
@@ -107,9 +116,9 @@ jobs:
               return newest;
             };
 
-            const validation = newestSuccessfulRun('Signal Intelligence V3 Validation');
+            const validation = newestSuccessfulRun(validationRuns, 'Signal Intelligence V3 Validation');
             if (!validation) return;
-            const representative = newestSuccessfulRun('Signal Intelligence V3 Representative Validation');
+            const representative = newestSuccessfulRun(representativeRuns, 'Signal Intelligence V3 Representative Validation');
             if (!representative) return;
 
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {

@@ -48,6 +48,35 @@ export function buildProductionComprehensiveReadonlyReceipt({
     throw new Error('COMPREHENSIVE_QA_RECOMMENDATIONS_1440_EVIDENCE_MISSING');
   }
 
+  const scannerPath = path.join(artifactDir, 'production-four-market-signal-scanner.json');
+  if (!fs.existsSync(scannerPath)) throw new Error('COMPREHENSIVE_QA_SIGNAL_SCANNER_EVIDENCE_MISSING');
+  const scanner = JSON.parse(fs.readFileSync(scannerPath, 'utf8'));
+  const expectedLanes = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'];
+  if (scanner?.complete !== true
+    || scanner?.executionAuthority !== 'NONE'
+    || scanner?.actualOrders !== 0
+    || scanner?.blockedMutationRequests !== 0
+    || !Array.isArray(scanner?.lanes)
+    || scanner.lanes.length !== expectedLanes.length) {
+    throw new Error('COMPREHENSIVE_QA_SIGNAL_SCANNER_EVIDENCE_INVALID');
+  }
+  for (const lane of expectedLanes) {
+    const row = scanner.lanes.find((candidate) => candidate?.lane === lane);
+    if (!row
+      || row.status !== 200
+      || row.orderSubmitted !== false
+      || row.exchangeRequestSent !== false
+      || row.outcome === 'PROVIDER_FAILURE'
+      || row.outcome === 'REQUEST_TIMEOUT'
+      || row.dataState === 'unavailable'
+      || row.dataState === 'untrusted'
+      || !Number.isFinite(row.universeCount)
+      || row.universeCount <= 0
+      || row.timeoutCount !== 0) {
+      throw new Error(`COMPREHENSIVE_QA_SIGNAL_SCANNER_LANE_INVALID:${lane}`);
+    }
+  }
+
   return {
     schemaVersion: 'production-comprehensive-readonly-qa-v1',
     targetSha: normalizedSha,
@@ -57,6 +86,11 @@ export function buildProductionComprehensiveReadonlyReceipt({
     identityMatch: true,
     complete: true,
     recommendationsDesktop1440: recommendationAudit,
+    fourMarketSignalScanner: {
+      complete: true,
+      lanes: expectedLanes,
+      validZeroSignalAccepted: scanner.validZeroSignalAccepted === true,
+    },
     orderRequests: 0,
     cancelRequests: 0,
     amendRequests: 0,
