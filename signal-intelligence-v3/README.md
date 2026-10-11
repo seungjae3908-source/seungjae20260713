@@ -303,3 +303,14 @@ fail-closed and cannot treat such evidence as a verified product source.
 Response byte bounds are checked, no key or source row leaves the
 pure diagnostic receipt. Current application worker still never
 invokes this official adapter unless separately authorized.
+
+## Draft: TLS-only public KRX master fetch
+
+The legacy `getKrUniverse` finder URL used plain HTTP for both stock
+and securities-product lists. An on-path modified response could
+misclassify, omit or inject listed instruments, even with subsequent
+row-count checks. The endpoint and same-origin Referer now use HTTPS,
+and `redirect:'error'` fails closed rather than allowing a downgrade
+or untrusted redirect to replace the KRX roster. Source errors remain
+`partial/stale` via the existing last-good/fallback path; no invented
+tickers or candles, secret/API key, deployment or trading change.

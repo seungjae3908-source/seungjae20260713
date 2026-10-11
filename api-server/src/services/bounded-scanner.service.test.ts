@@ -6,7 +6,7 @@ import type { SignalContext } from '../sample/accumulation';
 import type { Candle, Quote } from '../sample/types';
 import { MarketDataService } from './market-data.service';
 import { scannerUniverseCoveragePartial } from './scanner-universe.service';
-import { assertKrFinderSourcesReady } from '../providers/krx';
+import { assertKrFinderSourcesReady, KRX_FINDER_ENDPOINT } from '../providers/krx';
 import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   ScanProviderUnavailableError,
@@ -496,4 +496,15 @@ test('KRX stock and securities-product source pages must BOTH be complete enough
   assert.throws(()=>assertKrFinderSourcesReady(stocks,
     Array.from({length:200},()=>({short_code:'PRIVATE_VALUE',codeName:''}))),
     /KRX_FINDER_SOURCE_PAIR_INCOMPLETE/);
+});
+
+test('KRX master cannot silently downgrade to an unencrypted HTTP endpoint',()=>{
+  const url=new URL(KRX_FINDER_ENDPOINT);
+  assert.equal(url.protocol,'https:');
+  assert.equal(url.hostname,'data.krx.co.kr');
+  assert.equal(url.pathname,'/comm/bldAttendant/getJsonData.cmd');
+  assert.equal(url.username,'');
+  assert.equal(url.password,'');
+  assert.equal(url.search,'');
+  assert.equal(url.hash,'');
 });
