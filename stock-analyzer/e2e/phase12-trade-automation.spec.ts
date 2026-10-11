@@ -236,6 +236,17 @@ for (const width of [360, 390, 768, 1024, 1440]) {
 }
 
 
+test('holding popup never substitutes the broker average for missing canonical fill-price evidence', async ({ page }) => {
+  await page.goto('/__phase12-trade-automation-e2e?holdings=true&missingFillPrice=true');
+  await page.getByTestId('trading-holdings').getByRole('button', { name: /SK하이닉스/ }).filter({ visible: true }).click();
+  const popup = page.getByTestId('holding-detail-dialog');
+  await expect(popup).toBeVisible();
+  await expect(popup.getByText('진입가 · 실제 체결').locator('..')).toContainText('미설정 / 미확인');
+  await expect(popup).not.toContainText('200,000 KRW');
+  await expect(popup).toContainText('거래량 증가 + 돌파 조건 충족');
+  await expect(popup.getByRole('button', { name: /매도|주문|승인/ })).toHaveCount(0);
+});
+
 test('auto-trading rehearsal tab proves the safe four-market chain and displays zero real orders', async ({ page }) => {
   await page.unroute(/\/api\/user-integrations(?:\?.*)?$/);
   const forbiddenTradingMutations: string[] = [];

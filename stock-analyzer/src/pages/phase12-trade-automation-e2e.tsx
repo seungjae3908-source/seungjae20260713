@@ -59,5 +59,6 @@ export default function Phase12TradeAutomationE2EPage() {
   const params = new URLSearchParams(search);
   return <AutoTradingPage fixture={FIXTURE} initialMode={initialMode}
     paperOrigin={params.get('kind') === 'manual' ? 'manual' : 'automatic'}
-    holdingsFixture={params.get('holdings') === 'true' ? HOLDINGS : []} />;
+    holdingsFixture={params.get('holdings') === 'true' ? HOLDINGS.map(row => params.get('missingFillPrice') === 'true' && row.entryEvidence
+      ? { ...row, entryEvidence: { ...row.entryEvidence, entryPrice: null } } : row) : []} />;
 }
