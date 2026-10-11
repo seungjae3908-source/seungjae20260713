@@ -463,7 +463,7 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-      - name: Require canonical Production trade schema and scope-relevant database privileges before application mutation
+      - name: Require canonical Production trade schema and journal privileges before application mutation
         id: database-gates
         env:
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
