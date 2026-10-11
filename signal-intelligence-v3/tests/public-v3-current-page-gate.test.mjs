@@ -5,8 +5,10 @@ import {currentPagePublication,currentPublicV3CycleReady} from '../src/public-v3
 const markets=['KR','US','SPOT','FUTURES'];
 const modes=['SCALPING_15M','SWING_60M','MID_LONG_1D'];
 const allLanes=markets.flatMap(m=>modes.map(mode=>m+'_'+mode));
+const CYCLE_ID='11111111-1111-4111-8111-111111111111';
+const PRIOR_CYCLE_ID='22222222-2222-4222-8222-222222222222';
 const readyLane=id=>({
-  laneId:id,status:'CANDIDATES_AVAILABLE',
+  laneId:id,sourceCycleId:CYCLE_ID,status:'CANDIDATES_AVAILABLE',
   universeSource:id.startsWith('KR_')?'krx-symbol-master':
     id.startsWith('US_')?'nasdaq-trader-public-directory':
       id.startsWith('SPOT_')?'upbit-public':'bitget-public',
@@ -24,11 +26,11 @@ const readyLane=id=>({
 const receipt=()=>allLanes.map(readyLane);
 const freshRow=(id,lane,at=10,overrides={})=>({
   id,state:'CANDIDATE',dataStatus:'READY',
-  provenance:{laneId:lane,cursor:at},...overrides,
+  provenance:{laneId:lane,cursor:at,sourceCycleId:CYCLE_ID},...overrides,
 });
 const input=()=>{
   const verified=freshRow('verified','US_SCALPING_15M');
-  const older=freshRow('historical','US_SCALPING_15M',0);
+  const older=freshRow('historical','US_SCALPING_15M',0,{provenance:{laneId:'US_SCALPING_15M',cursor:0,sourceCycleId:PRIOR_CYCLE_ID}});
   const blocked=freshRow('blocked','KR_SCALPING_15M');
   const wrong=freshRow('unknown','WRONG_LANE');
   const stale=freshRow('stale-row','US_SWING_60M',10,{dataStatus:'BLOCKED'});
@@ -81,6 +83,7 @@ test('completeness, source replay and item failures fail closed',()=>{
     }
   }
   const bad=receipt();
+  bad[0]={...bad[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
   bad[3]={...bad[3],publicExecutionDiagnostic:{
     ...bad[3].publicExecutionDiagnostic,completed:4}};
   const checked=currentPagePublication(snapshot,bad);
@@ -95,11 +98,13 @@ test('no stale portfolio or old candidate can be presented when source absent',(
     assert.ok(Object.values(out.lists).every(rows=>rows.length===0));
   }
   const last=receipt();
+  last[0]={...last[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
   last[3].cursorBefore=0;last[3].cursorAfter=5;
   assert.deepEqual(currentPagePublication(source,last).events,[]);
 });
 test('valid final wrap to zero remains a verifiable completed source page',()=>{
   const snapshot=input(),lanes=receipt();
+  lanes[0]={...lanes[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
   lanes[3].cursorBefore=195;
   lanes[3].cursorAfter=0;
   snapshot.rows[0].provenance.cursor=195;
@@ -125,4 +130,15 @@ test('source freshness requires exactly 12 complete pages and correct market ros
   noTrade[8].retainedFromBatch=1;
   assert.equal(currentPublicV3CycleReady(noTrade),false);
   assert.equal(currentPublicV3CycleReady(receipt().slice(1)),false);
+});
+
+test('a reused cursor from an older cycle never publishes historical alerts',()=>{
+  const shot=input(),lanes=receipt();
+  lanes[0]={...lanes[0],status:'BLOCKED_DATA',lastGoodPreserved:true,responseDataState:'untrusted'};
+  shot.rows[0].provenance.sourceCycleId=PRIOR_CYCLE_ID;
+  assert.deepEqual(currentPagePublication(shot,lanes).events,[]);
+  const forged=receipt();
+  forged[3]={...forged[3],sourceCycleId:PRIOR_CYCLE_ID};
+  assert.equal(currentPublicV3CycleReady(forged),false);
+  assert.deepEqual(currentPagePublication(input(),forged).events,[]);
 });

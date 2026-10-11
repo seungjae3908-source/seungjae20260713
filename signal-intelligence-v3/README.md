@@ -146,3 +146,18 @@ Only a fully completed zero-failure source batch may advance and be adapted
 into Signal V3/Paper-ready candidates. No shared member/real execution code
 or profitability/quality threshold is relaxed. Missing candles must be
 verified from a genuine public provider; they cannot be manufactured.
+
+## Draft: per-cycle source epoch and truthful current-page health
+
+A rotating roster cursor is reused after a full pass and cannot prove
+a candidate was actually rediscovered on the latest pass. Every V3 public
+cycle now generates a UUIDv4 `sourceCycleId`; new candidate provenance
+and all twelve lane coverage rows share that ID. Read-only publication
+requires **same cycle, same lane, same cursor, genuine source**. Retained
+prior-cycle research rows and prior-epoch alerts never count as fresh
+publication, even after cursor wrap. Missing/mixed cycle IDs fail closed.
+
+Full-profile /health separately marks `snapshotCurrentPageSourceReady=false`
+and `snapshotFresh=false` when source checks fail. This is not whole-roster
+coverage or a Production runtime check. No Bot API send, secret access, user
+order, DB, PM2/systemd or deployment action is authorized in this Draft.

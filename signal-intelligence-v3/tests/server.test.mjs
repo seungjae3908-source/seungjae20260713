@@ -112,3 +112,24 @@ test('non-loopback bind is rejected', async () => {
   assert.notEqual(code, 0);
   assert.match(stderr, /SIGNAL_INTELLIGENCE_LOOPBACK_ONLY/);
 });
+
+test('full-profile blocked source data cannot masquerade as fresh server health',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'signal-v3-'));
+  const state=join(dir,'partial-snapshot.json');
+  const port=23000+Math.floor(Math.random()*1000);
+  const base=runSignalIntelligenceV3([candidate()]);
+  await writeFile(state,JSON.stringify({...base,serviceSha:SHA,
+    profile:{fullStrategyCoverage:true},coverage:[]})+'\n');
+  const server=await startServer(state,port);
+  try{
+    const health=await(await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.equal(health.snapshotReady,true);
+    assert.equal(health.snapshotCurrentPageSourceReady,false);
+    assert.equal(health.snapshotFresh,false);
+    assert.equal(health.executionAuthority,'NONE');
+  }finally{
+    server.child.kill('SIGTERM');
+    await new Promise(resolve=>server.child.once('exit',resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
