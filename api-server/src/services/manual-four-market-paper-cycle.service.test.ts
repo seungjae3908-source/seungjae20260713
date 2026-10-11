@@ -177,6 +177,25 @@ test('isolated margin insufficiency, leverage-fueled modeled liquidation and sta
   const liquidation=change(fixture(),'exitQuote',{bid:1,ask:2});
   blocks(liquidation,'PAPER_CYCLE_UNMODELLED_ISOLATED_LIQUIDATION');
 });
+test('entry fees and slippage require spendable margin even if leverage notional itself is in range',()=>{
+  const s=fixture('crypto_spot');
+  blocks(change(s,'selected',{requestedNotionalKrw:1_000_000}),
+    'PAPER_CYCLE_ENTRY_COSTS_EXCEED_AVAILABLE_CAPITAL');
+  const futures=fixture('crypto_futures');
+  blocks(change(futures,'selected',{requestedNotionalKrw:7_000_000}),
+    'PAPER_CYCLE_ENTRY_COSTS_EXCEED_AVAILABLE_CAPITAL');
+});
+test('unknown or duplicated journal identities cannot be used as verified prior trades',()=>{
+  const s=fixture();
+  blocks(change(s,'verifiedOwner',{priorCloseEventIds:[null]}),
+    'PAPER_CYCLE_LEDGER_DUPLICATE');
+  blocks(change(s,'verifiedOwner',{priorCloseEventIds:['fake-close-id']}),
+    'PAPER_CYCLE_LEDGER_DUPLICATE');
+  const good=evaluateManualFourMarketPaperClosedCycle(s);
+  blocks(change(s,'verifiedOwner',{priorCloseEventIds:[good.closedCycleId,good.closedCycleId]}),
+    'PAPER_CYCLE_LEDGER_DUPLICATE');
+});
+
 test('costs and FX can turn a gross profit into loss, without hallucinated news or CVD cause',()=>{
   const entry=fixture('us_stock');
   const costed=change(entry,'costs',{
