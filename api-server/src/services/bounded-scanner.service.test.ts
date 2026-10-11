@@ -8,6 +8,7 @@ import {
   ScannerUniverseService,
   classifyScannerUniverseSource,
   clearScannerUniverseCacheForTests,
+  markScannerUniverseFallbackUnknown,
   type ScannerUniverseEntry,
 } from './scanner-universe.service';
 import { BoundedWorkTimeoutError } from '../lib/bounded-work-pool';
@@ -574,4 +575,26 @@ test('missing US provider token uses UNKNOWN curated fallback; cursor pagination
     clearUsUniverseCacheForTests();
     clearScannerUniverseCacheForTests();
   }
+});
+
+test('outage fallback never retains previously LISTED symbols as currently verified', () => {
+  const original = [
+    providerStock('AAPL', 'US'),
+    providerStock('MSFT', 'US'),
+  ];
+  const fallback = markScannerUniverseFallbackUnknown(original);
+  assert.equal(fallback.length, 2);
+  assert.ok(fallback.every((row) => row.source === 'last-good-cache'
+    && row.listingStatus === 'UNKNOWN'));
+  assert.equal(original[0].listingStatus, 'LISTED', 'fallback must not mutate the cached original');
+  assert.notStrictEqual(fallback[0], original[0]);
+  assert.deepEqual(
+    fallback.map((row) => row.ticker),
+    original.map((row) => row.ticker),
+  );
+  const evidence = classifyScannerUniverseSource('US', fallback);
+  assert.equal(evidence.partial, true);
+  assert.equal(evidence.stale, true);
+  assert.equal(evidence.source, 'last-good-cache');
+  assert.equal(evidence.providerErrorCount, 1);
 });
