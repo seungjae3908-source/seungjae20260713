@@ -353,7 +353,9 @@ async function sendOnce(
       { method: 'POST', headers, body, signal: controller.signal },
     );
 
-    const retryable = response.status === 429 || response.status >= 500;
+    // HTTP 429 means rejected; a 5xx can occur after Telegram accepts a POST.
+    // Never retry a possibly accepted non-idempotent sendMessage.
+    const retryable = response.status === 429;
     if (retryable && attempt < MAX_RETRIES) {
       const delay = retryDelay(response, attempt);
       clearTimeout(timeout);
@@ -367,7 +369,8 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
-        errorCode: `TELEGRAM_HTTP_${response.status}`,
+        errorCode: response.status >= 500
+          ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : `TELEGRAM_HTTP_${response.status}`, 
       };
     }
 
@@ -381,7 +384,7 @@ async function sendOnce(
         messageId: null,
         messageKind,
         renderedText,
-        errorCode: 'TELEGRAM_RESPONSE_INVALID',
+        errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
       };
     }
     const rawMessageId = result.result?.message_id;
@@ -389,26 +392,24 @@ async function sendOnce(
       ? rawMessageId
       : null;
     return {
-      delivered: result.ok === true,
+      delivered: result.ok === true && messageId !== null,
       attempts: attempt + 1,
       messageId,
       messageKind,
       renderedText,
-      errorCode: result.ok === true ? null : 'TELEGRAM_API_REJECTED',
+      errorCode: result.ok === true
+        ? (messageId === null ? 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' : null)
+        : 'TELEGRAM_API_REJECTED',
     };
   } catch {
-    if (attempt < MAX_RETRIES) {
-      clearTimeout(timeout);
-      await sleep(300 * (attempt + 1));
-      return sendOnce(botToken, destination, text, input, attempt + 1);
-    }
+    // A network abort can occur AFTER the remote Bot API has accepted POST.
     return {
       delivered: false,
       attempts: attempt + 1,
       messageId: null,
       messageKind: text.length <= TELEGRAM_CAPTION_LIMIT && safePhoto(input.photo) ? 'PHOTO' : 'TEXT',
       renderedText: text,
-      errorCode: 'TELEGRAM_NETWORK_ERROR',
+      errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
     };
   } finally {
     clearTimeout(timeout);
