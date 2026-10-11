@@ -102,6 +102,7 @@ export function summarizePublicKrExclusions(roster){
   const expected=roster?.explainedExcludedCount;
   const byAssetType=Object.fromEntries(TYPES.map(x=>[x,0]));
   let alphanumericSix=0,numericSix=0,otherCode=0;
+  let securitiesProductFinderCount=0,stockFinderCount=0,unknownFinderCount=0;
   for(const row of rows){
     const ticker=String(row?.ticker??'').trim().toUpperCase();
     if(/^\d{6}$/u.test(ticker))numericSix+=1;
@@ -109,6 +110,13 @@ export function summarizePublicKrExclusions(roster){
     else otherCode+=1;
     const type=TYPES.includes(row?.assetType)?row.assetType:'OTHER';
     byAssetType[type]+=1;
+    // The app currently forces an ETF fallback for unidentified products
+    // coming from the KRX securities-product finder. This is source lineage,
+    // NOT a verified ETF/ETN/ELW exchange instrument classification.
+    if(row?.exchange==='ETF·ETN')securitiesProductFinderCount+=1;
+    else if(typeof row?.exchange==='string' && row.exchange.trim())
+      stockFinderCount+=1;
+    else unknownFinderCount+=1;
   }
   return Object.freeze({
     schemaVersion:'public-kr-exclusion-classes-v1',
@@ -119,6 +127,11 @@ export function summarizePublicKrExclusions(roster){
     alphanumericSixCodeCount:alphanumericSix,
     otherCodeCount:otherCode,
     byAssetType:Object.freeze(byAssetType),
+    // The byAssetType values are app name-based guesses; in particular
+    // ETF is a fallback for otherwise unknown securities products.
+    instrumentClassificationVerified:false,
+    securitiesProductFinderCount,stockFinderCount,unknownFinderCount,
+    securitiesProductSubtypeVerified:false,
     vendorSupportVerified:false,
     fullUniverseCovered:false,
     providerRequestsAdded:0,
