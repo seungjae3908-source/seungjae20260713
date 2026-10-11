@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
   safeSha, readHealthOnce, readSignalSourceOnce,
+  canonicalPm2Paths, resolveSafeTelegramStatePath,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
 
@@ -32,7 +33,7 @@ const runtime={
 };
 const observed=()=>({
   runtime,pm2Sha:deployed,markerSha:deployed,online:true,
-  canonicalCwd:true,
+  canonicalCwd:true,canonicalEntrypoint:true,
 });
 const health=async()=>({
   nodeSha:deployed,markerSha:deployed,identityMatch:true,
@@ -45,6 +46,32 @@ test('valid immutable SHAs only',()=>{
   assert.equal(safeSha('a'.repeat(40)), current);
   assert.equal(safeSha('invalid'), null);
   assert.equal(safeSha('A'.repeat(40)), current);
+});
+
+test('PM2 canonical root and entrypoint agree with Production deploy; default ledgers use PM2 cwd',()=>{
+  const canonical=canonicalPm2Paths({
+    pm_cwd:'/opt/stock-app',
+    pm_exec_path:'/opt/stock-app/api-server/dist/index.mjs',
+  });
+  assert.deepEqual(canonical,{canonicalCwd:true,canonicalEntrypoint:true});
+  assert.deepEqual(canonicalPm2Paths({
+    pm_cwd:'/opt/stock-app/api-server',
+    pm_exec_path:'/opt/stock-app/api-server/dist/index.mjs',
+  }),{canonicalCwd:false,canonicalEntrypoint:true});
+  assert.deepEqual(canonicalPm2Paths({
+    pm_cwd:'/opt/stock-app',pm_exec_path:'/tmp/unapproved.js',
+  }),{canonicalCwd:true,canonicalEntrypoint:false});
+  assert.equal(resolveSafeTelegramStatePath(null,'telegram-intelligence-delivery-state.json'),
+    '/opt/stock-app/.runtime/telegram-intelligence-delivery-state.json');
+  assert.equal(resolveSafeTelegramStatePath('','signal-intelligence-telegram-state.json'),
+    '/opt/stock-app/.runtime/signal-intelligence-telegram-state.json');
+  assert.equal(resolveSafeTelegramStatePath('/opt/stock-app-data/telegram-ledger.json','unused.json'),
+    '/opt/stock-app-data/telegram-ledger.json');
+  assert.equal(resolveSafeTelegramStatePath('/opt/stock-app/api-server/.runtime/old-ledger.json','unused.json'),
+    '/opt/stock-app/api-server/.runtime/old-ledger.json');
+  assert.equal(resolveSafeTelegramStatePath('/opt/stock-app/.env','unused.json'),null);
+  assert.equal(resolveSafeTelegramStatePath('/opt/stock-app/api-server/.env','unused.json'),null);
+  assert.equal(resolveSafeTelegramStatePath('/etc/passwd','unused.json'),null);
 });
 
 test('market and signal ledgers emit only fixed labels/counts and never IDs',()=>{
@@ -112,7 +139,10 @@ test('disabled market, duplicated room, stale production SHA and missing health 
     signalSource:async()=>({status:'READY',eventCount:0,safetyValidated:true}),
     state:()=>inspectDeliveryStateText(state({}),'market',now),
   });
-  assert.equal((await testCase({pm2Sha:current})).classification,'PRODUCTION_IDENTITY_MISMATCH');
+  assert.equal((await testCase({pm2Sha:current})).classification,'PRODUCTION_SHA_MISMATCH');
+  assert.equal((await testCase({online:false})).classification,'PM2_NOT_ONLINE');
+  assert.equal((await testCase({canonicalCwd:false})).classification,'PM2_CWD_MISMATCH');
+  assert.equal((await testCase({canonicalEntrypoint:false})).classification,'PM2_ENTRYPOINT_MISMATCH');
   const duplicates={...runtime, TELEGRAM_US_STOCK_CHAT_ID:runtime.TELEGRAM_KR_STOCK_CHAT_ID};
   assert.equal((await testCase({runtime:duplicates})).classification,'TELEGRAM_CONFIGURATION_BLOCKED');
   assert.equal((await testCase({runtime:{...runtime,BACKGROUND_WORKERS_ENABLED:'false'}})).classification,'TELEGRAM_CONFIGURATION_BLOCKED');
