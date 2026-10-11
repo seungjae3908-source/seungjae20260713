@@ -179,7 +179,7 @@ jobs:
             ||r.signalSource.eventCount>10000
             ||typeof r.signalSource.safetyValidated!=='boolean'
             ||!r.signalHealth ||!['NOT_CHECKED','READY','SNAPSHOT_MISSING',
-              'SNAPSHOT_STALE','HTTP_503','HTTP_ERROR','INVALID_RESPONSE',
+              'SNAPSHOT_STALE','SOURCE_DATA_BLOCKED','HTTP_503','HTTP_ERROR','INVALID_RESPONSE',
               'UNREACHABLE','TIMEOUT','UNSAFE_ENDPOINT'].includes(r.signalHealth.status)
             ||!safeSha(r.signalHealth.serviceSha)
             ||typeof r.signalHealth.snapshotReady!=='boolean'
@@ -220,7 +220,8 @@ jobs:
               'SHA_OR_READ_PATH_MISMATCH_SUSPECT','RECENT_HTTP_AND_FILE',
               'HTTP_FILE_AGE_DISAGREE','CYCLE_FAILED_SUSPECT',
               'TIMER_NOT_RECENT_SUSPECT','RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT',
-              'STALE_PUBLICATION_UNEXPLAINED','UNRESOLVED'].includes(r.staleCause)
+              'STALE_PUBLICATION_UNEXPLAINED','CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED',
+              'UNRESOLVED'].includes(r.staleCause)
             ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
             ||!/^[A-Z_]+$/u.test(String(r.classification))
             ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)

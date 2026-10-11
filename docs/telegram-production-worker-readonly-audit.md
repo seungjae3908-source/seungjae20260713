@@ -186,3 +186,24 @@ An absent default path does NOT prove no custom state directory exists.
 This is a Draft diagnostic, not real remediation; a new exact-head
 owner-approved protected Production QA is needed after a separately
 approved merge. No operations on PM2, DB, systemd, Telegram or trades.
+
+## Draft v7: distinguish Signal V3 current-page data blocking from age staleness
+
+The Signal V3 server defines `snapshotFresh=false` BOTH for truly
+age-expired snapshots AND for recent publications whose current data
+pages are incomplete. Previous Telegram Production read-only
+diagnostics incorrectly labeled both conditions `SNAPSHOT_STALE`,
+which could falsely attribute a data-provider coverage gap to the
+systemd timer, writer or state-file age.
+
+The new read-only health projection consumes only the existing safe
+`snapshotCurrentPageSourceReady` boolean. A recent snapshot with
+`snapshotCurrentPageSourceReady=false` reports
+`SOURCE_DATA_BLOCKED` and, if the local file is also recent,
+`CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED`. A truly old snapshot still
+reports `SNAPSHOT_STALE`; a contradictory response declaring itself
+fresh while its current source is blocked is invalid. Older server
+revisions without this field remain subject to the original safe
+classification. Runtime actions remain **zero**: no Telegram sends,
+rescan/POST, systemd/PM2 mutation, secret read, database writes,
+orders or deployments. New statuses remain strict NO-GO.
