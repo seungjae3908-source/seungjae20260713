@@ -238,6 +238,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Check out exact commit for independent continuation verification
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
@@ -280,6 +284,53 @@ jobs:
             + 'Status: not certified for deployment\\n');
           console.log(JSON.stringify({memberTimeframeProbeOnly:true,fullMarketVerified:false,memberAuthVerified:false,summary},null,2));
           NODE
+      # Two observed cycles, not 24h. Reuse the exact prior state file and
+      # identify data failures and partial rosters without fabricating success.
+      - name: Verify exact-head member scan resumes the next real source batch
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SIGNAL_INTELLIGENCE_STATE_DIR: ${{ runner.temp }}/signal-intelligence-member-qa
+          SIGNAL_INTELLIGENCE_STATE_FILE: ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
+          SIGNAL_INTELLIGENCE_PUBLIC_PROFILE_MODE: MEMBER_UI
+          SIGNAL_INTELLIGENCE_MEMBER_UI_QA: 'true'
+          SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE: 'true'
+          LIVE_TRADING: 'false'
+          AUTO_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          set -Eeuo pipefail
+          test "$(cat "$RUNNER_TEMP/member-timeframe/SERVICE_SHA")" = "$SIGNAL_INTELLIGENCE_SERVICE_SHA"
+          cp "$SIGNAL_INTELLIGENCE_STATE_FILE" "$SIGNAL_INTELLIGENCE_STATE_DIR/first-member-snapshot.json"
+          cp "$SIGNAL_INTELLIGENCE_STATE_DIR/cycle-state.json" "$SIGNAL_INTELLIGENCE_STATE_DIR/first-cycle-state.json"
+          node "$RUNNER_TEMP/member-timeframe/public-cycle.mjs" | tee -a "$RUNNER_TEMP/member-timeframe-public-cycle.log"
+          node signal-intelligence-v3/scripts/verify-public-cycle-continuity.mjs \
+            "$SIGNAL_INTELLIGENCE_STATE_DIR/first-member-snapshot.json" \
+            "$SIGNAL_INTELLIGENCE_STATE_DIR/first-cycle-state.json" \
+            "$SIGNAL_INTELLIGENCE_STATE_FILE" \
+            "$SIGNAL_INTELLIGENCE_STATE_DIR/cycle-state.json" \
+            > "$RUNNER_TEMP/public-two-cycle-continuity.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-two-cycle-continuity.json"
+          const fs=require('node:fs');
+          const evidence=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if (evidence.head!==process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA
+            || evidence.executionAuthority!=='NONE'
+            || evidence.ordersSent!==false
+            || evidence.observedTwoConsecutiveSourceCycles!==true
+            || evidence.exactCursorContinuationVerified!==true
+            || evidence.completeSourceIndexAcrossMarketsProven!==false
+            || evidence.realContinuous24hProven!==false
+            || evidence.lanes?.length!==12)
+            process.exit(1);
+          const rows=Object.entries(evidence.markets)
+            .map(([market,row])=>market+' continued='+row.continued
+              +' advanced='+row.advanced+' held='+row.held+' blocked='+row.blocked);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Two consecutive real public-member source batches (no production proof)\n\n'
+            + rows.map(x=>'- '+x+'\n').join('')+'\n');
+          console.log('PUBLIC_TWO_CYCLE_CURSOR_CONTINUATION_PASS '+rows.join(' | '));
+          NODE
       - name: Upload member-timeframe observation evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -289,6 +340,9 @@ jobs:
             ${{ runner.temp }}/signal-intelligence-member-qa/latest-snapshot.json
             ${{ runner.temp }}/signal-intelligence-member-qa/cycle-state.json
             ${{ runner.temp }}/member-timeframe-public-cycle.log
+            ${{ runner.temp }}/signal-intelligence-member-qa/first-member-snapshot.json
+            ${{ runner.temp }}/signal-intelligence-member-qa/first-cycle-state.json
+            ${{ runner.temp }}/public-two-cycle-continuity.json
           retention-days: 30
           if-no-files-found: warn
 
