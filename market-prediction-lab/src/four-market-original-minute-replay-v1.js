@@ -20,6 +20,12 @@ const VENUES=Object.freeze({
 });
 const ZONES=Object.freeze({KR_STOCK:"Asia/Seoul",US_STOCK:"America/New_York",
   CRYPTO_SPOT:"UTC",CRYPTO_FUTURES:"UTC"});
+const QUOTE_CURRENCY=Object.freeze({KR_STOCK:"KRW",US_STOCK:"USD",
+  CRYPTO_SPOT:"KRW",CRYPTO_FUTURES:"USDT"});
+const HORIZONS=Object.freeze([
+  ["1d",1],["1w",7],["1m",30],["3m",90],["6m",180],
+  ["1y",365],["3y",1095],["5y",1825],["10y",3650],
+]);
 const DATES=/^\d{4}-\d{2}-\d{2}$/;
 const SHA=/^[a-f0-9]{64}$/;
 const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/;
@@ -53,7 +59,8 @@ function normalize(input){
   const {root,market,symbol,stockCalendar=null,manifest,sessionSources=[],
     researchWindow,timeframe="5m",direction="LONG",asOfMs,
     strategy={},costModel={},initialCapitalKRW=1_000_000,
-    leverage=1,riskFraction=0.01} = input;
+    leverage=1,riskFraction=0.01,
+    fxRateKRWPerQuote=null} = input;
   if(typeof root!=="string"||!isAbsolute(root)||resolve(root)!==root
     ||!Object.hasOwn(VENUES,market)||typeof symbol!=="string"
     ||!SYMBOL.test(symbol)||!FRAMES.has(timeframe)
@@ -92,9 +99,18 @@ function normalize(input){
     fail("PRIVATE_REPLAY_HISTORIC_PIT_ROSTER_REQUIRED");
   const period=resolveSelectedResearchWindowV1(researchWindow);
   const calendar=validateSessions(market,period,stockCalendar,sessionSources);
+  const quote=QUOTE_CURRENCY[market];
+  const needsFX=quote!=="KRW";
+  if(fxRateKRWPerQuote!=null
+    &&(typeof fxRateKRWPerQuote!=="number"
+      ||!Number.isFinite(fxRateKRWPerQuote)
+      ||fxRateKRWPerQuote<=0||fxRateKRWPerQuote>10000))
+    fail("PRIVATE_REPLAY_MODELED_FX_RATE_INVALID");
+  const fx=needsFX?fxRateKRWPerQuote:1;
   return {root,market,symbol,manifest,period,calendar,timeframe,direction,asOfMs,
     strategy:{kind:"EMA_TREND",fast,slow,stopPercent,targetPercent},
-    costs,leverage,riskFraction,initialCapitalKRW};
+    costs,leverage,riskFraction,initialCapitalKRW,quote,
+    fxMissing:needsFX&&fx==null,fxRateKRWPerQuote:fx};
 }
 function validateSessions(market,period,stockCalendar,sources){
   const stock=market.endsWith("STOCK");
@@ -175,7 +191,10 @@ function createReplay(initialCapitalKRW){
     previousClose:null,observations:0,position:null,pending:null,
     trades:0,wins:0,losses:0,modeledCostKRW:0,
     modeledNetPnlKRW:0,detail:[],days:[],bySplit:{train:0,validation:0,test:0},
-    previousEndMs:-1,lossesByDate:new Map()};
+    previousEndMs:-1,lossesByDate:new Map(),
+    horizons:Object.fromEntries(HORIZONS.map(([key])=>[key,{
+      modeledTradeCount:0,modeledNetPnlKRW:0,modeledTotalCostKRW:0,
+    }]))};
 }
 function recordClose(state,p,b,price,reason,config){
   const spread=(config.costs.spreadRate??0)/2;
@@ -197,6 +216,15 @@ function recordClose(state,p,b,price,reason,config){
   if(net<0)state.lossesByDate.set(p.sessionDate,
     (state.lossesByDate.get(p.sessionDate)??0)+1);
   state.modeledCostKRW+=cost;state.modeledNetPnlKRW+=net;
+  for(const [key,days] of HORIZONS){
+    const cutoff=config.period.endExclusiveMs-days*DAY;
+    if(b.endMs>cutoff){
+      const group=state.horizons[key];
+      group.modeledTradeCount+=1;
+      group.modeledNetPnlKRW+=net;
+      group.modeledTotalCostKRW+=cost;
+    }
+  }
   if(net>0){state.equity+=net/2;state.reserve+=net/2;}
   else state.equity=Math.max(0,state.equity+net);
   const total=state.equity+state.reserve;
@@ -275,6 +303,8 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
   const response={market:cfg.market,symbol:cfg.symbol,timeframe:cfg.timeframe,
     direction:cfg.direction,selectedStartDate:cfg.period.startDate,
     selectedEndDate:cfg.period.endDate,
+    quoteCurrency:cfg.quote,modeledFxRateKRWPerQuote:cfg.fxRateKRWPerQuote,
+    fxEvidenceStatus:"STATIC_FX_MODEL_ONLY_NOT_HISTORICAL",
     requestedTradingDays:cfg.calendar.required.length,
     expectedSessions:cfg.calendar.events.length,
     tradingCalendarIndependentProof:false,
@@ -283,6 +313,10 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     sourceDaysRead:0,sourceSessionsRead:0,retrospectiveUnavailableRows:0,
     missingSourceDays:cfg.calendar.missing.length,
     ignoredOutOfWindowSourceDays:input.sessionSources.length-cfg.calendar.events.length};
+  if(cfg.fxMissing)return safe({...response,
+    reason:"HISTORICAL_QUOTE_TO_KRW_FX_MISSING",
+    modeledTradeCount:null,modeledReturnPercent:null,
+    modeledNetPnlKRW:null});
   if(cfg.calendar.missing.length||!cfg.calendar.events.length)
     return safe({...response,reason:"PIT_SESSION_OR_CALENDAR_DATES_MISSING",
       modeledTradeCount:null,modeledReturnPercent:null,
@@ -317,12 +351,20 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     if(!frame||!frame.sourceSessionCoverageComplete||frame.completeBarCount<1)
       return safe({...response,reason:"ORIGINAL_ONE_MINUTE_SESSION_PARTIAL_OR_UNAVAILABLE",
         modeledTradeCount:null,modeledReturnPercent:null,modeledNetPnlKRW:null});
+    // Convert quote amounts for the KRW-denominated model using an explicitly
+    // supplied STATIC FX assumption. This is NOT time-series official FX proof.
     const bars=frame.bars;
     for(const b of bars){
       if(b.availableAtMs>b.endMs)response.retrospectiveUnavailableRows++;
-      consumeBar(state,b,cfg);
+      const value=cfg.fxRateKRWPerQuote===1?b:{
+        ...b,open:b.open*cfg.fxRateKRWPerQuote,
+        high:b.high*cfg.fxRateKRWPerQuote,
+        low:b.low*cfg.fxRateKRWPerQuote,
+        close:b.close*cfg.fxRateKRWPerQuote,
+      };
+      consumeBar(state,value,cfg);
+      last=value;
     }
-    last=bars.at(-1);
     endSession(state,last,cfg);
     response.sourceSessionsRead++;
     sourceDigestChain.push([session.date,session.startMs,data.archiveSourceDigestSha256]);
@@ -341,6 +383,21 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     modeledMaximumDrawdownPercent:state.maxDrawdownPercent,
     modeledTradePreview:state.detail,
     modeledTrainValidationTestTradeCounts:state.bySplit,
+    modeledPeriodReturns:Object.fromEntries(HORIZONS.map(([key,days])=>{
+      const value=state.horizons[key];
+      const supported=cfg.period.requestedUtcDayCount>=days;
+      return [key,supported?{
+        modeledTradeCount:value.modeledTradeCount,
+        modeledNetPnlKRW:value.modeledNetPnlKRW,
+        modeledReturnPercent:100*value.modeledNetPnlKRW/cfg.initialCapitalKRW,
+        modeledTotalCostKRW:value.modeledTotalCostKRW,
+        independentOOSProven:false,
+      }:{
+        modeledTradeCount:null,modeledNetPnlKRW:null,
+        modeledReturnPercent:null,modeledTotalCostKRW:null,
+        reason:"SELECTED_WINDOW_SHORTER_THAN_HORIZON",
+      }];
+    })),
     candidateStatus:"RESEARCH_ONLY_NO_ADOPTION",
   });
 }

@@ -67,6 +67,9 @@ function fixture(market,{retro=false,missing=false}={}){
     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
     timeframe:"5m",direction:"LONG",initialCapitalKRW:1_000_000,
     leverage:market==="CRYPTO_FUTURES"?7:1,
+    // USD/USDT denominated candles need an EXPLICIT non-authoritative KRW model.
+    fxRateKRWPerQuote:market==="US_STOCK"||market==="CRYPTO_FUTURES"
+      ?1300:null,
     strategy:{kind:"EMA_TREND",fast:2,slow:5,stopPercent:0.8,targetPercent:1.4},
     costModel:{entryFeeRate:0.0006,exitFeeRate:0.0006,
       spreadRate:0.0004,slippageRate:0.0006,latencyRate:0.0001,
@@ -98,6 +101,10 @@ test("all four venues replay source-only EMA with next-bar execution and zero ec
       assert.equal(result.trueMarketWideRecall,null);
       assert.equal(result.profitabilityProven,false);
       assert.equal(result.paperAdmissionAllowed,false);
+      assert.equal(result.modeledPeriodReturns["1d"].independentOOSProven,false);
+      assert.equal(result.modeledPeriodReturns["1w"].modeledReturnPercent,null);
+      assert.equal(result.modeledPeriodReturns["3m"].modeledReturnPercent,null);
+      assert.equal(result.fxEvidenceStatus,"STATIC_FX_MODEL_ONLY_NOT_HISTORICAL");
       assert.equal(result.automaticPaperExecution,false);
       assert.equal(result.executionAuthority,"NONE");
       assert.equal(result.orderSubmitted,false);
@@ -199,5 +206,22 @@ test("cash reserves split modeled positive profits only, without transfers or re
     assert.equal(r.automaticPaperExecution,false);
     assert.equal(r.realOrders,false);
     assert.equal(r.orderSubmitted,false);
+  }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+
+test("US and futures require explicit modeled quote-to-KRW FX; missing rate cannot report a PnL",async()=>{
+  const folder=root();
+  try{
+    for(const market of ["US_STOCK","CRYPTO_FUTURES"]){
+      const x=fixture(market);
+      const noFX=await replay(x.request(folder,{fxRateKRWPerQuote:null}));
+      assert.equal(noFX.status,"BLOCKED_DATA");
+      assert.equal(noFX.reason,"HISTORICAL_QUOTE_TO_KRW_FX_MISSING");
+      assert.equal(noFX.modeledReturnPercent,null);
+      assert.equal(noFX.actualFillCount,null);
+      await assert.rejects(()=>replay(x.request(folder,{fxRateKRWPerQuote:-1300})),
+        /PRIVATE_REPLAY_MODELED_FX_RATE_INVALID/);
+    }
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
