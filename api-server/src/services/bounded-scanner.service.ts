@@ -130,6 +130,9 @@ export interface ScanExecutionOptions {
   itemTimeoutMs?: number;
   concurrency?: number;
   limit?: number;
+  // Only the StockSignalScannerService US 4H path may assert that it has
+  // aggregated complete 60m candles within one explicit trading session.
+  verifiedUs4hSessionAggregation?: boolean;
 }
 
 export interface BoundedScanResult {
@@ -371,9 +374,9 @@ function percentChange(from: number, to: number): number {
   return from ? ((to - from) / Math.abs(from)) * 100 : 0;
 }
 
-function scanTimeframe(value: unknown, market: string): ScannerTimeframe {
+function scanTimeframe(value: unknown, market: string, verifiedUs4hAggregation = false): ScannerTimeframe {
   const normalized = String(value ?? '1D') === '1H' ? '60m' : String(value ?? '1D');
-  if (String(market).toUpperCase() === 'US' && normalized === '4H') {
+  if (String(market).toUpperCase() === 'US' && normalized === '4H' && !verifiedUs4hAggregation) {
     throw new Error('SCAN_TIMEFRAME_UNSUPPORTED:US:4H');
   }
   return isScannerTimeframe(normalized) ? normalized : '1D';
@@ -658,7 +661,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         : includesMarketCap
           ? []
           : ['volume_accum', 'ma_breakout', 'ai_high'];
-      const timeframe = scanTimeframe(filters.timeframe, market);
+      const timeframe = scanTimeframe(filters.timeframe, market, execution.verifiedUs4hSessionAggregation === true);
       const volumeThreshold = typeof filters.volumeThreshold === 'number' && filters.volumeThreshold > 0
         ? filters.volumeThreshold
         : null;

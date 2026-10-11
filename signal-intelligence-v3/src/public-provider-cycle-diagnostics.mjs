@@ -61,12 +61,19 @@ export function summarizePublicProviderFailureReasons(failures) {
 }
 
 function statusFor(rows) {
-  if (rows.some(row => row.status === 'SEARCH_FAILURE'
-    || Number(row.insufficientDataCount ?? 0) > 0
+  // A missing candle or symbol mapping is a data-quality gap, NOT an HTTP
+  // provider outage. Keep provider failure, data quality and trust separate.
+  if (rows.some(row => (row.providerErrors ?? 0) > 0 || (row.timeouts ?? 0) > 0
+    || ['HTTP_429','HTTP_418','HTTP_4XX','HTTP_5XX','BITGET_REST_CODE',
+      'PROVIDER_ADMISSION','PROVIDER_OTHER','TIMEOUT']
+      .some(code => Number(row.publicProviderFailureSummary?.categories?.[code] ?? 0) > 0)))
+    return 'PROVIDER_BLOCKED';
+  if (rows.some(row => Number(row.insufficientDataCount ?? 0) > 0
     || Number(row.invalidDataFailureCount ?? 0) > 0
     || Number(row.publicProviderFailureSummary?.categories?.INVALID_DATA ?? 0) > 0
     || Number(row.publicProviderFailureSummary?.categories?.SYMBOL_MAPPING ?? 0) > 0))
-    return 'PROVIDER_BLOCKED';
+    return 'DATA_QUALITY_BLOCKED';
+  if (rows.some(row => row.status === 'SEARCH_FAILURE')) return 'SEARCH_FAILURE_UNKNOWN';
   if (rows.some(row => row.status === 'BLOCKED_DATA')) return 'PARTIAL_OR_UNTRUSTED';
   return 'CURRENT_BATCHES_ONLY';
 }
