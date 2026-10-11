@@ -115,3 +115,50 @@ test('missing or altered provider failure evidence fails closed rather than pass
   assert.throws(()=>assertBlockedKrPublicResearchCoverage(report),/KR_PUBLIC_/);
  }
 });
+
+test('a thrown source failure retains sanitized diagnostic counters without relaxing fail-closed cursor and action gates',()=>{
+ const report=fixture(),row=report.coverage[0];
+ Object.assign(row,{
+  status:'SEARCH_FAILURE',error:'SCAN_PROVIDER_ERROR',rosterVerified:false,
+  cursorBefore:0,cursorAfter:0,requestedCount:null,startedCount:null,completedCount:null,
+  providerErrors:10,timeouts:0,
+  thrownProviderMetrics:{
+    completed:0,providerErrors:10,workerErrors:0,timeouts:0,started:10,
+    sourceFailureConfirmed:true,fullMarketVerified:false,
+  },
+ });
+ delete row.cursorRotatedBlockedOnly;
+ // The audit now comes from the SAME failed scan, not a second provider call.
+ const quote={fetched:0,errors:0,invalidPrice:0};
+ const candle={fetched:0,errors:0,empty:0,shortLt20:0,shortLt40:0,
+  invalidOhlc:0,hasLateOrFuture:0,lastBarLagGteOneDay:0,lastBarLagGteFiveDays:0};
+ row.publicStockSourceAudit={
+  version:'public-stock-source-audit-v1',
+  candles:Object.fromEntries(['1m','3m','5m','15m','60m','4H','1D']
+    .map(tf=>[tf,{...candle}])),
+  quote,
+  sanitizedProviderFailures:{HTTP_429:5,HTTP_4XX:0,HTTP_5XX:0,TIMEOUT:0,OTHER:0},
+  symbolsRedacted:true,fullMarketVerified:false,executionAuthority:'NONE',
+ };
+ row.publicStockSourceAudit.candles['15m'].errors=5;
+ const outcome=assertBlockedKrPublicResearchCoverage(report);
+ assert.equal(outcome.releaseReady,false);
+ assert.equal(outcome.krWholeUniverseVerified,false);
+ assert.equal(outcome.lanes[0].result,'PROVIDER_FAILED_CURSOR_HELD');
+ assert.equal(outcome.lanes[0].sourceHttp429Count,5);
+ assert.equal(outcome.lanes[0].cursorHeld,true);
+ assert.equal(outcome.tradingAuthority,'NONE');
+ const illegal=[
+  a=>{a.sourceRawSymbol='secret';},
+  a=>{a.sanitizedProviderFailures.HTTP_429=-1;},
+  a=>{a.executionAuthority='LIVE';},
+  a=>{a.candles['15m'].secretTicker='005930';},
+  a=>{a.quote.invalidPrice=Number.NaN;},
+ ];
+ for(const change of illegal){
+  const attempt=structuredClone(report);
+  change(attempt.coverage[0].publicStockSourceAudit);
+  assert.throws(()=>assertBlockedKrPublicResearchCoverage(attempt),
+    /KR_PUBLIC_PROVIDER_FAILURE_NOT_FAILCLOSED/);
+ }
+});
