@@ -22,6 +22,23 @@ function fixture(overrides = {}) {
       ...overrides,
     }],
   }));
+  fs.writeFileSync(path.join(directory, 'production-four-market-signal-scanner.json'), JSON.stringify({
+    complete: true,
+    executionAuthority: 'NONE',
+    actualOrders: 0,
+    blockedMutationRequests: 0,
+    validZeroSignalAccepted: true,
+    lanes: ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'].map((lane) => ({
+      lane,
+      status: 200,
+      outcome: 'VALID_ZERO_SIGNAL',
+      dataState: 'complete',
+      universeCount: 10,
+      timeoutCount: 0,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+    })),
+  }));
   return directory;
 }
 
@@ -35,9 +52,23 @@ test('builds zero-authority exact-SHA comprehensive receipt', () => {
   assert.equal(receipt.targetSha, SHA);
   assert.equal(receipt.productionDeployRunId, 123);
   assert.equal(receipt.recommendationsDesktop1440.fallbackTimedOut, false);
+  assert.deepEqual(receipt.fourMarketSignalScanner.lanes, ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES']);
   assert.equal(receipt.orderRequests, 0);
   assert.equal(receipt.realOrderSubmitted, false);
   assert.equal(receipt.liveTradingAuthorityGranted, false);
+});
+
+test('rejects a four-market scanner lane with a provider failure', () => {
+  const directory = fixture();
+  const scannerPath = path.join(directory, 'production-four-market-signal-scanner.json');
+  const scanner = JSON.parse(fs.readFileSync(scannerPath, 'utf8'));
+  scanner.lanes[2].outcome = 'PROVIDER_FAILURE';
+  fs.writeFileSync(scannerPath, JSON.stringify(scanner));
+  assert.throws(() => buildProductionComprehensiveReadonlyReceipt({
+    artifactDir: directory,
+    targetSha: SHA,
+    productionDeployRunId: '123',
+  }), /COMPREHENSIVE_QA_SIGNAL_SCANNER_LANE_INVALID:CRYPTO_SPOT/);
 });
 
 test('rejects a lingering recommendations fallback instead of weakening the budget', () => {

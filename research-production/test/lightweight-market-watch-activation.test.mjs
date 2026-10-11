@@ -57,11 +57,15 @@ test('owner, exact main, both source PRs and same-run 6/6 are required before SS
     "'security-integration/verified'",
     "'ai-privacy/verified'",
     "'futures-public-network-smoke/verified'",
+    'github.rest.actions.listWorkflowRuns',
+    "workflow_id:'futures-public-network-smoke.yml'",
+    "branch:'main'",
     'needs.authorize.result',
     'ssh -i ~/.ssh/id_ed25519',
     'WATCH_EXECUTION_AUTHORITY=NONE',
     "WATCH_24H_UPTIME_PROVEN=false",
   ]) assert.ok(y.includes(part),part);
+  assert.doesNotMatch(y,/listWorkflowRunsForRepo/);
   assert.doesNotMatch(y,/ssh-keyscan|StrictHostKeyChecking=no|cancel-in-progress: true/);
 });
 test('no generated business or research AI/paper execution is in isolated activation',async()=>{
