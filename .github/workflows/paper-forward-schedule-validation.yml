@@ -617,6 +617,12 @@ jobs:
             stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
             stock-analyzer/src/lib/excel-export.ts
           )
+          # The Research Center batch shares Paper readbacks, not Live authority.
+          # Add exact reviewed paths, while preserving every Paper safety test.
+          node --test .github/tests/research-center-batch-scope.test.mjs
+          mapfile -t research_batch < <(node .github/scripts/research-center-batch-scope.mjs --list-paths)
+          test "${#research_batch[@]}" -gt 0
+          allowed+=("${research_batch[@]}")
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
           for path in "${changed[@]}"; do
@@ -633,8 +639,10 @@ jobs:
               case "$path" in
                 stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts) ;;
                 *)
-                  echo "Unexpected Paper-facing UI change: $path" >&2
-                  exit 1
+                  printf '%s\n' "${research_batch[@]}" | grep -Fx "$path" >/dev/null || {
+                    echo "Unexpected Paper-facing UI change: $path" >&2
+                    exit 1
+                  }
                   ;;
               esac
             fi
