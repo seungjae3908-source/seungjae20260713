@@ -389,7 +389,7 @@ test('fixed systemd Signal V3 statuses are whitelisted and no service actions oc
 });
 
 test('V3 health only classifies safe loopback snapshot status and never copies error contents',async()=>{
-  const responseFor=(status,ready,fresh)=>(target,opts,respond)=>{
+  const responseFor=(status,ready,fresh,currentPageSourceReady)=>(target,opts,respond)=>{
     assert.equal(target.protocol,'http:');
     assert.equal(target.hostname,'127.0.0.1');
     assert.equal(target.pathname,'/health');
@@ -404,6 +404,7 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
         res.emit('data',Buffer.from(JSON.stringify({
           ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
           bindHost:'127.0.0.1',snapshotReady:ready,snapshotFresh:fresh,
+          snapshotCurrentPageSourceReady:currentPageSourceReady,
           snapshotAgeMs:ready?60_000:null,
           executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
           snapshotError:'PRIVATE_DO_NOT_PUBLISH',secret:'PRIVATE_TOKEN',
@@ -417,6 +418,18 @@ test('V3 health only classifies safe loopback snapshot status and never copies e
   assert.deepEqual(ready,{status:'READY',serviceSha:deployed,snapshotReady:true,snapshotFresh:true,snapshotAgeBand:'UNDER_5M'});
   const stale=await readSignalV3HealthOnce({getImpl:responseFor(200,true,false)});
   assert.equal(stale.status,'SNAPSHOT_STALE');
+  const blocked=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,true,false,false),
+  });
+  assert.equal(blocked.status,'SOURCE_DATA_BLOCKED');
+  assert.equal(blocked.snapshotReady,true);
+  assert.equal(blocked.snapshotFresh,false);
+  assert.equal(blocked.snapshotAgeBand,'UNDER_5M');
+  const conflict=await readSignalV3HealthOnce({
+    getImpl:responseFor(200,true,true,false),
+  });
+  assert.equal(conflict.status,'INVALID_RESPONSE');
+  assert.ok(!JSON.stringify(blocked).includes('PRIVATE_TOKEN'));
   const missing=await readSignalV3HealthOnce({getImpl:responseFor(200,false,false)});
   assert.equal(missing.status,'SNAPSHOT_MISSING');
   const notReady=await readSignalV3HealthOnce({getImpl:responseFor(503,false,false)});
@@ -558,4 +571,8 @@ test('fixed read-only V3 state evidence is safe and classifies stale writer vs t
   assert.equal(v3StalenessHypothesis(health,{lastResult:'SUCCEEDED',
     startedAgeBand:'OVER_60M'},stale,timer),'TIMER_NOT_RECENT_SUSPECT');
   assert.equal(v3StalenessHypothesis(health,{},data,timer),'HTTP_FILE_AGE_DISAGREE');
+  assert.equal(v3StalenessHypothesis(
+    {status:'SOURCE_DATA_BLOCKED',serviceSha:deployed},
+    {lastResult:'SUCCEEDED',startedAgeBand:'UNDER_5M'},
+    data,timer),'CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED');
 });
