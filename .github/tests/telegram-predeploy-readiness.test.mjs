@@ -14,8 +14,8 @@ const valid = () => ({
   staging:{runtimeSha:sha,markerSha:sha,healthSha:sha,identityMatch:true,
     pm2Online:true,releaseReady:true,postgresAuth:true,dbReadOnly:true,
     protectedReceipt:true,runId:12345,checkedAt:at(60_000),
-    tlsProbes:[{checkedAt:at(8*60_000),code:'IPV4_TLS_READY'},
-      {checkedAt:at(60_000),code:'IPV4_TLS_READY'}]},
+    tlsProbes:[{checkedAt:at(8*60_000),code:'IPV4_TLS_READY',sha,runId:12343,protectedReceipt:true},
+      {checkedAt:at(60_000),code:'IPV4_TLS_READY',sha,runId:12344,protectedReceipt:true}]},
   signalV3:{serviceSha,healthStatus:'READY',getHttpStatus:200,
     snapshotReady:true,snapshotFresh:true,snapshotAgeMs:60_000,
     serverUnit:'ACTIVE',timerUnit:'ACTIVE',lastCycleResult:'SUCCEEDED',
@@ -68,6 +68,9 @@ test('missing, stale, mismatched, or incomplete evidence fails closed',()=>{
   rejected(x=>{x.ci.headSha=serviceSha;},'CI_6_OF_6_NOT_PROVEN');
   rejected(x=>{x.staging.runtimeSha=serviceSha;},'STAGING_SAME_SHA_READINESS_NOT_PROVEN');
   rejected(x=>{x.staging.protectedReceipt=false;},'STAGING_SAME_SHA_READINESS_NOT_PROVEN');
+  rejected(x=>{delete x.staging.dbReadOnly;},'STAGING_SAME_SHA_READINESS_NOT_PROVEN');
+  rejected(x=>{x.staging.tlsProbes[1].runId=x.staging.tlsProbes[0].runId;},'TELEGRAM_TLS_RELIABILITY_NOT_PROVEN');
+  rejected(x=>{x.staging.tlsProbes[1].sha=serviceSha;},'TELEGRAM_TLS_RELIABILITY_NOT_PROVEN');
   rejected(x=>{x.staging.checkedAt=at(45*60_000);},'STAGING_SAME_SHA_READINESS_NOT_PROVEN');
   rejected(x=>{x.staging.tlsProbes[1].checkedAt=at(6*60_000);},
     'TELEGRAM_TLS_RELIABILITY_NOT_PROVEN');
