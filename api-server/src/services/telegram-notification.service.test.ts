@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import {
   clearTelegramAlertState,
@@ -18,8 +21,10 @@ import {
   telegramReportDestinations,
 } from './telegram-intelligence-report.service';
 import {
+  FileTelegramIntelligenceStateStore,
   MemoryTelegramIntelligenceStateStore,
   TelegramIntelligenceWorker,
+  readTelegramIntelligenceWorkerHealth,
 } from './telegram-intelligence-worker.service';
 import { buildSignalIntelligenceTelegramInput } from './signal-intelligence-telegram-subscriber.service';
 import {
@@ -673,6 +678,38 @@ test('Telegram intelligence daily dedupe suppresses an already delivered report 
   assert.equal(plans.length, 1);
   const deduped = dedupeTelegramIntelligencePlans(plans, new Set([plans[0].dedupeKey]));
   assert.deepEqual(deduped, []);
+});
+
+test('corrupted market briefing ledger fails closed; no replay, overwrite or Telegram send', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'telegram-brief-dedupe-'));
+  const file = path.join(directory, 'delivery.json');
+  try {
+    const corrupt = '{BROKEN_LEGACY_STATE';
+    await writeFile(file, corrupt, 'utf8');
+    let sends = 0;
+    const worker = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(file),
+      async () => { sends += 1; return { ok: true as const, attempts: 1 }; },
+      (destination) => destination === 'KR_STOCK_ROOM' ? 'mock-kr-room' : null,
+      async () => { throw new Error('NO_REAL_MARKET_FETCH'); },
+    );
+    const time = new Date('2026-08-14T07:00:00.000Z');
+    await assert.rejects(worker.runOnce(time), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    await assert.rejects(worker.runOnce(time), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(sends, 0);
+    assert.equal(await readFile(file, 'utf8'), corrupt);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('Telegram scheduled worker exposes safe idle readiness without any send evidence', () => {
+  const status = readTelegramIntelligenceWorkerHealth();
+  assert.equal(typeof status.enabled, 'boolean');
+  assert.ok(['NOT_STARTED', 'RUNNING', 'DISABLED', 'STOPPED'].includes(status.state));
+  assert.ok(['NOT_OBSERVED','BOT_API_ACCEPTED','DEDUPED_ONLY','NOT_CONFIGURED',
+    'DELIVERY_FAILED','NO_ATTEMPTS','LEDGER_UNREADABLE','TICK_FAILED'].includes(status.lastDueCode));
+  assert.equal(Object.keys(status).some(key => /token|chat|account|user|order|secret/i.test(key)), false);
 });
 
 test('Telegram intelligence worker sends a due KR close report exactly once', async () => {
