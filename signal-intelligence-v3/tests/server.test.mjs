@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, stat, rename, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -90,7 +90,7 @@ test('server fails signal reads closed when snapshot is missing', async () => {
     assert.equal(health.snapshotReady, false);
     assert.equal(health.snapshotClockReady,false);
     assert.equal(health.snapshotPublicationReady,false);
-    assert.equal(health.snapshotBlockedReason,'ENOENT');
+    assert.equal(health.snapshotBlockedReason,'SNAPSHOT_NOT_READY');
     const response = await fetch(`http://127.0.0.1:${port}/v1/signals/kr`);
     assert.equal(response.status, 503);
     const body = await response.json();
@@ -242,4 +242,57 @@ test('future-dated snapshot and invalid max-age cannot produce a fresh signal',a
   const result=await new Promise(resolve=>invalid.once('exit',resolve));
   assert.notEqual(result,0);
   assert.match(stderr,/SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID/);
+});
+
+
+test('atomic snapshot with same mtime and different inode must never replay a cached older candidate',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'signal-v3-atomic-'));
+  const state=join(dir,'latest-snapshot.json');
+  const staged=join(dir,'replacement.json');
+  const port=27000+Math.floor(Math.random()*500);
+  const first={...runSignalIntelligenceV3([candidate()]),serviceSha:SHA};
+  const second={...runSignalIntelligenceV3([{...candidate(),symbol:'000660'}]),serviceSha:SHA};
+  await writeFile(state,JSON.stringify(first)+'\n');
+  const instance=await startServer(state,port);
+  try{
+    const endpoint='http://127.0.0.1:'+port+'/v1/signals/kr';
+    const before=await(await fetch(endpoint)).json();
+    assert.equal(before.candidates[0].symbol,'005930');
+    const metadata=await stat(state);
+    await writeFile(staged,JSON.stringify(second)+'\n');
+    await utimes(staged,metadata.atime,metadata.mtime);
+    await rename(staged,state);
+    const after=await(await fetch(endpoint)).json();
+    assert.equal(after.candidates[0].symbol,'000660');
+    assert.equal(after.executionAuthority,'NONE');
+  }finally{
+    instance.child.kill('SIGTERM');
+    await new Promise(resolve=>instance.child.once('exit',resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('corrupt JSON cannot leak raw error data into health or 503 responses',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'signal-v3-malformed-'));
+  const state=join(dir,'bad.json');
+  const port=27500+Math.floor(Math.random()*500);
+  await writeFile(state,'{"secret":"DONT_EXPORT",');
+  const instance=await startServer(state,port);
+  try{
+    const root='http://127.0.0.1:'+port;
+    const health=await(await fetch(root+'/health')).json();
+    assert.equal(health.snapshotReady,false);
+    assert.equal(health.snapshotError,'SNAPSHOT_INVALID_JSON');
+    assert.equal(health.snapshotBlockedReason,'SNAPSHOT_INVALID_JSON');
+    const response=await fetch(root+'/v1/signals/spot');
+    assert.equal(response.status,503);
+    const payload=await response.json();
+    assert.equal(payload.error,'SNAPSHOT_INVALID_JSON');
+    assert.equal(payload.executionAuthority,'NONE');
+    assert.equal(JSON.stringify({health,payload}).includes('DONT_EXPORT'),false);
+  }finally{
+    instance.child.kill('SIGTERM');
+    await new Promise(resolve=>instance.child.once('exit',resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
 });
