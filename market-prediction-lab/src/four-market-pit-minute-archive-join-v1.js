@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { auditHistoricalPITVenueUniverseV1 } from "./historical-pit-venue-universe-gate-v1.js";
 import {
@@ -24,6 +25,14 @@ const VENUES = Object.freeze({
 });
 const SHA = /^[0-9a-f]{64}$/u;
 const STOCK = new Set(["KR_STOCK", "US_STOCK"]);
+/** A local integrity fence, not independent calendar authentication. */
+export function digestPITMinuteSessionSelectionV1(sessions) {
+  if (!Array.isArray(sessions) || sessions.length < 1 || sessions.length > 16)
+    throw new TypeError("PIT_MINUTE_SESSION_SELECTION_INVALID");
+  return createHash("sha256").update(JSON.stringify(sessions.map(s => [
+    s.startMs, s.endMs, s.kind, s.timeZone, s.tradingDateLocal ?? null,
+  ]))).digest("hex");
+}
 const safety = extra => Object.freeze({
   schemaVersion: "four-market-pit-minute-archive-join-v1",
   status: "BLOCKED_DATA", reason: null,
@@ -137,6 +146,7 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
       dateBasis, pitGateStatus: pit.status,
     });
   }
+  const sessionCalendarDigestSha256 = digestPITMinuteSessionSelectionV1(sessions);
   if (sessions[0].startMs < manifest.coverageStartMs
     || sessions.at(-1).endMs > manifest.coverageEndMs) {
     return stop(market, day, "PIT_ARCHIVE_DOES_NOT_SPAN_EXACT_SESSIONS", {
@@ -245,6 +255,7 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
     pitGateStatus: pit.status, pitSourceClass: manifest.sourceClass,
     pitRosterSourceId: manifest.sourceId,
     pitRosterDigestSha256: expectedRosterDigestSha256,
+    sessionCalendarDigestSha256,
     sourceStatus, expectedHistoricalActiveMembers: rows.length,
     requestedOffset: offset, requestedLimit: limit,
     inspectedMemberCount: selected.length, nextOffset,
