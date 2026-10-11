@@ -54,12 +54,16 @@ export function toIso(value: string | undefined, fallback: Date) {
   return new Date(timestamp).toISOString();
 }
 
+const KST_OFFSET_MS = 9 * 60 * 60_000;
+// The simulator's user-facing daily/weekly loss accounting is Korea-local.
+// This affects only Paper; shared LIVE risk and real provider clocks are intact.
 export function dayKey(at: Date) {
-  return at.toISOString().slice(0, 10);
+  return new Date(at.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 export function weekKey(at: Date) {
-  const date = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  const local = new Date(at.getTime() + KST_OFFSET_MS);
+  const date = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()));
   const day = date.getUTCDay() || 7;
   date.setUTCDate(date.getUTCDate() + 4 - day);
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
@@ -72,15 +76,14 @@ export function weekKey(at: Date) {
  * A partly closed position is not double-counted until final close.
  */
 export function manualPaperLosingTradesToday(state: PaperTradingState, now: Date): number {
-  const shiftKst = (ms: number) => new Date(ms + 9 * 60 * 60_000).toISOString().slice(0,10);
   const nowMs = now.getTime();
-  const day = shiftKst(nowMs);
+  const day = dayKey(now);
   return state.journal.filter((row) => {
     const closedAt = Date.parse(row.closedAt ?? '');
     return row.status === 'closed'
       && Number.isFinite(closedAt)
       && closedAt <= nowMs + 5_000
-      && shiftKst(closedAt) === day
+      && dayKey(new Date(closedAt)) === day
       && typeof row.netPnl === 'number'
       && Number.isFinite(row.netPnl) && row.netPnl < 0;
   }).length;
