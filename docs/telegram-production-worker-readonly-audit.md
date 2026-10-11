@@ -44,6 +44,26 @@ Run #38096662006 sent zero messages and made zero DB/PM2/financial mutations.
 A new exact-main protected audit run and human production-environment review remain
 necessary to establish fresh market, signal and personal-delivery observations.
 
+## Signal source response classification
+
+The protected production audit Run #38097651870 confirms PM2 and six-room
+configuration but not continuous messages: both persisted Telegram worker
+ledgers are ABSENT, the personal delivery tick is fresh but unconfirmed,
+and the local Signal V3 query was classified UNREACHABLE.
+
+Signal V3 deliberately returns HTTP 503 for a missing or stale public
+snapshot. The old audit classified every non-200 HTTP response as a
+network outage. The corrected one-shot audit uses three distinct labels:
+UNREACHABLE for a genuine GET transport error or timeout, HTTP_503 for a
+reachable service returning HTTP 503 (snapshot may be unavailable), and
+HTTP_ERROR for any other non-200 HTTP response. READY still requires the
+validated public-only V3 envelope and reports only a count.
+
+This change does not inspect or publish response bodies, issue POST requests,
+rebuild data, restart systemd/PM2, deliver Telegram messages, change account
+permissions or submit trades. Another protected QA approval will be needed
+after an independently approved merge before making an operational claim.
+
 ## Interpretation
 
 - A market report ledger entry means accepted OR duplicate-suppressed, not proof of a fresh Bot API message. Proof level is PERSISTED_LEDGER_ONLY.

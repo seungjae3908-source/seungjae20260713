@@ -225,7 +225,8 @@ export async function readSignalSourceOnce({
     try {
       req = getImpl(target, { method: 'GET', timeout: 4500 }, res => {
         if (res.statusCode !== 200) {
-          res.resume?.(); done(emptySource('UNREACHABLE')); return;
+          const status = res.statusCode === 503 ? 'HTTP_503' : 'HTTP_ERROR';
+          res.resume?.(); done(emptySource(status)); return;
         }
         const chunks = [];
         let bytes = 0;
