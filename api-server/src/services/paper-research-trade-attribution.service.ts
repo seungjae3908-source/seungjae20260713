@@ -9,7 +9,7 @@ export type VerifiedPaperTradeAttribution = Readonly<{
   fees: number | null;
   tax: number | null;
   netPnlNative: number | null;
-  exitType: 'STOP' | 'TARGET' | 'OTHER' | 'UNKNOWN';
+  exitPriceProximity: 'NEAR_STOP_PRICE' | 'NEAR_TARGET_PRICE' | 'OTHER' | 'UNKNOWN';
   observedAtEntry: readonly string[];
   factualAttribution: readonly string[];
   unknownReasons: readonly string[];
@@ -25,12 +25,12 @@ const unknownReasons=Object.freeze([
   '신호가 실제 수익/손실의 원인인지 판단하려면 같은 시점의 주문흐름·체결·시장 대비 통제가 필요합니다.',
   '슬리피지, 펀딩, 매매 시점 환율의 별도 증거가 없다면 전체 KRW 순수익으로 단정할 수 없습니다.',
 ]);
-function getExitType(trade: UnifiedTradeCycle): VerifiedPaperTradeAttribution['exitType'] {
+function getExitPriceProximity(trade: UnifiedTradeCycle): VerifiedPaperTradeAttribution['exitPriceProximity'] {
   if (!finite(trade.exitPrice)) return 'UNKNOWN';
   if (finite(trade.stopLossPrice) && trade.stopLossPrice > 0
-    && Math.abs(trade.exitPrice-trade.stopLossPrice)/trade.stopLossPrice < 0.001) return 'STOP';
+    && Math.abs(trade.exitPrice-trade.stopLossPrice)/trade.stopLossPrice < 0.001) return 'NEAR_STOP_PRICE';
   if (finite(trade.targetPrice) && trade.targetPrice > 0
-    && Math.abs(trade.exitPrice-trade.targetPrice)/trade.targetPrice < 0.001) return 'TARGET';
+    && Math.abs(trade.exitPrice-trade.targetPrice)/trade.targetPrice < 0.001) return 'NEAR_TARGET_PRICE';
   return 'OTHER';
 }
 
@@ -82,7 +82,8 @@ export function explainAutomaticPaperTrade(trade: UnifiedTradeCycle): VerifiedPa
     grossPriceEffect:closed?trade.grossPnl:null,
     fees:closed?trade.fees:null,tax:closed?trade.tax:null,
     netPnlNative:closed?trade.netPnl:null,
-    exitType:closed?getExitType(trade):'UNKNOWN' as const,
+    // Price proximity does not prove the order was *caused* by target/stop.
+    exitPriceProximity:closed?getExitPriceProximity(trade):'UNKNOWN' as const,
     observedAtEntry:Object.freeze(observations),
     factualAttribution:Object.freeze(reasons),unknownReasons,
     causalImpactProven:false as const,profitabilityProven:false as const,
