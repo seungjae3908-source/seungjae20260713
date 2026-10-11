@@ -78,6 +78,7 @@ sync_source_tree() {
     --exclude='.env.*' \
     --exclude='*/.env' \
     --exclude='*/.env.*' \
+    --exclude='.runtime/' \
     --exclude='.deploy/' \
     --exclude='/releases/' \
     --exclude='logs/' \

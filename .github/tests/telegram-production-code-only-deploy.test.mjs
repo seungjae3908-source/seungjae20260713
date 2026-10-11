@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { classifyTelegramCodeOnlyDiff, TELEGRAM_CODE_ONLY_ALLOWED_FILES,
   TELEGRAM_VERIFIED_APP_TARGET_SHA, TELEGRAM_INTERVENING_AUTO_MERGE_SHA } from
   '../../ops/telegram-production-code-only-scope.mjs';
@@ -105,4 +106,30 @@ test('protected owner-only production workflow cannot run sends or migrations',(
     'Replit', 'replit.com',
   ]) assert.ok(!wf.includes(banned),'forbidden '+banned);
   assert.ok(!wf.includes('workflow_dispatch:'));
+});
+
+
+test('sync source, deployment and rollback preserve Telegram and Signal V3 persisted ledgers',()=>{
+  const start=deploy.indexOf('sync_source_tree() {');
+  const end=deploy.indexOf('\n}\n',start);
+  assert.ok(start>=0&&end>start);
+  const sync=deploy.slice(start,end);
+  assert.ok(sync.includes('rsync -a --delete'));
+  assert.ok(sync.includes("--exclude='.runtime/'"));
+  assert.ok(!sync.includes('--delete-excluded'));
+  for(const route of [
+    'sync_source_tree "$LIVE_DIR" "$BACKUP_DIR/source"',
+    'sync_source_tree "$RELEASE_DIR" "$LIVE_DIR"',
+    'sync_source_tree "$BACKUP_DIR/source" "$LIVE_DIR"',
+  ])assert.ok(deploy.includes(route),route);
+  const brief=fs.readFileSync('api-server/src/services/telegram-intelligence-worker.service.ts','utf8');
+  const signal=fs.readFileSync('api-server/src/services/signal-intelligence-telegram-subscriber.service.ts','utf8');
+  assert.ok(brief.includes('.runtime/telegram-intelligence-delivery-state.json'));
+  assert.ok(signal.includes('.runtime/signal-intelligence-telegram-state.json'));
+});
+
+test('pinned deployment script Git blob always matches reviewed branch bytes',()=>{
+  const actual=createHash('sha1').update('blob '+Buffer.byteLength(deploy,'utf8')+'\0')
+    .update(deploy,'utf8').digest('hex');
+  assert.equal(wf.split(actual).length-1,2);
 });
