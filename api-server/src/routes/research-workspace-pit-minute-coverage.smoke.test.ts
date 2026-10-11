@@ -115,6 +115,9 @@ test('research minute source admin HTTP: auth, GET only, private compact output,
 
     for (const bad of [
       '?market=CRYPTO_SPOT&startDate=2026-02-30&endDate=2026-03-01',
+      '?market=CRYPTO_SPOT&startDate=1969-12-31&endDate=1970-01-03',
+      '?market=CRYPTO_SPOT&startDate=2099-12-31&endDate=2100-01-01',
+      '?market=CRYPTO_SPOT&startDate=1970-01-02&endDate=2075-01-01',
       '?market=CRYPTO_SPOT&startDate=2026-09-20&endDate=2026-09-18',
       '?market=CRYPTO_SPOT&startDate=2026-09-18&endDate=2026-09-19&cursorDate=2026-09-20',
       '?market=CRYPTO_SPOT&startDate=2026-09-18&endDate=2026-09-19&chunkDays=99',
