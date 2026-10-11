@@ -13,13 +13,21 @@ export interface KrEntry {
   assetType: AssetType;
 }
 
-const KRX_URL = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
+export const KRX_FINDER_ENDPOINT = 'https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
 const KRX_REQUEST_TIMEOUT_MS = 15_000;
 
 interface FinderRow {
   short_code?: string;
   codeName?: string;
   marketName?: string;
+}
+
+// Outage/truncation guards, NOT proof of full PIT/historical listing coverage.
+export function assertKrFinderSourcesReady(stocks: FinderRow[], products: FinderRow[]): void {
+  const validCount = (rows: FinderRow[]) => Array.isArray(rows) ? rows.filter(row =>
+    typeof row?.short_code === 'string' && /^[A-Z0-9]{6}$/.test(row.short_code.trim().toUpperCase())
+    && typeof row.codeName === 'string' && row.codeName.trim().length > 0).length : 0;
+  if (validCount(stocks) < 1000 || validCount(products) < 100) throw new Error('KRX_FINDER_SOURCE_PAIR_INCOMPLETE');
 }
 
 function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear(): void } {
@@ -43,11 +51,12 @@ function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear()
 async function krxFinder(bld: string, parent?: AbortSignal): Promise<FinderRow[]> {
   const linked = linkedAbortSignal(parent);
   try {
-    const res = await fetch(KRX_URL, {
+    const res = await fetch(KRX_FINDER_ENDPOINT, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
+        Referer: 'https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
         'User-Agent': 'Mozilla/5.0',
       },
       body: `bld=${encodeURIComponent(bld)}&mktsel=ALL&searchText=`,
@@ -65,11 +74,13 @@ async function krxFinder(bld: string, parent?: AbortSignal): Promise<FinderRow[]
 }
 
 export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
-  return cached('krx:universe', TTL.mapping, async () => {
+  // Older cache rows did not prove that both source requests succeeded.
+  return cached('krx:universe:source-pair-v2', TTL.mapping, async () => {
     const [stocks, products] = await Promise.all([
       krxFinder('dbms/comm/finder/finder_stkisu', signal), // all listed stocks
       krxFinder('dbms/comm/finder/finder_secuprodisu', signal), // ETF + ETN products
     ]);
+    assertKrFinderSourcesReady(stocks, products);
     const out: KrEntry[] = [];
     for (const s of stocks) {
       if (!s.short_code || !s.codeName) continue;
@@ -82,8 +93,8 @@ export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
     }
     for (const p of products) {
       if (!p.short_code || !p.codeName) continue;
-      // Everything in the securities-product finder is an ETF/ETN; if the name
-      // doesn't self-identify, default to ETF rather than mislabeling as STOCK.
+      // Legacy display heuristic only: this source does not attest a product
+      // subtype. Do not treat this label as full-market/PIT classification proof.
       let at = classifyAssetType(p.codeName, 'KR');
       if (at === 'STOCK' || at === 'ADR' || at === 'REIT') at = 'ETF';
       out.push({

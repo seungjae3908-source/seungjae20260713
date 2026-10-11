@@ -6,7 +6,7 @@ export interface ScannerAiValidationInput {
   signalId: string;
   symbol: string;
   market: string;
-  strategy: 'scalping' | 'swing';
+  strategy: 'scalping' | 'swing' | 'position';
   direction: 'LONG' | 'SHORT' | 'NEUTRAL';
   score: number;
   riskScore: number | null;
@@ -188,7 +188,9 @@ export class ScannerAiSingleFlightAdapter implements ScannerAiProviderAdapter {
   constructor(
     private readonly delegate: ScannerAiProviderAdapter,
     private readonly keyOf: (input: ScannerAiValidationInput) => string = stableSignalKey,
+    private readonly deadlineMs = 8000,
   ) {
+    if (!Number.isFinite(deadlineMs) || deadlineMs <= 0 || deadlineMs > 60_000) throw new Error('SCANNER_AI_DEADLINE_INVALID');
     this.name = `${delegate.name}:single-flight`;
   }
 
@@ -208,13 +210,16 @@ export class ScannerAiSingleFlightAdapter implements ScannerAiProviderAdapter {
       this.sharedHitCount += 1;
       return await waitForSharedResult(existing.promise, signal);
     }
+    if (this.inFlight.size >= 128) throw new ScannerAiProviderError('SCANNER_AI_CAPACITY_EXHAUSTED', false);
 
     this.createdCount += 1;
     const detachedController = new AbortController();
-    const promise = this.delegate.validate(input, detachedController.signal);
+    const timer = setTimeout(() => detachedController.abort(new ScannerAiProviderError('SCANNER_AI_DEADLINE', false)), this.deadlineMs);
+    const promise = waitForSharedResult(Promise.resolve().then(() => this.delegate.validate(input, detachedController.signal)), detachedController.signal);
     const shared: SharedAiRequest = { promise, createdAt: Date.now() };
     this.inFlight.set(key, shared);
     void promise.finally(() => {
+      clearTimeout(timer);
       if (this.inFlight.get(key) === shared) this.inFlight.delete(key);
     }).catch(() => undefined);
     return await waitForSharedResult(promise, signal);
@@ -226,6 +231,7 @@ interface QueueItem {
   signal?: AbortSignal;
   resolve(value: ScannerAiValidation): void;
   reject(reason: unknown): void;
+  cleanup(): void;
 }
 
 export interface ScannerAiSchedulerOptions {
@@ -237,6 +243,8 @@ export interface ScannerAiSchedulerOptions {
   circuitResetMs?: number;
   random?: () => number;
   now?: () => number;
+  requestTimeoutMs?: number;
+  maxQueueLength?: number;
 }
 
 function abortError(reason?: unknown): Error {
@@ -282,11 +290,18 @@ export class ScannerAiProviderScheduler {
   private readonly circuitResetMs: number;
   private readonly random: () => number;
   private readonly now: () => number;
+  private readonly requestTimeoutMs: number;
+  private readonly maxQueueLength: number;
 
   constructor(
     private readonly adapter: ScannerAiProviderAdapter,
     options: ScannerAiSchedulerOptions = {},
   ) {
+    for (const [name, value] of Object.entries(options)) {
+      if (typeof value === 'number' && (!Number.isFinite(value) || value < 0)) {
+        throw new Error(`SCANNER_AI_OPTION_INVALID:${name}`);
+      }
+    }
     this.concurrency = Math.max(1, Math.floor(options.concurrency ?? 2));
     this.maxRetries = Math.max(0, Math.floor(options.maxRetries ?? 3));
     this.baseBackoffMs = Math.max(10, Math.floor(options.baseBackoffMs ?? 250));
@@ -295,6 +310,8 @@ export class ScannerAiProviderScheduler {
     this.circuitResetMs = Math.max(100, Math.floor(options.circuitResetMs ?? 30_000));
     this.random = options.random ?? Math.random;
     this.now = options.now ?? Date.now;
+    this.requestTimeoutMs = Math.max(10, Math.min(60_000, Math.floor(options.requestTimeoutMs ?? 8_000)));
+    this.maxQueueLength = Math.max(1, Math.min(1_024, Math.floor(options.maxQueueLength ?? 128)));
   }
 
   get providerName(): string {
@@ -311,8 +328,32 @@ export class ScannerAiProviderScheduler {
 
   validate(input: ScannerAiValidationInput, signal?: AbortSignal): Promise<ScannerAiValidation> {
     if (signal?.aborted) return Promise.reject(abortError(signal.reason));
+    if (this.queue.length >= this.maxQueueLength) {
+      return Promise.reject(new ScannerAiProviderError('SCANNER_AI_QUEUE_FULL', false));
+    }
     return new Promise((resolve, reject) => {
-      this.queue.push({ input, signal, resolve, reject });
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout>;
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onParentAbort);
+        controller.signal.removeEventListener('abort', onAbort);
+      };
+      const onParentAbort = () => controller.abort(abortError(signal?.reason));
+      const item: QueueItem = {
+        input, signal: controller.signal, cleanup,
+        resolve: value => { cleanup(); resolve(value); },
+        reject: error => { cleanup(); reject(error); },
+      };
+      const onAbort = () => {
+        const queued = this.queue.indexOf(item);
+        if (queued >= 0) this.queue.splice(queued, 1);
+        item.reject(abortError(controller.signal.reason));
+      };
+      timer = setTimeout(() => controller.abort(new ScannerAiProviderError('SCANNER_AI_DEADLINE', false)), this.requestTimeoutMs);
+      signal?.addEventListener('abort', onParentAbort, { once: true });
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+      this.queue.push(item);
       this.drain();
     });
   }
@@ -356,7 +397,17 @@ export class ScannerAiProviderScheduler {
       const onAbort = () => controller.abort(item.signal?.reason);
       item.signal?.addEventListener('abort', onAbort, { once: true });
       try {
-        const result = await this.adapter.validate(item.input, controller.signal);
+        const result = await waitForSharedResult(
+          Promise.resolve().then(() => this.adapter.validate(item.input, controller.signal)),
+          item.signal!,
+        );
+        if (!result || !['NOT_RUN', 'PASS', 'PARTIAL', 'VETO'].includes(result.status)
+          || ![result.counterEvidence, result.missingData, result.risks].every(values =>
+            Array.isArray(values) && values.every(value => typeof value === 'string'))
+          || !(result.provider === null || typeof result.provider === 'string')
+          || !(result.explanation === null || typeof result.explanation === 'string')) {
+          throw new ScannerAiProviderError('SCANNER_AI_RESPONSE_INVALID', false);
+        }
         this.consecutiveFailures = 0;
         this.circuitOpenedAt = null;
         return result;

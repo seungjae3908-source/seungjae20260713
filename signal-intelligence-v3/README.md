@@ -17,6 +17,39 @@ LONG and SHORT are evaluated independently. When both sides for the same market/
 
 ## AI committee contract
 
+### Manual public-evidence review in the app (Draft)
+
+The signal-detail `AI 근거 검토` button calls the existing authenticated
+`POST /api/market/scan/ai-review` endpoint only on explicit click. Ordinary scans
+and automatic polling capture bounded public snapshots without calling a model.
+The request accepts only `signalId` and a server-produced `evidenceKey`.
+Snapshots are member-scoped, retained for at most five minutes or the card's
+expiry, and checked before and after analysis. Client prices/facts, other-member
+snapshots, expired evidence and revoked access do not authorize a review.
+
+The existing AI provider chain is reused; configured providers may incur cost.
+There is no new credential, provider migration or live model verification in this
+Draft. Grounded structured summaries separate server facts, model inferences,
+missing evidence and risks. They never update ranking/score, provide a profit
+probability, set profitability PASS, place a Paper/real order or send Telegram.
+Missing providers/invalid output are explicit unavailable results, not AI PASS.
+
+### Public-cycle progress and publication
+
+`public-cycle-progress-v2` permits research-only cursor advancement for a fully
+attempted, error-free page from the market-matched roster even when source/data
+coverage is incomplete. Such pages remain `BLOCKED_DATA`, never candidates or
+valid zero trades. Provider failures/timeouts, missing execution fields and
+cursor evidence mismatches hold the cursor. Roster floors only detect anomalous
+truncation, not full-market or historical/PIT coverage.
+
+Current lists/events require this cycle's page provenance; retained history is
+kept in research rows, not reissued as fresh signals. Health distinguishes a
+recent file timestamp from twelve verified current pages. Neither proves that
+the whole roster was swept, profitability passed, or Paper is ready. Future
+timestamps and a mismatching service revision fail closed. The standalone
+fixture runner remains a contract test, not a live-market profit result.
+
 V3 accepts normalized findings from Catalyst, Technical Change, Risk Critic, and Contradiction AI roles.
 
 AI may:
