@@ -246,6 +246,13 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         capability: 'canAccessAutoTrading',
       },
       {
+        id: 'paper-trading',
+        href: APP_ROUTES.paperTrading,
+        label: '모의매매',
+        icon: 'power',
+        capability: 'canAccessPaperTrading',
+      },
+      {
         id: 'backtests',
         href: APP_ROUTES.backtests,
         label: '과거검증',
