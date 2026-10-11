@@ -192,6 +192,8 @@ on:
       - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
       - 'market-prediction-lab/src/*.js'
       - 'market-prediction-lab/tests/*.test.js'
+      - api-server/src/services/manual-four-market-paper-cycle.service.ts
+      - api-server/src/services/manual-four-market-paper-cycle.service.test.ts
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -572,6 +574,8 @@ jobs:
             stock-analyzer/src/components/manual-four-market-wallet-panel.tsx
             stock-analyzer/src/lib/manual-four-market-paper-status.test.ts
             stock-analyzer/src/lib/manual-four-market-paper-status.ts
+            api-server/src/services/manual-four-market-paper-cycle.service.ts
+            api-server/src/services/manual-four-market-paper-cycle.service.test.ts
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
