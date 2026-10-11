@@ -55,7 +55,14 @@ export function normalizePublicKrAlphaDaily(payload,requestedCode,nowMs=Date.now
    if(o===null||h===null||l===null||c===null||v===null||o<=0||c<=0||l<=0
      ||h<Math.max(o,c,l)||l>Math.min(o,c,h)||v<0)continue;
    const bar={time:new Date(date.at).toISOString(),open:o,high:h,low:l,close:c,volume:v};
-   if(byTimestamp.has(date.at))throw Error('KR_ALPHA_DAILY_DUPLICATE_BAR');
+   if(byTimestamp.has(date.at)){
+     const before=byTimestamp.get(date.at);
+     // Some public chart payloads duplicate the same day/timestamp. A truly
+     // byte-equivalent OHLCV is safe to deduplicate, not an extra market bar.
+     if(['open','high','low','close','volume'].every(k=>before[k]===bar[k]))
+       continue;
+     throw Error('KR_ALPHA_DAILY_CONFLICTING_BAR');
+   }
    byTimestamp.set(date.at,bar);
  }
  const candles=[...byTimestamp.entries()].sort(([a],[b])=>a-b).map(([,bar])=>bar);

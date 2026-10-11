@@ -38,6 +38,12 @@ test('invalid codes, malformed OHLC, insufficient history, unauthorized intraday
  const corrupt=validRows();corrupt[0].highPrice='-10';
  const parsed=normalizePublicKrAlphaDaily({priceInfos:corrupt},'0193W0',clock);
  assert.equal(parsed.length,39);
+ const identical=validRows(),first={...identical[0]};
+ const dedup=normalizePublicKrAlphaDaily({priceInfos:[...identical,first]},'0193W0',clock);
+ assert.equal(dedup.length,40);
+ assert.throws(()=>normalizePublicKrAlphaDaily({
+   priceInfos:[...identical,{...first,currentPrice:101}],
+ },'0193W0',clock),/CONFLICTING_BAR/);
  const feed=createPublicKrAlphaDailyFeed({fetchImpl:async()=>{throw Error('UNEXPECTED_FETCH')}});
  await assert.rejects(feed.getCandles('0193W0','5m'),/UNSUPPORTED_INTRADAY/);
 });
