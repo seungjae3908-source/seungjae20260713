@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPublicStockSourceAudit,attachPublicStockSourceAuditToError,
- readPublicStockSourceAuditFromError} from '../src/public-stock-source-audit.mjs';
+ readPublicStockSourceAuditFromError,classifyPublicStockSourceBlocker} from '../src/public-stock-source-audit.mjs';
 const NOW=Date.parse('2026-10-11T00:00:00Z');
 test('stock public source audit distinguishes short, stale, invalid and timeout evidence without exposing symbols',()=>{
  const audit=createPublicStockSourceAudit({now:()=>NOW});
@@ -90,4 +90,23 @@ test('weekend stale quote, missing and future timestamps never masquerade as HTT
  assert.equal(x.quote.errors,0);
  assert.equal(x.sanitizedProviderFailures.HTTP_429,0);
  assert.equal(x.executionAuthority,'NONE');
+});
+
+
+test('stale quote observations are not mistaken for HTTP faults or permission to create signals',()=>{
+ const audit=createPublicStockSourceAudit({now:()=>NOW});
+ for(let i=0;i<4;i++)audit.recordQuote({
+   price:100,updatedAt:new Date(NOW-3*3600000).toISOString()},'15m');
+ const stats=audit.snapshot();
+ const diagnosis=classifyPublicStockSourceBlocker(stats,'15m');
+ assert.equal(diagnosis.category,'ALL_OBSERVED_QUOTES_EXPIRED');
+ assert.equal(diagnosis.observedQuoteReads,4);
+ assert.equal(diagnosis.expiredQuoteReads,4);
+ assert.equal(diagnosis.http429Reads,0);
+ assert.equal(diagnosis.candidatePromotionAllowed,false);
+ assert.equal(diagnosis.fullMarketDataReady,false);
+ audit.quoteError(new Error('YAHOO_CHART_HTTP_429'));
+ assert.equal(classifyPublicStockSourceBlocker(audit.snapshot(),'15m').category,'HTTP_429_OBSERVED');
+ const tampered={...stats,executionAuthority:'LIVE'};
+ assert.equal(classifyPublicStockSourceBlocker(tampered,'15m').category,'SOURCE_CAUSE_UNVERIFIED');
 });

@@ -182,21 +182,37 @@ test('global lane deadline is separately visible even with zero item timeout cou
  assert.ok(out.releaseReadiness.blockers.includes('MARKET_CRYPTO_FUTURES_BATCH_DEADLINE_BLOCKED'));
 });
 
-test('same-cycle public stock candle depth evidence cannot be mistaken for source-wide market acceptance',()=>{
+test('same-cycle stock sources expose sanitized depth and expired quotes without raw URLs or false readiness',()=>{
  const shot=snapshot();
  const lane=shot.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+ lane.status='SEARCH_FAILURE';lane.providerErrors=10;
+ lane.timeframe='5m';
+ const counters={fetched:0,errors:0,empty:0,shortLt20:0,shortLt40:0,
+   invalidOhlc:0,hasLateOrFuture:0,lastBarLagGteOneDay:0,lastBarLagGteFiveDays:0};
  lane.publicStockSourceAudit={
   version:'public-stock-source-audit-v1',symbolsRedacted:true,
-  quote:{fetched:10,errors:0,invalidPrice:0},
-  candles:{'5m':{fetched:10,empty:2,shortLt20:3,shortLt40:4,lastBarLagGteOneDay:10}},
-  sanitizedProviderFailures:{HTTP_429:0,OTHER:0},
+  fullMarketVerified:false,executionAuthority:'NONE',
+  quote:{fetched:10,errors:0,invalidPrice:0,missingTimestamp:0,
+   expiredTimestamp:10,futureTimestamp:0,rawUrl:'https://private.example/secret'},
+  candles:Object.fromEntries(['1m','3m','5m','15m','60m','4H','1D']
+   .map(tf=>[tf,{...counters, ...(tf==='5m'
+     ?{fetched:10,empty:2,shortLt20:3,shortLt40:4,lastBarLagGteOneDay:10}:{}),
+     rawSymbol:'REDACT_THIS'}])),
+  sanitizedProviderFailures:{HTTP_429:0,HTTP_4XX:0,HTTP_5XX:0,TIMEOUT:0,OTHER:0,
+   rawText:'sensitive'},
   accountIdentifier:'must-not-propagate',
  };
  const result=inspectExactPublicProviderCycle(shot,SHA,NOW);
- const audit=result.rows.find(x=>x.market==='US_STOCK').lanes[0].publicStockSourceAudit;
+ const item=result.rows.find(x=>x.market==='US_STOCK');
+ const audit=item.lanes[0].publicStockSourceAudit;
+ const diagnosis=item.lanes[0].publicStockSourceFailureDiagnosis;
  assert.equal(audit.candles['5m'].empty,2);
  assert.equal(audit.fullMarketVerified,false);
- assert.equal(JSON.stringify(audit).includes('accountIdentifier'),false);
+ assert.equal(diagnosis.category,'ALL_OBSERVED_QUOTES_EXPIRED');
+ assert.equal(diagnosis.candidatePromotionAllowed,false);
+ assert.equal(item.status,'PROVIDER_BLOCKED');
+ for(const secret of ['accountIdentifier','sensitive','REDACT_THIS','private.example'])
+   assert.equal(JSON.stringify(result).includes(secret),false);
 });
 
 test('same-cycle Spot candle source quality is sanitized separately from profitable/24h claims',()=>{

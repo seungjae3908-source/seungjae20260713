@@ -1,3 +1,5 @@
+import {sanitizePublicStockSourceAudit,classifyPublicStockSourceBlocker}
+  from './public-stock-source-audit.mjs';
 // Diagnostics only. Reuse the exact real public Scanner cycle; do not
 // issue a second round of costly Upbit/Bitget/Yahoo requests just to
 // inspect provider errors after the first cycle has finished.
@@ -148,17 +150,12 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
               ?row.publicCryptoCandleQuality.incompleteCurrentBarsExcluded:null,
             sourceOnly:true,fullMarketVerified:false,tradeAuthority:'NONE',
           }):null,
-        publicStockSourceAudit:row.publicStockSourceAudit?.version==='public-stock-source-audit-v1'
-          && row.publicStockSourceAudit.symbolsRedacted===true
-          ?Object.freeze({
-            version:'public-stock-source-audit-v1',
-            quote:Object.freeze({...row.publicStockSourceAudit.quote}),
-            candles:Object.freeze(Object.fromEntries(Object.entries(row.publicStockSourceAudit.candles??{})
-              .filter(([tf])=>['1m','3m','5m','15m','60m','4H','1D'].includes(tf))
-              .map(([tf,v])=>[tf,Object.freeze({...v})]))),
-            sanitizedProviderFailures:Object.freeze({...row.publicStockSourceAudit.sanitizedProviderFailures}),
-            symbolsRedacted:true,fullMarketVerified:false,
-          }):null,
+        // Whitelist all nested counters as well as the parent envelope.
+        // Arbitrary quote/candle fields must not leak source URLs, tickers,
+        // credentials or raw data into GitHub diagnostic artifacts.
+        publicStockSourceAudit:sanitizePublicStockSourceAudit(row.publicStockSourceAudit),
+        publicStockSourceFailureDiagnosis:row.market==='KR_STOCK'||row.market==='US_STOCK'
+          ?classifyPublicStockSourceBlocker(row.publicStockSourceAudit,row.timeframe):null,
         batchDeadlineExceeded:row.batchDeadlineExceeded===true,
         partialExecution:row.partialExecution===true,
         publicProviderFailureSummary: row.publicProviderFailureSummary &&
