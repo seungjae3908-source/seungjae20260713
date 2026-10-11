@@ -313,6 +313,9 @@ export interface ScannerResponse {
     partial: boolean;
     stale: boolean;
     listingStatusCoverage: 'listed-or-unknown';
+    // Research-only source index identity. Never evidence of real-time
+    // price completeness, delisted instruments, or trading permission.
+    rosterDigest?: string;
   };
   dataState: ScannerDataState;
   outcome?: ScannerOutcomeCode;
