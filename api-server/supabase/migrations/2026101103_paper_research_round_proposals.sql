@@ -20,11 +20,6 @@ create table public.paper_research_round_proposals (
     check (proposed_seed_krw = 1000000),
   ending_cause text not null
     check (ending_cause in ('ZERO_EQUITY','BELOW_VERIFIED_MINIMUM')),
-  -- A nonzero residual is NOT a bankruptcy. Never erase it from research
-  -- performance when a small balance cannot satisfy provider minimum size.
-  constraint paper_round_zero_equity_evidence check (
-    ending_cause <> 'ZERO_EQUITY' or previous_operating_capital_krw = 0
-  ),
   previous_operating_capital_krw numeric(20,2) not null
     check (previous_operating_capital_krw >= 0),
   previous_locked_reserve_krw numeric(20,2) not null
@@ -33,6 +28,18 @@ create table public.paper_research_round_proposals (
     check (minimum_entry_krw is null or minimum_entry_krw > 0),
   observed_at timestamptz not null,
   proposed_at timestamptz not null default now(),
+  constraint paper_round_close_evidence_consistent check (
+    (ending_cause = 'ZERO_EQUITY'
+      and previous_operating_capital_krw = 0)
+    or (ending_cause = 'BELOW_VERIFIED_MINIMUM'
+      and previous_operating_capital_krw > 0
+      and minimum_entry_krw is not null
+      and previous_operating_capital_krw < minimum_entry_krw)
+  ),
+  constraint paper_round_observation_fresh check (
+    observed_at between proposed_at - interval '5 minutes'
+      and proposed_at + interval '5 seconds'
+  ),
   status text not null default 'PROPOSAL_ONLY'
     check (status = 'PROPOSAL_ONLY'),
   execution_authority text not null default 'NONE'
