@@ -387,7 +387,17 @@ test('Production real-account read-only providers return fresh connected snapsho
         credentials: 'same-origin',
         cache: 'no-store',
       });
-      if (!response.ok) throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}`);
+      if (!response.ok) {
+        let classification = 'UNKNOWN';
+        try {
+          const body = await response.json() as { error?: unknown };
+          if (typeof body.error === 'string'
+            && /^(?:BACKGROUND_LIVE_|BITGET_|UPBIT_|KIWOOM_|TOSS_|ACCOUNT_READONLY_|EXCHANGE_|TRADING_CREDENTIAL_)[A-Z0-9_]{1,80}$/.test(body.error)) {
+            classification = body.error;
+          }
+        } catch { /* Never log a raw provider body, credential, symbol or account. */ }
+        throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}:${url}:${classification}`);
+      }
       return response.json() as Promise<unknown>;
     };
     const [orders, approvalQueue, ...positionIsolation] = await Promise.all([
