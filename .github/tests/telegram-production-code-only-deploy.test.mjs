@@ -51,7 +51,7 @@ test('pinned ancestor excludes later automatic-trading code and old mode stays s
   for(const requirement of [
     'TELEGRAM_PINNED_ANCESTOR_RELEASE_LINEAGE_CHANGED',
     'autoCommit.data.parents[0].sha!==target',
-    'operatorCommit.data.parents[0].sha!==autoMerge',
+    'operatorCommit.data.parents[0].sha!==interveningAuto',
     'ops/deploy-telegram-operator.sh',
   ]) assert.ok(wf.includes(requirement),requirement);
 });
