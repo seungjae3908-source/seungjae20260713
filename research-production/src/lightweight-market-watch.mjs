@@ -4,6 +4,12 @@ export const WATCH_MARKETS = Object.freeze([
   'KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES',
 ]);
 export const WATCH_CONTRACT = 'lightweight-market-opportunity-watch-v1';
+// Private, bounded research audit of candidates outside the 12 public-watch
+// observation budget. NOT a signal, Paper strategy, or OOS/profit evidence.
+export const WATCH_CAPPED_AUDIT_CONTRACT = 'public-watch-capped-candidate-audit-v1';
+export const WATCH_CAPPED_AUDIT_LIMITS = Object.freeze({
+  maxDetailedCandidatesPerMarketCycle: 32,
+});
 export const WATCH_SAFETY = Object.freeze({
   researchOnly: true,
   orderAuthority: 'NONE',
@@ -17,6 +23,12 @@ export const WATCH_LIMITS = Object.freeze({
   intervalMs: 120_000,
   maxSymbolsPerMarket: 8_000,
   maxCandidatesPerMarket: 12,
+  // Existing eight-thousand-quote CPU bound: six thousand high-turnover
+  // anchors plus two overlapping one-thousand-symbol low-tail cohorts.
+  // A cohort remains eligible for 60 minutes to permit real future sampling.
+  stableHighTurnoverSymbols: 6_000,
+  rotationCohortSymbols: 1_000,
+  rotationWindowMs: 30 * 60_000,
   maxSourceAgeMs: 180_000,
   maxComparisonAgeMs: 300_000,
   minComparisonAgeMs: 15_000,
@@ -43,25 +55,83 @@ function symbol(value) {
   const s = String(value ?? '').trim().toUpperCase();
   return /^[A-Z0-9][A-Z0-9._-]{0,31}$/.test(s) ? s : null;
 }
+function stockSymbol(value, market) {
+  const code = symbol(value);
+  if (!code) return null;
+  // Market-specific labels prevent cross-market false candidates. KRX short
+  // codes are six alphanumeric characters; US may use class share suffixes.
+  if (market === 'KR_STOCK') return /^[A-Z0-9]{6}$/.test(code) ? code : null;
+  if (market === 'US_STOCK') return /^[A-Z][A-Z0-9]{0,14}(?:[.-][A-Z0-9]{1,6})?$/.test(code)
+    ? code : null;
+  return null;
+}
 function validAge(timestamp, nowMs) {
   return Number.isFinite(timestamp) && timestamp > 0
     && timestamp <= nowMs + 5_000
     && nowMs - timestamp <= WATCH_LIMITS.maxSourceAgeMs;
 }
-function uniqueQuotes(rows) {
+function uniqueQuotes(rows, nowMs) {
   const map = new Map();
   for (const row of rows) {
     const old = map.get(row.symbol);
+    // An identical source time with a different price is not independent
+    // price evidence. Refuse to select whichever duplicate arrived last.
+    if (old && old.sourceAtMs === row.sourceAtMs && old.price !== row.price)
+      throw new Error('WATCH_SOURCE_DUPLICATE_PRICE_CONFLICT');
     if (!old || row.sourceAtMs >= old.sourceAtMs) map.set(row.symbol, row);
   }
-  return [...map.values()].sort((a, b) =>
-    b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol))
-    .slice(0, WATCH_LIMITS.maxSymbolsPerMarket);
-}
-function sourceResult(market, source, status, listedCount, quotes) {
+  const ordered = [...map.values()].sort((a, b) =>
+    b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol));
+  const cap = WATCH_LIMITS.maxSymbolsPerMarket;
+  let selected = ordered;
+  if (ordered.length > cap) {
+    if (!Number.isSafeInteger(nowMs) || nowMs <= 0)
+      throw new Error('WATCH_SELECTION_TIME_INVALID');
+    const fixedCount = WATCH_LIMITS.stableHighTurnoverSymbols;
+    const cohortSize = WATCH_LIMITS.rotationCohortSymbols;
+    const fixed = ordered.slice(0, fixedCount);
+    // Never rotate or rank by same-cycle percent rise: deterministic turnover
+    // core and lexical tail cannot look ahead or invent an early-move signal.
+    const tail = ordered.slice(fixedCount).sort((a, b) =>
+      a.symbol.localeCompare(b.symbol));
+    const cohorts = Math.ceil(tail.length / cohortSize);
+    const window = Math.floor(nowMs / WATCH_LIMITS.rotationWindowMs);
+    const currentCohort = window % cohorts;
+    const previousCohort = (currentCohort + cohorts - 1) % cohorts;
+    const cohort = n => tail.slice(n * cohortSize, (n + 1) * cohortSize);
+    const tailSelected = new Map();
+    // Each new cohort is observed in the current AND following 30-minute
+    // window. This reduces comparison cold starts and coarse 20-minute study
+    // dropouts without exceeding the existing 8,000-quote cycle allowance.
+    for (const row of [...cohort(currentCohort), ...cohort(previousCohort)])
+      tailSelected.set(row.symbol, row);
+    // A short final cohort must not artificially waste available slots.
+    // Extra symbols remain opportunistic only, NOT assured 20-minute coverage.
+    for (const row of tail) {
+      if (tailSelected.size >= cap - fixedCount) break;
+      if (!tailSelected.has(row.symbol)) tailSelected.set(row.symbol, row);
+    }
+    selected = [...fixed, ...tailSelected.values()].sort((a, b) =>
+      b.turnover24h - a.turnover24h || a.symbol.localeCompare(b.symbol));
+  }
+  // Per-cycle capped source count is not a verified missed opportunity. It
+  // also says nothing about source-omitted or historically delisted symbols.
   return Object.freeze({
-    market, source, status, listedCount,
-    quotes: Object.freeze(uniqueQuotes(quotes)),
+    quotes: Object.freeze(selected),
+    sourceCappedCount: Math.max(0, ordered.length - selected.length),
+  });
+}
+function sourceResult(market, source, status, listedCount, quotes, nowMs) {
+  const selected = uniqueQuotes(quotes, nowMs);
+  // No full READY while even one distinct valid source quote was capped.
+  const boundedStatus = status === 'READY'
+    && (selected.quotes.length === 0 || selected.quotes.length !== listedCount)
+    ? market === 'KR_STOCK' || market === 'US_STOCK'
+      ? 'PARTIAL_UNIVERSE' : 'PARTIAL_TICKERS'
+    : status;
+  return Object.freeze({
+    market, source, status: boundedStatus, listedCount,
+    quotes: selected.quotes, sourceCappedCount: selected.sourceCappedCount,
   });
 }
 export function blockedSource(market, reason) {
@@ -139,44 +209,73 @@ export function normalizeUpbitSnapshot(marketRows, tickerRows, nowMs) {
   }
   if (!listed.size || !quotes.length) throw new Error('UPBIT_PUBLIC_QUOTES_UNAVAILABLE');
   const status = quotes.length === listed.size ? 'READY' : 'PARTIAL_TICKERS';
-  return sourceResult('CRYPTO_SPOT', 'UPBIT_PUBLIC_TICKERS', status, listed.size, quotes);
+  return sourceResult('CRYPTO_SPOT', 'UPBIT_PUBLIC_TICKERS', status, listed.size, quotes, nowMs);
 }
-export function normalizeBitgetSnapshot(payload, nowMs) {
+// Use the independent PUBLIC Bitget contracts endpoint to detect missing
+// USDT-FUTURES tickers. Current-roster parity is NOT historical PIT proof.
+function bitgetCurrentPublicRoster(payload) {
+  if (!payload || String(payload.code) !== '00000'
+    || !Array.isArray(payload.data) || payload.data.length === 0
+    || payload.data.length > 30_000)
+    throw new Error('BITGET_CONTRACT_ROSTER_INVALID');
+  const seen = new Set();
+  const current = new Set();
+  const allowedStatus = new Set([
+    'listed', 'normal', 'maintain', 'limit_open', 'restrictedAPI', 'off',
+  ]);
+  for (const row of payload.data) {
+    const ticker = symbol(row?.symbol);
+    if (!ticker || !ticker.endsWith('USDT') || row?.quoteCoin !== 'USDT'
+      || !allowedStatus.has(row?.symbolStatus) || seen.has(ticker))
+      throw new Error('BITGET_CONTRACT_ROSTER_INVALID');
+    seen.add(ticker);
+    if (row.symbolStatus !== 'off') current.add(ticker);
+  }
+  if (current.size === 0) throw new Error('BITGET_CONTRACT_ROSTER_EMPTY');
+  return current;
+}
+export function normalizeBitgetSnapshot(payload, nowMs, contracts = null) {
   if (!payload || String(payload.code) !== '00000' || !Array.isArray(payload.data))
     throw new Error('BITGET_PUBLIC_SHAPE_INVALID');
+  // Tickers cannot self-certify the completeness of their own source.
+  const roster = contracts == null ? null : bitgetCurrentPublicRoster(contracts);
   const quotes = [];
+  let invalidOrUnexpectedRows = 0;
   for (const row of payload.data) {
     const ticker = symbol(row?.symbol);
     const price = number(row?.lastPr);
     const turnover = number(row?.usdtVolume);
     const percent = number(row?.change24h);
     const observed = number(row?.ts);
-    if (!ticker || !(price > 0) || !(turnover >= 0) || percent == null
-      || !validAge(observed, nowMs)) continue;
+    if (!ticker || (roster && !roster.has(ticker))
+      || !(price > 0) || !(turnover >= 0) || percent == null
+      || !validAge(observed, nowMs)) {
+      invalidOrUnexpectedRows++;
+      continue;
+    }
     quotes.push(Object.freeze({
-      symbol: ticker, price,
-      turnover24h: turnover,
-      change24hPercent: percent * 100,
-      sourceAtMs: observed,
+      symbol: ticker, price, turnover24h: turnover,
+      change24hPercent: percent * 100, sourceAtMs: observed,
     }));
   }
   if (!quotes.length) throw new Error('BITGET_PUBLIC_QUOTES_UNAVAILABLE');
-  // Public APIs can return a partially usable market list. A subset must
-  // never be displayed to Research as verified full-universe coverage.
-  const quoteSymbols = new Set(quotes.map((row) => row.symbol));
-  const complete = quoteSymbols.size === payload.data.length;
-  return sourceResult(
-    'CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS',
-    complete ? 'READY' : 'PARTIAL_TICKERS',
-    payload.data.length, quotes,
-  );
+  const unique = new Set(quotes.map(v => v.symbol)).size;
+  const matched = roster != null && invalidOrUnexpectedRows === 0
+    && unique === roster.size && quotes.length === roster.size;
+  return sourceResult('CRYPTO_FUTURES', 'BITGET_PUBLIC_TICKERS',
+    matched ? 'READY' : 'PARTIAL_TICKERS',
+    roster?.size ?? payload.data.length, quotes, nowMs);
 }
 export function normalizeStockFeed(raw, market, nowMs) {
   if (market !== 'KR_STOCK' && market !== 'US_STOCK')
     throw new Error('STOCK_MARKET_INVALID');
   if (!raw || raw.schemaVersion !== 'research-stock-public-snapshot-v1'
     || raw.market !== market || typeof raw.source !== 'string'
-    || !/^[a-zA-Z0-9._-]{3,64}$/.test(raw.source)
+    // Source identities also flow into local Node and Python admin
+    // readbacks; never accept a name those readers reject. "NONE" is
+    // reserved for an unavailable/blocked feed, not a healthy provider.
+    || !/^[A-Za-z0-9_-]{3,64}$/.test(raw.source)
+    || raw.source === 'NONE'
     || typeof raw.completeUniverse !== 'boolean'
     || !Array.isArray(raw.quotes) || raw.quotes.length > 30_000) {
     throw new Error('STOCK_PUBLIC_FEED_INVALID');
@@ -185,7 +284,7 @@ export function normalizeStockFeed(raw, market, nowMs) {
   if (!validAge(observed, nowMs)) throw new Error('STOCK_PUBLIC_FEED_STALE');
   const quotes = [];
   for (const row of raw.quotes) {
-    const ticker = symbol(row?.symbol);
+    const ticker = stockSymbol(row?.symbol, market);
     const price = number(row?.price);
     const turnover = number(row?.turnover24h);
     const percent = number(row?.change24hPercent);
@@ -201,13 +300,12 @@ export function normalizeStockFeed(raw, market, nowMs) {
     }));
   }
   if (!quotes.length) throw new Error('STOCK_PUBLIC_FEED_EMPTY');
+  // Self-declared completeUniverse in this same local payload is not
+  // independent licensed/provider/roster evidence of complete market coverage.
+  // Until a separately validated source binding exists, no stock market may
+  // turn READY solely on a file-supplied flag or a one-ticker sample.
   return sourceResult(
-    market, raw.source,
-    raw.completeUniverse && quotes.length === raw.quotes.length
-      && new Set(quotes.map((row) => row.symbol)).size === quotes.length
-      && quotes.length <= WATCH_LIMITS.maxSymbolsPerMarket
-      ? 'READY' : 'PARTIAL_UNIVERSE',
-    raw.quotes.length, quotes,
+    market, raw.source, 'PARTIAL_UNIVERSE', raw.quotes.length, quotes, nowMs,
   );
 }
 export function evaluateWatchBudget(telemetry) {
@@ -286,12 +384,50 @@ export function evaluateMarketOpportunities(input) {
   candidates.sort((a, b) =>
     b.score - a.score || a.symbol.localeCompare(b.symbol));
   const selected = Object.freeze(candidates.slice(0, WATCH_LIMITS.maxCandidatesPerMarket));
+  const capped = candidates.slice(WATCH_LIMITS.maxCandidatesPerMarket);
+  const details = Object.freeze(capped.slice(
+    0, WATCH_CAPPED_AUDIT_LIMITS.maxDetailedCandidatesPerMarketCycle,
+  ).map((candidate) => Object.freeze({
+    symbol: candidate.symbol, direction: candidate.direction,
+    sourceAtMs: candidate.sourceAtMs,
+    priorSourceAtMs: candidate.priorSourceAtMs,
+    movePercent: candidate.movePercent, score: candidate.score,
+    turnover24h: candidate.turnover24h,
+  })));
+  // Hash all qualifying *capped* identities, including those whose details
+  // cannot fit in a small-server bounded per-cycle audit record. This is only
+  // integrity against accidental loss after observation, not market truth.
+  const cappedAudit = capped.length === 0 ? null : Object.freeze({
+    contract: WATCH_CAPPED_AUDIT_CONTRACT,
+    market, source: source.source, universeStatus: source.status,
+    kind: 'CAPPED_RESEARCH_OBSERVATION_ONLY',
+    qualifyingCandidateCount: candidates.length,
+    emittedCandidateCount: selected.length,
+    cappedCandidateCount: capped.length,
+    detailedCandidateCount: details.length,
+    undetailedCandidateCount: capped.length - details.length,
+    cappedIdentityDigest: watchCycleDigest(capped.map(candidate => [
+      candidate.symbol, candidate.direction, candidate.source,
+      candidate.sourceAtMs, candidate.priorSourceAtMs,
+      candidate.movePercent, candidate.score,
+    ])),
+    details,
+    isTradingSignal: false, paperAdmitted: false, oosPassed: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  });
   return Object.freeze({
+    cappedAudit,
     summary: Object.freeze({
       market, status: source.status, source: source.source,
       listedCount: source.listedCount,
       observedCount: rows.length,
       newCandidates: selected.length,
+      // Source cap is counted before scanning. Candidate cap covers only
+      // already-qualified, timestamp-comparable, cooldown-cleared observations.
+      sourceCappedCount: Number.isSafeInteger(source.sourceCappedCount)
+        && source.sourceCappedCount >= 0 ? source.sourceCappedCount : 0,
+      qualifyingCandidateCount: candidates.length,
+      candidateCappedCount: candidates.length - selected.length,
       previousSnapshotComparable: comparable,
       executionAuthority: 'NONE',
     }),
