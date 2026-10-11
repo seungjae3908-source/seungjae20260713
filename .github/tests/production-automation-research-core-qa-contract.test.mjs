@@ -32,7 +32,7 @@ test('dedicated release command selects scoped Staging and only the four request
     'evidence_scope=trading_core',
     'production-postdeploy-activation-ready-',
   ]) assert.ok(deploy.includes(marker), marker);
-  assert.ok(deploy.includes("inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research'"));
+  assert.ok(deploy.includes("inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research'"));
 });
 
 test('browser contract covers Auto, Paper, Research and Backtester without financial authority', () => {

@@ -286,6 +286,119 @@ test('builds Trading Core ACTIVATION_READY without unrelated Comprehensive recei
   assert.equal(evidence.memberAutoPilotStage, 'validated');
 });
 
+test('builds Automatic LIVE-only ACTIVATION_READY without Paper, Telegram or Comprehensive receipts', () => {
+  const input = fixture();
+  input.qaScope = 'auto_live';
+  input.comprehensive = null;
+  input.autoLive = {
+    schemaVersion: 'production-auto-live-readonly-qa-v2',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true,
+    authenticatedProductionSession: true,
+    identityMatch: true,
+    viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    markets: {
+      domestic_stock: 'PASS', us_stock: 'PASS', crypto_spot: 'PASS', crypto_futures: 'PASS',
+    },
+    memberAutoPolicyReady: true,
+    memberAutoPolicyBlockers: [],
+    memberAutoDomesticBroker: 'kiwoom',
+    memberAutoBitgetLeverage: 7,
+    memberAutoPilotStage: 'limited-50',
+    memberAutoLivePilotReady: true,
+    providerVerificationFresh: true,
+    marketReadinessBlockersOnlyExpectedPreactivation: true,
+    workerPreactivationSafe: true,
+    workerEnabled: false,
+    liveBackgroundRequested: false,
+    liveEntryArmPresent: false,
+    liveEntriesArmed: false,
+    pendingOrderCount: 0,
+    recoveryRequiredOrderCount: 0,
+    statusRequestOrderSubmissionCount: 0,
+    paperTrading: 'OUT_OF_SCOPE',
+    telegram: 'OUT_OF_SCOPE',
+    paperRequests: 0,
+    telegramRequests: 0,
+    observedMutationRequests: 0,
+    realOrderSubmitted: false,
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    ...ZERO,
+  };
+  input.autoLiveSignal = {
+    schemaVersion: 'production-auto-live-signal-source-v1',
+    targetSha: SHA,
+    productionDeployRunId: 42,
+    generatedAt: '2026-10-04T00:02:30.000Z',
+    canonicalValidation: true,
+    handoffStatus: 'READY',
+    handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true,
+    maximumAgeMinutes: 30,
+    entryCount: 0,
+    observedMarkets: [],
+    scheduleActive: true,
+    scheduleEntryCount: 1,
+    disableSentinelPresent: false,
+    publicDataOnly: true,
+    privateRequestCount: 0,
+    financialMutationCount: 0,
+    executionAuthority: 'NONE',
+    secretValuesRecorded: false,
+    accountValuesRecorded: false,
+    realOrderSubmitted: false,
+    ...ZERO,
+  };
+  const evidence = buildProductionPostdeployQaEvidence(input);
+  assert.equal(evidence.activationReady, true);
+  assert.equal(evidence.qaScope, 'auto_live');
+  assert.equal(evidence.autoLiveQa, 'PASS');
+  assert.equal(evidence.comprehensiveQa, 'NOT_RUN');
+  assert.equal(evidence.tradingCoreQa, 'NOT_RUN');
+  assert.equal(evidence.memberAutoPolicyReady, true);
+  assert.equal(evidence.memberAutoLivePilotReady, true);
+  assert.equal(evidence.canonicalAutoLiveSignalSource, 'PASS');
+  assert.equal(evidence.telegramActivationState, 'NOT_EVALUATED');
+});
+
+test('rejects Automatic LIVE evidence when the canonical signal schedule is not active', () => {
+  const input = fixture();
+  input.qaScope = 'auto_live';
+  input.comprehensive = null;
+  input.autoLive = {
+    schemaVersion: 'production-auto-live-readonly-qa-v2', targetSha: SHA,
+    productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:00.000Z',
+    officialProductionOrigin: true, authenticatedProductionSession: true, identityMatch: true,
+    viewports: ['desktop-1440', 'tablet-1024', 'mobile-390'],
+    providers: Object.fromEntries(providers.map((provider) => [provider, 'PASS'])),
+    markets: { domestic_stock: 'PASS', us_stock: 'PASS', crypto_spot: 'PASS', crypto_futures: 'PASS' },
+    memberAutoPolicyReady: true, memberAutoPolicyBlockers: [], memberAutoDomesticBroker: 'kiwoom',
+    memberAutoBitgetLeverage: 7, memberAutoPilotStage: 'limited-50', memberAutoLivePilotReady: true,
+    providerVerificationFresh: true, marketReadinessBlockersOnlyExpectedPreactivation: true,
+    workerPreactivationSafe: true, workerEnabled: false, liveBackgroundRequested: false,
+    liveEntryArmPresent: false, liveEntriesArmed: false, pendingOrderCount: 0,
+    recoveryRequiredOrderCount: 0, statusRequestOrderSubmissionCount: 0,
+    paperTrading: 'OUT_OF_SCOPE', telegram: 'OUT_OF_SCOPE', paperRequests: 0, telegramRequests: 0,
+    observedMutationRequests: 0, realOrderSubmitted: false, secretValuesRecorded: false,
+    accountValuesRecorded: false, ...ZERO,
+  };
+  input.autoLiveSignal = {
+    schemaVersion: 'production-auto-live-signal-source-v1', targetSha: SHA,
+    productionDeployRunId: 42, generatedAt: '2026-10-04T00:02:30.000Z',
+    canonicalValidation: true, handoffStatus: 'READY', handoffFresh: true,
+    handoffEvaluatedAfterScheduleActivation: true,
+    maximumAgeMinutes: 30, entryCount: 0, observedMarkets: [], scheduleActive: false,
+    scheduleEntryCount: 0, disableSentinelPresent: false, publicDataOnly: true,
+    privateRequestCount: 0, financialMutationCount: 0, executionAuthority: 'NONE',
+    secretValuesRecorded: false, accountValuesRecorded: false, realOrderSubmitted: false, ...ZERO,
+  };
+  assert.throws(() => buildProductionPostdeployQaEvidence(input), /AUTO_LIVE_SIGNAL_INVALID/);
+});
+
 test('Trading Core evidence may be core-ready while live pilot remains intentionally unprepared', () => {
   const input = fixture();
   input.qaScope = 'trading_core';
