@@ -243,3 +243,17 @@ and exposes explicit `instrumentClassificationVerified=false`,
 ticker or name. Trading/Paper/Telegram candidate gates are unchanged
 and full-roster coverage remains blocked pending official subtype
 metadata and public/private provider permissions.
+
+## Draft: prevent empty Yahoo candle pages from hiding an alternate public venue
+
+V3's `withProviderFallback` formerly treated a successful HTTP response
+containing `[]` candles as successful data; thus an unavailable KRX
+suffix could mask the valid alternative. V3 now treats an empty array
+as a deterministic **invalid data response**, probes at most one other
+public Yahoo venue when exchange information is unknown, and fails
+closed if both are empty. Known KOSPI/KOSDAQ records only use their
+verified exchange suffix, never silently route to the other board.
+U.S. class-share alternate symbols remain bounded. No external
+private provider or order authority is used. Unit tests cover empty,
+error, known-exchange and ambiguous-venue cases; source confidence,
+stale/partial classification and Telegram gates are unchanged.
