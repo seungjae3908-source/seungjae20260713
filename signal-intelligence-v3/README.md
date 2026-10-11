@@ -350,3 +350,25 @@ does not adapt or announce candidates, does not claim any roster PASS,
 and does not grant Paper/Live authority. Curated/last-good/stale,
 undersized, malformed and failed source pages may NOT silently rewind.
 No extra requests or private provider operations are introduced.
+
+## Draft: stable public V3 crypto cursor despite live 24-hour rank changes
+
+**Root cause found:** both Upbit and Bitget public ticker universes are
+normally sorted by 24h trading value, which can change between two
+sequential V3 research cycles. V3's persisted index cursor then samples
+different symbols at a given page boundary, causing repeat/miss even
+though the universe `totalCount` is unchanged. Only when
+`memberId === 'signal-intelligence-v3-public-only'`, the crypto scanner
+now copies and sorts validated unique ticker identities by stable ASCII
+symbol order **before slicing the next cursor page**. Normal member
+search results, market liquidity ranking, Forward/Paper, and live order
+selection remain untouched. Malformed or duplicate symbol rows fail
+closed rather than claiming all-market coverage. Mocked two-cycle
+regression tests prove 6/6 unique spot and futures symbols are visited
+despite adversarial trading-rank reorderings, and ordinary members
+retain their original rank order.
+
+This fixes one real all-symbol coverage defect but NOT changing listing
+membership, missing Upbit day candles, costs/OOS, full-market historical
+coverage, Telegram source 503 or live activation. No public request or
+trading authority was added.
