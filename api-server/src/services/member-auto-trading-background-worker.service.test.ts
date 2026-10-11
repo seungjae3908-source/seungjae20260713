@@ -591,7 +591,7 @@ test('stock automatic routing allows domestic Toss/Kiwoom but forces US Kiwoom',
   assert.equal(marketMapping('US_STOCK', kiwoom).exchange, 'kiwoom');
 });
 
-test('Bitget futures worker preserves administrator 4x-7x and blocks the same evidence for members', async () => {
+test('automatic Paper futures admits only verified isolated 7x for admins and members; LIVE role caps stay separate', async () => {
   for (const expectedLeverage of [4, 5, 6, 7] as const) {
   const nowMs = Date.now();
   const repository = new InMemoryTradingRepository();
@@ -663,12 +663,15 @@ test('Bitget futures worker preserves administrator 4x-7x and blocks the same ev
 
   const result = await withFetchMock(() => worker.runOnce(new Date(nowMs)));
   assert.equal(result.failures, 0);
-  assert.equal(result.createdPlans, 1);
+  const paperEligible = expectedLeverage === 7;
+  assert.equal(result.createdPlans, paperEligible ? 1 : 0);
   const plans = await repository.listPlans(USER);
-  assert.equal(plans.length, 1);
-  assert.equal(plans[0]?.exchange, 'bitget');
-  assert.equal(plans[0]?.leverage, expectedLeverage);
-  assert.equal(plans[0]?.marginMode, 'isolated');
+  assert.equal(plans.length, paperEligible ? 1 : 0);
+  if (paperEligible) {
+    assert.equal(plans[0]?.exchange, 'bitget');
+    assert.equal(plans[0]?.leverage, 7);
+    assert.equal(plans[0]?.marginMode, 'isolated');
+  }
 
   const memberRepository = new InMemoryTradingRepository();
   await memberRepository.savePolicy(USER, futuresPolicy);
@@ -694,8 +697,8 @@ test('Bitget futures worker preserves administrator 4x-7x and blocks the same ev
     },
   });
   const memberResult = await withFetchMock(() => memberWorker.runOnce(new Date(nowMs)));
-  assert.equal(memberResult.createdPlans, 0);
-  assert.equal((await memberRepository.listPlans(USER)).length, 0);
+  assert.equal(memberResult.createdPlans, paperEligible ? 1 : 0);
+  assert.equal((await memberRepository.listPlans(USER)).length, paperEligible ? 1 : 0);
   }
 });
 

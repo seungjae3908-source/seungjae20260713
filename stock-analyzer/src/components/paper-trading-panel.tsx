@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { AlertTriangle, Download, Loader2, RotateCcw, Upload, X } from 'lucide-react';
 import { getFuturesContractRules, getFuturesMarketSnapshot, type FuturesContractRules, type FuturesMarketSnapshot } from '@/lib/futures-market-data';
 import type { RiskEngineInput } from '@/lib/trading-risk';
+import { explainManualPaperTrade } from '@/lib/paper-trade-review';
 import {
   calculatePaperStatistics,
   clearPaperState,
@@ -11,6 +12,10 @@ import {
   importPaperState,
   loadPaperState,
   savePaperState,
+  getManualPaperRoundSummary,
+  exportManualPaperRounds,
+  startNextLocalManualPaperRound,
+  MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,
   type PaperOrderRequest,
   type PaperTradingAction,
   type PaperTradingActionResult,
@@ -68,6 +73,17 @@ function Metric({ label, value, testId }: { label: string; value: string; testId
   return <div className="rounded-xl border border-border/70 bg-background/70 p-3"><div className="text-[11px] text-muted-foreground">{label}</div><div className="mt-1 text-sm font-bold" data-testid={testId}>{value}</div></div>;
 }
 
+function PaperTradeReviewSummary({ entry }: { entry: PaperTradingState['journal'][number] }) {
+  const review = explainManualPaperTrade(entry);
+  return <details className="mt-2 rounded-lg border border-border/60 p-2 text-xs" data-testid="manual-paper-trade-review">
+    <summary className="cursor-pointer font-semibold">수익·손실 복기 · {review.outcome === 'PROFIT' ? '순이익' : review.outcome === 'LOSS' ? '순손실' : review.outcome === 'OPEN' ? '미종료' : '정산·확인 필요'}</summary>
+    <p className="mt-1">청산 근거: {review.exitExplanation}</p>
+    {review.priceContribution !== null ? <p>가격 기여: {money(review.priceContribution)} · 기록 비용: {money(review.recordedCosts ?? 0)} · 순손익: {money(review.netPnl ?? 0)}</p> : null}
+    {review.observedReasons.map((reason,i) => <p key={i}>{reason}</p>)}
+    <p className="mt-2 text-muted-foreground">추정 원인과 확정된 체결 사실은 구분합니다. {review.unknownFactors.join(' ')}</p>
+  </details>;
+}
+
 export function PaperTradingPanel({
   execute = evaluatePaperTrading,
   loadMarket = getFuturesMarketSnapshot,
@@ -88,6 +104,7 @@ export function PaperTradingPanel({
   const [notice, setNotice] = useState(initial.warning);
   const [confirming, setConfirming] = useState(false);
   const [resetStep, setResetStep] = useState(false);
+  const [newRoundConfirm, setNewRoundConfirm] = useState(false);
   const [journalFilter, setJournalFilter] = useState('all');
   const [closeQuantities, setCloseQuantities] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -104,6 +121,10 @@ export function PaperTradingPanel({
   };
 
   const openPositions = state.positions.filter((position) => position.status !== 'closed');
+  const canStartManualRound = state.account.equity <= 0.01 && openPositions.length === 0 && !state.orders.some(order => order.status === 'pending');
+  const roundSummary = useMemo(() => {
+    try { return getManualPaperRoundSummary(storage,state); } catch { return null; }
+  }, [storage,state]);
   const statistics = useMemo(() => calculatePaperStatistics(state.journal), [state.journal]);
   const filteredJournal = state.journal.filter((entry) => journalFilter === 'all' || entry.side === journalFilter || entry.symbol === journalFilter);
 
@@ -159,6 +180,9 @@ export function PaperTradingPanel({
       return blocks;
     }
     const price = market?.askPrice ?? market?.bidPrice ?? market?.markPrice ?? market?.price ?? null;
+    if (!Number.isInteger(form.leverage) || form.leverage < 1 || form.leverage > 125) {
+      blocks.push('수동 모의 선물 레버리지는 정수 1~125배만 허용됩니다.');
+    }
     if (!market || market.status !== 'live') blocks.push('시장 데이터가 live가 아닙니다.');
     if (!rules || rules.status !== 'live') blocks.push('계약 규칙이 live가 아닙니다.');
     if (price == null) blocks.push('진입 기준가격이 없습니다.');
@@ -254,6 +278,33 @@ export function PaperTradingPanel({
     } catch (cause) { setError(cause instanceof Error ? cause.message : '완료 봉을 처리하지 못했습니다.'); }
   }
 
+  function startNewManualRound() {
+    if (busy || actionInFlightRef.current) return;
+    try {
+      const next = startNextLocalManualPaperRound(storage,stateRef.current,
+        MANUAL_PAPER_NEXT_ROUND_CONFIRMATION);
+      commitState(next);
+      setNewRoundConfirm(false);
+      setError('');
+      setNotice('이전 거래내역·파산 여부를 보관하고 새 로컬 수동모의 연구 회차를 시작했습니다.');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '새 회차를 시작하지 못했습니다.');
+    }
+  }
+
+  function downloadRounds() {
+    try {
+      const blob = new Blob([exportManualPaperRounds(storage)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = `paper-manual-rounds-${new Date().toISOString().slice(0,10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '회차 기록 내보내기에 실패했습니다.');
+    }
+  }
+
   function downloadJson() {
     const blob = new Blob([exportPaperState(state)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -290,6 +341,14 @@ export function PaperTradingPanel({
       <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-account">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">모의계좌</h2><div className="flex gap-2"><button type="button" className={buttonClass} onClick={() => void refreshMarket()} disabled={busy || !futuresEnabled}>현재가 갱신</button><button type="button" className={buttonClass} onClick={() => void applyCandle()} disabled={busy || !futuresEnabled}>완료 봉 처리</button></div></div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="초기 자본" value={money(state.account.initialBalance)} /><Metric label="현금" value={money(state.account.cashBalance)} /><Metric label="자산" value={money(state.account.equity)} testId="paper-equity" /><Metric label="사용 증거금" value={money(state.account.usedMargin)} /><Metric label="사용 가능" value={money(state.account.availableMargin)} /><Metric label="실현손익" value={money(state.account.realizedPnl)} /><Metric label="미실현손익" value={money(state.account.unrealizedPnl)} /><Metric label="일일 / 주간" value={`${money(state.riskState.dailyRealizedPnl)} / ${money(state.riskState.weeklyRealizedPnl)}`} /></div>
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs" data-testid="manual-paper-round-controls">
+          <span>보관한 연구 회차 {roundSummary?.completedRounds ?? '확인 필요'}회 · 파산 {roundSummary?.bankruptcies ?? '미확인'}회</span>
+          {roundSummary?.cumulativeIncludingActive.totalIssued ? <span>이전 + 현재 회차 합산 수익률 {number(roundSummary.cumulativeIncludingActive.totalReturnPercent)}%</span> : null}
+          <button type="button" className={buttonClass} disabled={busy || !canStartManualRound}
+            onClick={() => setNewRoundConfirm(true)}>자본 소진 · 새 연구 회차</button>
+          <button type="button" className={buttonClass} onClick={downloadRounds}>이전 회차 전체 내보내기</button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">이 기능은 현재 브라우저의 수동 코인선물 모의계좌 전용입니다. 4시장 서버 계좌나 실거래 자본을 충전하지 않습니다. 운용자본이 소진되고 열린 포지션·미체결 주문이 없을 때만 새 회차를 시작할 수 있습니다.</p>
       </section>
 
       {futuresEnabled ? <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" data-testid="paper-order-form">
@@ -299,7 +358,7 @@ export function PaperTradingPanel({
           <Field label="롱·숏"><select className={inputClass} value={form.side} onChange={(e) => changeSide(e.target.value as FormValues['side'])}><option value="long">롱</option><option value="short">숏</option></select></Field>
           <Field label="주문 유형"><select className={inputClass} value={form.orderType} onChange={(e) => update('orderType', e.target.value as FormValues['orderType'])}><option value="market">시장가</option><option value="limit">지정가</option><option value="stop_market">스탑 시장가</option></select></Field>
           <Field label="수량 (비우면 추천)"><input className={inputClass} type="number" min="0" step="any" value={form.quantity} onChange={(e) => update('quantity', e.target.value)} /></Field>
-          <Field label="레버리지"><input className={inputClass} type="number" min="1" max="10" value={form.leverage} onChange={(e) => update('leverage', Number(e.target.value))} /></Field>
+          <Field label="레버리지 (수동 모의 전용 1~125배)"><input className={inputClass} type="number" min="1" max="125" step="1" value={form.leverage} onChange={(e) => update('leverage', Number(e.target.value))} /></Field>
           {form.orderType === 'limit' ? <Field label="지정가"><input className={inputClass} type="number" min="0" step="any" value={form.requestedPrice} onChange={(e) => update('requestedPrice', e.target.value)} /></Field> : null}
           {form.orderType === 'stop_market' ? <Field label="트리거 가격"><input className={inputClass} type="number" min="0" step="any" value={form.triggerPrice} onChange={(e) => update('triggerPrice', e.target.value)} /></Field> : null}
           <Field label="손절가"><input className={inputClass} type="number" min="0" step="any" value={form.stopLossPrice} onChange={(e) => update('stopLossPrice', Number(e.target.value))} /></Field>
@@ -309,7 +368,10 @@ export function PaperTradingPanel({
           <Field label="목표 2 비율"><input className={inputClass} type="number" min="0" max="100" value={form.targetClosePercent2} onChange={(e) => update('targetClosePercent2', Number(e.target.value))} /></Field>
           <Field label="거래당 위험률 %"><input className={inputClass} type="number" min="0.01" max="1" step="0.01" value={form.riskPercent} onChange={(e) => update('riskPercent', Number(e.target.value))} /></Field>
         </div>
-        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs"><div>시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
+        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs">
+          <div className="font-semibold text-amber-600 dark:text-amber-400">1~125배는 실제 거래소 허용 배수와 관계없는 가상 모의 설정입니다. 청산·갭·수수료·펀딩에 따라 전액 손실이 날 수 있습니다. 자동모의매매 7배 또는 실거래 설정을 변경하지 않습니다.</div>
+          {rules?.maximumLeverage != null && form.leverage > rules.maximumLeverage ? <div className="mt-1 text-amber-600">선택한 {form.leverage}배는 이 거래소 종목의 실제 허용 최대 {rules.maximumLeverage}배보다 높은 순수 가상 시나리오입니다.</div> : null}
+          <div className="mt-1">시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
         <button data-testid="paper-submit" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 font-bold text-primary-foreground disabled:opacity-50" disabled={busy || localBlocks.length > 0}>{busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : null}모의주문</button>
       </form> : null}
 
@@ -317,12 +379,19 @@ export function PaperTradingPanel({
 
       <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-orders"><h2 className="mb-3 font-bold">주문 목록</h2><div className="space-y-2">{state.orders.length === 0 ? <p className="text-sm text-muted-foreground">모의주문이 없습니다.</p> : [...state.orders].reverse().map((order) => <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border p-3 text-xs" key={order.id}><span>{order.symbol} · {order.side} · {order.orderType} · <b>{order.status}</b></span>{order.status === 'pending' ? <button type="button" className={buttonClass} disabled={busy} onClick={() => void runAction({ type: 'cancel_order', eventId: eventId('cancel'), orderId: order.id })}>취소</button> : null}{order.rejectionCodes.length ? <span className="w-full text-destructive">{order.rejectionCodes.join(', ')}</span> : null}</div>)}</div></section>
 
-      <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-journal"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">거래일지</h2><select className={inputClass} value={journalFilter} onChange={(e) => setJournalFilter(e.target.value)}><option value="all">전체</option><option value="long">롱</option><option value="short">숏</option><option value="BTCUSDT">BTCUSDT</option></select></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="총 거래" value={String(statistics.totalTrades)} /><Metric label="승률" value={`${number(statistics.winRate)}%`} /><Metric label="누적 순손익" value={money(statistics.cumulativeNetPnl)} /><Metric label="Profit Factor" value={number(statistics.profitFactor)} /><Metric label="총 수수료" value={money(statistics.totalFees)} /><Metric label="총 슬리피지" value={money(statistics.totalSlippage)} /><Metric label="총 펀딩비" value={money(statistics.totalFunding)} /><Metric label="최대 연속 손실" value={String(statistics.maximumConsecutiveLosses)} /></div><div className="mt-3 space-y-2">{filteredJournal.length === 0 ? <p className="text-sm text-muted-foreground">종료된 거래일지가 없습니다.</p> : [...filteredJournal].reverse().map((entry) => <article className="rounded-xl border border-border p-3 text-xs" key={entry.id}><div className="flex flex-wrap justify-between gap-2"><b>{entry.symbol} {entry.side}</b><span>{entry.status} · {entry.exitReason}</span></div><div className="mt-2">진입 {number(entry.entryPrice)} · 종료 {number(entry.exitPrice)} · 순손익 {money(entry.netPnl)} · R {number(entry.rMultiple)}</div><textarea aria-label={`${entry.symbol} 거래 메모`} className="mt-2 min-h-20 w-full rounded-lg border border-border bg-background p-2" value={entry.note} onChange={(e) => updateNote(entry.id, e.target.value)} placeholder="복기 메모 (일반 텍스트)" /></article>)}</div></section>
+      <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-journal"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">거래일지</h2><select className={inputClass} value={journalFilter} onChange={(e) => setJournalFilter(e.target.value)}><option value="all">전체</option><option value="long">롱</option><option value="short">숏</option><option value="BTCUSDT">BTCUSDT</option></select></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="총 거래" value={String(statistics.totalTrades)} /><Metric label="승률" value={`${number(statistics.winRate)}%`} /><Metric label="누적 순손익" value={money(statistics.cumulativeNetPnl)} /><Metric label="Profit Factor" value={number(statistics.profitFactor)} /><Metric label="총 수수료" value={money(statistics.totalFees)} /><Metric label="총 슬리피지" value={money(statistics.totalSlippage)} /><Metric label="총 펀딩비" value={money(statistics.totalFunding)} /><Metric label="최대 연속 손실" value={String(statistics.maximumConsecutiveLosses)} /></div><div className="mt-3 space-y-2">{filteredJournal.length === 0 ? <p className="text-sm text-muted-foreground">종료된 거래일지가 없습니다.</p> : [...filteredJournal].reverse().map((entry) => <article className="rounded-xl border border-border p-3 text-xs" key={entry.id}><div className="flex flex-wrap justify-between gap-2"><b>{entry.symbol} {entry.side}</b><span>{entry.status} · {entry.exitReason}</span></div><div className="mt-2">진입 {number(entry.entryPrice)} · 종료 {number(entry.exitPrice)} · 순손익 {money(entry.netPnl)} · R {number(entry.rMultiple)}</div><PaperTradeReviewSummary entry={entry} /><textarea aria-label={`${entry.symbol} 거래 메모`} className="mt-2 min-h-20 w-full rounded-lg border border-border bg-background p-2" value={entry.note} onChange={(e) => updateNote(entry.id, e.target.value)} placeholder="복기 메모 (일반 텍스트)" /></article>)}</div></section>
 
       <section className="rounded-2xl border border-border bg-card p-4"><h2 className="mb-3 font-bold">로컬 기록 관리</h2><div className="grid grid-cols-2 gap-2 sm:grid-cols-3"><button type="button" className={buttonClass} onClick={downloadJson}><Download className="mr-2 h-4 w-4" />JSON 내보내기</button><button type="button" className={buttonClass} onClick={() => fileRef.current?.click()}><Upload className="mr-2 h-4 w-4" />JSON 가져오기</button><button type="button" className={buttonClass} onClick={() => setResetStep(true)}><RotateCcw className="mr-2 h-4 w-4" />전체 초기화</button></div><input ref={fileRef} className="hidden" type="file" accept="application/json,.json" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importJson(file); e.currentTarget.value = ''; }} /></section>
     </div>
 
     {confirming ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="모의주문 확인"><div className="max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-card p-4"><div className="flex justify-between"><h2 className="font-bold">모의주문 확인</h2><button aria-label="닫기" onClick={() => setConfirming(false)}><X /></button></div><p className="mt-3 text-sm">{form.symbol} {form.side === 'long' ? '롱' : '숏'} · {form.orderType}</p><p className="mt-2 text-sm font-bold">예상 최대손실: {money(state.account.equity * form.riskPercent / 100)}</p><div className="mt-2 rounded-xl bg-amber-500/10 p-3 text-xs">실제 주문은 전송되지 않습니다. 현재 모의 리스크 규칙으로 수량과 차단 여부를 계산하며 실거래 서버 검증이나 주문 권한은 사용하지 않습니다.</div><div className="mt-4 grid grid-cols-2 gap-2"><button className={buttonClass} onClick={() => setConfirming(false)}>취소</button><button data-testid="confirm-paper-order" className="rounded-lg bg-primary px-3 font-bold text-primary-foreground disabled:opacity-50" disabled={busy || localBlocks.length > 0} onClick={() => void confirmOrder()}>모의주문 확인</button></div></div></div> : null}
+
+    {newRoundConfirm ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="수동모의 새 연구 회차 확인"><div className="w-full max-w-md rounded-2xl bg-card p-4">
+      <h2 className="font-bold">새 로컬 수동모의 연구 회차를 시작할까요?</h2>
+      <p className="mt-2 text-sm">기존 거래와 손익·파산 기록을 별도 보관한 뒤 새로운 가상자본 회차를 시작합니다. 운용자본이 남아 있는 회차는 재시작할 수 없습니다.</p>
+      <p className="mt-2 text-xs text-muted-foreground">저장 실패·진행 중 포지션·미체결 주문이 있으면 새 회차를 열지 않습니다. 운영 계좌 및 자동모의매매는 변경하지 않습니다.</p>
+      <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" className={buttonClass} onClick={() => setNewRoundConfirm(false)}>취소</button><button type="button" data-testid="manual-paper-new-round-confirm" className={buttonClass} disabled={busy || !canStartManualRound} onClick={startNewManualRound}>기록 보존 후 시작</button></div>
+    </div></div> : null}
 
     {resetStep ? <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center" role="dialog" aria-modal="true" aria-label="전체 초기화 확인"><div className="w-full max-w-md rounded-2xl bg-card p-4"><div className="flex items-start gap-2"><AlertTriangle className="h-5 w-5 text-destructive" /><div><h2 className="font-bold">모든 로컬 기록을 삭제할까요?</h2><p className="mt-1 text-xs text-muted-foreground">계좌·주문·포지션·거래일지가 복구 없이 삭제됩니다.</p></div></div><div className="mt-4 grid grid-cols-2 gap-2"><button className={buttonClass} onClick={() => setResetStep(false)}>돌아가기</button><button className="rounded-lg bg-destructive px-3 font-bold text-destructive-foreground" onClick={() => { commitState(clearPaperState(storage)); setResetStep(false); setNotice('모의거래 기록을 초기화했습니다.'); }}>2단계 초기화</button></div></div></div> : null}
   </main>;
