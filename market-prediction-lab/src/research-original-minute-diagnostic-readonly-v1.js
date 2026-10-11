@@ -241,8 +241,10 @@ export async function readResearchOriginalMinuteDiagnosticV1({
   // Both fixed files are validated; an unsafe sidecar cannot disappear.
   if(primaryRaw!==null)verifyRaw(primaryRaw,market);
   const sweepReport=sweepRaw===null?null:verifyRaw(sweepRaw,market);
+  // A fixed SWEEP sidecar is authoritative over the legacy SWEEP slot,
+  // INCLUDING a BLOCKED revocation. Never resurrect a stale positive.
   const raw=primaryRaw?.schemaVersion===PERIOD
-    ?primaryRaw:(sweepReport!==null?sweepRaw:primaryRaw??sweepRaw);
+    ?primaryRaw:(sweepRaw??primaryRaw);
   const pairedSweep=raw?.schemaVersion===PERIOD?sweepRaw:null;
   const report=raw===null?null:verifyRaw(raw,market,pairedSweep);
   const supplementary=report?.kind==="PERIOD"?sweepReport:null;
