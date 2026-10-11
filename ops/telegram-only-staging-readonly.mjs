@@ -99,6 +99,12 @@ export async function probeStagingTelegramNetwork({
       socket.once('timeout', () => done(timeoutCode()));
       socket.once('error', error => {
         const code = String(error?.code ?? error?.cause?.code ?? '');
+        // Native socket errors may deliver timeouts via 'error' instead of
+        // the socket 'timeout' event. Preserve the TCP-vs-TLS phase split.
+        if (code === 'ETIMEDOUT' || code === 'ERR_SOCKET_CONNECTION_TIMEOUT') {
+          done(timeoutCode());
+          return;
+        }
         done(['CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
           'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID',
           'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
