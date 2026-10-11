@@ -185,11 +185,6 @@ export function evaluateManualFourMarketPaperClosedCycle(
     ||s.signalObservedAtMs<=0||o.strategyValidatedAtMs<=0
     ||o.strategyValidatedAtMs>s.signalObservedAtMs
     ||s.signalObservedAtMs>nowMs)add('PAPER_CYCLE_LOOKAHEAD_OR_STRATEGY_NOT_VALIDATED');
-  // A closed strategy receipt also needs a trustworthy, bounded owner lookup.
-  // A validated timestamp from an unrelated future simulation run cannot
-  // turn a stale candidate into an authorized same-market Paper selection.
-  if(!Array.isArray(o.priorCloseEventIds)
-    ||o.priorCloseEventIds.length>10000)add('PAPER_CYCLE_LEDGER_PROOF_UNAVAILABLE');
   const correctQuote=(q:ManualPaperFourMarketQuote):boolean=>
     q.provenance==='SERVER_PUBLIC_MARKET_READBACK'
     &&q.closedCandleConfirmed===true
