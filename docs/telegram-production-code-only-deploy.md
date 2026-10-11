@@ -9,6 +9,13 @@ code deployment plus read-only verification.
 
 ## Safe boundary
 
+The ten files included in the already-verified merged Telegram candidate
+(#1825, merge commit ceade3d9fb4cbb4bfcea42d548233aec79653e92)
+are pinned by immutable Git blob SHAs. Even a change to an allowed filename
+blocks deployment. Current main and existing PM2/marker SHA are checked once
+more immediately before applying Production code.
+
+
 - The protected production job requires an exact owner command on Release
   Control #1555, current-main SHA, postmerge CI provenance, completed successful
   same-SHA Staging PostgreSQL auth and Staging Readiness artifacts.
