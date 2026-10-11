@@ -432,13 +432,18 @@ test('Kiwoom execution-vault keys drive only authenticated read-only snapshots f
   const originalFetch = globalThis.fetch;
   const { server, baseUrl } = await startServer(true, 'admin');
   try {
-    const sources: Record<string, string>[] = [{ appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret' },
-      { appKey: 'kiwoom-test-key', appSecret: 'kiwoom-test-secret' }];
+    const sources: Record<string, string>[] = [
+      { appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', appSecret: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret', appSecret: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: ' kiwoom-test-secret ', appSecret: 'kiwoom-test-secret ' },
+    ];
     for (const source of sources) {
       const local = new InMemoryTradingRepository();
       await local.saveConnection({ userId: USER, exchange: 'kiwoom', accountMode: 'live', configured: true,
         encryptedCredentials: encryptTradingCredentials(source), lastVerifiedAt: new Date().toISOString(),
         lastErrorCode: null, updatedAt: new Date().toISOString() });
+      const savedConnection = await local.getConnection(USER, 'kiwoom');
       setTradeAutomationRepositoryFactoryForTests(() => local);
       const calls: string[] = [];
       globalThis.fetch = (async (input, init) => {
@@ -470,9 +475,15 @@ test('Kiwoom execution-vault keys drive only authenticated read-only snapshots f
       }
       assert.equal(calls.length, 14);
       assert.equal((await local.listOrders(USER)).length, 0);
+      assert.deepEqual(await local.getConnection(USER, 'kiwoom'), savedConnection,
+        'successful account reads must not rewrite the execution vault or verification metadata');
     }
-    const invalid: Record<string, string>[] = [{ appKey: 'kiwoom-test-key' },
-      { appKey: 'kiwoom-test-key', secretKey: 'one', appSecret: 'different' }];
+    const invalid: Record<string, string>[] = [
+      { appKey: 'kiwoom-test-key' },
+      { secretKey: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: ' ', appSecret: '' },
+      { appKey: 'kiwoom-test-key', secretKey: 'one', appSecret: 'different' },
+    ];
     for (const source of invalid) {
       const local = new InMemoryTradingRepository();
       const encrypted = encryptTradingCredentials(source);
@@ -482,9 +493,13 @@ test('Kiwoom execution-vault keys drive only authenticated read-only snapshots f
       setTradeAutomationRepositoryFactoryForTests(() => local);
       let calls = 0;
       globalThis.fetch = (async () => { calls += 1; throw new Error('PROVIDER_MUST_NOT_BE_CALLED'); }) as typeof fetch;
-      const response = await originalFetch(baseUrl + '/api/trade-automation/live-position-isolation/kiwoom');
-      assert.equal(response.status, 400);
-      assert.equal((await response.json() as any).error, 'CREDENTIALS_UNAVAILABLE');
+      for (const path of ['/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom']) {
+        const response = await originalFetch(baseUrl + '/api/trade-automation' + path);
+        assert.equal(response.status, 400);
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(body.error, 'CREDENTIALS_UNAVAILABLE');
+        assert.doesNotMatch(JSON.stringify(body), /kiwoom-test|encryptedCredentials|appKey|secretKey|appSecret/);
+      }
       assert.equal(calls, 0);
       assert.equal((await local.getConnection(USER, 'kiwoom'))!.encryptedCredentials, encrypted);
     }
