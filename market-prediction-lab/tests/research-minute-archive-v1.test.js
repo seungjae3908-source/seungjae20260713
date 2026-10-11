@@ -159,7 +159,7 @@ test("raw digest, tampered compressed file and unsafe root fail closed", async (
     await assert.rejects(() => store({ root, source: bad }),
       /MINUTE_ARCHIVE_ORIGINAL_SOURCE_DIGEST_INVALID/);
     const inserted = await store({ root, source: a });
-    writeFileSync(inserted.path, Buffer.from("tampered bytes"));
+    writeFileSync(inserted.path, Buffer.from("tampered bytes that are not valid gzip"));
     await assert.rejects(() => read(request(root, a)),
       /MINUTE_ARCHIVE_COMPRESSED_ORIGINAL_INVALID/);
     const loose = join(root, "loose");
