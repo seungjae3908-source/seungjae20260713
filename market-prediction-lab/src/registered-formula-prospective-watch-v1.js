@@ -109,7 +109,11 @@ export function observeRegisteredFormulaClosedCandleV1(input={}) {
     previous=candle.timestamp;
   }
   const last=candles.at(-1),closedAt=last.timestamp+interval;
-  if (closedAt<=registeredAt) return block('FORMULA_WATCH_HISTORICAL_REPLAY_FORBIDDEN');
+  // Require the *entire* signal bar to begin after registration. Merely
+  // closing after registration could falsely count a pre-registry bar as a
+  // prospective opportunity (especially intraday crossover signals).
+  if (last.timestamp<registeredAt || closedAt<=registeredAt)
+    return block('FORMULA_WATCH_HISTORICAL_REPLAY_FORBIDDEN');
   if (publicEvidence.asOfMs<closedAt||evaluatedAtMs-closedAt>600_000)
     return block('FORMULA_WATCH_LATEST_CANDLE_STALE');
   let signal;
