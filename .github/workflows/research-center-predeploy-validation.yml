@@ -157,7 +157,8 @@ jobs:
           set -Eeuo pipefail
           node --test             "$RUNNER_TEMP/research-center-readonly.test.cjs"             "$RUNNER_TEMP/research-promotion-bridge.test.cjs"             "$RUNNER_TEMP/research-adoption-review.test.cjs"             "$RUNNER_TEMP/strategy-promotion-route.test.cjs"             "$RUNNER_TEMP/paper-journal-route.test.cjs"             "$RUNNER_TEMP/research-video-readback.test.cjs"             "$RUNNER_TEMP/research-workspace-auth.test.cjs"
           node --test "$RUNNER_TEMP/research-member-overview.test.cjs"
-            node --test research-production/test/research-owner-criteria.test.mjs research-production/test/research-free-policy-confirmation.test.mjs research-production/test/research-production-activation-workflow.test.mjs
+          node --test research-production/test/research-owner-criteria.test.mjs research-production/test/research-free-policy-confirmation.test.mjs research-production/test/research-production-activation-workflow.test.mjs
+          node --test .github/tests/research-center-batch-scope.test.mjs
 
       - name: Validate Research Dashboard runtime contract
         working-directory: research-dashboard
@@ -340,9 +341,9 @@ jobs:
         run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
 
       - name: Research Center overview, evidence, Paper and abort browser regressions
-          run: |
-            set -Eeuo pipefail
-            pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts             e2e/research-copilot.spec.ts
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir stock-analyzer exec playwright test -c playwright.config.ts             e2e/research-center-professional-hierarchy.spec.ts             e2e/research-center-simple-ko-ai-debate.spec.ts             e2e/research-evidence-maturity.spec.ts             e2e/research-paper-closed-loop-observer.spec.ts             e2e/research-reload-abort-contract.spec.ts             e2e/research-copilot.spec.ts
 
       - name: Research Video and Workspace browser regressions
         run: |
