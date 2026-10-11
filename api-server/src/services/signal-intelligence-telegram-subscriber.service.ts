@@ -52,7 +52,7 @@ type V3Snapshot = {
 };
 
 type V3Envelope = { ok: true; serviceSha: string; snapshot: V3Snapshot; executionAuthority: 'NONE' };
-type Persisted = { version: 1; delivered: Record<string, string> };
+type Persisted = { version: 1; delivered: Record<string, string>; unconfirmed?: Record<string, string> };
 type WatchlistDeliverer = typeof deliverMemberWatchlistTelegramForSignal;
 
 export type SignalTelegramSourceStatus = 'NOT_CHECKED' | 'READY' | 'HTTP_503'
@@ -280,6 +280,7 @@ export class SignalIntelligenceTelegramDeliveryState {
   private loaded = false;
   private blocked = false;
   private delivered = new Map<string, string>();
+  private unconfirmed = new Map<string, string>();
   constructor(private readonly file: string) {}
 
   private async load(): Promise<void> {
@@ -307,11 +308,23 @@ export class SignalIntelligenceTelegramDeliveryState {
         !key.startsWith('signal-intelligence-v3:') || key.length > 1024
         || typeof at !== 'string' || !Number.isFinite(Date.parse(at))))
         throw new Error(LEDGER_ERROR);
+      const uncertain = data.unconfirmed === undefined ? {} : data.unconfirmed;
+      if (!uncertain || typeof uncertain !== 'object' || Array.isArray(uncertain))
+        throw new Error(LEDGER_ERROR);
+      const ambiguousEntries = Object.entries(uncertain);
+      if (entries.length + ambiguousEntries.length > MAX_LEDGER_ENTRIES
+        || ambiguousEntries.some(([key, at]) =>
+          !key.startsWith('signal-intelligence-v3:') || key.length > 1024
+          || typeof at !== 'string' || !Number.isFinite(Date.parse(at))
+          || Object.prototype.hasOwnProperty.call(data.delivered, key)))
+        throw new Error(LEDGER_ERROR);
       this.delivered = new Map(entries as Array<[string,string]>);
+      this.unconfirmed = new Map(ambiguousEntries as Array<[string,string]>);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
       this.blocked = true;
       this.delivered.clear();
+      this.unconfirmed.clear();
       logger.warn({ code: LEDGER_ERROR }, 'signal Telegram dedupe ledger unavailable; suppressing sends');
       throw new Error(LEDGER_ERROR);
     }
@@ -337,39 +350,69 @@ export class SignalIntelligenceTelegramDeliveryState {
     return when >= now.getTime() - MAX_DELIVERED_AGE_MS;
   }
 
+  async hasUnconfirmed(key: string, now = new Date()): Promise<boolean> {
+    await this.load();
+    if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const at = this.unconfirmed.get(key);
+    if (!at) return false;
+    const when = Date.parse(at);
+    if (!Number.isFinite(when) || when > now.getTime() + 5_000) {
+      this.blocked = true;
+      throw new Error(LEDGER_ERROR);
+    }
+    return when >= now.getTime() - MAX_DELIVERED_AGE_MS;
+  }
+
   async mark(key: string, now: Date): Promise<void> {
+    return this.persist(key, now, true);
+  }
+  async markUnconfirmed(key: string, now: Date): Promise<void> {
+    return this.persist(key, now, false);
+  }
+  private async persist(key: string, now: Date, delivered: boolean): Promise<void> {
     await this.load();
     if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
       || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
     const next = new Map(this.delivered);
+    const uncertain = new Map(this.unconfirmed);
     const cutoff = now.getTime() - MAX_DELIVERED_AGE_MS;
-    for (const [id, timestamp] of next) if (Date.parse(timestamp) < cutoff) next.delete(id);
-    next.set(key, now.toISOString());
-    if (next.size > MAX_LEDGER_ENTRIES) { this.blocked = true; throw new Error(LEDGER_ERROR); }
+    for (const ledger of [next, uncertain])
+      for (const [id, timestamp] of ledger)
+        if (Date.parse(timestamp) < cutoff) ledger.delete(id);
+    if (delivered) {
+      uncertain.delete(key);
+      next.set(key, now.toISOString());
+    } else {
+      if (next.has(key)) {
+        this.blocked = true;
+        throw new Error(LEDGER_ERROR);
+      }
+      uncertain.set(key, now.toISOString());
+    }
+    if (next.size + uncertain.size > MAX_LEDGER_ENTRIES) {
+      this.blocked = true; throw new Error(LEDGER_ERROR);
+    }
     try {
       await mkdir(path.dirname(this.file), { recursive: true });
       const temp = `${this.file}.${process.pid}.tmp`;
-      // Never follow a pre-created link at the predictable temp pathname.
-      // E_EXCL blocks a stale/untrusted temp instead of overwriting a
-      // different file. After Bot API success, any write ambiguity
-      // must stop future sends until the ledger is inspected.
       const fd = await open(temp,
         fileConstants.O_WRONLY | fileConstants.O_CREAT
           | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
       try {
-        await fd.writeFile(
-          `${JSON.stringify({ version: 1, delivered: Object.fromEntries(next) }, null, 2)}\n`,
-          { encoding: 'utf8' },
-        );
+        const payload = `${JSON.stringify({ version: 1,
+          delivered: Object.fromEntries(next),
+          unconfirmed: Object.fromEntries(uncertain) }, null, 2)}\n`;
+        if (Buffer.byteLength(payload, 'utf8') > MAX_LEDGER_BYTES)
+          throw new Error(LEDGER_ERROR);
+        await fd.writeFile(payload, { encoding: 'utf8' });
         await fd.sync();
-      } finally {
-        await fd.close();
-      }
+      } finally { await fd.close(); }
       await rename(temp, this.file);
       this.delivered = next;
+      this.unconfirmed = uncertain;
     } catch {
-      // Prior Bot API send may have succeeded. Block subsequent sends, not
-      // pretend the dedupe receipt survived an unsuccessful disk write.
+      // Never infer success from a failed or interrupted ledger write.
       this.blocked = true;
       logger.warn({ code: LEDGER_ERROR }, 'signal Telegram ledger persistence failed; worker blocked');
       throw new Error(LEDGER_ERROR);
@@ -479,6 +522,9 @@ export class SignalIntelligenceTelegramSubscriber {
         const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
         if (await this.store.has(alert.dedupeKey, now)) { result.deduped += 1; continue; }
+        if (await this.store.hasUnconfirmed(alert.dedupeKey, now)) {
+          result.failed += 1; continue;
+        }
         result.attempted += 1;
         const sent = await this.deliver(alert);
         if (sent.ok || sent.skipped === 'DUPLICATE') {
@@ -488,7 +534,11 @@ export class SignalIntelligenceTelegramSubscriber {
             result.publicDelivered += 1;
           } else result.deduped += 1;
         } else if (sent.skipped === 'NOT_CONFIGURED') result.skipped += 1;
-        else result.failed += 1;
+        else if (sent.skipped === 'OUTCOME_UNCONFIRMED'
+          || sent.errorCode === 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED') {
+          await this.store.markUnconfirmed(alert.dedupeKey, now);
+          result.failed += 1;
+        } else result.failed += 1;
       }
       return result;
     } catch (error) {
