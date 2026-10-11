@@ -4,6 +4,10 @@ import { getSupabase,getUserSupabase,hasSupabaseServerKey } from '../lib/supabas
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
+  evaluateManualFourMarketPaperClosedCycle,
+  type ManualPaperFourMarketCycleInput,
+} from '../services/manual-four-market-paper-cycle.service';
+import {
   MANUAL_FOUR_MARKET_CONFIRMATION,
   buildManualFourMarketWalletSeeds,
   inspectManualFourMarketWallets,
@@ -11,7 +15,22 @@ import {
   type ManualWalletRole,
 } from '../services/manual-four-market-paper-wallets.service';
 
+type ManualPaperPreviewSelection = Readonly<{
+  market:'domestic_stock'|'us_stock'|'crypto_spot'|'crypto_futures';
+  symbol:string;
+  strategyId:string;
+  candidateId:string;
+  side:'BUY'|'LONG'|'SHORT';
+  leverage:number;
+  requestedNotionalKrw:number;
+}>;
 type ManualFourMarketDeps = {
+  // Trusted owner service must return the *complete* server-readback quote,
+  // strategy/receipt and cost/FX evidence, never a client body or mock PASS.
+  readResearchCycleEvidence:(owner:{id:string;role:ManualWalletRole},
+    selected:ManualPaperPreviewSelection,nowMs:number)
+    =>Promise<ManualPaperFourMarketCycleInput|null>;
+  researchPreviewEnabled:()=>boolean;
   now:()=>Date;
   listSeeds:(request:AuthenticatedRequest,ownerId:string)=>Promise<StoredPaperJournalRecord[]>;
   rlsReady:(request:AuthenticatedRequest)=>Promise<boolean>;
@@ -100,6 +119,97 @@ export function createManualFourMarketWalletRouter(
   });
   const bootstrapEnabled=deps.bootstrapEnabled??(
     ()=>process.env.MANUAL_FOUR_MARKET_PAPER_SEED_BOOTSTRAP_ENABLED==='true');
+  const researchPreviewEnabled=deps.researchPreviewEnabled??(
+    ()=>process.env.MANUAL_FOUR_MARKET_PAPER_RESEARCH_PREVIEW_ENABLED==='true');
+  // Fail closed in the product runtime until an independently certified
+  // public provider+backtest/OOS+cost source is actually wired.
+  const researchReader=deps.readResearchCycleEvidence??(async()=>null);
+
+  // Owner-scoped pure research preview, never a trade execution endpoint.
+  // All economic numbers come from injected SERVER evidence. No client-supplied
+  // quote/FX/cost/RLS/receipt/settlement or self-asserted PASS is accepted.
+  router.post('/paper-trading/manual-four-market/research-cycle-preview',
+    async(req:AuthenticatedRequest,res)=>{
+    res.set('Cache-Control','no-store');
+    const scope=authenticatedOwner(req);
+    if(!scope)return res.status(403).json(fail('CAPABILITY_REQUIRED',
+      '수동모의 연구 미리보기 회원 권한이 없습니다.'));
+    if(!researchPreviewEnabled())return res.status(409).json(fail(
+      'MANUAL_PAPER_RESEARCH_PREVIEW_OFF','연구용 모의거래 미리보기는 현재 비활성화입니다.'));
+    const raw=req.body;
+    const allowed=['market','symbol','strategyId','candidateId','side','leverage','requestedNotionalKrw'];
+    if(Object.keys(req.query).length || !raw || typeof raw!=='object'
+      || Array.isArray(raw) || Object.keys(raw).length!==allowed.length
+      || !Object.keys(raw).every(k=>allowed.includes(k))
+      || Buffer.byteLength(JSON.stringify(raw),'utf8')>2048
+      || !['domestic_stock','us_stock','crypto_spot','crypto_futures'].includes(raw.market)
+      || typeof raw.symbol!=='string'|| !/^[A-Z0-9._-]{2,35}$/u.test(raw.symbol)
+      || typeof raw.strategyId!=='string'|| !/^[A-Za-z0-9:._-]{1,120}$/u.test(raw.strategyId)
+      || typeof raw.candidateId!=='string'|| !/^[A-Za-z0-9:._-]{1,120}$/u.test(raw.candidateId)
+      || !['BUY','LONG','SHORT'].includes(raw.side)
+      || !Number.isInteger(raw.leverage) || raw.leverage<1 || raw.leverage>125
+      || !Number.isFinite(raw.requestedNotionalKrw)
+      || raw.requestedNotionalKrw<=0||raw.requestedNotionalKrw>125_000_000) {
+      return res.status(400).json(fail('MANUAL_PAPER_RESEARCH_SELECTION_INVALID',
+        '시장·종목·수식·방향·레버리지·가상금액을 다시 확인하세요.'));
+    }
+    if(raw.market==='crypto_futures'&&!hasCapability(req.member,'canAccessFutures')){
+      return res.status(403).json(fail('MANUAL_PAPER_FUTURES_CAPABILITY_REQUIRED',
+        '선물모의매매 이용 권한이 없습니다.'));
+    }
+    if(raw.market==='crypto_spot'&&!hasCapability(req.member,'canAccessSpot')){
+      return res.status(403).json(fail('MANUAL_PAPER_SPOT_CAPABILITY_REQUIRED',
+        '현물모의매매 이용 권한이 없습니다.'));
+    }
+    if(raw.market!=='crypto_futures'&&(raw.side!=='BUY'||raw.leverage!==1)){
+      return res.status(400).json(fail('MANUAL_PAPER_NONFUTURES_LONG_ONLY',
+        '주식·코인현물은 레버리지 없이 매수만 허용됩니다.'));
+    }
+    if(raw.market==='crypto_futures'&&!['LONG','SHORT'].includes(raw.side)){
+      return res.status(400).json(fail('MANUAL_PAPER_FUTURES_DIRECTION_INVALID',
+        '모의선물은 LONG 또는 SHORT를 선택해야 합니다.'));
+    }
+    const picked:ManualPaperPreviewSelection={
+      market:raw.market,symbol:raw.symbol,strategyId:raw.strategyId,
+      candidateId:raw.candidateId,side:raw.side,leverage:raw.leverage,
+      requestedNotionalKrw:raw.requestedNotionalKrw,
+    };
+    const at=now().getTime();
+    if(!Number.isSafeInteger(at))return res.status(503).json(fail(
+      'MANUAL_PAPER_SERVER_CLOCK_INVALID','모의거래 시각을 확인할 수 없습니다.'));
+    try{
+      const e=await researchReader(scope,picked,at);
+      if(!e)return res.status(409).json(fail(
+        'MANUAL_PAPER_CERTIFIED_RESEARCH_DATA_REQUIRED',
+        '같은 시점의 서버 시세·전략·수수료·환율 증거가 아직 준비되지 않았습니다.'));
+      const selected=e.selected;
+      const own=selected.ownerId===scope.id&&selected.role===scope.role
+        &&selected.mode==='manual'
+        &&e.nowMs===at
+        &&allowed.every(k=>selected[k as keyof ManualPaperPreviewSelection]
+          ===picked[k as keyof ManualPaperPreviewSelection]);
+      if(!own)return res.status(409).json(fail(
+        'MANUAL_PAPER_EVIDENCE_OWNER_OR_SELECTION_MISMATCH',
+        '현재 회원·종목·수식과 인증된 데이터가 일치하지 않습니다.'));
+      const evaluated=evaluateManualFourMarketPaperClosedCycle(e);
+      if(evaluated.status!=='RESEARCH_SIMULATED_CLOSED'){
+        return res.status(409).json(fail(
+          'MANUAL_PAPER_EVIDENCE_BLOCKED',
+          '모의 연구 거래가 안전성 검사를 통과하지 못했습니다.',
+          {blockers:evaluated.blockers}));
+      }
+      return res.status(200).json(harmless({
+        ok:true,ownerScope:'SELF',result:evaluated,
+        previewOnly:true,realPaperOrderCreated:false,
+        paperLedgerWritten:false,entryOrderSubmitted:false,
+        oosProfitabilityProven:false,
+      }));
+    }catch{
+      return res.status(503).json(fail(
+        'MANUAL_PAPER_EVIDENCE_SOURCE_UNAVAILABLE',
+        '인증된 수동모의매매 근거를 읽지 못했습니다.'));
+    }
+  });
 
   const statusPath='/paper-trading/manual-four-market/status';
   const bootstrapPath='/paper-trading/manual-four-market/bootstrap';
