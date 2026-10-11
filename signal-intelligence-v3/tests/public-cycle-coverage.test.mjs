@@ -382,3 +382,28 @@ test('Bitget V3 public candle batches keep starts under 10/sec; aborted callers 
   assert.equal(sent,0);
   assert.throws(() => pacer.cooldown(Infinity), /COOLDOWN_INVALID/u);
 });
+
+test('fulfilled but data-insufficient source symbols never skip to another page', () => {
+  const healthy = result({
+    dataState:'complete',
+    cards:[{symbol:'BTC',direction:'LONG'}],
+    universe:{totalCount:294,cursor:0,nextCursor:5,source:'upbit-public',partial:false,stale:false},
+    execution:{requestedCount:5,startedCount:5,completedCount:5,providerErrorCount:0,timeoutCount:0,partial:false},
+    failures:[],
+  });
+  assert.equal(classifyPublicCycleLaneStatus(healthy),'CANDIDATES_AVAILABLE');
+  for(const bad of [
+    {...healthy,failures:[{reason:'invalid_data',message:'no valid bars'}]},
+    {...healthy,failures:[{reason:'symbol_mapping',message:'quote not mapped'}]},
+    {...healthy,failures:[{reason:'provider_error',message:'HTTP_429'}]},
+    {...healthy,execution:{...healthy.execution,insufficientDataCount:1}},
+  ]) {
+    assert.equal(classifyPublicCycleLaneStatus(bad),'SEARCH_FAILURE');
+    assert.equal(decidePublicCycleCursor({response:bad,status:'SEARCH_FAILURE',cursor:0}).nextCursor,0);
+  }
+});
+test('KR partial observation cursor also holds on insufficient candle evidence', () => {
+  const bad=result({failures:[{reason:'invalid_data',message:'no candles'}]});
+  assert.equal(classifyPublicCycleLaneStatus(bad),'SEARCH_FAILURE');
+  assert.equal(decidePublicCycleCursor({response:bad,status:'SEARCH_FAILURE',cursor:0}).nextCursor,0);
+});

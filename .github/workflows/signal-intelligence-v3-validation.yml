@@ -139,6 +139,16 @@ jobs:
         run: |
           node .signal-intelligence/public-cycle.mjs | tee "$RUNNER_TEMP/signal-intelligence-live-cycle.log"
           node .signal-intelligence/provider-diagnostic.mjs | tee "$RUNNER_TEMP/signal-intelligence-provider-diagnostic.json"
+          node - <<'NODE' "$RUNNER_TEMP/signal-intelligence-provider-diagnostic.json"
+          const fs=require('node:fs');
+          const d=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const gate=d.releaseReadiness;
+          if (!gate || gate.ready!==false || gate.status!=='BLOCKED') process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Scanner product readiness: BLOCKED (contract tests only)\n\n'
+            + gate.blockers.map(x=>'- '+x+'\n').join('')+'\n');
+          console.log('SCANNER_PRODUCT_NOT_READY '+gate.blockers.join(','));
+          NODE
           node - <<'NODE' "$SIGNAL_INTELLIGENCE_STATE_FILE"
           const fs = require('node:fs');
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));

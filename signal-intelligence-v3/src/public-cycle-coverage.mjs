@@ -196,6 +196,13 @@ export function classifyPublicCycleLaneStatus(response) {
   const universe = response.universe;
   const execution = response.execution;
   if (!universe || !execution) return 'SEARCH_FAILURE';
+  // Fulfilled pool work with a null analyzer result may still mean missing
+  // candle evidence. Never call such a page complete or rotate the cursor.
+  if ((Number.isSafeInteger(execution.insufficientDataCount) && execution.insufficientDataCount > 0)
+    || (Array.isArray(response.failures) && response.failures.some((failure) =>
+      ['invalid_data','symbol_mapping','timeout','provider_error'].includes(failure?.reason)))) {
+    return 'SEARCH_FAILURE';
+  }
   if (INVALID_SOURCE_OUTCOMES.has(response.outcome)
     || response.dataState === 'unavailable'
     || universe.stale === true
