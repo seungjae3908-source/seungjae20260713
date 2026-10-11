@@ -23,6 +23,7 @@ export const TELEGRAM_CODE_ONLY_ALLOWED_FILES = Object.freeze([
   '.github/workflows/telegram-production-code-only-deploy.yml',
   '.github/tests/telegram-production-code-only-deploy.test.mjs',
   'ops/telegram-production-code-only-scope.mjs',
+  'ops/deploy-production.sh',
   'docs/telegram-production-code-only-deploy.md',
 ]);
 const safe = new Set(TELEGRAM_CODE_ONLY_ALLOWED_FILES);
@@ -48,6 +49,7 @@ export function classifyTelegramCodeOnlyDiff(diff) {
     'api-server/src/services/signal-intelligence-telegram-subscriber.service.ts',
     'api-server/src/index.ts',
     '.github/workflows/telegram-production-code-only-deploy.yml',
+    'ops/deploy-production.sh',
   ];
   if (!mustContain.every(name => names.includes(name)))
     return Object.freeze({ ok:false,code:'TELEGRAM_SCOPE_REQUIRED_FILE_ABSENT' });
