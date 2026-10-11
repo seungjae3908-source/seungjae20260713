@@ -27,7 +27,8 @@ const watch={
 function response(symbol,market,dir){
  return {ok:true,market:market==='CRYPTO_SPOT'?'UPBIT_KRW':'BITGET_USDT_FUTURES',
   orderSubmitted:false,exchangeRequestSent:false,dataState:'complete',
-  universe:{totalCount:200,partial:false,stale:false},
+  universe:{totalCount:200,partial:false,stale:false,
+   source:market==='CRYPTO_SPOT'?'upbit-public':'bitget-public'},
   execution:{requestedCount:1,startedCount:1,completedCount:1,
     providerErrorCount:0,timeoutCount:0,partial:false,timedOut:false,
     cancelled:false},
@@ -66,6 +67,8 @@ test('read-only two-market review verifies one real current-roster response each
  assert.equal(out.trustedPublicData,2);
  assert.equal(out.watchSideAgreed,2);
  assert.equal(out.observedPublicHttpRequests,6);
+ assert.equal(out.publicRequestCountProven,true);
+ assert.equal(out.publicRequestCountUnmeasured,0);
  assert.equal(out.telegramMessagesSent,0);
  assert.equal(out.costOosPassProven,false);
  assert.equal(out.skippedCursorSymbols,0);
@@ -89,14 +92,18 @@ test('untrusted, wrong instrument, missing HTTP evidence and network failure are
   enabled:true,nowMs:OBS,scanOne:async()=>{throw Error('sensitive token never return');},
  });
  assert.equal(network.sourceError,2);
+ assert.equal(network.observedPublicHttpRequests,null);
+ assert.equal(network.publicRequestCountProven,false);
+ assert.equal(network.publicRequestCountUnmeasured,2);
  assert.ok(!JSON.stringify(network).includes('sensitive'));
  const fabricated=await runV3OutOfCursorResearch(reviews,{
   enabled:true,nowMs:OBS,scanOne:async row=>({httpRequests:0,response:response(
     row.symbol,row.market,'LONG')}),
  });
  assert.equal(fabricated.sourceError,2);
- assert.equal(fabricated.publicRequestCountProven,true,
-   'false confidence must be represented by blocked source count, not success');
+ assert.equal(fabricated.publicRequestCountProven,false,
+   'missing HTTP proof must not be counted as a proven zero');
+ assert.equal(fabricated.observedPublicHttpRequests,null);
  installV3WithinPageWatchPriority(null);
 });
 test('review is off unless explicitly activated; malformed duplicate/stock shorts fail closed',async()=>{
@@ -129,5 +136,25 @@ test('a watch receipt expires during a long 12-lane scan without any late HTTP c
  assert.equal(out.staleWatchEvidenceSkipped,2);
  assert.equal(out.observedPublicHttpRequests,0);
  assert.equal(out.status,'RESEARCH_SOURCE_PARTIAL');
+ installV3WithinPageWatchPriority(null);
+});
+
+test('extra/mismatched source rows are never misreported as trusted Stage-2 coverage',async()=>{
+ installV3WithinPageWatchPriority(watch);
+ const selected=selectV3OutOfCursorResearch(watch);
+ const out=await runV3OutOfCursorResearch(selected,{
+  enabled:true,nowMs:OBS,
+  scanOne:async row=>{
+   const copy=response(row.symbol,row.market,row.direction==='DOWN'?'SHORT':'LONG');
+   copy.universe.source='last-good-cache';
+   copy.cards.push({...copy.cards[0],symbol:'UNREQUESTED'});
+   return {httpRequests:1,requestCountMeasured:true,response:copy};
+  },
+ });
+ assert.equal(out.trustedPublicData,0);
+ assert.equal(out.dataBlocked,2);
+ assert.equal(out.publicRequestCountProven,true);
+ assert.equal(out.observedPublicHttpRequests,2);
+ assert.equal(out.telegramMessagesSent,0);
  installV3WithinPageWatchPriority(null);
 });
