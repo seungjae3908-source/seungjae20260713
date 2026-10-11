@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bindPublicStockCandleSource, enforcePublicStockRosterCoverage } from '../src/public-stock-candle-binding.mjs';
+import {
+  bindPublicStockCandleSource,
+  enforcePublicStockRosterCoverage,
+  createPublicStockQualityCounter,
+} from '../src/public-stock-candle-binding.mjs';
 import { classifyPublicCycleLaneStatus } from '../src/public-cycle-coverage.mjs';
 
 const at=Date.parse('2026-10-11T05:00:00.000Z');
@@ -75,4 +79,31 @@ test('known KRX public-roster exclusions cannot silently become complete coverag
   assert.throws(()=>enforcePublicStockRosterCoverage(response,{
     totalCount:4010,rawTotalCount:3999,explainedExcludedCount:1,
   }),/EVIDENCE_INCONSISTENT/);
+});
+
+test('same-cycle quality diagnostics keep only safe cause counts',()=>{
+  const quality=createPublicStockQualityCounter();
+  quality.observe({state:'DATA_UNTRUSTED',
+    symbol:'CONFIDENTIAL_INSTRUMENT',candles:[{secret:'NEVER_LOG_THIS_CANDLE'}],
+    issues:[{code:'STALE_TIMESTAMP',severity:'blocking',message:'RAW_PROVIDER_DETAILS'},
+      {code:'MISSING_CANDLE',severity:'warning',message:'PRIVATE_SOURCE_DETAILS'},
+      {code:'NOT_RECOGNIZED',severity:'blocking',message:'PRIVATE_UNKNOWN'}]});
+  quality.observe({state:'DEGRADED',issues:[
+    {code:'STALE_TIMESTAMP',severity:'warning',message:'PRIVATE_DEBUG'}]});
+  quality.observe({state:'TRUSTED',issues:[]});
+  quality.observeError();
+  const snapshot=quality.snapshot();
+  assert.deepEqual(snapshot.stateCounts,
+    {TRUSTED:1,DEGRADED:1,DATA_UNTRUSTED:1});
+  assert.equal(snapshot.inspectedCount,3);
+  assert.equal(snapshot.evaluationErrorCount,1);
+  assert.equal(snapshot.issueCounts['STALE_TIMESTAMP:blocking'],1);
+  assert.equal(snapshot.issueCounts['STALE_TIMESTAMP:warning'],1);
+  assert.equal(snapshot.issueCounts['MISSING_CANDLE:warning'],1);
+  assert.equal(snapshot.providerRequestsAdded,0);
+  assert.equal(snapshot.economicAuthority,'NONE');
+  for(const value of ['CONFIDENTIAL_INSTRUMENT','NEVER_LOG_THIS_CANDLE',
+    'RAW_PROVIDER_DETAILS','PRIVATE_DEBUG','PRIVATE_SOURCE_DETAILS']) {
+    assert.equal(JSON.stringify(snapshot).includes(value),false);
+  }
 });
