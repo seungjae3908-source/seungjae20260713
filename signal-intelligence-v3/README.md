@@ -228,3 +228,18 @@ Both fresh/cached public-source metadata now marks a known
 raw-vs-eligible discrepancy as `partial:true`, including inconsistent
 counts. This does **not** expand the covered roster or grant any order
 or alert authority. Verified source-size equality retains `partial:false`.
+
+## Draft: distinguish KRX product finder lineage from confirmed ETF type
+
+KRX officially distinguishes ETF, ETN and ELW security products; the
+existing app KRX provider calls a generic securities-product finder
+and uses `assetType='ETF'` as a fallback if the name has no recognizable
+marker. Therefore the earlier 2,730 `ETF` classification is an
+**app heuristic**, not an exchange-confirmed count of genuine ETFs.
+The V3 public exclusion audit now separately counts source-finder
+lineage (stock finder vs securities-product finder vs unknown)
+and exposes explicit `instrumentClassificationVerified=false`,
+`securitiesProductSubtypeVerified=false` without logging any
+ticker or name. Trading/Paper/Telegram candidate gates are unchanged
+and full-roster coverage remains blocked pending official subtype
+metadata and public/private provider permissions.
