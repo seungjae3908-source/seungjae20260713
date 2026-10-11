@@ -3,6 +3,7 @@ import { link, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/pro
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { deriveResearchTimeframesFromMinuteSourceV1 as derive } from "./research-minute-to-multiframe-v1.js";
+import { resolveSelectedResearchWindowV1 } from "./research-selected-window-v1.js";
 
 /**
  * OFFLINE private, immutable 1-minute source archive. A session is indexed by
@@ -33,6 +34,7 @@ const safety = values => Object.freeze({
   trueMarketWideRecall: null, actualFillCount: null, netProfitPct: null,
   independentPITAndSourceAuthentication: false,
   wholeHistoricMarketPopulationVerified: false,
+  fullMarketOpportunityDenominatorVerified: false,
   profitabilityProven: false, executionAuthority: "NONE",
   liveTrading: false, autoTrading: false, realOrders: false,
   ...values,
@@ -312,5 +314,125 @@ export async function deriveArchivedResearchTimeframesV1({
     // A derived candle is NOT evidence of an original contemporaneous signal.
     originalScannerEarlyDiscoveryVerified: false,
     executionAuthority: "NONE", profitabilityProven: false,
+  });
+}
+
+
+
+/**
+ * Enumerate a bounded page of sessions ALREADY stored under an immutable
+ * PRIVATE 1m archive. A caller never supplies a pathname for a session.
+ * Symbol identity is SHA-256 addressed as the existing archive writer does.
+ * This is a read-only retrospective inventory, never a data-provider call,
+ * an official exchange calendar, an original-time signal or an OOS PASS.
+ *
+ * Stocks filter on EXCHANGE LOCAL date (KR premarket may begin on the
+ * preceding UTC date, US DST remains America/New_York). Returning no
+ * session is BLOCKED_DATA rather than proof that no trade was possible.
+ */
+export async function listArchivedResearchMinuteSessionsV1({
+  root, market, symbol, researchWindow,
+  cursorStartMs = null, maxSessions = 16,
+} = {}) {
+  const base=absoluteRoot(root);
+  validSelection({ market, symbol, sessionStartMs: 60_000 });
+  const period=resolveSelectedResearchWindowV1(researchWindow);
+  if(!Number.isSafeInteger(maxSessions)||maxSessions<1||maxSessions>31
+    ||(cursorStartMs!==null&&(!Number.isSafeInteger(cursorStartMs)
+      ||cursorStartMs<=0||cursorStartMs%60_000!==0)))
+    throw new TypeError("MINUTE_ARCHIVE_SESSION_INDEX_PAGE_INVALID");
+  const zone=market==="KR_STOCK"?"Asia/Seoul":
+    market==="US_STOCK"?"America/New_York":"UTC";
+  const localDate=ms=>{
+    const parts=Object.fromEntries(
+      new Intl.DateTimeFormat("en-US",{timeZone:zone,
+        year:"numeric",month:"2-digit",day:"2-digit"})
+        .formatToParts(new Date(ms)).map(part=>[part.type,part.value]));
+    return parts.year+"-"+parts.month+"-"+parts.day;
+  };
+  await checkAncestorsNoSymlinks(base);
+  const symbolParent=join(base,"minute-sessions-v1",market,hash(symbol));
+  try{
+    await privateDirectory(base,false);
+    let current=base;
+    for(const piece of ["minute-sessions-v1",market,hash(symbol)]){
+      current=join(current,piece);
+      await privateDirectory(current,false);
+    }
+  }catch(error){
+    if(error?.code==="ENOENT")
+      return safety({status:"BLOCKED_DATA",reason:"PRIVATE_ORIGINAL_SESSION_INDEX_NOT_FOUND",
+        market,symbol,selectedStartDate:period.startDate,
+        selectedEndDate:period.endDate,sourceSessions:[],
+        nextCursorStartMs:null,sessionCount:null,
+        historicalMarketSourceComplete:false});
+    throw error;
+  }
+  const names=await readdir(symbolParent,{withFileTypes:true});
+  if(names.length>50_000)
+    throw new TypeError("MINUTE_ARCHIVE_SESSION_INDEX_TOO_LARGE");
+  const included=[];
+  for(const entry of names){
+    if(!entry.isDirectory()||!/^[1-9][0-9]{9,15}$/.test(entry.name))
+      throw new TypeError("MINUTE_ARCHIVE_SESSION_INDEX_DIRECTORY_INVALID");
+    const start=Number(entry.name);
+    if(!Number.isSafeInteger(start)||start%60_000!==0)
+      throw new TypeError("MINUTE_ARCHIVE_SESSION_INDEX_TIMESTAMP_INVALID");
+    const local=localDate(start);
+    if(local>=period.startDate&&local<=period.endDate
+      &&(cursorStartMs==null||start>=cursorStartMs))
+      included.push({start,date:local});
+  }
+  included.sort((a,b)=>a.start-b.start);
+  if(included.length===0)
+    return safety({status:"BLOCKED_DATA",reason:"SELECTED_PRIVATE_ORIGINAL_SESSIONS_ABSENT",
+      market,symbol,selectedStartDate:period.startDate,
+      selectedEndDate:period.endDate,sourceSessions:[],
+      nextCursorStartMs:null,sessionCount:null,
+      historicalMarketSourceComplete:false});
+  const page=included.slice(0,maxSessions);
+  const sourceSessions=[];
+  for(const {start,date} of page){
+    const observed=await inspectArchivedResearchMinuteSessionV1({
+      root:base,market,symbol,sessionStartMs:start,
+    });
+    if(observed.status==="BLOCKED_DATA"
+      ||observed.sourceMinuteIntegrityVerified!==true
+      ||observed.archivedRevisionCount!==1
+      ||!Number.isSafeInteger(observed.archiveSessionEndMs)
+      ||observed.archiveSessionEndMs<=start
+      ||!["PREMARKET","REGULAR","AFTERMARKET","UTC_24H"]
+        .includes(observed.sessionKind)
+      ||observed.sessionTimeZone!==zone
+      ||!SHA.test(observed.archiveSourceDigestSha256??""))
+      return safety({status:"BLOCKED_DATA",
+        reason:"PRIVATE_ORIGINAL_SESSION_REVISION_OR_INTEGRITY_UNVERIFIED",
+        market,symbol,selectedStartDate:period.startDate,
+        selectedEndDate:period.endDate,
+        blockedSessionStartMs:start,
+        blockedArchiveReason:String(observed.reason??observed.status).slice(0,100),
+        sourceSessions:[],nextCursorStartMs:null,sessionCount:null,
+        historicalMarketSourceComplete:false});
+    sourceSessions.push(Object.freeze({
+      market,symbol,date,startMs:start,endMs:observed.archiveSessionEndMs,
+      kind:observed.sessionKind,zone:observed.sessionTimeZone,
+      sourceDigestSha256:observed.archiveSourceDigestSha256,
+      nativeMinuteSlotInventoryComplete:
+        observed.nativeMinuteSlotInventoryComplete===true,
+      originalScannerAsOfEvidenceVerified:false,
+    }));
+  }
+  const next=included[maxSessions]?.start??null;
+  return safety({status:"LOCAL_ORIGINAL_SESSION_INDEX_PAGE_ONLY",
+    reason:"SELF_ATTESTED_RETROSPECTIVE_ARCHIVE_INDEX_NOT_FULL_MARKET_PROOF",
+    market,symbol,selectedStartDate:period.startDate,
+    selectedEndDate:period.endDate,
+    sourceSessions:Object.freeze(sourceSessions),
+    sessionCount:sourceSessions.length,
+    nextCursorStartMs:next,
+    selectedPrivateOriginalSessionsAcrossPeriodIndependentlyVerified:false,
+    historicalMarketSourceComplete:false,
+    sourceRowsNotProofOfNoTradeGap:true,
+    providerGETCount:0,financialMutationCount:0,
   });
 }

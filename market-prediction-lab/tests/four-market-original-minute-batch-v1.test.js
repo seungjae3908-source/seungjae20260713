@@ -120,6 +120,14 @@ test("full PIT page -> immutable source -> modeled replay -> T-minus prices in f
      assert.equal(done.paperAdmissionAllowed,false,market);
      assert.equal(done.realOrders,false,market);
      assert.equal(done.providerGETCount,0,market);
+     const automaticIndex=await batch({...cfg,
+       sourceSessions:[],discoverArchivedSessions:true});
+     assert.equal(automaticIndex.status,"SOURCE_ONLY_REPLAY_PAGE_INSPECTED",market);
+     assert.equal(automaticIndex.inspectedSourceTasks,2,market);
+     assert.equal(automaticIndex.blockedSourceTasks,0,market);
+     assert.equal(automaticIndex.sourceOnlyEventLabels,6,market);
+     assert.equal(automaticIndex.paperAdmissionAllowed,false,market);
+     assert.equal(automaticIndex.providerGETCount,0,market);
    }
  }finally{rmSync(folder,{recursive:true,force:true});}
 });
@@ -142,6 +150,8 @@ test("malformed duplicated or mismatched source session index and cash SHORT fai
  try{
    const cfg=input("KR_STOCK",folder);
    await assert.rejects(()=>batch({...cfg,direction:"SHORT"}),
+     /ORIGINAL_BATCH_SCOPE_OR_SIDE_INVALID/);
+   await assert.rejects(()=>batch({...cfg,discoverArchivedSessions:true}),
      /ORIGINAL_BATCH_SCOPE_OR_SIDE_INVALID/);
    await assert.rejects(()=>batch({...cfg,sourceSessions:[
      cfg.sourceSessions[0],cfg.sourceSessions[0],
