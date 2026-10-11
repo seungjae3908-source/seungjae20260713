@@ -3,6 +3,7 @@ import { useSearch } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { BacktestPaperCandidatePreview } from '@/components/backtest-paper-candidate-preview';
 import AutoTradingPage from '@/pages/auto-trading';
+import {ManualFourMarketWalletPanel} from '@/components/manual-four-market-wallet-panel';
 import { readBacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 
 export default function PaperTradingPage() {
@@ -20,5 +21,9 @@ export default function PaperTradingPage() {
     );
   }
 
-  return <AutoTradingPage initialMode="paper" />;
+  return <div className="flex h-full min-h-0 flex-col"
+    data-testid="manual-paper-four-market-workspace">
+    <ManualFourMarketWalletPanel />
+    <div className="min-h-0 flex-1"><AutoTradingPage initialMode="paper" /></div>
+  </div>;
 }
