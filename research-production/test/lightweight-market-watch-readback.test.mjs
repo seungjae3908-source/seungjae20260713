@@ -8,6 +8,7 @@ import {
   WATCH_READBACK_CONTRACT,
   summarizeLightweightMarketWatch,
 } from '../src/lightweight-market-watch-readback.mjs';
+import { normalizeStockFeed } from '../src/lightweight-market-watch.mjs';
 
 const SHA = 'a'.repeat(40);
 const NOW = Date.parse('2026-10-09T12:00:00.000Z');
@@ -62,6 +63,60 @@ test('missing and valid partial market discovery never invent 24h research or pr
   assert.equal(status.profitabilityProven, false);
   assert.equal(status.executionAuthority, 'NONE');
   assert.equal(JSON.stringify(status).includes('market-watch-input'), false);
+});
+
+test('a valid stock source label survives producer to sanitized status without private exposure', () => {
+  const stock = normalizeStockFeed({
+    schemaVersion: 'research-stock-public-snapshot-v1',
+    market: 'KR_STOCK',
+    source: 'KRX_PUBLIC_V1',
+    asOf: new Date(NOW - 2_000).toISOString(),
+    completeUniverse: false,
+    quotes: [{
+      symbol: '005930', price: 100,
+      turnover24h: 2_000_000_000, change24hPercent: 1.2,
+      asOf: new Date(NOW - 3_000).toISOString(),
+    }],
+  }, 'KR_STOCK', NOW);
+  const status = evidence();
+  status.markets[0] = {
+    market: stock.market, source: stock.source, status: stock.status,
+    listedCount: stock.listedCount,
+    observedCount: stock.quotes.length, newCandidates: 0,
+    executionAuthority: 'NONE',
+  };
+  const readback = summarizeLightweightMarketWatch(status, NOW, SHA);
+  assert.equal(readback.status, 'PARTIAL');
+  assert.equal(readback.markets[0].source, 'KRX_PUBLIC_V1');
+  assert.equal(readback.markets[0].status, 'PARTIAL_UNIVERSE');
+  assert.equal(readback.marketCoverageCount, 2);
+  assert.equal(readback.continuous24hProven, false);
+  assert.equal(readback.paperExecutionProven, false);
+  assert.equal(readback.executionAuthority, 'NONE');
+  assert.equal(JSON.stringify(readback).includes('005930'), false);
+});
+
+test('self-reported KR complete universe stays PARTIAL through sanitized readback', () => {
+  const stock = normalizeStockFeed({
+    schemaVersion: 'research-stock-public-snapshot-v1',
+    market: 'KR_STOCK', source: 'KR_SOURCE_TEST',
+    asOf: new Date(NOW - 2_000).toISOString(),
+    completeUniverse: true,
+    quotes: [{ symbol: '005930', price: 100, turnover24h: 2e9,
+      change24hPercent: 1.2, asOf: new Date(NOW - 3_000).toISOString() }],
+  }, 'KR_STOCK', NOW);
+  assert.equal(stock.status, 'PARTIAL_UNIVERSE');
+  const state = evidence();
+  state.markets[0] = {
+    market: stock.market, source: stock.source, status: stock.status,
+    listedCount: stock.listedCount, observedCount: stock.quotes.length,
+    newCandidates: 0, executionAuthority: 'NONE',
+  };
+  const result = summarizeLightweightMarketWatch(state, NOW, SHA);
+  assert.equal(result.status, 'PARTIAL');
+  assert.equal(result.marketCoverageCount, 2);
+  assert.equal(result.markets[0].status, 'PARTIAL_UNIVERSE');
+  assert.equal(result.executionAuthority, 'NONE');
 });
 
 test('stale and future state do not show current 24-hour observation', () => {
@@ -202,4 +257,42 @@ test('local status CLI is missing-safe and does not read from the network', asyn
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test('read-only status projects exact capped counts and rejects forged overflow evidence', () => {
+  const raw = evidence();
+  raw.markets = raw.markets.map(row => ({
+    ...row, sourceCappedCount: 0,
+    qualifyingCandidateCount: row.newCandidates,
+    candidateCappedCount: 0,
+  }));
+  raw.markets[3] = {
+    ...raw.markets[3], status: 'PARTIAL_TICKERS',
+    listedCount: 8001, observedCount: 8000, newCandidates: 12,
+    sourceCappedCount: 1, qualifyingCandidateCount: 13,
+    candidateCappedCount: 1,
+  };
+  raw.newCandidateCount = 14;
+  const receipt = summarizeLightweightMarketWatch(raw, NOW, SHA);
+  assert.equal(receipt.status, 'PARTIAL');
+  assert.equal(receipt.markets[3].sourceCappedCount, 1);
+  assert.equal(receipt.markets[3].qualifyingCandidateCount, 13);
+  assert.equal(receipt.markets[3].candidateCappedCount, 1);
+  assert.equal(receipt.continuous24hProven, false);
+  assert.equal(receipt.paperExecutionProven, false);
+  assert.equal(receipt.executionAuthority, 'NONE');
+  assert.equal(JSON.stringify(receipt).includes('BTCUSDT'), false);
+  const forged = structuredClone(raw);
+  forged.markets[3].candidateCappedCount = 100;
+  assert.equal(summarizeLightweightMarketWatch(forged, NOW, SHA).status, 'INVALID');
+  forged.markets[3].candidateCappedCount = 1;
+  forged.markets[3].status = 'READY';
+  assert.equal(summarizeLightweightMarketWatch(forged, NOW, SHA).status, 'INVALID');
+  const incomplete = structuredClone(raw);
+  delete incomplete.markets[3].sourceCappedCount;
+  assert.equal(summarizeLightweightMarketWatch(incomplete, NOW, SHA).status, 'INVALID');
+  const old = summarizeLightweightMarketWatch(evidence(), NOW, SHA);
+  assert.equal(old.markets[2].sourceCappedCount, null);
+  assert.equal(old.markets[2].candidateCappedCount, null);
 });

@@ -19,7 +19,7 @@ installation scripts enable or start it.
 
 The continuous scanner is **stage 1 discovery only**:
 - Upbit: all eligible KRW markets advertised by the public market/ticker APIs.
-- Bitget: public USDT-futures ticker aggregate (not proof of historical delistings).
+- Bitget: two bounded READ-ONLY public V2 endpoints per cycle, current USDT-futures contracts plus all tickers. READY requires fresh source parity for each current non-off contract, not just tickers self-matching. Historical listing/delisting is NOT certified.
 - KR/US stocks: strictly optional, fresh public snapshot files under the research
   state root. When not connected, each stock market is explicitly `BLOCKED`.
 - Watch: two consecutive fresh snapshots from the **same source**, >=0.7% price movement,
@@ -29,7 +29,7 @@ The continuous scanner is **stage 1 discovery only**:
   model PASS, future signal, approved trading strategy, Paper or Live authority.
   Downward spot/stock movements are *observations*, never SHORT instructions.
 - A missing/stale source is a visible gap; zero activity is not claimed as success.
-- A subset of usable Bitget tickers is explicitly PARTIAL_TICKERS, not READY.
+- Missing/stale/extra Bitget quotes produce PARTIAL_TICKERS; invalid rosters BLOCKED, same-timestamp contradictory prices rejected. Current-contract source parity is NOT historical PIT, independent 24-hour uptime, executable fills or profit proof.
 - Public HTTP JSON is streamed with a 4 MB decompressed payload ceiling.
 - The observation time is measured after each collection cycle, not before HTTP requests.
 - Daily cycle/discovery counters are **diagnostic only**, not 24-hour uptime proof.
@@ -62,8 +62,23 @@ hard link. Example (the numbers are **illustrative**, not actual quotes):
 }
 ```
 
+The `source` identifier must be 3–64 ASCII characters drawn only from
+letters, digits, `_`, or `-`. It cannot be the reserved value `NONE`, a
+filesystem path, or a dotted identifier such as `KRX.V1`. Those names are
+rejected before publication because the bounded Node/Python Research
+Dashboard readers use the same source-ID allowlist. A rejected input becomes
+an explicit `BLOCKED` market source; it must not invalidate the whole
+four-market dashboard after publication. This is a **format contract**, not
+independent evidence of a market-data license, complete coverage, or source
+authenticity. Publisher identities must still be separately verified before
+claiming usable KR/US stock collection.
+
 `completeUniverse=true` may only be set when the real provider feed supplies
-a verifiable, complete current eligible universe. Historical PIT universe,
+a verifiable, complete current eligible universe. However the field is
+self-reported: the current watcher **always assigns PARTIAL_UNIVERSE to stock
+snapshots** until an independently audited and licensed provider/roster proof
+path is implemented. One supplied ticker cannot turn the whole stock market
+READY. Cross-market KR/US symbol shapes are also validated. Historical PIT universe,
 corporate actions, pre/post-market coverage, subscribed real-time market
 data and all-market streaming remain **unproven**. No fabricated feed is written
 by this implementation.
@@ -120,6 +135,108 @@ result, OOS/walk-forward PASS, or proof of monthly 20%-100% performance.
   implicitly qualify a FormulaCandidate, AI review, Paper order or trading signal.
   This Draft does not create any queue consumer, change existing signal gates,
   or activate the systemd worker.
+
+## Read-only KR/US input preflight (Draft; no market-watch start)
+
+When a separately approved Research checkout contains this tool, inspect the
+**optional** local stock snapshot files without starting systemd or connecting
+to a brokerage/market-data API:
+
+~~~bash
+sudo -u investment-research env \
+  RESEARCH_STATE_ROOT=/var/lib/investment-research-production \
+  node /opt/investment-research/current/research-production/bin/stock-source-preflight.mjs
+~~~
+
+This reads only KR_STOCK.json and US_STOCK.json with no-follow file checks,
+a 4 MB bound, matching service ownership, safe permissions and exact
+timestamp/source-ID/schema validation. It emits only aggregate quote counts
+and a bounded source identifier, not raw tickers/prices or any credential.
+MISSING, STALE and INVALID are distinct; an absent directory is INCOMPLETE,
+not evidence that a market contains zero stocks. No files are created.
+FORMAT_VALID_ONLY means **format/freshness** passed for both local inputs.
+Even if a feed asserts completeUniverse=true, the report explicitly leaves
+independentProviderVerified, marketDataRightsVerified, fullUniverseVerified,
+continuous24hProven and executionAuthority unproven/NONE. This is not a
+substitute for licensed KR/US feed contracts or an independent Vultr audit.
+No currently running host is claimed to have executed this Draft-only CLI.
+
+## Bounded public-watch selection and opportunity overflow (Draft)
+
+The existing 2-vCPU watcher still processes at most **8,000 distinct fresh
+quotes per market** and emits at most **12 provisional candidates per market
+per two-minute cycle**. The caps protect the app server and were NOT raised.
+
+- Within a capped market: hold the top **6,000** high-turnover quotes, plus
+  **1,000 lexically selected source symbols** in the current 30-minute window
+  and **1,000 from the previous window** for overlap. Fill partial tail windows
+  without exceeding 8,000, so samples outside the former permanent top 8k
+  can eventually receive two independent time-ordered observations.
+  The window is UTC-time deterministic and does **not** rank by same-cycle
+  price increase. No extra HTTP calls or larger per-cycle state are required.
+- `sourceCappedCount`: valid distinct supplied symbols not inspected **in
+  this cycle** after the 8k bound; these still may remain unobserved for long
+  periods. It is NOT a measured missed-trade count or a promise of 2-minute
+  complete-universe capture. Source-omitted/delisted symbols remain UNKNOWN.
+- `qualifyingCandidateCount`: among the retained symbols, the number
+  that pass comparable-timestamp, price, liquidity and cooldown gates.
+- `candidateCappedCount`: such qualified provisional candidates
+  beyond the top 12 that are NOT published to the ordinary event log.
+  They do not become signals, Paper admissions, fills or realized profit.
+- New **private capped-candidate audit**: at most 32 detailed additional
+  candidates per market/cycle are recorded in a separate 0600 JSONL under
+  `watch/capped/YYYY-MM-DD.jsonl`, with a full capped-identity SHA-256
+  digest and explicit count of any further *undetailed* candidates. This
+  avoids the former loss of all identities above position 12 while keeping
+  the output/forward limit at 12. The daily capped log has the same 64 MiB,
+  2 MiB/append and 16 KiB/row fail-closed limits as existing event logs.
+  One record per affected market/cycle, maximum 4; no raw feed, account
+  keys, public API export, alerts or Paper signal authority.
+- The aggregate capacity census now accounts for the capped category.
+  If a capped log is unsafe or full, the cycle fails without advancing its
+  cursor; duplicate audit eventIds from crash retries must be deduplicated
+  by a future read-only consumer. Zero archived capped records is not proof
+  that every eligible opportunity was emitted; records beyond 32 are
+  **counted and integrity-hashed, not individually recoverable**.
+  No new execution authority or retention/deletion process is enabled.
+- A source that reports READY but loses quotes to de-duplication or 8k
+  truncation is relabeled PARTIAL_TICKERS. Stock input remains
+  PARTIAL_UNIVERSE until independently authenticated licensed coverage.
+- The read-only local `lightweight-market-watch-status.mjs` validates
+  counters and returns UNKNOWN (null) for older release snapshots.
+  Unified local preflight returns `watchedSourceCappedThisCycle` and
+  `watchedCandidatesCappedThisCycle`; nonzero figures are blockers.
+  These counts are **per cycle**, not unique daily false negatives.
+
+The live PC Research Center has not been modified to display these fields.
+Rotating coverage is inherently **partial and delayed**: a 30,000-name input
+has 24 rotating 1,000-name tail cohorts, and observing every supplied name
+may take up to 12 hours under a stable source roster. Tail 20-minute studies
+can still fail when cohorts change; time-varying roster/turnover may extend
+or reset coverage. No turnover-gap count is proof of false-negative recall.
+At two-minute resolution intermediate spikes may still be missed. Complete
+historical PIT universe, independent originals, one-minute prices, sharding,
+order feasibility/OOS/full costs and 24-hour host attestation remain pending.
+No Paper, Live, automation or profitability permission is created.
+## Four-source read-only operational preflight
+
+The existing \`lightweight-market-watch-preflight.mjs\` now invokes the KR/US
+stock-source input preflight as its fourth **read-only local** diagnostic,
+alongside watcher status, cadence and disk capacity. Its summary includes
+\`checks.stockSources\` and only bounded aggregate \`stockInputMarkets\`
+(status/observedCount/listedCount, **not raw symbols or prices**).
+
+- Missing/stale stock files are \`INCOMPLETE\` with
+  \`STOCKSOURCES_NOT_CONNECTED\`.
+- Unsafe or malformed input is \`INVALID\`, not silently ignored.
+- Even if both local files are recent and parse correctly,
+  \`FORMAT_VALID_ONLY\` generates \`STOCKSOURCES_UPSTREAM_UNVERIFIED\`.
+  Independently licensed/authorized vendor identity, market entitlements,
+  full-universe proof and 24-hour host observations remain **unverified**.
+- The preflight never publishes stock snapshots, creates directories,
+  calls a provider, starts a systemd unit, or issues an order.
+  The command is available only after a separately approved deployment
+  of the exact Draft code; no current Vultr audit is asserted.
 
 ## Safe preflight and required follow-on steps
 
@@ -224,7 +341,7 @@ sudo -u investment-research env \
 ## Bounded durable local writes (Draft — worker remains OFF)
 
 The watch writer now enforces **64 MiB per UTC day and log category** for
-`watch/events` and `watch/outcomes`, with a 2 MiB append cap, a 16 KiB
+`watch/events`, `watch/outcomes` and `watch/capped`, with a 2 MiB append cap, a 16 KiB
 JSONL-row cap and a maximum of 1,024 rows per append. The existing UTC daily
 cohort reader uses the same daily file and per-line limits. Unsafe symbolic
 links, hard links, permissive file modes and oversized logs fail closed rather
