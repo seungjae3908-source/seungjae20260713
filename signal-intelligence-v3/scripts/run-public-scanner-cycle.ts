@@ -15,6 +15,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizeV3EconomicReadiness } from '../src/public-v3-readiness-diagnostics.mjs';
+import { summarizeV3RawCryptoQuality } from '../src/public-v3-crypto-quality-diagnostic.mjs';
 import {readV3StageOneWatch} from '../src/public-watch-v3-readonly.mjs';
 import {installV3WithinPageWatchPriority,v3WithinPagePriorityDiagnostic,
   selectV3OutOfCursorResearch} from '../src/public-watch-v3-priority.mjs';
@@ -405,9 +406,13 @@ async function scanCryptoRaw(lane, cursor) {
     .filter((card) => lane.scannerMarket === 'spot'
       ? card.direction === 'LONG'
       : card.direction === 'LONG' || card.direction === 'SHORT');
+  const publicCryptoQualityDiagnostic=summarizeV3RawCryptoQuality(scanned,{
+    rankedCards:cards.length,
+  });
   return withScannerCanonicalActions({
     ...aligned,
     cards,
+    publicCryptoQualityDiagnostic,
     execution: {
       ...aligned.execution,
       hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
@@ -588,6 +593,7 @@ async function main() {
         // Diagnostic-only, low-cardinality quality issues for the exact scan.
         // Its values do not grant a candidate, PASS, cursor or order authority.
         publicStockQualityDiagnostic: response.publicStockQualityDiagnostic ?? null,
+        publicCryptoQualityDiagnostic:response.publicCryptoQualityDiagnostic ?? null,
         // Diagnostic-only: distinguish regular hours vs other gap candidates.
         // This does NOT waive MISSING_CANDLE or create a verified signal.
         publicStockSessionDiagnostic: response.publicStockSessionDiagnostic ?? null,
