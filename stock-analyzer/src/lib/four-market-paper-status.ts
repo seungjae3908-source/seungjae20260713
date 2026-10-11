@@ -12,6 +12,7 @@ export type FourPaperMarketReadback = Readonly<{
   operatingCapitalKrw: number | null;
   reserveKrw: number | null;
   dailyLosingTrades: number | null;
+  settledTrades: number | null;
   blockers: readonly string[];
 }>;
 export type FourPaperReadOnlyStatus = Readonly<{
@@ -61,18 +62,39 @@ export function parseFourPaperReadOnlyStatus(raw: unknown): FourPaperReadOnlySta
       || !safeCodes(lane.blockers)) {
       throw new Error('PAPER_FOUR_MARKET_INVALID_LANE_' + key);
     }
+    // Four-market wallet readiness is independent from settlement readiness.
+    // A missing wallet or RLS guard can never authorize a new Paper entry.
+    if ((!raw.ready && lane.settlementReady) ||
+      (lane.newEntriesAllowed && (!raw.ready || !raw.rlsGuardReady || !lane.settlementReady))) {
+      throw new Error('PAPER_FOUR_MARKET_UNVERIFIED_ADMISSION_' + key);
+    }
     if (lane.settlementReady === true) {
       if (!safeAmount(lane.operatingCapitalKrw)
         || !safeAmount(lane.reserveKrw)
         || !Number.isSafeInteger(lane.dailyLosingTrades)
-        || Number(lane.dailyLosingTrades) < 0) {
+        || Number(lane.dailyLosingTrades) < 0
+        || !Number.isSafeInteger(lane.settledTrades)
+        || Number(lane.settledTrades) < 0
+        || lane.blockers.length > 0
+        || (lane.newEntriesAllowed && Number(lane.dailyLosingTrades) >= 5)) {
         throw new Error('PAPER_FOUR_MARKET_UNVERIFIED_EQUITY_' + key);
       }
     } else if (lane.operatingCapitalKrw !== null || lane.reserveKrw !== null
-      || lane.dailyLosingTrades !== null || lane.newEntriesAllowed !== false) {
+      || lane.dailyLosingTrades !== null || lane.settledTrades !== null
+      || lane.newEntriesAllowed !== false) {
       // UNKNOWN is never a provably zero loss, settled reserve, or usable cash.
       throw new Error('PAPER_FOUR_MARKET_UNKNOWN_BALANCE_' + key);
     }
   }
   return raw as unknown as FourPaperReadOnlyStatus;
+}
+
+/** Wallet existence, settlement evidence and entry permission are distinct. */
+export function summarizeFourPaperReadOnlyStatus(status: FourPaperReadOnlyStatus): string {
+  if (!status.rlsGuardReady) return '회원 DB 보호 미적용';
+  if (!status.ready) return '모의계좌·이력 준비 필요';
+  const markets = PAPER_FOUR_MARKET_KEYS.map(({key}) => status.marketCapital[key]);
+  if (markets.some(market => !market.settlementReady)) return '계좌 확인 · 일부 시장 정산 미확인';
+  if (markets.some(market => !market.newEntriesAllowed)) return '정산 확인 · 일부 시장 신규진입 차단';
+  return '4시장 계좌·정산·진입 검증됨';
 }
