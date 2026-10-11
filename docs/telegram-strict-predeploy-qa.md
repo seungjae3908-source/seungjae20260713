@@ -264,3 +264,19 @@ now emits only fixed `TELEGRAM_BRIEF_TIMEOUT` or
 containing a private URL/token and verify that the worker still sends
 only the safely generated mock fallback. No production send/deploy,
 DB update or trading authority is introduced.
+
+## Member-watchlist personal digest acceptance counted correctly (Telegram Draft)
+
+When a recipient's Telegram alert policy is `BATCHED`,
+`deliverPersonalTelegramAlert()` persists the digest item and returns
+`policy.decision.action=BATCHED` with `deliveryQueued=true`.
+The member-watchlist producer previously treated *every* non-IMMEDIATE
+action as `skipped`, even when the digest outbox had durably accepted
+the event. This made successful buffered personal alerts invisible to
+the Telegram-only operations counters and falsely looked like an
+unrouted signal. The producer now counts a durably accepted BATCHED
+digest as **`queued`**, and never as a direct `delivered` send. A
+rejected digest admission remains `skipped`; missing admission proof
+remains `failed`. `SUPPRESSED` continues to be skipped.
+Mock regression tests exercise both accepted and rejected digest
+admissions without any live Telegram send, real DB insert or order.
