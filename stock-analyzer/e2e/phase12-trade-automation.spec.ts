@@ -55,9 +55,10 @@ for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/__phase12-trade-automation-e2e');
 
-    await expect(page.getByRole('heading', { name: '매매', level: 1 })).toBeVisible();
-    await expect(page.getByTestId('trading-mode-auto')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('trading-mode-paper')).toContainText('모의매매');
+    await expect(page.getByRole('heading', { name: '자동매매', level: 1 })).toBeVisible();
+    await expect(page.getByTestId('trading-mode-auto')).toHaveCount(0);
+    await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
+    await expect(page.getByTestId('trading-market-select')).toBeVisible();
 
     const safetySummary = page.getByTestId('auto-trading-safety-summary');
     await expect(safetySummary).toContainText('주문별 승인');
@@ -69,27 +70,28 @@ for (const width of [360, 390, 430]) {
 
     await page.getByTestId('trading-section-settings').click();
 
-    await expect(page.getByTestId('auto-trading-telegram-settings')).toHaveAttribute('open', '');
+    await expect(page.getByTestId('auto-trading-telegram-settings')).not.toHaveAttribute('open', '');
+    await page.getByTestId('auto-trading-telegram-settings').locator('summary').click();
     await expect(page.getByTestId('user-broker-telegram-panel')).toBeVisible();
     await expect(page.getByTestId('automatic-trading-master-toggle')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('auto-market-domestic_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveValue('kiwoom');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-us_stock').click();
+    await page.getByTestId('trading-market-select').selectOption('us_stock');
     await expect(page.getByTestId('auto-market-us_stock')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('stock-broker-us_stock')).toHaveValue('kiwoom');
     await expect(page.getByTestId('stock-broker-us_stock')).toBeDisabled();
     await expect(page.getByTestId('stock-broker-us_stock').locator('option')).toHaveCount(1);
     await expect(page.getByTestId('stock-broker-domestic_stock')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-crypto_spot').click();
+    await page.getByTestId('trading-market-select').selectOption('crypto_spot');
     await expect(page.getByTestId('auto-market-crypto_spot')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-upbit')).toBeVisible();
     await expect(page.getByTestId('stock-broker-routing')).toHaveCount(0);
     await expect(page.getByLabel('Bitget 레버리지')).toHaveCount(0);
 
-    await page.getByTestId('trading-market-crypto_futures').click();
+    await page.getByTestId('trading-market-select').selectOption('crypto_futures');
     await expect(page.getByTestId('auto-market-crypto_futures')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('connection-bitget')).toBeVisible();
     await expect(page.getByLabel('Bitget 레버리지')).toBeVisible();
@@ -172,10 +174,10 @@ test('automatic trading surface never exposes per-order approval actions', async
 
 test('paper mode exposes the same four-market navigation without enabling live authority', async ({ page }) => {
   const failures = captureBrowserFailures(page);
-  await page.goto('/__phase12-trade-automation-e2e');
+  await page.goto('/__phase12-trade-automation-e2e?mode=paper');
 
-  await page.getByTestId('trading-mode-paper').click();
-  await expect(page.getByTestId('trading-mode-paper')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('heading', { name: '모의매매', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
   await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible();
   await expect(page.getByTestId('paper-trading-dashboard')).toContainText('실제 주문 0');
 
@@ -184,7 +186,7 @@ test('paper mode exposes the same four-market navigation without enabling live a
     await expect(page.getByTestId(`trading-market-${market}`)).toHaveAttribute('aria-pressed', 'true');
   }
 
-  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('LIVE/AUTO/REAL/Private API Gate');
+  await expect(page.getByTestId('trading-workspace-safety-note')).toContainText('실자동매매 권한과 분리');
   expectNoBrowserFailures(failures);
 });
 
@@ -354,7 +356,8 @@ test('auto-trading rehearsal tab proves the safe four-market chain and displays 
   });
 
   await page.goto('/__phase12-trade-automation-e2e');
-  await page.getByTestId('trading-section-rehearsal').click();
+  await page.getByTestId('trading-section-settings').click();
+  await page.getByTestId('auto-trading-rehearsal-settings').locator('summary').click();
   await expect(page.getByTestId('formula-ai-auto-rehearsal-panel')).toBeVisible();
   await expect(page.getByTestId('run-auto-rehearsal')).toContainText('자동매매 활성화 리허설 실행');
 
