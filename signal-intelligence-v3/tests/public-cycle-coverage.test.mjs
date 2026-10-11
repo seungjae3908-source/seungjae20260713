@@ -72,6 +72,34 @@ test('valid full batch rotates, while missing evidence never becomes zero-trade'
   }).nextCursor,0);
   assert.equal(classifyPublicCycleLaneStatus(null),'SEARCH_FAILURE');
 });
+test('missing completed symbols cannot masquerade as valid no-trade or advance cursor', () => {
+  const full=result({
+    dataState:'complete',cards:[],
+    universe:{...result().universe,partial:false},
+  });
+  for (const broken of [
+    {...full, execution:{...full.execution,startedCount:19}},
+    {...full, execution:{...full.execution,completedCount:19}},
+    {...full, execution:{...full.execution,partial:true}},
+    {...full, universe:{...full.universe,nextCursor:19}},
+    {...full, universe:{...full.universe,nextCursor:null}},
+    {...full, universe:{...full.universe,cursor:20}},
+    {...full, universe:{...full.universe,totalCount:10}},
+    {...full, execution:{...full.execution,requestedCount:0}},
+  ]) {
+    const status=classifyPublicCycleLaneStatus(broken);
+    assert.equal(status,'SEARCH_FAILURE',JSON.stringify(broken));
+    const cursor=decidePublicCycleCursor({response:broken,status,cursor:0});
+    assert.equal(cursor.nextCursor,0);
+    assert.equal(cursor.blockedObservationOnly,false);
+  }
+  const mismatched=decidePublicCycleCursor({
+    response:full,status:'BLOCKED_DATA',cursor:0,
+  });
+  assert.equal(mismatched.nextCursor,0);
+  assert.equal(mismatched.reason,'STATUS_EVIDENCE_MISMATCH');
+});
+
 test('a complete last page wraps, without pretending first-page or all-universe coverage', () => {
   const evidence=result({
     dataState:'complete',cards:[],
