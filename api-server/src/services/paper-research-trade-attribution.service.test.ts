@@ -22,7 +22,7 @@ test('verified simulated paper win separates target, price contribution and reco
   const r=explainAutomaticPaperTrade(fixture());
   assert.equal(r.outcome,'PROFIT');
   assert.equal(r.netPnlNative,36);
-  assert.equal(r.exitType,'TARGET');
+  assert.equal(r.exitPriceProximity,'NEAR_TARGET_PRICE');
   assert.equal(r.grossPriceEffect,40);
   assert.equal(r.fees,3);
   assert.equal(r.tax,1);
