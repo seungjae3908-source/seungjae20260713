@@ -4,6 +4,7 @@ import {
   bindPublicStockCandleSource,
   enforcePublicStockRosterCoverage,
   createPublicStockQualityCounter,
+  withPublicStockProviderFallback,
 } from '../src/public-stock-candle-binding.mjs';
 import { classifyPublicCycleLaneStatus } from '../src/public-cycle-coverage.mjs';
 
@@ -106,4 +107,29 @@ test('same-cycle quality diagnostics keep only safe cause counts',()=>{
     'RAW_PROVIDER_DETAILS','PRIVATE_DEBUG','PRIVATE_SOURCE_DETAILS']) {
     assert.equal(JSON.stringify(snapshot).includes(value),false);
   }
+});
+
+test('empty Yahoo candle page probes one alternate venue and never counts as completed source',async()=>{
+  const calls=[];
+  const v=await withPublicStockProviderFallback(['001234.KS','001234.KQ'],async name=>{
+    calls.push(name);
+    return name.endsWith('.KS')?[]:[
+      {time:'2026-10-09T00:00:00Z',open:5,high:6,low:4,close:5,volume:10},
+    ];
+  },{pause:async()=>{throw Error('EMPTY_PAGE_SHOULD_NOT_RETRY');}});
+  assert.equal(v.length,1);
+  assert.deepEqual(calls,['001234.KS','001234.KQ']);
+  assert.equal(v[0].close,5);
+  assert.equal((await withPublicStockProviderFallback(['AAPL'],async()=>({price:100}))).price,100);
+});
+test('all-empty or failed public stock providers never silently become valid bars',async()=>{
+  const names=[];
+  await assert.rejects(withPublicStockProviderFallback(['AAPL','AAPL.X'],
+    async name=>{names.push(name);return [];},{pause:async()=>{throw Error('UNEXPECTED_RETRY');}}),
+    /PUBLIC_STOCK_EMPTY_CANDLES/);
+  assert.deepEqual(names,['AAPL','AAPL.X']);
+  await assert.rejects(withPublicStockProviderFallback([],async()=>[]),
+    /PUBLIC_STOCK_FALLBACK_INVALID/);
+  await assert.rejects(withPublicStockProviderFallback(['AAPL'],async()=>{
+    throw Error('PUBLIC_QUOTE_REJECTED');},{retryCount:1}),/PUBLIC_QUOTE_REJECTED/);
 });
