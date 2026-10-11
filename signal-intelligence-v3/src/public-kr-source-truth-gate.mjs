@@ -3,6 +3,37 @@
 // Never turn invalid OHLC into a zero-signal or economically approved PASS.
 const STRATEGIES=new Set(['SCALPING','SWING','MID_LONG']);
 const numeric=n=>Number.isSafeInteger(n)&&n>=0;
+
+// A thrown stock Scanner may now carry independently bounded, source-only
+// counters. These do NOT represent any completed or trusted market page.
+// Validate the complete allowlist before even referencing their totals.
+const AUDIT_FIELDS=['version','candles','quote','sanitizedProviderFailures',
+  'symbolsRedacted','fullMarketVerified','executionAuthority'];
+const AUDIT_TF=['1m','3m','5m','15m','60m','4H','1D'];
+const AUDIT_CANDLE_FIELDS=['fetched','errors','empty','shortLt20','shortLt40',
+  'invalidOhlc','hasLateOrFuture','lastBarLagGteOneDay','lastBarLagGteFiveDays'];
+const AUDIT_QUOTE_FIELDS=['fetched','errors','invalidPrice'];
+const AUDIT_HTTP_FIELDS=['HTTP_429','HTTP_4XX','HTTP_5XX','TIMEOUT','OTHER'];
+function exactCounters(value,keys){
+ return value&&typeof value==='object'&&!Array.isArray(value)
+   &&Object.keys(value).length===keys.length
+   &&keys.every(key=>numeric(value[key]));
+}
+function safeFailureAudit(value){
+ if(value==null)return true; // non-instrumented source failure remains blocked
+ return typeof value==='object'&&!Array.isArray(value)
+   &&Object.keys(value).length===AUDIT_FIELDS.length
+   &&value.version==='public-stock-source-audit-v1'
+   &&value.symbolsRedacted===true&&value.fullMarketVerified===false
+   &&value.executionAuthority==='NONE'
+   &&exactCounters(value.quote,AUDIT_QUOTE_FIELDS)
+   &&exactCounters(value.sanitizedProviderFailures,AUDIT_HTTP_FIELDS)
+   &&value.candles&&typeof value.candles==='object'
+   &&!Array.isArray(value.candles)
+   &&Object.keys(value.candles).length===AUDIT_TF.length
+   &&AUDIT_TF.every(tf=>exactCounters(value.candles[tf],AUDIT_CANDLE_FIELDS));
+}
+
 export function assertBlockedKrPublicResearchCoverage(snapshot){
  if(!snapshot||snapshot.publicDataOnly!==true
    ||snapshot.safety?.executionAuthority!=='NONE'
@@ -25,7 +56,7 @@ export function assertBlockedKrPublicResearchCoverage(snapshot){
        ||row.lastGoodPreserved!==true||row.scannedCards!==0
        ||row.retainedFromBatch!==0||row.requestedCount!==null
        ||row.startedCount!==null||row.completedCount!==null
-       ||row.rosterVerified===true||row.publicStockSourceAudit!=null
+       ||row.rosterVerified===true||!safeFailureAudit(row.publicStockSourceAudit)
        ||row.cursorRotatedBlockedOnly===true
        ||!metrics||metrics.sourceFailureConfirmed!==true
        ||metrics.fullMarketVerified!==false
@@ -42,6 +73,10 @@ export function assertBlockedKrPublicResearchCoverage(snapshot){
        insufficientCount:null,invalidSourceBars:null,
        sourceProviderErrors:metrics.providerErrors,
        sourceTimeouts:metrics.timeouts,
+       // Audit counts are observational only and never compensate for a
+       // provider failure or missing market source data.
+       sourceHttp429Count:row.publicStockSourceAudit?.sanitizedProviderFailures?.HTTP_429??null,
+       auditedInvalidSourceCalls:row.publicStockSourceAudit?.candles?.[row.timeframe]?.invalidOhlc??null,
        observationOnly:false,cursorHeld:true,
      }));
      continue;
