@@ -27,6 +27,25 @@ const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
 
+test('AUTO authority revoked during the ownership read blocks at the final provider boundary', async () => {
+  const execution = new TradeExecutionService(new InMemoryTradingRepository());
+  const events: string[] = [];
+  Object.assign(execution, {
+    async assertAutomaticLiveEntryControls() {
+      events.push('controls');
+      if (events.length > 1) throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    },
+    async assertAutomaticLivePositionIsolation() { events.push('isolation'); },
+  });
+  const boundary = execution as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID, {
+    ...planInput(new Date()), executionMode: 'automatic', reduceOnly: false,
+  } as TradingPlan), /AUTOMATIC_ENTRY_POLICY_REVOKED/);
+  assert.deepEqual(events, ['controls', 'isolation', 'controls']);
+});
+
 test('provider mutation boundary re-reads manual ownership with execution vault and never mutates protected assets', async () => {
   const previousFetch = globalThis.fetch;
   const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
