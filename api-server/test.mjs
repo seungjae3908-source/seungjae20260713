@@ -9,6 +9,7 @@ const repositoryRoot = path.resolve(root, '..');
 const mode = process.argv[2] ?? 'all';
 const groups = {
   chart: [
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-feed.test.ts'),
     path.join(root, 'src/services/manual-order-authority.service.test.ts'),
     path.join(root, 'src/services/chart-manual-order.service.test.ts'),
     path.join(root, 'src/lib/frontend-static-cache.test.ts'),
@@ -107,6 +108,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/analysis-selection.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/asset-navigation.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-analysis.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-feed.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/scanner-request.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/signal-scanner-profile.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/chart-live-timeline.test.ts'),
