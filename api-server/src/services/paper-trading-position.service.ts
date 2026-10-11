@@ -105,18 +105,16 @@ export function createPositionFromOrder(
   if (!positive(fillPrice) || !positive(reference) || !positive(order.quantity)) {
     throw new PaperTradingError('INVALID_FILL', '모의체결 계산값이 올바르지 않습니다.');
   }
-  // A limit/stop order may have been queued before five KST losing closes.
-  // Recheck at the actual simulated fill time, not just when it was placed.
-  // Existing positions remain eligible for protective closes and liquidation.
+  // Manual Paper is a continuous RESEARCH simulation. Historical losing
+  // trades are observed but cannot veto a later trigger. Retain the exact
+  // KST daily count as evidence; do not hide bankruptcy/market-risk checks.
   const simulatedFillAt = new Date(at);
   if (!Number.isFinite(simulatedFillAt.getTime())) {
     throw new PaperTradingError('INVALID_TIMESTAMP', '모의체결 시각이 올바르지 않습니다.');
   }
-  if (manualPaperLosingTradesToday(state, simulatedFillAt) >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
-    order.rejectionCodes = unique([...order.rejectionCodes, 'MANUAL_PAPER_DAILY_5_LOSSES_LIMIT']);
-    transitionPaperOrder(order, 'rejected', at);
-    throw new PaperTradingError('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT',
-      '한국시간 당일 손실 거래 5회 제한으로 대기 주문의 모의체결을 차단했습니다.');
+  const losingTradesToday = manualPaperLosingTradesToday(state, simulatedFillAt);
+  if (losingTradesToday >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
+    order.warnings = unique([...order.warnings, 'PAPER_RESEARCH_FIVE_LOSSES_OBSERVED']);
   }
   if (hasDuplicateSymbol({ ...state, orders: state.orders.filter((item) => item.id !== order.id) }, order.symbol)) {
     order.rejectionCodes = unique([...order.rejectionCodes, 'DUPLICATE_SYMBOL_POSITION']);
@@ -226,8 +224,15 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
   } : expectedEntry(request, action.market, warnings, action.riskInput.slippageRate);
 
   const rejectionCodes: string[] = [];
+  // Closing-trade counts remain factual KST research metrics, never automatic
+  // capital replenishment or an execution veto.
   if (manualPaperLosingTradesToday(state, now) >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
-    rejectionCodes.push('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT');
+    warnings.push('PAPER_RESEARCH_FIVE_LOSSES_OBSERVED');
+  }
+  if (state.riskState.dailyRealizedPnl <= -state.account.initialBalance * 0.1) {
+    warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED');
+  } else if (state.riskState.dailyRealizedPnl <= -state.account.initialBalance * 0.05) {
+    warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_5PCT_OBSERVED');
   }
   if (hasDuplicateSymbol(state, request.symbol)) rejectionCodes.push('DUPLICATE_SYMBOL_POSITION');
   if (!entry.reference || !entry.fill || !positive(entry.fill)) rejectionCodes.push('MARKET_PRICE_UNAVAILABLE');
@@ -236,7 +241,16 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
   let quantity = 0;
   if (!canonical && entry.fill != null && positive(entry.fill)) {
     const riskInput = buildRiskInput(state, request, action.market, action.contractRules, action.riskInput, entry.fill, now);
-    riskResult = calculateTradingRisk(riskInput, now);
+    // Use a Paper-only projection to bypass count/realized-loss stop gates;
+    // the shared LIVE risk engine and stored loss evidence remain unchanged.
+    // Equity, funding, exposure, margin, instrument rules and market data are
+    // never zeroed or relaxed.
+    riskResult = calculateTradingRisk({
+      ...riskInput,
+      dailyRealizedPnl: 0,
+      weeklyRealizedPnl: 0,
+      consecutiveLosses: 0,
+    }, now);
     rejectionCodes.push(...riskResult.blockCodes);
     warnings.push(...riskResult.warnings);
     const recommended = riskResult.recommendedQuantity ?? 0;
