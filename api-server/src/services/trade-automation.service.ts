@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
+import { hasServerManualOrderAuthority, signManualOrderAuthority } from './manual-order-authority.service';
 import type { TradingRepository } from './trade-automation.repository';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
@@ -174,7 +175,7 @@ export class TradeAutomationService {
     return marketIntelligenceTradeDecision(intelligence, input.accountMode);
   }
 
-  async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean) {
+  async createPlan(userId: string, input: TradingPlanInput, policy: TradingPolicy, emergencyStopped: boolean, options: { manualApprovalOnly?: boolean } = {}) {
     const idempotencyKey = tradingIdempotencyKey(userId, input);
     const duplicate = await this.repository.findPlanByIdempotency(userId, idempotencyKey);
     if (duplicate) return { plan: duplicate, duplicate: true, decision: { allowed: true, blockCodes: [], warnings: [] } };
@@ -194,6 +195,7 @@ export class TradeAutomationService {
     const riskDecision = evaluateTradingPlan(input, policy, {
       emergencyStopped: emergencyStopped || await this.emergencyStopActive(userId, policy),
       serverLiveEnabled: serverLiveEnabledForPlan(input, policy),
+      manualUserOrder: options.manualApprovalOnly === true,
     });
     const decision = withMarketIntelligenceWarnings(riskDecision, intelligence.warnings);
     if (!decision.allowed) {
@@ -204,13 +206,16 @@ export class TradeAutomationService {
     const now = new Date();
     const plan: TradingPlan = {
       ...input,
-      executionMode: policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
+      executionMode: !options.manualApprovalOnly && policy.mode === 'automatic' && policy.automaticEnabled ? 'automatic' : 'manual',
+      // Overwrite any spoofed runtime field carried by /plans' legacy payload.
+      manualOrderAuthority: undefined,
       id: randomUUID(), userId, idempotencyKey,
       state: 'APPROVAL_PENDING',
       version: 0,
       approvalExpiresAt: new Date(now.getTime() + APPROVAL_TTL_MS).toISOString(),
       approvedAt: null, createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
+    if (options.manualApprovalOnly) plan.manualOrderAuthority = signManualOrderAuthority(plan);
     const inserted = await this.repository.insertPlan(plan);
     return { plan: inserted.plan, duplicate: !inserted.inserted, decision };
   }
@@ -244,6 +249,7 @@ export class TradeAutomationService {
     const decision = evaluateTradingPlan(plan, policy, {
       emergencyStopped: await this.emergencyStopActive(userId, storedPolicy),
       serverLiveEnabled: serverLiveEnabledForPlan(plan, storedPolicy),
+      manualUserOrder: hasServerManualOrderAuthority(plan),
     });
     if (!decision.allowed) {
       await tripKillSwitchForRiskFailure({ repository: this.repository, userId, blockCodes: decision.blockCodes });

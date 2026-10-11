@@ -1079,6 +1079,7 @@ test('desktop AI Chart reads the Toss position only after an explicit click and 
   await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('500,000원');
   await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('Provider 미체결');
   await expect(panel.getByTestId('ai-chart-account-capacity')).toContainText('1건');
+  await panel.getByText('손익 시나리오·분할 계산', { exact: true }).click();
   await expect(panel.getByTestId('ai-chart-position-guidance')).toContainText('평단 기준 수익 구간');
   await expect(page.getByTestId('unified-chart-wrapper')).toHaveAttribute('data-position-average', '70000');
 

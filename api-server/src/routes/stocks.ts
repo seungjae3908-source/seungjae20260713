@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BoundedTtlCache } from "../lib/bounded-ttl-cache";
 import { MarketDataService } from "../services/market-data.service";
+import { getHistoricalCandles as getYahooHistoricalCandles } from "../providers/yahoo";
 import {
 	getKiwoomShortSellingRaw,
 	type KiwoomUsExchange,
@@ -1404,6 +1405,43 @@ router.get("/:ticker/chart", async (req, res) => {
 		console.error("stock chart route error:", error);
 		res.status(500).json({ ok: false, error: "STOCK_CHART_ROUTE_ERROR", ticker, timeframe });
 	}
+});
+
+// Read-only older history; never holds the latency-sensitive live /candles route.
+router.get("/:ticker/history-candles", async (req, res) => {
+  const ticker = String(req.params.ticker ?? "").trim().toUpperCase();
+  const before = Number(req.query.before);
+  const timeframe = String(req.query.tf ?? "1D");
+  const allowed = new Set(["1m", "3m", "5m", "15m", "30m", "60m", "1H", "4H", "1D"]);
+  if (!/^[A-Z0-9.-]{1,32}$/.test(ticker) || !Number.isSafeInteger(before) || before <= 0 || before > Date.now() + 60_000 || !allowed.has(timeframe)) {
+    return res.status(400).json({ ok: false, error: "STOCK_HISTORY_INVALID_REQUEST" });
+  }
+  try {
+    // Korean numeric tickers can be listed on KOSPI (.KS) or KOSDAQ (.KQ).
+    // The canonical six-digit ticker alone does not identify that Yahoo suffix.
+    let rows: Awaited<ReturnType<typeof getYahooHistoricalCandles>> = [];
+    let firstError: unknown = null;
+    try {
+      rows = await getYahooHistoricalCandles(ticker, timeframe, before);
+    } catch (error) {
+      firstError = error;
+      if (!/^\d{6}$/u.test(ticker)) throw error;
+    }
+    if (/^\d{6}$/u.test(ticker) && rows.length === 0) {
+      // Only fall back to the real KOSDAQ provider symbol when KOSPI has no bars.
+      try { rows = await getYahooHistoricalCandles(`${ticker}.KQ`, timeframe, before); }
+      catch (error) { if (firstError) throw firstError; throw error; }
+    }
+    const candles = rows.filter((row) => {
+      const raw = row.time;
+      const timestamp = typeof raw === "number" ? (raw < 10_000_000_000 ? raw * 1_000 : raw) : Date.parse(String(raw));
+      return Number.isFinite(timestamp) && timestamp < before;
+    }).slice(-200);
+    return res.json({ ok: true, provider: "yahoo-history", timeframe, candles, count: candles.length });
+  } catch (error) {
+    console.warn("stock historical candles unavailable", { ticker, timeframe, code: error instanceof Error ? error.name : "UNKNOWN" });
+    return res.status(502).json({ ok: false, error: "STOCK_HISTORY_PROVIDER_UNAVAILABLE", candles: [] });
+  }
 });
 
 // GET /api/stocks/:ticker/candles?tf=1D

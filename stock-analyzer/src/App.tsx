@@ -27,8 +27,13 @@ import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError 
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
-import SearchPage from '@/pages/search';
-import RecommendationsPage from '@/pages/recommendations';
+// Keep the landing page eager. Rankings and recommendations are not part of
+// the authenticated AI Chart cold-start graph, so load their code only when
+// the user actually navigates to those routes.
+const loadMarketRankingsPage = () => import('@/pages/search');
+const MarketRankingsPage = lazy(loadMarketRankingsPage);
+const loadRecommendationsPage = () => import('@/pages/recommendations');
+const RecommendationsPage = lazy(loadRecommendationsPage);
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
@@ -380,7 +385,7 @@ function ApprovedRouter() {
     <Route path="/assets" component={PortfolioAccess} />
     <Route path="/settings" component={SettingsAccess} />
     <Route path="/search" component={UnifiedAssetSearchAccess} />
-    <Route path="/market-rankings" component={SearchPage} />
+    <Route path="/market-rankings" component={MarketRankingsPage} />
     <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/telegram-order" component={TelegramSignalOrderAccess} />
