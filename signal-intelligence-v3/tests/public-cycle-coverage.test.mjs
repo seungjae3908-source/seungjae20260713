@@ -9,6 +9,9 @@ import {
   publicUpbitGroupForUrl,
   createPublicUpbitGroupPacer,
   PUBLIC_V3_UPBIT_GROUP_INTERVAL_MS,
+  PUBLIC_V3_BITGET_MARKET_INTERVAL_MS,
+  publicBitgetMarketEndpoint,
+  createPublicBitgetMarketPacer,
 } from '../src/public-cycle-coverage.mjs';
 
 function result(changes={}) {
@@ -338,4 +341,44 @@ test('Upbit V3 separate rate-group queues honor cooldown and cancellation', asyn
   assert.equal(unwanted, 0);
   assert.throws(() => pacer.cooldown('candle', Infinity), /COOLDOWN_INVALID/u);
   await assert.rejects(pacer.schedule('orders', () => {}), /GROUP_UNSUPPORTED/u);
+});
+
+test('Bitget V3 only paces explicit public contract market endpoints', () => {
+  for (const endpoint of ['tickers','candles','contracts','query-position-lever']) {
+    assert.equal(
+      publicBitgetMarketEndpoint('https://api.bitget.com/api/v2/mix/market/' + endpoint + '?productType=USDT-FUTURES'),
+      'public-market',
+    );
+  }
+  assert.equal(publicBitgetMarketEndpoint('https://api.upbit.com/v1/ticker'), null);
+  for (const uri of [
+    'http://api.bitget.com/api/v2/mix/market/candles',
+    'https://api.bitget.com/api/v2/mix/order/place-order',
+    'https://api.bitget.com/api/v2/mix/account/accounts',
+    'https://user:secret@api.bitget.com/api/v2/mix/market/candles',
+    'https://api.bitget.com/api/v2/mix/market/candles#frag',
+  ]) assert.throws(() => publicBitgetMarketEndpoint(uri), /UNSAFE_ENDPOINT/u);
+  assert.equal(PUBLIC_V3_BITGET_MARKET_INTERVAL_MS, 100);
+});
+
+test('Bitget V3 public candle batches keep starts under 10/sec; aborted callers never send', async () => {
+  let at = 0;
+  const times = [];
+  const pacer = createPublicBitgetMarketPacer({
+    now: () => at,
+    wait: async ms => { at += ms; },
+  });
+  await Promise.all(Array.from({length: 10}, () => pacer.schedule(() => {
+    times.push(at);
+  })));
+  assert.deepEqual(times, Array.from({length:10},(_,i)=>i*100));
+  const before = at;
+  pacer.cooldown(2000);
+  await pacer.schedule(() => assert.ok(at >= before+2000));
+  const aborted = new AbortController();
+  aborted.abort(new Error('futures public scan stopped'));
+  let sent = 0;
+  await assert.rejects(pacer.schedule(() => { sent += 1; }, aborted.signal), /scan stopped/u);
+  assert.equal(sent,0);
+  assert.throws(() => pacer.cooldown(Infinity), /COOLDOWN_INVALID/u);
 });
