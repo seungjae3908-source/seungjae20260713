@@ -100,3 +100,15 @@ acceptance evidence. This checker cannot turn that missing evidence into
 a deployment or trading authorization. The new receipt field requires
 a matching V3 producer revision (Draft #1816), which is currently
 unmerged and unapproved.
+
+## Draft: require a common producer cycle identity
+
+Signal V3 rotates through many small pages. After a full roster wrap the
+same cursor can occur in a later cycle; an old saved candidate must not be
+treated as a new Telegram alert. This predeploy verifier requires all 12
+source-backed coverage rows to carry one identical canonical UUIDv4
+`sourceCycleId`, plus `snapshotCurrentPageSourceReady=true` from the V3
+/health endpoint. Missing or mixed epochs and blocked source data remain
+NO-GO regardless of a new JSON timestamp or green code CI. The matching
+public-only producer and server implementation is Draft PR #1816; all
+changes are unmerged and do not authorize Staging/Production or messages.
