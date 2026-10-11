@@ -11,7 +11,6 @@ import {getSupabase,hasSupabaseServerKey} from '../lib/supabase';
 export const AUTOMATIC_PAPER_ROUND_EPOCH_V3='automatic-paper-v3-epoch-draft' as const;
 const hex64=/^[0-9a-f]{64}$/u;
 const SHA=(s:string)=>createHash('sha256').update(s).digest('hex');
-const positive=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>0;
 export type AutomaticPaperV3Epoch=Readonly<{
   epoch_id:string;
   proposal_id:string;
