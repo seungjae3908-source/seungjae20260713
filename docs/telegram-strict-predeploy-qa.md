@@ -112,3 +112,17 @@ source-backed coverage rows to carry one identical canonical UUIDv4
 NO-GO regardless of a new JSON timestamp or green code CI. The matching
 public-only producer and server implementation is Draft PR #1816; all
 changes are unmerged and do not authorize Staging/Production or messages.
+
+## Draft — prevent weekend phantom closing/premarket reports
+
+The dedicated four-market Telegram scheduler previously generated
+KR_CLOSING every day at 15:50–16:10 KST and US_PREMARKET every day
+at 07:50–08:10 America/New_York. This included weekends when
+neither exchange normally holds a regular session, potentially
+misleading users with a close/premarket report. Those two session-
+specific plans now require the weekday for their respective exchange
+local timezone (US EDT/EST naturally handled). MORNING remains a daily
+market-state briefing, WEEKLY stays Monday KST. Stock-market official
+holidays/early closes remain subject to the existing N/A/NO_TRADE
+source-quality handling; no unsupported holiday calendar is invented.
+No actual Telegram message or schedule task was triggered here.
