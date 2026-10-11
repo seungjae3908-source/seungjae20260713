@@ -38,7 +38,9 @@ export function explainManualPaperTrade(entry: PaperJournalEntry): PaperTradeRev
   const net=entry.netPnl;
   const items=[entry.entryFee,entry.exitFee,entry.slippageCost,entry.fundingCost];
   if (![gross,net,...items].every(v=>typeof v === 'number' && Number.isFinite(v))
-    || items.some(v=>v<0)) {
+    // Signed funding can legitimately be a credit. Only commissions and
+    // the slippage estimate are nonnegative charges.
+    || items.slice(0,3).some(v=>v<0)) {
     return {outcome:'UNVERIFIED',exitExplanation:'손익 또는 비용 증거가 불완전합니다.',
       priceContribution:null,recordedCosts:null,netPnl:null,
       observedReasons:[],unknownFactors};
@@ -49,7 +51,7 @@ export function explainManualPaperTrade(entry: PaperJournalEntry): PaperTradeRev
   if(gross>0)facts.push('진입·청산 기준 가격 변화가 포지션 방향에 유리했습니다.');
   else if(gross<0)facts.push('진입·청산 기준 가격 변화가 포지션 방향에 불리했습니다.');
   if(gross>0 && net<0)facts.push('가격 기준 이익보다 기록된 거래 비용·기타 조정이 커 순손실로 마감했습니다.');
-  if(cost>0)facts.push('기록 비용: 진입·청산 수수료, 슬리피지, 펀딩 포함.');
+  if(cost!==0)facts.push('기록 순비용: 진입·청산 수수료, 슬리피지 및 부호 있는 펀딩 정산 포함.');
   // Canonical/manual journal entries may include adjustments not reducible
   // to these four displayed components. Never silently attribute a mismatch.
   const balanced=Math.abs((gross-cost)-net)<=Math.max(0.02,Math.abs(net)*0.0001);
