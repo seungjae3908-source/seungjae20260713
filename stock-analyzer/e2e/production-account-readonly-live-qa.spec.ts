@@ -11,7 +11,7 @@ import {
   providerDiagnosticHealthy,
   type ReadonlyProbeObservation,
 } from './support/production-live-disable-provider-audit';
-import { parseBitgetReadonlyDiagnosticHeader, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
+import { parseBitgetReadonlyDiagnosticHeader, summarizeAutomaticWarmupPositions, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -500,6 +500,7 @@ test('Production real-account read-only providers return fresh connected snapsho
       openOrderCount: Array.isArray(snapshot?.openOrders) ? snapshot.openOrders.length : -1,
       reconciliation: reconciliationPassed ? 'PASS' : 'FAIL',
       reconciliationPassed,
+      automaticWarmupPositions: summarizeAutomaticWarmupPositions(snapshot),
       diagnosticReadAccepted: snapshot !== undefined && providerReadErrorAccepted(
         provider,
         typeof snapshot.errorCode === 'string' ? snapshot.errorCode : null,
@@ -509,6 +510,15 @@ test('Production real-account read-only providers return fresh connected snapsho
         : {}),
     };
   });
+
+  console.log('AUTOMATIC_WARMUP_POSITION_DIAGNOSTIC', JSON.stringify({
+    localLiveOrderCount: localOrders.length,
+    providers: sanitizedProviders.map(({ provider, automaticWarmupPositions }) => ({
+      provider, ...automaticWarmupPositions,
+    })),
+    accountValuesRecorded: false,
+    secretValuesRecorded: false,
+  }));
 
   // Persist bounded, sanitized provider state before any connectivity assertion so a
   // Production failure identifies the exact provider status/error without retaining
