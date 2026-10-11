@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import {
   SAFE_NETWORK_STATUSES,
+  isPublicTelegramIpv4,
   STAGING_REQUIRED_STATUS,
   probeStagingTelegramNetwork,
   readStagingLoopbackHealth,
@@ -94,10 +95,10 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
     lookupImpl: (host, opts, done) => {
       assert.equal(host, 'api.telegram.org');
       assert.equal(opts.family, 4);
-      done(null, '192.0.2.123', 4);
+      done(null, '149.154.166.110', 4);
     },
     connectImpl: config => {
-      assert.equal(config.host, '192.0.2.123');
+      assert.equal(config.host, '149.154.166.110');
       assert.equal(config.servername, 'api.telegram.org');
       assert.equal(config.port, 443);
       assert.equal(config.family, 4);
@@ -111,7 +112,7 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
     },
   });
   assert.equal(success, 'IPV4_TLS_READY');
-  assert.equal(success.includes('192.0.2'), false);
+  assert.equal(success.includes('149.154'), false);
   assert.ok(SAFE_NETWORK_STATUSES.includes(success));
 
   const rejected = await probeStagingTelegramNetwork({
@@ -254,11 +255,11 @@ test('Staging TLS probe uses one DNS lookup, never logs addresses, and classifie
         assert.equal(host, 'api.telegram.org');
         assert.equal(opts.family, 4);
         lookups++;
-        done(null, '198.51.100.7', 4);
+        done(null, '149.154.166.111', 4);
       },
       connectImpl: config => {
         connects++;
-        assert.equal(config.host, '198.51.100.7');
+        assert.equal(config.host, '149.154.166.111');
         assert.equal(config.servername, 'api.telegram.org');
         assert.equal(config.rejectUnauthorized, true);
         assert.equal(config.autoSelectFamily, false);
@@ -274,7 +275,7 @@ test('Staging TLS probe uses one DNS lookup, never logs addresses, and classifie
     assert.equal(connects, 1);
     assert.equal(result, item.expected);
     assert.ok(SAFE_NETWORK_STATUSES.includes(result));
-    assert.ok(!JSON.stringify({ result }).includes('198.51.100.7'));
+    assert.ok(!JSON.stringify({ result }).includes('149.154.166.111'));
   }
 });
 
@@ -286,4 +287,41 @@ test('Staging probe fails closed on malformed IPv4 DNS without opening a socket'
     });
     assert.equal(result, 'IPV4_DNS_FAILED');
   }
+});
+
+
+test('Staging rejects private, loopback, CGNAT, documentation and multicast DNS replies',async()=>{
+  for (const ip of [
+    '10.0.0.1','172.16.8.9','192.168.1.10','127.0.0.1',
+    '169.254.12.23','100.64.0.1','192.0.2.123','198.51.100.7',
+    '203.0.113.7','198.18.0.9','224.0.0.5','255.255.255.255',
+  ]) {
+    assert.equal(isPublicTelegramIpv4(ip),false);
+    let connects=0;
+    const result=await probeStagingTelegramNetwork({
+      lookupImpl:(_host,_opts,cb)=>cb(null,ip,4),
+      connectImpl:()=>{connects++;throw Error('MUST_NOT_CONNECT_INTERNAL');},
+    });
+    assert.equal(result,'IPV4_DNS_UNSAFE_ADDRESS');
+    assert.equal(connects,0);
+    assert.ok(!JSON.stringify(result).includes(ip));
+  }
+  assert.equal(isPublicTelegramIpv4('149.154.166.110'),true);
+});
+
+test('Staging TLS certificate failure is distinct from TCP disconnect and never logs exception',async()=>{
+  const classify=error=>probeStagingTelegramNetwork({
+    lookupImpl:(_host,_opts,callback)=>callback(null,'149.154.166.111',4),
+    connectImpl:(_config)=>{
+      const socket=new EventEmitter();
+      socket.destroyed=false;
+      socket.destroy=()=>{socket.destroyed=true;};
+      queueMicrotask(()=>socket.emit('error',error));
+      return socket;
+    },
+  });
+  assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_DNS_DETAIL'),
+    {code:'ERR_TLS_CERT_ALTNAME_INVALID'})),'IPV4_TLS_CERT_FAILED');
+  assert.equal(await classify(Object.assign(new Error('CONFIDENTIAL_TCP_DETAIL'),
+    {code:'ECONNRESET'})),'IPV4_TLS_CONNECT_FAILED');
 });
