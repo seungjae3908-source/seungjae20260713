@@ -17,7 +17,7 @@ test('timer and manual rescan resolve to the same immutable kernel advisory lock
   const lock=v3PublicCycleLockCommand('/tmp/signal-v3/latest.json',
     '/opt/investment-signal-intelligence/current/producer.mjs');
   assert.deepEqual(lock.args.slice(0,3),['-n','-E','75']);
-  assert.equal(lock.lockPath,'/tmp/signal-v3/public-cycle.lock');
+  assert.equal(lock.lockPath,'/tmp/signal-v3');
   assert.equal(lock.conflictExitCode,V3_PUBLIC_CYCLE_CONFLICT_EXIT);
   assert.equal(lock.executionAuthority,'NONE');
   for(const input of ['relative.json',''])
