@@ -74,3 +74,20 @@ test('untrusted attachment, non-Error failures and extra fields cannot expose ra
  assert.equal(JSON.stringify(result).includes('NEVER_EMIT'),false);
  assert.equal(JSON.stringify(result).includes('1234XY'),false);
 });
+
+test('weekend stale quote, missing and future timestamps never masquerade as HTTP outage',()=>{
+ const audit=createPublicStockSourceAudit({now:()=>NOW});
+ audit.recordQuote({price:100,updatedAt:new Date(NOW-3*3600000).toISOString()},'15m');
+ audit.recordQuote({price:100,updatedAt:new Date(NOW-3*3600000).toISOString()},'1D');
+ audit.recordQuote({price:100},'15m');
+ audit.recordQuote({price:100,updatedAt:new Date(NOW+10*60000).toISOString()},'15m');
+ audit.recordQuote({price:100,updatedAt:new Date(NOW-6*86400000).toISOString()},'1D');
+ const x=audit.snapshot();
+ assert.equal(x.quote.fetched,5);
+ assert.equal(x.quote.expiredTimestamp,2);
+ assert.equal(x.quote.missingTimestamp,1);
+ assert.equal(x.quote.futureTimestamp,1);
+ assert.equal(x.quote.errors,0);
+ assert.equal(x.sanitizedProviderFailures.HTTP_429,0);
+ assert.equal(x.executionAuthority,'NONE');
+});

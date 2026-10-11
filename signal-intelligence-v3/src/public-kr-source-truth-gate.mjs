@@ -12,7 +12,10 @@ const AUDIT_FIELDS=['version','candles','quote','sanitizedProviderFailures',
 const AUDIT_TF=['1m','3m','5m','15m','60m','4H','1D'];
 const AUDIT_CANDLE_FIELDS=['fetched','errors','empty','shortLt20','shortLt40',
   'invalidOhlc','hasLateOrFuture','lastBarLagGteOneDay','lastBarLagGteFiveDays'];
-const AUDIT_QUOTE_FIELDS=['fetched','errors','invalidPrice'];
+const AUDIT_QUOTE_FIELDS=[
+  'fetched','errors','invalidPrice',
+  'missingTimestamp','expiredTimestamp','futureTimestamp',
+];
 const AUDIT_HTTP_FIELDS=['HTTP_429','HTTP_4XX','HTTP_5XX','TIMEOUT','OTHER'];
 function exactCounters(value,keys){
  return value&&typeof value==='object'&&!Array.isArray(value)
@@ -77,6 +80,7 @@ export function assertBlockedKrPublicResearchCoverage(snapshot){
        // provider failure or missing market source data.
        sourceHttp429Count:row.publicStockSourceAudit?.sanitizedProviderFailures?.HTTP_429??null,
        auditedInvalidSourceCalls:row.publicStockSourceAudit?.candles?.[row.timeframe]?.invalidOhlc??null,
+       sourceExpiredQuoteCount:row.publicStockSourceAudit?.quote?.expiredTimestamp??null,
        observationOnly:false,cursorHeld:true,
      }));
      continue;

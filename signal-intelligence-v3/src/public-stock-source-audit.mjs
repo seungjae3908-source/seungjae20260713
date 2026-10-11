@@ -14,7 +14,10 @@ const emptyBuckets=()=>Object.fromEntries(TF.map(tf=>[tf,{
 }]));
 export function createPublicStockSourceAudit({now=Date.now}={}){
  if(typeof now!=='function')throw Error('PUBLIC_STOCK_AUDIT_CLOCK_INVALID');
- const candles=emptyBuckets(),quote={fetched:0,errors:0,invalidPrice:0};
+ const candles=emptyBuckets(),quote={
+  fetched:0,errors:0,invalidPrice:0,
+  missingTimestamp:0,expiredTimestamp:0,futureTimestamp:0,
+};
  const errors={HTTP_429:0,HTTP_4XX:0,HTTP_5XX:0,TIMEOUT:0,OTHER:0};
  function fail(bucket,error){
    const s=String(error instanceof Error?error.message:'').toUpperCase();
@@ -43,7 +46,18 @@ export function createPublicStockSourceAudit({now=Date.now}={}){
     }
   },
   candleError(timeframe,error){if(Object.hasOwn(candles,timeframe))fail(candles[timeframe],error);},
-  recordQuote(row){quote.fetched++;if(!Number.isFinite(row?.price)||row.price<=0)quote.invalidPrice++;},
+  recordQuote(row,timeframe='1D'){
+    quote.fetched++;
+    if(!Number.isFinite(row?.price)||row.price<=0)quote.invalidPrice++;
+    // Research-only diagnostics mirror the selector's 2h intraday / 5d
+    // daily freshness gate. Expired quotes remain blocked, even on weekends.
+    const observedAt=typeof row?.updatedAt==='string'?Date.parse(row.updatedAt):NaN;
+    const at=now();
+    if(!Number.isFinite(observedAt))quote.missingTimestamp++;
+    else if(observedAt>at+300000)quote.futureTimestamp++;
+    else if(at-observedAt>(timeframe==='1D'?5*86400000:2*3600000))
+      quote.expiredTimestamp++;
+  },
   quoteError(error){fail(quote,error);},
   snapshot(){return Object.freeze({
     version:PUBLIC_STOCK_SOURCE_AUDIT_VERSION,
@@ -67,7 +81,10 @@ const CANDLE_BUCKET_FIELDS=Object.freeze([
   'fetched','errors','empty','shortLt20','shortLt40','invalidOhlc',
   'hasLateOrFuture','lastBarLagGteOneDay','lastBarLagGteFiveDays',
 ]);
-const QUOTE_BUCKET_FIELDS=Object.freeze(['fetched','errors','invalidPrice']);
+const QUOTE_BUCKET_FIELDS=Object.freeze([
+  'fetched','errors','invalidPrice',
+  'missingTimestamp','expiredTimestamp','futureTimestamp',
+]);
 const FAILURE_BUCKET_FIELDS=Object.freeze(['HTTP_429','HTTP_4XX','HTTP_5XX','TIMEOUT','OTHER']);
 const validCount=x=>Number.isSafeInteger(x)&&x>=0;
 function auditedCounters(input,keys){
