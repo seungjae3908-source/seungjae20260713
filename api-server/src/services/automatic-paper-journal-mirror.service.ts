@@ -150,8 +150,13 @@ function exactEconomicDuplicate(existing: Payload, external: Payload): boolean {
   // A provider-supplied fee/tax receipt must not be hidden by an
   // incomplete or conflicting cached projection.
   for (const key of ['fees','tax']) {
-    if (typeof external[key] === 'number' && Number.isFinite(external[key])) {
-      if (typeof existing[key] !== 'number' || !Number.isFinite(existing[key])
+    // Invalid or negative provider costs are never suppressed as duplicates:
+    // preserve them for canonical normalization/integrity rejection.
+    if (external[key] != null) {
+      if (typeof external[key] !== 'number'
+        || !Number.isFinite(external[key]) || external[key] < 0
+        || typeof existing[key] !== 'number'
+        || !Number.isFinite(existing[key]) || existing[key] < 0
         || !equalNumber(existing[key], external[key])) return false;
     }
   }
