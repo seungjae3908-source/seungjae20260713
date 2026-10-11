@@ -31,17 +31,19 @@ export class CryptoPublicRequestGate {
   constructor(private readonly spacingMs: number) {}
 
   backoff(milliseconds: number): void {
-    this.blockedUntil = Math.max(this.blockedUntil, Date.now() + Math.max(0, milliseconds));
+    this.blockedUntil = Math.max(this.blockedUntil, performance.now() + Math.max(0, milliseconds));
   }
 
-  async admit(signal: AbortSignal): Promise<void> {
+  async run<T>(signal: AbortSignal, operation: (startedAt: number) => T | Promise<T>): Promise<T> {
     for (;;) {
       if (signal.aborted) throw signal.reason ?? new Error('CRYPTO_PROVIDER_ABORTED');
-      const now = Date.now();
+      const now = performance.now();
       const delay = Math.max(this.nextAt, this.blockedUntil) - now;
       if (delay <= 0) {
         this.nextAt = now + this.spacingMs;
-        return;
+        // Start inside the gate. Returning a permit and awaiting it outside
+        // could coalesce starts after a busy event loop delayed the caller.
+        return operation(now);
       }
       await new Promise<void>((resolve, reject) => {
         const cleanup = () => signal.removeEventListener('abort', abort);
@@ -227,11 +229,10 @@ async function fetchJson<T>(url: string, signal?: AbortSignal, timeoutMs = ITEM_
   const linked = linkedSignal(signal, timeoutMs);
   const gate = new URL(url).origin === UPBIT_BASE ? upbitRequestGate : bitgetRequestGate;
   try {
-    await gate.admit(linked.signal);
-    const response = await fetch(url, {
+    const response = await gate.run(linked.signal, () => fetch(url, {
       headers: { Accept: 'application/json', 'User-Agent': 'seungjae-signal-scanner/1.0' },
       signal: linked.signal,
-    });
+    }));
     if (response.status === 429) {
       const rawRetry = response.headers.get('Retry-After');
       const retry = rawRetry == null ? Number.NaN : Number(rawRetry);

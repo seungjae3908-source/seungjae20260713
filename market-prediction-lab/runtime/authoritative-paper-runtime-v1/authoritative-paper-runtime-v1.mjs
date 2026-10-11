@@ -3892,16 +3892,16 @@ var CryptoPublicRequestGate = class {
   nextAt = 0;
   blockedUntil = 0;
   backoff(milliseconds) {
-    this.blockedUntil = Math.max(this.blockedUntil, Date.now() + Math.max(0, milliseconds));
+    this.blockedUntil = Math.max(this.blockedUntil, performance.now() + Math.max(0, milliseconds));
   }
-  async admit(signal) {
+  async run(signal, operation) {
     for (; ; ) {
       if (signal.aborted) throw signal.reason ?? new Error("CRYPTO_PROVIDER_ABORTED");
-      const now = Date.now();
+      const now = performance.now();
       const delay = Math.max(this.nextAt, this.blockedUntil) - now;
       if (delay <= 0) {
         this.nextAt = now + this.spacingMs;
-        return;
+        return operation(now);
       }
       await new Promise((resolve, reject) => {
         const cleanup = () => signal.removeEventListener("abort", abort);
@@ -3966,11 +3966,10 @@ async function fetchJson(url, signal, timeoutMs = ITEM_TIMEOUT_MS) {
   const linked = linkedSignal(signal, timeoutMs);
   const gate = new URL(url).origin === UPBIT_BASE ? upbitRequestGate : bitgetRequestGate;
   try {
-    await gate.admit(linked.signal);
-    const response = await fetch(url, {
+    const response = await gate.run(linked.signal, () => fetch(url, {
       headers: { Accept: "application/json", "User-Agent": "seungjae-signal-scanner/1.0" },
       signal: linked.signal
-    });
+    }));
     if (response.status === 429) {
       const rawRetry = response.headers.get("Retry-After");
       const retry = rawRetry == null ? Number.NaN : Number(rawRetry);

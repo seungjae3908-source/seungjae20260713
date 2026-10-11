@@ -29,16 +29,22 @@ test('public request pacing serializes concurrent start slots and honours abort/
   const gate = new CryptoPublicRequestGate(20);
   const starts: number[] = [];
   const controller = new AbortController();
-  await Promise.all(Array.from({ length: 4 }, async () => {
-    await gate.admit(controller.signal);
-    starts.push(Date.now());
-  }));
+  await Promise.all(Array.from({ length: 4 }, () => gate.run(controller.signal, (startedAt) => {
+    starts.push(startedAt);
+  })));
   for (let index = 1; index < starts.length; index++) assert.ok(starts[index] - starts[index - 1] >= 20);
+  const cooldownAt = performance.now();
+  gate.backoff(25);
+  const resumedAt = await gate.run(controller.signal, (startedAt) => startedAt);
+  assert.ok(resumedAt >= cooldownAt + 25, '429 cooldown cannot be bypassed by a queued start');
   gate.backoff(1000);
-  const aborted = gate.admit(controller.signal);
+  let startedDuringBackoff = false;
+  const forbiddenStart = () => { startedDuringBackoff = true; };
+  const aborted = gate.run(controller.signal, forbiddenStart);
   controller.abort(new Error('test-cancel'));
   await assert.rejects(aborted, /test-cancel/);
-  await assert.rejects(gate.admit(controller.signal), /test-cancel/);
+  await assert.rejects(gate.run(controller.signal, forbiddenStart), /test-cancel/);
+  assert.equal(startedDuringBackoff, false);
 });
 
 test('changing 24h volume rank cannot skip or duplicate symbols between cursor pages', async () => {
