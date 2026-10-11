@@ -453,6 +453,9 @@ export class SignalIntelligenceTelegramSubscriber {
       }
       result.sourceStatus = 'READY';
       for (const event of snapshot.events) {
+        // The V3 producer also emits STATE_CHANGED and RESCAN_REQUESTED.
+        // They are validated above but must not be sent as entry candidates.
+        if (event.type !== 'NEW_CANDIDATE') continue;
         try {
           const personal = await this.deliverWatchlist({
             type: event.type,
