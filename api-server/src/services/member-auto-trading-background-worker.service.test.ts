@@ -2792,7 +2792,7 @@ test('automatic Paper worker persists cost-policy tax/fee/FX receipts while miss
     assert.equal(orders[0]?.settlementFxEvidence?.source, 'NATIVE_KRW');
     const journal = tradeAutomationJournalPayloadsFromSnapshot(USER, orders, plans);
     assert.equal(journal[0]?.tax, 0);
-    assert.ok((journal[0]?.fees ?? -1) > 0);
+    assert.ok(typeof journal[0]?.fees === 'number' && journal[0].fees > 0);
     const withoutPolicy = new InMemoryTradingRepository();
     await withoutPolicy.savePolicy(USER, policy());
     delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
