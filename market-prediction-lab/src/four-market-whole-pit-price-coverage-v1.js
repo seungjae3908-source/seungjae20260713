@@ -237,9 +237,13 @@ export function auditFourMarketHistoricalWholeUniverseV1({
     }
     if(days.some(d=>d<benchmark.startMs||d>=benchmark.endExclusiveMs)){
       results[market]={
-        ...blocked(market,"REQUESTED_DATE_OUTSIDE_FIXED_THREE_YEAR_BENCHMARK"),
+        ...blocked(market,selectedWindow.selectedByUser
+          ?"REQUESTED_DATE_OUTSIDE_SELECTED_RESEARCH_WINDOW"
+          :"REQUESTED_DATE_OUTSIDE_FIXED_THREE_YEAR_BENCHMARK"),
         requestedTradingDays:null,sourceAttestedPriceJoinedDays:0,days:[],
-        benchmarkCalendarStatus:"REQUESTED_DATES_OUTSIDE_FIXED_BENCHMARK",
+        benchmarkCalendarStatus:selectedWindow.selectedByUser
+           ?"REQUESTED_DATES_OUTSIDE_SELECTED_WINDOW"
+           :"REQUESTED_DATES_OUTSIDE_FIXED_BENCHMARK",
         benchmarkPeriodSourceAttestedPriceJoined:false,
         fullBenchmarkDateCoverage:false,sourceAttestedMonthlyCoverage:{},
         incompleteDaysPreview:[],blockedReasonCounts:{},
@@ -321,9 +325,12 @@ export function auditFourMarketHistoricalWholeUniverseV1({
       :!stablePITLineage?"LIFECYCLE_SOURCE_ID_OR_DIGEST_CHANGED_ACROSS_DAYS"
       :!everyJoinedArchiveSpansBenchmark
         ?"LIFECYCLE_SOURCE_ARCHIVE_SPAN_TOO_SHORT"
-      :"SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY";
+      :selectedWindow.selectedByUser
+        ?"SOURCE_ATTESTED_FULL_SELECTED_WINDOW_LIFECYCLE_ONLY"
+        :"SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY";
     const benchmarkPeriodSourceAttestedPriceJoined=
-      lifecycleArchiveStatus==="SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY";
+      lifecycleArchiveStatus==="SOURCE_ATTESTED_FULL_3Y_LIFECYCLE_ONLY"
+      ||lifecycleArchiveStatus==="SOURCE_ATTESTED_FULL_SELECTED_WINDOW_LIFECYCLE_ONLY";
     results[market]={
       ...blocked(market,covered===days.length?
         "SOURCE_ATTESTED_NOT_INDEPENDENTLY_AUTHENTICATED":
