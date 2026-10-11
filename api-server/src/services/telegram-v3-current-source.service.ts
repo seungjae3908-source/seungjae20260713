@@ -58,10 +58,17 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
   const market=event.market,dir=event.direction;
   if(!(market==='CRYPTO_FUTURES'?dir==='LONG'||dir==='SHORT'
     :SOURCE[market]?.length>0&&dir==='BUY'))return false;
+  const expectedId=[market,event.symbol,event.strategy,event.timeframe,dir].join('|');
+  const slot=event.timeframe==='15m'?'SCALPING_15M'
+    :event.timeframe==='60m'?'SWING_60M'
+      :event.timeframe==='1D'?'MID_LONG_1D':null;
+  if(event.id!==expectedId||!slot)return false;
   const row=candidates.get(event.id),origin=OBJ(row?.provenance);
   const lane=lookup.get(origin?.laneId),proof=OBJ(lane?.publicExecutionDiagnostic);
   if(!row||!origin||!lane||!proof
-    ||!String(origin.laneId).startsWith(PREFIX[market]+'_')
+    ||origin.laneId!==PREFIX[market]+'_'+slot
+    ||lane.laneId!==origin.laneId
+    ||lane.strategy!==slot.split('_').slice(0,-1).join('_')
     ||row.state!=='CANDIDATE'||row.dataStatus!=='READY'
     ||row.market!==market||row.symbol!==event.symbol
     ||row.strategy!==event.strategy||row.timeframe!==event.timeframe

@@ -20,6 +20,7 @@ function fixture(){
        laneId.startsWith('SPOT_')?'CRYPTO_SPOT':'CRYPTO_FUTURES';
    return {
      laneId,sourceCycleId:EPOCH,market,
+     strategy:laneId.split('_').slice(1,-1).join('_'),
      timeframe:laneId.endsWith('15M')?'15m':laneId.endsWith('60M')?'60m':'1D',
      universeSource:market==='US_STOCK'?'nasdaq-trader-public-directory'
        :market==='KR_STOCK'?'krx-symbol-master':
@@ -70,6 +71,17 @@ test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 pro
  assert.equal(mutate(x=>{x.coverage[4].status='BLOCKED_DATA';}),false);
  assert.equal(mutate(x=>{x.rows[0].provenance.cursor=5;}),false);
  assert.equal(mutate(x=>{x.events[0].direction='SHORT';}),false);
+ assert.equal(mutate(x=>{
+   x.events[0].id='FAKE_CANONICAL_ID';
+   x.rows[0].id='FAKE_CANONICAL_ID';
+ }),false);
+ assert.equal(mutate(x=>{
+   x.coverage[4].laneId='US_MID_LONG_1D';
+   x.coverage[4].strategy='MID_LONG';
+   x.coverage[5].laneId='US_SWING_60M';
+   x.coverage[5].strategy='SWING';
+   x.rows[0].provenance.laneId='US_MID_LONG_1D';
+ }),false);
  assert.equal(mutate(x=>{x.events[0].type='STATE_CHANGED';}),false);
  assert.equal(mutate(x=>{x.events[0].validationTier='CHAMPION';}),false);
  assert.equal(mutate(x=>{x.events[0].utilityR=999;}),false);
@@ -112,22 +124,31 @@ test('public room and member watchlist receive only current verified V3 candidat
        }),{status:200});
      },
      async()=>{personalAttempts++;return {
-       eligible:false,matched:0,attempted:0,delivered:0,queued:0,
-       deduped:0,skipped:0,failed:0,reason:'DISABLED' as const,
+       eligible:true,matched:1,attempted:1,delivered:0,queued:1,
+       deduped:0,skipped:0,failed:0,reason:'COMPLETE' as const,
      };},
    );
    const at=new Date(NOW);
    let result=await subscriber.runOnce(at);
    assert.equal(result.sourceStatus,'READY');
    assert.equal(result.delivered,1);
+   assert.equal(result.publicDelivered,1);
+   assert.equal(result.personalDelivered,0);
+   assert.equal(result.personalQueued,1);
+   assert.equal(result.queued,1,'durable personal queue is NOT Bot API delivery');
    assert.equal(publicSends,1);assert.equal(personalAttempts,1);
    result=await subscriber.runOnce(at);
    assert.equal(result.sourceStatus,'READY');
    assert.equal(result.deduped,1);
+   assert.equal(result.publicDelivered,0);
+   assert.equal(result.personalQueued,1,
+     'persistent member queue retry remains a separate idempotent operation');
    assert.equal(publicSends,1);
    candidate=fixture();candidate.generatedAt=new Date(NOW-20*60_000).toISOString();
    result=await subscriber.runOnce(at);
    assert.equal(result.sourceStatus,'INVALID_RESPONSE');
+   assert.equal(result.queued,0);
+   assert.equal(result.publicDelivered,0);
    assert.equal(publicSends,1);assert.equal(personalAttempts,2);
    assert.equal(requests,3);
  }finally{
