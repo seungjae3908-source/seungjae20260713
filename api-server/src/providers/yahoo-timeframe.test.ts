@@ -1,6 +1,71 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateYahooDerivedTimeframe, yahooChartParams } from './yahoo';
+import { aggregateYahooDerivedTimeframe, yahooChartParams, getCandles, getQuote } from './yahoo';
+
+function publicChart(symbol = 'AAPL') {
+  return new Response(JSON.stringify({ chart: { result: [{ meta: { symbol, regularMarketTime: 1_700_000_000 }, timestamp: [1_700_000_000],
+    indicators: { quote: [{ open: [100], high: [102], low: [99], close: [101], volume: [10] }] } }] } }));
+}
+
+test('scanner bounds history without changing long-history chart requests', async t => {
+  const reads: URL[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => { reads.push(new URL(String(input))); return publicChart(); });
+  await getCandles('AAPL', '1D', { purpose: 'scanner' });
+  await getCandles('AAPL', '60m', { purpose: 'scanner' });
+  await getCandles('AAPL', '1D');
+  assert.deepEqual(reads.map(url => url.searchParams.get('range')), ['1y', '6mo', '10y']);
+});
+
+test('a fast successful chart does not start a redundant late hedge', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return publicChart(); });
+  await getQuote('AAPL');
+  await new Promise(resolve => setTimeout(resolve, 210));
+  assert.equal(calls, 1);
+});
+
+test('Korean scanner uses the roster exchange, never a guessed KOSPI alias', async t => {
+  const symbols: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const symbol = decodeURIComponent(new URL(String(input)).pathname.split('/').at(-1)!);
+    symbols.push(symbol); return publicChart(symbol);
+  });
+  await getCandles('247540', '1D', { purpose: 'scanner', exchange: 'KOSDAQ' });
+  await getCandles('005930', '1D', { purpose: 'scanner', exchange: 'KOSPI' });
+  await assert.rejects(getCandles('247540', '1D', { purpose: 'scanner', exchange: 'KONEX' }), /EXCHANGE_MAPPING_UNAVAILABLE/);
+  assert.deepEqual(symbols, ['247540.KQ', '005930.KS']);
+});
+
+test('Yahoo rejects cross-symbol evidence and never invents missing prices', async t => {
+  t.mock.method(globalThis, 'fetch', async () => publicChart('MSFT'));
+  await assert.rejects(getCandles('AAPL', '1D'), /YAHOO_PROVIDER_SYMBOL_MISMATCH/);
+});
+
+test('pre-abort makes zero public calls and active abort terminates non-cooperative fetch', async t => {
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', () => { calls++; return new Promise(() => {}); });
+  const early = new AbortController(); early.abort(new Error('EARLY_ABORT'));
+  await assert.rejects(getCandles('AAPL', '1D', { signal: early.signal }), /EARLY_ABORT/);
+  assert.equal(calls, 0);
+  const active = new AbortController();
+  const pending = getCandles('AAPL', '1D', { signal: active.signal });
+  active.abort(new Error('ACTIVE_ABORT'));
+  await assert.rejects(pending, /ACTIVE_ABORT/);
+  assert.equal(calls, 1);
+});
+
+test('hard public deadline settles even if both transports ignore abort', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const signals: AbortSignal[] = [];
+  t.mock.method(globalThis, 'fetch', (_input: unknown, init?: RequestInit) => { signals.push(init!.signal as AbortSignal); return new Promise(() => {}); });
+  const pending = getCandles('AAPL', '1D');
+  const rejection = assert.rejects(pending, /YAHOO_CHART_BUDGET_EXCEEDED/);
+  t.mock.timers.tick(180);
+  t.mock.timers.tick(2_620);
+  await rejection;
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every(signal => signal.aborted));
+});
 
 function candle(time: string, open: number, high: number, low: number, close: number, volume: number) {
   return { time, open, high, low, close, volume };

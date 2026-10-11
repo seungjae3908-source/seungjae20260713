@@ -287,6 +287,9 @@ test('actual mandatory provider rejection is counted as provider error', async (
   });
   assert.equal(result.completedCount, 1);
   assert.equal(result.providerErrorCount, 1);
+  assert.equal(result.failures?.length, 1);
+  assert.equal(result.failures?.[0].reason, 'provider_error');
+  assert.equal(result.failures?.[0].symbol, item(2).ticker);
   assert.equal(result.workerErrorCount, 0);
   assert.equal(result.timeoutCount, 0);
   assert.equal(result.partial, true);

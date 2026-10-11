@@ -179,6 +179,7 @@ async function loadStockCandles(
   timeframe: string,
   providerHealth: ScannerProviderHealthTracker,
   signal?: AbortSignal,
+  exchange?: string | null,
 ): Promise<Candle[]> {
   throwIfAborted(signal);
   if (market === 'US' && timeframe === '3m') {
@@ -191,7 +192,7 @@ async function loadStockCandles(
     throwIfAborted(signal);
     return completedStockScannerCandles(market, timeframe, aggregateUsSessionCandles(hourly, 60, 240));
   }
-  const candles = await providerHealth.getCandles(market, ticker, timeframe as Timeframe, signal);
+  const candles = await providerHealth.getCandles(market, ticker, timeframe as Timeframe, signal, exchange);
   throwIfAborted(signal);
   return completedStockScannerCandles(market, timeframe, candles);
 }
@@ -218,8 +219,8 @@ export const StockSignalScannerService = {
         const operationSignal = signal ?? request.signal;
         throwIfAborted(operationSignal);
         const [candles, context] = await Promise.all([
-          loadStockCandles(request.market, ticker, primaryTimeframe, providerHealth, operationSignal),
-          primaryTimeframe === contextTimeframe ? Promise.resolve<Candle[] | null>(null) : loadStockCandles(request.market, ticker, contextTimeframe, providerHealth, operationSignal).catch((error: unknown) => {
+          loadStockCandles(request.market, ticker, primaryTimeframe, providerHealth, operationSignal, entryByTicker.get(ticker)?.exchange),
+          primaryTimeframe === contextTimeframe ? Promise.resolve<Candle[] | null>(null) : loadStockCandles(request.market, ticker, contextTimeframe, providerHealth, operationSignal, entryByTicker.get(ticker)?.exchange).catch((error: unknown) => {
             if (operationSignal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
             return [];
           }),
@@ -333,7 +334,7 @@ export const StockSignalScannerService = {
       cards: intelligenceCards,
       discovery,
       alerts: lifecycle.alerts,
-      failures: [],
+      failures: raw.failures ?? [],
       execution: {
         requestedCount: universe.entries.length,
         startedCount: raw.scanned,

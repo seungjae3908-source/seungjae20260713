@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publicCyclePageDecision, currentPublicCyclePublication } from '../src/public-cycle-progress-v2.mjs';
+import { withPublicStockProvider } from '../src/public-stock-provider-adapter.mjs';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
 import { StockSignalScannerService } from '../../api-server/src/services/stock-signal-scanner.service';
@@ -118,40 +119,6 @@ async function usPublicUniverse() {
     partial: false, stale: false, providerErrorCount: 0, loadedAt: new Date().toISOString() };
 }
 
-function yahooProviderCandidates(lane, ticker, entry) {
-  const clean = String(ticker ?? '').trim().toUpperCase();
-  if (!clean) return [];
-  if (lane.market === 'KR_STOCK' && /^\d{6}$/u.test(clean)) {
-    const exchange = String(entry?.exchange ?? '').toUpperCase();
-    const kosdaq = /KOSDAQ|코스닥/u.test(exchange);
-    const primary = `${clean}.${kosdaq ? 'KQ' : 'KS'}`;
-    const alternate = `${clean}.${kosdaq ? 'KS' : 'KQ'}`;
-    return [primary, alternate];
-  }
-  if (lane.market === 'US_STOCK') {
-    const canonical = /^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean) ? clean.replace(/\./gu, '-') : clean;
-    const candidates = [canonical];
-    if (canonical.includes('-')) candidates.push(canonical.replace(/-/gu, '.'));
-    return [...new Set(candidates)];
-  }
-  return [clean];
-}
-
-async function withProviderFallback(candidates, operation) {
-  let lastError;
-  for (const candidate of candidates) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await operation(candidate);
-      } catch (error) {
-        lastError = error;
-        if (attempt < 3) await sleep(150 * attempt);
-      }
-    }
-  }
-  throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
-}
-
 async function withUpbitPacing(operation) {
   const originalFetch = globalThis.fetch;
   const schedule = createStartScheduler(130);
@@ -188,8 +155,6 @@ async function withUpbitPacing(operation) {
 async function withStockPublicOnly(lane, operation) {
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
-  const originalCandles = marketData.getCandles;
-  const originalQuote = marketData.getQuote;
   const originalUniverseGet = universe.get;
 
   let targetUniverse;
@@ -209,32 +174,12 @@ async function withStockPublicOnly(lane, operation) {
     targetUniverse = await originalUniverseGet.call(universe, 'KR');
   }
 
-  const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
-  marketData.getCandles = async (ticker, timeframe = '1D') => {
-    const entry = entryByTicker.get(String(ticker).toUpperCase());
-    const candidates = yahooProviderCandidates(lane, ticker, entry);
-    return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
-  };
-  marketData.getQuote = async (ticker) => {
-    const originalTicker = String(ticker).toUpperCase();
-    const entry = entryByTicker.get(originalTicker);
-    const candidates = yahooProviderCandidates(lane, ticker, entry);
-    const quote = await withProviderFallback(candidates, (providerSymbol) => yahoo.getQuote(providerSymbol));
-    return {
-      ...quote,
-      ticker: originalTicker,
-      symbol: originalTicker,
-      name: entry?.name ?? quote?.name ?? originalTicker,
-    };
-  };
   universe.get = async (market, signal, deadlineMs) => {
     if (market === lane.scannerMarket) return targetUniverse;
     return originalUniverseGet.call(universe, market, signal, deadlineMs);
   };
 
-  try { return await operation(); } finally {
-    marketData.getCandles = originalCandles;
-    marketData.getQuote = originalQuote;
+  try { return await withPublicStockProvider({ marketData, yahoo, entries: targetUniverse?.entries ?? [], market: lane.market }, operation); } finally {
     universe.get = originalUniverseGet;
   }
 }

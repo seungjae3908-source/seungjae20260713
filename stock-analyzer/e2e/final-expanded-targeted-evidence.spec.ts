@@ -138,7 +138,7 @@ function scannerPayload() {
 
 async function installTechnicalWorkspaceMocks(page: Page) {
   await page.route('**/api/**', (route) => fulfill(route, { ok: true, items: [], rows: [], results: [], quotes: [] }));
-  await page.route('**/api/market/scan**', (route) => fulfill(route, scannerPayload()));
+  await page.route('**/api/market/scan**', (route) => fulfill(route, { ...scannerPayload(), timeframe: new URL(route.request().url()).searchParams.get('timeframe') }));
   await page.route('**/api/stocks/*/chart**', (route) => fulfill(route, {
     ticker: decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2) ?? '000660'),
     timeframe: '1D',
