@@ -108,7 +108,7 @@ export function parseBitgetReadonlyDiagnosticHeader(
     || typeof raw.probe !== 'string'
     || !probes.has(raw.probe)
     || (raw.httpStatus !== null
-      && (!Number.isInteger(raw.httpStatus) || Number(raw.httpStatus) < 100 || Number(raw.httpStatus) > 599))
+      && (typeof raw.httpStatus !== 'number' || !Number.isInteger(raw.httpStatus) || raw.httpStatus < 100 || raw.httpStatus > 599))
     || (raw.applicationCode !== null
       && (typeof raw.applicationCode !== 'string' || !/^\d+$/.test(raw.applicationCode)))
     || typeof raw.sanitizedClassification !== 'string'
