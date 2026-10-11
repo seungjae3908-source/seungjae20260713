@@ -1383,6 +1383,23 @@ function buildPlanInput(
     estimatedSlippagePercent: slippage,
     averageSpreadPercent: averageSpread,
     economics: null,
+    researchLineage: Object.freeze({
+      schemaVersion: 'trading-research-lineage-v1',
+      candidateId: entry.identity.candidateId ?? null,
+      market: entry.identity.market,
+      symbol: entry.identity.symbol,
+      timeframe: entry.identity.timeframe,
+      direction: entry.identity.direction,
+      strategyId: entry.identity.strategyId,
+      strategyVersion: entry.identity.strategyVersion,
+      parameterHash: entry.identity.parameterHash,
+      researchCodeSha: entry.identity.researchCodeSha,
+      costPolicyVersion: entry.identity.costPolicyVersion,
+      handoffId: entry.handoffId,
+      source: 'MEMBER_AUTO_TRADING_PAPER_HANDOFF',
+      executionAuthority: 'NONE',
+      profitabilityCredit: 0,
+    }),
   };
 }
 

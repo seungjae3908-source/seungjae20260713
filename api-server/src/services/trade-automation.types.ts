@@ -252,6 +252,24 @@ export type TradingEconomics = {
   calibratedAt: string;
 };
 
+export type TradingResearchLineage = Readonly<{
+  schemaVersion: 'trading-research-lineage-v1';
+  candidateId: string | null;
+  market: 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+  symbol: string;
+  timeframe: string;
+  direction: 'BUY' | 'LONG' | 'SHORT';
+  strategyId: string;
+  strategyVersion: string;
+  parameterHash: string;
+  researchCodeSha: string;
+  costPolicyVersion: string;
+  handoffId: string;
+  source: 'MEMBER_AUTO_TRADING_PAPER_HANDOFF';
+  executionAuthority: 'NONE';
+  profitabilityCredit: 0;
+}>;
+
 export type TradingPlanInput = {
   exchange: TradingExchange;
   accountMode: TradingAccountMode;
@@ -282,6 +300,7 @@ export type TradingPlanInput = {
   estimatedSlippagePercent?: number | null;
   averageSpreadPercent?: number | null;
   economics?: TradingEconomics | null;
+  researchLineage?: TradingResearchLineage | null;
 };
 
 export type TradingOptimizationAssessment = {

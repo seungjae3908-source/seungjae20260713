@@ -120,6 +120,7 @@ export function tradeAutomationJournalPayloadsFromSnapshot(
         orderIds: [order.id],
         fillIds: fills.map((fill) => fill.id).filter(Boolean),
       },
+      researchLineage: plan.researchLineage ?? undefined,
       technicalSnapshot: {
         snapshotId: `trade-plan:${plan.id}`,
         contextSource: 'PRE_TRADE_SNAPSHOT',
