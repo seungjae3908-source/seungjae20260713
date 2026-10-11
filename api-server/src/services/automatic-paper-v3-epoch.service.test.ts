@@ -6,7 +6,6 @@ import {
 import {
   stageAutomaticPaperV3Epoch,sameAutomaticPaperV3Epoch,
   appendAutomaticPaperV3StagedEpoch,
-  type AutomaticPaperV3Epoch,
 } from './automatic-paper-v3-epoch.service';
 import type {PaperRoundProposalRow} from './paper-research-round-proposal-store.service';
 
