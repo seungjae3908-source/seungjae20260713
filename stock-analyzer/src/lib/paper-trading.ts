@@ -163,6 +163,8 @@ export {
   PAPER_STORAGE_KEY, PAPER_STORAGE_SCHEMA_VERSION, PAPER_STORAGE_LIMITS,
   createLocalPaperState, validatePaperState, repairPaperState, savePaperState, loadPaperState,
   exportPaperState, importPaperState, clearPaperState,
+  getManualPaperRoundSummary, startNextLocalManualPaperRound,
+  exportManualPaperRounds, MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,
   type StorageLike, type PaperStorageEnvelope,
 } from './paper-trading-storage';
 
