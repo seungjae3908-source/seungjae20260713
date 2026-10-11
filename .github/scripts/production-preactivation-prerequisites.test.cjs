@@ -33,9 +33,11 @@ function fixture(overrides = {}) {
     created_at: '2026-10-05T00:00:00.000Z',
     updated_at: '2026-10-05T00:01:00.000Z',
   };
-  const artifactKeys = qaScope === 'trading_core'
-    ? ['tradingCore', 'account', 'credential', 'activationReady']
-    : ['comprehensive', 'account', 'credential', 'activationReady'];
+  const artifactKeys = qaScope === 'auto_live'
+    ? ['autoLive', 'autoLiveSignal', 'account', 'credential', 'activationReady']
+    : qaScope === 'trading_core'
+      ? ['tradingCore', 'account', 'credential', 'activationReady']
+      : ['comprehensive', 'account', 'credential', 'activationReady'];
   const artifacts = artifactKeys.map((key, index) => ({
     id: index + 1,
     name: REQUIRED_ARTIFACT_NAMES[key](SHA, PRODUCTION_RUN_ID),
@@ -134,6 +136,13 @@ test('accepts focused Trading Core artifact set without Comprehensive artifact',
   assert.equal(result.qaScope, 'trading_core');
   assert.equal(result.productionDeployRunId, PRODUCTION_RUN_ID);
   assert.equal(result.artifactNames.tradingCore, `production-trading-core-${SHA}`);
+});
+
+test('accepts Automatic LIVE-only artifact set without Paper, Telegram or Comprehensive artifacts', async () => {
+  const input = fixture({ qaScope: 'auto_live' });
+  const result = await inspectProductionPreactivationPrerequisites({ ...input, targetSha: SHA });
+  assert.equal(result.qaScope, 'auto_live');
+  assert.equal(result.artifactNames.autoLive, `production-auto-live-${SHA}`);
 });
 
 test('ignores a newer pull-request validation run and selects the real workflow_dispatch Production deploy', async () => {
