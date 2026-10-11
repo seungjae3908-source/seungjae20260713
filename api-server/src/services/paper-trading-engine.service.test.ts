@@ -426,6 +426,58 @@ test('target two closes remaining quantity', () => {
   assert.equal(second.position?.status, 'closed');
 });
 
+test('manual Paper TP2 closes only its configured 25% and preserves the remaining position', () => {
+  const opened = place(undefined, {
+    request: { targetClosePercent1: 25, targetClosePercent2: 25 },
+  });
+  const first = process(opened.state, { open: 102, high: 106, low: 101, close: 105 }, 'quarter-tp1');
+  assert.equal(first.fills.length, 1);
+  const original = first.position!.quantity;
+  assert.ok(Math.abs(first.position!.remainingQuantity / original - 0.75) < 0.001);
+  const second = process(first.state, {
+    timestamp: NOW.getTime()+30*60_000, open: 106, high: 109, low: 105, close: 108,
+  }, 'quarter-tp2');
+  assert.equal(second.fills.length, 1);
+  assert.equal(second.fills[0].fillReason, 'take_profit');
+  assert.ok(Math.abs(second.fills[0].quantity / original - 0.25) < 0.001);
+  assert.ok(Math.abs(second.position!.remainingQuantity / original - 0.50) < 0.001);
+  assert.equal(second.position!.status, 'partially_closed');
+  assert.equal(second.state.journal.length, 1);
+  assert.ok(Math.abs(second.state.journal[0].closedQuantity / original - 0.50) < 0.001);
+  assert.equal(second.state.orders[0]?.status, 'filled');
+  assert.equal(second.orderSubmitted, false);
+  assert.equal(second.exchangeRequestSent, false);
+});
+
+test('manual Paper target-2 with a zero-percent allocation does not invent a closing fill', () => {
+  const opened = place(undefined, {
+    request: { targetClosePercent1: 50, targetClosePercent2: 0 },
+  });
+  const first = process(opened.state, { open: 102, high: 106, low: 101, close: 105 }, 'half-tp1');
+  const original = first.position!.quantity;
+  const second = process(first.state, {
+    timestamp: NOW.getTime()+30*60_000, open: 106, high: 109, low: 105, close: 108,
+  }, 'zero-tp2');
+  assert.equal(second.fills.length, 0);
+  assert.ok(Math.abs(second.position!.remainingQuantity / original - 0.5) < 0.001);
+  assert.equal(second.position!.status, 'partially_closed');
+  assert.equal(second.position!.target2Executed, true);
+  assert.equal(second.orderSubmitted, false);
+  assert.equal(second.exchangeRequestSent, false);
+});
+
+test('manual Paper both targets touched in one candle respect 25%/25%, without lookahead profit inflation', () => {
+  const opened = place(undefined, {
+    request: { targetClosePercent1: 25, targetClosePercent2: 25 },
+  });
+  const result = process(opened.state, { open: 106, high: 110, low: 105, close: 108 }, 'both-quarter-tps');
+  assert.equal(result.fills.length, 2);
+  assert.ok(Math.abs(result.fills[0].quantity / result.position!.quantity - 0.25) < 0.001);
+  assert.ok(Math.abs(result.fills[1].quantity / result.position!.quantity - 0.25) < 0.001);
+  assert.equal(result.position!.status, 'partially_closed');
+  assert.ok(Math.abs(result.position!.remainingQuantity / result.position!.quantity - 0.5) < 0.001);
+});
+
 test('same candle stop and target uses stop first', () => {
   const opened = place();
   const result = process(opened.state, { open: 100, high: 106, low: 97, close: 100 }, 'stop-first');

@@ -133,15 +133,24 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
     }
 
     if (target2Hit && !position.target2Executed && position.remainingQuantity > EPSILON) {
-      fills.push(closePositionInternal(
-        state,
-        position,
+      // Second target is a fraction of the ORIGINAL position, just like TP1.
+      // Closing the whole remainder silently ignores explicit 25%/25% plans.
+      // Any unallocated portion stays open for stop/manual close.
+      const targetQuantity = Math.min(
         position.remainingQuantity,
-        targetReference(position, candle, target2 as number),
-        'take_profit',
-        `${action.eventId}:${position.id}:tp2`,
-        at,
-      ));
+        floorQuantityToRules(position.quantity * position.targetClosePercent2 / 100, null, 8),
+      );
+      if (targetQuantity > EPSILON) {
+        fills.push(closePositionInternal(
+          state,
+          position,
+          targetQuantity,
+          targetReference(position, candle, target2 as number),
+          'take_profit',
+          `${action.eventId}:${position.id}:tp2`,
+          at,
+        ));
+      }
       position.target2Executed = true;
       lastPosition = position;
     }
