@@ -146,3 +146,23 @@ test('automatic Paper cost issuer is protected, market-scoped and blocks unknown
   assert.ok(execution.includes('return matches.length === 1 ? matches[0]! : null'));
   assert.ok(execution.includes("taxAmount == null ? null : costPolicy?.policyId"));
 });
+
+test('Bitget simulated funding certificate is issued only by bounded server readers', () => {
+  const source = read('api-server/src/services/paper-futures-funding-certificate.service.ts');
+  const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const execution = read('api-server/src/services/trade-execution.service.ts');
+  const automation = read('api-server/src/services/trade-automation.service.ts');
+  const capital = read('api-server/src/services/admin-four-market-paper-readback.service.ts');
+  const repository = read('api-server/src/services/trade-automation.repository.ts');
+  for (const marker of [
+    'BitgetPublicClient', 'collectBitgetFundingCostOnlyHistory',
+    'readHistoricalUpbitUsdtKrwMinute', 'historicalFx',
+    'eventDigest', 'eventCount', 'issued.add(certificate)',
+  ]) assert.ok(source.includes(marker), marker);
+  assert.ok(worker.includes('fundingReceipt: async (scope) => issueProtectedPaperFundingCertificate(scope)'));
+  assert.ok(execution.includes('this.paperCostEvidenceProviders.fundingReceipt'));
+  assert.ok(automation.includes('isProtectedPaperFundingCertificate(funding)'));
+  assert.ok(repository.includes('paperFundingSettlementEvidence: order.paperFundingSettlementEvidence ?? null'));
+  assert.ok(capital.includes('funding.netFundingKrw'));
+  assert.ok(capital.includes("funding.eventDigest"));
+});
