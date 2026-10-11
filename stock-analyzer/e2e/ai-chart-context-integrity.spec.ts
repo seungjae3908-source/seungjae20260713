@@ -174,10 +174,12 @@ test('timeframe changes clear stale Scanner price plan and expose one symbol sea
   await expect(chart.getByTestId('chart-stream-status')).toHaveText('REST_BOOTSTRAP');
 
   const evidence = chart.getByTestId('ai-chart-v3-evidence-status');
-  await expect(evidence).toContainText('TECHNICAL SCORE');
-  await expect(evidence).toContainText('CALIBRATED PROBABILITY');
-  await expect(evidence).toContainText('INSUFFICIENT_SAMPLE');
-  await expect(evidence).toContainText('승률이 아닙니다');
+  await chart.getByText('지표·데이터 상세', { exact: true }).click();
+  await expect(evidence).toBeVisible();
+  await expect(evidence).toContainText('기술 강도 점수');
+  await expect(evidence).toContainText('검증 승률');
+  await expect(evidence).toContainText('표본 부족');
+  await expect(evidence).toContainText('승률 미검증');
 
   const plan = chart.getByTestId('scanner-price-plan-chart');
   await expect(plan).toContainText('진입 · 손절 · 목표가');
