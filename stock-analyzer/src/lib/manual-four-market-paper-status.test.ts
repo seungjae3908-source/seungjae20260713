@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MANUAL_FOUR_MARKETS,parseManualFourMarketStatus} from './manual-four-market-paper-status';
+import {
+  MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
+  manualPaperBootstrapAuthorized,
+} from './manual-four-market-paper-status';
 const fixture=()=>({
   ok:true,mode:'MANUAL_PAPER_FOUR_MARKET_SEED_ONLY',
   ownerScope:'SELF',readOnlyProbe:true,role:'member',
@@ -43,4 +46,24 @@ test('cross-account RLS, false-ready market and invented capital are rejected',(
   changed.markets.us_stock={...changed.markets.us_stock,
     id:'manual-paper-admin-v1:us_stock'};
   assert.throws(()=>parseManualFourMarketStatus(changed));
+});
+
+test('manual four-market bootstrap confirmation expires at owner switch and cannot cross fund',()=>{
+  const ownerA='11111111-1111-1111-1111-111111111111';
+  const ownerB='22222222-2222-2222-2222-222222222222';
+  const ready=fixture();
+  ready.rlsGuardReady=true;
+  ready.canCreate=true;
+  ready.creationBlockers=[];
+  const checked=parseManualFourMarketStatus(ready);
+  assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerA,checked),true);
+  assert.equal(manualPaperBootstrapAuthorized(ownerB,ownerA,checked),false);
+  assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerB,checked),false);
+  assert.equal(manualPaperBootstrapAuthorized(ownerA,null,checked),false);
+  assert.equal(manualPaperBootstrapAuthorized('',ownerA,checked),false);
+  assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerA,null),false);
+  const noRls={...checked,rlsGuardReady:false};
+  assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerA,noRls),false);
+  const existing={...checked,ready:true,canCreate:false};
+  assert.equal(manualPaperBootstrapAuthorized(ownerA,ownerA,existing),false);
 });

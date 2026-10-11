@@ -13,7 +13,7 @@ test('manual 4-market Paper migration is transactional, follows V2 guards and ha
   assert.match(migration,/four_market_paper_wallet_rls_guard_ready\(\) is true/i);
   for(const name of [
     'domestic_stock','us_stock','crypto_spot','crypto_futures',
-    'manual-paper-admin-v1:','manual-paper-member-v1:','manual-four-market-paper-v1',
+    'manual-paper-%','manual-four-market-paper-v1',
   ])assert.ok(migration.includes(name),name);
   for(const field of ['initialBalance','equity','cashBalance','availableMargin',
     'usedMargin','reserveKrw','compoundedProfitKrw','compoundShare',
@@ -24,6 +24,13 @@ test('manual 4-market Paper migration is transactional, follows V2 guards and ha
   assert.match(migration,/before update or delete on public\.paper_accounts/i);
   assert.match(migration,/manual_four_market_paper_wallet_rls_guard_ready/i);
   assert.match(migration,/revoke truncate,references,trigger/i);
+  // No forged role/market/future-version can be created or removed through
+  // authenticated Paper Journal sync or an unreviewed privileged mutation.
+  assert.match(migration,/case when id like 'manual-paper-%' then/i);
+  assert.match(migration,/using \(id not like 'manual-paper-%'\)/i);
+  assert.match(migration,/with check \(id not like 'manual-paper-%'\)/i);
+  assert.match(migration,/if old\.id like 'manual-paper-%'/i);
+  assert.match(migration,/or new\.id like 'manual-paper-%'/i);
 });
 test('manual Paper never grants client direct mutation or a broader privileged RPC',()=>{
   for(const op of ['insert','update','delete']){

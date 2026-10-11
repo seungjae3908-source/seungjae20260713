@@ -14,11 +14,13 @@ begin
 end
 $preflight$;
 
+-- The entire manual-paper-* namespace is protected. Reject forged
+-- unknown roles, markets, versions and future seed identifiers unless a
+-- separately reviewed migration explicitly introduces them.
 alter table public.paper_accounts enable row level security;
 alter table public.paper_accounts
   add constraint manual_four_market_paper_seed_contract check (
-    case when id like 'manual-paper-admin-v1:%'
-          or id like 'manual-paper-member-v1:%' then
+    case when id like 'manual-paper-%' then
       coalesce(
         id = ('manual-paper-' || payload->>'role' || '-v1:' || payload->>'market')
         and payload->>'role' in ('admin','member')
@@ -48,18 +50,14 @@ alter table public.paper_accounts
 -- even if another permissive owner policy is later introduced.
 create policy "manual_v1_paper_wallet_insert_guard"
 on public.paper_accounts as restrictive for insert to authenticated
-with check (id not like 'manual-paper-admin-v1:%'
-        and id not like 'manual-paper-member-v1:%');
+with check (id not like 'manual-paper-%');
 create policy "manual_v1_paper_wallet_update_guard"
 on public.paper_accounts as restrictive for update to authenticated
-using (id not like 'manual-paper-admin-v1:%'
-   and id not like 'manual-paper-member-v1:%')
-with check (id not like 'manual-paper-admin-v1:%'
-        and id not like 'manual-paper-member-v1:%');
+using (id not like 'manual-paper-%')
+with check (id not like 'manual-paper-%');
 create policy "manual_v1_paper_wallet_delete_guard"
 on public.paper_accounts as restrictive for delete to authenticated
-using (id not like 'manual-paper-admin-v1:%'
-   and id not like 'manual-paper-member-v1:%');
+using (id not like 'manual-paper-%');
 
 -- Even service-role may INSERT the immutable seed only once. Disallow any
 -- subsequent amendment/deletion to its original evidence at DB trigger level.
@@ -70,17 +68,14 @@ set search_path=public,pg_temp
 as $immutable$
 begin
   if tg_op = 'UPDATE' then
-    if old.id like 'manual-paper-admin-v1:%'
-      or old.id like 'manual-paper-member-v1:%'
-      or new.id like 'manual-paper-admin-v1:%'
-      or new.id like 'manual-paper-member-v1:%' then
+    if old.id like 'manual-paper-%'
+      or new.id like 'manual-paper-%' then
       raise exception 'MANUAL_PAPER_SEED_IMMUTABLE' using errcode='23514';
     end if;
     return new;
   end if;
   if tg_op = 'DELETE' then
-    if old.id like 'manual-paper-admin-v1:%'
-      or old.id like 'manual-paper-member-v1:%' then
+    if old.id like 'manual-paper-%' then
       raise exception 'MANUAL_PAPER_SEED_IMMUTABLE' using errcode='23514';
     end if;
     return old;
@@ -110,10 +105,19 @@ as $readiness$
         )
         and permissive='RESTRICTIVE'
         and 'authenticated'::name = any(roles)
-        and (coalesce(qual,'') like '%manual-paper-admin-v1:%'
-          or coalesce(with_check,'') like '%manual-paper-admin-v1:%')
-        and (coalesce(qual,'') like '%manual-paper-member-v1:%'
-          or coalesce(with_check,'') like '%manual-paper-member-v1:%')
+        and (
+          (cmd='INSERT'
+            and with_check like '%manual-paper-%'
+            and with_check ~* '(!~~|not[[:space:]]+like)')
+          or (cmd='UPDATE'
+            and qual like '%manual-paper-%'
+            and with_check like '%manual-paper-%'
+            and qual ~* '(!~~|not[[:space:]]+like)'
+            and with_check ~* '(!~~|not[[:space:]]+like)')
+          or (cmd='DELETE'
+            and qual like '%manual-paper-%'
+            and qual ~* '(!~~|not[[:space:]]+like)')
+        )
     ) = 3
     and exists (
       select 1 from pg_catalog.pg_constraint
