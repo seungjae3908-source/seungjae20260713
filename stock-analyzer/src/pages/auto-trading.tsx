@@ -336,6 +336,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   }, [canAuto, fixture]);
 
   useEffect(() => {
+    if (mode !== 'paper') {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return;
+    }
     if (fixture) {
       setAutoPaperPreflight(null);
       setAutoPaperStatus('fixture');
@@ -525,6 +530,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
   const newEntriesStopped = policy?.newEntriesStopped === true;
   const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
+  const showLegacyPaperReadinessInsideAutoDashboard = mode === 'paper';
 
   const dashboard = mode === 'auto' ? (
     <div className="space-y-3">
@@ -595,7 +601,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
       </section>
 
-      <details
+      {showLegacyPaperReadinessInsideAutoDashboard ? <details
         className="rounded-2xl border border-card-border bg-card"
         data-testid="optional-paper-readiness"
       >
@@ -709,7 +715,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </section>
       ) : null}
         </div>
-      </details>
+      </details> : null}
     </div>
   ) : (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
