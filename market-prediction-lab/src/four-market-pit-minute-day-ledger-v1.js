@@ -113,11 +113,12 @@ function inspectMember(member, expectedSymbol, sessionCount) {
   counts.sourceSessionsCovered = member.archivedSessionCount;
   return { counts, expectedMissing: member.missingSessionCount };
 }
-function inspectPlan(plan, membership, expectedCountsBySymbol, market, date) {
+function inspectPlan(plan, membership, expectedCountsBySymbol, market, date, sessions) {
   const expectedCount=[...expectedCountsBySymbol.values()].reduce((a,b)=>a+b,0);
   if (!Array.isArray(plan) || plan.length !== expectedCount
     || plan.length > membership.length * 16) return false;
   const bySymbol = new Map(), actualCounts = new Map();
+  const byStart = new Map(sessions.map(x => [x.startMs,x]));
   for (const p of plan) {
     if (p?.market !== market || p.venue !== VENUES[market]
       || !membership.includes(p.symbol)
@@ -125,7 +126,13 @@ function inspectPlan(plan, membership, expectedCountsBySymbol, market, date) {
       || p.selectionDate !== date
       || !number(p.sessionStartMs) || !number(p.sessionEndMs)
       || p.sessionEndMs <= p.sessionStartMs
-      || typeof p.sessionKind !== "string") return false;
+      || !byStart.has(p.sessionStartMs)
+      || p.sessionEndMs !== byStart.get(p.sessionStartMs).endMs
+      || p.sessionKind !== byStart.get(p.sessionStartMs).kind
+      || (STOCKS.has(market)
+        ? p.tradingDateLocal !== date || Object.hasOwn(p,"dayUtc")
+        : p.dayUtc !== date || Object.hasOwn(p,"tradingDateLocal")))
+      return false;
     const id = p.symbol + ":" + p.sessionStartMs;
     if (bySymbol.has(id)) return false;
     bySymbol.set(id, true);
@@ -162,7 +169,12 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
     return blocked(market,day,"PIT_MINUTE_DAY_SOURCE_SPAN_INVALID");
   const cohort = cohortForSessions(manifest,sessions);
   if (!cohort) return blocked(market,day,"PIT_SAME_DAY_TICKER_REUSE_NEEDS_STABLE_ID");
-  if (cohort.length !== pit.dayActiveArchivedMembers)
+  const utcDaySymbols = new Set(manifest.memberships.filter(row =>
+    row.listedAtMs<end && (row.removedAtMs ?? Infinity)>start)
+    .map(row => String(row.symbol).trim().toUpperCase()));
+  if (cohort.length !== pit.dayActiveArchivedMembers
+    || cohort.length !== utcDaySymbols.size
+    || cohort.some(symbol=>!utcDaySymbols.has(symbol)))
     return blocked(market,day,"PIT_LOCAL_SESSION_MEMBERSHIP_DIFFERS_FROM_DAY_GATE");
   if (!cohort.length) return blocked(market,day,"PIT_NO_HISTORICAL_ACTIVE_MEMBERS");
   if (!Array.isArray(pages) || !pages.length || pages.length > 2500)
@@ -215,7 +227,7 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
       for (const counter of COUNTERS) local[counter]+=inspected.counts[counter];
     }
     const missing=page.missingSourcePlan;
-    if (!inspectPlan(missing,memberNames,expectedMissingBySymbol,market,day))
+    if (!inspectPlan(missing,memberNames,expectedMissingBySymbol,market,day,sessions))
       return blocked(market,day,"PIT_MINUTE_DAY_MISSING_PLAN_INVALID");
     for (const item of missing) {
       if (monthlyMissingPreview.length<100)
@@ -262,7 +274,10 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
     sessionCalendarDigestSha256:calendarDigest,
     pageReceiptDigestsSha256:hash(pageDigestInputs),
     completeDayPageAudit:true,
-    archiveSourceCompletenessEstablished:complete,
+    // Even all locally present fixture/self-attested rows do not authenticate
+    // historical venue membership or source completeness independently.
+    archiveSourceCompletenessEstablished:false,
+    localArchiveRowsPresentForEverySelectedPITMember:complete,
     inspectedPITMemberCount:cohort.length,
     expectedHistoricalActiveMembers:cohort.length,
     archiveReceiptPageCount:pages.length,
