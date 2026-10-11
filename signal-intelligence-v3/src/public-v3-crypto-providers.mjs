@@ -8,25 +8,82 @@ const UPBIT='https://api.upbit.com';
 const BITGET='https://api.bitget.com';
 const TIMEOUT=3500;
 const finite=value=>{const n=Number(value);return Number.isFinite(n)?n:null;};
+// Number(null) and Number('') are 0, not exchange-supplied OHLCV.
+const requiredNumber=value=>value==null || value===''?NaN:Number(value);
 const text=value=>typeof value==='string'?value.trim():'';
 const ascii=(a,b)=>a<b?-1:a>b?1:0;
 const fail=reason=>{throw new Error('PUBLIC_V3_CRYPTO_'+reason);};
 
-function normalizeCandles(rows, now) {
-  const map=new Map();
+// Each exchange candle is identified by its OPEN time, not its last trade.
+// Do not "repair" an inconsistent high/low with Math.max()/Math.min():
+// exclude the entire untrusted series so CryptoSignalScannerService reports
+// INVALID_DATA rather than creating a synthetic trade candidate.
+const TF_MS=Object.freeze({
+  '1m':60000,'3m':180000,'5m':300000,'15m':900000,
+  '60m':3600000,'4H':14400000,'1D':86400000,
+});
+export function upbitPublicCandleUtcStart(raw) {
+  if(typeof raw!=='string'||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$/u.test(raw))
+    return Number.NaN;
+  const at=Date.parse(raw+'Z');
+  return Number.isFinite(at)&&new Date(at).toISOString().slice(0,19)===raw?at:Number.NaN;
+}
+export function normalizePublicV3Candles(rows,now,timeframe) {
+  const duration=TF_MS[timeframe];
+  if(!Array.isArray(rows)||!Number.isFinite(now)||now<=0||!duration)
+    fail('CANDLE_SERIES_INPUT_INVALID');
+  const issues={
+    malformedSourceBars:0,invalidOhlcBars:0,
+    conflictingDuplicateBars:0,equivalentDuplicateBars:0,
+    incompleteCurrentBarsExcluded:0,
+  };
+  const output=new Map();
   for(const row of rows){
-    const time=Number(row.time);
-    if(!Number.isFinite(time)||time<=0||time>now+60000)continue;
-    if(![row.open,row.high,row.low,row.close].every(x=>Number.isFinite(x)&&x>0)
-      ||!Number.isFinite(row.volume)||row.volume<0)continue;
-    map.set(time,{
-      ...row,time,
-      high:Math.max(row.high,row.open,row.close),
-      low:Math.min(row.low,row.open,row.close),
-      quoteVolume:Number.isFinite(row.quoteVolume)&&row.quoteVolume>=0?row.quoteVolume:null,
-    });
+    const time=row?.time;
+    if(!Number.isSafeInteger(time)||time<=0||time>now+60000){
+      issues.malformedSourceBars++;
+      continue;
+    }
+    const open=row?.open,high=row?.high,low=row?.low,close=row?.close,volume=row?.volume;
+    if(![open,high,low,close,volume].every(Number.isFinite)
+       ||open<=0||high<=0||low<=0||close<=0||volume<0
+       ||high<Math.max(open,low,close)||low>Math.min(open,high,close)
+       ||(row?.quoteVolume!=null &&
+         (!Number.isFinite(row.quoteVolume)||row.quoteVolume<0))){
+      issues.invalidOhlcBars++;
+      continue;
+    }
+    // Do not use an unclosed interval to claim a finished indicator.
+    if(time+duration>now){
+      issues.incompleteCurrentBarsExcluded++;
+      continue;
+    }
+    const cleaned={
+      time,open,high,low,close,volume,
+      quoteVolume:row?.quoteVolume==null?null:row.quoteVolume,
+    };
+    const before=output.get(time);
+    if(before){
+      if(['open','high','low','close','volume','quoteVolume']
+        .every(key=>before[key]===cleaned[key]))
+        issues.equivalentDuplicateBars++;
+      else issues.conflictingDuplicateBars++;
+      continue;
+    }
+    output.set(time,cleaned);
   }
-  return [...map.values()].sort((a,b)=>a.time-b.time);
+  const invalid=issues.malformedSourceBars+issues.invalidOhlcBars+issues.conflictingDuplicateBars>0;
+  return Object.freeze({
+    candles:invalid?Object.freeze([]):
+      Object.freeze([...output.values()].sort((a,b)=>a.time-b.time).map(row=>Object.freeze(row))),
+    rejectedSourceSeries:invalid,
+    sourceInputBars:rows.length,
+    ...issues,
+    // A valid series can still lack sufficient historical depth; the
+    // canonical scanner decides its own minimum bar count and data quality.
+    fullUniverseVerified:false,
+    tradeAuthority:'NONE',
+  });
 }
 function candlePath(symbol,timeframe) {
   const market=encodeURIComponent('KRW-'+symbol);
@@ -39,6 +96,23 @@ function candlePath(symbol,timeframe) {
 export function createPublicV3CryptoProviders({fetchImpl=(...args)=>globalThis.fetch(...args),now=Date.now}={}){
   if(typeof fetchImpl!=='function'||typeof now!=='function')fail('PROVIDER_INPUT_INVALID');
   const digests=new Map();
+  const candleQuality=new Map();
+  const emptyQuality=()=>({
+    observedSeries:0,rejectedSourceSeries:0,emptyAfterClosed:0,
+    malformedSourceBars:0,invalidOhlcBars:0,conflictingDuplicateBars:0,
+    equivalentDuplicateBars:0,incompleteCurrentBarsExcluded:0,
+  });
+  const recordQuality=(market,observed)=>{
+    const state=candleQuality.get(market)??emptyQuality();
+    state.observedSeries++;
+    if(observed.rejectedSourceSeries)state.rejectedSourceSeries++;
+    if(observed.candles.length===0)state.emptyAfterClosed++;
+    for(const key of ['malformedSourceBars','invalidOhlcBars',
+      'conflictingDuplicateBars','equivalentDuplicateBars','incompleteCurrentBarsExcluded'])
+      state[key]+=observed[key];
+    candleQuality.set(market,state);
+    return observed.candles;
+  };
   async function request(url,signal,limitMs=TIMEOUT){
     const parsed=new URL(url);
     if(parsed.protocol!=='https:' || parsed.username||parsed.password||parsed.hash
@@ -133,13 +207,16 @@ export function createPublicV3CryptoProviders({fetchImpl=(...args)=>globalThis.f
       if(market==='spot'){
         const rows=await request(UPBIT+candlePath(symbol,timeframe),signal);
         if(!Array.isArray(rows))fail('UPBIT_CANDLES_MALFORMED');
-        return normalizeCandles(rows.map(r=>({
-          time:finite(r?.timestamp)??Date.parse(text(r?.candle_date_time_utc)),
-          open:finite(r?.opening_price)??NaN,high:finite(r?.high_price)??NaN,
-          low:finite(r?.low_price)??NaN,close:finite(r?.trade_price)??NaN,
-          volume:finite(r?.candle_acc_trade_volume)??NaN,
-          quoteVolume:finite(r?.candle_acc_trade_price),
-        })),now());
+        // Upbit timestamp=LAST TICK, while candle_date_time_utc=OPEN.
+        // The latter is the only correct indicator/candle key.
+        const observed=normalizePublicV3Candles(rows.map(r=>({
+          time:upbitPublicCandleUtcStart(r?.candle_date_time_utc),
+          open:requiredNumber(r?.opening_price),high:requiredNumber(r?.high_price),
+          low:requiredNumber(r?.low_price),close:requiredNumber(r?.trade_price),
+          volume:requiredNumber(r?.candle_acc_trade_volume),
+          quoteVolume:r?.candle_acc_trade_price==null?null:requiredNumber(r.candle_acc_trade_price),
+        })),now(),timeframe);
+        return recordQuality('spot',observed);
       }
       if(market!=='futures')fail('UNSUPPORTED_MARKET');
       const granularity=timeframe==='60m'?'1H':timeframe;
@@ -148,11 +225,14 @@ export function createPublicV3CryptoProviders({fetchImpl=(...args)=>globalThis.f
         +encodeURIComponent(symbol)+'&productType=USDT-FUTURES&granularity='+encodeURIComponent(granularity)+'&limit=200',signal);
       if(text(payload?.code)!=='00000'||!Array.isArray(payload?.data))
         fail('BITGET_'+(text(payload?.code)||'INVALID_CANDLES'));
-      return normalizeCandles(payload.data.filter(Array.isArray).map(row=>({
-        time:finite(row[0])??NaN,open:finite(row[1])??NaN,high:finite(row[2])??NaN,
-        low:finite(row[3])??NaN,close:finite(row[4])??NaN,volume:finite(row[5])??NaN,
-        quoteVolume:finite(row[6]),
-      })),now());
+      // Do not silently discard malformed Bitget response entries.
+      const observed=normalizePublicV3Candles(payload.data.map(row=>({
+        time:requiredNumber(row?.[0]),open:requiredNumber(row?.[1]),
+        high:requiredNumber(row?.[2]),low:requiredNumber(row?.[3]),
+        close:requiredNumber(row?.[4]),volume:requiredNumber(row?.[5]),
+        quoteVolume:row?.[6]==null?null:requiredNumber(row[6]),
+      })),now(),timeframe);
+      return recordQuality('futures',observed);
     },
     async getSpread(market,ticker,signal){
       if(market==='futures')return {bid:ticker.bid,ask:ticker.ask};
@@ -165,6 +245,13 @@ export function createPublicV3CryptoProviders({fetchImpl=(...args)=>globalThis.f
     now,
     readLastRosterDigest:market=>digests.get(market)??null,
     clearLastRosterDigest:market=>digests.delete(market),
+    resetCandleQuality:market=>candleQuality.set(market,emptyQuality()),
+    readCandleQuality:market=>Object.freeze({
+      schemaVersion:'public-v3-crypto-candle-quality-v1',
+      ...(candleQuality.get(market)??emptyQuality()),
+      market,sourceOnly:true,fullMarketVerified:false,
+      tradeAuthority:'NONE',
+    }),
   };
   return Object.freeze(publicProviders);
 }
