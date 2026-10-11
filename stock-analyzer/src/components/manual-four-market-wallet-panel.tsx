@@ -1,8 +1,9 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {authorizedFetch} from '@/lib/auth-fetch';
 import {useAuth} from '@/lib/auth';
 import {
   MANUAL_FOUR_MARKETS,parseManualFourMarketStatus,
+  manualPaperBootstrapAuthorized,
   type ManualFourMarketStatus,
 } from '@/lib/manual-four-market-paper-status';
 
@@ -20,9 +21,18 @@ export function ManualFourMarketWalletPanel(){
   const [revision,setRevision]=useState(0);
   const [loading,setLoading]=useState(false);
   const [saving,setSaving]=useState(false);
-  const [confirm,setConfirm]=useState(false);
+  const [confirmOwner,setConfirmOwner]=useState<string|null>(null);
+  const ownerRef=useRef(userId);
+  ownerRef.current=userId;
   const [error,setError]=useState('');
   const status=authorized&&state?.owner===userId?state.value:null;
+  const canConfirm=authorized && manualPaperBootstrapAuthorized(userId,confirmOwner,status);
+  useEffect(()=>{
+    // A pending seed creation dialog is NOT portable across authenticated
+    // identities. A former user's async response cannot clear the next
+    // user's errors or signal falsely that their wallet was created.
+    setConfirmOwner(null);
+  },[userId,authorized]);
   useEffect(()=>{
     if(!authorized){setState(null);setLoading(false);setError('');return;}
     const controller=new AbortController();
@@ -43,7 +53,8 @@ export function ManualFourMarketWalletPanel(){
   },[userId,authorized,revision]);
 
   const createOnce=async()=>{
-    if(!authorized||!status?.canCreate||saving)return;
+    if(!canConfirm||saving)return;
+    const initiatingOwner=userId;
     setSaving(true);setError('');
     try{
       const response=await authorizedFetch(API+'/bootstrap',{
@@ -57,10 +68,14 @@ export function ManualFourMarketWalletPanel(){
          ||raw.mode!=='MANUAL_PAPER_FOUR_MARKET_SEED_ONLY'
          ||raw.virtualSeedRowsInserted!==4||raw.manualExecutionReady!==false
          ||raw.realOrders!==0)throw new Error('서버 계좌 생성 검증에 실패했습니다.');
-      setConfirm(false);
-      setRevision(v=>v+1);
+      if(initiatingOwner===ownerRef.current){
+        setConfirmOwner(null);
+        setRevision(v=>v+1);
+      }
     }catch{
-      setError('서버 계좌 생성 또는 중복·DB 보호 검증에 실패했습니다. 기존 기록은 유지됩니다.');
+      if(initiatingOwner===ownerRef.current){
+        setError('서버 계좌 생성 또는 중복·DB 보호 검증에 실패했습니다. 기존 기록은 유지됩니다.');
+      }
     }finally{setSaving(false);}
   };
   const title=!authorized?'회원 모의매매 권한 필요':loading?'서버 계좌 확인 중'
@@ -82,7 +97,7 @@ export function ManualFourMarketWalletPanel(){
         </button>
         <button type="button" className="rounded-lg border border-card-border px-3 py-1.5"
           data-testid="manual-four-market-prepare"
-          disabled={!status?.canCreate||loading||saving} onClick={()=>setConfirm(true)}>
+          disabled={!status?.canCreate||loading||saving||!authorized} onClick={()=>setConfirmOwner(userId)}>
           초기 계좌 준비
         </button>
       </div>
@@ -106,13 +121,13 @@ export function ManualFourMarketWalletPanel(){
       <p className="pt-2 text-muted-foreground">자동모의·실계좌 자본과 완전히 별개입니다. 100만원은 초기 가상 배정 기준일 뿐 실제 주문가능 잔액이 아닙니다. 종목·전략·4시장 수동체결과 정산은 별도로 연결해야 합니다.</p>
     </details>
     {error?<p role="alert" className="pt-2 text-destructive">{error}</p>:null}
-    {confirm?<div className="mt-2 rounded-lg border border-card-border bg-background p-3" role="dialog"
+    {canConfirm?<div className="mt-2 rounded-lg border border-card-border bg-background p-3" role="dialog"
       aria-label="4시장 수동모의계좌 최초 생성 확인" aria-modal="true">
       <p>국내주식·미국주식·코인현물·코인선물에 각각 100만원의 서버 가상 초기 계좌를 한 번 생성합니다. 기존 거래 기록이나 실자동매매는 변경하지 않습니다. 중복 생성·재충전은 차단됩니다.</p>
       <div className="mt-2 flex justify-end gap-2">
-        <button type="button" className="rounded-lg border border-card-border px-3 py-2" onClick={()=>setConfirm(false)}>취소</button>
+        <button type="button" className="rounded-lg border border-card-border px-3 py-2" onClick={()=>setConfirmOwner(null)}>취소</button>
         <button type="button" className="rounded-lg border border-card-border px-3 py-2"
-          disabled={!status?.canCreate||saving} onClick={()=>void createOnce()}>
+          disabled={!canConfirm||saving} onClick={()=>void createOnce()}>
           {saving?'검증 중':'최초 생성 확인'}
         </button>
       </div>
