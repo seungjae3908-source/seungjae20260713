@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import {
+  isDiagnosticFreeIncompleteLogin,
+  type LoginSurfaceState,
+} from './support/production-readonly-login';
 
 function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
@@ -37,10 +41,10 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(qa).toContain('const LOGIN_READY_BUDGET_MS = 15_000;');
   expect(qa).toContain('const LOGIN_NAVIGATION_TIMEOUT_RETRIES = 1;');
   expect(qa).toContain('const LOGIN_INTERACTIVE_COLD_RETRIES = 1;');
-  expect(qa).toContain('const CACHED_AUTH_TIMEOUT_RETRIES = 1;');
+
   const timeoutHelperStart = qa.indexOf('function isPlaywrightTimeout');
   const navigationRetryStart = qa.indexOf('async function gotoLoginWithTimeoutRetry');
-  const validateCachedAuthStart = qa.indexOf('async function validateCachedAuthState');
+  const validateCachedAuthStart = qa.indexOf('function validateCachedAuthState');
   const loginStart = qa.indexOf('async function login(');
   const timeoutHelper = qa.slice(timeoutHelperStart, navigationRetryStart);
   const loginNavigation = qa.slice(navigationRetryStart, qa.indexOf('async function restoreCachedAuthState'));
@@ -53,15 +57,23 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(loginNavigation).toContain('isPlaywrightTimeout(error)');
   expect(timeoutHelper).toContain("error.name === 'TimeoutError'");
   expect(timeoutHelper).toContain('/Timeout \\d+ms exceeded/i.test(error.message)');
-  expect(login).toContain('await validateCachedAuthState(page, cached);');
+  expect(login).toContain('validateCachedAuthState(cached);');
   expect(validateCachedAuthStart).toBeGreaterThanOrEqual(0);
   expect(loginStart).toBeGreaterThan(validateCachedAuthStart);
-  expect(validateCachedAuth).toContain("page.request.get(new URL('/api/auth/profile', baseUrl).toString()");
-  expect(validateCachedAuth).toContain('Authorization: `Bearer ${token}`');
-  expect(validateCachedAuth).toContain('const timeoutOnly = isPlaywrightTimeout(error);');
-  expect(validateCachedAuth).toContain('attempt >= CACHED_AUTH_TIMEOUT_RETRIES');
-  expect(validateCachedAuth).toContain('if (response.status() !== 200)');
-  expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_PROFILE_INVALID');
+  expect(qa).toContain('function accessTokenExpiresAtMs(token: string)');
+  expect(validateCachedAuth).toContain('const token = accessTokenFromStorageState(state);');
+  expect(validateCachedAuth).toContain('const expiresAtMs = accessTokenExpiresAtMs(token);');
+  expect(validateCachedAuth).toContain('Date.now() + 30_000');
+  expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_TOKEN_INVALID');
+  expect(validateCachedAuth).toContain('PRODUCTION_QA_CACHED_SESSION_TOKEN_EXPIRED');
+  expect(validateCachedAuth).not.toContain('page.request.get(');
+  expect(validateCachedAuth).not.toContain('/api/auth/profile');
+
+
+
+
+
+
   expect(login).toContain('Math.max(1, LOGIN_READY_BUDGET_MS - (Date.now() - readinessStartedAt))');
   expect(login).toContain('attempt <= LOGIN_INTERACTIVE_COLD_RETRIES');
   expect(login).toContain("currentPath(page) === '/login'");
@@ -77,7 +89,7 @@ test('Production route audit keeps the authenticated document mounted during str
   expect(login).toContain('const cached = authStateByViewport.get(cacheKey);');
   expect(login).toContain('await restoreCachedAuthState(page, cached);');
   expect(login).not.toContain("await page.goto('/', { waitUntil: 'commit', timeout: LOGIN_READY_BUDGET_MS })");
-  expect(validateCachedAuth).toContain("throw new Error(`PRODUCTION_QA_CACHED_SESSION_PROFILE_${response.status()}`)");
+
   expect(login).toContain('const state = await page.context().storageState();');
   expect(login).toContain('authStateByViewport.set(cacheKey, state);');
   const cachedBranch = login.slice(login.indexOf('if (cached) {'), login.indexOf('const loginId'));
@@ -138,8 +150,22 @@ test('Production search audit records one settled HTTP request at every configur
   expect(searchTest).toContain("testInfo.project.name === 'prod-mobile-390'");
   expect(searchTest).toContain("item.requests.length !== 1");
   expect(searchTest).toContain("request.status !== 200 || request.failure");
+  const searchComponent = source('src/components/unified-asset-search.tsx');
   expect(searchTest).toContain("request.market !== SEARCH_MARKET_PARAMS[item.market]");
-  expect(searchTest).toContain("request.startedAfterInputMs < 150 || request.startedAfterInputMs > 1_000");
+  expect(searchTest).toContain("minimumExpectedSearchDispatchMs(item.market, item.query)");
+  expect(searchTest).toContain("request.startedAfterInputMs > 1_000");
+  expect(qa).toContain("function minimumExpectedSearchDispatchMs(");
+  expect(qa).toContain("if (market === 'KR' && /^\\d{6}$/.test(query)) return 0;");
+  expect(qa).toContain("if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;");
+  expect(qa).toContain("if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;");
+  expect(qa).toContain("if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;");
+  expect(qa).toContain('return 150;');
+  expect(searchComponent).toContain('function exactIdentitySearchDelayMs(');
+  expect(searchComponent).toContain("if (market === 'KR' && /^\\d{6}$/.test(query)) return 0;");
+  expect(searchComponent).toContain("if (market === 'US' && /^[A-Z][A-Z0-9.-]{3,9}$/.test(query)) return 0;");
+  expect(searchComponent).toContain("if (market === 'spot' && /^(?:KRW|BTC|USDT)-[A-Z0-9]{2,15}$/.test(query)) return 0;");
+  expect(searchComponent).toContain("if (market === 'futures' && /^[A-Z0-9]{2,15}(?:USDT|USDC)$/.test(query)) return 0;");
+  expect(searchComponent).toContain('return DEFAULT_SEARCH_DEBOUNCE_MS;');
   expect(searchTest).toContain("item.kind === 'console' || item.kind === 'pageerror' || item.kind === 'requestfailed'");
   expect(searchTest).toContain("item.status === 401 || item.status === 403 || (item.status ?? 0) >= 500");
   expect(qa).toContain("url.pathname !== '/api/search/suggest' || url.searchParams.get('q') !== query");
@@ -167,18 +193,54 @@ test('Production read-only suites share the bounded cold login contract', () => 
   expect(loginSupport).toContain("page.getByLabel('아이디')");
   expect(loginSupport).toContain("page.getByLabel('비밀번호')");
   expect(loginSupport).toContain("page.getByTestId('page-fallback').isVisible");
-  expect(loginSupport).toContain("new URL(page.url()).pathname === '/login'");
+  expect(loginSupport).toContain("state.path === '/login'");
+  expect(loginSupport).toContain('!state.membershipVisible');
+  expect(loginSupport).toContain('!state.alertVisible');
+  expect(loginSupport).toContain('diagnosticCount === 0');
+  expect(loginSupport).not.toContain('&& state.fallbackVisible');
+  expect(loginSupport).toContain("PRODUCTION_LOGIN_DIAGNOSTIC_DIR");
+  expect(loginSupport).toContain("schemaVersion: 'production-login-readiness-failure-v1'");
+  expect(loginSupport).toContain('secretValuesRecorded: false');
+  expect(loginSupport).toContain('[PRODUCTION_QA_LOGIN_NOT_READY]');
   expect(loginSupport).toContain('attempt >= LOGIN_INTERACTIVE_COLD_RETRIES');
   expect(loginSupport).toContain("}).toBe('READY')");
   for (const consumer of consumers) {
     const qa = source(consumer);
     const wrapperStart = qa.indexOf('async function login(');
     const wrapper = qa.slice(wrapperStart, qa.indexOf('\n}', wrapperStart) + 2);
-    expect(qa).toContain("import { loginProductionReadOnly } from './support/production-readonly-login';");
+    expect(qa).toMatch(
+      /import\s*\{[^}]*\bloginProductionReadOnly\b[^}]*\}\s*from\s*['"]\.\/support\/production-readonly-login['"];/s,
+    );
     expect(wrapperStart).toBeGreaterThanOrEqual(0);
     expect(wrapper).toContain('await loginProductionReadOnly(page, { login: qaLogin, password: qaPassword });');
     expect(wrapper).not.toContain('page.goto');
   }
+});
+
+test('Production login cold recovery distinguishes incomplete hydration from terminal failure', () => {
+  const incomplete: LoginSurfaceState = {
+    path: '/login',
+    idVisible: false,
+    passwordVisible: false,
+    buttonVisible: false,
+    fallbackVisible: false,
+    membershipVisible: false,
+    alertVisible: false,
+    documentReadyState: 'complete',
+    rootChildCount: 0,
+  };
+  expect(isDiagnosticFreeIncompleteLogin(incomplete, 0)).toBe(true);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, fallbackVisible: true }, 0)).toBe(true);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, alertVisible: true }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, path: '/error' }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin({ ...incomplete, membershipVisible: true }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin({
+    ...incomplete,
+    idVisible: true,
+    passwordVisible: true,
+    buttonVisible: true,
+  }, 0)).toBe(false);
+  expect(isDiagnosticFreeIncompleteLogin(incomplete, 1)).toBe(false);
 });
 
 test('Production cold-route modules settle before primary market data prewarm without competing with direct AI Chart bootstrap', () => {

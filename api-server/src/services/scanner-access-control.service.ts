@@ -14,8 +14,8 @@ export function parseScannerGradeQuery(value: unknown): ScannerSignalGrade | und
     : null;
 }
 
-export function canReadScannerGrade(tier: MemberTier, grade: ScannerSignalGrade): boolean {
-  return tier === 'admin' || grade !== 'S';
+export function canReadScannerGrade(tier: MemberTier, _grade: ScannerSignalGrade): boolean {
+  return tier === 'associate' || tier === 'regular' || tier === 'admin';
 }
 
 export function filterScannerResponseForTier(

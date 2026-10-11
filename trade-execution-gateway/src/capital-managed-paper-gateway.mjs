@@ -289,6 +289,43 @@ export class CapitalManagedPaperGateway {
     return task;
   }
 
+  /**
+   * Paper-only KRW wallet bootstrap (no canonical settlement admission).
+   * Existing OMS orders always block bootstrap: they may belong to another
+   * persisted account and must never be orphaned by a fresh virtual seed.
+   */
+  async initializeVirtualPaperWallet(options = {}) {
+    const task = this.#entryQueue.then(async () => {
+      if (typeof this.#capitalManager.initializeVirtualPaperWallet !== "function") {
+        throw new GatewayError(
+          "PAPER_VIRTUAL_SEED_UNSUPPORTED",
+          "the Paper capital manager does not support a virtual KRW wallet seed",
+          503,
+        );
+      }
+      if (this.#paperOrders().length > 0) {
+        throw new GatewayError(
+          "PAPER_VIRTUAL_SEED_EXISTING_OMS_ORDERS",
+          "existing Paper OMS orders must be reconciled without an account reset",
+          409,
+        );
+      }
+      const wallet = await this.#capitalManager.initializeVirtualPaperWallet(options);
+      return Object.freeze({
+        ...wallet,
+        walletMode: "PAPER_VIRTUAL_KRW_ONLY",
+        simulatedOnly: true,
+        paperOrderAuthorityGranted: false,
+        financialMutationCount: 0,
+        privateRequestCount: 0,
+        externalWithdrawalPerformed: false,
+        executionAuthority: "NONE",
+      });
+    });
+    this.#entryQueue = task.catch(() => undefined);
+    return task;
+  }
+
   getCapitalHealth() {
     const state = this.#capitalManager.getState();
     const current = this.#currentCommittedExposureKrw();
@@ -296,9 +333,12 @@ export class CapitalManagedPaperGateway {
       ...state,
       currentCommittedExposureKrw: current.exposureKrw,
       valuationBlockers: current.blockers,
-      availableNewExposureKrw: state.initialized
+      // A simulated 1M capital target is not spendable Paper exposure until
+      // the independent simulated settlement owner supplies its receipt.
+      availableNewExposureKrw: state.initialized && state.lastSettlement != null
         ? Math.max(0, state.effectiveTradingCapitalKrw - current.exposureKrw)
         : 0,
+      virtualSeedAwaitingSettlement: state.initialVirtualSeed != null && state.lastSettlement == null,
       filledExposureReleasedOnlyAfterFreshSettlement: true,
       settlementOrderWatermarkRuntimeOnly: true,
       ambiguousSameMillisecondOrderAfterRestartCountsAsUnsettled: true,

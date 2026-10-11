@@ -42,6 +42,36 @@ test('server snapshot preserves minimum identity, separates LONG/SHORT and grant
   }
 });
 
+test('cash-market backtest handoffs preserve BUY-only four-market identity at 1x', () => {
+  for (const [market, canonicalMarket, symbol] of [
+    ['kr-stock', 'KR_STOCK', '005930'],
+    ['us-stock', 'US_STOCK', 'AAPL'],
+    ['crypto-spot', 'CRYPTO_SPOT', 'BTC'],
+  ] as const) {
+    const cashRequest: BacktestRequest = {
+      ...request,
+      market,
+      symbol,
+      side: 'long',
+      leverage: 1,
+      fundingRatePerInterval: 0,
+    };
+    const cashCandles: NormalizedCandle[] = candles.map((row) => ({
+      ...row,
+      market,
+      symbol,
+    }));
+    const handoffs = buildBacktestPaperHandoffs(cashRequest, cashCandles, sha);
+    assert.equal(handoffs.length, 1);
+    assert.equal(handoffs[0].market, canonicalMarket);
+    assert.equal(handoffs[0].side, 'BUY');
+    assert.equal(handoffs[0].leverage, 1);
+    assert.equal(handoffs[0].executionAuthority, 'NONE');
+    assert.equal(handoffs[0].orderSubmitted, false);
+    assert.match(handoffs[0].candidateId!, /^paper-candidate-v1:[0-9a-f]{64}$/u);
+  }
+});
+
 test('parameter ordering is stable while risk, cost, exit and symbol changes isolate candidates', () => {
   const baseline = buildBacktestPaperHandoffs(request, candles, sha)[0];
   assert.equal(buildBacktestPaperHandoffs({ ...request, parameters: { volumeMultiplier: 1.2, lookback: 20 } }, candles, sha)[0].candidateId, baseline.candidateId);

@@ -55,8 +55,12 @@ assert(production.includes('actions.listArtifactsForRepo'), 'production gate mus
 assert(production.includes('actions.getWorkflowRun'), 'production gate must directly verify the artifact source run');
 assert(production.includes('actions/download-artifact@v4'), 'production gate must download the exact verdict artifact');
 assert(production.includes('verify-staging-verdict.mjs'), 'production gate must validate verdict contents');
-assert(production.includes('staging-verdict-${{ steps.target.outputs.sha }}'), 'production gate must use an exact-SHA artifact name');
-assert(production.includes("run.path === '.github/workflows/staging-readiness.yml'"), 'production gate must require the official staging workflow');
+assert(production.includes("format('staging-verdict-{0}', steps.target.outputs.sha)"), 'production full gate must use an exact-SHA artifact name');
+assert(production.includes("format('staging-automation-research-verdict-{0}', steps.target.outputs.sha)"), 'production scoped gate must use an exact-SHA artifact name');
+assert(production.includes('verify-staging-automation-research-verdict.mjs'), 'production scoped gate must validate verdict contents');
+assert(production.includes("? '.github/workflows/staging-trading-core-only.yml'")
+  && production.includes(": '.github/workflows/staging-readiness.yml'"),
+'production gate must bind each verdict scope to its allowlisted staging workflow');
 assert(production.includes("run.conclusion === 'success'"), 'production gate must require successful staging workflow conclusion');
 assert(/environment:\s*production/.test(production), 'production deploy job must use the protected production environment');
 assert(production.includes("github.event_name == 'workflow_dispatch'"), 'production concurrency must distinguish real workflow_dispatch from PR validation');
@@ -131,7 +135,7 @@ assert(verdictVerifier.includes('verdict.deployed_sha !== targetSha'), 'producti
 for (const requirement of [
   'anonymous: health, login boundary, and protected API denial',
   'pending: approval-waiting account',
-  'associate: basic stock, spot, scanner, paper/auto trading, and portfolio allowed; futures, AI-risk, and privileged APIs denied',
+  'associate: stock, spot, scanner, paper/auto trading, portfolio, AI chart and safe AI review preview allowed; futures and privileged APIs denied',
   'regular: futures, scanner, paper trading',
   'admin: member management is allowed',
   'bottom navigation and popup menus',
@@ -245,6 +249,7 @@ try {
     profile_rows_copied: 0,
     storage_objects_copied: 0,
     credentials_recorded: false,
+    admin_v2_rls_verified: true,
   }));
   const browserSpecTitles = [
     'desktop: login, refresh session retention, responsive layout, and logout',
@@ -311,6 +316,30 @@ try {
     env: { ...process.env, TARGET_SHA: sha },
   });
   assert(verified.status === 0, `release-ready verdict should verify: ${verified.stderr}`);
+  // An attestation is only trustworthy if the staging bootstrap explicitly
+  // emitted it. A forged release_ready field cannot substitute for this proof.
+  const forgedBootstrap = JSON.parse(await readFile(path.join(temp, 'staging-bootstrap-verification.json'), 'utf8'));
+  delete forgedBootstrap.admin_v2_rls_verified;
+  await writeFile(path.join(temp, 'staging-bootstrap-verification.json'), JSON.stringify(forgedBootstrap));
+  const forgedVerdict = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/build-staging-verdict.mjs')], {
+    cwd: root, encoding: 'utf8',
+    env: {
+      ...process.env, TARGET_SHA: sha, STAGING_RUN_FULL_VALIDATION: 'true',
+      STAGING_ARTIFACT_DIR: temp, GITHUB_RUN_ID: '123456789', GITHUB_RUN_ATTEMPT: '1',
+    },
+  });
+  assert(forgedVerdict.status !== 0, 'missing staging admin V2 RLS proof must fail closed');
+  await writeFile(path.join(temp, 'staging-bootstrap-verification.json'), JSON.stringify({
+    ...forgedBootstrap, admin_v2_rls_verified: true,
+  }));
+  const restored = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/build-staging-verdict.mjs')], {
+    cwd: root, encoding: 'utf8',
+    env: {
+      ...process.env, TARGET_SHA: sha, STAGING_RUN_FULL_VALIDATION: 'true',
+      STAGING_ARTIFACT_DIR: temp, GITHUB_RUN_ID: '123456789', GITHUB_RUN_ATTEMPT: '1',
+    },
+  });
+  assert(restored.status === 0, 'verified staging proof restoration should pass');
   // The positive fixture must track the real viewport contract, not relax it.
   const verdictFile = path.join(temp, 'staging-verdict.json');
   const completeVerdict = JSON.parse(await readFile(verdictFile, 'utf8'));

@@ -175,8 +175,8 @@ for (const viewport of [
     await tabs.getByRole('tab', { name: '백테스트' }).click();
     await expect(page.getByTestId('backtest-form')).toBeVisible();
 
-    await tabs.getByRole('tab', { name: '자동매매' }).click();
-    await expect(tabs.getByRole('tab', { name: '자동매매' })).toHaveAttribute('aria-selected', 'true');
+    await tabs.getByRole('tab', { name: '기술매매' }).click();
+    await expect(tabs.getByRole('tab', { name: '기술매매' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('heading', { name: '자동매매 실행 방식' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });

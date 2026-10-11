@@ -8,6 +8,72 @@ import type { NotificationDelivery, PortfolioSyncSink, TelegramTransport } from 
 const noopPortfolioSink: PortfolioSyncSink = { async accept() {} };
 const STALE_SENDING_LEASE_MS = 2 * 60 * 1000;
 
+export type UserTelegramDeliveryWorkerHealth = Readonly<{
+  enabled: boolean;
+  lastTickAt: string | null;
+  tickOk: boolean | null;
+  deliveryConfirmed: boolean;
+  lastConfirmedDeliveryAt: string | null;
+  errorCode: string | null;
+}>;
+
+let telegramDeliveryWorkerHealth: UserTelegramDeliveryWorkerHealth = Object.freeze({
+  enabled: false,
+  lastTickAt: null,
+  tickOk: null,
+  deliveryConfirmed: false,
+  lastConfirmedDeliveryAt: null,
+  errorCode: null,
+});
+
+export function readUserTelegramDeliveryWorkerHealth() {
+  return telegramDeliveryWorkerHealth;
+}
+
+// A successful contract check or an outdated delivery tick is not live readiness.
+export function userTelegramDeliveryWorkerHealthy(
+  health: UserTelegramDeliveryWorkerHealth,
+  nowMs = Date.now(),
+) {
+  const lastTickMs = Date.parse(health.lastTickAt ?? '');
+  const lastConfirmedMs = Date.parse(health.lastConfirmedDeliveryAt ?? '');
+  return health.enabled === true
+    && health.deliveryConfirmed === true
+    && Number.isFinite(lastConfirmedMs)
+    && lastConfirmedMs <= nowMs + 5_000
+    && nowMs - lastConfirmedMs <= 24 * 60 * 60_000
+    && health.tickOk === true
+    && health.errorCode == null
+    && Number.isFinite(nowMs)
+    && Number.isFinite(lastTickMs)
+    && lastTickMs <= nowMs + 5_000
+    && nowMs - lastTickMs <= 360_000;
+}
+
+// A retry or dead letter is a delivery failure, even when the queue processor itself ran.
+// Idle ticks cannot silently clear the failure. Require a confirmed outbound send.
+export function telegramDeliveryTickConfirmed(
+  previouslyConfirmed: boolean,
+  result: Readonly<{ sent: number; retryScheduled: number; deadLetter: number }>,
+) {
+  if (result.retryScheduled > 0 || result.deadLetter > 0) return false;
+  if (result.sent > 0) return true;
+  return previouslyConfirmed;
+}
+
+// The newest persisted terminal outcome must be a real recent SENT receipt.
+// A self-claimed healthy idle worker is insufficient, and a newer failure
+// invalidates an earlier delivery receipt after restart.
+export function verifiedRecentTelegramDeliveryReceipt(
+  row: { state?: string | null; updated_at?: string | null } | null | undefined,
+  nowMs = Date.now(),
+): string | null {
+  const observed = Date.parse(row?.updated_at ?? '');
+  if (row?.state !== 'SENT' || !Number.isFinite(nowMs) || !Number.isFinite(observed)
+    || observed > nowMs + 5_000 || nowMs - observed > 24 * 60 * 60_000) return null;
+  return new Date(observed).toISOString();
+}
+
 export interface TelegramDeliveryWorkerSource {
   listDue(now: string, limit: number): Promise<Array<Pick<NotificationDelivery, 'userId' | 'id'>>>;
 }
@@ -22,6 +88,7 @@ export class TelegramDeliveryWorker {
 
   async runOnce(now = new Date()) {
     const result = {
+      overlapSkipped: false,
       scanned: 0,
       processed: 0,
       sent: 0,
@@ -31,7 +98,7 @@ export class TelegramDeliveryWorker {
       ordersCancelled: 0 as const,
       privateBrokerRequests: 0 as const,
     };
-    if (this.running) return result;
+    if (this.running) return { ...result, overlapSkipped: true };
     this.running = true;
     try {
       const due = await this.source.listDue(now.toISOString(), this.batchSize);
@@ -52,6 +119,18 @@ export class TelegramDeliveryWorker {
 }
 
 export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWorkerSource {
+  async recentConfirmedDelivery(nowMs = Date.now()) {
+    if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
+    const { data, error } = await getSupabase().from('notification_deliveries')
+      .select('state,updated_at')
+      .in('state', ['SENT', 'RETRY_SCHEDULED', 'DEAD_LETTER', 'FAILED'])
+      .gte('updated_at', new Date(nowMs - 24 * 60 * 60_000).toISOString())
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw new Error('TELEGRAM_DELIVERY_RECEIPT_QUERY_FAILED');
+    return verifiedRecentTelegramDeliveryReceipt(data?.[0] ?? null, nowMs);
+  }
+
   async listDue(now: string, limit: number) {
     if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
     const nowMs = Date.parse(now);
@@ -97,15 +176,39 @@ export function startUserTelegramDeliveryWorker(
 ): TelegramWorkerControl | null {
   if (process.env.PERSONAL_TELEGRAM_WORKER_ENABLED !== 'true'
     || process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true') {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: false,
+      lastTickAt: null,
+      tickOk: null,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
+      errorCode: null,
+    });
     console.log('[user-telegram-worker] disabled; explicit worker and activation gates are required');
     return null;
   }
   if (!hasSupabaseServerKey()) {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: null,
+      tickOk: false,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
+      errorCode: 'TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED',
+    });
     console.error('[user-telegram-worker] blocked: service-role Supabase configuration is required');
     return null;
   }
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
   if (!transportOverride && !token) {
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: null,
+      tickOk: false,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
+      errorCode: 'TELEGRAM_BOT_TOKEN_REQUIRED',
+    });
     console.error('[user-telegram-worker] blocked: Telegram bot token is not configured');
     return null;
   }
@@ -118,9 +221,57 @@ export function startUserTelegramDeliveryWorker(
     process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
     sendTelegramAlert,
   );
-  const worker = new TelegramDeliveryWorker(new SupabaseTelegramDeliveryWorkerSource(), service);
-  const tick = () => void worker.runOnce().catch((error) => {
-    console.error('[user-telegram-worker] delivery tick failed', { code: error instanceof Error ? error.message : 'UNKNOWN' });
+  const deliverySource = new SupabaseTelegramDeliveryWorkerSource();
+  const worker = new TelegramDeliveryWorker(deliverySource, service);
+  telegramDeliveryWorkerHealth = Object.freeze({
+    enabled: true,
+    lastTickAt: null,
+    tickOk: null,
+    deliveryConfirmed: false,
+    lastConfirmedDeliveryAt: null,
+    errorCode: null,
+  });
+  // An empty queue at startup does not prove that any Telegram message arrived.
+  let deliveryConfirmed = false;
+  let lastConfirmedDeliveryAt: string | null = null;
+  // Read-only durable delivery proof survives a PM2 restart; failures or
+  // missing evidence remain unconfirmed, never silently promoted to PASS.
+  const restoreProof = deliverySource.recentConfirmedDelivery().then((receipt) => {
+    if (!receipt) return;
+    deliveryConfirmed = true;
+    lastConfirmedDeliveryAt = receipt;
+  }).catch((error) => {
+    console.error('[user-telegram-worker] delivery receipt restore failed', {
+      errorCode: error instanceof Error ? error.message.split(':')[0] : 'TELEGRAM_RECEIPT_RESTORE_FAILED',
+    });
+  });
+  const tick = () => void restoreProof.then(() => worker.runOnce()).then((result) => {
+    // An overlap is not a completed health probe; never overwrite the in-flight result.
+    if (result.overlapSkipped) return;
+    deliveryConfirmed = telegramDeliveryTickConfirmed(deliveryConfirmed, result);
+    if (!deliveryConfirmed) lastConfirmedDeliveryAt = null;
+    else if (result.sent > 0) lastConfirmedDeliveryAt = new Date().toISOString();
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: new Date().toISOString(),
+      tickOk: deliveryConfirmed,
+      deliveryConfirmed,
+      lastConfirmedDeliveryAt,
+      errorCode: deliveryConfirmed ? null : 'TELEGRAM_DELIVERY_UNCONFIRMED',
+    });
+  }).catch((error) => {
+    deliveryConfirmed = false;
+    lastConfirmedDeliveryAt = null;
+    const code = error instanceof Error ? error.message.split(':')[0] : 'TELEGRAM_WORKER_FAILED';
+    telegramDeliveryWorkerHealth = Object.freeze({
+      enabled: true,
+      lastTickAt: new Date().toISOString(),
+      tickOk: false,
+      deliveryConfirmed: false,
+      lastConfirmedDeliveryAt: null,
+      errorCode: /^[A-Z0-9_]+$/u.test(code) ? code : 'TELEGRAM_WORKER_FAILED',
+    });
+    console.error('[user-telegram-worker] delivery tick failed', { code });
   });
   const timer = setInterval(tick, boundedInterval(process.env.PERSONAL_TELEGRAM_WORKER_INTERVAL_MS));
   timer.unref?.();

@@ -57,7 +57,14 @@ function canonicalUserIntegrations() {
     brokerConnectionsAvailable: true,
     brokerConnectionsErrorCode: null,
     brokerMetadataRead: true,
-    telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null },
+    telegram: {
+      connected: false,
+      status: 'DISCONNECTED',
+      connectedAt: null,
+      recoveryRequired: false,
+      recoveryErrorCode: null,
+      recoveryFailedAt: null,
+    },
     preferences: {
       ORDER_SUBMITTED: false,
       ORDER_PARTIALLY_FILLED: false,
@@ -103,6 +110,13 @@ function canonicalUserIntegrations() {
       aiExplanationEnabled: false,
       signalFollowupEnabled: false,
       memberHoldingsEnabled: false,
+      backgroundWorkersEnabled: false,
+      personalWorkerEnabled: false,
+      personalWorkerStarted: false,
+      personalWorkerHealthy: false,
+      personalWorkerErrorCode: null,
+      personalWorkerLastTickAt: null,
+      personalWorkerLastConfirmedDeliveryAt: null,
       orderAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
@@ -270,6 +284,36 @@ test('Production account QA artifact whitelists Bitget diagnostics and removes c
   ]) {
     expect(artifact).not.toContain(prohibited);
   }
+});
+
+test('Production account QA accepts only the sanitized Classic single-account position-mode diagnostic', () => {
+  expect(parseBitgetReadonlyDiagnosticHeader(JSON.stringify({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: '/api/v2/mix/account/account',
+    endpointFamily: 'CLASSIC',
+    probe: 'ACCOUNT_SETTINGS',
+    httpStatus: 200,
+    applicationCode: '00000',
+    sanitizedClassification: 'BITGET_RESPONSE_SHAPE_INVALID',
+    fallbackAttempted: true,
+    timestampRejected: false,
+    productionHost: true,
+    credentialPresence: { key: true, secret: true, passphrase: true },
+  }))).toEqual({
+    provider: 'bitget',
+    requestMethod: 'GET',
+    requestPath: '/api/v2/mix/account/account',
+    endpointFamily: 'CLASSIC',
+    probe: 'ACCOUNT_SETTINGS',
+    httpStatus: 200,
+    applicationCode: '00000',
+    sanitizedClassification: 'BITGET_RESPONSE_SHAPE_INVALID',
+    fallbackAttempted: true,
+    timestampRejected: false,
+    productionHost: true,
+    credentialPresence: { key: true, secret: true, passphrase: true },
+  });
 });
 
 test('recognizes only canonical provider snapshot GET routes', () => {

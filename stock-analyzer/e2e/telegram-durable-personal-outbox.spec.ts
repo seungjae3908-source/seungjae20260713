@@ -60,8 +60,13 @@ test('missing member scope fails closed instead of defaulting Telegram delivery 
 
 test('link binding and every durable send recheck canonical current member eligibility', () => {
   expect(repository).toContain("from('profiles')");
-  expect(repository).toContain(".select('status,membership_level,is_active,role')");
-  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  // Canonical member reads must include expiration and permission timestamps;
+  // silently restoring the legacy four-column select would re-open expired links.
+  expect(repository).toContain(".select('status,membership_level,is_active,role,membership_expires_at,permissions_updated_at')");
+  expect(repository).not.toContain(".select('status,membership_level,is_active,role')");
+  expect(repository).toContain('membership_expires_at: typeof row.membership_expires_at');
+  expect(repository).toContain('permissions_updated_at: typeof row.permissions_updated_at');
+  expect(service).toContain("hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram')");
   expect(service).toContain("throw new Error('TELEGRAM_MEMBER_INELIGIBLE')");
   expect(service).toContain("'TELEGRAM_MEMBER_INELIGIBLE'");
   expect(service).toContain("'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE'");

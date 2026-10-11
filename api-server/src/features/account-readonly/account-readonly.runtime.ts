@@ -20,6 +20,7 @@ import {
 import { KiwoomReadonlyProvider, type KiwoomReadonlyCredentials } from './providers/kiwoom-readonly.provider';
 import {
   createTossReadonlyTransport,
+  processTossTokenManager,
   TossReadonlyProvider,
   TossTokenManager,
   type TossCredentials,
@@ -47,6 +48,7 @@ const READONLY_TARGETS = {
     origin: 'https://api.bitget.com',
     paths: new Set([
       '/api/v2/mix/account/accounts',
+      '/api/v2/mix/account/account',
       '/api/v2/mix/position/all-position',
       '/api/v2/mix/order/orders-pending',
       '/api/v3/account/settings',
@@ -393,7 +395,9 @@ export function createVaultBackedAccountReaders(
     fetchImpl,
   );
   const tossTransport = createTossReadonlyTransport(fetchImpl);
-  const tossTokens = new TossTokenManager(tossTransport);
+  const tossTokens = options.fetchImpl
+    ? new TossTokenManager(tossTransport)
+    : processTossTokenManager();
   const tossProvider = new TossReadonlyProvider(tossTransport, tossTokens);
   const kiwoomProvider = new KiwoomReadonlyProvider(fetchImpl);
 

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
+import { hasCanonicalMemberAccessState, hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
 import type { TelegramAlertInput, TelegramAlertResult } from '../../services/telegram-notification.service';
+import { telegramSixRoomRoutingIsolated } from '../../services/telegram-market-room.service';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import {
@@ -13,6 +14,33 @@ const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
 type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
+
+export function telegramDeliveryRequiresReconnect(errorCode: string | null | undefined): boolean {
+  const code = String(errorCode ?? '').trim().toUpperCase();
+  return code === 'TELEGRAM_HTTP_403' || code.startsWith('TELEGRAM_FORBIDDEN_');
+}
+
+export function telegramConnectionRecovery(
+  connection: { status: string; connectedAt: string } | null | undefined,
+  deliveries: ReadonlyArray<Pick<NotificationDelivery, 'state' | 'lastErrorCode' | 'updatedAt'>>,
+) {
+  if (!connection || connection.status !== 'ACTIVE') {
+    return { required: false, errorCode: null as string | null, failedAt: null as string | null };
+  }
+  const connectedAtMs = Date.parse(connection.connectedAt);
+  if (!Number.isFinite(connectedAtMs)) {
+    return { required: true, errorCode: 'TELEGRAM_CONNECTION_TIMESTAMP_INVALID', failedAt: null as string | null };
+  }
+  const latest = deliveries
+    .filter((delivery) => delivery.state === 'DEAD_LETTER'
+      && telegramDeliveryRequiresReconnect(delivery.lastErrorCode)
+      && Number.isFinite(Date.parse(delivery.updatedAt))
+      && Date.parse(delivery.updatedAt) >= connectedAtMs)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return latest
+    ? { required: true, errorCode: latest.lastErrorCode, failedAt: latest.updatedAt }
+    : { required: false, errorCode: null as string | null, failedAt: null as string | null };
+}
 
 export function hashTelegramLinkToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 export function maskBrokerAccount(value: string | null | undefined): string | null {
@@ -301,7 +329,7 @@ export class UserBrokerTelegramService {
 
   private async personalTelegramEligible(userId: string) {
     const profile = await this.repository.getPersonalTelegramMemberProfile(userId);
-    return hasCapability(profile, 'canConnectPersonalTelegram');
+    return hasCanonicalMemberAccessState(profile) && hasCapability(profile, 'canConnectPersonalTelegram');
   }
 
   async createTelegramLink(userId: string, now = new Date()) {
@@ -329,7 +357,15 @@ export class UserBrokerTelegramService {
     const connection = await this.repository.getTelegramConnection(userId);
     const preferences = await this.repository.getPreferences(userId);
     const deliveries = await this.repository.listDeliveries(userId);
-    return { telegram: { connected: connection?.status === 'ACTIVE', status: connection?.status ?? 'DISCONNECTED', connectedAt: connection?.connectedAt ?? null }, preferences,
+    const recovery = telegramConnectionRecovery(connection, deliveries);
+    return { telegram: {
+      connected: connection?.status === 'ACTIVE' && !recovery.required,
+      status: recovery.required ? 'RECOVERY_REQUIRED' : connection?.status ?? 'DISCONNECTED',
+      connectedAt: connection?.connectedAt ?? null,
+      recoveryRequired: recovery.required,
+      recoveryErrorCode: recovery.errorCode,
+      recoveryFailedAt: recovery.failedAt,
+    }, preferences,
       deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, payload: _payload, ...delivery }) => delivery) };
   }
   async savePreferences(userId: string, patch: Partial<NotificationPreferences>, now = new Date()) {
@@ -341,24 +377,61 @@ export class UserBrokerTelegramService {
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
   async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
-    const inserted = await this.repository.insertExecutionEvent(event);
-    if (!inserted) return { inserted: false, deliveryQueued: false };
-    if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
+    // Capture whether delivery was authorized AT FIRST PERSISTENCE. A crash
+    // may be replayed, but a user connecting Telegram or enabling preferences
+    // later must not receive a flood of historical orders retroactively.
     const preferences = await this.repository.getPreferences(event.userId);
-    if (!preferences[event.type]) return { inserted: true, deliveryQueued: false };
-    if (!personalTelegramEventAllowed(membership, event)) {
-      return { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
-    }
     const connection = await this.repository.getTelegramConnection(event.userId);
-    if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
+    const connectionRecovery = connection?.status === 'ACTIVE'
+      ? telegramConnectionRecovery(connection, await this.repository.listDeliveries(event.userId))
+      : { required: false, errorCode: null, failedAt: null };
+    const eligible = personalTelegramEventAllowed(membership, event);
+    const eventAtMs = Date.parse(event.occurredAt);
+    const connectionAtMs = Date.parse(connection?.connectedAt ?? '');
+    const deliveryIntended = Boolean(preferences[event.type] && eligible
+      && connection?.status === 'ACTIVE'
+      && !connectionRecovery.required
+      && Number.isFinite(eventAtMs) && Number.isFinite(connectionAtMs)
+      && eventAtMs >= connectionAtMs);
+    const proposed: UserExecutionEvent = {
+      ...event,
+      metadata: { ...event.metadata, telegramDeliveryIntendedAtInsert: deliveryIntended },
+    };
+    const inserted = await this.repository.insertExecutionEvent(proposed);
+    // Replay the persisted source identity after a crash; never turn an
+    // earlier USER_APPROVED event into AUTO_POLICY under the same source ID.
+    const canonical = inserted
+      ? proposed
+      : await this.repository.getExecutionEventBySource(event.userId, event.sourceEventId);
+    if (!canonical || canonical.userId !== event.userId || canonical.sourceEventId !== event.sourceEventId) {
+      throw new Error('EXECUTION_SOURCE_EVENT_RECOVERY_REQUIRED');
+    }
+    if (canonical.type !== event.type || canonical.source !== event.source
+      || canonical.executionMethod !== event.executionMethod
+      || canonical.orderPlanId !== event.orderPlanId
+      || canonical.executionId !== event.executionId
+      || canonical.symbol !== event.symbol || canonical.market !== event.market
+      || canonical.side !== event.side) {
+      throw new Error('EXECUTION_SOURCE_EVENT_LINEAGE_CONFLICT');
+    }
+    if (canonical.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(canonical);
+    if (!preferences[canonical.type]) return { inserted, deliveryQueued: false };
+    if (!eligible) return { inserted, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
+    if (!connection || connection.status !== 'ACTIVE') return { inserted, deliveryQueued: false };
+    if (connectionRecovery.required) {
+      return { inserted, deliveryQueued: false, skipped: 'TELEGRAM_CONNECTION_RECOVERY_REQUIRED' as const };
+    }
+    if (canonical.metadata.telegramDeliveryIntendedAtInsert !== true) {
+      return { inserted, deliveryQueued: false };
+    }
     const timestamp = now.toISOString();
     const delivery: NotificationDelivery = {
-      id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
+      id: randomUUID(), userId: canonical.userId, eventId: canonical.id, dedupeKey: `${canonical.id}:${canonical.type}`,
       state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp,
       kind: 'EXECUTION_EVENT', payload: null,
     };
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
-    return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
+    return { inserted, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);
@@ -425,6 +498,12 @@ export class UserBrokerTelegramService {
         await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
         return { processed: true, state: 'SENT' as const };
       }
+      if (telegramDeliveryRequiresReconnect(alertResult.errorCode)) {
+        await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
+          alertResult.errorCode ?? 'TELEGRAM_HTTP_403', timestamp);
+        await this.repository.revokeTelegramConnection(userId, timestamp);
+        return { processed: true, state: 'DEAD_LETTER' as const };
+      }
       const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
       const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
       await this.repository.finishDelivery(userId, deliveryId, state, attempt, dead ? null : nextRetryAt(now, attempt),
@@ -455,6 +534,10 @@ export class UserBrokerTelegramService {
         && this.ownerMemberId === event.userId
         && this.ownerAutoTradingChatId
         && this.ownerAutoTradingChatId !== connection.telegramChatId
+        && telegramSixRoomRoutingIsolated({
+          ...process.env,
+          TELEGRAM_AUTO_TRADING_CHAT_ID: this.ownerAutoTradingChatId,
+        })
       ) {
         try {
           await this.transport.send(this.ownerAutoTradingChatId, rendered);
@@ -464,6 +547,12 @@ export class UserBrokerTelegramService {
       }
       await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
       return { processed: true, state: 'SENT' as const };
+    }
+    if (telegramDeliveryRequiresReconnect(transportResult.errorCode)) {
+      await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', attempt, null,
+        transportResult.errorCode?.slice(0, 120) || 'TELEGRAM_HTTP_403', timestamp);
+      await this.repository.revokeTelegramConnection(userId, timestamp);
+      return { processed: true, state: 'DEAD_LETTER' as const };
     }
     const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
     const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
