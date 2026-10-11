@@ -34,6 +34,8 @@ export type RiskEngineInput = {
   maintenanceMarginRate?: number | null;
   maximumLeverage?: number | null;
   appMaximumLeverage?: number | null;
+  // Set only by the server-owned legacy MANUAL PAPER simulator. No LIVE path uses it.
+  manualPaperSimulationOnly?: boolean;
   contractRulesStatus?: RiskDataStatus;
 
   dailyRealizedPnl?: number;
@@ -586,10 +588,11 @@ export function calculateTradingRisk(
         `유지증거금률 정보가 없어 ${(TRADING_RISK_POLICY.defaultMaintenanceMarginRate * 100).toFixed(2)}%를 적용한 단순 근사입니다.`,
       );
     }
-    if (
-      liquidation.bufferPercent == null ||
-      liquidation.bufferPercent < TRADING_RISK_POLICY.minimumStopLiquidationBufferPercent
-    ) {
+    const liquidationBufferUnsafe = input.manualPaperSimulationOnly === true
+      ? liquidation.bufferPercent == null || liquidation.bufferPercent <= 0
+      : liquidation.bufferPercent == null
+        || liquidation.bufferPercent < TRADING_RISK_POLICY.minimumStopLiquidationBufferPercent;
+    if (liquidationBufferUnsafe) {
       addBlock(blocks, 'LIQUIDATION_TOO_CLOSE');
     }
   }

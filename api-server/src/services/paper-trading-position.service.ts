@@ -3,6 +3,7 @@ import type { CancelPaperOrderAction, MarkPaperPriceAction, PaperBacktestCandida
 import {
   EPSILON, MODE, PaperTradingError, adverseFillPrice, buildRiskInput, createId, expectedEntry, finite,
   hasDuplicateSymbol, makeOrder, positive, referencePrice, safeNumber, toIso, unique, validateOrderRequest,
+  manualPaperLosingTradesToday, MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT,
 } from './paper-trading-core.service';
 import type { prepareManualPaperCanonicalEvidence } from './manual-paper-canonical-contract.service';
 type CanonicalInput = NonNullable<ReturnType<typeof prepareManualPaperCanonicalEvidence>>;
@@ -71,6 +72,26 @@ export function recalculateAccount(state: PaperTradingState, at: string) {
   state.updatedAt = at;
 }
 
+/**
+ * Approximate manual Paper isolated margin liquidation threshold.
+ * Not a real exchange liquidation quote; never usable by LIVE execution.
+ */
+export function estimatedManualPaperLiquidationPrice(
+  position: Pick<PaperPosition, 'entryPrice' | 'leverage' | 'side' | 'maintenanceMarginRate'>,
+): number | null {
+  if (!(Number.isFinite(position.entryPrice) && position.entryPrice > 0)
+    || !(Number.isInteger(position.leverage) && position.leverage >= 1 && position.leverage <= 125)) return null;
+  const supplied = position.maintenanceMarginRate;
+  const maintenance = typeof supplied === 'number'
+    && Number.isFinite(supplied) && supplied >= 0 && supplied < 1
+    ? supplied : 0.005;
+  const ratio = position.side === 'long'
+    ? 1 - 1 / position.leverage + maintenance
+    : 1 + 1 / position.leverage - maintenance;
+  const price = position.entryPrice * ratio;
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 export function createPositionFromOrder(
   state: PaperTradingState,
   order: PaperOrder,
@@ -83,6 +104,17 @@ export function createPositionFromOrder(
 ): { position: PaperPosition; fill: PaperFill } {
   if (!positive(fillPrice) || !positive(reference) || !positive(order.quantity)) {
     throw new PaperTradingError('INVALID_FILL', '모의체결 계산값이 올바르지 않습니다.');
+  }
+  // Manual Paper is a continuous RESEARCH simulation. Historical losing
+  // trades are observed but cannot veto a later trigger. Retain the exact
+  // KST daily count as evidence; do not hide bankruptcy/market-risk checks.
+  const simulatedFillAt = new Date(at);
+  if (!Number.isFinite(simulatedFillAt.getTime())) {
+    throw new PaperTradingError('INVALID_TIMESTAMP', '모의체결 시각이 올바르지 않습니다.');
+  }
+  const losingTradesToday = manualPaperLosingTradesToday(state, simulatedFillAt);
+  if (losingTradesToday >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
+    order.warnings = unique([...order.warnings, 'PAPER_RESEARCH_FIVE_LOSSES_OBSERVED']);
   }
   if (hasDuplicateSymbol({ ...state, orders: state.orders.filter((item) => item.id !== order.id) }, order.symbol)) {
     order.rejectionCodes = unique([...order.rejectionCodes, 'DUPLICATE_SYMBOL_POSITION']);
@@ -109,6 +141,7 @@ export function createPositionFromOrder(
     quantity: order.quantity,
     remainingQuantity: order.quantity,
     leverage: order.leverage,
+    maintenanceMarginRate: order.maintenanceMarginRate,
     notionalValue: reference * order.quantity,
     requiredMargin,
     stopLossPrice: order.stopLossPrice,
@@ -191,6 +224,16 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
   } : expectedEntry(request, action.market, warnings, action.riskInput.slippageRate);
 
   const rejectionCodes: string[] = [];
+  // Closing-trade counts remain factual KST research metrics, never automatic
+  // capital replenishment or an execution veto.
+  if (manualPaperLosingTradesToday(state, now) >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
+    warnings.push('PAPER_RESEARCH_FIVE_LOSSES_OBSERVED');
+  }
+  if (state.riskState.dailyRealizedPnl <= -state.account.initialBalance * 0.1) {
+    warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED');
+  } else if (state.riskState.dailyRealizedPnl <= -state.account.initialBalance * 0.05) {
+    warnings.push('PAPER_RESEARCH_DAILY_DRAWDOWN_5PCT_OBSERVED');
+  }
   if (hasDuplicateSymbol(state, request.symbol)) rejectionCodes.push('DUPLICATE_SYMBOL_POSITION');
   if (!entry.reference || !entry.fill || !positive(entry.fill)) rejectionCodes.push('MARKET_PRICE_UNAVAILABLE');
 
@@ -198,7 +241,16 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
   let quantity = 0;
   if (!canonical && entry.fill != null && positive(entry.fill)) {
     const riskInput = buildRiskInput(state, request, action.market, action.contractRules, action.riskInput, entry.fill, now);
-    riskResult = calculateTradingRisk(riskInput, now);
+    // Use a Paper-only projection to bypass count/realized-loss stop gates;
+    // the shared LIVE risk engine and stored loss evidence remain unchanged.
+    // Equity, funding, exposure, margin, instrument rules and market data are
+    // never zeroed or relaxed.
+    riskResult = calculateTradingRisk({
+      ...riskInput,
+      dailyRealizedPnl: 0,
+      weeklyRealizedPnl: 0,
+      consecutiveLosses: 0,
+    }, now);
     rejectionCodes.push(...riskResult.blockCodes);
     warnings.push(...riskResult.warnings);
     const recommended = riskResult.recommendedQuantity ?? 0;
@@ -406,12 +458,29 @@ export function closePositionInternal(
   const entryFeeAllocation = position.entryFee * (actualQuantity / position.quantity);
   const entrySlippageAllocation = position.entrySlippageCost * (actualQuantity / position.quantity);
   const funding = canonical?.settlement?.fundingCost ?? fundingCost(position, actualQuantity, at);
-  const netForJournal = canonical?.settlement?.netPnl ?? (referenceGrossPnl - entryFeeAllocation - exitFee - entrySlippageAllocation - exitSlippage - funding);
-  const cashChange = fillGrossPnl - (canonical?.settlement?.exitCost ?? exitFee) - funding;
+  const rawJournalNet = canonical?.settlement?.netPnl ?? (referenceGrossPnl - entryFeeAllocation - exitFee - entrySlippageAllocation - exitSlippage - funding);
+  const rawCashChange = fillGrossPnl - (canonical?.settlement?.exitCost ?? exitFee) - funding;
+  // Isolated simulated losses cannot debit more than the initial margin
+  // pledged by THIS position, even after a price gap. Entry commission is
+  // already reflected in the account at entry time.
+  const isolatedLiquidation = reason === 'liquidation' && !canonical;
+  const allocatedMargin = position.initialRequiredMargin * (actualQuantity / position.quantity);
+  const cashChange = isolatedLiquidation
+    ? Math.max(-allocatedMargin, rawCashChange) : rawCashChange;
+  const netForJournal = isolatedLiquidation
+    ? cashChange - entryFeeAllocation : rawJournalNet;
+  if (isolatedLiquidation) {
+    position.warnings = unique([
+      ...position.warnings,
+      'PAPER_ISOLATED_LIQUIDATION_ESTIMATE: 실제 청산가격·갭·추가 수수료와 다를 수 있습니다.',
+    ]);
+  }
 
   position.remainingQuantity = Math.max(0, position.remainingQuantity - actualQuantity);
   position.currentPrice = reference;
-  position.realizedPnl += referenceGrossPnl - exitFee - exitSlippage - funding;
+  position.realizedPnl += isolatedLiquidation
+    ? cashChange + entrySlippageAllocation
+    : referenceGrossPnl - exitFee - exitSlippage - funding;
   position.totalFees += exitFee;
   position.totalSlippage += exitSlippage;
   position.totalFunding += funding;
@@ -487,10 +556,21 @@ export function cancelOrder(state: PaperTradingState, action: CancelPaperOrderAc
 export function markPrice(state: PaperTradingState, action: MarkPaperPriceAction, now: Date): PaperTradingActionResult {
   if (!positive(action.price)) throw new PaperTradingError('INVALID_MARK_PRICE', '현재가는 0보다 커야 합니다.');
   const at = toIso(action.at, now);
+  const fills: PaperFill[] = [];
+  let liquidatedPosition: PaperPosition | null = null;
   for (const position of state.positions) {
     if (position.symbol !== action.symbol || position.status === 'closed') continue;
     position.currentPrice = action.price;
     updateExcursions(position, action.price, action.price);
+    const liquidation = position.canonicalPaper ? null : estimatedManualPaperLiquidationPrice(position);
+    if (liquidation != null && (position.side === 'long'
+      ? action.price <= liquidation : action.price >= liquidation)) {
+      fills.push(closePositionInternal(
+        state, position, position.remainingQuantity, action.price,
+        'liquidation', `${action.eventId}:${position.id}:mark-liquidation`, at,
+      ));
+      liquidatedPosition = position;
+    }
   }
   recalculateAccount(state, at);
   return {
@@ -499,10 +579,11 @@ export function markPrice(state: PaperTradingState, action: MarkPaperPriceAction
     orderSubmitted: false,
     exchangeRequestSent: false,
     state,
-    order: null,
-    position: null,
-    fills: [],
-    warnings: [],
+    order: liquidatedPosition
+      ? state.orders.find((item) => item.id === liquidatedPosition!.orderId) ?? null : null,
+    position: liquidatedPosition,
+    fills,
+    warnings: liquidatedPosition ? ['수동 모의선물의 추정 강제청산 조건이 충족됐습니다.'] : [],
     duplicateEvent: false,
   };
 }

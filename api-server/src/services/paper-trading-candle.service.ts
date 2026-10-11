@@ -1,7 +1,7 @@
 import { floorQuantityToRules } from './trading-risk-engine.service';
 import type { ClosePaperPositionAction, PaperCandle, PaperFill, PaperFillReason, PaperOrder, PaperPosition, PaperTradingActionResult, PaperTradingState, ProcessPaperCandleAction } from './paper-trading.types';
 import { EPSILON, MARKET_FRESHNESS_MS, MODE, PaperTradingError, adverseFillPrice, finite, isFresh, limitFillPrice, positive, referencePrice, toIso, unique } from './paper-trading-core.service';
-import { closePositionInternal, createPositionFromOrder, recalculateAccount, updateExcursions } from './paper-trading-position.service';
+import { closePositionInternal, createPositionFromOrder, estimatedManualPaperLiquidationPrice, recalculateAccount, updateExcursions } from './paper-trading-position.service';
 
 function pendingOrderTrigger(order: PaperOrder, candle: PaperCandle) {
   if (order.orderType === 'limit') {
@@ -52,6 +52,10 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   let lastPosition: PaperPosition | null = null;
 
   for (const order of state.orders.filter((item) => item.status === 'pending' && item.symbol === candle.symbol)) {
+    // A completed historical OHLC bar may have started before the order was
+    // submitted. Its intrabar high/low cannot authorize a later entry.
+    const submittedAtMs = Date.parse(order.submittedAt);
+    if (!Number.isFinite(submittedAtMs) || candle.timestamp <= submittedAtMs) continue;
     const trigger = pendingOrderTrigger(order, candle);
     if (!trigger) continue;
     try {
@@ -69,8 +73,28 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   }
 
   for (const position of state.positions.filter((item) => item.status !== 'closed' && item.symbol === candle.symbol)) {
+    // Do not retroactively liquidate or take profit on pre-entry OHLC.
+    const openedAtMs = Date.parse(position.openedAt);
+    if (!Number.isFinite(openedAtMs) || candle.timestamp <= openedAtMs) continue;
     position.currentPrice = candle.close;
     updateExcursions(position, candle.high, candle.low);
+    // Conservative intrabar ordering: a hypothetical 1..125x isolated
+    // liquidation wins over a favorable stop or target when one OHLC candle
+    // touches both. Never infer a precise tick sequence from candle extrema.
+    const liquidation = position.canonicalPaper ? null : estimatedManualPaperLiquidationPrice(position);
+    const liquidationHit = liquidation != null && (position.side === 'long'
+      ? candle.low <= liquidation : candle.high >= liquidation);
+    if (liquidationHit && liquidation != null) {
+      const reference = position.side === 'long'
+        ? Math.min(candle.open, liquidation)
+        : Math.max(candle.open, liquidation);
+      fills.push(closePositionInternal(
+        state, position, position.remainingQuantity, reference,
+        'liquidation', `${action.eventId}:${position.id}:liquidation`, at,
+      ));
+      lastPosition = position;
+      continue;
+    }
     if (openedPositionIds.has(position.id)) continue;
 
     const stopHit = position.side === 'long'
@@ -96,10 +120,17 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
     }
 
     if (target1Hit && !position.target1Executed && position.remainingQuantity > EPSILON) {
-      const targetQuantity = Math.min(
-        position.remainingQuantity,
-        floorQuantityToRules(position.quantity * position.targetClosePercent1 / 100, null, 8),
+      const firstAllocation = floorQuantityToRules(
+        position.quantity * position.targetClosePercent1 / 100, null, 8,
       );
+      // Either target may arrive first. When TP2 has already executed and
+      // the declared allocations total 100%, TP1 must absorb rounding dust.
+      // A sub-100% plan must never close its unallocated remainder.
+      const allTargetsAccountedFor = position.target2Executed
+        && position.targetClosePercent1 + position.targetClosePercent2 >= 100 - EPSILON;
+      const targetQuantity = allTargetsAccountedFor
+        ? position.remainingQuantity
+        : Math.min(position.remainingQuantity, firstAllocation);
       if (targetQuantity > EPSILON) {
         fills.push(closePositionInternal(
           state,
@@ -116,15 +147,31 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
     }
 
     if (target2Hit && !position.target2Executed && position.remainingQuantity > EPSILON) {
-      fills.push(closePositionInternal(
-        state,
-        position,
-        position.remainingQuantity,
-        targetReference(position, candle, target2 as number),
-        'take_profit',
-        `${action.eventId}:${position.id}:tp2`,
-        at,
-      ));
+      // Second target is a fraction of the ORIGINAL position, just like TP1.
+      // Closing the whole remainder silently ignores explicit 25%/25% plans.
+      // Any unallocated portion stays open for stop/manual close.
+      const allocatedQuantity = floorQuantityToRules(
+        position.quantity * position.targetClosePercent2 / 100, null, 8,
+      );
+      // Two configured targets totaling 100% should finish the position,
+      // including exchange-step rounding dust from TP1. A 25%/25% plan must
+      // leave the unallocated 50% open for a later stop/manual close.
+      const allTargetsAccountedFor = position.target1Executed
+        && position.targetClosePercent1 + position.targetClosePercent2 >= 100 - EPSILON;
+      const targetQuantity = allTargetsAccountedFor
+        ? position.remainingQuantity
+        : Math.min(position.remainingQuantity, allocatedQuantity);
+      if (targetQuantity > EPSILON) {
+        fills.push(closePositionInternal(
+          state,
+          position,
+          targetQuantity,
+          targetReference(position, candle, target2 as number),
+          'take_profit',
+          `${action.eventId}:${position.id}:tp2`,
+          at,
+        ));
+      }
       position.target2Executed = true;
       lastPosition = position;
     }
