@@ -148,8 +148,8 @@ jobs:
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)
             ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
-            ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE',
-              'INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
+            ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE','HTTP_503',
+              'HTTP_ERROR','INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
             ||!Number.isInteger(r.signalSource.eventCount) ||r.signalSource.eventCount<0
             ||r.signalSource.eventCount>10000
             ||typeof r.signalSource.safetyValidated!=='boolean'
