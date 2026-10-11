@@ -50,20 +50,46 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
  const sent=new Set<string>();
  for(const raw of events){
   const event=OBJ(raw);
-  if(!event||event.type!=='NEW_CANDIDATE'||event.state!=='CANDIDATE'
+  if(!event||!['NEW_CANDIDATE','STATE_CHANGED','RESCAN_REQUESTED'].includes(event.type)
     ||!STR(event.id,400)||!STR(event.symbol,128)
-    ||!STR(event.strategy,40)||!STR(event.timeframe,20)||sent.has(event.id))
-    return false;
-  sent.add(event.id);
+    ||!STR(event.strategy,40)||!STR(event.timeframe,20))return false;
+  // V3 legitimately emits a rescan request alongside a new candidate
+  // (or a state change). Deduplicate by type+identity, not identity alone.
+  const eventKey=event.type+':'+event.id;
+  if(sent.has(eventKey))return false;
+  sent.add(eventKey);
   const market=event.market,dir=event.direction;
-  if(!(market==='CRYPTO_FUTURES'?dir==='LONG'||dir==='SHORT'
-    :SOURCE[market]?.length>0&&dir==='BUY'))return false;
+  const candidateEvent=event.type==='NEW_CANDIDATE';
+  if(!(market==='CRYPTO_FUTURES'
+      ? dir==='LONG'||dir==='SHORT'||(!candidateEvent&&dir===null)
+      : SOURCE[market]?.length>0&&(dir==='BUY'||(!candidateEvent&&dir===null))))
+    return false;
   const expectedId=[market,event.symbol,event.strategy,event.timeframe,dir].join('|');
   const slot=event.timeframe==='15m'?'SCALPING_15M'
     :event.timeframe==='60m'?'SWING_60M'
       :event.timeframe==='1D'?'MID_LONG_1D':null;
   if(event.id!==expectedId||!slot)return false;
-  const row=candidates.get(event.id),origin=OBJ(row?.provenance);
+  const row=candidates.get(event.id);
+  if(!row||row.market!==market||row.symbol!==event.symbol
+    ||row.strategy!==event.strategy||row.timeframe!==event.timeframe
+    ||row.direction!==dir||row.validationTier!==event.validationTier
+    ||row.state!==event.state)return false;
+  const origin=OBJ(row.provenance);
+  if(!candidateEvent){
+    // State/rescan events are informational only; never promote them
+    // to a BUY/LONG/SHORT Telegram alert or member digest.
+    if(origin&&(origin.sourceCycleId!==epoch
+      ||origin.laneId!==PREFIX[market]+'_'+slot))return false;
+    if(event.type==='STATE_CHANGED'){
+      const states=['CANDIDATE','ABSTAIN','NO_TRADE','BLOCKED_DATA'];
+      if(!states.includes(event.previousState)
+        ||event.previousState===row.state
+        ||JSON.stringify(event.reasons??null)!==JSON.stringify(row.reasons??null))
+        return false;
+    }else if(OBJ(row.ai)?.rescanRequested!==true)return false;
+    continue;
+  }
+  if(event.state!=='CANDIDATE')return false;
   const lane=lookup.get(origin?.laneId),proof=OBJ(lane?.publicExecutionDiagnostic);
   if(!row||!origin||!lane||!proof
     ||origin.laneId!==PREFIX[market]+'_'+slot
