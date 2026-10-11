@@ -227,6 +227,9 @@ on:
       - market-prediction-lab/src/registered-formula-prospective-watch-v1.js
       - market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
       - api-server/src/services/trade-automation-unified-journal-adapter.ts
+      - api-server/src/services/trade-automation.types.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.ts
+      - api-server/src/services/admin-four-market-paper-readback.service.test.ts
       - api-server/src/services/automatic-paper-journal-mirror.service.ts
       - api-server/src/services/automatic-paper-journal-mirror.service.test.ts
       - api-server/src/services/unified-trade-journal.service.test.ts
@@ -366,6 +369,9 @@ jobs:
             market-prediction-lab/src/registered-formula-prospective-watch-v1.js
             market-prediction-lab/tests/registered-formula-prospective-watch-v1.test.js
             api-server/src/services/trade-automation-unified-journal-adapter.ts
+            api-server/src/services/trade-automation.types.ts
+            api-server/src/services/admin-four-market-paper-readback.service.ts
+            api-server/src/services/admin-four-market-paper-readback.service.test.ts
             api-server/src/services/automatic-paper-journal-mirror.service.ts
             api-server/src/services/automatic-paper-journal-mirror.service.test.ts
             api-server/src/services/unified-trade-journal.service.test.ts
