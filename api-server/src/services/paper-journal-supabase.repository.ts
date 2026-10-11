@@ -176,7 +176,7 @@ function createScopedPaperJournalRepository(
       assertOwner(userId);
       const { data: reserved, error: checkError } = await client.from('paper_accounts')
         .select('id').eq('user_id', authenticatedUserId)
-        .or('id.like.automatic-paper-admin-v2:%,id.like.automatic-paper-member-v2:%,id.like.manual-paper-admin-v1:%,id.like.manual-paper-member-v1:%')
+        .or('id.like.automatic-paper-admin-v2:%,id.like.automatic-paper-member-v2:%,id.like.manual-paper-%')
         .limit(1);
       if (checkError) throw databaseFailure();
       if (reserved?.length) {

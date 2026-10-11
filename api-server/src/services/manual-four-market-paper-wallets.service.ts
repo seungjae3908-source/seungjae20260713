@@ -38,9 +38,9 @@ export function isManualPaperWalletId(id: unknown): id is string {
  * `manual-paper-member-v1:fake-market` via the generic journal API.
  */
 export function isReservedManualPaperWalletNamespace(id: unknown): id is string {
-  return typeof id === 'string'
-    && (id.startsWith('manual-paper-admin-v1:')
-      || id.startsWith('manual-paper-member-v1:'));
+  // Reserve the entire manual-Paper namespace; a forged future version,
+  // unrecognized role or fake market must not bypass generic Paper sync.
+  return typeof id === 'string' && id.startsWith('manual-paper-');
 }
 
 /** Immutable manual-only virtual seed; never an actual broker account or
