@@ -105,6 +105,19 @@ export function createPositionFromOrder(
   if (!positive(fillPrice) || !positive(reference) || !positive(order.quantity)) {
     throw new PaperTradingError('INVALID_FILL', '모의체결 계산값이 올바르지 않습니다.');
   }
+  // A limit/stop order may have been queued before five KST losing closes.
+  // Recheck at the actual simulated fill time, not just when it was placed.
+  // Existing positions remain eligible for protective closes and liquidation.
+  const simulatedFillAt = new Date(at);
+  if (!Number.isFinite(simulatedFillAt.getTime())) {
+    throw new PaperTradingError('INVALID_TIMESTAMP', '모의체결 시각이 올바르지 않습니다.');
+  }
+  if (manualPaperLosingTradesToday(state, simulatedFillAt) >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
+    order.rejectionCodes = unique([...order.rejectionCodes, 'MANUAL_PAPER_DAILY_5_LOSSES_LIMIT']);
+    transitionPaperOrder(order, 'rejected', at);
+    throw new PaperTradingError('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT',
+      '한국시간 당일 손실 거래 5회 제한으로 대기 주문의 모의체결을 차단했습니다.');
+  }
   if (hasDuplicateSymbol({ ...state, orders: state.orders.filter((item) => item.id !== order.id) }, order.symbol)) {
     order.rejectionCodes = unique([...order.rejectionCodes, 'DUPLICATE_SYMBOL_POSITION']);
     transitionPaperOrder(order, 'rejected', at);
