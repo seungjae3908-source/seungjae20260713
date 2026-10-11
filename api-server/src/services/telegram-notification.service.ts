@@ -585,31 +585,38 @@ export async function editTelegramMessage(input: {
         },
       );
 
-      const retryable = response.status === 429 || response.status >= 500;
-      if (retryable && attempt < MAX_RETRIES) {
+      // Edits may race a newer keyboard revocation or signal-state change.
+      // An ambiguous POST can already have applied remotely; delayed replay
+      // could restore a stale order button. Retry only explicit HTTP 429.
+      if (response.status === 429 && attempt < MAX_RETRIES) {
         const delay = retryDelay(response, attempt);
         clearTimeout(timeout);
         await sleep(delay);
         return run(attempt + 1);
       }
-      if (!response.ok) return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      if (!response.ok) {
+        return response.status >= 500
+          ? { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+            errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' }
+          : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      }
 
       let result: TelegramSendResponse;
       try {
         result = (await response.json()) as TelegramSendResponse;
       } catch {
-        return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+        // A malformed HTTP 200 does not prove the edit was rejected.
+        return { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
       }
       return result.ok === true
         ? { ok: true, attempts: attempt + 1 }
         : { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
     } catch {
-      if (attempt < MAX_RETRIES) {
-        clearTimeout(timeout);
-        await sleep(300 * (attempt + 1));
-        return run(attempt + 1);
-      }
-      return { ok: false, attempts: attempt + 1, skipped: 'DELIVERY_FAILED' };
+      // A network abort can happen after the remote message was modified.
+      // Never reapply an old keyboard over a newer revocation.
+      return { ok: false, attempts: attempt + 1, skipped: 'OUTCOME_UNCONFIRMED',
+        errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
     } finally {
       clearTimeout(timeout);
     }
