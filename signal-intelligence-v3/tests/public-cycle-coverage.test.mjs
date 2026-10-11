@@ -221,3 +221,70 @@ test('no source-partial waiver for aborted or timed-out pages, failed or incompl
   };
   assert.equal(classifyPublicCycleLaneStatus(completeRoster), 'SEARCH_FAILURE');
 });
+
+test('stale underlying candles hold research cursor even with a fresh public roster', () => {
+  for (const partial of [false, true]) {
+    const data = result({
+      dataState: 'stale',
+      cards: [],
+      universe: {
+        totalCount: 50, cursor: 20, nextCursor: 40,
+        source: partial ? 'krx-symbol-master' : 'upbit-public',
+        partial, stale: false,
+      },
+      execution: {
+        ...result().execution,
+        requestedCount: 20, startedCount: 20, completedCount: 20, partial,
+      },
+    });
+    const status = classifyPublicCycleLaneStatus(data);
+    assert.equal(status, 'BLOCKED_DATA');
+    const resultCursor = decidePublicCycleCursor({ response: data, status, cursor: 20 });
+    assert.equal(resultCursor.nextCursor, 20);
+    assert.equal(resultCursor.blockedObservationOnly, false);
+    assert.equal(resultCursor.reason, 'STALE_CANDLE_HOLD');
+  }
+});
+
+test('synthetic four-market paginated research windows visit every eligible index once without cursor skips', () => {
+  const scenarios = [
+    { market: 'KR_STOCK', total: 4010, batch: 20, source: 'krx-symbol-master', partial: true },
+    { market: 'US_STOCK', total: 12322, batch: 20, source: 'nasdaq-trader-public-directory', partial: false },
+    { market: 'CRYPTO_SPOT', total: 294, batch: PUBLIC_V3_SPOT_STAGE_TWO_LIMIT, source: 'upbit-public', partial: false },
+    { market: 'CRYPTO_FUTURES', total: 820, batch: 20, source: 'bitget-public', partial: false },
+  ];
+  for (const { market, total, batch, source, partial } of scenarios) {
+    let cursor = 0;
+    const visited = new Set();
+    const pageCount = Math.ceil(total / batch);
+    for (let page = 0; page < pageCount; page += 1) {
+      const count = Math.min(batch, total - cursor);
+      const after = cursor + count < total ? cursor + count : null;
+      const data = result({
+        outcome: null,
+        dataState: partial ? 'partial' : 'complete',
+        cards: [],
+        universe: { totalCount: total, cursor, nextCursor: after, source, partial, stale: false },
+        execution: {
+          requestedCount: count, startedCount: count, completedCount: count,
+          providerErrorCount: 0, timeoutCount: 0, partial,
+          cancelled: false, timedOut: false, duplicate: false,
+        },
+      });
+      const status = classifyPublicCycleLaneStatus(data);
+      assert.equal(status, partial ? 'BLOCKED_DATA' : 'VALID_NO_TRADE', market);
+      const decision = decidePublicCycleCursor({ response: data, status, cursor });
+      assert.equal(decision.nextCursor, after ?? 0, market);
+      assert.equal(decision.blockedObservationOnly, partial, market);
+      for (let index = cursor; index < cursor + count; index += 1) {
+        assert.equal(visited.has(index), false, `${market} duplicate index ${index}`);
+        visited.add(index);
+      }
+      cursor = decision.nextCursor;
+    }
+    assert.equal(cursor, 0, `${market} did not wrap after last eligible index`);
+    assert.equal(visited.size, total, `${market} dropped or skipped source indexes`);
+  }
+  // These are synthetic index-rotation tests, not proof of authentic whole-
+  // market quotes, provider uptime, OOS, Paper fills, or profitability.
+});

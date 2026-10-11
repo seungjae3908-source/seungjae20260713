@@ -107,6 +107,11 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
   const { universe, execution } = response;
   if (!universe || !execution) return hold('EVIDENCE_MISSING');
   if (status === 'SEARCH_FAILURE') return hold('PROVIDER_FAILURE');
+  // An as-of/source roster may still be current while the underlying
+  // candles/quotes are stale. Never skip those symbols or call the page
+  // explored merely because the public ticker roster was reachable.
+  if (status === 'BLOCKED_DATA' && response.dataState === 'stale')
+    return hold('STALE_CANDLE_HOLD');
   if (!integer(universe.totalCount) || universe.totalCount === 0
     || !integer(universe.cursor) || universe.cursor !== cursor
     || !integer(execution.requestedCount) || execution.requestedCount === 0
