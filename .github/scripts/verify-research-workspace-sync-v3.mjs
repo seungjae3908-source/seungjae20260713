@@ -393,6 +393,22 @@ const memberTelegramReviewed=[
  'api-server/src/services/telegram-signal-followup.service.ts',
  'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
 ];
+// Exactly one isolated, admin-only and READ-ONLY PIT minute source-inventory bridge.
+// These paths are not trading owners and their changes do not grant orders,
+// source entitlements, model adoption, or Production authority.
+const researchPITReadOnlyReviewed=[
+  'market-prediction-lab/src/research-selected-window-v1.js',
+  'market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js',
+  'market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.d.ts',
+  'market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js',
+  'market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.d.ts',
+  'market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js',
+  'api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts',
+  'stock-analyzer/src/lib/research-pit-minute-coverage-period.ts',
+  'stock-analyzer/src/components/research-pit-minute-coverage.tsx',
+  'stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts',
+  '.github/workflows/research-pit-minute-readonly-drift.yml',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -408,6 +424,79 @@ const allowed=new Set([
  ...memberTelegramReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+const pitReadOnlyChanged=changed.some((p)=>researchPITReadOnlyReviewed.includes(p));
+if(pitReadOnlyChanged){
+ const required=[...researchPITReadOnlyReviewed,
+  '.github/workflows/research-center-predeploy-validation.yml',
+  'api-server/scripts/verify-research-center-predeploy-contract.mjs',
+  '.github/scripts/verify-research-workspace-sync-v3.mjs',
+  'api-server/src/routes/research-workspace.ts',
+  'stock-analyzer/src/pages/research-center.tsx'];
+ for(const path of required)if(!changed.includes(path))
+  throw new Error('PIT_READONLY_COMPLETE_GATE_REQUIRED:'+path);
+ const permitted=new Set(required);
+ for(const path of changed)if(!permitted.has(path))
+  throw new Error('PIT_READONLY_UNRELATED_OWNER_SCOPE_FORBIDDEN:'+path);
+ // The canonical auth/video/worker/orchestrator route graph must be
+ // byte-for-byte identical to current main after removing just this GET.
+ const route='api-server/src/routes/research-workspace.ts';
+ let currentRoute=git('show','HEAD:'+route);
+ currentRoute=currentRoute.replace(
+  "import {\n  readResearchPITMinuteCoverageV1,\n  type ResearchPITMarket,\n} from '../../../market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js';\n",'');
+ const start=currentRoute.indexOf('  // Research 1m original-source COVERAGE ONLY.');
+ const end=currentRoute.indexOf('  // .all intentionally rejects HEAD',start);
+ if(start<0||end<=start)throw new Error('PIT_READONLY_ROUTE_BOUNDARY_MISSING');
+ const pitRoute=currentRoute.slice(start,end);
+ currentRoute=currentRoute.slice(0,start)+currentRoute.slice(end);
+ if(currentRoute!==git('show',MAIN+':'+route))
+  throw new Error('PIT_READONLY_MAIN_ADMIN_WORKSPACE_MUTATED');
+ for(const token of [
+  "router.all('/pit-minute-coverage'",
+  "res.setHeader('Cache-Control', 'no-store, max-age=0')",
+  "if (req.method !== 'GET')",
+  "readResearchPITMinuteCoverageV1({",
+  "financialMutationCount: 0",
+  "executionAuthority: 'NONE'",
+  "realOrders: false",
+ ])if(!pitRoute.includes(token))throw new Error('PIT_READONLY_ROUTE_SAFETY_MISSING:'+token);
+ if(pitRoute.includes("router.post(")||pitRoute.includes("router.put(")
+  ||pitRoute.includes("router.delete("))
+  throw new Error('PIT_READONLY_WRITE_VERB_FORBIDDEN');
+ // Existing Research Center detailed evidence is preserved exactly.
+ const page='stock-analyzer/src/pages/research-center.tsx';
+ const currentPage=git('show','HEAD:'+page)
+  .replace("import { ResearchPITMinuteCoveragePanel } from '@/components/research-pit-minute-coverage';\n",'')
+  .replace("        {tab === 'evidence' ? <ResearchPITMinuteCoveragePanel /> : null}\n",'');
+ if(currentPage!==git('show',MAIN+':'+page))
+  throw new Error('PIT_READONLY_MAIN_RESEARCH_CENTER_MUTATED');
+ const e2e='stock-analyzer/e2e/research-center-professional-hierarchy.spec.ts';
+ let currentE2e=git('show','HEAD:'+e2e).replace(
+  "import {\n  checkedPITSelection, collectPITMinuteCoveragePeriod, isValidPITCoverageResponse,\n  type PITSelection,\n} from '../src/lib/research-pit-minute-coverage-period';\n",'');
+ const addedStart=currentE2e.indexOf("test('admin historical 1m coverage reads and aggregates");
+ if(addedStart<0)throw new Error('PIT_READONLY_BROWSER_REGRESSIONS_MISSING');
+ currentE2e=currentE2e.slice(0,addedStart).trimEnd()+'\n';
+ if(currentE2e!==git('show',MAIN+':'+e2e))
+  throw new Error('PIT_READONLY_EXISTING_BROWSER_TESTS_MUTATED');
+ const source=git('show','HEAD:market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js');
+ for(const token of [
+  'providerGETCount:0','financialMutationCount:0',
+  'profitabilityProven:false','executionAuthority:"NONE"',
+  'constants.O_RDONLY|constants.O_NOFOLLOW',
+ ])if(!source.includes(token))throw new Error('PIT_READONLY_PRIVATE_SOURCE_GUARD_MISSING:'+token);
+ if(/\b(?:fetch|axios)\s*\(/u.test(source))
+  throw new Error('PIT_READONLY_PROVIDER_NETWORK_FORBIDDEN');
+ const frontend=git('show','HEAD:stock-analyzer/src/components/research-pit-minute-coverage.tsx');
+ for(const token of ['authorizedFetch','method: \'GET\'','gcTime: 0',
+  'collectPITMinuteCoveragePeriod'])
+  if(!frontend.includes(token))throw new Error('PIT_READONLY_BROWSER_SAFETY_MISSING:'+token);
+ if(/fetch\(\s*['"]https?:/u.test(frontend))
+  throw new Error('PIT_READONLY_EXTERNAL_BROWSER_REQUEST_FORBIDDEN');
+ const gate=git('show','HEAD:.github/workflows/research-pit-minute-readonly-drift.yml');
+ if(!gate.includes('node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js')
+  ||!gate.includes('research-workspace-pit-minute-coverage.smoke.test.ts')
+  ||!gate.includes('EXECUTION_AUTHORITY: "NONE"'))
+  throw new Error('PIT_READONLY_SCOPED_QA_REQUIRED');
+}
 // The personal Telegram member-profile reads share a repository with automatic
 // execution. Do not require automatic-trading deployment gates for ONLY the
 // proven expiry/permissions read patch and additive membership regression
@@ -617,6 +706,7 @@ if(current!==mainRoute)throw new Error('MAIN_ROUTE_CHANGE_NOT_PRESERVED');
 const protectedPaths=['market-prediction-lab','research-production','research-dashboard','api-server/src/middleware/auth.ts','stock-analyzer/src/pages/research-center.tsx','stock-analyzer/vite.config.ts','packages/member-access','pnpm-lock.yaml'];
 const protectedPathExceptions=new Map([
  ['market-prediction-lab',new Set([
+  ...researchPITReadOnlyReviewed.filter((p)=>p.startsWith('market-prediction-lab/')),
   'market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js',
   'market-prediction-lab/src/frozen-candidate-performance-publisher-v1.js',
   'market-prediction-lab/tests/frozen-candidate-performance-publisher-v1.test.js',

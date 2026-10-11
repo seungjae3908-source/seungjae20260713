@@ -28,6 +28,12 @@ on:
       - 'packages/member-access/src/index.d.ts'
       - 'api-server/supabase/migrations/2026100601_member_access_s_ai_hardening.sql'
       - 'api-server/src/routes/research-workspace.ts'
+      - 'api-server/src/routes/research-workspace-pit-minute-coverage.smoke.test.ts'
+      - 'stock-analyzer/src/lib/research-pit-minute-coverage-period.ts'
+      - 'stock-analyzer/src/components/research-pit-minute-coverage.tsx'
+      - 'market-prediction-lab/src/research-pit-minute-coverage-readonly-v1.js'
+      - 'market-prediction-lab/src/four-market-pit-minute-compact-selected-window-v1.js'
+      - '.github/workflows/research-pit-minute-readonly-drift.yml'
       - 'api-server/src/routes/strategy-promotion.ts'
       - 'api-server/src/routes/video-research-evidence.ts'
       - 'api-server/src/routes/video-research-source-evidence.ts'
@@ -124,6 +130,9 @@ jobs:
           node api-server/scripts/verify-research-center-predeploy-contract.mjs
           node api-server/scripts/verify-fast-profitability-bounded-artifact-discovery-contract.mjs
           node api-server/scripts/verify-fast-profitability-preactivation-watch-contract.mjs
+          # Separate native-source coverage from historical profitability PASS.
+          # This is a fixture-only read; provider and trading requests remain zero.
+          node --test market-prediction-lab/tests/research-pit-minute-coverage-readonly-v1.test.js
 
       - name: Assert formula queue missing producer and Paper consumer do not appear ready
         shell: bash
