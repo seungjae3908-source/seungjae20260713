@@ -245,11 +245,17 @@ function tradingDatesForChunk(market,w,start,end,stockTradingDates){
   let before=0;
   for(const date of stockTradingDates){
     const ms=parseDay(date);
-    if(ms<=before||ms<w.startMs||ms>=w.endExclusiveMs)
+    // The server keeps ONE archive of exchange-local trading dates for
+    // many years, rather than constructing a new calendar per HTTP query.
+    // Validate the entire supplied list for sorted unique dates, but only
+    // consume the selected request chunk. Missing dates remain unknown.
+    if(ms<=before)
       fail("PIT_COMPACT_STOCK_DATES_INVALID");
     before=ms;
   }
-  return stockTradingDates.filter(date=>date>=utc(start)&&date<utc(end));
+  return stockTradingDates.filter(date=>
+    date>=utc(start)&&date<utc(end)
+    &&date>=w.startDate&&date<=w.endDate);
 }
 /**
  * A range may span 1..36,600 selected days; process at most 31 dates per

@@ -107,6 +107,29 @@ test("stock without caller-provided dated calendar fails closed despite a report
     assert.equal(x.trueMarketWideRecall,null);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+test("long-term stock calendar can serve a short date window without false holiday evidence",async()=>{
+  const root=makeRoot();
+  try{
+    const venueDir=join(root,"US_STOCK");
+    mkdirSync(venueDir,{mode:0o700});
+    writeFileSync(join(venueDir,"stock-trading-dates.json"),
+      JSON.stringify({market:"US_STOCK",tradingDates:[
+        "2025-12-31","2026-09-18","2026-09-21","2027-01-04",
+      ]}),{mode:0o600});
+    const r=await read({root,market:"US_STOCK",
+      startDate:"2026-09-18",endDate:"2026-09-21",chunkDays:7});
+    assert.equal(r.available,true);
+    assert.equal(r.status,"INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK");
+    assert.equal(r.report.expectedHistoricalTradingDays,2);
+    assert.equal(r.report.missingSourceDays,2);
+    assert.deepEqual(r.report.dailyReadiness.map(x=>x.date),
+      ["2026-09-18","2026-09-21"]);
+    assert.equal(r.fullMarketOpportunityDenominatorVerified,false);
+    assert.equal(r.actualMarketWideOpportunityCount,null);
+    assert.equal(r.profitabilityProven,false);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
+
 test("invalid market, range, cursor and day bounds reject without hitting any provider",async()=>{
   const root=makeRoot();
   try{

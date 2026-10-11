@@ -262,6 +262,27 @@ test("stock without independently supplied local session dates does not certify 
     stockTradingDates:["2026-09-18"],dayReceipts:[]}),
     /PIT_COMPACT_CRYPTO_STOCK_DATES_FORBIDDEN/);
 });
+test("a long-term stock trading calendar may extend beyond a short selected period",()=>{
+  const dates=["2025-12-31","2026-01-12","2026-09-18","2026-09-21","2027-01-04"];
+  const w={startDate:"2026-09-18",endDate:"2026-09-21"};
+  const x=range({market:"US_STOCK",researchWindow:w,
+    stockTradingDates:dates,chunkCalendarDays:31,dayReceipts:[]});
+  assert.equal(x.status,"INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK");
+  assert.equal(x.expectedHistoricalTradingDays,2);
+  assert.equal(x.missingSourceDays,2);
+  assert.equal(x.dailyReadiness[0].date,"2026-09-18");
+  assert.equal(x.dailyReadiness[1].date,"2026-09-21");
+  assert.equal(x.dailyReadiness[0].originalMinuteRows,null);
+  assert.equal(x.trueMarketWideRecall,null);
+  assert.equal(x.executionAuthority,"NONE");
+  for(const bad of [
+    ["2026-09-18","2026-09-18"],
+    ["2026-09-21","2026-09-18"],
+    ["2026-02-30","2026-09-18"],
+  ])assert.throws(()=>range({market:"US_STOCK",researchWindow:w,
+    stockTradingDates:bad,dayReceipts:[]}),/PIT_COMPACT_(?:STOCK_DATES|EXPLICIT_DATE)_INVALID/);
+});
+
 test("offline CLI seals verified 1-day file, reads compact multi-day index, never raw pages",async()=>{
   const root=folder(),market="CRYPTO_SPOT",pit=manifest(market);
   try{
