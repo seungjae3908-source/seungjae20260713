@@ -27,10 +27,12 @@ export async function withReadOnlyStockProviderOverlay({
   try {
     marketData.getCandlesMeta = async (ticker, timeframe = '1D') => {
       const canonical = String(ticker ?? '').toUpperCase();
-      const candles = await readPublicCandles(canonical, timeframe, entries.get(canonical));
-      if (!Array.isArray(candles))
+      const result = await readPublicCandles(canonical, timeframe, entries.get(canonical));
+      const candles = Array.isArray(result) ? result : result?.candles;
+      const provider = Array.isArray(result) ? 'yahoo-public' : result?.provider;
+      if (!Array.isArray(candles) || !['yahoo-public', 'naver-public-dayCandle'].includes(provider))
         throw new Error('PUBLIC_STOCK_CANDLES_INVALID');
-      return { candles, provider: 'yahoo-public', fetchedAt: new Date().toISOString() };
+      return { candles, provider, fetchedAt: new Date().toISOString() };
     };
     marketData.getCandles = async (ticker, timeframe = '1D') =>
       (await marketData.getCandlesMeta(ticker, timeframe)).candles;

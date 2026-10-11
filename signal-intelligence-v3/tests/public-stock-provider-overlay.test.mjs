@@ -78,3 +78,21 @@ test('malformed public data cannot be passed as an apparently valid candle list'
     }),/PUBLIC_STOCK_CANDLES_INVALID/,
   );
 });
+
+test('read-only Naver historical dayCandle can supply explicit provenance without altering Yahoo default or member scanners',async()=>{
+ const f=fixture();
+ const result=await withReadOnlyStockProviderOverlay({...f.props,
+   readPublicCandles:async()=>({
+     candles:[{time:'2026-10-09T06:30:00.000Z',open:10,high:11,low:9,close:10.5,volume:100}],
+     provider:'naver-public-dayCandle',
+   }),
+   operation:async()=>f.data.getCandlesMeta('A','1D'),
+ });
+ assert.equal(result.provider,'naver-public-dayCandle');
+ assert.equal(result.candles.length,1);
+ assert.equal(f.data.getCandlesMeta,f.original.getCandlesMeta);
+ await assert.rejects(withReadOnlyStockProviderOverlay({...f.props,
+   readPublicCandles:async()=>({candles:[],provider:'secret-account'}),
+   operation:async()=>f.data.getCandlesMeta('A','1D'),
+ }),/PUBLIC_STOCK_CANDLES_INVALID/);
+});
