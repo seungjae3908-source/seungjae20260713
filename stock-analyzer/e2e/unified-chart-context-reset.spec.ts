@@ -164,7 +164,7 @@ function timeline(page: Page) {
 }
 
 function currentAnalysis(page: Page) {
-  return page.locator('section').filter({ hasText: '현재 판단' }).last();
+  return page.getByTestId('ai-chart-current-judgment');
 }
 
 async function expectLatestCandle(page: Page, expectedTime: number) {
@@ -251,7 +251,8 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await page.getByTestId('market-US').click();
   await expect(page).toHaveURL(/market=US/);
   await expect(page).toHaveURL(/ticker=AAPL/);
-  await expect(page.getByText('context-reset-us-aapl', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-us-aapl');
   await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
