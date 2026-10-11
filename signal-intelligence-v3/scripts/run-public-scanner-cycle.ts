@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
@@ -17,6 +18,7 @@ import { summarizePublicProviderFailureReasons } from '../src/public-provider-cy
 import { getPublicScannerProfileSet, PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT } from '../src/public-scanner-profiles.mjs';
 import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-overlay.mjs';
 import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } from '../src/public-research-rotation.mjs';
+import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/public-roster-integrity.mjs';
 import {
   classifyPublicCycleLaneStatus,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
@@ -61,6 +63,7 @@ function freshState() {
     cursors: Object.fromEntries(lanes.map((lane) => [lane.id, 0])),
     dataRetry: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
     coverageProgress: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
+    rosterDigests: Object.fromEntries(lanes.map((lane) => [lane.id, null])),
     retained: {},
     updatedAt: new Date(0).toISOString(),
   };
@@ -273,12 +276,12 @@ async function withStockPublicOnly(lane, operation) {
       const symbols = yahooProviderCandidates(lane, ticker, entry);
       return withProviderFallback(symbols, (symbol) => yahoo.getQuote(symbol));
     },
-    operation,
+    operation: () => operation(targetUniverse),
   });
 }
 
 async function scanStock(lane, cursor) {
-  return withStockPublicOnly(lane, async () => {
+  return withStockPublicOnly(lane, async (targetUniverse) => {
     const scanned = await StockSignalScannerService.scan({
       memberId: MEMBER_ID,
       market: lane.scannerMarket,
@@ -290,6 +293,10 @@ async function scanStock(lane, cursor) {
     });
     return withScannerCanonicalActions({
       ...scanned,
+      universe: {
+        ...scanned.universe,
+        rosterDigest: hashPublicStockSourceRoster(lane.market,targetUniverse.source,targetUniverse.entries,createHash),
+      },
       cards: scanned.cards.map((card) => ({ ...card, dataSources: [...new Set([...card.dataSources, 'yahoo-public'])] })),
     });
   });
@@ -373,6 +380,7 @@ async function main() {
   const state = releaseChanged ? freshState() : persistedState;
   state.dataRetry ??= {};
   state.coverageProgress ??= {};
+  state.rosterDigests ??= {};
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
@@ -385,7 +393,39 @@ async function main() {
       const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
-      const status = laneStatus(response);
+      const rosterIdentity = decidePublicRosterContinuity({
+        previousDigest: state.rosterDigests[lane.id] ?? null,
+        observedDigest: response.universe.rosterDigest ?? null,
+        stale: response.universe.stale === true,
+        providerErrors: Number(response.universe.providerErrorCount ?? 0),
+      });
+      if (rosterIdentity.changed) {
+        // The eligible set changed under a cursor, including same-count
+        // delist/relist. No old signal, old attempted-index counter or old
+        // retry can survive a source-index identity change.
+        state.rosterDigests[lane.id] = rosterIdentity.nextDigest;
+        state.cursors[lane.id] = 0;
+        state.dataRetry[lane.id] = null;
+        state.coverageProgress[lane.id] = null;
+        for (const [key,row] of Object.entries(state.retained ?? {})) {
+          if (row?.laneId === lane.id) delete state.retained[key];
+        }
+        coverage.push({
+          laneId: lane.id, market: lane.market, strategy: lane.label,
+          timeframe: lane.timeframe, cursorBefore: cursor,cursorAfter:0,
+          totalUniverse: response.universe.totalCount,
+          universeSource: response.universe.source,
+          universePartial: response.universe.partial === true,
+          universeStale: response.universe.stale === true,
+          status:'SEARCH_FAILURE',error:'ROSTER_DIGEST_CHANGED_RESET',
+          rosterVerified:false, retainedFromBatch:0,scannedCards:0,
+          providerErrors:0,timeouts:0,lastGoodPreserved:false,
+          leverage:{evaluated:0,available:0,blocked:0,unavailable:0},
+        });
+        continue;
+      }
+      if (rosterIdentity.trusted) state.rosterDigests[lane.id] = rosterIdentity.nextDigest;
+      const status = rosterIdentity.trusted ? laneStatus(response) : 'SEARCH_FAILURE';
       const recovery = resolvePublicResearchDataRetry({
         response, status, cursor, priorRetry: state.dataRetry[lane.id] ?? null,
       });
@@ -437,6 +477,8 @@ async function main() {
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
+        rosterVerified: rosterIdentity.trusted,
+        rosterFingerprintPresent: typeof response.universe.rosterDigest === 'string',
         cursorBefore: cursor,
         cursorAfter: state.cursors[lane.id],
         totalUniverse: response.universe.totalCount,
