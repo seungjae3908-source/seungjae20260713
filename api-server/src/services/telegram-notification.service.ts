@@ -287,7 +287,7 @@ async function retryDelay(response: Response, attempt: number): Promise<number |
   const rawHeader = response.headers.get('retry-after');
   if (rawHeader !== null) {
     const header = rawHeader.trim();
-    const seconds = /^(?:0|[1-9]\\d*)(?:\\.\\d+)?$/u.test(header)
+    const seconds = /^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(header)
       ? Number(header) : Number.NaN;
     const fromDate = /GMT$/iu.test(header) ? Date.parse(header) : Number.NaN;
     hints.push(Number.isFinite(seconds) && seconds >= 0
@@ -296,7 +296,7 @@ async function retryDelay(response: Response, attempt: number): Promise<number |
   }
   const length = response.headers.get('content-length');
   // An oversized/untrusted error body cannot authorize an immediate retry.
-  const bounded = length === null || (/^\\d+$/u.test(length) && Number(length) <= 4096);
+  const bounded = length === null || (/^\d+$/u.test(length) && Number(length) <= 4096);
   if (bounded) {
     try {
       const payload: unknown = await response.clone().json();
