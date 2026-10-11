@@ -67,6 +67,8 @@ on:
       - market-prediction-lab/tests/four-market-pit-replay-work-queue-v1.test.js
       - market-prediction-lab/scripts/run-four-market-original-minute-replay-v1.mjs
       - market-prediction-lab/tests/four-market-original-minute-replay-cli-v1.test.js
+      - market-prediction-lab/src/stock-native-minute-offline-intake-v1.js
+      - market-prediction-lab/tests/stock-native-minute-offline-intake-v1.test.js
       - market-prediction-lab/src/four-market-original-minute-opportunities-v1.js
       - market-prediction-lab/tests/four-market-original-minute-opportunities-v1.test.js
       - market-prediction-lab/tests/four-market-original-minute-day-events-v1.test.js
@@ -147,6 +149,7 @@ jobs:
           node --test market-prediction-lab/tests/four-market-original-minute-replay-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-replay-work-queue-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-replay-cli-v1.test.js
+          node --test market-prediction-lab/tests/stock-native-minute-offline-intake-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-opportunities-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-day-events-v1.test.js
           node --test market-prediction-lab/tests/four-market-original-minute-batch-v1.test.js
