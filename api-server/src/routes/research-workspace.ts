@@ -96,6 +96,8 @@ export function createResearchWorkspaceRouter(): IRouter {
     if (Object.keys(query).some(key => !allowed.has(key))
       || typeof market !== 'string'
       || !markets.has(market as ResearchPITMarket)
+      || typeof startDate !== 'string' || typeof endDate !== 'string'
+      || (cursorDate != null && typeof cursorDate !== 'string')
       || startMs == null || endMs == null || startMs > endMs
       || (cursorDate != null && (
         cursorMs == null || cursorMs < startMs || cursorMs > endMs))
