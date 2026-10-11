@@ -264,13 +264,11 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
   test.beforeAll(async () => {
     const port = await findFreePort();
     isolatedBaseURL = `http://127.0.0.1:${port}`;
-    const vite = path.resolve(
-      analyzerDirectory(),
-      process.platform === 'win32' ? 'node_modules/.bin/vite.cmd' : 'node_modules/.bin/vite',
-    );
+    const viteCli = path.resolve(analyzerDirectory(), 'node_modules/vite/bin/vite.js');
     isolatedVite = spawn(
-      vite,
+      process.execPath,
       [
+        viteCli,
         '--config',
         'vite.config.ts',
         '--host',
@@ -287,7 +285,6 @@ test.describe('restored authenticated context direct AI Chart bootstrap', () => 
           VITE_SUPABASE_URL: `https://${SUPABASE_HOST}`,
           VITE_SUPABASE_ANON_KEY: ACCESS_TOKEN,
         },
-        shell: process.platform === 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );

@@ -334,13 +334,13 @@ function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
   const { format } = useChartCurrency();
   const market = ['KR', 'US', 'UPBIT', 'BITGET'].includes(analysis?.market ?? '') ? analysis!.market as AnalysisSelection['market'] : 'KR';
   const current = typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null;
-  return <section className="rounded-2xl border border-card-border bg-card p-4">
+  return <section data-testid="ai-chart-current-judgment" className="rounded-2xl border border-card-border bg-card p-4">
     <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
     {analysis ? <><div className="mt-3 flex items-center gap-2"><BiasIcon bias={analysis.bias} /><strong className="text-sm">{analysis.bias === 'bullish' ? '상승 우세' : analysis.bias === 'bearish' ? '하락 우세' : '판단 보류'}</strong></div>
       <p className="mt-2 text-xl font-black tabular-nums">{format(current, market)}</p>
       <div className="mt-3 grid grid-cols-2 gap-2">{analysis.priceLevels.slice(0, 4).map((level, i) => <div key={level.role + i} className="rounded-xl bg-background p-2"><p className="text-[11px] text-muted-foreground">{level.role === 'support' ? '지지' : level.role === 'resistance' ? '저항' : level.role === 'target' ? '참고 목표' : level.role === 'invalidation' ? '무효화' : level.role}</p><p className="mt-1 text-xs font-bold tabular-nums">{format(level.price, market)}</p></div>)}</div>
       <p className="mt-3 text-[11px] text-muted-foreground">{formatAnalysisTime(analysis.detectedAt)} · 기술 강도 {formatAiChartScore(analysis.confidence)} · 승률 아님</p>
-    </> : <p className="mt-3 text-xs text-muted-foreground">유효한 시세 확인 중</p>}
+    </> : <p className="mt-3 text-xs text-muted-foreground">차트 데이터 확인 후 표시됩니다.</p>}
   </section>;
 }
 
