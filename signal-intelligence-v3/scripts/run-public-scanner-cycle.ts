@@ -14,6 +14,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
+import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
 import {
   bindPublicStockCandleSource,
   enforcePublicStockRosterCoverage,
@@ -515,8 +516,14 @@ async function main() {
   pruneRetained(state, nowMs);
   const inputs = Object.values(state.retained).map((row) => row.input);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
+  // Retained earlier research rows remain inspectable in rows/stateById,
+  // but only the exact verified current source page can publish fresh lists
+  // or Telegram candidate events. An invalid receipt returns empty outputs.
+  const publication = currentPagePublication(baseSnapshot, coverage);
   const snapshot = {
     ...baseSnapshot,
+    lists: publication.lists,
+    events: publication.events,
     serviceSha: SERVICE_SHA,
     profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,
