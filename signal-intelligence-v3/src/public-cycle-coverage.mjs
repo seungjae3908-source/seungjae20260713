@@ -13,6 +13,10 @@ const TRUSTED_ROSTER_SOURCES = new Set([
   'krx-symbol-master', 'finnhub-symbol-master',
   'nasdaq-trader-public-directory', 'upbit-public', 'bitget-public',
 ]);
+const INVALID_SOURCE_OUTCOMES = new Set([
+  'PROVIDER_FAILURE', 'REQUEST_TIMEOUT', 'UNIVERSE_EMPTY',
+  'SYMBOL_MAPPING_FAILURE', 'DATA_QUALITY_REJECT', 'FRONTEND_RENDER_FAILURE',
+]);
 const integer = (value) => Number.isSafeInteger(value) && value >= 0;
 const nonNegative = (value) => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
@@ -40,7 +44,7 @@ export function classifyPublicCycleLaneStatus(response) {
   const universe = response.universe;
   const execution = response.execution;
   if (!universe || !execution) return 'SEARCH_FAILURE';
-  if (response.outcome === 'PROVIDER_FAILURE' || response.outcome === 'REQUEST_TIMEOUT'
+  if (INVALID_SOURCE_OUTCOMES.has(response.outcome)
     || response.dataState === 'unavailable'
     || universe.stale === true
     || !nonNegative(execution.providerErrorCount) || execution.providerErrorCount > 0
@@ -53,11 +57,19 @@ export function classifyPublicCycleLaneStatus(response) {
   // not proof that ALL providers failed. NEVER silently create a PASS or a
   // no-trade result from excluded/unverified instruments.
   if (!pageEvidenceComplete(universe, execution)) return 'SEARCH_FAILURE';
+  // A curated or stale fallback cannot certify an entire market, even if
+  // another caller mislabels its aggregate dataState as complete.
+  if (!TRUSTED_ROSTER_SOURCES.has(universe.source)) return 'BLOCKED_DATA';
   if (universe.partial === true
     || response.dataState === 'untrusted' || response.dataState === 'stale'
     || response.dataState === 'partial') return 'BLOCKED_DATA';
   if (response.dataState !== 'complete') return 'BLOCKED_DATA';
   if (!Array.isArray(response.cards)) return 'SEARCH_FAILURE';
+  // Fail closed on a response whose declared outcome contradicts its cards;
+  // do not create economic or no-trade evidence from a malformed envelope.
+  if ((response.outcome === 'VALID_ZERO_SIGNAL' && response.cards.length > 0)
+    || (response.outcome === 'CANDIDATES_AVAILABLE' && response.cards.length === 0))
+    return 'SEARCH_FAILURE';
   return response.cards.length ? 'CANDIDATES_AVAILABLE' : 'VALID_NO_TRADE';
 }
 
