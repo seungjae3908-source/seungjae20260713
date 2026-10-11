@@ -372,3 +372,26 @@ This fixes one real all-symbol coverage defect but NOT changing listing
 membership, missing Upbit day candles, costs/OOS, full-market historical
 coverage, Telegram source 503 or live activation. No public request or
 trading authority was added.
+
+## Draft: restore shared Paper scanner, isolate V3 crypto sort at bundle build
+
+The shared crypto scanner sorts by 24h turnover; across repeated V3
+cursor pages, rank changes omit or repeat symbols. A first Draft fix
+patched the shared `crypto-signal-scanner.service.ts`, which correctly
+failed the separate Paper Forward changed-path gate and changed the
+authoritative Paper runtime package digest. These protections are
+deliberate and were **not bypassed**.
+
+The shared crypto scanner and its tests are now restored byte-for-byte
+to original `main`. The standalone V3-only
+`scripts/build-public-producer.mjs` loads that shared scanner through
+an esbuild transform and injects stable ASCII alphabetical symbol
+pagination **only** for `signal-intelligence-v3-public-only`.
+Ordinary member/Forward/Paper/LIVE use the unmodified backend and
+original liquidity ranking. Malformed or duplicate V3 symbols fail
+closed. The identical V3-only builder is used by the actual public
+cycle QA and by the independently approved release activation script.
+Exact source-marker and one-module-build assertions fail closed if the
+underlying scanner changes; offline tests cover rank flips, duplicate
+symbols and unchanged shared source. No private API, order, Telegram
+send, deployment or service mutation is introduced.
