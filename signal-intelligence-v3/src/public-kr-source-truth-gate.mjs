@@ -14,6 +14,38 @@ export function assertBlockedKrPublicResearchCoverage(snapshot){
    throw Error('KR_PUBLIC_COVERAGE_LANES_MISSING');
  const lanes=[];
  for(const row of rows){
+   // A fully failed public provider batch has NO candles, audit or roster
+   // attestation. Its strict bounded-Scanner numeric exception is allowed as
+   // fail-closed evidence, never as market coverage or successful scan.
+   // This is distinct from a completed partial KRX batch below.
+   if(row.error==='SCAN_PROVIDER_ERROR'){
+     const metrics=row.thrownProviderMetrics;
+     if(row.status!=='SEARCH_FAILURE'
+       ||!numeric(row.cursorBefore)||row.cursorAfter!==row.cursorBefore
+       ||row.lastGoodPreserved!==true||row.scannedCards!==0
+       ||row.retainedFromBatch!==0||row.requestedCount!==null
+       ||row.startedCount!==null||row.completedCount!==null
+       ||row.rosterVerified===true||row.publicStockSourceAudit!=null
+       ||row.cursorRotatedBlockedOnly===true
+       ||!metrics||metrics.sourceFailureConfirmed!==true
+       ||metrics.fullMarketVerified!==false
+       ||!numeric(metrics.started)||metrics.started<1
+       ||metrics.completed!==0||!numeric(metrics.providerErrors)
+       ||!numeric(metrics.timeouts)||!numeric(metrics.workerErrors)
+       ||metrics.providerErrors+metrics.timeouts<1
+       ||metrics.providerErrors+metrics.timeouts+metrics.workerErrors>metrics.started
+       ||row.providerErrors!==metrics.providerErrors||row.timeouts!==metrics.timeouts)
+       throw Error('KR_PUBLIC_PROVIDER_FAILURE_NOT_FAILCLOSED');
+     lanes.push(Object.freeze({
+       strategy:row.strategy,timeframe:row.timeframe,
+       result:'PROVIDER_FAILED_CURSOR_HELD',requestedCount:null,
+       insufficientCount:null,invalidSourceBars:null,
+       sourceProviderErrors:metrics.providerErrors,
+       sourceTimeouts:metrics.timeouts,
+       observationOnly:false,cursorHeld:true,
+     }));
+     continue;
+   }
    const audit=row.publicStockSourceAudit;
    const quality=audit?.candles?.[row.timeframe];
    if(row.rosterVerified!==true||row.universePartial!==true
