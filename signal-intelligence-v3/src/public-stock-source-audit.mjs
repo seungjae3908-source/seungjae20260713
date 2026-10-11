@@ -96,7 +96,7 @@ function auditedCounters(input,keys){
   }
   return Object.freeze(output);
 }
-function sanitizedStockAudit(input){
+export function sanitizePublicStockSourceAudit(input){
   if(!input||input.version!==PUBLIC_STOCK_SOURCE_AUDIT_VERSION
     ||input.symbolsRedacted!==true||input.fullMarketVerified!==false
     ||input.executionAuthority!=='NONE'
@@ -120,7 +120,7 @@ function sanitizedStockAudit(input){
 }
 export function attachPublicStockSourceAuditToError(error,audit){
   if(!(error instanceof Error))return error;
-  const safe=sanitizedStockAudit(audit);
+  const safe=sanitizePublicStockSourceAudit(audit);
   if(!safe)return error;
   try{
     Object.defineProperty(error,PUBLIC_STOCK_ERROR_AUDIT,{
@@ -133,5 +133,41 @@ export function attachPublicStockSourceAuditToError(error,audit){
 }
 export function readPublicStockSourceAuditFromError(error){
   return error instanceof Error
-    ?sanitizedStockAudit(error[PUBLIC_STOCK_ERROR_AUDIT]):null;
+    ?sanitizePublicStockSourceAudit(error[PUBLIC_STOCK_ERROR_AUDIT]):null;
+}
+
+
+/**
+ * Explain already-blocked stock research source observations without a second
+ * provider call. An expired quote is not a network outage or a safe live price.
+ * Even "ALL_OBSERVED_QUOTES_EXPIRED" does NOT prove that the exchange is closed,
+ * that every symbol is covered, or that any scanner/trading gate can be opened.
+ */
+export function classifyPublicStockSourceBlocker(audit,timeframe){
+ const source=sanitizePublicStockSourceAudit(audit);
+ const unknown=Object.freeze({
+   category:'SOURCE_CAUSE_UNVERIFIED',observedQuoteReads:null,expiredQuoteReads:null,
+   http429Reads:null,blockedOnly:true,fullMarketDataReady:false,
+   candidatePromotionAllowed:false,executionAuthority:'NONE',
+ });
+ if(!source||!TF.includes(timeframe))return unknown;
+ const q=source.quote,c=source.candles[timeframe],f=source.sanitizedProviderFailures;
+ let category='SOURCE_CAUSE_UNVERIFIED';
+ if(f.HTTP_429>0)category='HTTP_429_OBSERVED';
+ else if(f.TIMEOUT>0)category='HTTP_TIMEOUT_OBSERVED';
+ else if(f.HTTP_4XX>0||f.HTTP_5XX>0)category='HTTP_OTHER_ERROR_OBSERVED';
+ else if(f.OTHER>0)category='PROVIDER_OTHER_ERROR_OBSERVED';
+ else if(q.missingTimestamp>0||q.futureTimestamp>0)
+   category='QUOTE_TIMESTAMP_INVALID_OBSERVED';
+ else if(q.fetched>0&&q.expiredTimestamp===q.fetched
+   &&q.errors===0&&q.invalidPrice===0)
+   category='ALL_OBSERVED_QUOTES_EXPIRED';
+ else if(q.expiredTimestamp>0)category='SOME_OBSERVED_QUOTES_EXPIRED';
+ else if(c.invalidOhlc>0)category='INVALID_OHLC_OBSERVED';
+ else if(c.empty>0||c.shortLt20>0)category='CANDLE_DEPTH_OR_EMPTY_OBSERVED';
+ return Object.freeze({
+   category,observedQuoteReads:q.fetched,expiredQuoteReads:q.expiredTimestamp,
+   http429Reads:f.HTTP_429,blockedOnly:true,fullMarketDataReady:false,
+   candidatePromotionAllowed:false,executionAuthority:'NONE',
+ });
 }
