@@ -375,7 +375,7 @@ test('manual Paper 5-loss gate respects KST midnight rather than UTC midnight', 
     id:'prior-kst-loss-'+i,status:'closed',
     closedAt:'2026-08-02T14:59:59.000Z',netPnl:-1,
   } as any));
-  const result=place(state,{at:now});
+  const result=place(state,{now});
   assert.equal(result.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
 });
 
