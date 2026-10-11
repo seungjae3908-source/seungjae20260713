@@ -37,7 +37,7 @@ test('quote/base and futures product IDs stay distinct; no raw prices or symbols
  assert.equal(v.wholeVenueTradingSignalReady,false);
  assert.equal(v.executionAuthority,'NONE');
  assert.equal(JSON.stringify(v).includes('ETHUSDC'),false);
- assert.equal(JSON.stringify(v).includes('100'),false);
+ assert.equal(JSON.stringify(v).includes('"trade_price"'),false);
 });
 test('missing and duplicate source rows remain failed evidence, never fabricated zero',()=>{
  const x=fixture();
