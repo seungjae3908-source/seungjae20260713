@@ -3,6 +3,9 @@
 // Paper repair snapshot; any later edit restores the automatic-trading gate.
 export const PAPER_INTEGRATION_SHA = '09854c1895b1a41f0dfedc9cf1240734c88ac5e3';
 export const RESEARCH_CENTER_BATCH_PATHS = Object.freeze([
+  ".github/tests/pr-exact-head-paper-repair-checkout.test.mjs",
+  "market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js",
+  ".github/scripts/paper-forward-reviewed-paths.mjs",
   ".github/scripts/research-center-batch-scope.mjs",
   ".github/scripts/verify-research-workspace-sync-v3.mjs",
   ".github/tests/production-admin-four-paper-rls.test.mjs",
