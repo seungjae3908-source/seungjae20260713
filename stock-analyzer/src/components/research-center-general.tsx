@@ -203,7 +203,7 @@ function SummaryCard({ icon, label, value, detail, tone, selected, onClick, test
         <div className={'flex h-9 w-9 items-center justify-center rounded-xl border ' + TONE[tone]} aria-hidden="true">{icon}</div>
         <span className="text-xs font-black text-muted-foreground">{selected ? '선택됨' : '보기'}</span>
       </div>
-      <p className="mt-3 text-xs font-medium text-muted-foreground">{label}</p>
+      <span className="mt-3 block text-xs font-medium text-muted-foreground">{label}</span>
       <p className="mt-1 break-words text-lg font-bold tabular-nums">{value}</p>
       <p className="mt-1 line-clamp-2 break-keep text-xs font-medium leading-5 text-muted-foreground">{detail}</p>
     </button>

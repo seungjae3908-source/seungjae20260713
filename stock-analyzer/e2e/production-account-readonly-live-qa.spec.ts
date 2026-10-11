@@ -11,7 +11,7 @@ import {
   providerDiagnosticHealthy,
   type ReadonlyProbeObservation,
 } from './support/production-live-disable-provider-audit';
-import { parseBitgetReadonlyDiagnosticHeader, summarizeAutomaticWarmupPositions, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
+import { READONLY_RUNTIME_ERROR_PATTERN, parseBitgetReadonlyDiagnosticHeader, summarizeAutomaticWarmupPositions, type SanitizedBitgetReadonlyDiagnostic } from './production-account-readonly-live-qa-diagnostic';
 
 const baseUrl = String(process.env.PRODUCTION_BASE_URL ?? '').replace(/\/$/, '');
 const qaLogin = String(process.env.PRODUCTION_QA_LOGIN ?? '');
@@ -380,7 +380,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(credentialStatus?.liveTradingEnabled).toBe(false);
   expect(credentialStatus?.autoTradingEnabled).toBe(false);
 
-  const runtimeState = await page.evaluate(async ({ token, requirePositionIsolation }) => {
+  const runtimeState = await page.evaluate(async ({ token, requirePositionIsolation, errorPattern }) => {
     const read = async (url: string) => {
       const response = await fetch(url, {
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
@@ -392,7 +392,7 @@ test('Production real-account read-only providers return fresh connected snapsho
         try {
           const body = await response.json() as { error?: unknown };
           if (typeof body.error === 'string'
-            && /^(?:BACKGROUND_LIVE_|BITGET_|UPBIT_|KIWOOM_|TOSS_|ACCOUNT_READONLY_|EXCHANGE_|TRADING_CREDENTIAL_)[A-Z0-9_]{1,80}$/.test(body.error)) {
+            && new RegExp(errorPattern).test(body.error)) {
             classification = body.error;
           }
         } catch { /* Never log a raw provider body, credential, symbol or account. */ }
@@ -407,7 +407,8 @@ test('Production real-account read-only providers return fresh connected snapsho
         .map((provider) => read(`/api/trade-automation/live-position-isolation/${provider}`)) : []),
     ]);
     return { orders, approvalQueue, positionIsolation };
-  }, { token: accessToken!, requirePositionIsolation: !recoveryDisableAudit && testedProviders.length === 4 }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot;
+  }, { token: accessToken!, requirePositionIsolation: !recoveryDisableAudit && testedProviders.length === 4,
+    errorPattern: READONLY_RUNTIME_ERROR_PATTERN }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot;
     positionIsolation: Array<Record<string, unknown>> };
 
   for (const proof of runtimeState.positionIsolation) {
