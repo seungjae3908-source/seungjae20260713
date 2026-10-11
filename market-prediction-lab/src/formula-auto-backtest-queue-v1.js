@@ -21,6 +21,8 @@ export const FORMULA_PAPER_STRATEGY_REGISTRY_CONTRACT_V1 = 'research-formula-pap
 export const FORMULA_AUTO_BACKTEST_STATES_V1 = Object.freeze(['PASS', 'HOLD', 'RESERVE', 'EXCLUDE']);
 
 const SAFE_FILE = /^[A-Za-z0-9._-]{1,180}\.json$/u;
+// Bounded, public research evidence. This is not a credential or trade path.
+const MAX_QUEUE_JSON_BYTES = 64 * 1024 * 1024;
 const FORBIDDEN_CREDENTIAL_KEY = /^(?:api[_-]?key|api[_-]?secret|secret[_-]?key|access[_-]?key|password|passphrase|authorization|cookie|bearer|private[_-]?key|account[_-]?token)$/iu;
 const STRUCTURAL_REJECT_CODES = new Set([
   'FORMULA_INVALID',
@@ -480,6 +482,32 @@ async function assertPrivateIntakeDirectory(path) {
   }
 }
 
+// Input/result JSON can be researcher-provided. Reject symbolic links,
+// oversized files, mutable in-place reads and writable shared files before
+// interpreting any cached result as strategy evidence.
+async function readBoundedQueueJson(path, unsafeReason) {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (error?.code === 'ELOOP') throw new Error(unsafeReason);
+    throw error;
+  }
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.nlink !== 1
+      || before.size <= 0 || before.size > MAX_QUEUE_JSON_BYTES
+      || (before.mode & 0o022) !== 0) throw new Error(unsafeReason);
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    if (bytes.length !== before.size || after.ino !== before.ino
+      || after.size !== before.size || after.mtimeMs !== before.mtimeMs
+      || after.nlink !== 1) throw new Error(unsafeReason);
+    try { return JSON.parse(bytes.toString('utf8')); }
+    catch { throw new Error(unsafeReason); }
+  } finally { await handle.close(); }
+}
+
 async function readPrivateIntakeJson(path) {
   let handle;
   try {
@@ -669,9 +697,7 @@ export async function processFormulaAutoBacktestQueueV1({
   const rows = [];
   for (const name of files) {
     const path = join(inbox, name);
-    const info = await lstat(path);
-    if (!info.isFile() || info.isSymbolicLink()) continue;
-    const item = JSON.parse(await readFile(path, 'utf8'));
+    const item = await readBoundedQueueJson(path, 'FORMULA_QUEUE_INPUT_UNSAFE_FILE');
     const itemDigest = digest(item);
     const resultPath = join(resultsRoot, itemDigest + '.json');
     const formulaId = typeof item?.formulaCandidate?.candidateId === 'string'
@@ -680,7 +706,8 @@ export async function processFormulaAutoBacktestQueueV1({
     let result;
     try {
       result = assertSafeCachedFormulaResultV1(
-        JSON.parse(await readFile(resultPath, 'utf8')), itemDigest, formulaId, queuedAt,
+        await readBoundedQueueJson(resultPath, 'FORMULA_QUEUE_CACHED_RESULT_UNSAFE_FILE'),
+        itemDigest, formulaId, queuedAt,
       );
       rows.push({ ...result, repeated: true });
       continue;

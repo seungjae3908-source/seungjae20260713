@@ -213,5 +213,7 @@ test('snapshot republish contract test stays registered in bounded validation pa
     'utf8',
   );
   const testPath = 'market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js';
-  assert.equal(workflow.split(testPath).length - 1, 2);
+  assert.equal(workflow.split(testPath).length - 1, 1, 'PR trigger must still cover the test');
+  const { PAPER_FORWARD_REVIEWED_PATHS } = await import('../../.github/scripts/paper-forward-reviewed-paths.mjs');
+  assert.ok(PAPER_FORWARD_REVIEWED_PATHS.includes(testPath), 'bounded diff must still own the test');
 });
