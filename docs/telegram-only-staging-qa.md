@@ -69,3 +69,15 @@ remote firewall, route, or provider network fault is resolved. The protected
 Staging QA retains the exact-current-main and exact-runtime identity gate,
 and execution needs separate approved merger/deployment before it can attest
 any new live network outcome.
+
+
+## Public IPv4 DNS redirect and TLS error safety (Draft)
+The token-free Staging probe now refuses connections to private, loopback,
+link-local, shared CGNAT, documentation, benchmarking or multicast IPv4
+answers, reporting only `IPV4_DNS_UNSAFE_ADDRESS` without the destination.
+This avoids local-network probing after DNS poisoning or split-horizon
+misconfiguration. A trusted public IPv4 is still validated using strict
+Telegram hostname SNI and the CA chain; hostname mismatches, missing CA
+issuers and expired/invalid certificates have an explicit bounded
+`IPV4_TLS_CERT_FAILED` classification rather than a generic network error.
+This does not change actual Production egress or prove real connectivity.
