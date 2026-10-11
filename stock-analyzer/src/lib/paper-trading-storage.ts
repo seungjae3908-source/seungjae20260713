@@ -147,3 +147,151 @@ export function clearPaperState(storage: StorageLike, initialBalance = 10_000) {
   storage.removeItem(PAPER_STORAGE_KEY);
   return createLocalPaperState(initialBalance);
 }
+
+/** This is the legacy browser-local MANUAL futures simulator archive only.
+ * A new research round is never a server 4-market Paper wallet, LIVE account,
+ * transfer, or authority to invent historical profit.
+ */
+export const PAPER_MANUAL_ROUNDS_KEY = 'seungjae.paper-trading.manual-rounds.v1';
+export const MANUAL_PAPER_NEXT_ROUND_CONFIRMATION = 'START_NEXT_LOCAL_MANUAL_PAPER_ROUND_WITH_HISTORY';
+const MANUAL_ROUND_MAX_COUNT = 40;
+const MANUAL_ROUND_MAX_BYTES = 3_500_000;
+
+export type ManualPaperRoundRecord = Readonly<{
+  round: number;
+  previousAccountId: string;
+  nextAccountId: string;
+  closedAt: string;
+  finalEquity: number;
+  initialCapital: number;
+  netPnl: number;
+  bankrupt: boolean;
+  archived: PaperTradingState;
+}>;
+
+function readManualPaperRounds(storage: StorageLike): ManualPaperRoundRecord[] {
+  const raw = storage.getItem(PAPER_MANUAL_ROUNDS_KEY);
+  if (!raw) return [];
+  if (raw.length > MANUAL_ROUND_MAX_BYTES) throw new Error('모의 연구 회차 보관 용량을 초과했습니다. 기록을 먼저 내보내세요.');
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new Error('기존 수동모의 회차 보관 기록이 손상되어 신규 회차를 차단했습니다.'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('수동모의 회차 보관 형식이 올바르지 않습니다.');
+  }
+  const obj = parsed as {schemaVersion?:unknown; rounds?:unknown};
+  if (obj.schemaVersion !== 1 || !Array.isArray(obj.rounds) || obj.rounds.length > MANUAL_ROUND_MAX_COUNT
+    || containsSecretKey(obj.rounds)) throw new Error('수동모의 회차 보관 검증에 실패했습니다.');
+  const previous = new Set<string>();
+  return obj.rounds.map((row, i) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('수동모의 회차 이력이 올바르지 않습니다.');
+    const record = row as ManualPaperRoundRecord;
+    if (record.round !== i+1
+      || typeof record.previousAccountId !== 'string' || !record.previousAccountId
+      || typeof record.nextAccountId !== 'string' || !record.nextAccountId
+      || record.previousAccountId === record.nextAccountId
+      || previous.has(record.previousAccountId)
+      || !Number.isFinite(Date.parse(record.closedAt))
+      || !finite(record.finalEquity) || !finite(record.initialCapital) || !finite(record.netPnl)
+      || typeof record.bankrupt !== 'boolean' || !validatePaperState(record.archived)
+      || record.archived.account.id !== record.previousAccountId
+      || record.archived.account.initialBalance !== record.initialCapital) {
+      throw new Error('수동모의 회차 이력 검증에 실패했습니다.');
+    }
+    previous.add(record.previousAccountId);
+    return record;
+  });
+}
+
+export function getManualPaperRoundSummary(storage: StorageLike) {
+  const rounds = readManualPaperRounds(storage);
+  const totalIssued = rounds.reduce((sum, row) => sum + row.initialCapital, 0);
+  const totalNet = rounds.reduce((sum, row) => sum + row.netPnl, 0);
+  if (!Number.isFinite(totalIssued) || !Number.isFinite(totalNet)) {
+    throw new Error('수동모의 전체 회차 손익이 올바르지 않습니다.');
+  }
+  return {
+    completedRounds:rounds.length,
+    bankruptcies:rounds.filter(row => row.bankrupt).length,
+    totalIssued,
+    totalNet,
+    issuedCapitalReturnPercent:totalIssued > 0 ? totalNet / totalIssued * 100 : null,
+    // Historical rounds are immutable browser snapshots; no withdrawal/transfer.
+    records:rounds.map(({archived, ...summary}) => summary),
+  };
+}
+
+/** Explicit human confirmation, flat position/order and durable archive first.
+ * A failure after archive commit can be retried against the SAME previous ID
+ * without issuing a second round. There is no automatic cash refill.
+ */
+export function startNextLocalManualPaperRound(
+  storage: StorageLike,
+  state: PaperTradingState,
+  confirmation: string,
+  now = new Date(),
+): PaperTradingState {
+  if (confirmation !== MANUAL_PAPER_NEXT_ROUND_CONFIRMATION) {
+    throw new Error('수동모의 연구 회차 시작을 명시적으로 확인해야 합니다.');
+  }
+  if (!validatePaperState(state) || !Number.isFinite(now.getTime())) {
+    throw new Error('현재 모의매매 상태가 유효하지 않습니다.');
+  }
+  if (state.positions.some(row => row.status !== 'closed' && row.remainingQuantity > 0)
+      || state.orders.some(row => row.status === 'pending')) {
+    throw new Error('열린 포지션과 미체결 주문이 있으면 새 회차를 시작할 수 없습니다.');
+  }
+  if (Math.abs(state.account.equity - state.account.cashBalance) > 0.01
+      || state.account.usedMargin > 0.01 || state.account.unrealizedPnl !== 0) {
+    throw new Error('모의계좌 잔량과 현금 정산이 일치하지 않아 새 회차를 차단했습니다.');
+  }
+  const stored = storage.getItem(PAPER_STORAGE_KEY);
+  if (stored) {
+    let current: Partial<PaperStorageEnvelope>;
+    try {current = JSON.parse(stored);}
+    catch {throw new Error('현재 저장된 모의계좌 데이터가 손상되어 있습니다.');}
+    if (!validatePaperState(current.state) || current.state.account.id !== state.account.id) {
+      throw new Error('다른 화면에서 모의계좌가 변경되었습니다. 다시 불러온 뒤 진행하세요.');
+    }
+  }
+  const records = readManualPaperRounds(storage);
+  const last = records.at(-1);
+  const alreadyArchived = last?.previousAccountId === state.account.id;
+  if (records.some(row => row.previousAccountId === state.account.id) && !alreadyArchived) {
+    throw new Error('이미 종료된 과거 모의계좌를 다시 시작할 수 없습니다.');
+  }
+  if (records.length >= MANUAL_ROUND_MAX_COUNT && !alreadyArchived) {
+    throw new Error('브라우저 보관 회차 40개 한도입니다. 전체 이력을 먼저 내보내세요.');
+  }
+  const nextRound = alreadyArchived ? last!.round + 1 : records.length + 2;
+  const nextAccount = alreadyArchived ? last!.nextAccountId
+    : `paper_manual_round_${nextRound}_${now.getTime()}`;
+  const nextState = createLocalPaperState(state.account.initialBalance, now);
+  nextState.account.id = nextAccount;
+  if (!alreadyArchived) {
+    const ending = {
+      round:records.length + 1, previousAccountId:state.account.id,
+      nextAccountId:nextAccount, closedAt:now.toISOString(),
+      finalEquity:state.account.equity, initialCapital:state.account.initialBalance,
+      netPnl:state.account.equity - state.account.initialBalance,
+      bankrupt:state.account.equity <= 0,
+      archived:state,
+    };
+    const raw = JSON.stringify({schemaVersion:1,savedAt:now.toISOString(),rounds:[...records,ending]});
+    if (raw.length > MANUAL_ROUND_MAX_BYTES) {
+      throw new Error('회차 이력 보관 공간이 부족합니다. 내보낸 뒤 별도 보관하세요.');
+    }
+    storage.setItem(PAPER_MANUAL_ROUNDS_KEY,raw);
+  }
+  // Round archive is durable before replacing the local active Paper state.
+  // If storage fails here, the next explicit attempt resumes the same round.
+  savePaperState(storage,nextState);
+  return nextState;
+}
+
+export function exportManualPaperRounds(storage: StorageLike): string {
+  return JSON.stringify({
+    schemaVersion:1,exportedAt:new Date().toISOString(),
+    localManualPaperOnly:true,rounds:readManualPaperRounds(storage),
+  },null,2);
+}
