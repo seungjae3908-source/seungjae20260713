@@ -155,18 +155,33 @@ test("missing or partial source rejects modeled profits instead of inventing zer
     assert.equal(noTomorrow.modeledTradeCount,null);
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
-test("multi-decade user selection is not silently capped to 3 years",async()=>{
+test("multi-decade date selection survives but pre-listing dates are not fake missing source sessions",async()=>{
   const x=fixture("CRYPTO_FUTURES"),folder=root();
   try{
-    const r=await replay(x.request(folder,{
+    const beforeListing=await replay(x.request(folder,{
       researchWindow:{startDate:"2016-01-01",endDate:"2025-12-31"},
       sessionSources:[],
     }));
-    assert.equal(r.status,"BLOCKED_DATA");
-    assert.equal(r.missingSourceDays,3653);
-    assert.equal(r.modeledReturnPercent,null);
-    assert.equal(r.sourceSessionsRead,0);
-    assert.equal(r.profitabilityProven,false);
+    assert.equal(beforeListing.status,"BLOCKED_DATA");
+    assert.equal(beforeListing.reason,"HISTORIC_SYMBOL_NOT_ACTIVE_IN_SELECTED_PERIOD");
+    assert.equal(beforeListing.selectedStartDate,"2016-01-01");
+    assert.equal(beforeListing.selectedEndDate,"2025-12-31");
+    assert.equal(beforeListing.requestedTradingDays,0);
+    assert.equal(beforeListing.missingSourceDays,0);
+    assert.equal(beforeListing.modeledReturnPercent,null);
+    assert.equal(beforeListing.sourceSessionsRead,0);
+    assert.equal(beforeListing.profitabilityProven,false);
+    // The same symbol is already listed here; absent native 1m MUST block
+    // all 79 actually eligible days, rather than forging zero trades.
+    const eligibleMissing=await replay(x.request(folder,{
+      researchWindow:{startDate:"2026-07-01",endDate:"2026-09-17"},
+      sessionSources:[],
+    }));
+    assert.equal(eligibleMissing.status,"BLOCKED_DATA");
+    assert.equal(eligibleMissing.missingSourceDays,79);
+    assert.equal(eligibleMissing.requestedTradingDays,79);
+    assert.equal(eligibleMissing.modeledReturnPercent,null);
+    assert.equal(eligibleMissing.profitabilityProven,false);
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
 test("source first seen retrospectively cannot become original scanner signal or an OOS PASS",async()=>{
