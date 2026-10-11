@@ -248,7 +248,20 @@ export function classifyPublicCycleLaneStatus(response) {
     ||!['invalid_data','symbol_mapping'].includes(f.reason))) {
     return 'SEARCH_FAILURE';
   }
-  if (response.failures.length>0)return 'BLOCKED_DATA';
+  if (response.failures.some(f=>f.reason==='symbol_mapping')
+    ||!nonNegative(execution.providerErrorCount)||execution.providerErrorCount>0
+    ||!nonNegative(execution.timeoutCount)||execution.timeoutCount>0
+    ||(universe.providerErrorCount!=null
+      &&(!nonNegative(universe.providerErrorCount)||universe.providerErrorCount>0)))
+    return 'SEARCH_FAILURE';
+  if (response.failures.length>0){
+    // A wholly attempted page with one insufficient-history item remains
+    // BLOCKED_DATA, never successful candidates or valid no-trade proof.
+    return pageEvidenceComplete(universe,execution)
+      && universe.stale!==true && response.dataState!=='unavailable'
+      && !INVALID_SOURCE_OUTCOMES.has(response.outcome)
+      ? 'BLOCKED_DATA' : 'SEARCH_FAILURE';
+  }
   if (INVALID_SOURCE_OUTCOMES.has(response.outcome)
     || response.dataState === 'unavailable'
     || universe.stale === true
@@ -288,10 +301,19 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
     return hold('STATUS_EVIDENCE_MISMATCH');
   const { universe, execution } = response;
   if (!universe || !execution) return hold('EVIDENCE_MISSING');
-  // Do not skip a symbol that returned null/invalid data during otherwise
-  // successful crypto stage-2. Retry the exact cursor in a later cycle.
+  // Fully completed zero-provider-error invalid_data pages can advance
+  // research-only and will be revisited after roster wrap. No candidate/Paper.
   if (!Array.isArray(response.failures)) return hold('FAILURE_ENVELOPE_MISSING');
-  if (response.failures.length>0) return hold('REPORTED_ITEM_FAILURE_HOLD');
+  if (response.failures.length>0
+    && !(status==='BLOCKED_DATA'
+      && response.failures.every(f=>f?.reason==='invalid_data')
+      && pageEvidenceComplete(universe,execution)
+      && execution.providerErrorCount===0&&execution.timeoutCount===0
+      && (universe.providerErrorCount??0)===0
+      && universe.stale!==true && response.dataState!=='stale'
+      && response.dataState!=='unavailable'
+      && TRUSTED_ROSTER_SOURCES.has(universe.source)))
+    return hold('REPORTED_ITEM_FAILURE_HOLD');
   if (status === 'SEARCH_FAILURE') return hold('PROVIDER_FAILURE');
   // An as-of/source roster may still be current while the underlying
   // candles/quotes are stale. Never skip those symbols or call the page
@@ -331,7 +353,9 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
     && TRUSTED_ROSTER_SOURCES.has(universe.source)) {
     return Object.freeze({
       nextCursor: after, blockedObservationOnly: true,
-      reason: 'BLOCKED_RESEARCH_ROTATION_ONLY',
+      reason: response.failures.length>0
+        ? 'BLOCKED_INVALID_DATA_RESEARCH_ROTATION_ONLY'
+        : 'BLOCKED_RESEARCH_ROTATION_ONLY',
     });
   }
   return hold('BLOCKED_WITHOUT_PROVEN_ROSTER');
