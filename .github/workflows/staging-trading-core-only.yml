@@ -8,11 +8,15 @@ on:
       - '.github/scripts/build-staging-trading-core-only-verdict.mjs'
       - '.github/scripts/verify-staging-automation-research-verdict.mjs'
       - '.github/scripts/verify-automation-research-release-preflight.mjs'
+      - '.github/scripts/build-staging-auto-live-only-verdict.mjs'
+      - '.github/scripts/verify-staging-auto-live-verdict.mjs'
       - '.github/tests/production-automation-research-predeploy-contract.test.mjs'
       - 'stock-analyzer/playwright.production-automation-research-predeploy.config.ts'
       - 'stock-analyzer/e2e/production-automation-research-predeploy-readiness.spec.ts'
       - 'stock-analyzer/playwright.staging-trading-core-only.config.ts'
       - 'stock-analyzer/e2e/staging-trading-core-only.spec.ts'
+      - 'stock-analyzer/playwright.staging-auto-live-only.config.ts'
+      - 'stock-analyzer/e2e/staging-auto-live-only.spec.ts'
       - 'stock-analyzer/src/pages/auto-trading.tsx'
       - 'stock-analyzer/src/pages/paper-trading.tsx'
       - 'stock-analyzer/src/pages/research-center.tsx'
@@ -25,6 +29,8 @@ on:
       - 'api-server/src/routes/backtests.ts'
       - 'api-server/scripts/staging-trading-core-admin-profile.mjs'
       - '.github/tests/staging-trading-core-admin-profile.test.mjs'
+      - 'api-server/scripts/verify-staging-deploy-script-contract.mjs'
+      - 'ops/deploy-staging.sh'
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -41,6 +47,14 @@ on:
           - deploy
         required: true
         default: preflight
+      release_scope:
+        description: Scoped release contract to verify
+        type: choice
+        options:
+          - automation_research
+          - auto_live
+        required: true
+        default: automation_research
       delegated_by_run_id:
         description: Trusted Production Post-Deploy orchestrator run ID; empty for direct owner dispatch
         required: false
@@ -84,6 +98,8 @@ jobs:
           node --check .github/scripts/build-staging-trading-core-only-verdict.mjs
           node --check .github/scripts/verify-staging-automation-research-verdict.mjs
           node --check .github/scripts/verify-automation-research-release-preflight.mjs
+          node --check .github/scripts/build-staging-auto-live-only-verdict.mjs
+          node --check .github/scripts/verify-staging-auto-live-verdict.mjs
           node .github/scripts/verify-automation-research-release-preflight.mjs
           node --check api-server/scripts/staging-trading-core-admin-profile.mjs
           node --test .github/tests/staging-trading-core-only-contract.test.mjs .github/tests/staging-trading-core-admin-profile.test.mjs
@@ -107,6 +123,7 @@ jobs:
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
       action: ${{ steps.target.outputs.action }}
+      release_scope: ${{ steps.target.outputs.release_scope }}
     env:
       STAGING_ACTION: ${{ inputs.action }}
       STAGING_RUN_FULL_VALIDATION: 'false'
@@ -189,12 +206,14 @@ jobs:
         env:
           REQUESTED_SHA: ${{ github.event_name == 'issue_comment' && steps.owner-command.outputs.sha || inputs.sha }}
           REQUESTED_ACTION: ${{ github.event_name == 'issue_comment' && steps.owner-command.outputs.action || inputs.action }}
+          REQUESTED_SCOPE: ${{ github.event_name == 'issue_comment' && 'automation_research' || inputs.release_scope }}
           DISPATCH_AUTHORIZED: ${{ steps.dispatch-authority.outputs.authorized }}
         run: |
           set -Eeuo pipefail
           [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'STAGING_CORE_REQUIRES_MAIN_REF' >&2; exit 1; }
           [[ "$DISPATCH_AUTHORIZED" == 'true' ]] || { echo 'STAGING_CORE_OWNER_REQUIRED' >&2; exit 1; }
           [[ "$REQUESTED_ACTION" == preflight || "$REQUESTED_ACTION" == deploy ]] || { echo 'STAGING_CORE_ACTION_INVALID' >&2; exit 1; }
+          [[ "$REQUESTED_SCOPE" == automation_research || "$REQUESTED_SCOPE" == auto_live ]] || { echo 'STAGING_CORE_SCOPE_INVALID' >&2; exit 1; }
           [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'STAGING_CORE_IMMUTABLE_SHA_REQUIRED' >&2; exit 1; }
           target="$(printf %s "$REQUESTED_SHA" | tr '[:upper:]' '[:lower:]')"
           git fetch --no-tags origin main "$target"
@@ -204,6 +223,7 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$target" ]] || { echo 'STAGING_CORE_CHECKOUT_MISMATCH' >&2; exit 1; }
           echo "sha=$target" >> "$GITHUB_OUTPUT"
           echo "action=$REQUESTED_ACTION" >> "$GITHUB_OUTPUT"
+          echo "release_scope=$REQUESTED_SCOPE" >> "$GITHUB_OUTPUT"
           echo "STAGING_ACTION=$REQUESTED_ACTION" >> "$GITHUB_ENV"
       - name: Require coherent post-merge release provenance
         uses: actions/github-script@v7
@@ -247,6 +267,7 @@ jobs:
             throw new Error('STAGING_CORE_PRODUCTION_DATABASE_FORBIDDEN');
           NODE
       - name: Verify Staging admin DB authorization and owner-scoped Paper GET before deployment
+        if: steps.target.outputs.release_scope == 'automation_research'
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
@@ -254,6 +275,14 @@ jobs:
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
           STAGING_BASE_URL: ${{ env.STAGING_BASE_URL }}
         run: node api-server/scripts/staging-trading-core-admin-profile.mjs
+      - name: Verify Staging admin authentication without Paper DB/RLS coupling
+        if: steps.target.outputs.release_scope == 'auto_live'
+        env:
+          SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
+          ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
+        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs
       - name: Preflight-only result (does not deploy or change any environment)
         if: steps.target.outputs.action == 'preflight'
         run: |
@@ -279,6 +308,7 @@ jobs:
       STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
       STAGING_ADMIN_EMAIL: ${{ secrets.STAGING_ADMIN_EMAIL }}
       STAGING_ADMIN_PASSWORD: ${{ secrets.STAGING_ADMIN_PASSWORD }}
+      RELEASE_SCOPE: ${{ needs.owner-gate.outputs.release_scope }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
     steps:
       - uses: actions/checkout@v4
@@ -293,6 +323,7 @@ jobs:
           [[ "$(git rev-parse origin/main)" == "$TARGET_SHA" ]] || { echo 'STAGING_CORE_MAIN_MOVED_BEFORE_DEPLOY' >&2; exit 1; }
           [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
       - name: Resolve Staging admin publisher binding inside same protected deploy job
+        if: needs.owner-gate.outputs.release_scope == 'automation_research'
         env:
           SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
@@ -322,8 +353,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
-          PUBLISHER_DIGEST="$(tr -d '[:space:]' < "$RUNNER_TEMP/staging-core-publisher-binding")"
-          [[ "$PUBLISHER_DIGEST" =~ ^[0-9a-f]{64}$ ]] || { echo 'STAGING_CORE_LOCAL_PUBLISHER_BINDING_INVALID' >&2; exit 1; }
+          [[ "$RELEASE_SCOPE" == automation_research || "$RELEASE_SCOPE" == auto_live ]] || { echo 'STAGING_CORE_SCOPE_INVALID' >&2; exit 1; }
+          PUBLISHER_DIGEST=''
+          if [[ "$RELEASE_SCOPE" == automation_research ]]; then
+            PUBLISHER_DIGEST="$(tr -d '[:space:]' < "$RUNNER_TEMP/staging-core-publisher-binding")"
+            [[ "$PUBLISHER_DIGEST" =~ ^[0-9a-f]{64}$ ]] || { echo 'STAGING_CORE_LOCAL_PUBLISHER_BINDING_INVALID' >&2; exit 1; }
+          else
+            test ! -e "$RUNNER_TEMP/staging-core-publisher-binding"
+          fi
           local_secret_file="$(mktemp)"
           cleanup() {
             rm -f "$local_secret_file"
@@ -335,7 +372,10 @@ jobs:
             printf 'STAGING_SUPABASE_URL=%q\n' "$STAGING_SUPABASE_URL"
             printf 'STAGING_SUPABASE_ANON_KEY=%q\n' "$STAGING_SUPABASE_ANON_KEY"
             printf 'STAGING_SUPABASE_SECRET_KEY=%q\n' "$STAGING_SUPABASE_SECRET_KEY"
-            printf 'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_DIGEST"
+            printf 'STAGING_RELEASE_SCOPE=%q\n' "$RELEASE_SCOPE"
+            if [[ "$RELEASE_SCOPE" == automation_research ]]; then
+              printf 'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_DIGEST"
+            fi
           } > "$local_secret_file"
           chmod 600 "$local_secret_file"
           scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15             "$local_secret_file" "$STAGING_SSH_USER@$STAGING_SSH_HOST:$REMOTE_SECRET_FILE"
@@ -344,6 +384,7 @@ jobs:
           set -Eeuo pipefail
           chmod 600 "$STAGING_SECRET_FILE"
           source "$STAGING_SECRET_FILE"
+          STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="${STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"
           SOURCE_DIR="$(mktemp -d /tmp/seungjae-staging-core-source.XXXXXX)"
           cleanup_remote() {
             rm -rf -- "$SOURCE_DIR"
@@ -356,7 +397,7 @@ jobs:
           [[ "$RESOLVED_SHA" == "$TARGET_SHA" ]] || { echo 'STAGING_CORE_SHA_RESOLUTION_MISMATCH' >&2; exit 1; }
           git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
           chmod 700 "$SOURCE_DIR/ops/deploy-staging.sh"
-          SOURCE_DIR="$SOURCE_DIR" STAGING_DIR=/srv/seungjae-staging           STAGING_PM2_NAME=seungjae-staging STAGING_PORT=18083 STAGING_CANARY_PORT=18084           STAGING_BASE_URL="$STAGING_BASE_URL" STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL"           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY"           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY"           STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
+          SOURCE_DIR="$SOURCE_DIR" STAGING_DIR=/srv/seungjae-staging           STAGING_PM2_NAME=seungjae-staging STAGING_PORT=18083 STAGING_CANARY_PORT=18084           STAGING_BASE_URL="$STAGING_BASE_URL" STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL"           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY"           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY"           STAGING_RELEASE_SCOPE="$STAGING_RELEASE_SCOPE"           STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
           REMOTE
       - name: Destroy Staging SSH deployment authority and publisher binding
         if: always()
@@ -373,7 +414,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      STAGING_TRADING_CORE_ONLY_QA: 'true'
+      STAGING_TRADING_CORE_ONLY_QA: ${{ needs.owner-gate.outputs.release_scope == 'automation_research' && 'true' || 'false' }}
+      STAGING_AUTO_LIVE_ONLY_QA: ${{ needs.owner-gate.outputs.release_scope == 'auto_live' && 'true' || 'false' }}
       STAGING_TARGET_SHA: ${{ needs.owner-gate.outputs.target_sha }}
       STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
       STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
@@ -413,27 +455,47 @@ jobs:
       - name: Install isolated Chromium
         run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run ONLY Auto, Paper, Research Center and Backtester scoped Staging tests
+        if: needs.owner-gate.outputs.release_scope == 'automation_research'
         working-directory: stock-analyzer
         run: pnpm exec playwright test -c playwright.staging-trading-core-only.config.ts
+      - name: Run ONLY Automatic LIVE scoped Staging tests
+        if: needs.owner-gate.outputs.release_scope == 'auto_live'
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test -c playwright.staging-auto-live-only.config.ts
       - name: Build and verify exact-SHA Automation/Paper/Research/Backtester scoped release receipt
+        if: needs.owner-gate.outputs.release_scope == 'automation_research'
         run: >-
           node .github/scripts/build-staging-trading-core-only-verdict.mjs
           stock-analyzer/staging-trading-core-artifacts "$STAGING_TARGET_SHA"
       - name: Verify scoped verdict cannot impersonate Full Staging
+        if: needs.owner-gate.outputs.release_scope == 'automation_research'
         run: >-
           node .github/scripts/verify-staging-automation-research-verdict.mjs
           stock-analyzer/staging-trading-core-artifacts/automation-research-staging-verdict.json
           "$STAGING_TARGET_SHA"
       - name: Upload exact-SHA Automation/Paper/Research/Backtester Staging verdict
-        if: always()
+        if: always() && needs.owner-gate.outputs.release_scope == 'automation_research'
         uses: actions/upload-artifact@v4
         with:
           name: staging-automation-research-verdict-${{ needs.owner-gate.outputs.target_sha }}
           path: stock-analyzer/staging-trading-core-artifacts
           if-no-files-found: error
           retention-days: 14
+      - name: Build and verify exact-SHA Automatic LIVE-only Staging receipt
+        if: needs.owner-gate.outputs.release_scope == 'auto_live'
+        run: |
+          node .github/scripts/build-staging-auto-live-only-verdict.mjs stock-analyzer/staging-auto-live-artifacts "$STAGING_TARGET_SHA"
+          node .github/scripts/verify-staging-auto-live-verdict.mjs stock-analyzer/staging-auto-live-artifacts/staging-auto-live-verdict.json "$STAGING_TARGET_SHA"
+      - name: Upload exact-SHA Automatic LIVE-only Staging verdict
+        if: always() && needs.owner-gate.outputs.release_scope == 'auto_live'
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-auto-live-verdict-${{ needs.owner-gate.outputs.target_sha }}
+          path: stock-analyzer/staging-auto-live-artifacts
+          if-no-files-found: error
+          retention-days: 14
       - name: Explain narrow release verdict and activation exclusion
-        if: success()
+        if: success() && needs.owner-gate.outputs.release_scope == 'automation_research'
         run: |
           echo '## Automation/Paper/Research/Backtester Staging QA PASS (scoped)' >> "$GITHUB_STEP_SUMMARY"
           echo '- Scoped Production release_ready: true' >> "$GITHUB_STEP_SUMMARY"
@@ -442,4 +504,12 @@ jobs:
           node -e "const v=require('./stock-analyzer/staging-trading-core-artifacts/automation-research-staging-verdict.json'); console.log('- Operational prerequisites: '+v.operationalReadiness)" >> "$GITHUB_STEP_SUMMARY"
           echo '- Production order/provider private calls: 0' >> "$GITHUB_STEP_SUMMARY"
           echo '- Backtester computation: PASS; financial mutation authority: NONE; Telegram: OUT_OF_SCOPE' >> "$GITHUB_STEP_SUMMARY"
+          echo '- LIVE/AUTO activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
+      - name: Explain Automatic LIVE-only release verdict
+        if: success() && needs.owner-gate.outputs.release_scope == 'auto_live'
+        run: |
+          echo '## Automatic LIVE-only Staging QA PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Covered: Automatic Trading UI/API on desktop, tablet and mobile' >> "$GITHUB_STEP_SUMMARY"
+          echo '- Paper Trading and Telegram: OUT_OF_SCOPE and not requested' >> "$GITHUB_STEP_SUMMARY"
+          echo '- orders/cancels/amends/transfers/withdrawals: 0/0/0/0/0' >> "$GITHUB_STEP_SUMMARY"
           echo '- LIVE/AUTO activation permission: NONE' >> "$GITHUB_STEP_SUMMARY"
