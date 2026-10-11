@@ -1,4 +1,9 @@
-import { TRADING_RISK_POLICY, type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
+import { type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
+// Keep the authoritative Paper runtime bundle dependency graph unchanged.
+const MANUAL_PAPER_FUTURES_MAX_LEVERAGE = 125 as const;
+const validateManualPaperFuturesLeverage = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value)
+  && value >= 1 && value <= MANUAL_PAPER_FUTURES_MAX_LEVERAGE;
 import type { PaperRiskState, PaperTradingState, PaperOrderRequest, PaperMarketData, PaperSide, PaperContractRules, PlacePaperOrderAction, PaperOrderStatus, PaperOrder } from './paper-trading.types';
 
 export class PaperTradingError extends Error {
@@ -15,6 +20,7 @@ export class PaperTradingError extends Error {
 export const MODE = 'paper-only' as const;
 export const MAX_PROCESSED_EVENTS = 500;
 export const MARKET_FRESHNESS_MS = 60_000;
+export const MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT = 5 as const;
 export const CONTRACT_FRESHNESS_MS = 20 * 60_000;
 export const EPSILON = 1e-8;
 
@@ -48,17 +54,39 @@ export function toIso(value: string | undefined, fallback: Date) {
   return new Date(timestamp).toISOString();
 }
 
+const KST_OFFSET_MS = 9 * 60 * 60_000;
+// The simulator's user-facing daily/weekly loss accounting is Korea-local.
+// This affects only Paper; shared LIVE risk and real provider clocks are intact.
 export function dayKey(at: Date) {
-  return at.toISOString().slice(0, 10);
+  return new Date(at.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 export function weekKey(at: Date) {
-  const date = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  const local = new Date(at.getTime() + KST_OFFSET_MS);
+  const date = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()));
   const day = date.getUTCDay() || 7;
   date.setUTCDate(date.getUTCDate() + 4 - day);
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const week = Math.ceil((((date.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+/** Count closed losing manual simulation trades in Korea-local calendar time.
+ * Never share this five-loss Paper rule with LIVE/provider risk policy.
+ * A partly closed position is not double-counted until final close.
+ */
+export function manualPaperLosingTradesToday(state: PaperTradingState, now: Date): number {
+  const nowMs = now.getTime();
+  const day = dayKey(now);
+  return state.journal.filter((row) => {
+    const closedAt = Date.parse(row.closedAt ?? '');
+    return row.status === 'closed'
+      && Number.isFinite(closedAt)
+      && closedAt <= nowMs + 5_000
+      && dayKey(new Date(closedAt)) === day
+      && typeof row.netPnl === 'number'
+      && Number.isFinite(row.netPnl) && row.netPnl < 0;
+  }).length;
 }
 
 export function normalizedRiskState(state: PaperRiskState, at: Date): PaperRiskState {
@@ -156,8 +184,14 @@ export function validateOrderRequest(request: PaperOrderRequest) {
   if (!['market', 'limit', 'stop_market'].includes(request.orderType)) {
     throw new PaperTradingError('INVALID_ORDER_TYPE', '모의주문 유형이 올바르지 않습니다.');
   }
-  if (!positive(request.leverage) || !positive(request.stopLossPrice)) {
-    throw new PaperTradingError('INVALID_ORDER_INPUT', '레버리지와 손절가는 0보다 커야 합니다.');
+  if (!validateManualPaperFuturesLeverage(request.leverage)) {
+    throw new PaperTradingError(
+      'MANUAL_PAPER_LEVERAGE_OUT_OF_RANGE',
+      '수동 선물 모의매매 레버리지는 정수 1~125배만 설정할 수 있습니다.',
+    );
+  }
+  if (!positive(request.stopLossPrice)) {
+    throw new PaperTradingError('INVALID_ORDER_INPUT', '손절가는 0보다 커야 합니다.');
   }
   if (request.orderType === 'limit' && !positive(request.requestedPrice)) {
     throw new PaperTradingError('INVALID_LIMIT_PRICE', '지정가 모의주문에는 지정가가 필요합니다.');
@@ -290,12 +324,19 @@ export function buildRiskInput(
     minimumQuantity: rules.minimumQuantity,
     minimumNotional: rules.minimumNotional,
     maintenanceMarginRate: rules.maintenanceMarginRate,
-    maximumLeverage: rules.maximumLeverage,
-    appMaximumLeverage: TRADING_RISK_POLICY.cryptoFuturesAppMaximumLeverage,
+    // Manual Paper is an explicitly hypothetical simulation. Exchange contract
+    // leverage ceilings still appear as warnings in the UI, but no private
+    // leverage or order request may be submitted. Keep live risk untouched.
+    maximumLeverage: MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
+    appMaximumLeverage: MANUAL_PAPER_FUTURES_MAX_LEVERAGE,
+    manualPaperSimulationOnly: true,
     contractRulesStatus: rulesStatus,
     dailyRealizedPnl: state.riskState.dailyRealizedPnl,
     weeklyRealizedPnl: state.riskState.weeklyRealizedPnl,
-    consecutiveLosses: state.riskState.consecutiveLosses,
+    // LIVE's 3-loss streak guard does not govern this hypothetical manual
+    // simulation. Its own KST-day five-losing-trades gate is checked at
+    // simulated order admission, without changing shared LIVE risk policy.
+    consecutiveLosses: 0,
     openExposure: openExposure(state),
     sameDirectionExposure: sameDirectionExposure(state, request.side),
     dataStatus: marketStatus,
@@ -325,6 +366,7 @@ export function makeOrder(
     triggerPrice: request.triggerPrice ?? null,
     quantity,
     leverage: request.leverage,
+    maintenanceMarginRate: action.contractRules.maintenanceMarginRate,
     stopLossPrice: request.stopLossPrice,
     takeProfitPrice1: request.takeProfitPrice1 ?? null,
     takeProfitPrice2: request.takeProfitPrice2 ?? null,

@@ -1,5 +1,6 @@
 // @ts-nocheck
 import test from 'node:test';
+import './manual-four-market-paper-wallets.smoke.test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import express from 'express';

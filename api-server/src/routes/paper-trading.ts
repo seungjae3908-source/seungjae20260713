@@ -1,4 +1,5 @@
 import { Router, type IRouter } from 'express';
+import { createManualFourMarketWalletRouter } from './manual-four-market-paper-wallets';
 import { resolveCanonicalStrategyIdentity } from '../../../market-prediction-lab/src/canonical-strategy-identity-v1.js';
 import type { BacktestPaperHandoff } from '../../../packages/strategy-hypothesis/src/backtest-paper-handoff.js';
 import type { AuthenticatedRequest } from '../middleware/auth';
@@ -113,6 +114,9 @@ export function createPaperTradingRouter(
   dependencies: Partial<PaperTradingDependencies> = {},
 ): IRouter {
   const router: IRouter = Router();
+  // Manual Paper owner-scoped wallet status/one-time seeds are isolated from
+  // legacy browser-supplied simulations and every LIVE provider route.
+  router.use('/', createManualFourMarketWalletRouter());
   const evaluate = dependencies.evaluate ?? applyPaperTradingAction;
   const publishState = dependencies.publishState ?? publishAuthenticatedPaperTradingState;
   const canonicalEvidenceSource = dependencies.canonicalEvidenceSource
