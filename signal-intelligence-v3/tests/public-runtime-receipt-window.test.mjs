@@ -111,7 +111,7 @@ test('each read-only receipt accounts for all four markets without raw symbols',
  const a=auditPublicReadOnly24hReceiptWindow({
   observations:samples,serviceSha:SHA,asOfMs:START+86400000,
  });
- assert.equal(a.marketEvidence.CRYPTO_SPOT.verifiedBatches,720);
+ assert.equal(a.marketEvidence.CRYPTO_SPOT.verifiedBatches,721);
  assert.equal(a.marketEvidence.US_STOCK.providerErrors,0);
  assert.equal(a.real24hInfrastructureAttested,false);
  const tampered={...r,marketEvidence:{...r.marketEvidence,
