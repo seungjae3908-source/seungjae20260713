@@ -127,7 +127,7 @@ jobs:
             'morningWindowCoverage',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
             'roomBindingsValid','personal','briefWorker','marketBrief','signalSubscriber','signalSource',
-            'signalHealth','signalUnits',
+            'signalHealth','signalUnits','signalCycle',
             'proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
           const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
@@ -166,7 +166,7 @@ jobs:
             &&(b.lastDueCode===null||briefCodes.includes(b.lastDueCode))
             &&(b.status!=='PRESENT'||(b.state!==null&&b.lastDueCode!==null));
           if(Object.keys(r).sort().join()!==keys.sort().join()
-            ||r.schemaVersion!=='telegram-production-worker-readonly-v3'
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v4'
             ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)||!safeIso(r.pm2StartedAt)
@@ -191,6 +191,16 @@ jobs:
             ||!Object.values(r.signalUnits).every(v=>
               ['NOT_CHECKED','ACTIVE','INACTIVE','FAILED','NOT_FOUND',
                'UNKNOWN','UNAVAILABLE'].includes(v))
+            ||!r.signalCycle
+            ||Object.keys(r.signalCycle).sort().join()!=='exitCode,hasStarted,lastResult,unitState'
+            ||!['NOT_CHECKED','ACTIVE','INACTIVE','FAILED','NOT_FOUND','UNKNOWN','UNAVAILABLE']
+              .includes(r.signalCycle.unitState)
+            ||!['NOT_OBSERVED','UNKNOWN','RUNNING','SUCCEEDED','FAILED']
+              .includes(r.signalCycle.lastResult)
+            ||typeof r.signalCycle.hasStarted!=='boolean'
+            ||!(r.signalCycle.exitCode===null ||
+              (Number.isInteger(r.signalCycle.exitCode)&&r.signalCycle.exitCode>=0
+                &&r.signalCycle.exitCode<=255))
             ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
             ||!/^[A-Z_]+$/u.test(String(r.classification))
             ||![r.telegramSends,r.databaseWrites,r.pm2Restarts,r.financialMutations].every(n=>n===0)
@@ -257,6 +267,11 @@ jobs:
                 '- Signal V3 local health/status/snapshot ready/fresh/SHA: '+
                   [r.signalHealth.status,r.signalHealth.snapshotReady,
                    r.signalHealth.snapshotFresh,r.signalHealth.serviceSha||'none'].join(' / '),
+                '- Signal V3 fixed oneshot cycle unit/result/exit/started: '+
+                  [r.signalCycle.unitState,r.signalCycle.lastResult,
+                    r.signalCycle.exitCode===null?'unknown':r.signalCycle.exitCode,
+                    r.signalCycle.hasStarted].join(' / '),
+                '- INACTIVE after successful oneshot is normal; status alone never proves fresh data.',
                 '- Classification: '+r.classification+'; proof level: '+r.proofLevel,
                 '- State entries mean accepted-or-deduped, not confirmed Bot API delivery.',
                 '- Telegram sends / database writes / PM2 restarts / financial changes: 0 / 0 / 0 / 0',
