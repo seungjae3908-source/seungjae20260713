@@ -116,12 +116,15 @@ test('a failed provider refresh clears current judgment and marks old log as his
   await refresh(page, fixture);
   await expect(page.getByTestId('chart-error-state')).toBeVisible();
   await expect(feed.getByTestId('chart-live-halted')).toContainText('연결 오류 · 새 판단 중단');
-  await expect(page.getByTestId('ai-chart-mobile-judgment')).toContainText('유효한 시세 확인 중');
+  const currentJudgment = page.getByTestId('ai-chart-current-judgment');
+  await expect(currentJudgment.locator('p')).toHaveText('차트 데이터 확인 후 표시됩니다.');
+  await expect(currentJudgment).not.toContainText('기술 강도');
   await expect(feed.locator('[data-event-kind="analysis"]')).toHaveCount(1);
   fixture.status = 200;
   await page.getByRole('button', { name: '다시 시도', exact: true }).click();
   await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
   await expect(feed.getByTestId('chart-live-halted')).toHaveCount(0);
+  await expect(currentJudgment).toContainText('기술 강도');
   expect(pageErrors).toEqual([]);
   expect(orderWrites).toEqual([]);
 });
