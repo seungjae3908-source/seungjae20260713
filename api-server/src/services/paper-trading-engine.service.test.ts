@@ -479,6 +479,19 @@ test('target two closes remaining quantity', () => {
   assert.equal(second.position?.status, 'closed');
 });
 
+test('manual Paper 75%/25% targets settle the final residual fill without rounding dust', () => {
+  const opened = place(undefined, { request: {
+    targetClosePercent1: 75, targetClosePercent2: 25,
+  } });
+  const first = process(opened.state, { open:102,high:106,low:101,close:105 },'split-75');
+  const second = process(first.state, { timestamp:NOW.getTime()+30*60_000,
+    open:106,high:109,low:105,close:108 },'split-25');
+  assert.equal(second.position?.status,'closed');
+  assert.equal(second.position?.remainingQuantity,0);
+  assert.equal(second.state.account.usedMargin,0);
+  assert.equal(second.exchangeRequestSent,false);
+});
+
 test('manual Paper TP2 closes only its configured 25% and preserves the remaining position', () => {
   const opened = place(undefined, {
     request: { targetClosePercent1: 25, targetClosePercent2: 25 },
