@@ -2,6 +2,8 @@ export type ScannerDataQualityState = 'TRUSTED' | 'DEGRADED' | 'DATA_UNTRUSTED';
 
 export type ScannerDataQualityCode =
   | 'STALE_TIMESTAMP'
+  | 'FUTURE_TIMESTAMP'
+  | 'OUT_OF_ORDER_CANDLE'
   | 'MISSING_CANDLE'
   | 'DUPLICATE_CANDLE'
   | 'INVALID_OHLC'
@@ -53,6 +55,7 @@ export interface ScannerDataQualityInput {
   marketClosed?: boolean;
   tradingHalt?: boolean;
   sessionAware?: boolean;
+  sessionTimeZone?: string;
   staleMultiplier?: number;
   providerDisagreementPercent?: number;
 }
@@ -78,8 +81,8 @@ const TIMEFRAME_MS: Record<string, number> = {
 const SESSION_AWARE_RECENT_STALE_MS = 4 * 24 * 60 * 60_000;
 
 function compactKoreaTimestamp(value: string): number | null {
-  const digits = value.replace(/\D/g, '');
-  if (digits.length !== 8 && digits.length !== 14) return null;
+  if (!/^(?:\d{8}|\d{14})$/.test(value)) return null;
+  const digits = value;
   const year = digits.slice(0, 4);
   const month = digits.slice(4, 6);
   const day = digits.slice(6, 8);
@@ -90,7 +93,7 @@ function compactKoreaTimestamp(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function timestamp(value: string | number): number | null {
+export function scannerTimestampMs(value: string | number): number | null {
   if (typeof value === 'number') {
     const parsed = value < 10_000_000_000 ? value * 1_000 : value;
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -129,6 +132,9 @@ function shouldInspectGap(
   expectedIntervalMs: number,
   timeframe: string,
   sessionAware: boolean,
+  previousAt: number,
+  currentAt: number,
+  sessionTimeZone: string,
 ): boolean {
   if (gap <= expectedIntervalMs * 1.8) return false;
   if (!sessionAware) return true;
@@ -136,7 +142,10 @@ function shouldInspectGap(
   // Overnight/weekend/holiday closures are expected in stock markets. Six
   // hours is safely above an ordinary in-session interruption while below a
   // normal overnight gap in the markets currently supported here.
-  if (gap >= 6 * 60 * 60_000) return false;
+  if (gap >= 6 * 60 * 60_000) {
+    const dates = new Intl.DateTimeFormat('en-CA', { timeZone: sessionTimeZone });
+    if (dates.format(new Date(previousAt)) !== dates.format(new Date(currentAt))) return false;
+  }
   return true;
 }
 
@@ -148,9 +157,10 @@ function inspectCandles(
 ): string | null {
   const seen = new Set<number>();
   const ordered: Array<{ at: number; candle: ScannerQualityCandle }> = [];
+  let previousInputAt: number | null = null;
 
   for (const candle of input.candles) {
-    const at = timestamp(candle.time);
+    const at = scannerTimestampMs(candle.time);
     if (at == null) {
       pushIssue(issues, 'INVALID_OHLC', 'blocking', '캔들 timestamp가 유효하지 않습니다.');
       continue;
@@ -158,6 +168,13 @@ function inspectCandles(
     if (seen.has(at)) {
       pushIssue(issues, 'DUPLICATE_CANDLE', 'blocking', '동일 timestamp 캔들이 중복되었습니다.');
     }
+    if (at > now) {
+      pushIssue(issues, 'FUTURE_TIMESTAMP', 'blocking', '현재 시각 이후의 캔들은 신호 근거로 사용할 수 없습니다.');
+    }
+    if (previousInputAt != null && at < previousInputAt) {
+      pushIssue(issues, 'OUT_OF_ORDER_CANDLE', 'blocking', '입력 캔들의 시간 순서가 지표 계산 순서와 일치하지 않습니다.');
+    }
+    previousInputAt = at;
     seen.add(at);
     ordered.push({ at, candle });
 
@@ -184,14 +201,21 @@ function inspectCandles(
       expectedIntervalMs,
       input.timeframe,
       input.sessionAware === true,
+      ordered[index].at,
+      row.at,
+      input.sessionTimeZone ?? 'UTC',
     ));
     if (largeGaps.length) {
-      const ratio = largeGaps.length / Math.max(1, ordered.length - 1);
+      const missingCount = largeGaps.reduce((sum, row) => {
+        const index = ordered.indexOf(row);
+        return sum + Math.max(1, Math.round((row.at - ordered[index - 1].at) / expectedIntervalMs) - 1);
+      }, 0);
+      const ratio = missingCount / (ordered.length + missingCount);
       pushIssue(
         issues,
         'MISSING_CANDLE',
         ratio >= 0.08 ? 'blocking' : 'warning',
-        `예상 간격보다 큰 거래 구간 내 캔들 공백 ${largeGaps.length}개가 발견되었습니다.`,
+        `거래 구간 내 공백 ${largeGaps.length}개에서 예상 캔들 ${missingCount}개가 누락되었습니다.`,
       );
     }
   }

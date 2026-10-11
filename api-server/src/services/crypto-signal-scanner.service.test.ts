@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createCryptoSignalScannerService,
+  normalizeCryptoScannerCandles,
+  upbitScannerCandleTimestamp,
   type CryptoCandle,
   type CryptoScannerProviders,
   type CryptoTicker,
@@ -12,8 +14,62 @@ import {
   type CryptoWilliamsDailyCandle,
 } from './crypto-williams-atr-scanner-overlay.service';
 import { resolveScannerCanonicalPaperIdentity } from './scanner-canonical-paper-identity.service';
+import { evaluateScannerDataQuality } from './scanner-data-quality.service';
+import { CryptoPublicRequestGate } from '../lib/crypto-public-request-gate';
 
 const now = () => Date.now();
+
+test('Upbit bucket time is UTC and does not use the last-trade timestamp', () => {
+  assert.equal(upbitScannerCandleTimestamp('2026-10-11T00:00:00'), Date.parse('2026-10-11T00:00:00Z'));
+  assert.equal(upbitScannerCandleTimestamp('2026-10-11T00:00:00Z'), Date.parse('2026-10-11T00:00:00Z'));
+  assert.ok(Number.isNaN(upbitScannerCandleTimestamp(undefined)));
+});
+
+test('public request pacing serializes concurrent start slots and honours abort/backoff', async () => {
+  const gate = new CryptoPublicRequestGate(20);
+  const starts: number[] = [];
+  const controller = new AbortController();
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    await gate.admit(controller.signal);
+    starts.push(Date.now());
+  }));
+  for (let index = 1; index < starts.length; index++) assert.ok(starts[index] - starts[index - 1] >= 20);
+  gate.backoff(1000);
+  const aborted = gate.admit(controller.signal);
+  controller.abort(new Error('test-cancel'));
+  await assert.rejects(aborted, /test-cancel/);
+  await assert.rejects(gate.admit(controller.signal), /test-cancel/);
+});
+
+test('changing 24h volume rank cannot skip or duplicate symbols between cursor pages', async () => {
+  const rows = ['F', 'E', 'D', 'C', 'B', 'A'].map(ticker);
+  const service = createCryptoSignalScannerService(providers({
+    getUniverse: async () => universe(rows),
+  }));
+  const first = await service.scan({ ...request('spot'), batchSize: 5 });
+  rows.reverse();
+  const second = await service.scan({ ...request('spot'), batchSize: 5, cursor: first.universe.nextCursor! });
+  const names = [...first.cards, ...second.cards].map((row) => row.symbol);
+  assert.equal(new Set(names).size, 6);
+  assert.equal(names.length, 6);
+});
+
+test('normalization excludes an unfinished bucket but cannot hide bad OHLC, duplicates or future bars', () => {
+  const current = Date.now();
+  const valid: CryptoCandle = { time: current - 10 * 60_000, open: 100, high: 101, low: 99, close: 100,
+    volume: 100, quoteVolume: null };
+  const rows = [valid, { ...valid, high: 90 }, { ...valid, time: current - 60_000 },
+    { ...valid, time: current + 5 * 60_000 }];
+  const result = normalizeCryptoScannerCandles(rows, current, '5m');
+  assert.equal(result.length, 3);
+  assert.equal(result[1].high, 90);
+  assert.equal(rows[1].high, 90, 'do not mutate provider evidence');
+  const quality = evaluateScannerDataQuality({ symbol: 'BTC', timeframe: '5m', candles: result, now: current });
+  assert.equal(quality.state, 'DATA_UNTRUSTED');
+  for (const code of ['INVALID_OHLC', 'DUPLICATE_CANDLE', 'FUTURE_TIMESTAMP']) {
+    assert.ok(quality.issues.some((issue) => issue.code === code), code);
+  }
+});
 
 function ticker(symbol: string): CryptoTicker {
   return {

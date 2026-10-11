@@ -159,6 +159,11 @@ function validZeroScannerResponse() {
 
 async function fulfill(route: Route, payload: unknown, delayMs = 0) {
   if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  // A successful fixture must describe the requested timeframe, just like
+  // the real API. Identity-mismatch tests use route.fulfill directly.
+  if (typeof payload === 'object' && payload !== null && 'ok' in payload && payload.ok === true) {
+    payload = { ...payload, timeframe: new URL(route.request().url()).searchParams.get('timeframe') ?? '1D' };
+  }
   await route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -316,6 +321,22 @@ test('actual-provider semantics with zero signals remains a valid flow fixture',
   await expect(page.getByTestId('scanner-zero-outcome')).toContainText('공급자 데이터와 분석은 정상');
   await expect(page.getByTestId('scanner-zero-outcome')).toContainText('유니버스 80');
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('a failed market switch never shows the previous market cards or treats them as partial results', async ({ page }) => {
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('market') === 'US') {
+      return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'PROVIDER_UNAVAILABLE' }) });
+    }
+    return fulfill(route, scannerResponse());
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByRole('button', { name: /^삼성전자 005930/ })).toBeVisible();
+  await page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^미국주식/ }).click();
+  await expect(page.getByRole('button', { name: /^삼성전자 005930/ })).toHaveCount(0);
+  await expect(page.getByRole('alert')).toBeVisible();
 });
 
 test('latest timeframe response wins and all four public markets remain separated', async ({ page }) => {
