@@ -473,18 +473,22 @@ export async function processFormulaAutoBacktestQueueV1({
     if (!info.isFile() || info.isSymbolicLink()) continue;
     const item = JSON.parse(await readFile(path, 'utf8'));
     const itemDigest = digest(item);
+    const formulaId = typeof item?.formulaCandidate?.candidateId === 'string'
+      ? item.formulaCandidate.candidateId : basename(name, '.json');
     const resultPath = join(resultsRoot, itemDigest + '.json');
     let result;
     try {
-      result = JSON.parse(await readFile(resultPath, 'utf8'));
+      const cached = JSON.parse(await readFile(resultPath, 'utf8'));
+      // A matching filename does not authenticate the contents. In
+      // particular, a cached synthetic PASS must never mint a Paper registry
+      // entry from this TRAIN-only queue.
+      result = assertSafeCachedFormulaResultV1(cached, itemDigest, formulaId, item.queuedAt);
       rows.push({ ...result, repeated: true });
       continue;
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
     const evaluated = await evaluateFormulaAutoBacktestQueueItemV1(item);
-    const formulaId = typeof item?.formulaCandidate?.candidateId === 'string'
-      ? item.formulaCandidate.candidateId : basename(name, '.json');
     result = {
       schemaVersion: 1,
       contract: FORMULA_AUTO_BACKTEST_RESULT_CONTRACT_V1,
