@@ -31,6 +31,7 @@ import {
 } from '../src/public-stock-session-diagnostics.mjs';
 import { evaluateScannerDataQuality } from '../../api-server/src/services/scanner-data-quality.service';
 import { recoverV3CompletedPublicBars } from '../src/public-stock-complete-bars-recovery.mjs';
+import { shouldProbeV3StockGap } from '../src/public-stock-gap-probe-policy.mjs';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -255,6 +256,10 @@ async function withStockPublicOnly(lane, operation) {
     : lane.strategyMode === 'swing' ? 320 : 400;
   // Verified V3-only public lower-bar repair never replaces native bars,
   // fabricates no-trade candles or affects normal member/Paper scanners.
+  // The zero-recovery 28-call GitHub cycle is not an acceptable permanent
+  // public API cost. Default OFF; a deliberate V3-only research opt-in allows
+  // at most two lower-interval comparisons per US intraday lane.
+  const gapProbeEnabled = process.env.SIGNAL_INTELLIGENCE_V3_LOWER_BAR_PROBE === 'true';
   const gapRecovery = {attempted:0,inserted:0,unchanged:0,
     sourceFailed:0,conflicting:0,providerRequestsAdded:0};
   // StockSignalScanner -> ScannerProviderHealth calls getCandlesMeta, not
@@ -286,7 +291,9 @@ async function withStockPublicOnly(lane, operation) {
         missing=preliminary.issues.some(issue=>
           issue.code==='MISSING_CANDLE'&&issue.severity==='blocking');
       } catch { /* invalid native data must remain blocked */ }
-      if(missing){
+      if(shouldProbeV3StockGap({enabled:gapProbeEnabled,
+        market:lane.market,timeframe,hasBlockingGap:missing,
+        attempted:gapRecovery.attempted})){
         gapRecovery.attempted+=1;
         gapRecovery.providerRequestsAdded+=1;
         try {
@@ -345,6 +352,7 @@ async function withStockPublicOnly(lane, operation) {
       publicStockSessionDiagnostic: sessionGapAudit.snapshot(),
       publicGapRecoveryDiagnostic: Object.freeze({
         ...gapRecovery, providerName:'yahoo-public',scope:'V3_US_REGULAR_COMPLETE_LOWER_ONLY',
+        enabled:gapProbeEnabled,maximumAttemptsPerLane:2,
         sourceSymbolsIncluded:false,fullRosterPassProven:false,economicAuthority:'NONE',
       }),
       publicKrExclusionDiagnostic: lane.market === 'KR_STOCK'
