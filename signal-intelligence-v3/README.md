@@ -194,3 +194,25 @@ and contributes no V3 Telegram candidates, no Paper or real authority.
 Provider errors, malformed, incomplete and stale batches still hold
 the cursor. The invalid instrument is revisited when rotation wraps;
 missing historical candles remain unproven rather than fabricated.
+
+## Draft: stock session-gap and KRX exclusion root-cause evidence
+
+The stock scanner's existing session-aware quality rule compares
+15m/60m bar intervals without an exchange-specific intraday schedule.
+The bounded V3 public scan now calculates **diagnostic-only** counts
+using exchange-local regular-session clocks (KR 09:00–15:30 KST;
+US 09:30–16:00 America/New_York, with DST) on already fetched candles.
+Counts distinguish gap candidates inside a single regular trading
+session from overnight/boundary/premarket/extended-hours gaps.
+Exchange holidays, half-days, halts and individual vendor semantics
+are **not inferred as verified**, and the original scanner quality
+gate and `BLOCKED_DATA` remain unchanged.
+
+The 2,837 public KRX exclusions are now summarized by code shape and
+instrument/ETP class **without instrument IDs or names**. A numeric
+six-digit ticker inside an exclusion or a mismatched stated total is
+reported rather than silently forgiven. This information helps choose
+a legitimate read-only source for nonnumeric KRX instruments but is not
+a claim that any vendor universally supports them. No new provider
+requests, chart fabrication, private access, release activation or
+trading authority are introduced.
