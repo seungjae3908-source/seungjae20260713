@@ -95,6 +95,9 @@ export function ResearchPITMinuteCoveragePanel() {
     enabled: request !== null,
     queryFn: ({ signal }) => fetchCoverage(request!, signal),
     staleTime: 0,
+    // Source coverage belongs to the CURRENT authenticated admin session.
+    // Don't keep a readable admin cache after this panel unmounts.
+    gcTime: 0,
     retry: false,
   });
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -104,9 +107,19 @@ export function ResearchPITMinuteCoveragePanel() {
       return;
     }
     setInputError(null);
+    // React Query structurally hashes selection keys. Repeating the exact
+    // same form would otherwise reuse a stale key without checking permission.
+    if (request?.market === market && request.startDate === startDate
+      && request.endDate === endDate && request.cursorDate === null) {
+      void query.refetch();
+      return;
+    }
     setRequest({ market, startDate, endDate, cursorDate: null });
   }
-  const response = query.data;
+  // TanStack Query may retain a prior success result after a refetch fails
+  // with 401/403. Never display previously authorized private source totals
+  // during revalidation or after an error.
+  const response = query.isSuccess && !query.isFetching ? query.data : null;
   const report = response?.available === true ? response.report : null;
   const next = report?.nextCursorDate;
   return (
