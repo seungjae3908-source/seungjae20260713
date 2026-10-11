@@ -155,3 +155,19 @@ An altered research candidate cannot be advertised as CHAMPION or
 claim 999R / 125x leverage solely by tampering with an event object.
 This remains source-integrity validation, not an independent economic
 OOS/realized-return PASS.
+
+## Scoped V3 tests must not mutate the global API test registry
+
+The initial hardening inserted two source tests into the shared
+`api-server/test.mjs` Telegram group, which triggered the unrelated
+research/automatic-trading integration scope guard. That protected
+guard must remain untouched. The exact shared test runner and original
+Staging test-target cardinality are now restored to current `main`.
+A separate, deterministic `ops/telegram-v3-source-mock-tests.mjs`
+reuses the existing esbuild-and-node test harness to run **exactly**
+the two new Telegram-only V3 intake and subscriber test files in the
+Telegram-Only Staging and Strict Predeploy QA workflows. Existing
+`test:telegram`, backend typecheck, application Fast/Full CI and all
+protected checks remain required and unchanged. No additional
+Paper/Research/Live test, private service, Telegram send or deployment
+was invoked or authorized.
