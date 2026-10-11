@@ -29,7 +29,7 @@ export function parsePublicRetryAfterMs(value, nowMs = Date.now()) {
   if (!Number.isFinite(nowMs) || nowMs < 0)
     throw new Error('PUBLIC_RETRY_AFTER_CLOCK_INVALID');
   const raw = String(value).trim();
-  if (/^(?:0|[1-9]\\d*)(?:\\.\\d+)?$/u.test(raw)) {
+  if (/^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(raw)) {
     const delay = Math.ceil(Number(raw) * 1000);
     return Number.isSafeInteger(delay) ? delay : Number.POSITIVE_INFINITY;
   }
