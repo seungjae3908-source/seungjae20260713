@@ -38,7 +38,6 @@ const fourMarketPaperCapital = read('api-server/src/services/admin-four-market-p
 const memberPaperMigration = read('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql');
 const legacyCryptoRoute = read('api-server/src/routes/crypto-auto.ts');
 const deploy = read('ops/deploy-production.sh');
-const paperReadiness = read('ops/verify-production-paper-forward-readiness.mjs');
 
 const requireText = (source, token, code) => {
   if (!source.includes(token)) throw new Error(code + ':' + token);
@@ -158,19 +157,8 @@ requireText(preactivationEvidence, 'PREACTIVATION_PROVIDER_NOT_READY:', 'AUTO_GA
 requireText(postdeployEvidence, 'reconciliationPassed', 'AUTO_GATE_RECONCILIATION_MISSING');
 requireText(postdeployEvidence, "production-account-readonly-live-qa-v3", 'AUTO_GATE_ACCOUNT_QA_SCHEMA_V3_MISSING');
 requireText(postdeployEvidence, 'assertAccountReceipt(account, { targetSha: sha, productionDeployRunId: deployRunId });', 'AUTO_GATE_POSTDEPLOY_ACCOUNT_RECEIPT_REQUIRED');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_PAPER_FORWARD_RUNTIME_REQUIRED', 'AUTO_GATE_PAPER_RUNTIME_RECEIPT_MISSING');
-requireText(workflow, 'paper-forward-no-deploy-', 'AUTO_GATE_PAPER_RUNTIME_ARTIFACT_MISSING');
-requireText(workflow, '--activation-artifact', 'AUTO_GATE_PAPER_ACTIVATION_VERIFY_MISSING');
-requireText(workflow, '--runtime-artifact', 'AUTO_GATE_PAPER_RUNTIME_VERIFY_MISSING');
-requireText(workflow, 'validateMemberAutoTradingPaperHandoff', 'AUTO_GATE_CANONICAL_HANDOFF_VALIDATION_MISSING');
-requireText(workflow, 'PAPER_FORWARD_LAST_INVOCATION_STALE', 'AUTO_GATE_PAPER_RUNTIME_FRESHNESS_MISSING');
-requireText(workflow, "validated.status !== 'READY'", 'AUTO_GATE_PAPER_HANDOFF_READY_MISSING');
-requireText(paperReadiness, 'production-paper-forward-runtime-readiness-v1', 'AUTO_GATE_PAPER_READINESS_SCHEMA_MISSING');
-requireText(paperReadiness, 'RUNTIME_HANDOFF_CANONICAL_VALIDATION_MISSING', 'AUTO_GATE_PAPER_CANONICAL_EVIDENCE_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_EXACT_TELEGRAM_RELEASE_REQUIRED', 'AUTO_GATE_TELEGRAM_RELEASE_RECEIPT_MISSING');
-requireText(workflow, 'telegram-production-runtime-verification-', 'AUTO_GATE_TELEGRAM_RUNTIME_ARTIFACT_MISSING');
-requireText(workflow, 'ops/verify-production-telegram-runtime-readiness.mjs', 'AUTO_GATE_TELEGRAM_RUNTIME_VERIFIER_MISSING');
-requireText(workflow, 'Require Telegram runtime, AUTO room, and zero-mutation ACTIVE_VERIFIED evidence', 'AUTO_GATE_TELEGRAM_AUTO_ROOM_PROOF_MISSING');
+forbid(workflow, /AUTOMATIC_TRADING_EXACT_(?:PAPER_FORWARD|TELEGRAM)_/u,
+  'AUTO_GATE_OPTIONAL_FEATURE_COUPLING_FORBIDDEN');
 requireText(workflow, "auto-trading-live-entry-arm.json", 'AUTO_GATE_LIVE_ENTRY_ARM_PATH_MISSING');
 requireText(workflow, 'disarmLiveEntries();', 'AUTO_GATE_PRE_WARMUP_DISARM_MISSING');
 requireText(workflow, 'requireWorkerWarmup(after, { requireCurrentArm: false });', 'AUTO_GATE_WORKER_WARMUP_PROOF_MISSING');
@@ -191,17 +179,8 @@ requireText(workflow, 'health?.liveCyclePolicyReady === true', 'AUTO_GATE_LIVE_C
 requireText(workflow, 'health?.liveCycleAllFourPolicyReady === true', 'AUTO_GATE_LIVE_CYCLE_ALL4_POLICY_READY_MISSING');
 requireText(workflow, 'attempt < 360', 'AUTO_GATE_ROTATING_MEMBER_POLL_WINDOW_MISSING');
 requireText(workflow, 'health?.globalEmergencyStopActive === false', 'AUTO_GATE_GLOBAL_STOP_PROOF_MISSING');
-requireText(workflow, 'last?.userTelegramDelivery?.tickOk === true', 'AUTO_GATE_TELEGRAM_POST_RESTART_HEALTH_MISSING');
-requireText(workflow, 'last?.userTelegramDelivery?.deliveryConfirmed === true', 'AUTO_GATE_TELEGRAM_DELIVERY_PROOF_MISSING');
-requireText(workflow, '&& telegramProofFresh', 'AUTO_GATE_RECENT_DELIVERY_PROOF_REQUIRED');
-requireText(telegramWorker, 'recentConfirmedDelivery(nowMs = Date.now())', 'AUTO_GATE_DURABLE_TELEGRAM_RECEIPT_REQUIRED');
-requireText(telegramWorker, 'const restoreProof = deliverySource.recentConfirmedDelivery()', 'AUTO_GATE_TELEGRAM_RESTART_PROOF_RESTORE_MISSING');
-requireText(paperWorker, "memberTelegramConnected?.(member.userId)", 'AUTO_GATE_MEMBER_TELEGRAM_BINDING_CHECK_MISSING');
 requireText(workflow, "const autoLastTickMs = Date.parse(String(health?.lastTickAt || ''))", 'AUTO_GATE_AUTO_HEALTH_TIMESTAMP_MISSING');
-requireText(workflow, "const telegramLastTickMs = Date.parse(String(last?.userTelegramDelivery?.lastTickAt || ''))", 'AUTO_GATE_TELEGRAM_HEALTH_TIMESTAMP_MISSING');
 requireText(workflow, 'nowMs - autoLastTickMs <= 360_000', 'AUTO_GATE_AUTO_HEALTH_FRESHNESS_MISSING');
-requireText(workflow, 'nowMs - telegramLastTickMs <= 360_000', 'AUTO_GATE_TELEGRAM_HEALTH_FRESHNESS_MISSING');
-requireText(workflow, 'AUTOMATIC_TRADING_TELEGRAM_RUNTIME_NOT_ACTIVE', 'AUTO_GATE_TELEGRAM_PM2_FLAGS_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ENTRIES_ARMED: false', 'AUTO_GATE_FIRST_TICK_ENTRY_BLOCK_PROOF_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_ORDER_PROOF_MISSING');
 requireText(workflow, 'FIRST_WARMUP_TICK_LIVE_EXIT_ORDERS: 0', 'AUTO_GATE_FIRST_TICK_ZERO_LIVE_EXIT_PROOF_MISSING');
@@ -220,7 +199,7 @@ requireText(workflow, "'live_cycle_order_eligible=true'", 'AUTO_GATE_CYCLE_ORDER
 requireText(workflow, "'live_cycle_policy_ready=true'", 'AUTO_GATE_CYCLE_POLICY_READY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'live_cycle_all_four_policy_ready=true'", 'AUTO_GATE_CYCLE_ALL4_READY_HUB_RECEIPT_MISSING');
 requireText(workflow, "'global_emergency_stop=false'", 'AUTO_GATE_GLOBAL_STOP_HUB_RECEIPT_MISSING');
-requireText(workflow, "'telegram_delivery_worker_post_restart=HEALTHY'", 'AUTO_GATE_TELEGRAM_POST_RESTART_HUB_RECEIPT_MISSING');
+requireText(workflow, "'optional_telegram_state_preserved=true'", 'AUTO_GATE_OPTIONAL_TELEGRAM_PRESERVATION_RECEIPT_MISSING');
 requireText(workflow, "rmSync(liveEntryArmPath, { force: true });", 'AUTO_GATE_DISABLE_DISARM_MISSING');
 requireText(workflow, 'AUTOMATIC_TRADING_DISABLE_OPEN_LIVE_POSITIONS', 'AUTO_GATE_DISABLE_OPEN_POSITION_BLOCK_MISSING');
 requireText(workflow, 'autoHealth?.liveTrackedPositions', 'AUTO_GATE_DISABLE_POSITION_HEALTH_MISSING');
@@ -322,10 +301,7 @@ for (const token of [
   'liveExitsSuppressedByWarmupOrArm',
   "if (!liveExitsArmedThisTick || !hasCapability(member.profile, 'canPlaceOrders'))",
   "const liveEntriesArmedThisTick = liveExitsArmedThisTick",
-  "&& liveTelegramHealthyThisTick && !this.liveCycleHardWarmupBlocked;",
-  "this.source.telegramDeliveryHealthy?.(Date.now()) !== true",
-  "result.liveEntriesSuppressedByTelegram += 1;",
-  "telegramDeliveryHealthy(nowMs: number)",
+  "&& !this.liveCycleHardWarmupBlocked;",
   'liveAllFourConnectionVerificationReady',
   "const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];",
   'liveAllFourConnectionVerificationReady(policy, connections, nowMs)',
@@ -336,7 +312,8 @@ for (const token of [
   "leverage < 2 || leverage > 7",
   "this.readLiveAccountSnapshot(userId, provider)",
   '&& liveSnapshotsReady',
-  'runtime.paperAccountReady',
+  'paperReadEnabled = true',
+  'hasCapability(member.profile, \'canManageMembers\'), !liveModeRequested)',
   'executionSyncBlocks',
   'executionSyncMissingReferences',
   'if (synced.missingReferences > 0)',
@@ -376,10 +353,8 @@ for (const token of [
   'this.memberBatchCursor = hasMore && lastUserId ? lastUserId : null;',
   'const refreshRuntime = async () =>',
   'Always re-read canonical exposure at the entry boundary',
-  // A canonical projection is not enough: admin Paper entry must also
-  // have an attested database-side write barrier (RLS) before we trust fills.
-  'let entryProjectionHealthy = adminWalletDbGuardReady',
-  '&& await syncExecutionProjection();',
+  'let entryProjectionHealthy = liveModeRequested',
+  '? true',
   'if (!entryProjectionHealthy) {',
   'await refreshRuntime();',
   'if (liveEntriesArmedThisTick && hasCapability',
@@ -393,30 +368,24 @@ requireText(liveEntryArm, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_
 requireText(liveEntryArm, 'member-auto-trading-live-entry-arm-v1', 'AUTO_GATE_WORKER_ARM_SCHEMA_MISSING');
 requireText(paperWorker, 'if (!await liveEntryArmPresent())', 'AUTO_GATE_WORKER_REARM_MISSING');
 requireText(paperWorker, "liveExitsSuppressedByPolicy", 'AUTO_GATE_STOPPED_LIVE_POSITION_VISIBILITY_MISSING');
-requireText(paperWorker, 'memberTelegramProofMatchesCurrentBinding', 'AUTO_GATE_MEMBER_CHAT_REBIND_PROOF_MISSING');
 requireText(paperWorker, "'BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED'", 'AUTO_GATE_PROVIDER_UNTRACKED_POSITION_BLOCK_MISSING');
-requireText(paperWorker, "'BACKGROUND_MEMBER_TELEGRAM_SENT_RECEIPT_REQUIRED'", 'AUTO_GATE_MEMBER_SCOPED_TELEGRAM_RECEIPT_MISSING');
 requireText(liveExecution, "throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY')", 'AUTO_GATE_PROVIDER_ARM_MISSING');
 requireText(liveExecution, 'await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);', 'AUTO_GATE_BITGET_MUTATION_ARM_GUARD_MISSING');
 requireText(liveExecution, "'AUTOMATIC_ENTRY_POLICY_REVOKED'", 'AUTO_GATE_AUTO_ORIGIN_POLICY_REVOCATION_GUARD_MISSING');
 requireText(liveExecution, "const automaticLive = currentPolicy.mode === 'automatic' && currentPolicy.automaticEnabled;", 'AUTO_GATE_STRICT_CURRENT_AUTO_AUTHORITY_MISSING');
 requireText(paperWorker, "result.handoffStatus = 'BLOCKED_DATA';", 'AUTO_GATE_BAD_HANDOFF_QUARANTINE_MISSING');
 requireText(paperWorker, 'selectRotatingHandoffEntries(', 'AUTO_GATE_FAIR_ENTRY_PAGING_MISSING');
-requireText(paperWorker, '&& await this.memberTelegramConnected(userId);', 'AUTO_GATE_READINESS_WITNESS_TELEGRAM_REQUIRED');
+requireText(paperWorker, "buildPlanInput(member, entry, runtime, fx, nowMs, 'live')", 'AUTO_GATE_LIVE_CANDIDATE_INDEPENDENCE_MISSING');
+requireText(paperWorker, 'if (!paperLaneReady && !liveModeRequested)', 'AUTO_GATE_PAPER_LANE_INDEPENDENCE_MISSING');
+forbid(paperWorker, /liveEntriesArmedThisTick[^;]+telegramDeliveryHealthy/us,
+  'AUTO_GATE_TELEGRAM_ENTRY_COUPLING_FORBIDDEN');
 requireText(paperWorker, 'formulaAiReviewReasonsForLive(input.entry, input.nowMs)', 'AUTO_GATE_FORMULA_AI_PROOF_FORWARDING_MISSING');
 requireText(paperWorker, "if (code === 'BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_BLOCKED_RUNTIME_STATUS_MISSING');
 requireText(paperWorker, "throw new Error('BACKGROUND_FORMULA_AI_REVIEW_PROOF_REQUIRED')", 'AUTO_GATE_FORMULA_AI_MISSING_PROOF_BLOCK_MISSING');
 requireText(handoffContract, 'canonicalAiReviewEvidenceValid(', 'AUTO_GATE_CANONICAL_AI_REVIEW_VALIDATION_MISSING');
 requireText(paperWorker, '&& this.liveCycleAllFourPolicyReadySeen;', 'AUTO_GATE_WORKER_ALL4_WARMUP_FORMULA_MISSING');
 requireText(apiIndex, 'autoTradingBackground: readMemberAutoTradingBackgroundRuntimeHealth()', 'AUTO_GATE_WORKER_HEALTH_ENDPOINT_MISSING');
-requireText(apiIndex, 'userTelegramDelivery: readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_ENDPOINT_MISSING');
-requireText(telegramWorker, 'export function readUserTelegramDeliveryWorkerHealth()', 'AUTO_GATE_TELEGRAM_WORKER_HEALTH_READER_MISSING');
-requireText(telegramWorker, "tickOk: deliveryConfirmed", 'AUTO_GATE_TELEGRAM_CONFIRMED_HEALTH_MISSING');
-requireText(telegramWorker, "telegramDeliveryTickConfirmed(deliveryConfirmed, result)", 'AUTO_GATE_TELEGRAM_DELIVERY_FAILURE_INTEGRATION_MISSING');
-requireText(telegramWorker, "if (result.overlapSkipped) return;", 'AUTO_GATE_TELEGRAM_OVERLAP_HEALTH_GUARD_MISSING');
-requireText(telegramWorker, "export function userTelegramDeliveryWorkerHealthy(", 'AUTO_GATE_TELEGRAM_FRESH_HEALTH_HELPER_MISSING');
-requireText(telegramWorkerTest, "Telegram delivery failure stays unhealthy through idle ticks until confirmed success", 'AUTO_GATE_TELEGRAM_FAILURE_REGRESSION_TEST_MISSING');
-requireText(paperWorkerTest, "Telegram outage blocks armed live entry while preserving independent exit warmup", 'AUTO_GATE_TELEGRAM_LIVE_ENTRY_REGRESSION_TEST_MISSING');
+requireText(paperWorkerTest, 'Live readiness and entry do not require Paper wallet or Telegram binding', 'AUTO_GATE_LIVE_INDEPENDENCE_REGRESSION_MISSING');
 requireText(liveConnectionVerification, "LIVE_CONNECTION_VERIFICATION_MAX_AGE_MS", 'AUTO_GATE_CREDENTIAL_AGE_POLICY_MISSING');
 requireText(liveExecution, "liveConnectionVerificationFresh(connection)", 'AUTO_GATE_ORDER_TIME_CREDENTIAL_RECHECK_MISSING');
 requireText(liveExecution, "isRiskReducingExitPlan(plan)", 'AUTO_GATE_RISK_REDUCING_EXIT_EXCEPTION_MISSING');
@@ -451,21 +420,19 @@ requireText(paperWorkerTest, 'assert.equal(result.liveOrderEligibleMembers, 0);'
 
 requireText(autoTradingPage, 'readyForAutomaticOrderEvaluation', 'AUTO_UI_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'runtimeStatus?.autoTradingBackground', 'AUTO_UI_WORKER_RUNTIME_HEALTH_MISSING');
-requireText(autoTradingPage, 'runtimeStatus?.userTelegramDelivery', 'AUTO_UI_TELEGRAM_RUNTIME_HEALTH_MISSING');
 requireText(autoTradingPage, 'autoWorker.liveEntriesArmed === true', 'AUTO_UI_ARMED_STATE_MISSING');
 requireText(autoTradingPage, '안전대기 · Arm 준비 중', 'AUTO_UI_ARM_WAIT_LABEL_MISSING');
 requireText(autoTradingPage, '자동 실거래 작동 준비됨', 'AUTO_UI_RUNTIME_READY_LABEL_MISSING');
 requireText(autoTradingPage, 'runtimeHealthFresh', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_HELPER_MISSING');
 requireText(autoTradingPage, 'nowMs - tickMs <= 360_000', 'AUTO_UI_RUNTIME_HEALTH_FRESHNESS_BOUND_MISSING');
 requireText(autoTradingPage, '자동 워커 상태 지연', 'AUTO_UI_STALE_WORKER_LABEL_MISSING');
-requireText(autoTradingPage, 'Telegram 상태 지연', 'AUTO_UI_STALE_TELEGRAM_LABEL_MISSING');
 requireText(autoTradingPage, 'runtimeRefreshInFlight', 'AUTO_UI_STATUS_POLLING_DEDUP_MISSING');
 requireText(autoTradingPage, 'setRuntimeClockMs(Date.now())', 'AUTO_UI_STATUS_FRESHNESS_CLOCK_MISSING');
 requireText(autoTradingPage, 'setRuntimeReadError(true)', 'AUTO_UI_STATUS_READ_FAILURE_STATE_MISSING');
 requireText(autoTradingPage, '상태 조회 실패', 'AUTO_UI_STATUS_READ_FAILURE_LABEL_MISSING');
 requireText(autoTradingPage, "tone={providerVerified ? 'ok' : 'warn'}", 'AUTO_UI_PROVIDER_STATUS_TONE_MISSING');
 requireText(autoTradingPage, "tone={effectiveEntryStopped ? 'warn' : 'ok'}", 'AUTO_UI_STOP_STATUS_TONE_MISSING');
-requireText(autoTradingPage, "tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
+requireText(autoTradingPage, "tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady ? 'ok' : 'warn'}", 'AUTO_UI_AUTHORITY_STATUS_TONE_MISSING');
 requireText(autoTradingPage, 'AlertTriangle', 'AUTO_UI_WARNING_ICON_MISSING');
 requireText(autoTradingPage, 'liveAutomaticReadinessByMarket?.[market]', 'AUTO_UI_MARKET_RUNTIME_READINESS_MISSING');
 requireText(autoTradingPage, 'automaticServerGateEnabled', 'AUTO_UI_AUTOMATIC_GATE_STATE_MISSING');
@@ -588,7 +555,7 @@ console.log(JSON.stringify({
   oneAutomaticGate: true,
   accountQaRunsRequiredPerRelease: 1,
   disablePreservesSpotAndFuturesManualAuthority: true,
-  paperBackgroundWorkerCoupled: true,
+  paperBackgroundWorkerCoupled: false,
   liveBackgroundWorkerCoupled: true,
   liveEntryTwoPhaseArm: true,
   startupWarmupProofRequired: true,
@@ -609,7 +576,9 @@ console.log(JSON.stringify({
   rotationFailureClearsPartialReadiness: true,
   activationWaitsForCompletedMemberReadinessCycle: true,
   globalEmergencyStopMustBeClear: true,
-  telegramDeliveryHealthRequiredAfterRestart: true,
+  telegramDeliveryHealthRequiredAfterRestart: false,
+  optionalTelegramStatePreserved: true,
+  liveEntryIndependentFromPaperWallet: true,
   activationWorkerHealthFreshnessRequired: true,
   manualGatesPreservePersonalTelegramDelivery: true,
   automaticRestartPreservesManualRuntime: true,
