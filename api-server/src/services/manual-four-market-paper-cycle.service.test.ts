@@ -58,7 +58,8 @@ function fixture(market:AdminPaperMarket='crypto_futures',
       spreadAndSlippageKrw:100,taxKrw:0,signedFundingKrw:0,
       entryFxKrwPerQuote:market==='domestic_stock'||market==='crypto_spot'?1:1400,
       exitFxKrwPerQuote:market==='domestic_stock'||market==='crypto_spot'?1:1400,
-      fxSourceId:'public-fx-snapshot-1',fxObservedAtMs:NOW-15_000,
+      entryFxSourceId:'public-fx-entry-1',entryFxObservedAtMs:NOW-40_000,
+      exitFxSourceId:'public-fx-exit-2',exitFxObservedAtMs:NOW-20_000,
     },nowMs:NOW,
     ...changes,
   };
@@ -141,7 +142,11 @@ test('entry must follow selected signal, exit after entry, and FX/cost cannot co
     'PAPER_CYCLE_UNVERIFIED_OR_FUTURE_TIMELINE');
   blocks(change(fixture(),'costs',{observedAtMs:NOW-25_000}),
     'PAPER_CYCLE_COST_FX_EVIDENCE_UNVERIFIED');
-  blocks(change(fixture(),'costs',{fxObservedAtMs:NOW+1}),
+  blocks(change(fixture(),'costs',{entryFxObservedAtMs:NOW-15_000}),
+    'PAPER_CYCLE_COST_FX_EVIDENCE_UNVERIFIED');
+  blocks(change(fixture(),'costs',{exitFxObservedAtMs:NOW+1}),
+    'PAPER_CYCLE_COST_FX_EVIDENCE_UNVERIFIED');
+  blocks(change(fixture(),'costs',{entryFxObservedAtMs:NOW-150_000}),
     'PAPER_CYCLE_COST_FX_EVIDENCE_UNVERIFIED');
   blocks(change(fixture(),'verifiedOwner',{strategyValidatedAtMs:NOW-30_000}),
     'PAPER_CYCLE_LOOKAHEAD_OR_STRATEGY_NOT_VALIDATED');
