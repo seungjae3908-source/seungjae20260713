@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
 import {
   dueTelegramIntelligenceReports,
@@ -36,26 +36,42 @@ type PersistedState = {
 
 export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceStateStore {
   private loaded = false;
+  private blocked = false;
   private delivered = new Map<string, string>();
 
   constructor(private readonly statePath: string) {}
 
   private async ensureLoaded(): Promise<void> {
+    if (this.blocked) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     if (this.loaded) return;
     this.loaded = true;
     try {
-      const parsed = JSON.parse(await readFile(this.statePath, 'utf8')) as Partial<PersistedState>;
-      if (parsed.version !== 1 || !parsed.delivered || typeof parsed.delivered !== 'object') return;
-      for (const [key, value] of Object.entries(parsed.delivered)) {
-        if (typeof value === 'string' && Number.isFinite(new Date(value).getTime())) {
-          this.delivered.set(key, value);
-        }
+      const details = await lstat(this.statePath);
+      if (!details.isFile() || details.isSymbolicLink() || details.size > 1_048_576) {
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
       }
+      const raw = await readFile(this.statePath, 'utf8');
+      if (Buffer.byteLength(raw, 'utf8') > 1_048_576) {
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      }
+      const parsed = JSON.parse(raw) as Partial<PersistedState>;
+      if (parsed.version !== 1 || !parsed.delivered || typeof parsed.delivered !== 'object'
+        || Array.isArray(parsed.delivered)) {
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      }
+      const entries = Object.entries(parsed.delivered);
+      if (entries.length > 10000 || entries.some(([key, value]) =>
+        key.length > 1024 || typeof value !== 'string' || !Number.isFinite(Date.parse(value)))) {
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      }
+      for (const [key, value] of entries) this.delivered.set(key, value);
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException)?.code;
-      if (code !== 'ENOENT') {
-        logger.warn({ code }, 'telegram intelligence state could not be read; starting fail-closed empty state');
-      }
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      this.blocked = true;
+      this.delivered.clear();
+      logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
+        'telegram intelligence persisted dedupe state unreadable; scheduled sends blocked');
+      throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     }
   }
 
@@ -244,38 +260,112 @@ function boundedInterval(value: unknown): number {
   return Math.max(30_000, Math.min(300_000, Math.trunc(parsed)));
 }
 
+// Counts and fixed codes only. No tokens, chat IDs, symbols or member information.
+export type TelegramIntelligenceWorkerHealth = Readonly<{
+  enabled: boolean;
+  state: 'NOT_STARTED' | 'DISABLED' | 'RUNNING' | 'STOPPED';
+  startErrorCode: 'FLAG_DISABLED' | 'ACTIVATION_REQUIRED' | 'TOKEN_MISSING' | 'ROOMS_MISSING' | null;
+  lastTickAt: string | null;
+  tickOk: boolean | null;
+  lastDueTickAt: string | null;
+  lastDuePlans: number;
+  lastDueAttempted: number;
+  lastDueDelivered: number;
+  lastDueDeduped: number;
+  lastDueNotConfigured: number;
+  lastDueFailed: number;
+  lastDueCode: 'NOT_OBSERVED' | 'BOT_API_ACCEPTED' | 'DEDUPED_ONLY'
+    | 'NOT_CONFIGURED' | 'DELIVERY_FAILED' | 'NO_ATTEMPTS'
+    | 'LEDGER_UNREADABLE' | 'TICK_FAILED';
+}>;
+
+function emptyTelegramIntelligenceWorkerHealth(): TelegramIntelligenceWorkerHealth {
+  return Object.freeze({
+    enabled: false, state: 'NOT_STARTED', startErrorCode: null,
+    lastTickAt: null, tickOk: null, lastDueTickAt: null,
+    lastDuePlans: 0, lastDueAttempted: 0, lastDueDelivered: 0,
+    lastDueDeduped: 0, lastDueNotConfigured: 0, lastDueFailed: 0,
+    lastDueCode: 'NOT_OBSERVED',
+  });
+}
+
+let runtimeHealth: TelegramIntelligenceWorkerHealth = emptyTelegramIntelligenceWorkerHealth();
+export function readTelegramIntelligenceWorkerHealth(): TelegramIntelligenceWorkerHealth {
+  return runtimeHealth;
+}
+
+function putTelegramIntelligenceHealth(patch: Partial<TelegramIntelligenceWorkerHealth>): void {
+  runtimeHealth = Object.freeze({ ...runtimeHealth, ...patch });
+}
+
+function sanitizedTelegramIntelligenceError(error: unknown): 'LEDGER_UNREADABLE' | 'TICK_FAILED' {
+  return error instanceof Error && error.message === 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE'
+    ? 'LEDGER_UNREADABLE' : 'TICK_FAILED';
+}
+
 export type TelegramIntelligenceWorkerControl = {
   worker: TelegramIntelligenceWorker;
   stop: () => void;
 };
 
 export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerControl | null {
+  runtimeHealth = emptyTelegramIntelligenceWorkerHealth();
+  const disabled = (code: NonNullable<TelegramIntelligenceWorkerHealth['startErrorCode']>) => {
+    putTelegramIntelligenceHealth({ state: 'DISABLED', startErrorCode: code });
+    return null;
+  };
   if (process.env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED === 'false') {
     console.log('[telegram-intelligence-worker] disabled by explicit flag');
-    return null;
+    return disabled('FLAG_DISABLED');
   }
   if (process.env.LIVE_TELEGRAM_ACTIVATION_APPROVED !== 'true') {
     console.log('[telegram-intelligence-worker] disabled; LIVE_TELEGRAM_ACTIVATION_APPROVED=true is required');
-    return null;
+    return disabled('ACTIVATION_REQUIRED');
   }
   if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) {
     console.log('[telegram-intelligence-worker] disabled; Telegram bot token is required');
-    return null;
+    return disabled('TOKEN_MISSING');
   }
   const missingMarketRooms = missingTelegramMarketRoomEnv(process.env);
   if (missingMarketRooms.length) {
     console.log('[telegram-intelligence-worker] disabled; four dedicated market Telegram rooms are required', {
       missing: missingMarketRooms,
     });
-    return null;
+    return disabled('ROOMS_MISSING');
   }
 
   const statePath = process.env.TELEGRAM_INTELLIGENCE_STATE_PATH?.trim()
     || path.resolve(process.cwd(), '.runtime/telegram-intelligence-delivery-state.json');
   const worker = new TelegramIntelligenceWorker(new FileTelegramIntelligenceStateStore(statePath));
+  putTelegramIntelligenceHealth({ enabled: true, state: 'RUNNING' });
+  let inFlight = false;
   const tick = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    const observedAt = new Date();
+    const dueExpected = dueTelegramIntelligenceReports(observedAt, {
+      membership: 'admin', portfolioRelevant: false, watchlistRelevant: false,
+      includeStocks: true, includeCrypto: true,
+    }).length;
     try {
-      const result = await worker.runOnce(new Date());
+      const result = await worker.runOnce(observedAt);
+      const completedAt = new Date().toISOString();
+      putTelegramIntelligenceHealth({
+        lastTickAt: completedAt, tickOk: true,
+        ...(result.duePlans > 0 ? {
+          lastDueTickAt: completedAt,
+          lastDuePlans: result.duePlans,
+          lastDueAttempted: result.attempted,
+          lastDueDelivered: result.delivered,
+          lastDueDeduped: result.deduped,
+          lastDueNotConfigured: result.notConfigured,
+          lastDueFailed: result.failed,
+          lastDueCode: result.failed > 0 ? 'DELIVERY_FAILED'
+            : result.notConfigured > 0 ? 'NOT_CONFIGURED'
+              : result.delivered > 0 ? 'BOT_API_ACCEPTED'
+                : result.deduped > 0 ? 'DEDUPED_ONLY' : 'NO_ATTEMPTS',
+        } : {}),
+      });
       if (result.duePlans > 0) {
         console.log('[telegram-intelligence-worker] tick', {
           duePlans: result.duePlans,
@@ -286,7 +376,18 @@ export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerCon
         });
       }
     } catch (error) {
-      logger.warn({ error: error instanceof Error ? error.message : 'unknown' }, 'telegram intelligence worker tick failed');
+      const code = sanitizedTelegramIntelligenceError(error);
+      const failedAt = new Date().toISOString();
+      putTelegramIntelligenceHealth({
+        lastTickAt: failedAt, tickOk: false,
+        ...(dueExpected > 0 ? {
+          lastDueTickAt: failedAt, lastDuePlans: dueExpected,
+          lastDueCode: code,
+        } : {}),
+      });
+      logger.warn({ code }, 'telegram intelligence worker tick failed');
+    } finally {
+      inFlight = false;
     }
   };
 
@@ -294,5 +395,11 @@ export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerCon
   const timer = setInterval(() => { void tick(); }, boundedInterval(process.env.TELEGRAM_INTELLIGENCE_INTERVAL_MS));
   timer.unref?.();
   console.log('[telegram-intelligence-worker] started');
-  return { worker, stop: () => clearInterval(timer) };
+  return {
+    worker,
+    stop: () => {
+      clearInterval(timer);
+      putTelegramIntelligenceHealth({ enabled: false, state: 'STOPPED' });
+    },
+  };
 }
