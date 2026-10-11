@@ -711,7 +711,7 @@ test('market brief send followed by disk-commit failure blocks subsequent sends 
     const archivedDirectory = path.join(directory, 'archived');
     await mkdir(stateDirectory);
     const file = path.join(stateDirectory, 'delivery.json');
-    const original = '{"version":1,"delivered":{}}\\n';
+    const original = '{"version":1,"delivered":{}}';
     await writeFile(file, original, 'utf8');
     const store = new FileTelegramIntelligenceStateStore(file);
     assert.equal(await store.has('telegram-intelligence:warmup'), false);
