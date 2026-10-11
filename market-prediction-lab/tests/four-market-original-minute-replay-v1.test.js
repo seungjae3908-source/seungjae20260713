@@ -208,9 +208,8 @@ test("invalid PIT digest and spoofed unknown market are rejected before any file
     await assert.rejects(()=>replay(x.request(folder,{market:"BINANCE"})),
       /PRIVATE_REPLAY_MARKET_OR_RISK_POLICY_INVALID/);
     await assert.rejects(()=>replay(x.request(folder,{
-      stockCalendar:{market:"KR_STOCK",tradingDates:[
-        "2028-01-03","2026-09-18",
-      ]},
+      stockCalendar:{...x.request(folder).stockCalendar,
+        tradingDates:["2028-01-03","2026-09-18"]},
     })),/PRIVATE_REPLAY_STOCK_TRADING_DATES_INVALID/);
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
@@ -276,7 +275,7 @@ test("KR/US stock replay rejects a missing PREMARKET or AFTERMARKET session even
       const altered=[...base.sessionSources,{...base.sessionSources[0],
         startMs:base.sessionSources[0].startMs+60_000}];
       await assert.rejects(()=>replay({...base,sessionSources:altered}),
-        /PRIVATE_REPLAY_SOURCE_SESSION_INVALID|PRIVATE_REPLAY_UNEXPECTED_OR_DUPLICATE_STOCK_SESSION/);
+        /PRIVATE_REPLAY_SOURCE_SESSION_INVALID|PRIVATE_REPLAY_UNEXPECTED_OR_DUPLICATE_STOCK_SESSION|MINUTE_WINDOW_STOCK_CALENDAR_INVALID/);
     }
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
