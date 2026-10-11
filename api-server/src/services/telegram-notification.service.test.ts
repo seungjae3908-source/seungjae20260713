@@ -798,6 +798,52 @@ test('Telegram scheduled worker exposes safe idle readiness without any send evi
   assert.equal(Object.keys(status).some(key => /token|chat|account|user|order|secret/i.test(key)), false);
 });
 
+test('ambiguous scheduled Telegram POST is persisted as unconfirmed and never automatically replayed after restart', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'telegram-uncertain-brief-'));
+  const ledger = path.join(directory, 'brief-state.json');
+  const now = new Date('2026-10-12T07:00:00.000Z');
+  let sends = 0;
+  try {
+    const worker = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => {
+        sends++;
+        return { ok: false as const, attempts: 1, skipped: 'OUTCOME_UNCONFIRMED' as const,
+          errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED' };
+      },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-only-kr-room' : null,
+    );
+    const first = await worker.runOnce(now);
+    assert.equal(first.duePlans, 1);
+    assert.equal(first.attempted, 1);
+    assert.equal(first.delivered, 0);
+    assert.equal(first.deduped, 0);
+    assert.equal(first.failed, 1);
+    assert.equal(sends, 1);
+    const persisted = JSON.parse(await readFile(ledger, 'utf8'));
+    assert.equal(persisted.version, 1);
+    assert.equal(Object.keys(persisted.delivered).length, 0, 'uncertain is never recorded as SENT');
+    assert.equal(Object.keys(persisted.unconfirmed).length, 1);
+
+    const reopened = new TelegramIntelligenceWorker(
+      new FileTelegramIntelligenceStateStore(ledger),
+      async () => {
+        sends++;
+        throw new Error('UNCERTAIN_MESSAGE_MUST_NOT_BE_REPLAYED');
+      },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-only-kr-room' : null,
+    );
+    const again = await reopened.runOnce(now);
+    assert.equal(again.attempted, 0);
+    assert.equal(again.delivered, 0);
+    assert.equal(again.deduped, 0);
+    assert.equal(again.failed, 1, 'unconfirmed message remains explicitly unresolved');
+    assert.equal(sends, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('Telegram intelligence worker sends a due KR close report exactly once', async () => {
   delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
   const store = new MemoryTelegramIntelligenceStateStore();
