@@ -5,11 +5,13 @@ import { classifyTelegramCodeOnlyDiff, TELEGRAM_CODE_ONLY_ALLOWED_FILES } from
   '../../ops/telegram-production-code-only-scope.mjs';
 
 const wf=fs.readFileSync('.github/workflows/telegram-production-code-only-deploy.yml','utf8');
+const deploy=fs.readFileSync('ops/deploy-production.sh','utf8');
 const validFiles=[
   'api-server/src/services/telegram-intelligence-worker.service.ts',
   'api-server/src/services/signal-intelligence-telegram-subscriber.service.ts',
   'api-server/src/index.ts',
   '.github/workflows/telegram-production-code-only-deploy.yml',
+  'ops/deploy-production.sh',
 ];
 const compare=(files=validFiles)=>({
   status:'ahead',ahead_by:2,behind_by:0,total_commits:2,
@@ -18,7 +20,7 @@ const compare=(files=validFiles)=>({
 
 test('only a strict bounded Telegram app-code diff can be deployed',()=>{
   assert.deepEqual(classifyTelegramCodeOnlyDiff(compare()),{
-    ok:true,code:'TELEGRAM_CODE_ONLY_SCOPE_PASS',changedFileCount:4,
+    ok:true,code:'TELEGRAM_CODE_ONLY_SCOPE_PASS',changedFileCount:5,
   });
   assert.equal(classifyTelegramCodeOnlyDiff(compare([...validFiles,
     'api-server/src/services/member-auto-trading-background-worker.service.ts'])).ok,false);
@@ -39,6 +41,20 @@ test('only finite whitelisted paths are accepted',()=>{
   assert.ok(!TELEGRAM_CODE_ONLY_ALLOWED_FILES.includes('.github/workflows/production-deploy.yml'));
 });
 
+test('only release canary suppresses background workers; live PM2 is not disabled by this patch',()=>{
+  const begin=deploy.indexOf('nohup env PORT=');
+  const end=deploy.indexOf('echo $! >"$RELEASE_DIR/.canary.pid"',begin);
+  assert.ok(begin>=0&&end>begin);
+  const canary=deploy.slice(begin,end);
+  assert.ok(canary.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=false'));
+  assert.ok(canary.includes('BACKGROUND_WORKERS_ENABLED=false'));
+  assert.equal((deploy.match(/BACKGROUND_WORKERS_ENABLED=false/g)||[]).length,1);
+  const restart=deploy.slice(deploy.indexOf('restart_application_preserving_telegram()'),
+    deploy.indexOf('listener_pids()',deploy.indexOf('restart_application_preserving_telegram()')));
+  assert.ok(!restart.includes('BACKGROUND_WORKERS_ENABLED=false'));
+  assert.ok(deploy.includes('assert_live_trading_inactive_before_deploy'));
+});
+
 test('protected owner-only production workflow cannot run sends or migrations',()=>{
   for(const value of [
     'environment: production',
@@ -52,6 +68,7 @@ test('protected owner-only production workflow cannot run sends or migrations',(
     'Require exact-main successful PostgreSQL auth and Staging verdict',
     'Reject unrelated files between actual Production and exact main',
     'TELEGRAM_PINNED_RELEASE_SOURCE_CHANGED',
+    "'ops/deploy-production.sh'",
     'TELEGRAM_PREDEPLOY_RUNTIME_MOVED',
     'Revalidate immutable main immediately before Production mutation',
     'StrictHostKeyChecking=yes',
