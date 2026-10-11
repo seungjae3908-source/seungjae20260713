@@ -6,6 +6,8 @@ import {deriveArchivedResearchTimeframesV1} from "./research-minute-archive-v1.j
 import {validateResearchStockSessionsForDateV1} from "./research-minute-archive-window-v1.js";
 import {auditHistoricalPITVenueUniverseV1,digestPITMembershipRowsV1} from "./historical-pit-venue-universe-gate-v1.js";
 import {validatePublicNativeCryptoRosterCaptureV1} from "./public-native-crypto-roster-v1.js";
+import {ORIGINAL_MINUTE_EXECUTION_MODEL_V2,originalMinuteExitFillV2,
+  originalMinuteLiquidationV2,recordOriginalMinuteEquityV2} from "./original-minute-execution-model-v2.js";
 
 /**
  * Bounded-memory, OFFLINE historical source -> diagnostic strategy replay.
@@ -371,21 +373,7 @@ function createReplay(initialCapitalKRW){
     }]))};
 }
 function recordClose(state,p,b,price,reason,config){
-  const spread=(config.costs.spreadRate??0)/2;
-  const out=price*(p.side==="LONG"?1-spread:1+spread);
-  const qty=p.quantity;
-  const gross=(out-p.entryPrice)*qty*(p.side==="LONG"?1:-1);
-  // Half-spread is already represented in filled entry/exit prices above.
-  // Do not deduct it twice. Include it in modeled cost DISCLOSURE only.
-  const entryCost=p.entryPrice*qty*(config.costs.entryFeeRate
-    +config.costs.slippageRate+config.costs.latencyRate);
-  const exitCost=out*qty*(config.costs.exitFeeRate+config.costs.slippageRate
-    +config.costs.latencyRate+config.costs.taxRate);
-  const funding=config.market==="CRYPTO_FUTURES"
-    ?p.entryPrice*qty*config.costs.fundingRatePerSession:0;
-  const net=gross-entryCost-exitCost-funding;
-  const modeledSpreadCost=(p.entryPrice+out)*qty*spread;
-  const cost=entryCost+exitCost+funding+modeledSpreadCost;
+  const {out,net,cost}=originalMinuteLiquidationV2(p,price,config.costs,config.market);
   state.trades++;state.wins+=Number(net>0);state.losses+=Number(net<0);
   if(net<0)state.lossesByDate.set(p.sessionDate,
     (state.lossesByDate.get(p.sessionDate)??0)+1);
@@ -402,9 +390,7 @@ function recordClose(state,p,b,price,reason,config){
   if(net>0){state.equity+=net/2;state.reserve+=net/2;}
   else state.equity=Math.max(0,state.equity+net);
   const total=state.equity+state.reserve;
-  state.peak=Math.max(state.peak,total);
-  state.maxDrawdownPercent=Math.max(state.maxDrawdownPercent,
-    state.peak>0?100*(state.peak-total)/state.peak:0);
+  recordOriginalMinuteEquityV2(state,total);
   const fraction=(p.signalMs-config.period.startMs)/
     (config.period.endExclusiveMs-config.period.startMs);
   const split=fraction<0.6?"train":fraction<0.8?"validation":"test";
@@ -422,6 +408,7 @@ function recordClose(state,p,b,price,reason,config){
   if(state.detail.length<100)state.detail.push(Object.freeze({
     side:p.side,signalMs:p.signalMs,entryMs:p.entryMs,
     exitMs:b.endMs,exitReason:reason,
+    modeledEntryPrice:p.entryPrice,modeledExitPrice:out,modeledPriceCurrency:"KRW",
     modeledNetPnlKRW:net,modeledTotalCostKRW:cost,split,
     originalSignalAvailabilityVerified:false,actualFillVerified:false,
   }));
@@ -446,13 +433,16 @@ function consumeBar(state,b,config){
     state.pending=null;
   }
   if(state.position){
-    const p=state.position,long=p.side==="LONG";
-    const stop=p.entryPrice*(long?1-strategy.stopPercent/100:1+strategy.stopPercent/100);
-    const target=p.entryPrice*(long?1+strategy.targetPercent/100:1-strategy.targetPercent/100);
-    const stopped=long?b.low<=stop:b.high>=stop;
-    const reached=long?b.high>=target:b.low<=target;
-    if(stopped)recordClose(state,p,b,stop,"stop_first",config);
-    else if(reached)recordClose(state,p,b,target,"target",config);
+    const p=state.position;
+    const fill=originalMinuteExitFillV2(b,p.side,p.entryPrice,strategy);
+    if(fill)recordClose(state,p,{...b,endMs:fill.atMs},fill.price,fill.reason,config);
+    else{
+      const {net}=originalMinuteLiquidationV2(p,b.close,config.costs,config.market);
+      // Include open-position losses and hypothetical liquidation costs.
+      // This is CLOSED-BAR MTM, not unobserved intrabar peak-to-trough or
+      // an authenticated futures liquidation/margin model.
+      recordOriginalMinuteEquityV2(state,state.reserve+Math.max(0,state.equity+net));
+    }
   }
   const alphaFast=2/(strategy.fast+1),alphaSlow=2/(strategy.slow+1);
   const previousFast=state.emaFast;
@@ -492,6 +482,10 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     currentRosterObservedAtMs:cfg.currentRosterObservedAtMs,
     historicalPITRosterChecked:false,
     sessionClosePolicy:"CLOSE_EACH_SOURCE_SESSION",
+    executionModel:ORIGINAL_MINUTE_EXECUTION_MODEL_V2,
+    modeledDrawdownBasis:"CLOSED_BAR_NET_LIQUIDATION_AND_REALIZED_EQUITY",
+    intrabarMaximumDrawdownVerified:false,
+    futuresMarginLiquidationVerified:false,
     historicalTradingAvailabilityVerified:false,
     quoteCurrency:cfg.quote,modeledFxRateKRWPerQuote:cfg.fxRateKRWPerQuote,
     fxEvidenceStatus:"STATIC_FX_MODEL_ONLY_NOT_HISTORICAL",
@@ -619,7 +613,8 @@ export async function runFourMarketOriginalMinuteReplayV1(input={}){
     sessions:sourceDigestChain,
   }:sourceDigestChain);
   const sourceModelDigestSha256=checksum({
-    schemaVersion:"original-minute-ema-model-v1",evidenceScope:cfg.evidenceScope,
+    schemaVersion:"original-minute-ema-model-v2",executionModel:ORIGINAL_MINUTE_EXECUTION_MODEL_V2,
+    evidenceScope:cfg.evidenceScope,
     currentRosterDigestSha256:cfg.currentRosterDigestSha256,
     historicalRosterDigestSha256:cfg.manifest?.rawMembershipDigestSha256??null,
     sourceDigestChainSha256,market:cfg.market,symbol:cfg.symbol,
