@@ -113,3 +113,28 @@ test('provider failures missing or overflowing cannot be misreported as an empty
   assert.equal(lane.publicProviderFailureSummary.failuresObserved, 2);
   assert.equal(result.rows.find(x=>x.market==='CRYPTO_FUTURES').providerErrorCount, 6);
 });
+
+test('explicit product readiness remains blocked even if all contract lanes are nominal',()=>{
+  const d=inspectExactPublicProviderCycle(snapshot(),SHA,NOW);
+  assert.equal(d.releaseReadiness.status,'BLOCKED');
+  assert.equal(d.releaseReadiness.ready,false);
+  assert.equal(d.releaseReadiness.fullUniverseRealQuotesVerified,false);
+  assert.equal(d.releaseReadiness.continuous24hVerified,false);
+  assert.ok(d.releaseReadiness.blockers.includes('WHOLE_UNIVERSE_QUOTE_ROUNDTRIP_NOT_PROVEN'));
+  assert.ok(d.releaseReadiness.blockers.includes('MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED'));
+  const corrupt=snapshot();
+  const row=corrupt.coverage.find(x=>x.market==='CRYPTO_SPOT'&&x.strategy==='MID_LONG');
+  row.publicProviderFailureSummary=summarizePublicProviderFailureReasons([{symbol:'REDACT_ME',reason:'invalid_data',message:'missing bars'}]);
+  const blocked=inspectExactPublicProviderCycle(corrupt,SHA,NOW);
+  assert.equal(blocked.rows.find(x=>x.market==='CRYPTO_SPOT').status,'PROVIDER_BLOCKED');
+  assert.equal(JSON.stringify(blocked.releaseReadiness).includes('REDACT_ME'),false);
+});
+test('member UI first-page evidence does not certify a whole-market release',()=>{
+  const shot=snapshot();
+  shot.profile.surface='MEMBER_UI';
+  shot.profile.timeframes=['5m','4H','1D'];
+  const d=inspectExactPublicProviderCycle(shot,SHA,NOW);
+  assert.equal(d.releaseReadiness.memberUiFirstBatchObserved,true);
+  assert.equal(d.releaseReadiness.ready,false);
+  assert.ok(!d.releaseReadiness.blockers.includes('MEMBER_UI_5M_4H_1D_PUBLIC_QA_NOT_OBSERVED'));
+});
