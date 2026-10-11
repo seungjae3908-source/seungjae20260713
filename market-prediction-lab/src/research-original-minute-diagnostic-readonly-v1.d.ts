@@ -61,6 +61,10 @@ export type ResearchOriginalMinuteDiagnosticResponse={
   reportPublishedAtMs:number|null;
   publicationAgeStatus:'UNKNOWN'|'LOCAL_PUBLICATION_ONLY'|'OLDER_THAN_7_DAYS';
   publicationTimeIndependentlyAttested:false;
+  supplementarySweepReport:ResearchOriginalMinuteDiagnosticSummary|null;
+  supplementarySweepWindowMatches:boolean|null;
+  supplementarySweepPublishedAtMs:number|null;
+  supplementarySweepPublicationAgeStatus:'UNKNOWN'|'LOCAL_PUBLICATION_ONLY'|'OLDER_THAN_7_DAYS';
 };
 export function readResearchOriginalMinuteDiagnosticV1(input:{
   root:string;market:ResearchOriginalMinuteMarket;

@@ -5,7 +5,7 @@
 ## Disconnection fixed
 
 - Offline research CLI PERIOD/SWEEP writes a create-only run result with an arbitrary private filename.
-- Admin GET `/api/research/video/evidence/workspace/original-minute-diagnostics?market=CRYPTO_SPOT` reads a fixed `<MARKET>.json` under server-only `RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT`.
+- Admin GET `/api/research/video/evidence/workspace/original-minute-diagnostics?market=CRYPTO_SPOT` reads fixed private files `<MARKET>.json` (PERIOD) and optional `<MARKET>.SWEEP.json` under server-only `RESEARCH_ORIGINAL_MINUTE_DIAGNOSTIC_ROOT`. Legacy single-file SWEEP remains readable; new SWEEP publication does not replace PERIOD. Both must be 0600, never HTTP-selected.
 - Explicit `PUBLISH` mode validates the source result and atomically publishes **only whitelisted model diagnostic fields** to the fixed 0600 market file. Raw OHLCV, trading credentials, account data, raw strategy parameters, file paths and detailed trades are excluded.
 
 ## Future use ONLY with a new explicit owner approval

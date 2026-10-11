@@ -22,7 +22,8 @@ const SYMBOL=/^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const NONE="NONE";
 const SHA=/^[a-f0-9]{64}$/u;
 const MAX_PUBLICATION_AGE_MS=7*86_400_000;
-const safe=(market,reason,report=null,publication=null)=>Object.freeze({
+const safe=(market,reason,report=null,publication=null,
+  supplementarySweepReport=null,sweepPublication=null)=>Object.freeze({
   schemaVersion:SCHEMA,market,
   available:report!==null,status:report?.status??"BLOCKED_DATA",
   reason,report,
@@ -40,6 +41,14 @@ const safe=(market,reason,report=null,publication=null)=>Object.freeze({
   reportPublishedAtMs:publication?.atMs??null,
   publicationAgeStatus:publication?.ageStatus??"UNKNOWN",
   publicationTimeIndependentlyAttested:false,
+  supplementarySweepReport,
+  supplementarySweepWindowMatches:report?.kind==="PERIOD"
+    &&supplementarySweepReport?.kind==="SWEEP"
+      ?report.selectedStartDate===supplementarySweepReport.selectedStartDate
+        &&report.selectedEndDate===supplementarySweepReport.selectedEndDate
+      :null,
+  supplementarySweepPublishedAtMs:sweepPublication?.atMs??null,
+  supplementarySweepPublicationAgeStatus:sweepPublication?.ageStatus??"UNKNOWN",
 });
 const count=v=>Number.isSafeInteger(v)&&v>=0;
 const optionalCount=v=>v===null||count(v);
@@ -53,7 +62,7 @@ function validDay(v){
 }
 function plain(v){return v!==null&&typeof v==="object"&&!Array.isArray(v);}
 function text(v){return typeof v==="string"&&v.length>0&&v.length<=160;}
-function verifyRaw(raw,market){
+function verifyRaw(raw,market,sweepResult=null){
   if(!plain(raw)||raw.market!==market
     ||![PERIOD,SWEEP].includes(raw.schemaVersion)
     ||raw.executionAuthority!==NONE||raw.profitabilityProven!==false
@@ -71,6 +80,9 @@ function verifyRaw(raw,market){
     ||raw.fullMarketOpportunityDenominatorVerified===true
     ||(raw.sourceModelDigestSha256!==undefined
       &&!SHA.test(raw.sourceModelDigestSha256))
+    ||(raw.sourceSessionIndexDigestSha256!=null
+      &&!SHA.test(raw.sourceSessionIndexDigestSha256))
+    ||(raw.pageChainSha256!=null&&!SHA.test(raw.pageChainSha256))
     ||typeof raw.status!=="string"||!STATUS.test(raw.status)
     ||!["BLOCKED_DATA","SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY",
       "LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY"]
@@ -120,7 +132,7 @@ function verifyRaw(raw,market){
       canonicalPaperResearchReview:Object.freeze((()=>{
         const verdict=reviewOriginalMinuteForCanonicalPaperV1({
           market,symbol:raw.symbol,
-          periodResult:raw,
+          periodResult:raw,sweepResult,
         });
         return {
           status:verdict.status,
@@ -185,6 +197,27 @@ async function checkRoot(root){
     cursor=parent;
   }
 }
+async function readFixedPrivateReport(file){
+  let handle;
+  try{
+    handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW);
+    const st=await handle.stat();
+    if(!st.isFile()||st.nlink!==1||(st.mode&0o077)!==0
+      ||st.size<10||st.size>MAX_FILE_BYTES)
+      throw new TypeError("NATIVE_DIAGNOSTIC_PRIVATE_FILE_INVALID");
+    return JSON.parse(await handle.readFile("utf8"));
+  }catch(error){
+    if(error?.code==="ENOENT")return null;
+    throw error;
+  }finally{await handle?.close();}
+}
+function localPublication(raw){
+  const atMs=raw?.reportPublishedAtMs;
+  return Number.isSafeInteger(atMs)?{
+    atMs,ageStatus:Date.now()-atMs>MAX_PUBLICATION_AGE_MS
+      ?"OLDER_THAN_7_DAYS":"LOCAL_PUBLICATION_ONLY",
+  }:null;
+}
 export async function readResearchOriginalMinuteDiagnosticV1({
   root,market,
 }={}){
@@ -198,28 +231,23 @@ export async function readResearchOriginalMinuteDiagnosticV1({
     if(error?.code==="ENOENT")return safe(market,"PRIVATE_MODEL_REPORT_ROOT_NOT_FOUND");
     throw error;
   }
-  // No user-provided filename, symbol, path, formula or account ID.
-  const file=join(root,market+".json");
-  let handle;
-  try{
-    handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW);
-    const st=await handle.stat();
-    if(!st.isFile()||st.nlink!==1||(st.mode&0o077)!==0
-      ||st.size<10||st.size>MAX_FILE_BYTES)
-      throw new TypeError("NATIVE_DIAGNOSTIC_PRIVATE_FILE_INVALID");
-    const raw=JSON.parse(await handle.readFile("utf8"));
-    const report=validateAndSanitizeOriginalMinuteDiagnosticV1(raw,market);
-    const published=raw.reportPublishedAtMs;
-    const publication=Number.isSafeInteger(published)?{
-      atMs:published,
-      ageStatus:Date.now()-published>MAX_PUBLICATION_AGE_MS
-        ?"OLDER_THAN_7_DAYS":"LOCAL_PUBLICATION_ONLY",
-    }:null;
-    return safe(market,
-      report?"RETROSPECTIVE_MODEL_ONLY_NOT_LIVE_OR_OOS":
-        "OFFLINE_MODEL_BLOCKED_OR_INCOMPLETE",report,publication);
-  }catch(error){
-    if(error?.code==="ENOENT")return safe(market,"PRIVATE_MODEL_REPORT_NOT_FOUND");
-    throw error;
-  }finally{await handle?.close();}
+  // Only server-fixed names. No HTTP filename, path or symbol.
+  const primaryRaw=await readFixedPrivateReport(join(root,market+".json"));
+  const sweepRaw=await readFixedPrivateReport(join(root,market+".SWEEP.json"));
+  if(primaryRaw===null&&sweepRaw===null)
+    return safe(market,"PRIVATE_MODEL_REPORT_NOT_FOUND");
+  if(sweepRaw!==null&&sweepRaw.schemaVersion!==SWEEP)
+    throw new TypeError("NATIVE_DIAGNOSTIC_SWEEP_SIDECAR_SCHEMA_INVALID");
+  // Both fixed files are validated; an unsafe sidecar cannot disappear.
+  if(primaryRaw!==null)verifyRaw(primaryRaw,market);
+  const sweepReport=sweepRaw===null?null:verifyRaw(sweepRaw,market);
+  const raw=primaryRaw?.schemaVersion===PERIOD
+    ?primaryRaw:(sweepReport!==null?sweepRaw:primaryRaw??sweepRaw);
+  const pairedSweep=raw?.schemaVersion===PERIOD?sweepRaw:null;
+  const report=raw===null?null:verifyRaw(raw,market,pairedSweep);
+  const supplementary=report?.kind==="PERIOD"?sweepReport:null;
+  return safe(market,report?"RETROSPECTIVE_MODEL_ONLY_NOT_LIVE_OR_OOS":
+    "OFFLINE_MODEL_BLOCKED_OR_INCOMPLETE",report,
+    localPublication(raw),supplementary,
+    report?.kind==="PERIOD"?localPublication(sweepRaw):null);
 }

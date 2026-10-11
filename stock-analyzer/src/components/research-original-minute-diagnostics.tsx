@@ -52,6 +52,11 @@ type Response = {
   reportPublishedAtMs: number | null;
   publicationAgeStatus: 'UNKNOWN' | 'LOCAL_PUBLICATION_ONLY' | 'OLDER_THAN_7_DAYS';
   publicationTimeIndependentlyAttested: false;
+  supplementarySweepReport?: DiagnosticReport | null;
+  supplementarySweepWindowMatches?: boolean | null;
+  supplementarySweepPublishedAtMs?: number | null;
+  supplementarySweepPublicationAgeStatus?:
+    'UNKNOWN' | 'LOCAL_PUBLICATION_ONLY' | 'OLDER_THAN_7_DAYS';
 };
 const BLOCKER_LABEL: Record<string, string> = {
   INDEPENDENT_WHOLE_VENUE_HISTORICAL_PIT_ROSTER_MISSING: '과거 전체 종목·상장폐지 이력 독립 검증',
@@ -63,6 +68,9 @@ const BLOCKER_LABEL: Record<string, string> = {
   AUTOMATIC_PAPER_FILL_SETTLEMENT_JOURNAL_TELEGRAM_UNVERIFIED: '모의주문·체결·정산·일지·텔레그램 폐루프',
   HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED: '해당 기간 전 종목 PIT 원본 점검 자료',
   ORIGINAL_ONE_MINUTE_MODEL_LINEAGE_OR_COUNTER_UNVERIFIED: '원본 계보·거래 횟수 무결성 보완',
+  HISTORIC_PIT_SWEEP_LINEAGE_OR_COMPLETENESS_UNVERIFIED: '전 종목 점검 범위·원본 계보 미확인',
+  HISTORIC_WHOLE_VENUE_PIT_SWEEP_BLOCKED: '전 종목 점검 자료 불완전',
+  PERIOD_SWEEP_SELECTED_DATE_WINDOW_MISMATCH: '종목 연구·전 종목 점검 기간 불일치',
 };
 const MARKET_LABEL: Record<Market, string> = {
   KR_STOCK: '국내주식', US_STOCK: '미국주식',
@@ -124,6 +132,28 @@ function validResponse(value: unknown, requested: Market): value is Response {
     || !review.blockers.every(v => typeof v === 'string' && /^[A-Z0-9_]{1,120}$/.test(v))
     || review.blockerCount !== review.blockers.length))
     return false;
+  const companion = value.supplementarySweepReport;
+  if (companion != null) {
+    if (r.kind !== 'PERIOD' || !isRecord(companion)
+      || companion.kind !== 'SWEEP'
+      || companion.status !== 'LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY'
+      || companion.executionAuthority !== 'NONE'
+      || companion.profitabilityProven !== false
+      || companion.paperCandidatePASS !== false
+      || companion.actualFillCount !== null
+      || companion.independentOOSProven !== false
+      || companion.independentFullCostProven !== false
+      || companion.originalHistoricalSignalVerified !== false
+      || typeof companion.selectedStartDate !== 'string'
+      || typeof companion.selectedEndDate !== 'string'
+      || !Number.isSafeInteger(companion.pageCountSelfAttested)
+      || !Number.isSafeInteger(companion.sourceOnlyObservedPriceEventLabels)
+      || Number(companion.sourceOnlyObservedPriceEventLabels) < 0
+      || value.supplementarySweepWindowMatches !== (
+        companion.selectedStartDate === r.selectedStartDate
+        && companion.selectedEndDate === r.selectedEndDate
+      )) return false;
+  } else if (value.supplementarySweepWindowMatches != null) return false;
   return r.kind === 'SWEEP'
     ? Number.isSafeInteger(r.sourceOnlyObservedPriceEventLabels)
       && Number(r.sourceOnlyObservedPriceEventLabels) >= 0
@@ -254,6 +284,27 @@ export function ResearchOriginalMinuteDiagnosticsPanel() {
               </div>
             </div>
           )}
+          {report.kind === 'PERIOD' && value?.supplementarySweepReport ? (
+            <div className="rounded-xl border border-card-border bg-background p-3"
+              data-testid="research-native-sweep-companion">
+              <p className="text-xs font-bold">
+                전 종목 PIT 점검 자료 대조 (로컬 근거, 독립 원본 인증 아님)
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {value.supplementarySweepReport.selectedStartDate} ~{' '}
+                {value.supplementarySweepReport.selectedEndDate}
+                {' · '}
+                {value.supplementarySweepWindowMatches
+                  ? '기간 일치' : '기간 불일치 — 함께 승인할 수 없음'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                로컬 점검 페이지 {number(value.supplementarySweepReport.pageCountSelfAttested)}개
+                {' · '}사후 가격 이벤트{' '}
+                {number(value.supplementarySweepReport.sourceOnlyObservedPriceEventLabels)}개
+                {' · '}실제 탐지율·체결 수익 아님
+              </p>
+            </div>
+          ) : null}
           {report.kind === 'PERIOD' && report.canonicalPaperResearchReview ? (
             <div className="rounded-xl border border-card-border bg-background p-3"
               data-testid="research-native-paper-blockers">
