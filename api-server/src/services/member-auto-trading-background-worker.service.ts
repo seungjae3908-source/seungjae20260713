@@ -588,6 +588,23 @@ function recentMovePercent(entry: MemberAutoTradingPaperHandoffEntry, observedAt
   return (midpoint - reference) / reference * 100;
 }
 
+export function automaticTradingStoredEntryReasons(entry: MemberAutoTradingPaperHandoffEntry): string[] {
+  // Capture observed context at plan creation, not a retrospective AI explanation.
+  const learning = record(entry.signal.learningSnapshot);
+  const observedReasons = Array.isArray(learning?.reasons)
+    ? learning.reasons.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      .slice(0, 10).map(value => value.trim().slice(0, 300)) : [];
+  const reasons = [
+    ...observedReasons,
+    '진입 전략: ' + entry.identity.strategyId + ' · 버전 ' + entry.identity.strategyVersion,
+    '신호 방향: ' + entry.identity.direction + ' · 주기 ' + entry.identity.timeframe,
+  ];
+  if (entry.identity.regime) reasons.push('진입 당시 시장 국면: ' + entry.identity.regime);
+  if (finite(entry.riskEvidence.actualRiskPercent)) reasons.push('진입 당시 검증 위험비율: ' + entry.riskEvidence.actualRiskPercent + '%');
+  if (finite(entry.riskEvidence.riskReward1)) reasons.push('진입 당시 목표 1 손익비: ' + entry.riskEvidence.riskReward1);
+  return reasons;
+}
+
 function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
   const learning = record(entry.signal.learningSnapshot);
   const stop = Number(learning?.stopLoss);
@@ -1349,6 +1366,7 @@ function buildPlanInput(
     reduceOnly: false,
     invalidateAction: 'hold',
     signalReasons: [
+      ...automaticTradingStoredEntryReasons(entry),
       accountMode === 'live' ? 'CANONICAL_LIVE_AUTO_CANDIDATE' : 'CANONICAL_PAPER_HANDOFF',
       ...(member.policy.pilotStage === 'formula-ai-exception'
         ? formulaAiReviewReasonsForLive(entry, nowMs) : []),

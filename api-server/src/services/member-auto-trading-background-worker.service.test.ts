@@ -31,6 +31,7 @@ import {
   startMemberAutoTradingBackgroundWorker,
   selectRotatingHandoffEntries,
   formulaAiReviewReasonsForLive,
+  automaticTradingStoredEntryReasons,
   assertCanonicalLiveProviderPositions,
   liveProviderSnapshotReadyForAutomaticWarmup,
   memberTelegramProofMatchesCurrentBinding,
@@ -56,6 +57,21 @@ import {
 } from './admin-four-market-paper-capital.service';
 
 const USER = '11111111-1111-1111-1111-111111111111';
+
+test('stored entry rationale captures actual handoff context and never fabricates chart or AI claims', () => {
+  const entry = { identity: { strategyId: 'trend-breakout-v1', strategyVersion: 'v1',
+    direction: 'BUY', timeframe: '5m', regime: 'TREND' },
+    signal: { learningSnapshot: { reasons: ['실제 저장된 진입 조건', null, ''] } },
+    riskEvidence: { actualRiskPercent: 0.2, riskReward1: 2 } } as any;
+  const reasons = automaticTradingStoredEntryReasons(entry);
+  assert.equal(reasons[0], '실제 저장된 진입 조건');
+  assert.ok(reasons.includes('진입 전략: trend-breakout-v1 · 버전 v1'));
+  assert.ok(reasons.includes('진입 당시 검증 위험비율: 0.2%'));
+  assert.ok(reasons.includes('진입 당시 목표 1 손익비: 2'));
+  const withoutDescription = automaticTradingStoredEntryReasons({ ...entry, signal: { learningSnapshot: null },
+    riskEvidence: { actualRiskPercent: null, riskReward1: null } });
+  assert.doesNotMatch(withoutDescription.join('|'), /거래량|캔들|AI 승인|위험비율/);
+});
 
 function policy(): TradingPolicy {
   return normalizeTradingPolicy({

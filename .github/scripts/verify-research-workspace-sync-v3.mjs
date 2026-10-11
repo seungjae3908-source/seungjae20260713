@@ -318,6 +318,19 @@ const formulaAiDriftReviewed=[
  'api-server/test.mjs',
 ];
 const automaticTradingDriftReviewed=[
+ // Read-only holdings UI and entry evidence, with no new database or financial scope.
+ 'stock-analyzer/src/components/bottom-nav.tsx',
+ 'stock-analyzer/e2e/app-navigation.spec.ts',
+ 'api-server/src/services/trading-holdings-readonly.service.ts',
+ 'api-server/src/features/account-readonly/account-readonly.contract.ts',
+ 'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
+ 'api-server/src/features/account-readonly/providers/toss-readonly.provider.ts',
+ 'stock-analyzer/src/components/trading-holdings-panel.tsx',
+ 'stock-analyzer/src/pages/paper-trading.tsx',
+ 'stock-analyzer/src/pages/technical-workspace.tsx',
+ 'stock-analyzer/src/lib/app-navigation.ts',
+ 'stock-analyzer/e2e/staging-auto-live-only.spec.ts',
+ 'stock-analyzer/e2e/production-auto-live-only-qa.spec.ts',
  // Manual holdings isolation is Trading-only; both activation guards below
  // remain mandatory when either runtime or receipt validation changes.
  '.github/scripts/verify-production-preactivation-evidence.cjs',
