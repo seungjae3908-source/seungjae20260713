@@ -133,3 +133,15 @@ test('four-market automatic gate keeps live auto independent from Paper runtime 
   assert.ok(worker.includes('paperExitOrders'));
   assert.ok(worker.includes('liveExitOrders'));
 });
+
+
+test('automatic Paper cost issuer is protected, market-scoped and blocks unknown settlement', () => {
+  const worker = read('api-server/src/services/member-auto-trading-background-worker.service.ts');
+  const execution = read('api-server/src/services/trade-execution.service.ts');
+  assert.ok(worker.includes('costPolicy: async (plan, nowMs) => protectedAutomaticPaperCostPolicyV1(plan, nowMs)'));
+  assert.ok(execution.includes('MEMBER_AUTO_PAPER_COST_RULES_V1'));
+  assert.ok(execution.includes("plan.executionMode !== 'automatic'"));
+  assert.ok(execution.includes('if (seen.has(identity)) return null'));
+  assert.ok(execution.includes('return matches.length === 1 ? matches[0]! : null'));
+  assert.ok(execution.includes("taxAmount == null ? null : costPolicy?.policyId"));
+});
