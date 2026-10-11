@@ -131,3 +131,31 @@ test("private OPPORTUNITIES mode does not infer price events from absent origina
   assert.equal(statSync(output).mode&0o077,0);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+
+test("private BATCH job checks historical PIT/source work without advancing to Drift, Paper, or provider GET",async()=>{
+ const root=dir(),input=join(root,"batch-input.json"),out=join(root,"batch-result.json");
+ try{
+  writePrivate(input,{mode:"BATCH",root,market:"CRYPTO_SPOT",
+    manifest:roster(),
+    researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+    sourceSessions:[],asOfMs:D+5*DAY,timeframe:"5m",
+    direction:"LONG",initialCapitalKRW:1_000_000,leverage:1,
+  });
+  const response=await run({input,output:out});
+  assert.equal(response.mode,"BATCH");
+  assert.equal(response.status,"BLOCKED_DATA");
+  const result=JSON.parse(readFileSync(out,"utf8"));
+  assert.equal(result.sourceTasksRequested,1);
+  assert.equal(result.inspectedSourceTasks,1);
+  assert.equal(result.blockedSourceTasks,1);
+  assert.equal(result.sourceOnlyModeledTradeCount,null);
+  assert.equal(result.actualMarketWideOpportunityCount,null);
+  assert.equal(result.executionAuthority,"NONE");
+  assert.equal(result.paperAdmissionAllowed,false);
+  assert.equal(result.providerGETCount,0);
+  assert.equal(result.profitabilityProven,false);
+  assert.equal(statSync(out).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

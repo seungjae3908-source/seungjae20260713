@@ -60,6 +60,25 @@ function fixture(market,{retro=false,missing=false}={}){
   }];
   const stockCalendar=market.endsWith("STOCK")?{
     market,tradingDates:["2015-01-05","2026-09-18","2028-01-03"],
+    sessions:[{
+      tradingDateLocal:"2015-01-05",
+      startMs:Date.parse(market==="KR_STOCK"
+        ?"2015-01-05T00:00:00Z":"2015-01-05T14:30:00Z"),
+      endMs:Date.parse(market==="KR_STOCK"
+        ?"2015-01-05T00:30:00Z":"2015-01-05T15:00:00Z"),
+      kind:"REGULAR",timeZone:p.zone,
+    },{
+      tradingDateLocal:"2026-09-18",
+      startMs:session.startMs,endMs:session.endMs,
+      kind:session.kind,timeZone:p.zone,
+    },{
+      tradingDateLocal:"2028-01-03",
+      startMs:Date.parse(market==="KR_STOCK"
+        ?"2028-01-03T00:00:00Z":"2028-01-03T14:30:00Z"),
+      endMs:Date.parse(market==="KR_STOCK"
+        ?"2028-01-03T00:30:00Z":"2028-01-03T15:00:00Z"),
+      kind:"REGULAR",timeZone:p.zone,
+    }],
   }:null;
   const request=(folder,override={})=>({
     root:folder,market,symbol:p.symbol,manifest,sessionSources,
@@ -222,6 +241,42 @@ test("US and futures require explicit modeled quote-to-KRW FX; missing rate cann
       assert.equal(noFX.actualFillCount,null);
       await assert.rejects(()=>replay(x.request(folder,{fxRateKRWPerQuote:-1300})),
         /PRIVATE_REPLAY_MODELED_FX_RATE_INVALID/);
+    }
+  }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+
+
+test("KR/US stock replay rejects a missing PREMARKET or AFTERMARKET session even when the day exists",async()=>{
+  const folder=root();
+  try {
+    for(const market of ["KR_STOCK","US_STOCK"]){
+      const x=fixture(market), original=x.source;
+      const base=x.request(folder);
+      const beforeStart=original.session.startMs-30*60_000;
+      const afterStart=original.session.endMs;
+      const calendar={
+        ...base.stockCalendar,
+        sessions:base.stockCalendar.sessions.toSpliced(1,1,
+          {tradingDateLocal:"2026-09-18",startMs:beforeStart,
+            endMs:original.session.startMs,kind:"PREMARKET",
+            timeZone:original.session.timeZone},
+          base.stockCalendar.sessions[1],
+          {tradingDateLocal:"2026-09-18",startMs:afterStart,
+            endMs:afterStart+30*60_000,kind:"AFTERMARKET",
+            timeZone:original.session.timeZone}),
+      };
+      await persistResearchMinuteSessionV1({root:folder,source:original});
+      const result=await replay({...base,stockCalendar:calendar});
+      assert.equal(result.status,"BLOCKED_DATA",market);
+      assert.equal(result.reason,"STOCK_EXPECTED_ORIGINAL_SESSION_MISSING",market);
+      assert.equal(result.missingExpectedStockSessions,2,market);
+      assert.equal(result.modeledNetPnlKRW,null,market);
+      assert.equal(result.profitabilityProven,false,market);
+      const altered=[...base.sessionSources,{...base.sessionSources[0],
+        startMs:base.sessionSources[0].startMs+60_000}];
+      await assert.rejects(()=>replay({...base,sessionSources:altered}),
+        /PRIVATE_REPLAY_SOURCE_SESSION_INVALID|PRIVATE_REPLAY_UNEXPECTED_OR_DUPLICATE_STOCK_SESSION/);
     }
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
