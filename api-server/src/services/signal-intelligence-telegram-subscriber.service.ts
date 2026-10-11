@@ -2,6 +2,8 @@ import path from 'node:path';
 import { constants as fileConstants } from 'node:fs';
 import { lstat, open, mkdir, rename, writeFile } from 'node:fs/promises';
 import { logger } from '../lib/logger';
+import {boundedTelegramV3Json,validTelegramV3CurrentSource}
+ from './telegram-v3-current-source.service';
 import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
@@ -376,13 +378,14 @@ export class SignalIntelligenceTelegramSubscriber {
     try {
       const response = await this.fetchImpl(
         resolveSignalIntelligenceTelegramEndpoint(process.env.SIGNAL_INTELLIGENCE_URL),
-        { method: 'GET', signal: controller.signal, headers: { accept: 'application/json' } });
+        { method: 'GET', redirect: 'error', signal: controller.signal,
+          headers: { accept: 'application/json' } });
       if (!response.ok) {
         result.sourceStatus = response.status === 503 ? 'HTTP_503' : 'HTTP_ERROR';
         return result;
       }
       let envelope: V3Envelope;
-      try { envelope = await response.json() as V3Envelope; }
+      try { envelope = await boundedTelegramV3Json(response) as V3Envelope; }
       catch { result.sourceStatus = 'INVALID_RESPONSE'; return result; }
       const snapshot = envelope?.snapshot;
       if (envelope?.ok !== true || envelope.executionAuthority !== 'NONE'
@@ -396,6 +399,12 @@ export class SignalIntelligenceTelegramSubscriber {
       }
       // Preflight must precede member watchlist fan-out as well as public sends.
       await this.store.ready();
+      // Strict current-page evidence before ANY member watchlist or public
+      // Telegram fanout; do not interpret HTTP 200 as a verified source.
+      if (!validTelegramV3CurrentSource(snapshot, now.getTime())) {
+        result.sourceStatus = 'INVALID_RESPONSE';
+        return result;
+      }
       sourceReady = true;
       result.sourceStatus = 'READY';
       for (const event of snapshot.events) {
