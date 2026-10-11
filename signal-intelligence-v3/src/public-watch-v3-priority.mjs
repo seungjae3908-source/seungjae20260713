@@ -220,13 +220,15 @@ export function selectV3OutOfCursorResearch(handoff){
       ||row.executionAuthority!=='NONE'
       ||typeof row.score!=='number'||!Number.isFinite(row.score)
       ||row.score<0.7||row.score>10000
+      ||!Number.isSafeInteger(row.sourceAtMs)||row.sourceAtMs<=0
       ||typeof row.watchEventId!=='string'||!DIGEST.test(row.watchEventId)
       ||(market==='spot'&&row.direction!=='UP')
       ||(market==='futures'&&!['UP','DOWN'].includes(row.direction))
       ||verifiedInPage[market].has(row.symbol))continue;
     out.push(Object.freeze({
       market:row.market,symbol:row.symbol,direction:row.direction,
-      watchEventId:row.watchEventId,status:'RESEARCH_ONLY',
+      watchEventId:row.watchEventId,sourceAtMs:row.sourceAtMs,
+      status:'RESEARCH_ONLY',
       executionAuthority:'NONE',
     }));
     used.add(market);
