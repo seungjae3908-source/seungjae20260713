@@ -179,3 +179,45 @@ test('HTTP Retry-After seconds, dates and malformed values honor conservative 42
   }
   assert.throws(() => parsePublicRetryAfterMs('2', Number.NaN), /CLOCK_INVALID/);
 });
+
+test('known-partial KRX eligible page rotates observation-only despite inherited execution.partial', () => {
+  const evidence = result({
+    dataState: 'partial',
+    universe: { ...result().universe, partial: true },
+    execution: { ...result().execution, partial: true },
+  });
+  const status = classifyPublicCycleLaneStatus(evidence);
+  assert.equal(status, 'BLOCKED_DATA');
+  const cursor = decidePublicCycleCursor({ response: evidence, status, cursor: 0 });
+  assert.equal(cursor.nextCursor, 20);
+  assert.equal(cursor.blockedObservationOnly, true);
+  assert.equal(cursor.reason, 'BLOCKED_RESEARCH_ROTATION_ONLY');
+  assert.equal(evidence.cards.length, 0);
+});
+
+test('no source-partial waiver for aborted or timed-out pages, failed or incomplete work', () => {
+  const baseline = result({
+    dataState: 'partial',
+    execution: { ...result().execution, partial: true },
+  });
+  for (const broken of [
+    { ...baseline, execution: { ...baseline.execution, cancelled: true } },
+    { ...baseline, execution: { ...baseline.execution, timedOut: true } },
+    { ...baseline, execution: { ...baseline.execution, duplicate: true } },
+    { ...baseline, execution: { ...baseline.execution, completedCount: 19 } },
+    { ...baseline, execution: { ...baseline.execution, startedCount: 19 } },
+    { ...baseline, execution: { ...baseline.execution, timeoutCount: 1 } },
+    { ...baseline, execution: { ...baseline.execution, providerErrorCount: 1 } },
+    { ...baseline, universe: { ...baseline.universe, stale: true } },
+  ]) {
+    const status = classifyPublicCycleLaneStatus(broken);
+    assert.equal(status, 'SEARCH_FAILURE');
+    const cursor = decidePublicCycleCursor({ response: broken, status, cursor: 0 });
+    assert.equal(cursor.nextCursor, 0);
+    assert.equal(cursor.blockedObservationOnly, false);
+  }
+  const completeRoster = {
+    ...baseline, universe: { ...baseline.universe, partial: false },
+  };
+  assert.equal(classifyPublicCycleLaneStatus(completeRoster), 'SEARCH_FAILURE');
+});

@@ -47,7 +47,14 @@ function pageEvidenceComplete(universe, execution) {
     || !integer(execution.startedCount) || !integer(execution.completedCount)
     || execution.startedCount !== execution.requestedCount
     || execution.completedCount !== execution.requestedCount
-    || execution.partial === true) return false;
+    // Stock Scanner deliberately computes execution.partial as
+    // raw.partial || universe.partial. A verified fully-attempted eligible
+    // page with a known partial KRX roster is still BLOCKED_DATA, not a
+    // technical SEARCH_FAILURE. Permit only its research-only cursor; never
+    // grant a no-trade verdict, candidate or economic credit.
+    || (execution.partial === true && universe.partial !== true)
+    || execution.cancelled === true || execution.timedOut === true
+    || execution.duplicate === true) return false;
   const end = universe.cursor + execution.requestedCount;
   if (end > universe.totalCount) return false;
   if (universe.nextCursor === null) return end === universe.totalCount;
