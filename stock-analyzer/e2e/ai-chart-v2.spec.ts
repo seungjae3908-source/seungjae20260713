@@ -200,7 +200,6 @@ test('desktop AI Chart 2.0 preserves one initial chart request, loads MTF on dem
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
 
   await page.goto(chartUrl);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
   await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
   await expect(page.getByTestId('strategy-mode-SCALPING')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('mtf-not-loaded')).toBeVisible();
@@ -255,7 +254,6 @@ test('current AI evidence fails closed on stale shared chart data without duplic
   await page.setViewportSize({ width: 1440, height: 960 });
   const mock = await installMocks(context, { ageMs: 60 * 60_000 });
   await page.goto(chartUrl);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
 
   const evidence = page.getByTestId('ai-evidence-panel');
   await expect(evidence).toContainText('WAIT');
@@ -269,7 +267,6 @@ test('current AI evidence fails closed when the shared chart provider is unavail
   await page.setViewportSize({ width: 1440, height: 960 });
   const mock = await installMocks(context, { unavailable: true });
   await page.goto(chartUrl);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
 
   const evidence = page.getByTestId('ai-evidence-panel');
   await expect(evidence).toContainText('WAIT');
@@ -299,7 +296,6 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
   await page.getByRole('tab', { name: '현재 판단', exact: true }).click();
   await expect(page.getByTestId('unified-analysis-chart')).toBeHidden();
   await expect(page.getByTestId('unified-analysis-chart')).toHaveCount(1);
-  await page.getByText('분석 근거 더 보기', { exact: true }).click();
   await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
   // The read-only signal is portalled into the preserved, currently hidden
   // chart. Returning to its tab must show it without another chart request.
