@@ -444,6 +444,33 @@ test("custom one-day real research scope does not become 3-year proof from fixtu
  assert.equal(a.actualFillCount,null);
  assert.equal(a.trueMarketWideRecall,null);
 });
+test("selected source-attested 1-day research is not called 3 years or real-market PASS",()=>{
+  const day=START,period={startDate:"2025-02-03",endDate:"2025-02-03"};
+  const historical=fullCryptoSourceAttestedBenchmarkV1();
+  const receipt=historical.receipts[String(day)];
+  assert.ok(receipt,"fixture day must be present in legacy history");
+  const r=four({researchWindow:period,
+    requestedTradingDaysByMarket:{CRYPTO_SPOT:[day]},
+    dailyReceiptsByMarket:{CRYPTO_SPOT:{[String(day)]:receipt}},
+  });
+  const result=r.markets.CRYPTO_SPOT;
+  assert.equal(result.requestedTradingDays,1);
+  assert.equal(result.sourceAttestedPriceJoinedDays,1);
+  assert.equal(result.lifecycleArchiveStatus,
+    "SOURCE_ATTESTED_FULL_SELECTED_WINDOW_LIFECYCLE_ONLY");
+  assert.equal(result.benchmarkPeriodSourceAttestedPriceJoined,true);
+  assert.equal(result.independentlyAuthenticatedPITAndPriceEvidence,false);
+  assert.equal(result.actualMarketWideOpportunityCount,null);
+  assert.equal(result.trueMarketWideRecall,null);
+  assert.equal(r.profitabilityProven,false);
+  const outside=four({researchWindow:period,
+    requestedTradingDaysByMarket:{US_STOCK:[day+D]}});
+  assert.equal(outside.markets.US_STOCK.reason,
+    "REQUESTED_DATE_OUTSIDE_SELECTED_RESEARCH_WINDOW");
+  assert.equal(outside.markets.US_STOCK.benchmarkCalendarStatus,
+    "REQUESTED_DATES_OUTSIDE_SELECTED_WINDOW");
+});
+
 test("invalid date / inverted range / half-supplied range cannot run the scanner",()=>{
  for(const range of [
   {startDate:"2025-02-30",endDate:"2025-03-01"},
