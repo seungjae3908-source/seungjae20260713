@@ -47,6 +47,38 @@ function verifiedLanes(coverage){
   return unique.size===LANES.length?unique:null;
 }
 
+
+const VALID_SOURCE = Object.freeze({
+  KR: new Set(['krx-symbol-master']),
+  US: new Set(['nasdaq-trader-public-directory','finnhub-symbol-master']),
+  SPOT: new Set(['upbit-public']),
+  FUTURES: new Set(['bitget-public']),
+});
+function validSource(lane){
+  const key=String(lane?.laneId??'').split('_')[0];
+  return VALID_SOURCE[key]?.has(lane?.universeSource)===true;
+}
+/** All source-backed *current pages* are healthy; does not prove every
+ * symbol in each full roster has ever been scanned. */
+export function currentPublicV3CycleReady(coverage){
+  const lanes=verifiedLanes(coverage);
+  return Boolean(lanes && [...lanes.values()].every(lane=>{
+    if(!validSource(lane)||lane.lastGoodPreserved!==false
+      ||lane.cursorRotatedBlockedOnly===true
+      ||lane.responseDataState!=='complete'
+      ||lane.universePartial!==false||lane.universeStale!==false
+      ||lane.status!=='VALID_NO_TRADE'&&lane.status!=='CANDIDATES_AVAILABLE'
+      ||!isCount(lane.scannedCards)||!isCount(lane.retainedFromBatch)
+      ||lane.retainedFromBatch>lane.scannedCards)return false;
+    const page={...lane,status:'CANDIDATES_AVAILABLE'};
+    return verifiedCurrentLane(page) &&
+      (lane.status!=='VALID_NO_TRADE'||
+        (lane.scannedCards===0&&lane.retainedFromBatch===0)) &&
+      (lane.status!=='CANDIDATES_AVAILABLE'||
+        (lane.scannedCards>0&&lane.retainedFromBatch>0));
+  }));
+}
+
 /** Conservative fresh publication view. Prior research rows are kept only in
  * snapshot.rows/stateById; lists and notifications require exact current page.
  */
@@ -63,7 +95,7 @@ export function currentPagePublication(snapshot,coverage){
   for(const row of snapshot.rows){
     const origin=row?.provenance;
     const lane=lanes.get(origin?.laneId);
-    if(!verifiedCurrentLane(lane)||origin.cursor!==lane.cursorBefore
+    if(!validSource(lane)||!verifiedCurrentLane(lane)||origin.cursor!==lane.cursorBefore
       ||!row?.id||row.state!=='CANDIDATE'||row.dataStatus!=='READY')
       continue;
     permitted.add(row.id);
