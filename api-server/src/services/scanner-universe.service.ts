@@ -81,6 +81,19 @@ export function classifyScannerUniverseSource(
   };
 }
 
+// A provider outage invalidates the CURRENT listing assertion even if a
+// previously verified roster is still useful for cautious symbol lookup.
+// Apply identically to failed/partial provider refresh paths.
+export function markScannerUniverseFallbackUnknown(
+  entries: readonly ScannerUniverseEntry[],
+): ScannerUniverseEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    listingStatus: 'UNKNOWN' as const,
+    source: 'last-good-cache' as const,
+  }));
+}
+
 function catalogFallback(market: MarketScope): ScannerUniverseEntry[] {
   return CATALOG
     .filter((entry) => entry.market === market)
@@ -276,10 +289,7 @@ export const ScannerUniverseService = {
         // a subset or a curated list. No stale entry remains LISTED.
         if (evidence.partial && cached?.entries.length) {
           return {
-            entries: cached.entries.map((entry) => ({
-              ...entry, listingStatus: 'UNKNOWN' as const,
-              source: 'last-good-cache' as const,
-            })),
+            entries: markScannerUniverseFallbackUnknown(cached.entries),
             totalCount: cached.entries.length,
             rawTotalCount: cached.rawTotalCount,
             explainedExcludedCount: cached.explainedExclusions.length,
@@ -318,7 +328,7 @@ export const ScannerUniverseService = {
 
     if (cached?.entries.length) {
       return {
-        entries: cached.entries.map((entry) => ({ ...entry, source: 'last-good-cache' })),
+        entries: markScannerUniverseFallbackUnknown(cached.entries),
         totalCount: cached.entries.length,
         rawTotalCount: cached.rawTotalCount,
         explainedExcludedCount: cached.explainedExclusions.length,
