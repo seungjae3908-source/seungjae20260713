@@ -13,6 +13,7 @@ export type ResearchOriginalMinutePublisherResult={
   paperAdmissionAllowed:false;orderSubmitted:false;
   realOrders:false;liveTrading:false;autoTrading:false;
   sourceResultDigestSha256?:string;
+  sourceModelDigestSha256?:string;
   reportPublishedAtMs?:number;
   reportMarket?:ResearchOriginalMinuteMarket;
 };

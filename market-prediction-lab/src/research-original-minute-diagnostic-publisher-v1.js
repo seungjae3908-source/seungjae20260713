@@ -65,7 +65,7 @@ async function readPrivateOriginal(path){
     return {data,sourceDigestSha256:digest(body)};
   }finally{await file?.close();}
 }
-async function optionalOldReport(path){
+async function optionalOldReport(path,expectedMarket){
   let fd;
   try{
     fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
@@ -75,9 +75,12 @@ async function optionalOldReport(path){
       fail("RESEARCH_PUBLISH_EXISTING_REPORT_UNSAFE");
     const raw=await fd.readFile("utf8");
     const old=JSON.parse(raw);
-    if(!MARKETS.has(old.market))
-      fail("RESEARCH_PUBLISH_EXISTING_REPORT_MARKET_INVALID");
-    validateAndSanitizeOriginalMinuteDiagnosticV1(old,old.market);
+    if(!MARKETS.has(old.market)||old.market!==expectedMarket)
+      fail("RESEARCH_PUBLISH_EXISTING_REPORT_MARKET_MISMATCH");
+    validateAndSanitizeOriginalMinuteDiagnosticV1(old,expectedMarket);
+    if(old.sourceModelDigestSha256!==undefined
+      &&!/^[0-9a-f]{64}$/u.test(old.sourceModelDigestSha256))
+      fail("RESEARCH_PUBLISH_EXISTING_MODEL_IDENTITY_INVALID");
     // Migration of previously hand-copied (pre-publisher) immutable report:
     // old legacy entries have no timestamp. They are accepted for explicit
     // replacement only after FULL safety validation, never silently reused.
@@ -168,7 +171,23 @@ export async function publishResearchOriginalMinuteDiagnosticV1({
   const source=await readPrivateOriginal(sourceResultPath);
   const projected=publicationProjection(source.data,market,
     source.sourceDigestSha256,now);
-  const encoded=JSON.stringify(projected)+"\n";
+  // A canonical model-evidence identity ignores result-file whitespace and
+  // irrelevant private extra fields, but includes immutable source lineage
+  // when a real new historical corpus is replayed. This prevents changing
+  // only a publication timestamp to disguise stale source as a fresh run.
+  const lineage=source.data.sourceSessionIndexDigestSha256
+    ??source.data.sourceDigestChainSha256
+    ??source.data.pageChainSha256??null;
+  if(lineage!==null
+    &&(typeof lineage!=="string"||!/^[0-9a-f]{64}$/u.test(lineage)))
+    fail("RESEARCH_PUBLISH_ORIGINAL_LINEAGE_INVALID");
+  const stable={...projected};
+  delete stable.reportPublishedAtMs;
+  delete stable.sourceResultDigestSha256;
+  const modelDigest=digest(JSON.stringify({stable,lineage}));
+  const encoded=JSON.stringify({
+    ...projected,sourceModelDigestSha256:modelDigest,
+  })+"\n";
   if(Buffer.byteLength(encoded)>MAX_OUT_BYTES)
     fail("RESEARCH_PUBLISH_SANITIZED_REPORT_TOO_LARGE");
   const lockPath=join(reportRoot,"."+market+".publish.lock");
@@ -176,11 +195,15 @@ export async function publishResearchOriginalMinuteDiagnosticV1({
     |constants.O_EXCL|constants.O_NOFOLLOW,0o600);
   let tempPath=null;
   try{
-    const previous=await optionalOldReport(target);
+    const previous=await optionalOldReport(target,market);
     if(previous!==null&&!allowReplaceExisting)
       return blocked(market,"EXPLICIT_EXISTING_MARKET_REPORT_REPLACEMENT_REQUIRED");
     if(previous!==null&&previous.reportPublishedAtMs>=now)
       return blocked(market,"STALE_OR_DUPLICATED_REPORT_PUBLICATION_TIME");
+    if(previous!==null&&(previous.sourceResultDigestSha256
+      ===source.sourceDigestSha256
+      ||previous.sourceModelDigestSha256===modelDigest))
+      return blocked(market,"PREVIOUSLY_PUBLISHED_SOURCE_MODEL_NOT_NEW_EVIDENCE");
     tempPath=join(reportRoot,"."+market+"."+randomUUID()+".new");
     let out;
     try{
@@ -203,6 +226,7 @@ export async function publishResearchOriginalMinuteDiagnosticV1({
       status:"LOCAL_SANITIZED_DIAGNOSTIC_PUBLISHED",
       published:true,reportReplaced:previous!==null,
       sourceResultDigestSha256:source.sourceDigestSha256,
+      sourceModelDigestSha256:modelDigest,
       reportPublishedAtMs:now,
       reportMarket:market,
     });
