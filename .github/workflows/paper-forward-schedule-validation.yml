@@ -254,6 +254,7 @@ on:
       - 'market-prediction-lab/src/adaptive-multi-evidence-*.js'
       - 'market-prediction-lab/tests/adaptive-multi-evidence-*.test.js'
       - 'market-prediction-lab/tests/paper-*.test.js'
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
