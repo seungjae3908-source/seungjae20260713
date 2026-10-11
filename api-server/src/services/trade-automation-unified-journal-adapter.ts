@@ -82,6 +82,10 @@ export function tradeAutomationJournalPayloadsFromSnapshot(
       schemaVersion: 1,
       recordType: 'unified_trade_order',
       source: sourceForPlan(plan),
+      // Owner-scoped, read-only join key for the durable execution mirror.
+      // The broker order ID is retained for provider/cost lineage; only the
+      // server-owned canonical order ID may deduplicate a Paper mirror.
+      canonicalOrderId: plan.accountMode === 'paper' ? order.id : null,
       broker,
       accountIdMasked: maskBrokerAccountReference(broker, userId),
       market,

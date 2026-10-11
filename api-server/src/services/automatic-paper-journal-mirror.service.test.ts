@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  AUTOMATIC_PAPER_JOURNAL_MIRROR_VERSION,
+  reconcileCanonicalPaperJournalMirrors,
+} from './automatic-paper-journal-mirror.service';
+
+function canonical(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1, recordType: 'unified_trade_order',
+    source: 'APP_PAPER', broker: 'UPBIT', market: 'CRYPTO_SPOT',
+    symbol: 'BTC', side: 'BUY', positionSide: 'LONG',
+    positionEffect: 'OPEN', currency: 'KRW',
+    brokerOrderId: 'external-or-paper-provider-' + id,
+    clientOrderId: 'client-' + id, canonicalOrderId: id,
+    canonicalLineage: { orderIds: [id] },
+    filledQuantity: 1, averageFillPrice: 100,
+    status: 'FILLED', accountIdMasked: 'UPBIT-****-owner-hash',
+    ...overrides,
+  };
+}
+function mirror(id: string, overrides: Record<string, unknown> = {}) {
+  const { canonicalOrderId: _key, canonicalLineage: _lineage, ...other } = canonical(id);
+  return {
+    ...other, brokerOrderId: id, clientOrderId: id,
+    accountIdMasked: 'UPBIT-****-UNAVAILABLE',
+    ...overrides,
+  };
+}
+
+test('15 persisted auto Paper mirrors are suppressed by exact internal ID; unmatched canonical orders remain visible', () => {
+  const projected = Array.from({ length: 17 }, (_, i) => canonical('paper-' + i));
+  const stored = Array.from({ length: 15 }, (_, i) => mirror('paper-' + i));
+  const result = reconcileCanonicalPaperJournalMirrors(stored, projected);
+  assert.equal(result.payloads.length, 17);
+  assert.equal(result.audit.contract, AUTOMATIC_PAPER_JOURNAL_MIRROR_VERSION);
+  assert.equal(result.audit.persistedMirrorsSuppressed, 15);
+  assert.equal(result.audit.canonicalOrdersWithoutPersistedMirror, 2);
+  assert.equal(result.audit.unmatchedPersistedPaperRows, 0);
+  assert.equal(result.audit.financialMutationCount, 0);
+  assert.equal(result.audit.independentSettlementVerified, false);
+  assert.equal(result.audit.executionAuthority, 'NONE');
+  assert.equal(result.payloads[0], projected[0]);
+});
+test('other markets, futures LONG/SHORT and live rows retain independent source scope', () => {
+  const projected = [
+    canonical('kr', {broker:'TOSS',market:'KR_STOCK',symbol:'005930'}),
+    canonical('us', {broker:'KIWOOM',market:'US_STOCK',symbol:'AAPL',currency:'USD'}),
+    canonical('short', {broker:'BITGET',market:'CRYPTO_FUTURES',symbol:'BTCUSDT',
+      currency:'USDT',side:'SELL',positionSide:'SHORT'}),
+    canonical('long', {broker:'BITGET',market:'CRYPTO_FUTURES',symbol:'ETHUSDT',
+      currency:'USDT',side:'BUY',positionSide:'LONG'}),
+  ];
+  const stored = [
+    ...projected.map((p, i) => mirror(['kr','us','short','long'][i], {
+      broker:p.broker,market:p.market,symbol:p.symbol,currency:p.currency,
+      side:p.side,positionSide:p.positionSide,
+    })),
+    {recordType:'unified_trade_order',source:'APP_AUTO',brokerOrderId:'live-1'},
+    mirror('historical-not-in-current-ledger'),
+  ];
+  const result = reconcileCanonicalPaperJournalMirrors(stored, projected);
+  assert.equal(result.audit.persistedMirrorsSuppressed, 4);
+  assert.equal(result.audit.unmatchedPersistedPaperRows, 1);
+  assert.equal(result.payloads.length, 6);
+  assert.ok(result.payloads.some(p => p.source==='APP_AUTO'));
+});
+test('tampered stored side/market/quantity/price never hides a canonical Paper conflict', () => {
+  const projected = [canonical('fixed')];
+  for (const extra of [
+    {market:'CRYPTO_FUTURES'}, {side:'SELL'},
+    {positionSide:'SHORT'}, {symbol:'ETH'},
+    {filledQuantity:2}, {averageFillPrice:200},
+    {status:'REJECTED'},
+  ]) {
+    assert.throws(
+      () => reconcileCanonicalPaperJournalMirrors([mirror('fixed', extra)], projected),
+      /PAPER_JOURNAL_MIRROR_CANONICAL_CONFLICT/,
+    );
+  }
+});
+test('canonical identity is attested by its own order lineage and never inferred from symbol/time', () => {
+  assert.throws(() => reconcileCanonicalPaperJournalMirrors([], [
+    canonical('one', {canonicalOrderId:'two'}),
+  ]), /PAPER_JOURNAL_CANONICAL_ORDER_REFERENCE_REQUIRED/);
+  assert.throws(() => reconcileCanonicalPaperJournalMirrors([], [
+    canonical('one'),canonical('one'),
+  ]), /PAPER_JOURNAL_CANONICAL_ORDER_COLLISION/);
+  const x = reconcileCanonicalPaperJournalMirrors([
+    mirror('not-same-order'),
+  ], [canonical('same-symbol-and-time')]);
+  assert.equal(x.audit.persistedMirrorsSuppressed,0);
+  assert.equal(x.audit.unmatchedPersistedPaperRows,1);
+  assert.equal(x.payloads.length,2);
+});
+test('partial fill mirror does not manufacture a second fill when canonical order closes', () => {
+  const row = mirror('partial', {status:'PARTIALLY_FILLED',filledQuantity:0.5,averageFillPrice:101});
+  const actual = reconcileCanonicalPaperJournalMirrors([row],[canonical('partial')]);
+  assert.equal(actual.payloads.length,1);
+  assert.equal(actual.audit.persistedMirrorsSuppressed,1);
+});
