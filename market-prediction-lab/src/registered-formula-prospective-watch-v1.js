@@ -136,10 +136,14 @@ export function observeRegisteredFormulaClosedCandleV1(input={}) {
     ||signal.formulaHash!==entry.strategyHash
     ||signal.parameterIdentity!==entry.parameterIdentity)
     return block('FORMULA_WATCH_EVALUATOR_SIGNAL_IDENTITY_INVALID');
+  // Idempotency key: one formula + market/symbol + side/timeframe + closed bar.
+  // Do not include mutable quote timestamps, provider failover, warmup candles
+  // or provider corrections: repeated polling must never mint a new signal ID
+  // for the same bar. Independent evidence and Paper admission remain separate.
   const id=digest(sorted({
     registryId:entry.registryId,researchCodeSha,market,symbol,direction,timeframe,
-    source:publicEvidence.source,asOfMs:publicEvidence.asOfMs,
-    bars:candles.map(c=>[c.timestamp,c.open,c.high,c.low,c.close,c.volume]),
+    strategyHash:entry.strategyHash,
+    signalBarOpenedAtMs:last.timestamp,signalBarClosedAtMs:closedAt,
   }));
   return result(input,'OBSERVED_CLOSED_CANDLE_SIGNAL',
     'PUBLIC_FORMULA_SIGNAL_ONLY_NO_PAPER_ORDER',{atMs:closedAt,id});
