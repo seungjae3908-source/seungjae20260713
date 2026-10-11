@@ -17,6 +17,9 @@ const coverage=()=>({
       {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
       market,...mode,totalUniverse:100,cursorBefore:0,cursorAfter:20,
       lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
+      publicExecutionDiagnostic:{state:'PAGE_EXECUTION_COMPLETE',requested:20,
+        started:20,completed:20,partial:false,timedOut:false,
+        providerErrors:0,timeouts:0,failuresObserved:0},
       universePartial:false,universeStale:false,
       universeSource:market==='KR_STOCK'?'krx-symbol-master':
         market==='US_STOCK'?'nasdaq-trader-public-directory':
@@ -159,4 +162,32 @@ test('fail closed for mismatched market sources, cursor replays and forged lane 
   assert.equal(classifySignalV3HealthAndSource(health(),{
     ok:true,serviceSha:sha,executionAuthority:'NONE',snapshot:genuine,
   },now).ok,true);
+});
+
+test('full 12-lane health rejects unchecked, missing, inconsistent or partial page accounting',()=>{
+  const mutators=[
+    row=>{delete row.publicExecutionDiagnostic;},
+    row=>{row.publicExecutionDiagnostic.state='UNSTARTED_REQUESTS';},
+    row=>{row.publicExecutionDiagnostic.requested=21;},
+    row=>{row.publicExecutionDiagnostic.started=19;},
+    row=>{row.publicExecutionDiagnostic.completed=19;},
+    row=>{row.publicExecutionDiagnostic.partial=true;},
+    row=>{row.publicExecutionDiagnostic.timedOut=true;},
+    row=>{row.publicExecutionDiagnostic.failuresObserved=1;},
+    row=>{row.publicExecutionDiagnostic.providerErrors=1;},
+    row=>{row.publicExecutionDiagnostic.timeouts=1;},
+    row=>{row.cursorAfter=21;},
+    row=>{row.totalUniverse=18;},
+  ];
+  for(const change of mutators){
+    const s=coverage();
+    change(s.coverage[0]);
+    assert.equal(verifiedSignalV3Coverage(s),false,
+      'bad page accounting must not certify Signal V3');
+  }
+  const final=coverage();
+  final.coverage[0].totalUniverse=20;
+  final.coverage[0].cursorAfter=0;
+  assert.equal(verifiedSignalV3Coverage(final),true,
+    'a documented final page wrapping to zero can still be genuine');
 });
