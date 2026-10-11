@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { cloneElement, useEffect, useId, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import { useAuth } from '@/lib/auth';
 import {
   applyOriginalMinutePreset, changeOriginalMinuteMarket, createOriginalMinuteClient, createOriginalMinuteForm,
@@ -64,8 +64,10 @@ const percent = (value: number) => `${numberFormatter.format(value)}%`;
 const observed = (value: number | null) => value === null ? '미확인' : numberFormatter.format(value);
 const defaultClient = createOriginalMinuteClient();
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="grid min-w-0 gap-1.5 text-xs font-semibold text-muted-foreground"><span>{label}</span>{children}</label>;
+function Field({ label, children }: { label: string; children: ReactElement<{ id?: string }> }) {
+  const generatedId = useId();
+  const controlId = children.props.id ?? `original-minute-${generatedId}`;
+  return <div className="grid min-w-0 gap-1.5 text-xs font-semibold text-muted-foreground"><label htmlFor={controlId}>{label}</label>{cloneElement(children, { id: controlId })}</div>;
 }
 function Metric({ label, value, testId }: { label: string; value: string; testId?: string }) {
   return <div className="min-w-0 rounded-xl border border-border bg-background p-3"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 break-words text-base font-semibold" data-testid={testId}>{value}</dd></div>;
