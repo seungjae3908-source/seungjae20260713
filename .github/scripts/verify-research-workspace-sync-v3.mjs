@@ -418,6 +418,34 @@ const memberTelegramReviewed=[
  'api-server/src/services/telegram-signal-followup.service.ts',
  'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
 ];
+// Exact Paper-only integration additions reviewed from Draft #1836/#1839/#1840.
+// NO wildcard: original LIVE/Production/RLS/research guards remain enabled.
+const paperFourModeIntegrationReviewed=[
+ 'api-server/src/routes/manual-four-market-paper-wallets.smoke.test.ts',
+ 'api-server/src/routes/manual-four-market-paper-wallets.ts',
+ 'api-server/src/routes/paper-trading.smoke.test.ts',
+ 'api-server/src/routes/paper-trading.ts',
+ 'api-server/src/services/manual-four-market-paper-wallet-migration.test.ts',
+ 'api-server/src/services/manual-four-market-paper-wallets.service.test.ts',
+ 'api-server/src/services/manual-four-market-paper-wallets.service.ts',
+ 'api-server/src/services/paper-journal-service-role.repository.test.ts',
+ 'api-server/src/services/paper-research-round-lifecycle.service.test.ts',
+ 'api-server/src/services/paper-research-round-lifecycle.service.ts',
+ 'api-server/src/services/paper-research-round-proposal-migration.test.ts',
+ 'api-server/src/services/paper-research-round-proposal-store.service.test.ts',
+ 'api-server/src/services/paper-research-round-proposal-store.service.ts',
+ 'api-server/src/services/paper-research-trade-attribution.service.test.ts',
+ 'api-server/src/services/paper-research-trade-attribution.service.ts',
+ 'api-server/supabase/migrations/2026101101_manual_four_market_paper_wallet_guard.sql',
+ 'api-server/supabase/migrations/2026101103_paper_research_round_proposals.sql',
+ 'stock-analyzer/src/components/four-market-paper-status-panel.tsx',
+ 'stock-analyzer/src/components/manual-four-market-wallet-panel.tsx',
+ 'stock-analyzer/src/lib/four-market-paper-status.test.ts',
+ 'stock-analyzer/src/lib/four-market-paper-status.ts',
+ 'stock-analyzer/src/lib/manual-four-market-paper-status.test.ts',
+ 'stock-analyzer/src/lib/manual-four-market-paper-status.ts',
+ 'stock-analyzer/src/pages/paper-trading.tsx',
+];
 const allowed=new Set([
  ...original,
  ...added,
@@ -431,6 +459,7 @@ const allowed=new Set([
  ...formulaAiDriftReviewed,
  ...automaticTradingDriftReviewed,
  ...memberTelegramReviewed,
+ ...paperFourModeIntegrationReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
 // The personal Telegram member-profile reads share a repository with automatic
