@@ -167,7 +167,12 @@ export async function auditHistoricalPITMinuteArchiveChunkV1({
       dateBasis, pitGateStatus: pit.status,
     });
   }
-  if (ids.size !== pit.dayActiveArchivedMembers) {
+  const utcDayIds=new Set(manifest.memberships.filter(row=>
+    row.listedAtMs<endMs&&(row.removedAtMs??Infinity)>startMs)
+    .map(row=>String(row.symbol).trim().toUpperCase()));
+  if (ids.size !== pit.dayActiveArchivedMembers
+    || ids.size !== utcDayIds.size
+    || [...ids].some(symbol=>!utcDayIds.has(symbol))) {
     return stop(market, day, "PIT_LOCAL_SESSION_MEMBERSHIP_DIFFERS_FROM_DAY_GATE", {
       dateBasis, pitGateStatus: pit.status,
       pitGateDayActiveMembers: pit.dayActiveArchivedMembers,
