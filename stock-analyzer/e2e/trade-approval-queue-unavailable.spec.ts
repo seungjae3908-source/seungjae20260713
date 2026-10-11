@@ -22,6 +22,8 @@ test('auto trading source has no approval queue dependency', async () => {
   const source = await readFile('src/pages/auto-trading.tsx', 'utf8');
   expect(source).not.toContain('TradeApprovalQueue');
   expect(source).not.toContain('approvalFixture');
-  expect(source).toContain('4시장 개별 ON/OFF');
-  expect(source).toContain('주문마다 승인을 요청하지 않습니다.');
+  expect(source).toContain('<StatusItem label="시장 제어" value="4시장"');
+  expect(source).toContain('<StatusItem label="주문별 승인" value="불필요"');
+  expect(source).toContain('<StatusItem label="위험검사" value="매 주문 재검증"');
+  expect(source).toContain('data-testid="trading-market-tabs"');
 });

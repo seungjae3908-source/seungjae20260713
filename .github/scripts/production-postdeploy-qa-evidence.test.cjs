@@ -5,6 +5,7 @@ const {
   verifyPostDeployMainLineage,
   isActiveProductionTradingGateRun,
   revalidateProductionTradingGateConflicts,
+  assertAutomaticPositionIsolationReceipt,
 } = require('./production-postdeploy-qa-evidence.cjs');
 
 const SHA = 'b'.repeat(40);
@@ -18,6 +19,23 @@ const ZERO = {
   autoTradingAuthorityGranted: false,
 };
 const providers = ['bitget', 'kiwoom', 'toss', 'upbit'];
+
+test('AUTO isolation proof protects existing manual assets and rejects absent, mixed or mutating evidence', () => {
+  const account = fixture().account;
+  account.providers.find((row) => row.provider === 'toss').automaticPositionIsolation.manualProtectedPositionCount = 1;
+  account.providers.find((row) => row.provider === 'upbit').automaticPositionIsolation.manualProtectedPositionCount = 2;
+  assert.doesNotThrow(() => assertAutomaticPositionIsolationReceipt(account));
+  for (const [key, invalid] of [ ['ready', false], ['manualEntryBlocked', false], ['canonicalExitOnly', false],
+    ['ambiguousPositionCount', 1], ['manualProtectedPositionCount', -1], ['orderRequests', 1],
+    ['autoTradingAuthorityGranted', true], ['policyVersion', 'old-unscoped'] ]) {
+    const bad = structuredClone(account);
+    bad.providers[0].automaticPositionIsolation[key] = invalid;
+    assert.throws(() => assertAutomaticPositionIsolationReceipt(bad), /POSITION_ISOLATION/);
+  }
+  const old = structuredClone(account);
+  delete old.providers[0].automaticPositionIsolation;
+  assert.throws(() => assertAutomaticPositionIsolationReceipt(old), /POSITION_ISOLATION/);
+});
 
 function fixture() {
   return {
@@ -54,6 +72,9 @@ function fixture() {
         provider, connected: true, status: 'CONNECTED', stale: false, fresh: true,
         errorCode: null, checkedAtPresent: true, lastGoodAtPresent: true,
         reconciliation: 'PASS', reconciliationPassed: true, openOrderCount: 0,
+        automaticPositionIsolation: { ok: true, provider, policyVersion: 'manual-protected-auto-ledger-v1',
+          ready: true, fresh: true, manualEntryBlocked: true, canonicalExitOnly: true,
+          manualProtectedPositionCount: 0, automaticOwnedPositionCount: 0, ambiguousPositionCount: 0, ...ZERO },
       })),
       safetyCounters: {
         openOrderCount: 0,
