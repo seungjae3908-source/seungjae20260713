@@ -13,11 +13,13 @@ import {runFourMarketOriginalMinuteBatchV1} from
   "../src/four-market-original-minute-batch-v1.js";
 import {runFourMarketOriginalMinutePeriodV1} from
   "../src/four-market-original-minute-period-v1.js";
+import {runFourMarketOriginalMinuteSweepV1} from
+  "../src/four-market-original-minute-sweep-v1.js";
 
 /**
  * ONE PRIVATE read-only source job per invocation. No background timers,
  * no data-provider HTTP, no Paper orders, no LIVE execution, no DB.
- * Input mode: PLAN, REPLAY, PERIOD, OPPORTUNITIES or BATCH. Output 0600,
+ * Input mode: PLAN, REPLAY, PERIOD, OPPORTUNITIES, BATCH or SWEEP. Output 0600,
  * create-only, never overwritten. The PERIOD mode discovers immutable native
  * sessions automatically and models one cross-session per-symbol strategy.
  */
@@ -61,7 +63,7 @@ async function readPrivate(path){
     try{data=JSON.parse(raw);}catch{fail("RESEARCH_REPLAY_INPUT_JSON_INVALID");}
     refuseCredentials(data);
     if(!data||typeof data!=="object"||Array.isArray(data)
-      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH"].includes(data.mode))
+      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP"].includes(data.mode))
       fail("RESEARCH_REPLAY_INPUT_MODE_INVALID");
     return data;
   }finally{await file?.close();}
@@ -99,7 +101,9 @@ export async function runOriginalReplayPrivateJobV1({input,output}={}){
         ?await runFourMarketOriginalMinuteBatchV1(task)
         :mode==="PERIOD"
           ?await runFourMarketOriginalMinutePeriodV1(task)
-          :await runFourMarketOriginalMinuteReplayV1(task);
+          :mode==="SWEEP"
+            ?await runFourMarketOriginalMinuteSweepV1(task)
+            :await runFourMarketOriginalMinuteReplayV1(task);
   if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
     ||result.realOrders!==false||result.actualFillCount!==null
     ||result.trueMarketWideRecall!==null)
