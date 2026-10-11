@@ -20,5 +20,6 @@ export default function PaperTradingPage() {
     );
   }
 
-  return <AutoTradingPage initialMode="paper" />;
+  return <AutoTradingPage key={search} initialMode="paper"
+    paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'} />;
 }

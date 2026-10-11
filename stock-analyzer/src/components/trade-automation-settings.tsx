@@ -224,10 +224,12 @@ export function TradeAutomationSettings({
   fixture,
   selectedMarket,
   canManagePilot = false,
+  onStatusRead,
 }: {
   fixture?: Status;
   selectedMarket?: Market;
   canManagePilot?: boolean;
+  onStatusRead?: (status: Status | null) => void;
 }) {
   const [status, setStatus] = useState<Status | null>(fixture ?? null);
   const [draft, setDraft] = useState<UiPolicy>(() => normalizeUiPolicy(fixture?.policy));
@@ -235,15 +237,18 @@ export function TradeAutomationSettings({
   const [message, setMessage] = useState('');
   const [confirming, setConfirming] = useState(false);
   const refreshInFlight = useRef(false);
+  const statusReadController = useRef<AbortController | null>(null);
   const maximumBitgetLeverage = status?.maximumBitgetLeverage
     ?? (canManagePilot ? 7 : 3);
 
   async function load({ syncDraft = true }: { syncDraft?: boolean } = {}) {
     if (fixture || refreshInFlight.current) return;
     refreshInFlight.current = true;
+    const controller = new AbortController();
+    statusReadController.current = controller;
     if (syncDraft) setLoading(true);
     try {
-      const response = await authorizedFetch('/api/trade-automation/status');
+      const response = await authorizedFetch('/api/trade-automation/status', { signal: controller.signal });
       const payload = await response.json() as Status & { ok?: boolean; status?: string; error?: string };
       if (!response.ok || payload.ok === false) {
         const message = payload.status === 'UNAVAILABLE'
@@ -252,11 +257,14 @@ export function TradeAutomationSettings({
         throw new Error(message);
       }
       setStatus(payload);
+      onStatusRead?.(payload);
       if (syncDraft) {
         setDraft(normalizeUiPolicy(payload.policy));
         setMessage('');
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
+      onStatusRead?.(null);
       if (syncDraft) setMessage(error instanceof Error ? error.message : '설정을 불러오지 못했습니다.');
     } finally {
       refreshInFlight.current = false;
@@ -268,7 +276,10 @@ export function TradeAutomationSettings({
     if (fixture) return;
     void load();
     const timer = window.setInterval(() => { void load({ syncDraft: false }); }, 15_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      statusReadController.current?.abort();
+    };
   }, [fixture]);
 
   function updateNumber(key: keyof UiPolicy, value: string) {
