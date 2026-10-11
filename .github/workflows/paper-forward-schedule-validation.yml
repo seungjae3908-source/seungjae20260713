@@ -231,6 +231,10 @@ on:
       - api-server/src/services/automatic-paper-journal-mirror.service.test.ts
       - api-server/src/services/unified-trade-journal.service.test.ts
       - api-server/src/routes/paper-journal.ts
+      - api-server/src/services/trade-execution.service.ts
+      - api-server/src/services/trade-execution-pre-submission.test.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.ts
+      - api-server/src/services/member-auto-trading-background-worker.service.test.ts
       - .github/tests/trading-ops-consolidated-preflight.test.mjs
       - market-prediction-lab/src/formula-paper-registry-readback-v1.js
       - market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
@@ -364,6 +368,10 @@ jobs:
             api-server/src/services/automatic-paper-journal-mirror.service.test.ts
             api-server/src/services/unified-trade-journal.service.test.ts
             api-server/src/routes/paper-journal.ts
+            api-server/src/services/trade-execution.service.ts
+            api-server/src/services/trade-execution-pre-submission.test.ts
+            api-server/src/services/member-auto-trading-background-worker.service.ts
+            api-server/src/services/member-auto-trading-background-worker.service.test.ts
             .github/tests/trading-ops-consolidated-preflight.test.mjs
             market-prediction-lab/src/formula-paper-registry-readback-v1.js
             market-prediction-lab/tests/formula-paper-registry-readback-v1.test.js
