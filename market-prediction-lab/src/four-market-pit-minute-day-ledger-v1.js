@@ -23,10 +23,12 @@ const MEMBER_STATUSES = new Set([
   "BLOCKED_PIT_PARTIAL_LIFECYCLE", "MISSING_ORIGINAL_MINUTE_ARCHIVE",
   "SOURCE_REVISION_CONFLICT", "UNREADABLE_OR_INVALID_SOURCE",
   "SOURCE_LIMITED_MINUTE_INTERVALS", "SOURCE_MINUTE_SESSIONS_PRESENT_ONLY",
+  "SOURCE_MINUTE_SLOTS_PRESENT_RETROSPECTIVE_ONLY",
 ]);
 const COUNTERS = ["archivedMembers", "missingSourceMembers",
   "sourceLimitedMembers", "revisedSourceMembers", "unreadableMembers",
-  "lifecycleBlockedMembers", "sourceMinuteRows", "sourceSessionsCovered"];
+  "lifecycleBlockedMembers", "sourceMinuteRows", "sourceSessionsCovered",
+  "retrospectiveSourceMembers", "retrospectiveMinuteRows"];
 const SHA = /^[a-f0-9]{64}$/u;
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const safe = extra => Object.freeze({
@@ -85,7 +87,9 @@ function inspectMember(member, expectedSymbol, sessionCount) {
   const keys = ["sourceSessionCount", "archivedSessionCount",
     "missingSessionCount", "sourceLimitedSessionCount",
     "revisionConflictSessionCount", "unreadableSessionCount",
-    "verifiedLocalOriginalOneMinuteRows"];
+    "verifiedLocalOriginalOneMinuteRows",
+    "retrospectiveSourceSessionCount",
+    "retrospectiveUnavailableOneMinuteRows"];
   if (keys.some(key => !number(member[key]))
     || member.reason !== null
     || member.sourceSessionCount !== sessionCount
@@ -96,13 +100,22 @@ function inspectMember(member, expectedSymbol, sessionCount) {
     || member.verifiedLocalOriginalOneMinuteRows
       < member.archivedSessionCount
     || member.verifiedLocalOriginalOneMinuteRows
-      > member.archivedSessionCount * 1440) return null;
+      > member.archivedSessionCount * 1440
+    || member.retrospectiveSourceSessionCount>member.archivedSessionCount
+    || member.retrospectiveUnavailableOneMinuteRows
+      >member.verifiedLocalOriginalOneMinuteRows
+    || (member.retrospectiveSourceSessionCount===0
+      && member.retrospectiveUnavailableOneMinuteRows!==0)
+    || (member.retrospectiveSourceSessionCount>0
+      && member.retrospectiveUnavailableOneMinuteRows===0)) return null;
   const status = member.missingSessionCount
     ? "MISSING_ORIGINAL_MINUTE_ARCHIVE"
     : member.revisionConflictSessionCount ? "SOURCE_REVISION_CONFLICT"
     : member.unreadableSessionCount ? "UNREADABLE_OR_INVALID_SOURCE"
     : member.sourceLimitedSessionCount ? "SOURCE_LIMITED_MINUTE_INTERVALS"
-    : "SOURCE_MINUTE_SESSIONS_PRESENT_ONLY";
+    : member.retrospectiveSourceSessionCount
+      ? "SOURCE_MINUTE_SLOTS_PRESENT_RETROSPECTIVE_ONLY"
+      : "SOURCE_MINUTE_SESSIONS_PRESENT_ONLY";
   if (status !== member.status) return null;
   counts.archivedMembers = Number(member.archivedSessionCount > 0);
   counts.missingSourceMembers = Number(member.missingSessionCount > 0);
@@ -111,6 +124,10 @@ function inspectMember(member, expectedSymbol, sessionCount) {
   counts.unreadableMembers = Number(member.unreadableSessionCount > 0);
   counts.sourceMinuteRows = member.verifiedLocalOriginalOneMinuteRows;
   counts.sourceSessionsCovered = member.archivedSessionCount;
+  counts.retrospectiveSourceMembers =
+    Number(member.retrospectiveSourceSessionCount > 0);
+  counts.retrospectiveMinuteRows =
+    member.retrospectiveUnavailableOneMinuteRows;
   return { counts, expectedMissing: member.missingSessionCount };
 }
 function inspectPlan(plan, membership, expectedCountsBySymbol, market, date, sessions) {
@@ -288,6 +305,7 @@ export function summarizeHistoricalPITMinuteDayPagesV1({
     memberSourceStatusCounts:{...statusCounts},
     ...summed,
     checkedArchiveSourcesOnly:true,
+    retrospectiveMinutesAreNotAsOfScannerEvidence:true,
     stockCalendarIndependentlyAuthenticated:false,
   });
 }

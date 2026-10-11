@@ -6,7 +6,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { persistResearchMinuteSessionV1 as store } from "../src/research-minute-archive-v1.js";
+import {
+  persistResearchMinuteSessionV1 as store,
+  deriveArchivedResearchTimeframesV1 as deriveAt,
+  inspectArchivedResearchMinuteSessionV1 as inspect,
+} from "../src/research-minute-archive-v1.js";
 import { auditResearchMinuteArchiveWindowV1 as audit } from "../src/research-minute-archive-window-v1.js";
 import {
   parseResearchMinuteWindowArgsV1 as parse,
@@ -248,6 +252,67 @@ test("a full 1440-minute archive is still not full PIT or actual market recall",
     assert.equal(r.noTradeMinuteEvidenceVerified, false);
     assert.equal(r.actualMarketWideOpportunityCount, null);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("retrospective 1440 source minutes stay physically present, never historical-as-of scanner bars", async () => {
+  const root=tmp(),market="CRYPTO_SPOT";
+  const retrievedAtMs=Date.parse("2026-10-11T02:00:00Z");
+  try {
+    const source=sample(market,D0,{count:1440});
+    for (const row of source.minuteBars) row.availableAtMs=retrievedAtMs;
+    source.sourceMinuteRowsSha256=hash(source.minuteBars);
+    source.asOfMs=retrievedAtMs;
+    await store({root,source});
+    const physical=await inspect({root,market,symbol:source.symbol,
+      sessionStartMs:D0});
+    assert.equal(physical.nativeMinuteSlotInventoryComplete,true);
+    assert.equal(physical.missingUnverifiedSourceMinuteSlots,0);
+    assert.equal(physical.originalRowsUnavailableBySessionEnd,1440);
+    assert.equal(physical.originalMinuteObservationTimesRetrospective,true);
+    assert.equal(physical.originalScannerAvailabilityIndependentlyVerified,false);
+    const window=await audit(inputs(root,market,"2026-09-18","2026-09-18"));
+    assert.equal(window.status,"SOURCE_PRESENT_BUT_NOT_INDEPENDENTLY_AUTHENTICATED");
+    assert.equal(window.archivedSessionCount,1);
+    assert.equal(window.sourceLimitedSessionCount,0);
+    assert.equal(window.originalOneMinuteRows,1440);
+    assert.equal(window.sourceUnverifiedOneMinuteSlots,0);
+    assert.equal(window.retrospectiveSourceSessionCount,1);
+    assert.equal(window.retrospectiveUnavailableOneMinuteRows,1440);
+    assert.equal(window.missingCollectionPlan.length,0);
+    assert.equal(window.sourceSlotInventoryIsNotAsOfScannerAvailabilityProof,true);
+    assert.equal(window.fullMarketOpportunityDenominatorVerified,false);
+    assert.equal(window.trueMarketWideRecall,null);
+    assert.equal(window.profitabilityProven,false);
+    const old=await deriveAt({root,market,symbol:source.symbol,
+      sessionStartMs:D0,asOfMs:D0+DAY,timeframes:["1m","5m"]});
+    assert.equal(old.intervalData["1m"].completeBarCount,0);
+    assert.equal(old.intervalData["1m"].barDataUnavailableAtCutoffBuckets,1440);
+    assert.equal(old.intervalData["5m"].completeBarCount,0);
+    const present=await deriveAt({root,market,symbol:source.symbol,
+      sessionStartMs:D0,asOfMs:retrievedAtMs,timeframes:["1m"]});
+    assert.equal(present.intervalData["1m"].completeBarCount,1440);
+    assert.equal(present.originalScannerEarlyDiscoveryVerified,false);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
+test("retrospectively fetched partial rows remain missing source slots and unavailable as-of", async () => {
+  const root=tmp(),market="CRYPTO_FUTURES";
+  const later=Date.parse("2026-10-11T02:00:00Z");
+  try {
+    const source=sample(market,D0,{count:10});
+    for(const row of source.minuteBars) row.availableAtMs=later;
+    source.sourceMinuteRowsSha256=hash(source.minuteBars);
+    source.asOfMs=later;
+    await store({root,source});
+    const window=await audit(inputs(root,market,"2026-09-18","2026-09-18"));
+    assert.equal(window.archivedSessionCount,1);
+    assert.equal(window.sourceLimitedSessionCount,1);
+    assert.equal(window.sourceUnverifiedOneMinuteSlots,1430);
+    assert.equal(window.retrospectiveSourceSessionCount,1);
+    assert.equal(window.retrospectiveUnavailableOneMinuteRows,10);
+    assert.equal(window.missingSessionCount,0);
+    assert.equal(window.trueMarketWideRecall,null);
+  } finally {rmSync(root,{recursive:true,force:true});}
 });
 
 test("corrupt original is blocked without hiding other missing sessions", async () => {

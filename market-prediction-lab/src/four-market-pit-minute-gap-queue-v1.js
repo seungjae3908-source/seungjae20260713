@@ -102,7 +102,8 @@ export function planPITNativeMinuteSourceGapsV1({
   const unsupportedCount = allMissing.length - candidateTasks.length;
   const blockedMemberReview = page.memberSourceStatuses.filter(row =>
     !["MISSING_ORIGINAL_MINUTE_ARCHIVE",
-      "SOURCE_MINUTE_SESSIONS_PRESENT_ONLY"].includes(row.status))
+      "SOURCE_MINUTE_SESSIONS_PRESENT_ONLY",
+      "SOURCE_MINUTE_SLOTS_PRESENT_RETROSPECTIVE_ONLY"].includes(row.status))
     .map(row => ({ symbol: row.symbol, sourceStatus: row.status,
       reason: row.reason ?? "REQUIRES_MANUAL_PROVENANCE_REVIEW" }));
   let status, reason;

@@ -188,6 +188,33 @@ test("partial retained 1m is manual review; missing other member still proposed"
     assert.equal(x.providerGETCount,0);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+test("physically complete retrospective 1m archive is not scheduled for redundant GET",async()=>{
+  const root=temp(),market="CRYPTO_SPOT",m=make(market,2);
+  const retrievedAtMs=Date.parse("2026-10-11T02:00:00Z");
+  try{
+    const saved=tenMinuteSource(market,symbol(market,0));
+    saved.minuteBars=Array.from({length:1440},(_,i)=>({
+      ...saved.minuteBars[0],
+      timestampMs:D+i*MIN,availableAtMs:retrievedAtMs,
+    }));
+    saved.sourceMinuteRowsSha256=createHash("sha256")
+      .update(JSON.stringify(saved.minuteBars)).digest("hex");
+    saved.asOfMs=retrievedAtMs;
+    await store({root,source:saved});
+    const p=await pageAll(root,market,m);
+    assert.equal(p[0].sourceLimitedMembers,0);
+    assert.equal(p[0].retrospectiveSourceMembers,1);
+    assert.equal(p[0].retrospectiveMinuteRows,1440);
+    const queue=plan(input(market,m,p));
+    assert.equal(queue.candidateTasks.length,1);
+    assert.equal(queue.candidateTasks[0].symbol,symbol(market,1));
+    assert.equal(queue.manualReviewMemberCount,0);
+    assert.equal(queue.totalMissingSourceSessions,1);
+    assert.equal(queue.providerGETCount,0);
+    assert.equal(queue.autoExecuteAllowed,false);
+    assert.equal(queue.trueMarketWideRecall,null);
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
 test("private CLI builds selected task page, rejects overwrite and insecure receipts",async()=>{
   const root=temp(),market="CRYPTO_SPOT",m=make(market,25);
   try{
