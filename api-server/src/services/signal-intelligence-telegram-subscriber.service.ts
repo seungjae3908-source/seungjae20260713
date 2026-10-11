@@ -279,6 +279,7 @@ const MAX_LEDGER_ENTRIES = 10_000;
 export class SignalIntelligenceTelegramDeliveryState {
   private loaded = false;
   private blocked = false;
+  private loading: Promise<void> | null = null;
   private delivered = new Map<string, string>();
   private unconfirmed = new Map<string, string>();
   constructor(private readonly file: string) {}
@@ -286,9 +287,19 @@ export class SignalIntelligenceTelegramDeliveryState {
   private async load(): Promise<void> {
     if (this.blocked) throw new Error(LEDGER_ERROR);
     if (this.loaded) return;
-    this.loaded = true;
+    if (this.loading) return this.loading;
+    this.loading = this.initializeLedger();
+    try {
+      await this.loading;
+      this.loaded = true;
+    } finally { this.loading = null; }
+  }
+
+  private async initializeLedger(): Promise<void> {
+    let originalLedgerObserved = false;
     try {
       const before = await lstat(this.file);
+      originalLedgerObserved = true;
       if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_LEDGER_BYTES)
         throw new Error(LEDGER_ERROR);
       const fd = await open(this.file, fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW);
@@ -321,7 +332,10 @@ export class SignalIntelligenceTelegramDeliveryState {
       this.delivered = new Map(entries as Array<[string,string]>);
       this.unconfirmed = new Map(ambiguousEntries as Array<[string,string]>);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+      // Only initially missing state is empty; disappearance after lstat
+      // must block future sends to prevent replays from a lost receipt.
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT'
+        && !originalLedgerObserved) return;
       this.blocked = true;
       this.delivered.clear();
       this.unconfirmed.clear();
