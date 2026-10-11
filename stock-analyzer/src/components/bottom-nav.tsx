@@ -93,7 +93,7 @@ export function BottomNav() {
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && openMenu) {
         event.preventDefault();
         closeAndRestoreFocus();
       }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
+import type { TradingPlan } from './trade-automation.types';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -25,6 +26,69 @@ import {
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
+
+test('AUTO authority revoked during the ownership read blocks at the final provider boundary', async () => {
+  const execution = new TradeExecutionService(new InMemoryTradingRepository());
+  const events: string[] = [];
+  Object.assign(execution, {
+    async assertAutomaticLiveEntryControls() {
+      events.push('controls');
+      if (events.length > 1) throw new Error('AUTOMATIC_ENTRY_POLICY_REVOKED');
+    },
+    async assertAutomaticLivePositionIsolation() { events.push('isolation'); },
+  });
+  const boundary = execution as unknown as {
+    assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  await assert.rejects(boundary.assertAutomaticLiveEntryAuthorized(USER_ID, {
+    ...planInput(new Date()), executionMode: 'automatic', reduceOnly: false,
+  } as TradingPlan), /AUTOMATIC_ENTRY_POLICY_REVOKED/);
+  assert.deepEqual(events, ['controls', 'isolation', 'controls']);
+});
+
+test('provider mutation boundary re-reads manual ownership with execution vault and never mutates protected assets', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousKey = process.env.TRADING_CREDENTIAL_MASTER_KEY;
+  process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
+  const repository = new InMemoryTradingRepository();
+  await repository.saveConnection({ userId: USER_ID, exchange: 'upbit', accountMode: 'live',
+    configured: true, encryptedCredentials: encryptTradingCredentials({ accessKey: 'test', secretKey: 'test' }),
+    lastVerifiedAt: new Date().toISOString(), lastErrorCode: null, updatedAt: new Date().toISOString() });
+  const execution = new TradeExecutionService(repository) as unknown as {
+    assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan): Promise<void>;
+  };
+  const plan = { ...planInput(new Date()), symbol: 'KRW-SOL', executionMode: 'automatic',
+    userId: USER_ID, signalReasons: ['CANONICAL_LIVE_AUTO_HANDOFF'] } as TradingPlan;
+  let acquiredSolManually = false;
+  let reads = 0;
+  let mutations = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(String(input));
+    if (String(init?.method ?? 'GET') !== 'GET') { mutations += 1; throw new Error('MUTATION_FORBIDDEN'); }
+    reads += 1;
+    if (url.pathname === '/v1/accounts') return Response.json([
+      { currency: 'KRW', balance: '1000000', locked: '0', avg_buy_price: '0', unit_currency: 'KRW' },
+      { currency: 'BTC', balance: '0.2', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' },
+      ...(acquiredSolManually ? [{ currency: 'SOL', balance: '1', locked: '0', avg_buy_price: '1', unit_currency: 'KRW' }] : []),
+    ]);
+    if (url.pathname === '/v1/orders/open') return Response.json([]);
+    throw new Error('UNEXPECTED_READ_PATH');
+  }) as typeof fetch;
+  try {
+    await execution.assertAutomaticLivePositionIsolation(USER_ID, plan);
+    acquiredSolManually = true;
+    await assert.rejects(execution.assertAutomaticLivePositionIsolation(USER_ID, plan), /MANUAL_ASSET_PROTECTED/);
+    await assert.rejects(execution.assertAutomaticLivePositionIsolation(USER_ID,
+      { ...plan, side: 'sell', reduceOnly: true, signalReasons: ['AUTO_EXIT_ENTRY_PLAN:unproven'] }), /MANUAL_ASSET_PROTECTED/);
+    assert.ok(reads >= 3, 'each boundary performed a fresh private read');
+    assert.equal(mutations, 0);
+    assert.equal((await repository.listOrders(USER_ID)).length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey === undefined) delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
+    else process.env.TRADING_CREDENTIAL_MASTER_KEY = previousKey;
+  }
+});
 
 function marketSnapshot(now: Date): TradingMarketSnapshot {
   return {

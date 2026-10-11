@@ -8,6 +8,11 @@ import {
 } from './trade-automation.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import {
+  canonicalAutomaticLivePositions,
+  assertAutomaticLiveTargetIsolation,
+  readAutomaticLiveExecutionAccount,
+} from './automatic-live-position-isolation.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
@@ -1018,6 +1023,14 @@ export class TradeExecutionService {
   private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
     if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
       || isRiskReducingExitPlan(plan)) return;
+    await this.assertAutomaticLiveEntryControls(userId, plan);
+    await this.assertAutomaticLivePositionIsolation(userId, plan);
+    // Private reads can take time. Recheck revocable authority and member caps
+    // AFTER them, rather than trusting a pre-read arm/policy decision.
+    await this.assertAutomaticLiveEntryControls(userId, plan);
+  }
+
+  private async assertAutomaticLiveEntryControls(userId: string, plan: TradingPlan) {
     // A provider-side margin/leverage mutation is still a financial mutation,
     // even if no order POST follows. Enforce this before EACH mutable call,
     // and recheck after preflight at the actual order intent boundary.
@@ -1048,8 +1061,26 @@ export class TradeExecutionService {
     }
   }
 
+  private async assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan) {
+    if (plan.accountMode !== 'live' || (plan.executionMode !== 'automatic'
+      && !plan.signalReasons.some((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))) return;
+    // A manual trade may occur after the worker's earlier snapshot. Re-read at
+    // EVERY mutation boundary; never sell/adopt ambiguous same-symbol assets.
+    const [snapshot, plans, orders] = await Promise.all([
+      readAutomaticLiveExecutionAccount(this.repository, userId, plan.exchange),
+      this.repository.listPlans(userId), this.repository.listOrders(userId),
+    ]);
+    assertAutomaticLiveTargetIsolation(snapshot, canonicalAutomaticLivePositions(plans, orders), plan);
+  }
+
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
     await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
+    if (isRiskReducingExitPlan(risk.plan)) {
+      await this.assertAutomaticLivePositionIsolation(order.userId, risk.plan);
+      if (risk.plan.accountMode === 'live' && (risk.plan.executionMode === 'automatic'
+        || risk.plan.signalReasons.some((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))
+        && !await liveEntryArmPresent()) throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
+    }
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
     order.submissionAttemptId = submissionAttemptId;

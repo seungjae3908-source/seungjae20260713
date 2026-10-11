@@ -109,6 +109,12 @@ test('Automatic LIVE-only Staging proves responsive UI and read-only four-market
     await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });
     await expect(page.getByTestId('auto-trading-page')).toBeVisible({ timeout: 25_000 });
     await expect(page.getByTestId('auto-trading-responsive-layout')).toBeVisible();
+    await expect(page.getByTestId('technical-trading-modes')).toContainText('자동매매');
+    await expect(page.getByTestId('technical-trading-modes')).toContainText('모의매매');
+    await expect(page.getByTestId('trading-paper-modes')).toHaveCount(0);
+    await expect(page.getByTestId('trading-holdings')).toBeVisible();
+    await expect(page.getByTestId('auto-trading-runtime-summary')).not.toContainText('확인 중');
+    await expect(page.getByTestId('trading-workspace-safety-note')).toHaveCount(0);
     await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
     await expect(page.getByTestId('paper-trading-shell')).toHaveCount(0);
     if (viewport.width < 640) {
