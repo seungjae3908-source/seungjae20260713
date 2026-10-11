@@ -55,7 +55,7 @@ function onePrivateCompactReceipt() {
 async function responseData(r: Response) {
   const body = await r.text();
   assert.match(r.headers.get('content-type') ?? '', /application\/json/i);
-  assert.doesNotMatch(body, /(?:api[_-]?key|authorization|password|private.?key|stack|\\/root\\/|\\/home\\/|\\/var\\/)/i);
+  assert.doesNotMatch(body, /(?:api[_-]?key|authorization|password|private.?key|stack|\/root\/|\/home\/|\/var\/)/i);
   return JSON.parse(body) as Record<string, any>;
 }
 
