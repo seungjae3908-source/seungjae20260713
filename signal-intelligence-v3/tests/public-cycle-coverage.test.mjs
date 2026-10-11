@@ -19,7 +19,7 @@ import {
 
 function result(changes={}) {
   return {
-    outcome: null, dataState: 'untrusted', cards: [],
+    outcome: null, dataState: 'untrusted', cards: [], failures: [],
     universe: {
       totalCount: 4010, cursor: 0, nextCursor: 20,
       source: 'krx-symbol-master', partial: true, stale: false,
@@ -441,4 +441,41 @@ test('incomplete futures scan is distinguished from provider errors without leak
   assert.equal(d.state,'REPORTED_ITEM_FAILURES');
   assert.equal(JSON.stringify(d).includes('DO_NOT_LOG'),false);
   assert.equal(JSON.stringify(d).includes('SECRET_BODY'),false);
+});
+
+test('crypto valid candidates cannot conceal fulfilled-null invalid-data items',()=>{
+  const complete=result({
+    outcome:null,dataState:'complete',
+    universe:{totalCount:294,cursor:0,nextCursor:5,
+      source:'upbit-public',partial:false,stale:false,providerErrorCount:0},
+    execution:{requestedCount:5,startedCount:5,completedCount:5,
+      partial:false,timedOut:false,providerErrorCount:0,timeoutCount:0},
+    cards:[{symbol:'PUBLIC_CRYPTO',direction:'LONG'}],
+    failures:[],
+  });
+  assert.equal(classifyPublicCycleLaneStatus(complete),'CANDIDATES_AVAILABLE');
+  assert.equal(decidePublicCycleCursor({
+    response:complete,status:'CANDIDATES_AVAILABLE',cursor:0,
+  }).nextCursor,5);
+  const withNull={...complete,failures:[{
+    symbol:'NOT_PUBLIC_FOR_QA',reason:'invalid_data',
+    message:'PRIVATE_PROVIDER_BODY',
+  }]};
+  const status=classifyPublicCycleLaneStatus(withNull);
+  assert.equal(status,'BLOCKED_DATA');
+  assert.equal(decidePublicCycleCursor({response:withNull,status,cursor:0}).nextCursor,0);
+  assert.equal(decidePublicCycleCursor({response:withNull,status,cursor:0}).reason,
+    'REPORTED_ITEM_FAILURE_HOLD');
+  const unsupported={...complete,failures:[{
+    symbol:'OTHER',reason:'provider_error',message:'HTTP_429',
+  }]};
+  assert.equal(classifyPublicCycleLaneStatus(unsupported),'SEARCH_FAILURE');
+  assert.equal(decidePublicCycleCursor({
+    response:unsupported,status:'SEARCH_FAILURE',cursor:0,
+  }).nextCursor,0);
+  assert.equal(classifyPublicCycleLaneStatus({...complete,failures:undefined}),
+    'SEARCH_FAILURE');
+  assert.equal(decidePublicCycleCursor({
+    response:{...complete,failures:undefined},status:'SEARCH_FAILURE',cursor:0,
+  }).nextCursor,0);
 });
