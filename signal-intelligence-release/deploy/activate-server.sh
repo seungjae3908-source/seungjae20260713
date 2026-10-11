@@ -84,13 +84,7 @@ build_public_cycle() {
     cd "$RELEASE_DIR"
     corepack pnpm install --frozen-lockfile --filter '@workspace/api-server...'
     install -d -m 0755 api-server/.signal-intelligence
-    corepack pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/run-public-scanner-cycle.ts \
-      --bundle \
-      --platform=node \
-      --format=esm \
-      --target=node20 \
-      --packages=external \
-      --outfile=./.signal-intelligence/public-cycle.mjs
+    node signal-intelligence-v3/scripts/build-public-producer.mjs --external-packages
     node --check api-server/.signal-intelligence/public-cycle.mjs
   )
 }
