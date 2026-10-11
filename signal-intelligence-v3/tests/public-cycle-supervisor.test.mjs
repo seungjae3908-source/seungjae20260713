@@ -61,3 +61,22 @@ test('completed eligible index pages, blocked and provider errors remain distinc
  assert.equal(h.profitabilityProven,false);
  assert.equal(h.actualContinuous24hVerified,false);
 });
+
+test('a prior successful snapshot less than 15 minutes old cannot be reused as another cycle',()=>{
+ let current=START;
+ const c=createPublicOnlyCycleController({
+  serviceSha:SHA,now:()=>current,minIntervalMs:60000,
+ });
+ assert.equal(c.start().allowed,true);
+ current+=2000;
+ assert.equal(c.finish({snapshot:snapshot(current)}).ok,true);
+ current+=60001;
+ assert.equal(c.start().allowed,true);
+ current+=1000;
+ const replay=c.finish({snapshot:snapshot(START+2000)});
+ assert.equal(replay.ok,false);
+ assert.equal(replay.reason,'PUBLIC_SUPERVISOR_OUT_OF_CYCLE_SNAPSHOT');
+ assert.equal(c.health().completed,1);
+ assert.equal(c.health().failed,1);
+ assert.equal(c.health().actualContinuous24hVerified,false);
+});

@@ -80,8 +80,16 @@ export function createPublicOnlyCycleController({
     if(!Number.isFinite(at)||at<startedAt)throw Error('PUBLIC_SUPERVISOR_CLOCK_REVERSED');
     let summary=null,failReason=null;
     if(error)failReason='CYCLE_EXECUTION_FAILED';
-    else try{summary=summarizePublicCycleHealth(snapshot,serviceSha,at);}
-      catch(e){failReason=e instanceof Error?e.message.split(':')[0]:'UNKNOWN';}
+    else {
+      // A producer exiting 0 must write a snapshot generated during THIS run.
+      // Reusing the previous successful snapshot (still <15m old) is not a
+      // successful scan or a fresh provider observation.
+      const observedAt=Date.parse(String(snapshot?.generatedAt??''));
+      if(!Number.isFinite(observedAt)||observedAt<startedAt||observedAt>at)
+        failReason='PUBLIC_SUPERVISOR_OUT_OF_CYCLE_SNAPSHOT';
+      else try{summary=summarizePublicCycleHealth(snapshot,serviceSha,at);}
+        catch(e){failReason=e instanceof Error?e.message.split(':')[0]:'UNKNOWN';}
+    }
     if(summary){completed++;lastHealth=summary;lastError=null;}
     else{failed++;lastError=failReason??'PUBLIC_SUPERVISOR_NO_EVIDENCE';}
     history.push({atMs:at,ok:Boolean(summary),
