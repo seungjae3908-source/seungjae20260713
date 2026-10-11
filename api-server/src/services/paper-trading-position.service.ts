@@ -3,6 +3,7 @@ import type { CancelPaperOrderAction, MarkPaperPriceAction, PaperBacktestCandida
 import {
   EPSILON, MODE, PaperTradingError, adverseFillPrice, buildRiskInput, createId, expectedEntry, finite,
   hasDuplicateSymbol, makeOrder, positive, referencePrice, safeNumber, toIso, unique, validateOrderRequest,
+  manualPaperLosingTradesToday, MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT,
 } from './paper-trading-core.service';
 import type { prepareManualPaperCanonicalEvidence } from './manual-paper-canonical-contract.service';
 type CanonicalInput = NonNullable<ReturnType<typeof prepareManualPaperCanonicalEvidence>>;
@@ -212,6 +213,9 @@ export function evaluatePlacePaperOrder(state: PaperTradingState, action: PlaceP
   } : expectedEntry(request, action.market, warnings, action.riskInput.slippageRate);
 
   const rejectionCodes: string[] = [];
+  if (manualPaperLosingTradesToday(state, now) >= MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT) {
+    rejectionCodes.push('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT');
+  }
   if (hasDuplicateSymbol(state, request.symbol)) rejectionCodes.push('DUPLICATE_SYMBOL_POSITION');
   if (!entry.reference || !entry.fill || !positive(entry.fill)) rejectionCodes.push('MARKET_PRICE_UNAVAILABLE');
 
