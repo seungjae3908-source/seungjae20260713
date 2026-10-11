@@ -16,6 +16,7 @@
     "test:risk": "node ./test.mjs risk",
     "test:phase4": "node ./test.mjs phase4",
     "test:phase5": "node ./test.mjs phase5",
+    "test:original-minute": "node ./test.mjs original-minute",
     "test:phase6": "node ./test.mjs phase6",
     "test:phase7": "node ./test.mjs phase7",
     "test:phase8": "node ./test.mjs phase8",

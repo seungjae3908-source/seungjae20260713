@@ -24,6 +24,13 @@ const groups = {
     path.join(root, 'src/services/backtest-data.service.test.ts'),
     path.join(root, 'src/services/backtest-performance.test.ts'),
   ],
+  'original-minute': [
+    path.join(root, 'src/services/original-minute-backtest.service.test.ts'),
+    path.join(root, 'src/routes/original-minute-backtests.smoke.test.ts'),
+    path.join(repositoryRoot, 'stock-analyzer/src/lib/original-minute-backtest.test.ts'),
+    path.join(root, 'src/routes/backtests.smoke.test.ts'),
+    path.join(root, 'src/routes/research-workspace-pit-minute-coverage.smoke.test.ts'),
+  ],
   phase6: [
     path.join(root, 'src/services/paper-trading-engine.service.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-trading-storage.test.ts'),
@@ -185,6 +192,7 @@ groups.unit = [
   ...groups.risk,
   ...groups.phase4,
   ...groups.phase5,
+  ...groups['original-minute'].slice(0, 3),
   ...groups.phase6,
   ...groups.phase7,
   ...groups.phase8,
@@ -194,7 +202,7 @@ groups.unit = [
   groups.search[1],
   groups.search[2],
 ];
-const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
+const allowedModes = ['all', 'unit', 'phase2', 'risk', 'phase4', 'phase5', 'original-minute', 'phase6', 'phase7', 'phase8', 'phase9', 'phase12', 'search', 'smoke'];
 if (!allowedModes.includes(mode)) throw new Error(`Unknown test mode: ${mode}`);
 
 const entries = mode === 'all' ? [...groups.unit, ...groups.smoke] : groups[mode];

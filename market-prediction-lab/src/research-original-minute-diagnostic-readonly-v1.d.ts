@@ -13,6 +13,12 @@ export type ResearchOriginalMinuteDiagnosticSummary = {
   independentFullCostProven:false;
   originalHistoricalSignalVerified:false;
   symbol?:string;
+  evidenceScope?:'CURRENT_PROVIDER_ROSTER_SOURCE_ONLY'|'HISTORICAL_PIT_ROSTER';
+  sourceOnlyMode?:boolean;
+  historicalPITRosterChecked?:boolean;
+  currentRosterDigestSha256?:string|null;
+  currentRosterObservedAtMs?:number|null;
+  sessionClosePolicy?:'CLOSE_EACH_SOURCE_SESSION'|null;
   timeframe?:string|null;
   modeledTradeCount?:number|null;
   modeledReturnPercent?:number|null;
