@@ -44,6 +44,45 @@ function sanitizedIsoTime(value) {
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? value : null;
 }
 
+
+const BRIEF_STATES=new Set(['NOT_STARTED','DISABLED','RUNNING','STOPPED']);
+const BRIEF_START_CODES=new Set([null,'FLAG_DISABLED','ACTIVATION_REQUIRED','TOKEN_MISSING','ROOMS_MISSING']);
+const BRIEF_DUE_CODES=new Set([
+  'NOT_OBSERVED','BOT_API_ACCEPTED','DEDUPED_ONLY','NOT_CONFIGURED',
+  'DELIVERY_FAILED','NO_ATTEMPTS','LEDGER_UNREADABLE','TICK_FAILED',
+]);
+const BRIEF_COUNTERS=[
+  'lastDuePlans','lastDueAttempted','lastDueDelivered','lastDueDeduped',
+  'lastDueNotConfigured','lastDueFailed',
+];
+function emptyBriefHealth(status){
+  return {status,enabled:false,state:null,startErrorCode:null,
+    lastTickAt:null,tickOk:null,tickFresh:false,lastDueTickAt:null,
+    lastDuePlans:0,lastDueAttempted:0,lastDueDelivered:0,
+    lastDueDeduped:0,lastDueNotConfigured:0,lastDueFailed:0,lastDueCode:null};
+}
+/** Strict public shape. Any extra private payload is discarded. */
+export function sanitizeBriefWorkerHealth(value){
+  if(value==null)return emptyBriefHealth('NOT_AVAILABLE');
+  if(typeof value!=='object'||Array.isArray(value))return emptyBriefHealth('INVALID');
+  if(typeof value.enabled!=='boolean'||!BRIEF_STATES.has(value.state)
+    ||!BRIEF_START_CODES.has(value.startErrorCode)
+    ||!BRIEF_DUE_CODES.has(value.lastDueCode)
+    ||!(value.tickOk===null||typeof value.tickOk==='boolean')
+    ||!(value.lastTickAt===null||sanitizedIsoTime(value.lastTickAt)!==null)
+    ||!(value.lastDueTickAt===null||sanitizedIsoTime(value.lastDueTickAt)!==null)
+    ||!BRIEF_COUNTERS.every(k=>Number.isSafeInteger(value[k])&&value[k]>=0&&value[k]<=10000))
+    return emptyBriefHealth('INVALID');
+  return {
+    status:'PRESENT',enabled:value.enabled,state:value.state,
+    startErrorCode:value.startErrorCode,lastTickAt:sanitizedIsoTime(value.lastTickAt),
+    tickOk:value.tickOk,tickFresh:false,lastDueTickAt:sanitizedIsoTime(value.lastDueTickAt),
+    lastDuePlans:value.lastDuePlans,lastDueAttempted:value.lastDueAttempted,
+    lastDueDelivered:value.lastDueDelivered,lastDueDeduped:value.lastDueDeduped,
+    lastDueNotConfigured:value.lastDueNotConfigured,lastDueFailed:value.lastDueFailed,
+    lastDueCode:value.lastDueCode,
+  };
+}
 function emptyState(status) {
   return {
     status, recordCount: 0, recent24hCount: 0, lastEvidenceAt: null,
@@ -191,6 +230,7 @@ export async function readHealthOnce({ getImpl = httpGet } = {}) {
             deliveryConfirmed: worker.deliveryConfirmed === true,
             lastConfirmedDeliveryAt: sanitizedIsoTime(worker.lastConfirmedDeliveryAt),
             errorCode: sanitizedErrorCode(worker.errorCode),
+            briefWorker:sanitizeBriefWorkerHealth(obj.telegramIntelligenceWorker),
           });
         });
       });
@@ -225,7 +265,8 @@ export async function readSignalSourceOnce({
     try {
       req = getImpl(target, { method: 'GET', timeout: 4500 }, res => {
         if (res.statusCode !== 200) {
-          res.resume?.(); done(emptySource('UNREACHABLE')); return;
+          const status = res.statusCode === 503 ? 'HTTP_503' : 'HTTP_ERROR';
+          res.resume?.(); done(emptySource(status)); return;
         }
         const chunks = [];
         let bytes = 0;
@@ -255,6 +296,147 @@ export async function readSignalSourceOnce({
   });
 }
 
+
+const SIGNAL_UNITS = Object.freeze({
+  server: 'investment-signal-intelligence-v3.service',
+  timer: 'investment-signal-intelligence-v3-cycle.timer',
+  cycle: 'investment-signal-intelligence-v3-cycle.service',
+});
+
+// Read only three fixed systemd unit names, never journal data or unit env.
+// All returned statuses are whitelisted: no raw paths, usernames or secrets.
+export function readSignalV3Units({ execImpl = execFileSync } = {}) {
+  const inspect = (unit) => {
+    let value;
+    try {
+      value = execImpl('systemctl',
+        ['show', '--no-pager', '--property=LoadState,ActiveState', unit],
+        { encoding: 'utf8', timeout: 3500, maxBuffer: 8192,
+          stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch { return 'UNAVAILABLE'; }
+    if (typeof value !== 'string' || value.length > 8192) return 'UNAVAILABLE';
+    const load = /^LoadState=([a-z-]+)$/mu.exec(value)?.[1];
+    const active = /^ActiveState=([a-z-]+)$/mu.exec(value)?.[1];
+    if (load === 'not-found') return 'NOT_FOUND';
+    if (load !== 'loaded') return 'UNKNOWN';
+    if (active === 'active') return 'ACTIVE';
+    if (active === 'inactive') return 'INACTIVE';
+    if (active === 'failed') return 'FAILED';
+    return 'UNKNOWN';
+  };
+  return Object.fromEntries(Object.entries(SIGNAL_UNITS)
+    .map(([label, unit]) => [label, inspect(unit)]));
+}
+
+function emptySignalHealth(status) {
+  return { status, serviceSha: null, snapshotReady: false, snapshotFresh: false };
+}
+
+/** Only fixed loopback V3 /health. Never emit response body or snapshotError. */
+export async function readSignalV3HealthOnce({
+  sourceUrl = process.env.SIGNAL_INTELLIGENCE_URL?.trim() || 'http://127.0.0.1:8790/v1/signals',
+  getImpl = httpGet,
+} = {}) {
+  let target;
+  try { target = new URL(sourceUrl); } catch { return emptySignalHealth('UNSAFE_ENDPOINT'); }
+  if (target.protocol !== 'http:'
+    || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)
+    || target.pathname !== '/v1/signals' || target.search || target.hash
+    || target.username || target.password) return emptySignalHealth('UNSAFE_ENDPOINT');
+  target.pathname = '/health';
+  return await new Promise(resolve => {
+    let finished = false;
+    let req = null;
+    const done = status => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(status);
+    };
+    const timer = setTimeout(() => {
+      done(emptySignalHealth('TIMEOUT'));
+      req?.destroy?.();
+    }, 5000);
+    try {
+      req = getImpl(target, { method: 'GET', timeout: 4500 }, res => {
+        if (res.statusCode !== 200) {
+          res.resume?.();
+          done(emptySignalHealth(res.statusCode === 503 ? 'HTTP_503' : 'HTTP_ERROR'));
+          return;
+        }
+        const chunks = [];
+        let bytes = 0;
+        res.on('data', chunk => {
+          bytes += chunk.length;
+          if (bytes > 131072) {
+            done(emptySignalHealth('INVALID_RESPONSE'));
+            res.destroy?.();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('error', () => done(emptySignalHealth('UNREACHABLE')));
+        res.on('end', () => {
+          let payload;
+          try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+          const sha = safeSha(payload?.serviceSha);
+          if (payload?.ok !== true || payload?.service !== 'signal-intelligence-v3'
+            || payload?.executionAuthority !== 'NONE'
+            || payload?.privateTradingApiAllowed !== false || payload?.realOrderAllowed !== false
+            || !['127.0.0.1', '::1', 'localhost'].includes(payload?.bindHost)
+            || !sha || typeof payload.snapshotReady !== 'boolean'
+            || typeof payload.snapshotFresh !== 'boolean') {
+            done(emptySignalHealth('INVALID_RESPONSE'));
+            return;
+          }
+          const status = !payload.snapshotReady ? 'SNAPSHOT_MISSING'
+            : payload.snapshotFresh ? 'READY' : 'SNAPSHOT_STALE';
+          done({ status, serviceSha: sha, snapshotReady: payload.snapshotReady,
+            snapshotFresh: payload.snapshotFresh });
+        });
+      });
+      req.on('timeout', () => {
+        done(emptySignalHealth('TIMEOUT'));
+        req.destroy?.();
+      });
+      req.on('error', () => done(emptySignalHealth('UNREACHABLE')));
+    } catch { done(emptySignalHealth('UNREACHABLE')); }
+  });
+}
+
+/**
+ * PM2 opportunity through today's Korea 07:50–08:10 briefing window.
+ * This cannot establish worker execution or any Telegram delivery.
+ */
+export function morningWindowProcessCoverage(startedAt, nowMs = Date.now()) {
+  if (!sanitizedIsoTime(startedAt) || !Number.isSafeInteger(nowMs)) return 'UNKNOWN';
+  const now = new Date(nowMs);
+  if (Number.isNaN(now.getTime())) return 'UNKNOWN';
+  const startedMs = Date.parse(startedAt);
+  if (startedMs > nowMs + 5000) return 'UNKNOWN';
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now).filter(part => part.type !== 'literal')
+    .map(part => [part.type, part.value]));
+  const year = Number(dateParts.year);
+  const month = Number(dateParts.month);
+  const day = Number(dateParts.day);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return 'UNKNOWN';
+  const endUtc = Date.UTC(year, month - 1, day, -1, 10); // 08:10 KST
+  const startUtc = endUtc - 20 * 60_000; // 07:50 KST
+  if (nowMs < endUtc) return 'NOT_ELAPSED';
+  if (startedMs <= startUtc) return 'FULL_WINDOW';
+  if (startedMs <= endUtc) return 'PARTIAL_WINDOW';
+  return 'MISSED_WINDOW';
+}
+
+function safePm2StartAt(raw, nowMs) {
+  const milliseconds = Number(raw);
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 946684800000
+    || milliseconds > nowMs + 5000) return null;
+  return new Date(milliseconds).toISOString();
+}
+
 export async function observeProductionTelegram({
   mainSha = process.env.TELEGRAM_AUDIT_MAIN_SHA,
   deployedSha = process.env.TELEGRAM_AUDIT_DEPLOYED_SHA,
@@ -262,21 +444,27 @@ export async function observeProductionTelegram({
   health = readHealthOnce,
   state = readStateFile,
   signalSource = readSignalSourceOnce,
+  signalHealth = readSignalV3HealthOnce,
+  signalUnits = readSignalV3Units,
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
-    schemaVersion: 'telegram-production-worker-readonly-v1',
+    schemaVersion: 'telegram-production-worker-readonly-v3',
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
+    pm2StartedAt: null, morningWindowCoverage: 'UNKNOWN',
     activationEnabled: false, marketWorkerConfigured: false, personalWorkerConfigured: false,
     roomBindingsValid: false, personal: {
       healthAvailable: false, enabled: false, tickFresh: false, tickOk: false,
       lastTickAt: null, deliveryConfirmed: false, lastConfirmedDeliveryAt: null, errorCode: null,
     },
+    briefWorker:emptyBriefHealth('NOT_CHECKED'),
     marketBrief: emptyState('NOT_CHECKED'),
     signalSubscriber: emptyState('NOT_CHECKED'),
     signalSource: emptySource('NOT_CHECKED'),
+    signalHealth: emptySignalHealth('NOT_CHECKED'),
+    signalUnits: { server: 'NOT_CHECKED', timer: 'NOT_CHECKED', cycle: 'NOT_CHECKED' },
     proofLevel: 'NO_DELIVERY_PROOF',
     classification: 'NOT_STARTED',
     telegramSends: 0, databaseWrites: 0, pm2Restarts: 0,
@@ -289,6 +477,7 @@ export async function observeProductionTelegram({
     const observed = snapshot();
     if (!observed) { receipt.classification = 'PM2_UNAVAILABLE'; return receipt; }
     const runtime = observed.runtime ?? {};
+    receipt.pm2StartedAt = safePm2StartAt(runtime.pm_uptime, nowMs);
     receipt.pm2Sha = safeSha(observed.pm2Sha);
     receipt.markerSha = safeSha(observed.markerSha);
     receipt.pm2Online = observed.online === true;
@@ -307,6 +496,7 @@ export async function observeProductionTelegram({
               : 'PRODUCTION_IDENTITY_MISMATCH';
       return receipt;
     }
+    receipt.morningWindowCoverage = morningWindowProcessCoverage(receipt.pm2StartedAt, nowMs);
     const ids = ROOM_KEYS.map(key => String(runtime[key] ?? '').trim());
     receipt.roomBindingsValid = ids.every(id => /^-100[0-9]{8,15}$/u.test(id))
       && new Set(ids).size === ROOM_KEYS.length;
@@ -341,11 +531,20 @@ export async function observeProductionTelegram({
       lastConfirmedDeliveryAt: sanitizedIsoTime(result.lastConfirmedDeliveryAt),
       errorCode: sanitizedErrorCode(result.errorCode),
     };
+    receipt.briefWorker=result.briefWorker??emptyBriefHealth('NOT_AVAILABLE');
+    if(receipt.briefWorker.status==='INVALID'){
+      receipt.classification='BRIEF_WORKER_HEALTH_INVALID';return receipt;
+    }
+    const briefTick=Date.parse(receipt.briefWorker.lastTickAt??'');
+    receipt.briefWorker.tickFresh=Number.isFinite(briefTick)
+      && briefTick<=nowMs+5000 && nowMs-briefTick<=360000;
     receipt.marketBrief = state(runtime.TELEGRAM_INTELLIGENCE_STATE_PATH,
       'telegram-intelligence-delivery-state.json', 'market', nowMs);
     receipt.signalSubscriber = state(runtime.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH,
       'signal-intelligence-telegram-state.json', 'signal', nowMs);
     receipt.signalSource = await signalSource({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
+    receipt.signalHealth = await signalHealth({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
+    receipt.signalUnits = signalUnits();
     // Saved state is dedupe-or-delivery evidence, never Bot API confirmation.
     receipt.proofLevel = receipt.marketBrief.recordCount > 0
       || receipt.signalSubscriber.recordCount > 0 ? 'PERSISTED_LEDGER_ONLY' : 'NO_DELIVERY_PROOF';
