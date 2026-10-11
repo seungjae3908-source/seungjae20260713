@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import test from 'node:test';
 import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
-  safeSha, readHealthOnce, readSignalSourceOnce,
+  safeSha, readHealthOnce, readSignalSourceOnce, readSignalHealthOnce,
+  safePm2StartedAt, morningWindowElapsedWithCurrentProcess,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
@@ -30,6 +31,7 @@ const runtime={
   LIVE_TELEGRAM_ACTIVATION_APPROVED:'true',
   BACKGROUND_WORKERS_ENABLED:'true',
   TELEGRAM_BOT_TOKEN:'NEVER_LOG_PRIVATE_BOT_TOKEN',
+  pm_uptime:Date.parse('2026-10-10T23:02:00.000Z'),
 };
 const observed=()=>({
   runtime,pm2Sha:deployed,markerSha:deployed,online:true,
@@ -74,6 +76,49 @@ test('PM2 canonical root and entrypoint agree with Production deploy; default le
   assert.equal(resolveSafeTelegramStatePath('/etc/passwd','unused.json'),null);
 });
 
+test('PM2 uptime and elapsed morning window stay evidence only, not delivery proof',()=>{
+  assert.equal(safePm2StartedAt(runtime.pm_uptime,now),'2026-10-10T23:02:00.000Z');
+  assert.equal(safePm2StartedAt('INVALID_STRING',now),null);
+  assert.equal(morningWindowElapsedWithCurrentProcess('2026-10-10T23:02:00.000Z',now),true);
+  assert.equal(morningWindowElapsedWithCurrentProcess('2026-10-10T23:11:00.000Z',now),false);
+  assert.equal(morningWindowElapsedWithCurrentProcess('2026-10-10T23:02:00.000Z',
+    Date.parse('2026-10-10T23:06:00.000Z')),false);
+});
+
+test('signal /health checks public safe envelope and never emits member or secret data',async()=>{
+  const probe=(payload,statusCode=200)=>readSignalHealthOnce({
+    sourceUrl:'http://127.0.0.1:8790/v1/signals',
+    getImpl:(target,options,callback)=>{
+      assert.equal(target.pathname,'/health');
+      assert.equal(options.method,'GET');
+      const req=new EventEmitter();req.destroy=()=>{};
+      queueMicrotask(()=>{
+        const response=new EventEmitter();response.statusCode=statusCode;response.resume=()=>{};
+        callback(response);
+        if(statusCode===200) {
+          response.emit('data',Buffer.from(JSON.stringify(payload)));
+          response.emit('end');
+        }
+      });
+      return req;
+    },
+  });
+  const safe={ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
+    executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
+    snapshotReady:true,snapshotFresh:true,secret:'NEVER_PRINT_SIGNAL_SECRET'};
+  assert.deepEqual(await probe(safe),{status:'READY'});
+  assert.deepEqual(await probe({...safe,snapshotReady:false,snapshotFresh:false}),
+    {status:'MISSING_SNAPSHOT'});
+  assert.deepEqual(await probe({...safe,snapshotFresh:false}),{status:'STALE_SNAPSHOT'});
+  assert.deepEqual(await probe({...safe,executionAuthority:'LIVE'}),{status:'INVALID_RESPONSE'});
+  assert.deepEqual(await probe(safe,503),{status:'HTTP_UNAVAILABLE'});
+  assert.deepEqual(await readSignalHealthOnce({
+    sourceUrl:'http://external.invalid/v1/signals',
+    getImpl:()=>{throw Error('UNSAFE_OUTBOUND_CALL');},
+  }),{status:'UNSAFE_ENDPOINT'});
+  assert.ok(!JSON.stringify(await probe(safe)).includes('NEVER_PRINT_SIGNAL_SECRET'));
+});
+
 test('market and signal ledgers emit only fixed labels/counts and never IDs',()=>{
   const market=inspectDeliveryStateText(state({
     [marketKey]:new Date(now-120_000).toISOString(),
@@ -107,6 +152,7 @@ test('ledger parser fails closed on empty/malformed/future and bounded entries',
 
 test('real PM2 flags and recent personal tick are observed without false delivery PASS',async()=>{
   const result=await observeProductionTelegram({
+    signalHealth:async()=>({status:'READY'}),
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,health,
     signalSource:async()=>({status:'READY',eventCount:0,safetyValidated:true}),
@@ -121,6 +167,9 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.proofLevel,'PERSISTED_LEDGER_ONLY');
   assert.equal(result.marketBrief.recordCount,1);
   assert.equal(result.signalSource.status,'READY');
+  assert.equal(result.signalHealth.status,'READY');
+  assert.equal(result.pm2StartedAt,'2026-10-10T23:02:00.000Z');
+  assert.equal(result.morningWindowElapsedWithCurrentProcess,true);
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
   assert.equal(result.databaseWrites,0);
@@ -133,6 +182,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
 
 test('disabled market, duplicated room, stale production SHA and missing health fail closed',async()=>{
   const testCase=async changes=>observeProductionTelegram({
+    signalHealth:async()=>({status:'READY'}),
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:()=>({...observed(),...changes}),
     health,
@@ -147,6 +197,7 @@ test('disabled market, duplicated room, stale production SHA and missing health 
   assert.equal((await testCase({runtime:duplicates})).classification,'TELEGRAM_CONFIGURATION_BLOCKED');
   assert.equal((await testCase({runtime:{...runtime,BACKGROUND_WORKERS_ENABLED:'false'}})).classification,'TELEGRAM_CONFIGURATION_BLOCKED');
   assert.equal((await observeProductionTelegram({
+    signalHealth:async()=>({status:'READY'}),
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,health:async()=>null,
   })).classification,'HEALTH_UNAVAILABLE');
@@ -189,6 +240,7 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
 
 test('production receipt rejects non-ISO personal time and preserves only valid UTC evidence',async()=>{
   const bad=await observeProductionTelegram({
+    signalHealth:async()=>({status:'READY'}),
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,
     health:async()=>({...await health(),deliveryConfirmed:true,
@@ -201,6 +253,7 @@ test('production receipt rejects non-ISO personal time and preserves only valid 
   assert.ok(!JSON.stringify(bad).includes('PRIVATE_SECRET_MASQUERADING_AS_DATE'));
   const validTimestamp=new Date(now-60_000).toISOString();
   const good=await observeProductionTelegram({
+    signalHealth:async()=>({status:'READY'}),
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,
     health:async()=>({...await health(),deliveryConfirmed:true,
