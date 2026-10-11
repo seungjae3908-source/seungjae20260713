@@ -14,9 +14,17 @@ const MODES = Object.freeze([
   {strategy:'SWING',timeframe:'60m'},
   {strategy:'MID_LONG',timeframe:'1D'},
 ]);
-const SOURCES = new Set([
-  'krx-symbol-master','finnhub-symbol-master',
-  'nasdaq-trader-public-directory','upbit-public','bitget-public',
+// A truthful source label is market-specific. A healthy Bitget roster
+// cannot be presented as verified KRX stock coverage, or vice versa.
+const SOURCES_BY_MARKET = Object.freeze({
+  KR_STOCK: new Set(['krx-symbol-master']),
+  US_STOCK: new Set(['nasdaq-trader-public-directory','finnhub-symbol-master']),
+  CRYPTO_SPOT: new Set(['upbit-public']),
+  CRYPTO_FUTURES: new Set(['bitget-public']),
+});
+const FAILED_OUTCOMES = new Set([
+  'PROVIDER_FAILURE','REQUEST_TIMEOUT','UNIVERSE_EMPTY',
+  'SYMBOL_MAPPING_FAILURE','DATA_QUALITY_REJECT','FRONTEND_RENDER_FAILURE',
 ]);
 const allowedStatuses = new Set(['VALID_NO_TRADE','CANDIDATES_AVAILABLE']);
 const nonNegative = x => Number.isSafeInteger(x) && x >= 0;
@@ -39,18 +47,32 @@ export function verifiedSignalV3Coverage(snapshot) {
     if(!expected.has(key)||seen.has(key))return false;
     seen.add(key);
     if(!allowedStatuses.has(row.status)
-      ||!SOURCES.has(row.universeSource)
+      ||!SOURCES_BY_MARKET[row.market]?.has(row.universeSource)
       ||row.universePartial!==false
       ||row.universeStale!==false
       ||row.responseDataState!=='complete'
+      ||row.lastGoodPreserved!==false
+      ||row.cursorRotatedBlockedOnly===true
+      ||FAILED_OUTCOMES.has(row.outcome)
       ||!nonNegative(row.totalUniverse)||row.totalUniverse===0
+      // A 12-lane envelope must represent actual attempted roster progress.
+      // No cursor movement, invalid indices or replayed last-good blocks
+      // are permitted to stand in for a fresh market scan.
+      ||!nonNegative(row.cursorBefore)||row.cursorBefore>=row.totalUniverse
+      ||!nonNegative(row.cursorAfter)||row.cursorAfter>=row.totalUniverse
+      ||row.cursorAfter===row.cursorBefore
       ||!nonNegative(row.scannedCards)
       ||!nonNegative(row.retainedFromBatch)
+      ||row.retainedFromBatch>row.scannedCards
       ||row.universeProviderErrors!==0
       ||row.providerErrors!==0
       ||row.timeouts!==0
-      ||(row.status==='VALID_NO_TRADE'&&row.scannedCards!==0)
-      ||(row.status==='CANDIDATES_AVAILABLE'&&row.scannedCards<1))return false;
+      ||(row.status==='VALID_NO_TRADE'
+        &&(row.scannedCards!==0||row.retainedFromBatch!==0
+          ||row.outcome==='CANDIDATES_AVAILABLE'))
+      ||(row.status==='CANDIDATES_AVAILABLE'
+        &&(row.scannedCards<1||row.retainedFromBatch<1
+          ||row.outcome==='VALID_ZERO_SIGNAL')))return false;
   }
   return seen.size===12;
 }
