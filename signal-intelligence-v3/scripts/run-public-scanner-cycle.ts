@@ -13,6 +13,7 @@ import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/pu
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
+import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -413,6 +414,9 @@ async function main() {
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
+        // Only bounded reason classes from the SAME already completed cycle.
+        // This emits no symbol, raw body, URL, token or extra network call.
+        publicProviderFailureSummary: summarizePublicProviderFailureReasons(response.failures),
         leverage: leverageDiagnostics,
         lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   PUBLIC_PROVIDER_CYCLE_DIAGNOSTIC_VERSION,
   inspectExactPublicProviderCycle,
+  summarizePublicProviderFailureReasons,
 } from '../src/public-provider-cycle-diagnostics.mjs';
 const NOW=Date.parse('2026-10-11T00:00:00.000Z');
 const SHA='a'.repeat(40);
@@ -65,4 +66,50 @@ test('wrong release, stale/future report or incomplete 12-lane evidence is rejec
   assert.throws(()=>inspectExactPublicProviderCycle({...s,coverage:s.coverage.slice(1)},SHA,NOW),/EXACT_CYCLE_REQUIRED/);
   s.coverage[0].strategy='WRONG';
   assert.throws(()=>inspectExactPublicProviderCycle(s,SHA,NOW),/LANES_INVALID/);
+});
+
+test('same-cycle reason buckets identify futures HTTP and exchange codes without exposing symbols or raw messages', () => {
+  const raw = [
+    { symbol: 'BTCUSDT', reason: 'provider_error', message: 'HTTP_429' },
+    { symbol: 'ETHUSDT', reason: 'provider_error', message: 'BITGET_40034 sensitive source details' },
+    { symbol: 'BTCUSDT', reason: 'provider_error', message: 'HTTP_502 arbitrary host' },
+    { symbol: 'SOLUSDT', reason: 'provider_error', message: 'CIRCUIT_OPEN internal metadata' },
+    { symbol: 'AVAXUSDT', reason: 'timeout', message: 'connection timeout on hidden host' },
+    { symbol: 'DOTUSDT', reason: 'invalid_data', message: 'no primary candles' },
+  ];
+  const result = summarizePublicProviderFailureReasons(raw);
+  assert.equal(result.failuresObserved, 6);
+  assert.equal(result.categories.HTTP_429, 1);
+  assert.equal(result.categories.BITGET_REST_CODE, 1);
+  assert.equal(result.categories.HTTP_5XX, 1);
+  assert.equal(result.categories.PROVIDER_ADMISSION, 1);
+  assert.equal(result.categories.TIMEOUT, 1);
+  assert.equal(result.categories.INVALID_DATA, 1);
+  assert.deepEqual(result.bitgetNumericCodes, ['40034']);
+  assert.equal(JSON.stringify(result).includes('BTCUSDT'), false);
+  assert.equal(JSON.stringify(result).includes('sensitive source details'), false);
+  assert.equal(result.symbolsRedacted,true);
+});
+
+test('provider failures missing or overflowing cannot be misreported as an empty-success reason list', () => {
+  assert.equal(summarizePublicProviderFailureReasons(undefined), null);
+  assert.equal(summarizePublicProviderFailureReasons(Array.from({length:81},()=>({reason:'provider_error',message:'HTTP_429'}))), null);
+  const rows = [{reason:'provider_error', message:'BITGET_bad_secret_001'}];
+  const diagnostic = summarizePublicProviderFailureReasons(rows);
+  assert.equal(diagnostic.categories.PROVIDER_OTHER, 1);
+  assert.deepEqual(diagnostic.bitgetNumericCodes, []);
+  const shot = snapshot();
+  const last = shot.coverage.find(x => x.market==='CRYPTO_FUTURES' && x.strategy==='MID_LONG');
+  last.status = 'SEARCH_FAILURE';
+  last.providerErrors = 6;
+  last.publicProviderFailureSummary = summarizePublicProviderFailureReasons([
+    {reason:'provider_error',message:'HTTP_429'},
+    {reason:'provider_error',message:'BITGET_40034'},
+  ]);
+  const result = inspectExactPublicProviderCycle(shot,SHA,NOW);
+  const lane = result.rows.find(x=>x.market==='CRYPTO_FUTURES').lanes.find(x=>x.strategy==='MID_LONG');
+  assert.equal(lane.publicProviderFailureSummary.categories.HTTP_429, 1);
+  assert.deepEqual(lane.publicProviderFailureSummary.bitgetNumericCodes, ['40034']);
+  assert.equal(lane.publicProviderFailureSummary.failuresObserved, 2);
+  assert.equal(result.rows.find(x=>x.market==='CRYPTO_FUTURES').providerErrorCount, 6);
 });
