@@ -21,9 +21,17 @@ test('V3 stable index pagination never repeats rank-shuffled Upbit and Bitget sy
   }
 });
 test('V3 only rejects duplicate and malformed public ticker identities',()=>{
-  for(const bad of [[],[{symbol:''}],[{symbol:'BTC@PRIVATE'}],
-    [{symbol:'BTC'},{symbol:'BTC'}]])
+  for(const bad of [[],[{symbol:''}],[{symbol:' BTC'}],
+    [{symbol:'BTC\nUSDT'}],[{symbol:'BTC'},{symbol:'BTC'}]])
     assert.throws(()=>stablePublicV3CryptoRows(bad),/PUBLIC_V3_CRYPTO_ROSTER/);
+});
+test('market-defined Bitget future code punctuation is sortable without silently dropping a symbol',()=>{
+  const rows=[{symbol:'BTC/USDT'},{symbol:'BTC@USDT'},
+    {symbol:'BTCUSDT_UMCBL'},{symbol:'1000000PEPEUSDT'},
+    {symbol:'LONGALTCOININDEXUSDTINDEXFUTURES202612'}];
+  const out=stablePublicV3CryptoRows(rows);
+  assert.equal(out.length,rows.length);
+  assert.equal(new Set(out.map(x=>x.symbol)).size,rows.length);
 });
 test('only an exact upstream scanner source can be transformed; Paper source stays intact',()=>{
   const isolated=patchV3CryptoScannerSource(source);
