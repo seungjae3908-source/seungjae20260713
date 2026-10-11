@@ -17,7 +17,9 @@ import { resolveSelectedResearchWindowV1 } from "./research-selected-window-v1.j
 const SCHEMA = "research-private-minute-session-archive-v1";
 const MAX_ORIGINAL_BYTES = 3 * 1024 * 1024;
 const SHA = /^[0-9a-f]{64}$/u;
-const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
+// Native Bitget identifiers can contain Han characters. The on-disk path
+// uses a SHA of this exact identifier; never transliterate an exchange pair.
+const SYMBOL = /^[A-Z0-9\p{Script=Han}][A-Z0-9\p{Script=Han}._:-]{0,39}$/u;
 const MARKETS = Object.freeze({
   KR_STOCK: "KRX", US_STOCK: "US_SIP",
   CRYPTO_SPOT: "UPBIT_KRW", CRYPTO_FUTURES: "BITGET_USDT_FUTURES",

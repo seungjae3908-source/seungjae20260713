@@ -5,6 +5,7 @@ on:
     branches:
       - research/four-market-daily-opportunity-scanner-3y-v1-20260930
     paths:
+      - market-prediction-lab/src/public-history-source-errors-v1.js
       - market-prediction-lab/scripts/run-four-market-daily-opportunity-scanner-3y-v1.py
       - market-prediction-lab/scripts/opportunity_coverage_audit_v1.py
       - market-prediction-lab/src/historical-intraday-opportunity-audit-v1.js

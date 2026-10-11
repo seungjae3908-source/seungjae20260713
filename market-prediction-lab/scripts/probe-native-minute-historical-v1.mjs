@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { collectUpbitSpotHistory } from "../src/upbit-spot-history.js";
 import { BitgetPublicClient, BitgetPublicApiError } from "../src/bitget-public-client.js";
 import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
+import { isPublicHistorySourceDataErrorV1 } from "../src/public-history-source-errors-v1.js";
 import { auditNativeObservedMinuteWindowV1 } from "../src/historical-intraday-opportunity-audit-v1.js";
 
 export const HISTORICAL_SAMPLE_WINDOW_V1 = Object.freeze({
@@ -21,7 +22,8 @@ const SOURCE_LIMITS = Object.freeze({ upbitPages:4, maxBitgetCandles:500 });
 
 export function classifyPublicSourceFailure(error) {
   const msg=String(error?.message ?? error);
-  if (error instanceof BitgetPublicApiError
+  if (isPublicHistorySourceDataErrorV1(error)
+      || error instanceof BitgetPublicApiError
       || /^UPBIT_HISTORY_HTTP_\d{3}$/.test(msg)
       || /^UPBIT_HISTORY_(RANGE_INCOMPLETE|INSUFFICIENT_\d+)$/.test(msg)
       || /^BITGET_HISTORY_RANGE_INCOMPLETE$/.test(msg)

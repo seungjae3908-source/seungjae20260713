@@ -92,6 +92,50 @@ async function countArchiveBytes(root, maxEntries=100000) {
   }
   return used;
 }
+/** Shared source-only archive guard. All public capture paths use this lock. */
+export async function withResearchMinuteArchiveBudgetV1({
+  root,maxSources=1,maxLocalBytes=DEFAULT_MAX_LOCAL_BYTES,
+  minFreeBytes=DEFAULT_MIN_FREE_BYTES,statfsImpl=statfs,
+}={},work) {
+  if(!Number.isSafeInteger(maxSources)||maxSources<1||maxSources>20
+    ||!Number.isSafeInteger(maxLocalBytes)||maxLocalBytes<MAX_SINGLE_SOURCE_BYTES
+    ||maxLocalBytes>16*1024*MIB||!Number.isSafeInteger(minFreeBytes)
+    ||minFreeBytes<0||minFreeBytes>100*1024*MIB
+    ||typeof statfsImpl!=="function"||typeof work!=="function")
+    fail("RESEARCH_MINUTE_BUDGET_ARGUMENT_INVALID");
+  await assertPrivateRoot(root);
+  const lockPath=join(root,".pit-native-minute-task.lock");
+  let lock;
+  try {
+    lock=await open(lockPath,"wx",0o600);
+    await lock.writeFile("RESEARCH_PUBLIC_SOURCE_GET_ONLY\n","utf8");
+    await lock.sync();
+  }catch(error){
+    if(lock){await lock.close();await unlink(lockPath);}
+    if(error?.code==="EEXIST")return Object.freeze({
+      status:"BLOCKED_DATA",reason:"ARCHIVE_WRITER_LOCK_HELD",
+    });
+    throw error;
+  }
+  try {
+    const before=await countArchiveBytes(root);
+    const fs=await statfsImpl(root);
+    const reserve=MAX_SINGLE_SOURCE_BYTES*maxSources;
+    const budget=Object.freeze({archiveBytesCheckedBeforeGet:before,
+      maxLocalBytes,minFreeBytes,reservedSourceBytes:reserve,
+      archiveWriterLockUsed:true});
+    const stop=reason=>Object.freeze({status:"BLOCKED_DATA",reason,...budget});
+    if(!fs||!Number.isSafeInteger(fs.bavail)||!Number.isSafeInteger(fs.bsize)
+      ||fs.bavail<0||fs.bsize<1)return stop("ARCHIVE_DISK_STAT_UNAVAILABLE");
+    if(before+reserve>maxLocalBytes)return stop("ARCHIVE_LOCAL_QUOTA_EXCEEDED");
+    if(BigInt(fs.bavail)*BigInt(fs.bsize)<BigInt(minFreeBytes+reserve))
+      return stop("ARCHIVE_MINIMUM_FREE_SPACE_NOT_MET");
+    return await work(budget);
+  }finally{
+    await lock.close();
+    await unlink(lockPath);
+  }
+}
 function validate({root,market,day,pages,taskPageIndex,taskIndex,
   expectedTaskDigestSha256,allowPublicReadOnlyFetch,
   maxLocalBytes,minFreeBytes,nowImpl,statfsImpl}) {

@@ -5,10 +5,13 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, statSync,
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { digestPITMembershipRowsV1 } from "../src/historical-pit-venue-universe-gate-v1.js";
-import { collectPITNativeCryptoMinuteSourceV1 as collect }
+import { collectPITNativeCryptoMinuteSourceV1 as collect,
+  normalizeRetrospectiveCryptoMinuteSourceV1 as normalize }
   from "../src/pit-native-crypto-minute-backfill-v1.js";
-import { deriveArchivedResearchTimeframesV1 as derive }
+import { deriveArchivedResearchTimeframesV1 as derive, persistResearchMinuteSessionV1 }
   from "../src/research-minute-archive-v1.js";
+import { collectUpbitSpotHistory } from "../src/upbit-spot-history.js";
+import { collectBitgetCandles } from "../src/bitget-candle-collector.js";
 import { parsePITNativeMinuteBackfillArgsV1 as parse,
   runPITNativeMinuteBackfillCliV1 as cli }
   from "../scripts/pit-native-crypto-minute-backfill-v1.mjs";
@@ -75,6 +78,147 @@ function bitgetMock(calls){
     ]};
   }};
 }
+
+function collectedSource(market = "CRYPTO_SPOT", symbol = "KRW-BTC", offsets = [0, 1], overrides = {}) {
+  return {
+    market, timeframe: "1m", intervalMs: MIN,
+    requestedStartTime: START, requestedEndTime: START + DAY,
+    rawPageWindowTraversed: true, reachedRequestedStart: true,
+    historicalSignalAvailabilityProven: false, actualFillProven: false,
+    ...(market === "CRYPTO_SPOT"
+      ? { providerMarket: symbol, exchange: "UPBIT", source: "upbit-public-candles" }
+      : { symbol, productType: "usdt-futures", provider: "bitget-public-v2" }),
+    candles: offsets.map(index => ({ timestamp: START + index * MIN,
+      open: 100, high: 104, low: 99, close: 102, volume: 2.5 })),
+    ...overrides,
+  };
+}
+
+test("normalizer strict default still requires provider traversal and two candles", () => {
+  const input = { market: "CRYPTO_SPOT", symbol: "KRW-BTC", dayStartMs: START, receivedAtMs: NOW };
+  const boundaryMissing = collectedSource("CRYPTO_SPOT", "KRW-BTC", [720, 721], {
+    rawPageWindowTraversed: false, reachedRequestedStart: false,
+  });
+  assert.equal(normalize({ ...input, collected: boundaryMissing }).error, "NATIVE_1M_PROVIDER_SCOPE_OR_HISTORY_UNVERIFIED");
+  assert.equal(normalize({ ...input, collected: collectedSource("CRYPTO_SPOT", "KRW-BTC", [0]) }).error, "NATIVE_1M_PROVIDER_SCOPE_OR_HISTORY_UNVERIFIED");
+  const strict = normalize({ ...input, collected: collectedSource() });
+  assert.equal(strict.providerRequestWindowVerified, true);
+  assert.equal(strict.source.minuteBars.length, 2);
+  assert.equal(strict.sourcePartialReason, "MISSING_MINUTE_SLOTS_NOT_PROVEN_NO_TRADES");
+  assert.equal(strict.missingUnverifiedMinuteSlots, 1438);
+  assert.equal(normalize({ ...input, allowPartialSource: "true", collected: boundaryMissing }).error, "NATIVE_1M_PARTIAL_SOURCE_OPTION_INVALID");
+});
+
+test("explicit source-only normalization preserves a single listing-edge candle without fabricating traversal", async () => {
+  const root = tmp();
+  try {
+    for (const [market, symbol] of [["CRYPTO_SPOT", "KRW-BTC"], ["CRYPTO_FUTURES", "龙虾USDT"]]) {
+      const collected = collectedSource(market, symbol, [1439], {
+        rawPageWindowTraversed: false, reachedRequestedStart: false,
+      });
+      const parsed = normalize({ market, symbol, dayStartMs: START, receivedAtMs: NOW, collected, allowPartialSource: true });
+      assert.ok(parsed.source);
+      assert.equal(parsed.providerRequestWindowVerified, false);
+      assert.equal(parsed.providerRawPageWindowTraversed, false);
+      assert.equal(parsed.providerReachedRequestedStart, false);
+      assert.equal(parsed.sourcePartialReason, "PROVIDER_REQUEST_WINDOW_NOT_FULLY_TRAVERSED");
+      assert.equal(parsed.missingUnverifiedMinuteSlots, 1439);
+      assert.equal(parsed.source.minuteBars[0].timestampMs, START + 1439 * MIN);
+      assert.equal(parsed.source.minuteBars[0].availableAtMs, NOW);
+      assert.equal(collected.rawPageWindowTraversed, false);
+      assert.equal(Object.hasOwn(parsed.source, "providerRequestWindowVerified"), false);
+      await persistResearchMinuteSessionV1({ root, source: parsed.source });
+      const saved = await derive({ root, market, symbol, sessionStartMs: START, asOfMs: NOW, timeframes: ["1m", "3m"] });
+      assert.equal(saved.sourceMinuteRows, 1);
+      assert.equal(saved.intervalData["1m"].bars.length, 1);
+      assert.equal(saved.intervalData["3m"].bars.length, 0);
+      assert.equal(saved.historicalWholeMarketSourceCoverageVerified, false);
+      assert.equal(saved.profitabilityProven, false);
+      const historical = await derive({ root, market, symbol, sessionStartMs: START, asOfMs: START + DAY, timeframes: ["1m"] });
+      assert.equal(historical.intervalData["1m"].bars.length, 0);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("partial option preserves each pagination boolean and distinguishes missing slots from a complete source window", () => {
+  const input = { market: "CRYPTO_SPOT", symbol: "KRW-BTC", dayStartMs: START, receivedAtMs: NOW, allowPartialSource: true };
+  const partial = normalize({ ...input, collected: collectedSource("CRYPTO_SPOT", "KRW-BTC", [0], {
+    rawPageWindowTraversed: false, reachedRequestedStart: true,
+  }) });
+  assert.equal(partial.providerRequestWindowVerified, false);
+  assert.equal(partial.providerRawPageWindowTraversed, false);
+  assert.equal(partial.providerReachedRequestedStart, true);
+  const complete = normalize({ ...input, collected: collectedSource("CRYPTO_SPOT", "KRW-BTC", Array.from({ length: 1440 }, (_, i) => i)) });
+  assert.equal(complete.providerRequestWindowVerified, true);
+  assert.equal(complete.sourcePartialReason, null);
+  assert.equal(complete.missingUnverifiedMinuteSlots, 0);
+  for (const overrides of [
+    { rawPageWindowTraversed: undefined }, { reachedRequestedStart: undefined },
+    { rawPageWindowTraversed: "true" }, { rawPageWindowTraversed: true, reachedRequestedStart: false },
+  ]) {
+    assert.equal(normalize({ ...input, collected: collectedSource("CRYPTO_SPOT", "KRW-BTC", [0], overrides) }).error, "NATIVE_1M_PROVIDER_SCOPE_OR_HISTORY_UNVERIFIED");
+  }
+});
+
+test("source-only normalization never relaxes capture clock, UTC day, venue or candle integrity", () => {
+  const input = { market: "CRYPTO_SPOT", symbol: "KRW-BTC", dayStartMs: START, receivedAtMs: NOW, allowPartialSource: true, collected: collectedSource() };
+  for (const receivedAtMs of [undefined, null, Number.NaN, -1, NOW + 0.5, START + DAY - 1, 8_640_000_000_000_001])
+    assert.equal(normalize({ ...input, receivedAtMs }).error, "NATIVE_1M_CAPTURE_CLOCK_OR_DAY_INVALID");
+  for (const dayStartMs of [undefined, null, 0, START + 1, START + MIN, Number.NaN])
+    assert.equal(normalize({ ...input, dayStartMs }).error, "NATIVE_1M_CAPTURE_CLOCK_OR_DAY_INVALID");
+  for (const override of [{ market: "US_STOCK" }, { market: "__proto__" }, { symbol: "../BTC" }, { symbol: "USDT-BTC" }])
+    assert.equal(normalize({ ...input, ...override }).error, "NATIVE_1M_SOURCE_IDENTITY_INVALID");
+  for (const override of [
+    { exchange: "OTHER" }, { providerMarket: "KRW-ETH" }, { source: "binance-spot" },
+    { timeframe: "5m" }, { intervalMs: 300_000 }, { requestedStartTime: START + MIN },
+    { requestedEndTime: START + DAY + MIN }, { historicalSignalAvailabilityProven: true },
+    { actualFillProven: true }, { candles: [] },
+  ]) assert.equal(normalize({ ...input, collected: { ...input.collected, ...override } }).error, "NATIVE_1M_PROVIDER_SCOPE_OR_HISTORY_UNVERIFIED");
+  for (const bad of [
+    { timestamp: START - MIN }, { timestamp: START + DAY }, { timestamp: START + 1 },
+    { open: 0 }, { high: 99 }, { low: 104 }, { close: Number.NaN }, { volume: null }, { volume: -1 },
+  ]) {
+    const collected = { ...input.collected, candles: [{ ...input.collected.candles[0], ...bad }] };
+    assert.equal(normalize({ ...input, collected }).error, "NATIVE_1M_ROW_ORDER_OR_OHLC_INVALID");
+  }
+  const duplicate = { ...input.collected, candles: [input.collected.candles[0], input.collected.candles[0]] };
+  assert.equal(normalize({ ...input, collected: duplicate }).error, "NATIVE_1M_ROW_ORDER_OR_OHLC_INVALID");
+});
+
+test("one-candle native collectors require explicit source-only opt-in while canonical PIT remains strict", async () => {
+  const ts = START + 720 * MIN;
+  const spotConfig = { symbol: "KRW-BTC", timeframe: "1m", startTime: START, endTime: START + DAY,
+    minCandles: 1, minIntervalMs: 0, requireFullWindow: false,
+    fetchImpl: async url => ({ ok: true, status: 200, json: async () =>
+      Date.parse(new URL(url).searchParams.get("to")) > ts ? [nativeMinute(ts)] : [] }),
+  };
+  await assert.rejects(() => collectUpbitSpotHistory(spotConfig), /minCandles/);
+  await assert.rejects(() => collectUpbitSpotHistory({ ...spotConfig, allowPartialSource: true, requireFullWindow: true }), /allowPartialSource/);
+  const spot = await collectUpbitSpotHistory({ ...spotConfig, allowPartialSource: true });
+  assert.equal(spot.candles.length, 1);
+  assert.equal(spot.reachedRequestedStart, false);
+  assert.equal(spot.rawPageWindowTraversed, false);
+  const futuresConfig = { client: { get: async () => ({ code: "00000", data: [[String(ts), "100", "104", "99", "102", "2.5"]] }) },
+    market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "1m", startTime: START, endTime: START + DAY,
+    minCandles: 1, requireFullWindow: false,
+  };
+  await assert.rejects(() => collectBitgetCandles(futuresConfig), /minCandles/);
+  await assert.rejects(() => collectBitgetCandles({ ...futuresConfig, allowPartialSource: true, requireFullWindow: true }), /allowPartialSource/);
+  const future = await collectBitgetCandles({ ...futuresConfig, allowPartialSource: true });
+  assert.equal(future.candles.length, 1);
+  assert.equal(future.rawPageWindowTraversed, false);
+  const parsed = normalize({ market: "CRYPTO_FUTURES", symbol: "BTCUSDT", dayStartMs: START, receivedAtMs: NOW, collected: future, allowPartialSource: true });
+  assert.ok(parsed.source);
+  const root = tmp();
+  try {
+    const canonical = await collect({ ...config(root, "CRYPTO_SPOT", "KRW-BTC", {
+      allowPublicReadOnlyFetch: true, upbitFetchImpl: spotConfig.fetchImpl,
+    }), allowPartialSource: true });
+    assert.equal(canonical.status, "BLOCKED_DATA");
+    assert.equal(canonical.reason, "NATIVE_1M_PROVIDER_DATA_UNAVAILABLE");
+    assert.equal(canonical.providerReason, "UPBIT_HISTORY_RANGE_INCOMPLETE");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("Upbit PIT public 1m opt-in stores private source, no historical as-of fabrication",async()=>{
   const root=tmp(),calls=[];
@@ -217,6 +361,42 @@ test("wrong source identity, unavailable historical window and malformed candles
     }));
     assert.equal(future.reason,"HISTORIC_UTC_DAY_NOT_CLOSED");
   }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test("PIT minute source records known malformed provider data but surfaces unknown implementation errors", async () => {
+  const root = tmp();
+  try {
+    const spot = await collect(config(root, "CRYPTO_SPOT", "KRW-BTC", {
+      allowPublicReadOnlyFetch: true,
+      upbitFetchImpl: async () => ({ ok: true, status: 200, json: async () => [
+        nativeMinute(START), { ...nativeMinute(START + MIN), candle_acc_trade_volume: null },
+      ] }),
+    }));
+    assert.equal(spot.status, "BLOCKED_DATA");
+    assert.equal(spot.reason, "NATIVE_1M_PROVIDER_DATA_UNAVAILABLE");
+    assert.equal(spot.providerReason, "UPBIT_HISTORY_INVALID_OHLCV");
+    const future = await collect(config(root, "CRYPTO_FUTURES", "BTCUSDT", {
+      allowPublicReadOnlyFetch: true,
+      bitgetClient: { get: async () => ({ code: "00000", data: [
+        [String(START), "100", "104", "99", "102", "2.5", "255"],
+        [String(START + MIN), "100", "104", "99", "102", "2.5", "-255"],
+      ] }) },
+    }));
+    assert.equal(future.status, "BLOCKED_DATA");
+    assert.equal(future.reason, "NATIVE_1M_PROVIDER_DATA_UNAVAILABLE");
+    assert.equal(future.netProfitPct, null);
+    const timeout = await collect(config(root, "CRYPTO_SPOT", "KRW-BTC", {
+      allowPublicReadOnlyFetch: true,
+      upbitFetchImpl: async () => { throw Object.assign(new Error("request timeout: UPBIT_HISTORY_TIMEOUT"), { code: "UPBIT_HISTORY_TIMEOUT" }); },
+    }));
+    assert.equal(timeout.reason, "NATIVE_1M_PROVIDER_DATA_UNAVAILABLE");
+    const defect = Object.assign(new TypeError("unexpected local defect"), { code: "UPBIT_HISTORY_UNKNOWN_DEFECT" });
+    await assert.rejects(() => collect(config(root, "CRYPTO_SPOT", "KRW-BTC", {
+      allowPublicReadOnlyFetch: true, upbitFetchImpl: async () => { throw defect; },
+    })), (error) => error === defect);
+    const archived = await derive({ root, market: "CRYPTO_SPOT", symbol: "KRW-BTC", sessionStartMs: START, asOfMs: NOW, timeframes: ["1m"] });
+    assert.equal(archived.reason, "ARCHIVED_SESSION_NOT_FOUND");
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("private CLI dry-run outputs blocked receipt; explicit GET stores and duplicate receipt fails",async()=>{

@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import {collectUpbitSpotHistory} from "./upbit-spot-history.js";
 import {normalizeBitgetCandle} from "./bitget-candle-collector.js";
 import {BitgetPublicApiError,BITGET_ENDPOINTS} from "./bitget-public-client.js";
+import {isPublicHistorySourceDataErrorV1} from "./public-history-source-errors-v1.js";
 import {auditHistoricalPITVenueUniverseV1}
   from "./historical-pit-venue-universe-gate-v1.js";
 import {FOUR_MARKET_WHOLE_SCOPE_V1 as SCOPE,
@@ -176,7 +177,8 @@ export async function collectNativePITDayPriceV1({
 }
 function expectedProviderFailure(error){
   const e=String(error?.message??"");
-  return error instanceof BitgetPublicApiError
+  return isPublicHistorySourceDataErrorV1(error)
+    ||error instanceof BitgetPublicApiError
     ||/^UPBIT_HISTORY_(?:HTTP_\d+|RANGE_INCOMPLETE|INSUFFICIENT_\d+)/.test(e);
 }
 export async function collectNativeHistoricalPITDayChunkV1({
