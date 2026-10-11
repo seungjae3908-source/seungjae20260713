@@ -13,6 +13,9 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
+import { ChartCurrencyProvider, useChartCurrency } from '@/components/chart-currency-provider';
+import { AiChartLivePanel, AiChartDrawingSummary, type ChartLiveSnapshot } from '@/components/ai-chart-live-panel';
+
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import {
   defaultStrategyMode,
@@ -83,19 +86,12 @@ const LazyUnifiedAnalysisChart = lazy(() =>
     default: UnifiedAnalysisChart,
   })),
 );
-const LazyAiChartPositionPanel = lazy(() =>
-  import('@/components/ai-chart-position-panel').then(({ AiChartPositionPanel }) => ({
-    default: AiChartPositionPanel,
-  })),
-);
-
-type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';
+type MobileChartTab = 'summary' | 'chart' | 'live';
 
 const MOBILE_CHART_TABS = [
-  { value: 'summary', label: '요약' },
   { value: 'chart', label: '차트' },
-  { value: 'position', label: '내 포지션' },
-  { value: 'details', label: '상세' },
+  { value: 'summary', label: '현재 판단' },
+  { value: 'live', label: 'AI 생중계' },
 ] as const;
 
 function emptySelection(): AnalysisSelection {
@@ -182,7 +178,12 @@ function strategyModeLabel(mode: AiChartStrategyMode): string {
 
 function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
   return chartSelectionKey(left) === chartSelectionKey(right)
-    && left.displayName === right.displayName;
+    && left.displayName === right.displayName
+    && left.signalId === right.signalId
+    && left.searchRunId === right.searchRunId
+    && left.signalScore === right.signalScore
+    && left.action === right.action
+    && left.selectedAt === right.selectedAt;
 }
 
 function supportedSelection(value: AnalysisSelection | null): AnalysisSelection | null {
@@ -219,7 +220,7 @@ function initialStrategyMode(selection: AnalysisSelection): AiChartStrategyMode 
 }
 
 function useDesktopChartLayout(): boolean {
-  const query = '(min-width: 1024px)';
+  const query = '(min-width: 768px)';
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
 
   useEffect(() => {
@@ -330,66 +331,17 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
 }
 
 function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
-  return (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-      <div className="flex items-center gap-2">
-        <Database className="h-4 w-4 text-primary" />
-        <h2 className="text-sm font-black">현재 판단</h2>
-      </div>
-      {analysis ? (
-        <div className="mt-3 space-y-3 text-xs">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <BiasIcon bias={analysis.bias} />
-                <strong className="line-clamp-2 break-keep text-sm">{analysis.title}</strong>
-              </div>
-            </div>
-            <span
-              className={cn(
-                'shrink-0 rounded-full border px-2 py-1 text-[10px] font-black',
-                analysis.status === 'confirmed'
-                  ? 'border-primary/30 bg-primary/10 text-primary'
-                  : analysis.status === 'invalidated' || analysis.status === 'expired'
-                    ? 'border-muted bg-muted text-muted-foreground'
-                    : 'border-warning/30 bg-warning/10 text-warning',
-              )}
-            >
-              {statusLabel(analysis.status)}
-            </span>
-          </div>
-
-          <p className="line-clamp-3 break-keep rounded-2xl bg-secondary/70 px-3 py-3 leading-5 text-foreground">
-            {analysis.summary}
-          </p>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-2xl border border-card-border bg-background p-3">
-              <div className="flex items-center gap-1.5 text-muted-foreground">
-                <Clock3 className="h-3.5 w-3.5" />
-                <span className="text-[10px] font-bold">감지</span>
-              </div>
-              <strong className="mt-1 block text-[11px]">{formatAnalysisTime(analysis.detectedAt)}</strong>
-            </div>
-            <div className="rounded-2xl border border-card-border bg-background p-3">
-              <p className="text-[10px] font-bold text-muted-foreground">최근 변화</p>
-              <strong className="mt-1 block line-clamp-2 break-keep text-[11px]">
-                {analysis.transitionReason ?? '최초 분석'}
-              </strong>
-            </div>
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-3">
-            <CompactList title="판단 근거" items={analysis.reasons} />
-            <CompactList title="확인 조건" items={analysis.confirmationConditions} />
-            <CompactList title="무효 조건" items={analysis.invalidationConditions} danger />
-          </div>
-        </div>
-      ) : (
-        <p className="mt-3 text-xs font-bold text-muted-foreground">차트 데이터 확인 후 표시됩니다.</p>
-      )}
-    </section>
-  );
+  const { format } = useChartCurrency();
+  const market = ['KR', 'US', 'UPBIT', 'BITGET'].includes(analysis?.market ?? '') ? analysis!.market as AnalysisSelection['market'] : 'KR';
+  const current = typeof analysis?.relatedIndicators.currentPrice === 'number' ? analysis.relatedIndicators.currentPrice : null;
+  return <section className="rounded-2xl border border-card-border bg-card p-4">
+    <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-black">현재 판단</h2><span className="rounded-lg bg-secondary px-2 py-1 text-xs">{analysis ? statusLabel(analysis.status) : '확인 중'}</span></div>
+    {analysis ? <><div className="mt-3 flex items-center gap-2"><BiasIcon bias={analysis.bias} /><strong className="text-sm">{analysis.bias === 'bullish' ? '상승 우세' : analysis.bias === 'bearish' ? '하락 우세' : '판단 보류'}</strong></div>
+      <p className="mt-2 text-xl font-black tabular-nums">{format(current, market)}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2">{analysis.priceLevels.slice(0, 4).map((level, i) => <div key={level.role + i} className="rounded-xl bg-background p-2"><p className="text-[11px] text-muted-foreground">{level.role === 'support' ? '지지' : level.role === 'resistance' ? '저항' : level.role === 'target' ? '참고 목표' : level.role === 'invalidation' ? '무효화' : level.role}</p><p className="mt-1 text-xs font-bold tabular-nums">{format(level.price, market)}</p></div>)}</div>
+      <p className="mt-3 text-[11px] text-muted-foreground">{formatAnalysisTime(analysis.detectedAt)} · 기술 강도 {formatAiChartScore(analysis.confidence)} · 승률 아님</p>
+    </> : <p className="mt-3 text-xs text-muted-foreground">유효한 시세 확인 중</p>}
+  </section>;
 }
 
 function CompactList({ title, items, danger = false }: { title: string; items: string[]; danger?: boolean }) {
@@ -439,10 +391,14 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
 
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const hasSelection = Boolean(String(selection.symbol || selection.ticker || '').trim());
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
+  const [liveSnapshot, setLiveSnapshot] = useState<ChartLiveSnapshot | null>(null);
+  const handleLiveSnapshotChange = useCallback((snapshot: ChartLiveSnapshot) => setLiveSnapshot(snapshot), []);
+  const visibleLiveSnapshot = liveSnapshot?.identity === `${selection.market}:${selection.ticker}:${selection.timeframe}` ? liveSnapshot : null;
   const [criticalRendererMounted, setCriticalRendererMounted] = useState(() => !DIRECT_AI_CHART_COLD_ROUTE);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
-  const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
+  const [mobileTab, setMobileTab] = useState<MobileChartTab>('chart');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -473,8 +429,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectionOrderRef = useRef<ChartSelectionOrder | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
-
-  const ignorePositionOverlay = useCallback(() => {}, []);
 
   const stopPopupTracking = useCallback(() => {
     popupPollCleanupRef.current?.();
@@ -507,7 +461,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     selectionRef.current = normalized;
     setSelection(normalized);
     setAnalysis(null);
-    setMobileTab('summary');
+    setMobileTab('chart');
   }, [embedded, state.selection]);
 
   useEffect(() => {
@@ -758,6 +712,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         selection={selection}
         onSelectionChange={updateSelection}
         onAnalysisChange={handleAnalysisChange}
+        onLiveSnapshotChange={handleLiveSnapshotChange}
       />
     </Suspense>
   ) : emptyState;
@@ -780,33 +735,19 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   ) : null;
 
   const details = hasSelection ? (
-    <div className="space-y-4">
-      {deferNonCriticalEvidence ? (
-        <p
-          role="status"
-          data-testid="ai-chart-cold-evidence-deferred"
-          className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground"
-        >
-          차트를 먼저 준비한 뒤 AI 분석 근거와 공개 시장 근거를 불러옵니다.
-        </p>
-      ) : (
-        <>
-          {intelligencePanel}
-          <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
-            <LazyFuturesPublicContextPanel selection={selection} />
-          </Suspense>
-        </>
-      )}
-      <ContextCard selection={selection} analysis={analysis} />
+    <div className="space-y-3">
       <DecisionCard analysis={analysis} />
-      <SafetyNote />
+      <AiChartDrawingSummary snapshot={visibleLiveSnapshot} />
+      <details className="rounded-2xl border border-card-border bg-card p-4" onToggle={event => setEvidenceOpen(event.currentTarget.open)}>
+        <summary className="cursor-pointer text-xs font-bold text-muted-foreground">분석 근거 더 보기</summary>
+        <div className="mt-3 space-y-3">{evidenceOpen && <>{intelligencePanel}<Suspense fallback={null}><LazyFuturesPublicContextPanel selection={selection} /></Suspense><ContextCard selection={selection} analysis={analysis} /></>}</div>
+      </details>
     </div>
-  ) : <div className="space-y-4"><SafetyNote /></div>;
-
+  ) : null;
   const mobile = !desktop && !externalMode && !embedded;
 
   return (
-    <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
+    <ChartCurrencyProvider market={selection.market}><div className="flex h-full min-h-0 flex-col"><div data-testid="ai-chart-route-scroll" className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain bg-background pb-4">
       <header className="sticky top-0 z-30 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
           {!embedded && !externalMode && (
@@ -857,54 +798,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         )}
       </header>
 
-      {mobile ? (
-        <>
-          <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl sm:top-[61px]">
-            <div className="mx-auto max-w-7xl">
-              <ResponsiveTabs
-                value={mobileTab}
-                options={MOBILE_CHART_TABS}
-                onChange={setMobileTab}
-                ariaLabel="AI 차트 모바일 보기"
-                testId="ai-chart-mobile-tabs"
-                compact
-                fluid
-              />
-            </div>
-          </div>
-          <main className="mx-auto w-full max-w-7xl p-3 sm:p-4">
-            {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={analysis} /> : emptyState) : null}
-            {mobileTab === 'chart' ? (
-              <section data-testid="ai-chart-mobile-chart" className="min-w-0 space-y-3">
-                {chart}
-                {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
-              </section>
-            ) : null}
-            {mobileTab === 'position' ? (
-              <section data-testid="ai-chart-mobile-position" className="min-w-0">
-                {hasSelection ? (
-                  <LazyAiChartPositionPanel
-                    selection={selection}
-                    market={selection.market}
-                    symbol={selection.symbol || selection.ticker}
-                    chartPrice={null}
-                    pricePlan={selection.pricePlan}
-                    onOverlayChange={ignorePositionOverlay}
-                  />
-                ) : emptyState}
-              </section>
-            ) : null}
-            {mobileTab === 'details' ? <section data-testid="ai-chart-mobile-details">{details}</section> : null}
-          </main>
-        </>
-      ) : (
-        <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-          <section className="min-w-0">{chart}</section>
-          <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">{details}</aside>
-        </main>
-      )}
+      {mobile && <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl">
+        <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={setMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
+      </div>}
+      <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:grid-cols-[minmax(0,1fr)_280px] md:p-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <section data-testid="ai-chart-mobile-chart" hidden={hasSelection && mobile && mobileTab !== 'chart'} className="min-w-0 space-y-3">{chart}</section>
+        <aside hidden={!hasSelection} className="min-w-0 space-y-3 md:sticky md:top-20">
+          <div data-testid="ai-chart-mobile-judgment" hidden={mobile && mobileTab !== 'summary'}>{details}</div>
+          <div data-testid="ai-chart-mobile-live" hidden={mobile && mobileTab !== 'live'}><AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} /></div>
+        </aside>
+      </main>
 
-      {!embedded && !externalMode && <BottomNav />}
-    </div>
+    </div>{!embedded && !externalMode && <BottomNav />}
+    </div></ChartCurrencyProvider>
   );
 }
