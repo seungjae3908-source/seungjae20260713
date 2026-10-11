@@ -111,7 +111,6 @@ export type ManualPaperFourMarketCycle=Readonly<{
 const MARKET_CURRENCY:Readonly<Record<AdminPaperMarket,ManualPaperFourQuoteCurrency>>={
   domestic_stock:'KRW',us_stock:'USD',crypto_spot:'KRW',crypto_futures:'USDT',
 };
-const YEAR=365*24*60*60*1000;
 const FRESH=60_000;
 const riskAllowed=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v)&&v>=0;
 const positive=(v:unknown):v is number=>riskAllowed(v)&&v>0;
@@ -173,6 +172,11 @@ export function evaluateManualFourMarketPaperClosedCycle(
   if(!Number.isFinite(margin)
     ||!(positive(o.operatingCapitalKrw)&&margin<=o.operatingCapitalKrw))
     add('PAPER_CYCLE_INSUFFICIENT_OPERATING_CAPITAL');
+  if(positive(o.highWaterMarkKrw)&&riskAllowed(o.operatingCapitalKrw)
+    &&riskAllowed(o.lockedReserveKrw)
+    &&(o.highWaterMarkKrw<1_000_000
+      ||o.highWaterMarkKrw+0.01<o.operatingCapitalKrw+o.lockedReserveKrw))
+    add('PAPER_CYCLE_INVALID_HIGH_WATER_PROOF');
   if(!Number.isSafeInteger(s.signalObservedAtMs)||!Number.isSafeInteger(o.strategyValidatedAtMs)
     ||s.signalObservedAtMs<=0||o.strategyValidatedAtMs<=0
     ||o.strategyValidatedAtMs>s.signalObservedAtMs
@@ -211,6 +215,8 @@ export function evaluateManualFourMarketPaperClosedCycle(
     if(c.entryFxKrwPerQuote!==1||c.exitFxKrwPerQuote!==1)
       add('PAPER_CYCLE_KRW_FX_MUST_EQUAL_ONE');
   }
+  if(s.market!=='crypto_futures'&&c.signedFundingKrw!==0)
+    add('PAPER_CYCLE_NONFUTURES_FUNDING_FORBIDDEN');
   if(Array.isArray(o.priorCloseEventIds)
     &&new Set(o.priorCloseEventIds).size!==o.priorCloseEventIds.length)
     add('PAPER_CYCLE_LEDGER_DUPLICATE');
@@ -233,10 +239,12 @@ export function evaluateManualFourMarketPaperClosedCycle(
   // model. A mock price move beyond pledged margin must never fabricate a fill.
   if(s.market==='crypto_futures' &&netKrw< -margin-0.01)
     return blocked(input,['PAPER_CYCLE_UNMODELLED_ISOLATED_LIQUIDATION']);
+  // Identity anchors to the decision, not to a later price/cost revision.
+  // Otherwise the same order can be replayed with a new feed ID and credited
+  // twice. Evidence IDs remain in the journal for actual audit.
   const dedupId='paper-manual-cycle-v1:'+sha([
     s.ownerId,s.accountId,o.currentEpochId,o.currentRoundNumber,s.candidateId,
     s.market,s.symbol,s.side,s.leverage,s.signalObservedAtMs,
-    e.sourceId,x.sourceId,c.sourceId,c.fxSourceId,
   ].join('|'));
   if(o.priorCloseEventIds.includes(dedupId))
     return blocked(input,['PAPER_CYCLE_ALREADY_CLOSED']);
