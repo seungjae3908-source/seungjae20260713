@@ -67,7 +67,7 @@ export function FourMarketPaperStatusPanel(){
               ? '내부 예비금 '+formatWon(balance.reserveKrw!)
               : '예비금 미확정'}</p>
             {balance.settlementReady ? <p>검증 정산 거래 {balance.settledTrades?.toLocaleString('ko-KR')}건</p> : null}
-            {balance.settlementReady ? <p>오늘 손실 거래 {balance.dailyLosingTrades}/5회</p> : null}
+            {balance.settlementReady ? <p>오늘 손실 거래 {balance.dailyLosingTrades}회 (중단 없이 기록)</p> : null}
             <p>{balance.newEntriesAllowed?'시장별 자본 게이트 통과 (실행 미보장)':'시장별 자본 게이트 차단'}</p>
             {balance.blockers.length > 0 ? <p className="mt-1 text-amber-700">차단 근거: {balance.blockers.slice(0,2).join(' · ')}{balance.blockers.length>2 ? ` 외 ${balance.blockers.length-2}건` : ''}</p> : null}
           </div>;
