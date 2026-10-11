@@ -37,6 +37,8 @@ const groups = {
     path.join(root, 'src/services/paper-journal-service-role.repository.test.ts'),
     path.join(root, 'src/services/paper-journal-analytics.service.test.ts'),
     path.join(root, 'src/services/unified-trade-journal.service.test.ts'),
+    path.join(root, 'src/services/trade-automation-unified-journal-adapter.test.ts'),
+    path.join(root, 'src/services/automatic-paper-journal-mirror.service.test.ts'),
     path.join(root, 'src/services/paper-journal-migration.test.ts'),
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-sync-storage.test.ts'),
   ],
