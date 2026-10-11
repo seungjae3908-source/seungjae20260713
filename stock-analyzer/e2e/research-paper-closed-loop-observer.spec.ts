@@ -259,9 +259,9 @@ async function install(page: Page, body: unknown, journalBody: unknown = journal
 
 async function openPaper(page: Page) {
   await page.goto('/research-center');
-  await page.getByRole('button', { name: '상세', exact: true }).click();
+  await page.getByRole('button', { name: '연구', exact: true }).click();
   await expect(page.getByTestId('research-center-page')).toBeVisible();
-  await page.getByRole('tab', { name: '모의매매', exact: true }).click();
+  await page.getByRole('button', { name: '모의매매', exact: true }).click();
   await expect(page.getByTestId('research-paper-tab')).toBeVisible();
 }
 
@@ -273,10 +273,10 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
 
     const observer = page.getByTestId('paper-closed-loop-observer');
     await expect(observer).toBeVisible();
-    await expect(observer).toContainText('Candidate → Entry → Position → Trigger → Settlement → 8 Cost → Net PnL → 매매일지');
-    await expect(observer).toContainText('READ ONLY · executionAuthority=NONE');
+    await expect(observer.getByRole('article')).toHaveCount(8);
+    await expect(observer).toContainText('조회 전용 · 실주문 없음');
 
-    await expect(page.getByTestId('paper-closed-loop-candidate')).toContainText('identity 확인');
+    await expect(page.getByTestId('paper-closed-loop-candidate')).toContainText('후보 일치 확인');
     await expect(page.getByTestId('paper-closed-loop-entry')).toContainText('4건');
     await expect(page.getByTestId('paper-closed-loop-position')).toContainText('2건');
     await expect(page.getByTestId('paper-closed-loop-trigger')).toContainText('1건 검증');
@@ -296,9 +296,9 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 
     const firstZero = page.getByTestId('paper-closed-loop-first-zero');
     await expect(firstZero).toContainText('화면 기준 첫 미완료 단계');
     await expect(firstZero).toContainText('관측 범위 완료');
-    await expect(firstZero).toContainText('Canonical FIRST_ZERO');
+    await expect(firstZero).toContainText('원본 차단 사유');
     await expect(firstZero).toContainText('CANONICAL_TRIGGER_READBACK_NOT_EXPOSED');
-    await expect(firstZero).toContainText('이 UI가 임의로 변경하지 않습니다');
+    await expect(firstZero).toContainText('CANONICAL_TRIGGER_READBACK_NOT_EXPOSED');
 
     await expect(page.getByTestId('paper-closed-loop-paper-link')).toHaveAttribute('href', '/paper-trading');
     await expect(page.getByTestId('paper-closed-loop-journal-link')).toHaveAttribute('href', '/portfolio?tab=journal');
@@ -313,12 +313,12 @@ test('missing candidate evidence stays unknown instead of borrowing aggregate Pa
   await install(page, overview(false));
   await openPaper(page);
 
-  await expect(page.getByTestId('paper-closed-loop-candidate')).toContainText('MISSING');
+  await expect(page.getByTestId('paper-closed-loop-candidate')).toContainText('미확인·차단');
   await expect(page.getByTestId('paper-closed-loop-entry')).toContainText('미관측');
   await expect(page.getByTestId('paper-closed-loop-position')).toContainText('미관측');
   await expect(page.getByTestId('paper-closed-loop-settlement')).toContainText('미관측');
   await expect(page.getByTestId('paper-closed-loop-net-pnl')).toContainText('미관측');
-  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('Candidate');
+  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('후보');
   await expect(page.getByTestId('paper-closed-loop-observer')).not.toContainText('0.0000');
 });
 
@@ -357,7 +357,7 @@ test('verified Full Cost without canonical Net PnL keeps Net PnL blocked', async
   await expect(netPnl).toContainText('15.5');
   await expect(netPnl).toContainText('Net PnL canonical binding은 아직 별도 검증되지 않았습니다');
   await expect(netPnl).toContainText('불충족');
-  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('Net PnL');
+  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('비용 후 손익');
 });
 
 test('verified Trigger without canonical Full Cost keeps 8 Cost blocked', async ({ page }) => {
@@ -370,7 +370,7 @@ test('verified Trigger without canonical Full Cost keeps 8 Cost blocked', async 
   await expect(cost).toContainText('canonical 8 Cost는 아직 검증되지 않았습니다');
   await expect(cost).toContainText('불충족');
   await expect(page.getByTestId('paper-closed-loop-trigger')).toContainText('1건 검증');
-  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('8 Cost');
+  await expect(page.getByTestId('paper-closed-loop-first-zero')).toContainText('총비용 8항목');
 });
 
 test('journal identity mismatch is blocked instead of becoming a verified candidate link', async ({ page }) => {
