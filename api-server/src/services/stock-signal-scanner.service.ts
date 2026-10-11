@@ -21,6 +21,7 @@ import {
 } from './scanner-quant-strategy.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import { ScannerUniverseService } from './scanner-universe.service';
+import { scannerTimestampMs } from './scanner-data-quality.service';
 
 export interface StockSignalScanRequest {
   memberId: string;
@@ -151,6 +152,27 @@ function throwIfAborted(signal?: AbortSignal): void {
   throw abortError();
 }
 
+export function completedStockScannerCandles(market: 'KR' | 'US', timeframe: string, rows: Candle[], now = Date.now()): Candle[] {
+  const interval = ({ '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000,
+    '30m': 1_800_000, '60m': 3_600_000, '1H': 3_600_000, '4H': 14_400_000 } as Record<string, number>)[timeframe];
+  const formatter = timeframe === '1D' ? new Intl.DateTimeFormat('en-US', {
+    timeZone: market === 'US' ? 'America/New_York' : 'Asia/Seoul', year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : null;
+  const wall = (at: number) => {
+    const p = new Map(formatter!.formatToParts(new Date(at)).map(v => [v.type, v.value]));
+    return { date: `${p.get('year')}-${p.get('month')}-${p.get('day')}`, minute: Number(p.get('hour')) * 60 + Number(p.get('minute')) };
+  };
+  return rows.filter(row => {
+    const at = scannerTimestampMs(row.time);
+    // Preserve corrupt/future facts for the quality gate to reject explicitly.
+    if (at == null || at > now) return true;
+    if (interval != null) return at + interval <= now;
+    if (!formatter) return true;
+    const bar = wall(at), current = wall(now);
+    return bar.date < current.date || (bar.date === current.date && current.minute >= (market === 'US' ? 16 * 60 : 15 * 60 + 30));
+  });
+}
+
 async function loadStockCandles(
   market: 'KR' | 'US',
   ticker: string,
@@ -162,16 +184,16 @@ async function loadStockCandles(
   if (market === 'US' && timeframe === '3m') {
     const oneMinute = await providerHealth.getCandles(market, ticker, '1m', signal);
     throwIfAborted(signal);
-    return aggregateUsSessionCandles(oneMinute, 1, 3);
+    return completedStockScannerCandles(market, timeframe, aggregateUsSessionCandles(oneMinute, 1, 3));
   }
   if (market === 'US' && timeframe === '4H') {
     const hourly = await providerHealth.getCandles(market, ticker, '60m', signal);
     throwIfAborted(signal);
-    return aggregateUsSessionCandles(hourly, 60, 240);
+    return completedStockScannerCandles(market, timeframe, aggregateUsSessionCandles(hourly, 60, 240));
   }
   const candles = await providerHealth.getCandles(market, ticker, timeframe as Timeframe, signal);
   throwIfAborted(signal);
-  return candles;
+  return completedStockScannerCandles(market, timeframe, candles);
 }
 
 function boundedCompatibilityTimeframe(timeframe: string): Timeframe {
@@ -243,6 +265,7 @@ export const StockSignalScannerService = {
         timeframe: primaryTimeframe,
         candles,
         contextCandles: contextByTicker.get(card.ticker) ?? [],
+        contextTimeframe,
         strategyMode,
         allowShort: false,
         sessionAware: true,
@@ -341,6 +364,7 @@ export const StockSignalScannerService = {
         backtestMissingCount: ranking.diagnostics.backtestMissingCount,
       },
       universe: {
+        rosterId: universe.rosterId,
         totalCount: universe.totalCount,
         cursor: universe.cursor,
         nextCursor: universe.nextCursor,

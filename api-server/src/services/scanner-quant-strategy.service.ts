@@ -231,7 +231,9 @@ function gradeFor(score: number, factors: ScannerQuantFactors, input: ScannerQua
 
 export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): ScannerQuantStrategyResult {
   const primary = buildScannerIndicatorSnapshot(input.candles, input.sessionTimeZone ?? 'UTC');
-  const context = buildScannerIndicatorSnapshot(input.contextCandles.length ? input.contextCandles : input.candles, input.sessionTimeZone ?? 'UTC');
+  const context = buildScannerIndicatorSnapshot(input.contextCandles, input.sessionTimeZone ?? 'UTC');
+  const contextMissing = input.contextCandles.length === 0;
+  const contextInsufficient = input.contextCandles.length < 60;
   const aiValidation = input.aiValidation ?? DEFAULT_AI_VALIDATION;
   const factors = input.mode === 'scalping' ? scalpingFactors(primary, context, input) : input.mode === 'position' ? positionFactors(primary, context, input) : swingFactors(primary, context, input);
   const limits = limitsFor(input.mode);
@@ -244,8 +246,9 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
   if (input.dataQuality.state === 'DATA_UNTRUSTED') score = Math.min(score, 49);
   if (aiValidation.status === 'VETO') score = Math.min(score, 49);
   if (aiValidation.status === 'PARTIAL') score = Math.min(score, 79);
+  if (contextInsufficient) score = Math.min(score, 74);
   const independentSignalEvidence = hasIndependentSignalEvidence(factors, direction);
-  const strongSignalEligible = direction !== 'NEUTRAL' && independentSignalEvidence && score >= limits.strongScore
+  const strongSignalEligible = !contextInsufficient && direction !== 'NEUTRAL' && independentSignalEvidence && score >= limits.strongScore
     && input.dataQuality.state !== 'DATA_UNTRUSTED' && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore
     && (input.riskScore ?? 101) <= limits.maxRiskScore && factors.liquidity >= limits.minLiquidityFactor
     && factors.volatility >= limits.minVolatilityFactor && aiValidation.status !== 'VETO';
@@ -262,6 +265,8 @@ export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): Scann
     ...aiValidation.counterEvidence.map((reason) => `AI 반대근거: ${reason}`),
     ...aiValidation.missingData.map((reason) => `AI 데이터부족: ${reason}`),
     ...aiValidation.risks.map((reason) => `AI 위험: ${reason}`),
+    ...(contextMissing ? ['CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE'] : []),
+    ...(!contextMissing && contextInsufficient ? ['CONTEXT_TIMEFRAME_HISTORY_INSUFFICIENT'] : []),
   ];
   return { mode: input.mode, score, grade, direction, factors, primary, context, strongSignalEligible, reasons, warnings, aiValidation };
 }

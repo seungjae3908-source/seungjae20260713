@@ -411,6 +411,18 @@ test('actual-provider semantics with zero signals remains a valid flow fixture',
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+test('blocked empty data is not displayed as a verified no-signal result', async ({ page }) => {
+  await installBaseMocks(page, []);
+  await page.route('**/api/market/scan**', route => {
+    const response = validZeroScannerResponse();
+    return fulfill(route, { ...response, dataState: 'untrusted', outcome: 'DATA_QUALITY_REJECT',
+      message: '상위 시간봉 검증 실패 · 정상 검색 결과가 아닙니다.' });
+  });
+  await page.goto('/__phase11-technical-workspace-e2e');
+  await expect(page.getByTestId('scanner-zero-outcome')).toContainText('DATA_QUALITY_REJECT');
+  await expect(page.getByTestId('scanner-zero-outcome')).not.toContainText('공급자 데이터와 분석은 정상');
+});
+
 test('a failed market switch never shows the previous market cards or treats them as partial results', async ({ page }) => {
   await installBaseMocks(page, []);
   await page.route('**/api/market/scan**', async (route) => {

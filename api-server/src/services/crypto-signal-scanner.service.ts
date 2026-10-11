@@ -920,6 +920,8 @@ export function createCryptoSignalScannerService(
       // Cursor position cannot depend on changing 24h volume ranks. Refresh
       // ticker values freely, but keep the same symbol order across pages.
       const orderedRows = [...universe.rows].sort((left, right) => left.symbol.localeCompare(right.symbol));
+      const rosterId = createHash('sha256').update(JSON.stringify([request.market, universe.source,
+        orderedRows.map(row => row.symbol)])).digest('hex');
       const cursor = Math.max(0, Math.min(orderedRows.length, Math.floor(request.cursor) || 0));
       const batch = orderedRows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
@@ -946,6 +948,7 @@ export function createCryptoSignalScannerService(
             timeframe: request.timeframe,
             candles,
             contextCandles: contextCandles ?? candles,
+            contextTimeframe,
             strategyMode,
             allowShort: request.market === 'futures',
             now: providers.now(),
@@ -1037,6 +1040,7 @@ export function createCryptoSignalScannerService(
           maxConcurrency: work.maxConcurrency,
         },
         universe: {
+          rosterId,
           totalCount: universe.rows.length,
           cursor,
           nextCursor,

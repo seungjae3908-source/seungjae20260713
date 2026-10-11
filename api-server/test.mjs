@@ -92,6 +92,8 @@ const groups = {
     path.join(root, 'src/lib/cache.test.ts'),
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(root, 'src/providers/krx-source-pair.test.ts'),
+    path.join(root, 'src/providers/nasdaq-trader.test.ts'),
+    path.join(root, 'src/services/scanner-outcome.test.ts'),
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
     path.join(root, 'src/services/telegram-test-message.service.test.ts'),
