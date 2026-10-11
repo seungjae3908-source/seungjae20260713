@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import './paper-flat-recovery-backend.test';
 import './paper-trade-review.test';
 import './four-market-paper-status.test';
@@ -210,4 +212,17 @@ test('a failed manual round state write can retry the SAME archived next round w
     MANUAL_PAPER_NEXT_ROUND_CONFIRMATION,new Date(NOW.getTime()+3_000));
   assert.equal(retry.account.id,getManualPaperRoundSummary(storage).records[0].nextAccountId);
   assert.equal(getManualPaperRoundSummary(storage).completedRounds,1);
+});
+
+test('Paper composite page keeps both owner-scoped panels and the original backtest/Paper mode', () => {
+  const root = path.basename(process.cwd()) === 'api-server'
+    ? path.resolve(process.cwd(), '..') : process.cwd();
+  const source = readFileSync(path.join(root, 'stock-analyzer/src/pages/paper-trading.tsx'), 'utf8');
+  assert.match(source, /import \{ FourMarketPaperStatusPanel \}/);
+  assert.match(source, /import \{ManualFourMarketWalletPanel\}/);
+  assert.match(source, /<FourMarketPaperStatusPanel \/>/);
+  assert.match(source, /<ManualFourMarketWalletPanel \/>/);
+  assert.match(source, /<AutoTradingPage initialMode="paper" \/>/);
+  assert.match(source, /<BacktestPaperCandidatePreview imported=\{imported\} \/>/);
+  assert.doesNotMatch(source, /initialMode="live"/);
 });
