@@ -19,6 +19,23 @@ export type ManualFourMarketStatus=Readonly<{
   blockers:readonly string[];
   creationBlockers:readonly string[];
 }>;
+/**
+ * A bootstrap confirmation belongs to the exact authenticated account that
+ * opened it. Switching accounts, even with the same four-market readiness,
+ * must invalidate a pending confirmation before issuing any request.
+ */
+export function manualPaperBootstrapAuthorized(
+  ownerId:string, confirmedOwnerId:string|null,
+  status:ManualFourMarketStatus|null,
+):boolean {
+  return typeof ownerId==='string' && ownerId.length>0
+    && confirmedOwnerId===ownerId
+    && status?.ownerScope==='SELF'
+    && status.rlsGuardReady===true
+    && status.ready===false
+    && status.canCreate===true;
+}
+
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const codes=(v:unknown):v is string[]=>Array.isArray(v)&&v.length<=16&&v.every(
   x=>typeof x==='string'&&x.length>0&&x.length<=128);
