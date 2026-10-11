@@ -1,0 +1,57 @@
+name: Telegram Strict Predeploy QA (No Deploy / No Real Sends)
+
+on:
+  pull_request:
+    paths:
+      - ops/telegram-predeploy-readiness.mjs
+      - .github/tests/telegram-predeploy-readiness.test.mjs
+      - .github/workflows/telegram-strict-predeploy-qa.yml
+      - docs/telegram-strict-predeploy-qa.md
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance-contract:
+    name: Enforce no-go for CI green but Staging/TLS/V3/delivery unhealthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate pure predeploy evaluator and known-failure regressions
+        run: |
+          set -Eeuo pipefail
+          node --check ops/telegram-predeploy-readiness.mjs
+          node --test .github/tests/telegram-predeploy-readiness.test.mjs
+
+  telegram-mocked-integration:
+    name: Execute Telegram and Signal V3 mock contract tests (no sends)
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Six-room/individual Telegram message formatting, 403 and dedupe regressions
+        run: pnpm --dir api-server test:telegram
+      - name: Signal Intelligence V3 public-only read/test contracts
+        run: |
+          set -Eeuo pipefail
+          node --test signal-intelligence-v3/tests/*.test.mjs
+          node signal-intelligence-v3/scripts/verify-contract.mjs
+
+# Deliberately NO issue_comment, workflow_dispatch, Production/Staging secrets,
+# environment approvals, PM2/systemd mutations, Bot API proof sends or deploys.
+# Separate real Staging and V3 proof must be verified prior to any release.
