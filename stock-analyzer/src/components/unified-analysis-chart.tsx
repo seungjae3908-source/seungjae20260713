@@ -757,6 +757,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const analysisLevels = useMemo(() => computeLevels(analysisCandles, analysisIndicators),
     [analysisCandles, analysisIndicators]);
   const analysis = useMemo(() => {
+    if (chartQuery.isError) return null;
     if (!effectiveChartData || !analysisLevels || analysisCandles.length < 2) return null;
     return buildCurrentAnalysis({
       selection: { ...selection, timeframe },
@@ -769,16 +770,20 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         && realtimeHealth.dataStatus === 'LIVE',
       previous: previousAnalysisRef.current,
     });
-  }, [analysisCandles.length, analysisIndicators, analysisLevels, effectiveChartData, historyKey, liveCandle, realtimeHealth.connectionState, realtimeHealth.dataStatus, selection, timeframe]);
+  }, [analysisCandles.length, analysisIndicators, analysisLevels, chartQuery.isError, effectiveChartData, historyKey, liveCandle, realtimeHealth.connectionState, realtimeHealth.dataStatus, selection, timeframe]);
 
   useEffect(() => {
     const latest = analysisCandles.at(-1);
+    const dataState = sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError);
+    const verifiedStream = liveCandle != null && liveCandleIdentityRef.current === historyKey
+      && realtimeHealth.connectionState === 'LIVE_STREAM' && realtimeHealth.dataStatus === 'LIVE';
     onLiveSnapshotChange?.({ identity: historyKey, market, analysis, drawing, price: latest?.close ?? null,
       closedTime: analysisCandles.filter(row => row.isClosed).at(-1)?.time ?? null,
-      volumeRatio: analysisIndicators.points.at(-1)?.volumeRatio20 ?? null, source: chartQuery.data?.provider ?? '연결 대기',
-      status: dataStatusLabel(sourceAwareChartDataStatus(effectiveChartData, chartQuery.isError)),
-      asOf: realtimeHealth.lastValidEventAt ?? (chartQuery.data?.updatedAt ? Date.parse(chartQuery.data.updatedAt) : latest ? latest.time * 1000 : null) });
-  }, [analysis, analysisCandles, analysisIndicators, chartQuery.data, chartQuery.isError, drawing, effectiveChartData, historyKey, market, onLiveSnapshotChange, realtimeHealth.lastValidEventAt]);
+      volumeRatio: analysisIndicators.points.at(-1)?.volumeRatio20 ?? null,
+      source: verifiedStream ? `${realtimeHealth.provider}:PUBLIC_WS_VERIFIED` : chartQuery.data?.provider ?? '연결 대기',
+      status: dataStatusLabel(dataState), dataState, transport: verifiedStream ? '공개 WS 검증' : 'REST 주기 조회',
+      asOf: verifiedStream ? realtimeHealth.lastValidEventAt : latestCandleSourceTimeMs(effectiveChartData) });
+  }, [analysis, analysisCandles, analysisIndicators, chartQuery.data, chartQuery.isError, drawing, effectiveChartData, historyKey, liveCandle, market, onLiveSnapshotChange, realtimeHealth.connectionState, realtimeHealth.dataStatus, realtimeHealth.lastValidEventAt, realtimeHealth.provider]);
 
   useEffect(() => {
     if (selectedCandleTime != null && !candles.some((candle) => candle.time === selectedCandleTime)) {
