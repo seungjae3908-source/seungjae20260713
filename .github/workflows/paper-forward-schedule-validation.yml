@@ -5,39 +5,6 @@ on:
     branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
       - market-prediction-lab/src/paper-public-provider-authority-v1.js
-      - market-prediction-lab/src/adaptive-multi-evidence-cost-liquidity-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-e2e-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-event-normalization-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-formula-tournament-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-global-risk-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-independence-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-journal-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-market-features-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-meta-decision-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-natural-paper-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-position-policy-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-price-structure-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-regime-router-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-research-ingest-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-strategy-health-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-strategy-portfolio-v2.js
-      - market-prediction-lab/src/adaptive-multi-evidence-validation-v2.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-cost-liquidity-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-e2e-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-event-normalization-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-formula-tournament-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-global-risk-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-independence-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-journal-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-market-features-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-meta-decision-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-natural-paper-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-position-policy-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-regime-router-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-research-ingest-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-strategy-health-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-strategy-portfolio-v2.test.js
-      - market-prediction-lab/tests/adaptive-multi-evidence-validation-v2.test.js
       - .github/workflows/public-forward-liquidity-server-shadow-activation.yml
       - .github/workflows/public-forward-liquidity-server-canonical-activation-v1.yml
       - ops/activate-public-forward-liquidity-server-canonical-v1.sh
@@ -85,19 +52,14 @@ on:
       - api-server/src/services/paper-canonical-validation-freshness-policy.service.ts
       - api-server/src/services/paper-canonical-validation-freshness-policy.service.test.ts
       - ops/check-paper-canonical-pm2-safety.mjs
-      - market-prediction-lab/tests/paper-canonical-pm2-safety-probe-v1.test.js
       - ops/materialize-paper-canonical-forward-observer.mjs
       - ops/publish-paper-canonical-validation-freshness-policy.mjs
-      - market-prediction-lab/tests/paper-canonical-forward-observer-materialization-v1.test.js
-      - market-prediction-lab/tests/paper-canonical-validation-freshness-configuration-v1.test.js
       - .github/workflows/paper-canonical-evidence-bridge.yml
       - .github/workflows/paper-canonical-runtime-readiness.yml
       - .github/workflows/paper-canonical-seven-blocker-repair.yml
       - .github/tests/pr-exact-head-paper-repair-checkout.test.mjs
       - api-server/scripts/check-paper-canonical-runtime-readiness-remote.ts
       - market-prediction-lab/src/paper-canonical-seven-blocker-repair-plan-v1.js
-      - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-plan-v1.test.js
-      - market-prediction-lab/tests/paper-canonical-seven-blocker-repair-cli-v1.test.js
       - ops/plan-paper-canonical-seven-blocker-repair.mjs
       - api-server/src/services/manual-paper-natural-contract.d.ts
       - api-server/src/routes/paper-trading.ts
@@ -173,26 +135,16 @@ on:
       - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
       - market-prediction-lab/tests/member-auto-trading-paper-handoff-v1.test.js
       - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
-      - market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
-      - market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
-      - market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js
       - market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
       - market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
-      - market-prediction-lab/tests/paper-scheduler-driver-v1.test.js
-      - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
-      - market-prediction-lab/tests/paper-forward-schedule-authoritative-stage-adoption-v1.test.js
-      - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
       - market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
       - market-prediction-lab/tests/natural-paper-authoritative-settlement-cost-collector-v1.test.js
       - market-prediction-lab/tests/bitget-funding-cost-owner-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
-      - market-prediction-lab/tests/paper-forward-no-deploy-snapshot-bridge-v1.test.js
-      - market-prediction-lab/tests/paper-forward-no-deploy-cron-diagnostics-v1.test.js
       - market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v1.json
       - market-prediction-lab/scripts/materialize-paper-risk-policy-record.mjs
-      - market-prediction-lab/tests/paper-risk-policy-human-approval-v1.test.js
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
       - research-production/deploy/research-production@.service
       - research-production/src/engine.mjs
@@ -212,7 +164,6 @@ on:
       - .github/tests/paper-forward-genuine-cost-window.test.mjs
       - ops/bridge-paper-forward-no-deploy-snapshot.mjs
       - ops/run-paper-forward-flat-snapshot-republish.mjs
-      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
       - ops/collect-paper-forward-no-deploy-diagnostics.mjs
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -300,6 +251,9 @@ on:
       - stock-analyzer/src/components/manual-four-market-wallet-panel.tsx
       - stock-analyzer/src/lib/manual-four-market-paper-status.test.ts
       - stock-analyzer/src/lib/manual-four-market-paper-status.ts
+      - 'market-prediction-lab/src/adaptive-multi-evidence-*.js'
+      - 'market-prediction-lab/tests/adaptive-multi-evidence-*.test.js'
+      - 'market-prediction-lab/tests/paper-*.test.js'
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -352,6 +306,7 @@ jobs:
           set -Eeuo pipefail
           python - <<'PY'
           from pathlib import Path
+          from fnmatch import fnmatchcase
           text = Path('.github/workflows/paper-forward-schedule-validation.yml').read_text()
           pull = text.split('  pull_request:\n', 1)[1].split('  push:\n', 1)[0]
           trigger = [line.split('- ', 1)[1].strip() for line in pull.splitlines() if line.startswith('      - ')]
@@ -361,7 +316,12 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_DUPLICATE_PATH')
           if len(allowed) != len(set(allowed)):
               raise SystemExit('PAPER_FORWARD_VALIDATION_ALLOWLIST_DUPLICATE_PATH')
-          missing = sorted(set(allowed) - set(trigger))
+          # Path globs affect only when the workflow starts. The exact
+          # runtime path allowlist below still rejects all unreviewed changes.
+          patterns = [value[1:-1] if value.startswith("'") and value.endswith("'")
+                      else value for value in trigger]
+          missing = sorted(path for path in set(allowed)
+                           if not any(fnmatchcase(path, pattern) for pattern in patterns))
           if missing:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
