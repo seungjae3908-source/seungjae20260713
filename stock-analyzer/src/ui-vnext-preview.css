@@ -7,28 +7,29 @@
  */
 
 html[data-ui-vnext-preview='true'] {
-  --background: 219 30% 10% !important;
-  --foreground: 213 28% 96% !important;
-  --card: 218 30% 14% !important;
-  --card-foreground: 213 28% 96% !important;
-  --card-border: 216 24% 24% !important;
-  --border: 216 22% 22% !important;
-  --input: 216 22% 22% !important;
-  --muted: 217 20% 19% !important;
-  --muted-foreground: 215 16% 69% !important;
-  --secondary: 217 22% 19% !important;
-  --accent: 216 24% 21% !important;
-  --primary: 216 92% 64% !important;
-  --ring: 216 92% 64% !important;
+  --background: 210 40% 98% !important;
+  --foreground: 222 47% 11% !important;
+  --card: 0 0% 100% !important;
+  --card-foreground: 222 47% 11% !important;
+  --card-border: 214 32% 89% !important;
+  --border: 214 32% 88% !important;
+  --input: 214 32% 88% !important;
+  --muted: 210 40% 96% !important;
+  --muted-foreground: 215 16% 42% !important;
+  --secondary: 214 100% 97% !important;
+  --accent: 214 100% 96% !important;
+  --primary: 221 83% 53% !important;
+  --ring: 221 83% 53% !important;
   --bg-alpha: 0.985 !important;
-  --card-alpha: 0.97 !important;
-  background: #0a1220;
+  --card-alpha: 1 !important;
+  color-scheme: light !important;
+  background: #f8fafc;
 }
 
 html[data-ui-vnext-preview='true'] body {
   background:
-    radial-gradient(1100px 520px at 48% -180px, rgb(67 121 220 / 0.20), transparent 66%),
-    linear-gradient(180deg, #0b1423 0%, #08111e 52%, #07101b 100%);
+    radial-gradient(1100px 520px at 48% -180px, rgb(59 130 246 / 0.12), transparent 66%),
+    linear-gradient(180deg, #ffffff 0%, #f8fafc 52%, #f1f5f9 100%);
 }
 
 html[data-ui-vnext-preview='true'] [data-testid='member-privacy-watermark'] {
@@ -36,22 +37,7 @@ html[data-ui-vnext-preview='true'] [data-testid='member-privacy-watermark'] {
 }
 
 html[data-ui-vnext-preview='true'] body::after {
-  content: 'UI vNext · 기능형 Preview · 거래변경 차단';
-  position: fixed;
-  right: 14px;
-  bottom: 82px;
-  z-index: 120;
-  padding: 7px 10px;
-  border: 1px solid rgb(105 151 224 / 0.28);
-  border-radius: 999px;
-  background: rgb(12 24 42 / 0.92);
-  color: #b9d0f3;
-  box-shadow: 0 12px 36px rgb(0 0 0 / 0.22);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  pointer-events: none;
-  backdrop-filter: blur(14px);
+  display: none;
 }
 
 html[data-ui-vnext-preview='true'] [data-testid='app-shell'] {
@@ -61,14 +47,14 @@ html[data-ui-vnext-preview='true'] [data-testid='app-shell'] {
 html[data-ui-vnext-preview='true'] [data-testid='app-shell'] > div.relative.z-10 {
   width: 100% !important;
   max-width: 100% !important;
-  background: rgb(10 18 32 / 0.78) !important;
+  background: rgb(248 250 252 / 0.88) !important;
 }
 
 /* Cleaner global cards without erasing existing feature hierarchy. */
 html[data-ui-vnext-preview='true'] .rounded-3xl.border.border-card-border.bg-card,
 html[data-ui-vnext-preview='true'] .rounded-2xl.border.border-card-border.bg-card {
   border-color: hsl(var(--card-border) / 0.86) !important;
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.12) !important;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 0.07) !important;
 }
 
 html[data-ui-vnext-preview='true'] .font-black {
@@ -135,6 +121,16 @@ html[data-ui-vnext-preview='true'] [data-testid='scanner-price-plan-chart'] {
   border-color: hsl(var(--primary) / 0.28) !important;
 }
 
+html[data-ui-vnext-preview='true'] [data-testid='ai-chart-responsive-board'] > section,
+html[data-ui-vnext-preview='true'] [data-testid='ai-chart-responsive-board'] > aside {
+  align-self: stretch !important;
+  min-height: 100% !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='ai-chart-detail-card-stack'] > :last-child {
+  margin-top: auto !important;
+}
+
 /* RESEARCH — user status first, internal detail second. */
 html[data-ui-vnext-preview='true'] [data-testid='research-center-workspace'] > div:first-child {
   padding-block: 0.7rem !important;
@@ -192,8 +188,8 @@ html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
     border: 1px solid hsl(var(--card-border) / 0.9) !important;
     border-radius: 1.15rem !important;
     padding: 0.35rem 0.7rem !important;
-    background: rgb(14 27 46 / 0.94) !important;
-    box-shadow: 0 18px 44px rgb(0 0 0 / 0.24) !important;
+    background: rgb(255 255 255 / 0.96) !important;
+    box-shadow: 0 18px 44px rgb(15 23 42 / 0.12) !important;
   }
 
   html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] > div:last-child {
@@ -210,6 +206,12 @@ html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
 
   html[data-ui-vnext-preview='true'] div:has(> header h1[aria-label='AI 차트 생중계 · AI 차트 2.0']) > main.mx-auto.grid {
     grid-template-columns: minmax(0, 2.25fr) minmax(21rem, 0.82fr) !important;
+    align-items: stretch !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='ai-chart-responsive-board'] > section > *,
+  html[data-ui-vnext-preview='true'] [data-testid='ai-chart-responsive-board'] > aside > * {
+    height: 100% !important;
   }
 }
 
@@ -245,6 +247,11 @@ html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
     margin-top: 1rem !important;
     position: static !important;
   }
+
+  html[data-ui-vnext-preview='true'] [data-testid='ai-chart-responsive-board'] > section,
+  html[data-ui-vnext-preview='true'] [data-testid='ai-chart-responsive-board'] > aside {
+    min-height: 0 !important;
+  }
 }
 
 /* Mobile: retain real functions, remove squeeze/overflow, use 44px+ controls. */
@@ -262,7 +269,7 @@ html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
 
   html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] {
     border-top-color: hsl(var(--card-border)) !important;
-    background: rgb(9 19 33 / 0.97) !important;
+    background: rgb(255 255 255 / 0.98) !important;
   }
 
   html[data-ui-vnext-preview='true'] nav[aria-label='주요 메뉴'] button,
@@ -305,6 +312,11 @@ html[data-ui-vnext-preview='true'] main:has([aria-label='설정']) {
     padding-inline: 0.1rem !important;
   }
 
+  html[data-ui-vnext-preview='true'] [data-testid='live-order-workspace'] .sm\:grid-cols-3,
+  html[data-ui-vnext-preview='true'] [data-testid='manual-live-order-entry'] .sm\:grid-cols-3 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
   html[data-ui-vnext-preview='true'] [data-testid='trading-market-tabs'],
   html[data-ui-vnext-preview='true'] [data-testid='trading-section-tabs'] {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -320,8 +332,8 @@ html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] {
   gap: 14px !important;
   border-bottom-color: hsl(var(--card-border) / 0.92) !important;
   background:
-    linear-gradient(180deg, rgb(16 31 52 / 0.98), rgb(12 24 41 / 0.96)) !important;
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.14) !important;
+    linear-gradient(180deg, rgb(255 255 255 / 0.99), rgb(248 250 252 / 0.97)) !important;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 0.08) !important;
 }
 
 html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] > button:first-child {
@@ -339,4 +351,58 @@ html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] [dat
 html[data-ui-vnext-preview='true'] [data-testid='professional-command-bar'] button[aria-label='계정 열기'] {
   background: hsl(var(--card) / 0.72) !important;
   border-color: hsl(var(--card-border) / 0.9) !important;
+}
+
+/* Shared white workspace: one readable content width per device class. */
+html[data-ui-vnext-preview='true'] [data-testid='unified-asset-search-page'] main > div,
+html[data-ui-vnext-preview='true'] [data-testid='stocks-scroll-content'] > header,
+html[data-ui-vnext-preview='true'] [data-testid='stocks-scroll-content'] > main {
+  width: 100%;
+  margin-inline: auto;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='unified-search-single-input'],
+html[data-ui-vnext-preview='true'] [data-testid='instrument-orderbook-dialog'] {
+  background: #fff !important;
+  box-shadow: 0 18px 50px rgb(15 23 42 / 0.12) !important;
+}
+
+html[data-ui-vnext-preview='true'] [data-testid='unified-market-tabs'] [role='tab'][aria-selected='true'],
+html[data-ui-vnext-preview='true'] [data-testid='trading-section-tabs'] [role='tab'][aria-selected='true'],
+html[data-ui-vnext-preview='true'] [data-testid='technical-trading-modes'] [role='tab'][aria-selected='true'] {
+  box-shadow: 0 7px 18px hsl(var(--primary) / 0.2) !important;
+}
+
+@media (min-width: 1200px) {
+  html[data-ui-vnext-preview='true'] [data-testid='unified-asset-search-page'] main > div {
+    max-width: 64rem !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='stocks-scroll-content'] > header,
+  html[data-ui-vnext-preview='true'] [data-testid='stocks-scroll-content'] > main {
+    max-width: 88rem !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1199px) {
+  html[data-ui-vnext-preview='true'] [data-testid='unified-asset-search-page'] main > div,
+  html[data-ui-vnext-preview='true'] [data-testid='stocks-scroll-content'] > header,
+  html[data-ui-vnext-preview='true'] [data-testid='stocks-scroll-content'] > main {
+    max-width: 60rem !important;
+  }
+}
+
+@media (max-width: 767px) {
+  html[data-ui-vnext-preview='true'] [data-testid='unified-market-tabs'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='trading-section-tabs'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  html[data-ui-vnext-preview='true'] [data-testid='instrument-orderbook-dialog'] {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
 }

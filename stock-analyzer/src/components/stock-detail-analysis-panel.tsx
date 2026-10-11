@@ -27,6 +27,7 @@ export function StockDetailAnalysisPanel({ ticker, market }: { ticker: string; m
           ariaLabel="상세분석 하위 탭"
           testId="stock-detail-analysis-tabs"
           compact
+          fluid
         />
       </div>
 

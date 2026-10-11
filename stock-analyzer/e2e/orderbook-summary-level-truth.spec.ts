@@ -44,8 +44,8 @@ async function serve(page: Page, body: Record<string, unknown>) {
 test('fails closed when declared best ask disagrees with the visible ask ladder', async ({ page }) => {
   const dialog = await serve(page, { ...readyFixture, bestAsk: 70200, spread: 200 });
 
-  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('ORDERBOOK_LEVELS_CORRUPT')).toBeVisible();
+  await expect(dialog.getByText('표시 차단', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('호가 데이터의 가격 순서가 올바르지 않아 안전하게 표시를 차단했습니다.')).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
@@ -53,8 +53,8 @@ test('fails closed when declared best ask disagrees with the visible ask ladder'
 test('fails closed when declared spread disagrees with canonical best ask and bid', async ({ page }) => {
   const dialog = await serve(page, { ...readyFixture, spread: 999 });
 
-  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('ORDERBOOK_LEVELS_CORRUPT')).toBeVisible();
+  await expect(dialog.getByText('표시 차단', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('호가 데이터의 가격 순서가 올바르지 않아 안전하게 표시를 차단했습니다.')).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();
 });
@@ -69,8 +69,8 @@ test('preserves crossed-book diagnosis even when a stale declared spread disagre
     spread: 100,
   });
 
-  await expect(dialog.getByText('Invalid', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('ORDERBOOK_CROSSED')).toBeVisible();
+  await expect(dialog.getByText('표시 차단', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('호가 데이터의 가격 순서가 올바르지 않아 안전하게 표시를 차단했습니다.')).toBeVisible();
   await expect(dialog.getByText(/교차 호가가 감지되어 클라이언트에서도 표시를 차단했습니다/)).toBeVisible();
   await expect(dialog.getByTestId('ask-levels')).toBeEmpty();
   await expect(dialog.getByTestId('bid-levels')).toBeEmpty();

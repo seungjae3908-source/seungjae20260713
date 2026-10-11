@@ -139,10 +139,12 @@ function assetFromQuote(row: QuoteRow, currency: MarketInformationCurrency): Mar
   const symbol = String(row.ticker ?? '').trim().toUpperCase();
   const price = positive(row.price);
   if (!symbol || price == null) return null;
+  const fallbackExchange = row.market === 'US' ? 'US' : 'KRX';
+  const exchange = String(row.exchange ?? fallbackExchange).trim() || fallbackExchange;
   return {
     symbol,
     name: String(row.name ?? symbol).trim() || symbol,
-    exchange: String(row.exchange ?? (row.market === 'US' ? 'US' : 'KRX')).trim(),
+    exchange,
     currency,
     price,
     changePercent: finite(row.changePercent),

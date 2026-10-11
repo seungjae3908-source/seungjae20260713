@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const NOW = '2026-08-15T06:40:00.000Z';
@@ -141,6 +142,7 @@ async function mockDetail(
 
 for (const viewport of [
   { width: 390, height: 844 },
+  { width: 820, height: 1180 },
   { width: 1440, height: 960 },
 ] as const) {
   test(`clean stock detail loads summary first and optional tabs on demand at ${viewport.width}px`, async ({ page }) => {
@@ -156,6 +158,27 @@ for (const viewport of [
     await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
     await expect(page.getByText('반도체', { exact: true })).toBeVisible();
     await expect(page.getByTestId('stock-detail-health-status')).toHaveText('정상');
+    const detailBoard = page.getByTestId('stock-detail-responsive-board');
+    const boardCards = detailBoard.locator(':scope > section');
+    await expect(boardCards).toHaveCount(2);
+    const firstCard = await boardCards.nth(0).boundingBox();
+    const secondCard = await boardCards.nth(1).boundingBox();
+    expect(firstCard).not.toBeNull();
+    expect(secondCard).not.toBeNull();
+    if (viewport.width >= 768) {
+      expect(Math.abs(firstCard!.y - secondCard!.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs((firstCard!.y + firstCard!.height) - (secondCard!.y + secondCard!.height))).toBeLessThanOrEqual(1);
+    } else {
+      expect(secondCard!.y).toBeGreaterThan(firstCard!.y + firstCard!.height - 1);
+    }
+    await expect(page.getByTestId('stock-detail-action-grid').getByRole('button')).toHaveCount(4);
+    const captureDirectory = process.env.UI_CAPTURE_DIR?.trim();
+    if (captureDirectory) {
+      await page.screenshot({
+        path: path.join(captureDirectory, `stock-detail-white-${viewport.width}.png`),
+        fullPage: false,
+      });
+    }
     expect(requests).toContain('/api/stocks/005930/quote');
     expect(requests).toContain('/api/stocks/005930/profile');
     expect(requests).not.toContain('/api/stocks/005930/news');

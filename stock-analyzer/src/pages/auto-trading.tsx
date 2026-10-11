@@ -58,6 +58,26 @@ const PAPER_RUNTIME_BLOCKER_LABELS: Record<string, string> = {
   BACKGROUND_EXECUTION_PROJECTION_NOT_HEALTHY: '체결·매매일지 동기화 상태의 검증이 필요합니다.',
 };
 
+const LIVE_ORDER_BLOCKER_LABELS: Record<string, string> = {
+  CREDENTIAL_VAULT_NOT_READY: '주문키 보안 저장소가 준비되지 않았습니다.',
+  LIVE_CONNECTION_NOT_CONFIGURED: '이 시장의 실계좌가 연결되지 않았습니다.',
+  LIVE_CONNECTION_NOT_VERIFIED: '실계좌 연결 검증을 완료해야 합니다.',
+  LIVE_CONNECTION_VERIFICATION_EXPIRED: '실계좌 검증 유효시간이 지나 다시 확인해야 합니다.',
+  MANUAL_LIVE_SERVER_GATE_OFF: '수동 실전 주문 서버 기능이 꺼져 있습니다.',
+  AUTOMATIC_LIVE_SERVER_GATE_OFF: '자동 실전 주문 서버 기능이 꺼져 있습니다.',
+  MEMBER_ORDER_CAPABILITY_REQUIRED: '현재 계정에 실전 주문 권한이 없습니다.',
+  FUTURES_CAPABILITY_REQUIRED: '현재 계정에 코인선물 권한이 없습니다.',
+  AUTOMATIC_POLICY_OFF: '자동매매가 꺼져 있습니다.',
+  MEMBER_POLICY_STOPPED: '회원 비상정지 또는 신규진입 차단이 작동 중입니다.',
+  GLOBAL_EMERGENCY_STOP_ACTIVE: '서버 전체 비상정지가 작동 중입니다.',
+  MARKET_AUTOMATIC_DISABLED: '선택한 시장의 자동매매가 꺼져 있습니다.',
+  EXCHANGE_AUTOMATIC_DISABLED: '선택한 연결사의 자동매매가 꺼져 있습니다.',
+};
+
+function liveOrderBlockerLabel(value: string): string {
+  return LIVE_ORDER_BLOCKER_LABELS[value] ?? '실전 주문 준비 상태를 다시 확인해야 합니다.';
+}
+
 async function readAutomaticPaperRuntimeReadiness(signal?: AbortSignal): Promise<AutomaticPaperRuntimeReadiness> {
   const response = await authorizedFetch('/api/trade-automation/paper-runtime-readiness', { signal });
   const data = await response.json().catch(() => null) as
@@ -229,17 +249,21 @@ function SegmentedButton({
   children,
   onClick,
   testId,
+  semantics = 'toggle',
 }: {
   active: boolean;
   disabled?: boolean;
   children: ReactNode;
   onClick: () => void;
   testId?: string;
+  semantics?: 'toggle' | 'tab';
 }) {
   return (
     <button
       type="button"
-      aria-pressed={active}
+      role={semantics === 'tab' ? 'tab' : undefined}
+      aria-selected={semantics === 'tab' ? active : undefined}
+      aria-pressed={semantics === 'toggle' ? active : undefined}
       disabled={disabled}
       onClick={onClick}
       data-testid={testId}
@@ -546,6 +570,27 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
   const newEntriesStopped = policy?.newEntriesStopped === true;
   const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
+  const liveOrderReady = !runtimeLoading
+    && !runtimeReadError
+    && canPlaceOrders
+    && policy?.automaticEnabled === true
+    && marketEnabled
+    && !effectiveEntryStopped
+    && liveReadiness?.readyForAutomaticOrderEvaluation === true
+    && automaticRuntimeReady;
+  const liveOrderBlockers = [...new Set([
+    ...(!canPlaceOrders ? ['현재 계정에 실전 주문 권한이 없습니다.'] : []),
+    ...(runtimeReadError ? ['서버의 실전 주문 준비 상태를 불러오지 못했습니다.'] : []),
+    ...(!policy?.automaticEnabled ? ['자동매매 설정이 꺼져 있습니다.'] : []),
+    ...(!marketEnabled ? [`${marketMeta.label} 자동매매가 꺼져 있습니다.`] : []),
+    ...(effectiveEntryStopped ? ['비상정지 또는 신규진입 차단이 작동 중입니다.'] : []),
+    ...((liveReadiness?.blockers ?? []).map(liveOrderBlockerLabel)),
+    ...(!liveStrategyConfigured ? ['실전 자동매매 전략을 먼저 선택해야 합니다.'] : []),
+    ...(autoWorker?.enabled !== true || autoWorker.liveModeRequested !== true
+      ? ['자동매매 서버 실행기가 꺼져 있습니다.'] : []),
+    ...(!autoWorkerFresh ? ['자동매매 서버 상태가 최신인지 확인할 수 없습니다.'] : []),
+    ...(autoWorker?.liveEntriesArmed !== true ? ['신규 실전 주문 안전대기가 아직 해제되지 않았습니다.'] : []),
+  ])].slice(0, 6);
   const showLegacyPaperReadinessInsideAutoDashboard = mode === 'paper' && paperOrigin === 'automatic';
 
   const liveDashboard = (
@@ -745,9 +790,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatusItem label="시장" value={marketMeta.label} />
-        <StatusItem label="Provider" value={marketMeta.provider} />
+        <StatusItem label="연결사" value={marketMeta.provider} />
         <StatusItem label="선택 종목" value={selectionMatchesMarket ? selection?.ticker ?? '선택됨' : '미선택'} />
-        <StatusItem label="경제적 증거" value="Settlement 후 판정" />
+        <StatusItem label="성과 판정" value="거래 종료 후 확인" />
       </div>
     </section>
     {automaticPaperReadiness}
@@ -755,23 +800,91 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   );
 
   const orders = mode === 'auto' ? (
-    <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="auto-trading-orders">
-      <div className="flex items-center gap-2">
-        <WalletCards className="h-4 w-4 text-primary" />
-        <h2 className="text-sm font-bold">포지션·주문 · {marketMeta.label}</h2>
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatusItem label="최근 상태" value={lastOrder?.state ?? '주문 없음'} />
-        <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
-        <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
-        <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건`} />
-      </div>
-      <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/scanner')}>신호 확인</button>
-        <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/ai-chart')}>AI 차트·포지션</button>
-        <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/account')}>실계좌 연결</button>
-      </div>
-    </section>
+    <div className="space-y-3" data-testid="auto-trading-orders">
+      <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="live-order-workspace">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <WalletCards className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div>
+              <h2 className="text-sm font-bold">실전 주문 · {marketMeta.label}</h2>
+              <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">
+                자동 실행이 켜져 있고 서버 조건을 모두 통과하면 실계좌로 실제 주문이 전송됩니다.
+              </p>
+            </div>
+          </div>
+          <span className={[
+            'rounded-full border px-2.5 py-1 text-xs font-bold',
+            liveOrderReady
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700'
+              : 'border-amber-500/30 bg-amber-500/10 text-amber-700',
+          ].join(' ')} data-testid="live-order-readiness-badge">
+            {runtimeLoading ? '확인 중' : liveOrderReady ? '실전 주문 가능' : '주문 전 점검 필요'}
+          </span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <StatusItem label="최근 상태" value={lastOrder?.state ?? '주문 없음'} />
+          <StatusItem label="미결 주문" value={`${marketActivity?.pendingOrders ?? 0}건`} />
+          <StatusItem label="오늘 주문" value={`${marketActivity?.todayOrders ?? 0}건`} />
+          <StatusItem label="오늘 체결" value={`${marketActivity?.todayFilledOrders ?? 0}건`} />
+        </div>
+
+        {liveOrderReady ? (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs leading-5 text-emerald-800" role="status">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              실제 주문 경로가 준비됐습니다. 새 주문마다 서버가 신호 유효성, 현재 가격, 잔고, 주문한도와 손실한도를 다시 검사합니다.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3" role="status">
+            <div className="flex items-center gap-2 text-xs font-bold text-amber-800">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              현재 실제 주문은 전송되지 않습니다.
+            </div>
+            {liveOrderBlockers.length ? (
+              <ul className="mt-2 space-y-1 pl-5 text-xs leading-5 text-amber-800">
+                {liveOrderBlockers.map((blocker) => <li key={blocker} className="list-disc">{blocker}</li>)}
+              </ul>
+            ) : null}
+          </div>
+        )}
+
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <button type="button" className="min-h-11 rounded-xl bg-primary px-3 text-sm font-bold text-primary-foreground" onClick={() => setSection('settings')}>
+            실전 주문 설정
+          </button>
+          <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/scanner')}>신호 확인</button>
+          <button type="button" className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold" onClick={() => navigate('/account')}>실계좌 연결</button>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="manual-live-order-entry">
+        <div className="flex items-center gap-2">
+          <ClipboardList className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-bold">선택 종목 주문 검토</h2>
+        </div>
+        {selectionMatchesMarket && selection ? (
+          <>
+            <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+              {selection.displayName} · {selection.ticker}의 최신 신호와 가격계획을 AI 차트에서 확인합니다. 서버가 만든 승인 대기 계획이 있을 때만 최종 승인 버튼이 열립니다.
+            </p>
+            <button type="button" className="mt-3 min-h-11 w-full rounded-xl border border-primary/30 bg-primary/5 px-4 text-sm font-bold text-primary" onClick={() => navigate('/ai-chart')}>
+              {selection.displayName} 주문 검토 열기
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
+              검색기에서 {marketMeta.label} 종목을 선택하면 호가·차트·서버 신호를 같은 종목으로 이어서 검토할 수 있습니다.
+            </p>
+            <button type="button" className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-4 text-sm font-bold" onClick={() => navigate('/scanner')}>
+              {marketMeta.label} 종목 선택하기
+            </button>
+          </>
+        )}
+      </section>
+    </div>
   ) : paperOrigin === 'automatic' ? (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="automatic-paper-orders">
       <h2 className="text-sm font-bold">{marketMeta.label} · 자동모의 주문</h2>
@@ -791,7 +904,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <h2 className="text-sm font-bold">{marketMeta.label} 모의 포지션 준비</h2>
           </div>
           <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">
-            AI 검색기에서 {marketMeta.label} 종목을 선택하면 동일 신호 identity와 위험·비용 evidence를 서버에서 다시 검증해 Paper 포지션을 준비합니다.
+            AI 검색기에서 {marketMeta.label} 종목을 선택하면 같은 신호와 위험·비용 정보를 서버에서 다시 확인해 모의 포지션을 준비합니다.
           </p>
           <button type="button" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground" onClick={() => navigate('/scanner')}>
             {marketMeta.label} 신호 선택하기
@@ -862,7 +975,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       </div>
       <div className="mt-3 space-y-2 text-xs leading-5 text-muted-foreground">
         <p>시장 선택은 상단 4시장 버튼에서 통합 관리합니다.</p>
-        <p>Canonical Paper는 실제 거래소 주문을 전송하지 않으며, 수량·레버리지·진입가격은 서버 evidence가 결정합니다.</p>
+        <p>모의매매는 실제 거래소 주문을 보내지 않으며, 수량·레버리지·진입가격은 서버의 검증된 시장 데이터와 위험 기준으로 결정합니다.</p>
         <p>코인선물 수동 시뮬레이터는 포지션·주문 탭에서만 선택적으로 열 수 있습니다.</p>
       </div>
     </section>
@@ -910,17 +1023,17 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         ? 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4'
         : 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4'}>
         <div className="mx-auto w-full max-w-6xl space-y-3" data-testid="auto-trading-responsive-layout">
-          <div className="grid grid-cols-2 gap-2" aria-label="기술매매 모드" data-testid="technical-trading-modes">
+          <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="기술매매 모드" data-testid="technical-trading-modes">
             <SegmentedButton active={mode === 'auto'} disabled={!canAuto}
-              onClick={() => navigate('/auto-trading')} testId="technical-mode-live">자동매매</SegmentedButton>
+              onClick={() => navigate('/auto-trading')} testId="technical-mode-live" semantics="tab">자동매매</SegmentedButton>
             <SegmentedButton active={mode === 'paper'} disabled={!canPaper}
-              onClick={() => navigate('/paper-trading')} testId="technical-mode-paper">모의매매</SegmentedButton>
+              onClick={() => navigate('/paper-trading')} testId="technical-mode-paper" semantics="tab">모의매매</SegmentedButton>
           </div>
-          {mode === 'paper' ? <div className="grid grid-cols-2 gap-2" aria-label="모의매매 방식" data-testid="trading-paper-modes">
+          {mode === 'paper' ? <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="모의매매 방식" data-testid="trading-paper-modes">
             <SegmentedButton active={paperOrigin === 'automatic'} disabled={!canAuto}
-              onClick={() => navigate('/paper-trading?kind=automatic')} testId="paper-mode-automatic">자동모의매매</SegmentedButton>
+              onClick={() => navigate('/paper-trading?kind=automatic')} testId="paper-mode-automatic" semantics="tab">자동모의매매</SegmentedButton>
             <SegmentedButton active={paperOrigin === 'manual'}
-              onClick={() => navigate('/paper-trading?kind=manual')} testId="paper-mode-manual">수동모의매매</SegmentedButton>
+              onClick={() => navigate('/paper-trading?kind=manual')} testId="paper-mode-manual" semantics="tab">수동모의매매</SegmentedButton>
           </div> : null}
           <div className="rounded-xl border border-card-border bg-card p-2.5 sm:p-3" data-testid="trading-market-tabs">
             <label className="flex items-center gap-3 sm:hidden">
@@ -954,10 +1067,10 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-1.5" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
+          <div className="grid grid-cols-4 gap-1.5" role="tablist" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
             {SECTIONS.map((item) => (
-              <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)} testId={'trading-section-' + item.value}>
-                {item.label}
+              <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)} testId={'trading-section-' + item.value} semantics="tab">
+                {item.value === 'orders' ? (mode === 'auto' ? '실전 주문' : '모의주문') : item.label}
               </SegmentedButton>
             ))}
           </div>
