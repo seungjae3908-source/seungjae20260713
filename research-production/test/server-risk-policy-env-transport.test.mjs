@@ -58,7 +58,7 @@ switch (name) {
     if (args[0] === 'show') {
       const property = args[args.indexOf('-p') + 1];
       if (property === 'LoadState') console.log('loaded');
-      else if (property === 'ActiveState') console.log(args[1].endsWith('.service')
+      else if (property === 'ActiveState') console.log(args[1] === 'research-production@fast-historical.service'
         ? (process.env.HARNESS_WORKLOAD_STATE ?? 'inactive') : 'inactive');
       else if (property === 'UnitFileState') console.log('disabled');
       else throw Error('unexpected unit property');
@@ -144,6 +144,7 @@ test('full activation harness blocks a still-running workload before installing 
   const result = activate(undefined, { workloadState: 'active' });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /RESEARCH_WORKLOAD_NOT_STOPPED/u);
+  assert.match(result.stderr, /RESEARCH_PRODUCTION_ROLLBACK_BLOCKED_RUNNING_WORKLOAD=true/u);
   assert.equal(result.environment, null);
   assert.ok(result.events.some(event => event[0] === 'systemctl' && event[1] === 'stop'));
   assert.equal(result.events.some(event => event[0] === 'install' && event.at(-1).endsWith('/research-production.env')), false);
