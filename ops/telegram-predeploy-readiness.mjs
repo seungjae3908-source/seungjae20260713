@@ -64,7 +64,7 @@ export function evaluateTelegramPredeploy(evidence,{expectedSha,nowMs}={}) {
     || staging.markerSha !== expectedSha || staging.healthSha !== expectedSha
     || staging.identityMatch !== true || staging.pm2Online !== true
     || staging.releaseReady !== true || staging.postgresAuth !== true
-    || staging.dbReadOnly === false || staging.protectedReceipt !== true
+    || staging.dbReadOnly !== true || staging.protectedReceipt !== true
     || !Number.isSafeInteger(staging.runId) || staging.runId <= 0
     || !inWindow(staging.checkedAt,nowMs,MAX_QA_AGE_MS)) {
     block('STAGING_SAME_SHA_READINESS_NOT_PROVEN');
@@ -74,13 +74,17 @@ export function evaluateTelegramPredeploy(evidence,{expectedSha,nowMs}={}) {
   const validProbes = Array.isArray(probes) && probes.length >= 2
     && probes.length <= 12
     && probes.every(x => object(x)
+      && x.sha === expectedSha
+      && Number.isSafeInteger(x.runId) && x.runId > 0
+      && x.protectedReceipt === true
       && typeof x.code === 'string'
       && inWindow(x.checkedAt,nowMs,MAX_QA_AGE_MS));
   if (!validProbes) {
     block('TELEGRAM_TLS_RELIABILITY_NOT_PROVEN');
   } else {
     const sorted = [...probes].sort((a,b)=>Date.parse(a.checkedAt)-Date.parse(b.checkedAt));
-    const reliable = sorted.every(x => x.code === 'IPV4_TLS_READY')
+    const reliable = new Set(sorted.map(x => x.runId)).size === sorted.length
+      && sorted.every(x => x.code === 'IPV4_TLS_READY')
       && inWindow(sorted.at(-1).checkedAt,nowMs,MAX_TLS_LAST_AGE_MS)
       && Date.parse(sorted.at(-1).checkedAt)-Date.parse(sorted[0].checkedAt)>=MIN_TLS_GAP_MS;
     if (!reliable) block('TELEGRAM_TLS_RELIABILITY_NOT_PROVEN');
