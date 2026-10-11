@@ -8,6 +8,11 @@ import {
 } from './trade-automation.service';
 import { isRiskReducingExitPlan, liveConnectionVerificationAllowsReducingExit, liveConnectionVerificationFresh } from './live-connection-verification.service';
 import { liveEntryArmPresent } from './member-auto-trading-live-arm.service';
+import {
+  canonicalAutomaticLivePositions,
+  assertAutomaticLiveTargetIsolation,
+  readAutomaticLiveExecutionAccount,
+} from './automatic-live-position-isolation.service';
 import { resolveRulePackPilotDynamicCapPolicy } from './trade-rule-pack-pilot-capital.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
 import { TradeOrderRecoveryService } from './trade-order-recovery.service';
@@ -1046,10 +1051,26 @@ export class TradeExecutionService {
     if (!await liveEntryArmPresent()) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
+    await this.assertAutomaticLivePositionIsolation(userId, plan);
+  }
+
+  private async assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan) {
+    if (plan.accountMode !== 'live' || (plan.executionMode !== 'automatic'
+      && !plan.signalReasons.some((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))) return;
+    // A manual trade may occur after the worker's earlier snapshot. Re-read at
+    // EVERY mutation boundary; never sell/adopt ambiguous same-symbol assets.
+    const [snapshot, plans, orders] = await Promise.all([
+      readAutomaticLiveExecutionAccount(this.repository, userId, plan.exchange),
+      this.repository.listPlans(userId), this.repository.listOrders(userId),
+    ]);
+    assertAutomaticLiveTargetIsolation(snapshot, canonicalAutomaticLivePositions(plans, orders), plan);
   }
 
   private async beginSubmissionIntent(order: TradingOrder, risk: PreSubmissionRiskResult) {
     await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
+    if (isRiskReducingExitPlan(risk.plan)) {
+      await this.assertAutomaticLivePositionIsolation(order.userId, risk.plan);
+    }
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
     order.submissionAttemptId = submissionAttemptId;
