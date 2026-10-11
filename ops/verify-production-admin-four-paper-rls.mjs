@@ -6,11 +6,13 @@ if (mode === '--static') {
   const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
   const helper = readFileSync('ops/apply-production-admin-four-paper-rls.mjs','utf8');
   const migration = readFileSync('api-server/supabase/migrations/2026100901_admin_four_paper_wallet_rls_guard.sql','utf8');
+  const memberMigration = readFileSync('api-server/supabase/migrations/2026101001_member_four_market_paper_wallet_guard.sql','utf8');
   for (const token of [
     'ops/apply-production-admin-four-paper-rls.mjs',
     'node ops/verify-production-admin-four-paper-rls.mjs --artifact',
     'admin_paper_rls_artifact=',
     'production-admin-four-paper-rls-',
+    '2026101001_member_four_market_paper_wallet_guard.sql',
   ]) if (!workflow.includes(token)) fail('PRODUCTION_DEPLOY_GUARD_MISSING');
   for (const token of [
     'PRODUCTION_DATABASE_IDENTITY_INVALID','lock_timeout','statement_timeout',
@@ -18,12 +20,21 @@ if (mode === '--static') {
     'production-admin-four-paper-rls-v1','adminV2RlsVerified',
     'ATOMIC_MIGRATION_FAILED_ROLLED_BACK','APPROVED_TARGET_SHA_REQUIRED',
     'privateProviderRequests','historicalWalletRowsPreserved',
+    'PRODUCTION_MEMBER_V2_RLS_GUARD_UNVERIFIED',
+    'memberV2RlsVerified','memberV2WalletRowsPreserved',
   ]) if (!helper.includes(token)) fail('MIGRATION_RUNNER_GUARD_MISSING');
   for (const token of [
     'security invoker','admin_four_paper_wallet_rls_guard_ready',
     'as restrictive','revoke truncate','automatic-paper-admin-v2:',
     'begin;','commit;',
   ]) if (!migration.toLowerCase().includes(token.toLowerCase())) fail('MIGRATION_SQL_GUARD_MISSING');
+  for (const token of [
+    'security invoker','four_market_paper_wallet_rls_guard_ready',
+    'member_v2_auto_paper_insert_guard',
+    'member_v2_paper_wallet_update_guard',
+    'member_four_market_paper_seed_contract','begin;','commit;',
+  ]) if (!memberMigration.toLowerCase().includes(token.toLowerCase()))
+    fail('MEMBER_MIGRATION_SQL_GUARD_MISSING');
   if (!workflow.includes('node ops/verify-production-admin-four-paper-rls.mjs --static')) fail('STATIC_GATE_NOT_REGISTERED');
   console.log('PRODUCTION_ADMIN_PAPER_V2_RLS_STATIC_SAFE');
 } else if (mode === '--artifact') {
@@ -35,7 +46,8 @@ if (mode === '--static') {
   if (!/^[0-9a-f]{40}$/u.test(sha) ||
     artifact?.schemaVersion !== 'production-admin-four-paper-rls-v1' ||
     artifact?.status !== 'passed' || artifact?.approvedTargetSha !== sha ||
-    artifact?.adminV2RlsVerified !== true || artifact?.transactional !== true ||
+    artifact?.adminV2RlsVerified !== true || artifact?.memberV2RlsVerified !== true ||
+    artifact?.memberV2WalletRowsPreserved !== true || artifact?.transactional !== true ||
     artifact?.productionProjectMatch !== true ||
     artifact?.historicalWalletRowsPreserved !== true ||
     artifact?.paperTradePlanRowsPreserved !== true ||

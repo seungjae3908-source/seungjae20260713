@@ -22,6 +22,7 @@ test('sanitized migration attestation accepts exact SHA only and no user row wri
     const receipt = {
       schemaVersion:'production-admin-four-paper-rls-v1',
       status:'passed', approvedTargetSha:TARGET_SHA, adminV2RlsVerified:true,
+      memberV2RlsVerified:true,memberV2WalletRowsPreserved:true,
       transactional:true,productionProjectMatch:true,
       historicalWalletRowsPreserved:true,paperTradePlanRowsPreserved:true,
       paperJournalRowsPreserved:true,walletsCreated:0,ordersCreated:0,
@@ -31,7 +32,8 @@ test('sanitized migration attestation accepts exact SHA only and no user row wri
     writeFileSync(file, JSON.stringify(receipt));
     assert.equal(verify('--artifact',file).status,0);
     for(const invalid of [
-      {adminV2RlsVerified:false}, {walletsCreated:4}, {ordersCreated:1},
+      {adminV2RlsVerified:false}, {memberV2RlsVerified:false},
+      {memberV2WalletRowsPreserved:false}, {walletsCreated:4}, {ordersCreated:1},
       {liveTradingEnabled:true}, {approvedTargetSha:'b'.repeat(40)},
       {paperJournalRowsPreserved:false},{privateProviderRequests:1},
     ]){
