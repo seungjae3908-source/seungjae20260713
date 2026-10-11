@@ -64,3 +64,18 @@ old Telegram application artifact. Dedicated no-network mocked tests cover
 all 12 market/strategy lanes, stale/partial/provider error blocking, old cycle
 status, safety envelope and fixed-loopback HTTP GET. A workflow-only code
 snippet cannot replace these executable contract tests.
+
+## Draft additional false-green closure: actual lane lineage (2026-10-11)
+
+All twelve Signal V3 coverage rows must now prove market-specific public
+roster sources, in-range advancing cursors, and non-replayed fresh lane
+observations. Blocked-only cursor rotation and retained last-good rows are
+never new full-coverage success. A `VALID_NO_TRADE` row cannot secretly
+retain candidate inputs; a `CANDIDATES_AVAILABLE` row must have real adapted
+inputs bounded by its scanned count, and a reported provider failure can
+never be concealed by a zero-error envelope. Deterministic contract tests
+include these counterexamples, without external providers or writes.
+
+This is **not** a fix for the three observed KR/US `BLOCKED_DATA` lanes
+in PR #1816. Those remain NO-GO until independently verified provider,
+session and quality-source evidence succeeds; no quality gate is relaxed.

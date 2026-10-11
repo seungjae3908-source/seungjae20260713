@@ -12,7 +12,9 @@ const sourceCoverage = () => ({
   coverage:['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'].flatMap(market =>
     [{strategy:'SCALPING',timeframe:'15m'},{strategy:'SWING',timeframe:'60m'},
       {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
-      market,...mode,totalUniverse:100,scannedCards:0,retainedFromBatch:0,
+      market,...mode,totalUniverse:100,cursorBefore:0,cursorAfter:20,
+      lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
+      scannedCards:0,retainedFromBatch:0,
       universeSource:market==='KR_STOCK'?'krx-symbol-master':
         market==='US_STOCK'?'nasdaq-trader-public-directory':
           market==='CRYPTO_SPOT'?'upbit-public':'bitget-public',

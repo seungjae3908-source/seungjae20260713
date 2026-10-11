@@ -15,7 +15,9 @@ const coverage=()=>({
   coverage:['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'].flatMap(market=>
     [{strategy:'SCALPING',timeframe:'15m'},{strategy:'SWING',timeframe:'60m'},
       {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
-      market,...mode,totalUniverse:100,universePartial:false,universeStale:false,
+      market,...mode,totalUniverse:100,cursorBefore:0,cursorAfter:20,
+      lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
+      universePartial:false,universeStale:false,
       universeSource:market==='KR_STOCK'?'krx-symbol-master':
         market==='US_STOCK'?'nasdaq-trader-public-directory':
           market==='CRYPTO_SPOT'?'upbit-public':'bitget-public',
@@ -117,4 +119,44 @@ test('runtime read-only mode returns bounded GO/NO_GO and never grants live auth
     cycle:()=>false,read:()=>{throw Error('SHOULD_NOT_RUN');},now:()=>now,
   });
   assert.deepEqual(denied,{ok:false,code:'TELEGRAM_PREDEPLOY_SIGNAL_V3_NOT_READY'});
+});
+
+test('fail closed for mismatched market sources, cursor replays and forged lane counts',()=>{
+  const baseline=coverage();
+  assert.equal(verifiedSignalV3Coverage(baseline),true);
+  const broken=[
+    ['market/source mismatch',row=>{row.universeSource='bitget-public';}],
+    ['cursor missing',row=>{delete row.cursorBefore;}],
+    ['cursor repeated',row=>{row.cursorAfter=row.cursorBefore;}],
+    ['cursor out of range',row=>{row.cursorAfter=row.totalUniverse+1;}],
+    ['cursor negative',row=>{row.cursorBefore=-1;}],
+    ['historically preserved success',row=>{row.lastGoodPreserved=true;}],
+    ['blocked-only rotation hidden under success',row=>{row.cursorRotatedBlockedOnly=true;}],
+    ['provider outcome contradicts success',row=>{row.outcome='PROVIDER_FAILURE';}],
+    ['silent retained candidates on no-trade',row=>{row.retainedFromBatch=1;}],
+    ['candidate count above scanned count',row=>{
+      row.status='CANDIDATES_AVAILABLE';row.scannedCards=1;row.retainedFromBatch=2;
+    }],
+    ['candidate status without adopted V3 inputs',row=>{
+      row.status='CANDIDATES_AVAILABLE';row.scannedCards=1;row.retainedFromBatch=0;
+    }],
+    ['no-trade status contradicts upstream candidate outcome',row=>{
+      row.outcome='CANDIDATES_AVAILABLE';
+    }],
+  ];
+  for(const [label,change] of broken){
+    const shot=coverage();
+    change(shot.coverage[0]);
+    assert.equal(verifiedSignalV3Coverage(shot),false,label);
+    assert.equal(classifySignalV3HealthAndSource(health(),{
+      ok:true,serviceSha:sha,executionAuthority:'NONE',snapshot:shot,
+    },now).ok,false,label);
+  }
+  const genuine=coverage();
+  const row=genuine.coverage[0];
+  row.status='CANDIDATES_AVAILABLE';row.scannedCards=2;row.retainedFromBatch=2;
+  assert.equal(verifiedSignalV3Coverage(genuine),true);
+  assert.equal(classifySignalV3HealthAndSource(health(),{
+    ok:true,serviceSha:sha,executionAuthority:'NONE',snapshot:genuine,
+  },now).ok,true);
 });
