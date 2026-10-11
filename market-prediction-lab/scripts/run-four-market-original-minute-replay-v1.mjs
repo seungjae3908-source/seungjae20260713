@@ -19,6 +19,8 @@ import {importStockNativeMinuteOfflineV1} from
   "../src/stock-native-minute-offline-intake-v1.js";
 import {publishResearchOriginalMinuteDiagnosticV1} from
   "../src/research-original-minute-diagnostic-publisher-v1.js";
+import {reviewOriginalMinuteForCanonicalPaperV1} from
+  "../src/four-market-original-minute-candidate-review-v1.js";
 
 /**
  * ONE private local research job per invocation. No background timers,
@@ -28,6 +30,9 @@ import {publishResearchOriginalMinuteDiagnosticV1} from
  * immutable private archive. PUBLISH explicitly publishes only a SANITIZED
  * completed PERIOD/SWEEP summary into an admin-configured 0700 report root;
  * replacement requires separate consent. Neither touches trading systems.
+ * CANDIDATE_REVIEW invokes canonical Paper + unified profitability gates
+ * with MISSING live/forward data to document blockers only. It never makes
+ * a Paper candidate, real order, journal record, notification or promotion.
  * CLI audit result output is 0600, create-only, never overwritten.
  */
 const fail=x=>{throw new TypeError(x);};
@@ -70,7 +75,7 @@ async function readPrivate(path){
     try{data=JSON.parse(raw);}catch{fail("RESEARCH_REPLAY_INPUT_JSON_INVALID");}
     refuseCredentials(data);
     if(!data||typeof data!=="object"||Array.isArray(data)
-      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP","STOCK_IMPORT","PUBLISH"].includes(data.mode))
+      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP","STOCK_IMPORT","PUBLISH","CANDIDATE_REVIEW"].includes(data.mode))
       fail("RESEARCH_REPLAY_INPUT_MODE_INVALID");
     return data;
   }finally{await file?.close();}
@@ -119,7 +124,9 @@ export async function runOriginalReplayPrivateJobV1({input,output}={}){
                 ?await importStockNativeMinuteOfflineV1(task)
                 :mode==="PUBLISH"
                   ?await publishResearchOriginalMinuteDiagnosticV1(task)
-                  :await runFourMarketOriginalMinuteReplayV1(task);
+                  :mode==="CANDIDATE_REVIEW"
+                    ?reviewOriginalMinuteForCanonicalPaperV1(task)
+                    :await runFourMarketOriginalMinuteReplayV1(task);
     if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
       ||result.realOrders!==false||result.actualFillCount!==null
       ||result.trueMarketWideRecall!==null)

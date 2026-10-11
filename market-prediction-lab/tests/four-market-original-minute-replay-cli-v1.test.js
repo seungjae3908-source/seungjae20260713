@@ -308,6 +308,31 @@ test("private PERIOD CLI receipt -> explicitly consented PUBLISH CLI -> admin re
      asOfMs:D+5*DAY,direction:"LONG",timeframe:"5m"});
    const model=await run({input:periodInput,output:periodOutput});
    assert.equal(model.status,"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY");
+   // Real PERIOD CLI receipt -> canonical profitability and Paper candidate
+   // policy inspection; no Paper signal, sample order or registry write.
+   const reviewInput=join(root,"candidate-review.json");
+   const reviewOutput=join(root,"candidate-review-result.json");
+   writePrivate(reviewInput,{mode:"CANDIDATE_REVIEW",
+     market:"CRYPTO_SPOT",symbol:"KRW-BTC",
+     periodResult:JSON.parse(readFileSync(periodOutput,"utf8"))});
+   const reviewed=await run({input:reviewInput,output:reviewOutput});
+   assert.equal(reviewed.mode,"CANDIDATE_REVIEW");
+   assert.equal(reviewed.readOnly,true);
+   assert.equal(reviewed.localOnlyWrite,false);
+   assert.equal(reviewed.status,"RESEARCH_HOLD");
+   const evidence=JSON.parse(readFileSync(reviewOutput,"utf8"));
+   assert.equal(evidence.canonicalProfitabilityStatus,"RESEARCH_HOLD");
+   assert.equal(evidence.canonicalProfitabilityEligible,false);
+   assert.equal(evidence.canonicalPaperBridgeStatus,"BLOCKED");
+   assert.equal(evidence.canonicalPaperEvidenceReady,false);
+   assert.equal(evidence.paperCandidate,null);
+   assert.equal(evidence.paperAdmissionAllowed,false);
+   assert.equal(evidence.orderSubmitted,false);
+   assert.equal(evidence.providerGETCount,0);
+   assert.equal(evidence.actualFillCount,null);
+   assert.equal(evidence.profitabilityProven,false);
+   assert.equal(evidence.executionAuthority,"NONE");
+   assert.equal(statSync(reviewOutput).mode&0o077,0);
    const before=await readAdminSummary({root:adminRoot,market:"CRYPTO_SPOT"});
    assert.equal(before.available,false);
    assert.equal(before.reason,"PRIVATE_MODEL_REPORT_NOT_FOUND");

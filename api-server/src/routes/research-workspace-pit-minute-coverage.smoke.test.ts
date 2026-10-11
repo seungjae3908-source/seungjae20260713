@@ -287,6 +287,14 @@ test('research original minute model report: admin GET only, sanitized period an
     assert.equal(out.available, true);
     assert.equal(out.report.kind, 'PERIOD');
     assert.equal(out.report.modeledReturnPercent, 3.25);
+    assert.equal(out.report.canonicalPaperResearchReview.status, 'RESEARCH_HOLD');
+    assert.equal(out.report.canonicalPaperResearchReview.canonicalProfitabilityStatus, 'RESEARCH_HOLD');
+    assert.equal(out.report.canonicalPaperResearchReview.canonicalPaperBridgeStatus, 'BLOCKED');
+    assert.equal(out.report.canonicalPaperResearchReview.paperAdmissionAllowed, false);
+    assert.ok(out.report.canonicalPaperResearchReview.blockers.includes(
+      'HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED'));
+    assert.ok(out.report.canonicalPaperResearchReview.canonicalPaperBridgeBlockers.includes(
+      'ADMISSION_EVIDENCE_BUNDLE_REQUIRED'));
     assert.equal(out.report.independentOOSProven, false);
     assert.equal(out.report.paperCandidatePASS, false);
     assert.equal(out.financialMutationCount, 0);

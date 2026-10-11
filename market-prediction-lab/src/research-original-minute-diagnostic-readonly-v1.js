@@ -1,6 +1,8 @@
 import {constants} from "node:fs";
 import {lstat,open} from "node:fs/promises";
 import {dirname,isAbsolute,join,resolve} from "node:path";
+import {reviewOriginalMinuteForCanonicalPaperV1} from
+  "./four-market-original-minute-candidate-review-v1.js";
 
 /**
  * Admin-only source of SANITIZED local research-diagnostic readback.
@@ -115,6 +117,22 @@ function verifyRaw(raw,market){
       originalHistoricalSignalVerified:false,
       actualFillCount:null,profitabilityProven:false,
       paperCandidatePASS:false,executionAuthority:NONE,
+      canonicalPaperResearchReview:Object.freeze((()=>{
+        const verdict=reviewOriginalMinuteForCanonicalPaperV1({
+          market,symbol:raw.symbol,
+          periodResult:raw,
+        });
+        return {
+          status:verdict.status,
+          blockerCount:verdict.blockers.length,
+          blockers:verdict.blockers,
+          canonicalProfitabilityStatus:verdict.canonicalProfitabilityStatus,
+          canonicalPaperBridgeStatus:verdict.canonicalPaperBridgeStatus,
+          canonicalPaperBridgeBlockers:verdict.canonicalPaperBridgeBlockers,
+          paperAdmissionAllowed:false,
+          executionAuthority:NONE,
+        };
+      })()),
     };
     return available?report:null;
   }

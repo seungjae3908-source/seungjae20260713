@@ -24,6 +24,16 @@ type DiagnosticReport = {
   originalHistoricalSignalVerified: false;
   paperCandidatePASS: false;
   executionAuthority: 'NONE';
+  canonicalPaperResearchReview?: {
+    status: 'RESEARCH_HOLD';
+    blockerCount: number;
+    blockers: readonly string[];
+    canonicalProfitabilityStatus: 'RESEARCH_HOLD';
+    canonicalPaperBridgeStatus: 'BLOCKED';
+    canonicalPaperBridgeBlockers: readonly string[];
+    paperAdmissionAllowed: false;
+    executionAuthority: 'NONE';
+  };
 };
 type Response = {
   schemaVersion: 'research-original-minute-diagnostic-readonly-v1';
@@ -42,6 +52,17 @@ type Response = {
   reportPublishedAtMs: number | null;
   publicationAgeStatus: 'UNKNOWN' | 'LOCAL_PUBLICATION_ONLY' | 'OLDER_THAN_7_DAYS';
   publicationTimeIndependentlyAttested: false;
+};
+const BLOCKER_LABEL: Record<string, string> = {
+  INDEPENDENT_WHOLE_VENUE_HISTORICAL_PIT_ROSTER_MISSING: '과거 전체 종목·상장폐지 이력 독립 검증',
+  SOURCE_CALENDAR_AND_NATIVE_ONE_MINUTE_ENTITLEMENTS_UNVERIFIED: '거래소 원본 1분봉·세션·이용 권한 검증',
+  ORIGINAL_TIME_T_MINUS_SCANNER_SIGNAL_UNVERIFIED: '당시 실시간 T-60~T0 신호 기록',
+  FROZEN_STRATEGY_AND_INDEPENDENT_OOS_UNVERIFIED: '전략 동결·독립 OOS·워크포워드 검증',
+  DATED_FX_FEES_FUNDING_LIQUIDITY_SLIPPAGE_FILLS_UNVERIFIED: '환율·수수료·펀딩·슬리피지·체결 실측',
+  FUTURE_PROSPECTIVE_SIGNAL_UNVERIFIED: '미래 데이터 실관측 신호',
+  AUTOMATIC_PAPER_FILL_SETTLEMENT_JOURNAL_TELEGRAM_UNVERIFIED: '모의주문·체결·정산·일지·텔레그램 폐루프',
+  HISTORIC_WHOLE_VENUE_PIT_SWEEP_REQUIRED: '해당 기간 전 종목 PIT 원본 점검 자료',
+  ORIGINAL_ONE_MINUTE_MODEL_LINEAGE_OR_COUNTER_UNVERIFIED: '원본 계보·거래 횟수 무결성 보완',
 };
 const MARKET_LABEL: Record<Market, string> = {
   KR_STOCK: '국내주식', US_STOCK: '미국주식',
@@ -92,6 +113,17 @@ function validResponse(value: unknown, requested: Market): value is Response {
     || r.independentFullCostProven !== false
     || r.originalHistoricalSignalVerified !== false
     || r.actualFillCount !== null) return false;
+  const review = r.canonicalPaperResearchReview;
+  if (review != null && (!isRecord(review)
+    || review.status !== 'RESEARCH_HOLD'
+    || review.canonicalProfitabilityStatus !== 'RESEARCH_HOLD'
+    || review.canonicalPaperBridgeStatus !== 'BLOCKED'
+    || review.paperAdmissionAllowed !== false
+    || review.executionAuthority !== 'NONE'
+    || !Array.isArray(review.blockers) || review.blockers.length > 32
+    || !review.blockers.every(v => typeof v === 'string' && /^[A-Z0-9_]{1,120}$/.test(v))
+    || review.blockerCount !== review.blockers.length))
+    return false;
   return r.kind === 'SWEEP'
     ? Number.isSafeInteger(r.sourceOnlyObservedPriceEventLabels)
       && Number(r.sourceOnlyObservedPriceEventLabels) >= 0
@@ -222,6 +254,21 @@ export function ResearchOriginalMinuteDiagnosticsPanel() {
               </div>
             </div>
           )}
+          {report.kind === 'PERIOD' && report.canonicalPaperResearchReview ? (
+            <div className="rounded-xl border border-card-border bg-background p-3"
+              data-testid="research-native-paper-blockers">
+              <p className="text-xs font-bold">
+                기존 수익성·Paper 후보 심사: RESEARCH_HOLD (실행 불가)
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                {report.canonicalPaperResearchReview.blockers.slice(0, 10).map(code =>
+                  <li key={code}>{BLOCKER_LABEL[code] ?? code}</li>)}
+              </ul>
+              <p className="mt-2 text-xs text-muted-foreground">
+                공식 Paper 승인 검사 결과: BLOCKED · 자동주문/정산 실행 없음
+              </p>
+            </div>
+          ) : null}
           <p className="text-xs font-semibold text-muted-foreground">
             읽기 전용 · 독립 OOS 미검증 · 실제 체결 0건 입증 아님
             · 실제 수익성 미증명 · Paper/LIVE 실행 권한 없음
