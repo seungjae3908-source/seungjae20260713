@@ -126,11 +126,11 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page).toHaveURL(/\/research-center$/u);
   await expect(page.getByRole('button', { name: '요약', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-general-view')).toBeVisible();
-  await expect(page.getByTestId('research-workspace-selection')).toContainText('현재 · 요약');
+  await expect(page.getByTestId('research-workspace-tabs').getByRole('button')).toHaveCount(6);
 
-  await page.getByRole('button', { name: '상세', exact: true }).click();
-  await expect(page.getByRole('button', { name: '상세', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toBeVisible();
+  await page.getByRole('button', { name: '연구', exact: true }).click();
+  await expect(page.getByRole('button', { name: '연구', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toHaveCount(0);
   await expect(page.getByTestId('research-overview-tab')).toBeVisible();
 
   await page.reload();

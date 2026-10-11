@@ -533,6 +533,20 @@ verify_unit_sources() {
   done
 }
 
+confirm_free_only() {
+  # Explicit owner command only. The ordinary preflight remains read-only.
+  [[ "${RESEARCH_FREE_ONLY_OWNER_COMMENT_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] || exit 64
+  [[ "$ENV_ROOT" == '/etc/investment-research' ]] || exit 64
+  require_exact_research_release
+  require_research_safety_env
+  provider_preflight >/dev/null
+  "${SUDO[@]}" env TARGET_SHA="$TARGET_SHA" RESEARCH_FREE_ONLY_OWNER_COMMENT_ID="$RESEARCH_FREE_ONLY_OWNER_COMMENT_ID" \
+    node "$RESEARCH_ROOT/research-production/bin/confirm-research-free-policy.mjs"
+  "${SUDO[@]}" chown root:investment-research "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV"
+  "${SUDO[@]}" chmod 0640 "$AI_POLICY_ENV" "$VIDEO_POLICY_ENV"
+  require_runtime_policy_env
+}
+
 preflight() {
   command -v git >/dev/null
   command -v node >/dev/null
@@ -629,6 +643,7 @@ activate() {
 }
 
 case "$MODE" in
+  confirm-free-only) confirm_free_only ;;
   preflight) preflight ;;
   activate) activate ;;
   *)
