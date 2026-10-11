@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -699,6 +699,41 @@ test('corrupted market briefing ledger fails closed; no replay, overwrite or Tel
     await assert.rejects(worker.runOnce(time), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
     assert.equal(sends, 0);
     assert.equal(await readFile(file, 'utf8'), corrupt);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('market brief send followed by disk-commit failure blocks subsequent sends and preserves ledger', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'telegram-brief-durable-'));
+  try {
+    const stateDirectory = path.join(directory, 'state');
+    const archivedDirectory = path.join(directory, 'archived');
+    await mkdir(stateDirectory);
+    const file = path.join(stateDirectory, 'delivery.json');
+    const original = '{"version":1,"delivered":{}}\\n';
+    await writeFile(file, original, 'utf8');
+    const store = new FileTelegramIntelligenceStateStore(file);
+    assert.equal(await store.has('telegram-intelligence:warmup'), false);
+
+    // Move the already-opened state directory aside, then make its former
+    // path a regular file. mkdir(stateDirectory) must fail with ENOTDIR.
+    await rename(stateDirectory, archivedDirectory);
+    await writeFile(stateDirectory, 'SIMULATED_DISK_FAILURE', 'utf8');
+
+    let sends = 0;
+    const worker = new TelegramIntelligenceWorker(
+      store,
+      async () => { sends += 1; return { ok: true as const, attempts: 1 }; },
+      destination => destination === 'KR_STOCK_ROOM' ? 'mock-room' : null,
+    );
+    const when = new Date('2026-08-14T07:00:00.000Z');
+    await assert.rejects(worker.runOnce(when), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(sends, 1, 'the first mocked Bot API acceptance occurred');
+    await assert.rejects(worker.runOnce(when), /TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE/);
+    assert.equal(sends, 1, 'no second Telegram send after undurable receipt');
+    assert.equal(await readFile(path.join(archivedDirectory, 'delivery.json'), 'utf8'), original);
+    assert.equal(await readFile(stateDirectory, 'utf8'), 'SIMULATED_DISK_FAILURE');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

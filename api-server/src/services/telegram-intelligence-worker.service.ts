@@ -82,19 +82,37 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
 
   async markDelivered(key: string, deliveredAt: Date): Promise<void> {
     await this.ensureLoaded();
-    const cutoff = deliveredAt.getTime() - MAX_STATE_AGE_MS;
-    for (const [candidate, timestamp] of this.delivered) {
-      if (new Date(timestamp).getTime() < cutoff) this.delivered.delete(candidate);
+    try {
+      if (!key.startsWith('telegram-intelligence:') || key.length > 1024
+        || !Number.isFinite(deliveredAt.getTime())) {
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      }
+      // Never mutate the active in-memory dedupe state before durable rename.
+      // If Bot API already accepted the message but persistence fails, the
+      // worker must stop rather than silently claim a successful receipt.
+      const next = new Map(this.delivered);
+      const cutoff = deliveredAt.getTime() - MAX_STATE_AGE_MS;
+      for (const [candidate, timestamp] of next) {
+        if (Date.parse(timestamp) < cutoff) next.delete(candidate);
+      }
+      next.set(key, deliveredAt.toISOString());
+      if (next.size > 10000) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      const payload: PersistedState = { version: 1, delivered: Object.fromEntries(next) };
+      const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+      if (Buffer.byteLength(serialized, 'utf8') > 1_048_576)
+        throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_INVALID');
+      await mkdir(path.dirname(this.statePath), { recursive: true });
+      const temporary = `${this.statePath}.${process.pid}.tmp`;
+      await writeFile(temporary, serialized, { encoding: 'utf8', mode: 0o600 });
+      await rename(temporary, this.statePath);
+      this.delivered = next;
+    } catch {
+      this.blocked = true;
+      this.delivered.clear();
+      logger.warn({ code: 'TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE' },
+        'telegram intelligence dedupe write failed; further scheduled sends blocked');
+      throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     }
-    this.delivered.set(key, deliveredAt.toISOString());
-    await mkdir(path.dirname(this.statePath), { recursive: true });
-    const payload: PersistedState = {
-      version: 1,
-      delivered: Object.fromEntries(this.delivered),
-    };
-    const temporary = `${this.statePath}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(temporary, this.statePath);
   }
 }
 
