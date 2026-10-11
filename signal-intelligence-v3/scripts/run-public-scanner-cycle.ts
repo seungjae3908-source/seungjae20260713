@@ -21,6 +21,10 @@ import {
   enforcePublicStockRosterCoverage,
   createPublicStockQualityCounter,
 } from '../src/public-stock-candle-binding.mjs';
+import {
+  createPublicStockSessionGapAudit,
+  summarizePublicKrExclusions,
+} from '../src/public-stock-session-diagnostics.mjs';
 import { evaluateScannerDataQuality } from '../../api-server/src/services/scanner-data-quality.service';
 import {
   classifyPublicCycleLaneStatus,
@@ -266,6 +270,7 @@ async function withStockPublicOnly(lane, operation) {
 
   const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
   const qualityCounter = createPublicStockQualityCounter();
+  const sessionGapAudit = createPublicStockSessionGapAudit(lane.market, lane.timeframe);
   const qualityWindow = lane.strategyMode === 'scalping' ? 240
     : lane.strategyMode === 'swing' ? 320 : 400;
   // StockSignalScanner -> ScannerProviderHealth calls getCandlesMeta, not
@@ -279,6 +284,7 @@ async function withStockPublicOnly(lane, operation) {
     // Reuse the very same public candles. Count only bounded quality codes,
     // never symbols, candle payloads, exception text or extra HTTP requests.
     if (String(timeframe) === lane.timeframe) {
+      sessionGapAudit.observe(candles.slice(-qualityWindow));
       try {
         qualityCounter.observe(evaluateScannerDataQuality({
           symbol: 'PUBLIC_SOURCE_DIAGNOSTIC',
@@ -313,7 +319,13 @@ async function withStockPublicOnly(lane, operation) {
     // An eligible 4,010-symbol KRX roster does not prove complete
     // coverage when upstream reports 2,837 explained unsupported codes.
     const withRosterEvidence = enforcePublicStockRosterCoverage(scanned, targetUniverse);
-    return { ...withRosterEvidence, publicStockQualityDiagnostic: qualityCounter.snapshot() };
+    return {
+      ...withRosterEvidence,
+      publicStockQualityDiagnostic: qualityCounter.snapshot(),
+      publicStockSessionDiagnostic: sessionGapAudit.snapshot(),
+      publicKrExclusionDiagnostic: lane.market === 'KR_STOCK'
+        ? summarizePublicKrExclusions(targetUniverse) : null,
+    };
   } finally {
     restoreCandles();
     marketData.getQuote = originalQuote;
@@ -478,6 +490,10 @@ async function main() {
         // Diagnostic-only, low-cardinality quality issues for the exact scan.
         // Its values do not grant a candidate, PASS, cursor or order authority.
         publicStockQualityDiagnostic: response.publicStockQualityDiagnostic ?? null,
+        // Diagnostic-only: distinguish regular hours vs other gap candidates.
+        // This does NOT waive MISSING_CANDLE or create a verified signal.
+        publicStockSessionDiagnostic: response.publicStockSessionDiagnostic ?? null,
+        publicKrExclusionDiagnostic: response.publicKrExclusionDiagnostic ?? null,
         // The prior futures 60m SEARCH_FAILURE reported 0 provider errors
         // while hiding incomplete started/completed work. Preserve the exact
         // execution accounting without any private provider payload.
