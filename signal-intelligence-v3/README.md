@@ -180,3 +180,17 @@ cannot turn an untrusted V3 signal into a fresh 200. Production runtime
 `SNAPSHOT_STALE` / 503 resolution still requires separately approved
 real read-only systemd/snapshot evidence after deployment; these Draft code
 tests alone do not prove the operational root cause was repaired.
+
+## Draft: bounded invalid-item research rotation avoids whole-market starvation
+
+A five-coin Spot 1D page had zero HTTP errors/timeouts but one
+`invalid_data` item (insufficient public candles) and four other completed
+items. Holding cursor zero would prevent scanning the rest of the Spot
+roster until this single coin acquired enough daily history, potentially
+for days. Only a fully started and completed zero-provider-error page with
+explicit `invalid_data` may now rotate the *research-only* cursor as
+`BLOCKED_INVALID_DATA_RESEARCH_ROTATION_ONLY`. It stays `BLOCKED_DATA`
+and contributes no V3 Telegram candidates, no Paper or real authority.
+Provider errors, malformed, incomplete and stale batches still hold
+the cursor. The invalid instrument is revisited when rotation wraps;
+missing historical candles remain unproven rather than fabricated.

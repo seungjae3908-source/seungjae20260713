@@ -463,9 +463,10 @@ test('crypto valid candidates cannot conceal fulfilled-null invalid-data items',
   }]};
   const status=classifyPublicCycleLaneStatus(withNull);
   assert.equal(status,'BLOCKED_DATA');
-  assert.equal(decidePublicCycleCursor({response:withNull,status,cursor:0}).nextCursor,0);
-  assert.equal(decidePublicCycleCursor({response:withNull,status,cursor:0}).reason,
-    'REPORTED_ITEM_FAILURE_HOLD');
+  const researchOnly=decidePublicCycleCursor({response:withNull,status,cursor:0});
+  assert.equal(researchOnly.nextCursor,5);
+  assert.equal(researchOnly.blockedObservationOnly,true);
+  assert.equal(researchOnly.reason,'BLOCKED_INVALID_DATA_RESEARCH_ROTATION_ONLY');
   const unsupported={...complete,failures:[{
     symbol:'OTHER',reason:'provider_error',message:'HTTP_429',
   }]};
@@ -478,4 +479,36 @@ test('crypto valid candidates cannot conceal fulfilled-null invalid-data items',
   assert.equal(decidePublicCycleCursor({
     response:{...complete,failures:undefined},status:'SEARCH_FAILURE',cursor:0,
   }).nextCursor,0);
+});
+
+test('one invalid-data item rotates research only, while incomplete and provider errors hold',()=>{
+  const ok={cards:[],failures:[{symbol:'PUBLIC',reason:'invalid_data',message:'NOT_ENOUGH_CANDLES'}],
+    outcome:null,dataState:'complete',
+    universe:{totalCount:294,cursor:0,nextCursor:5,
+      source:'upbit-public',providerErrorCount:0,partial:false,stale:false},
+    execution:{requestedCount:5,startedCount:5,completedCount:5,
+      providerErrorCount:0,timeoutCount:0,partial:false,timedOut:false,
+      cancelled:false,duplicate:false},
+  };
+  assert.equal(classifyPublicCycleLaneStatus(ok),'BLOCKED_DATA');
+  const complete=decidePublicCycleCursor({response:ok,status:'BLOCKED_DATA',cursor:0});
+  assert.equal(complete.nextCursor,5);
+  assert.equal(complete.blockedObservationOnly,true);
+  const cases=[
+    {...ok,execution:{...ok.execution,completedCount:4}},
+    {...ok,execution:{...ok.execution,partial:true}},
+    {...ok,execution:{...ok.execution,timeoutCount:1}},
+    {...ok,execution:{...ok.execution,providerErrorCount:1}},
+    {...ok,universe:{...ok.universe,stale:true}},
+    {...ok,universe:{...ok.universe,nextCursor:3}},
+    {...ok,failures:[...ok.failures,{symbol:'OTHER',reason:'provider_error',message:'HTTP_429'}]},
+  ];
+  for(const row of cases){
+    const status=classifyPublicCycleLaneStatus(row);
+    assert.notEqual(status,'CANDIDATES_AVAILABLE');
+    assert.notEqual(status,'VALID_NO_TRADE');
+    const decision=decidePublicCycleCursor({response:row,status,cursor:0});
+    assert.equal(decision.nextCursor,0,'unsafe page must not rotate');
+    assert.equal(decision.blockedObservationOnly,false);
+  }
 });
