@@ -2749,6 +2749,7 @@ test('Cost missing is not an allowed zero-rate estimate in automatic Paper hando
   for (const cost of [
     undefined, null, {}, {commissionRate:null}, {commissionRate:''},
     {commissionRate:NaN}, {commissionRate:Infinity}, {commissionRate:-0.1},
-    {commissionRate:1.1},
+    {commissionRate:1.1}, {commissionRate:' '}, {commissionRate:'0'},
+    {commissionRate:false}, {commissionRate:[]}, {commissionRate:{}},
   ]) assert.equal(costPercent(shape(cost), 'commissionRate'), null);
 });

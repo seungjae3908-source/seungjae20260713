@@ -599,9 +599,9 @@ function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
 
 export function costPercent(entry: MemberAutoTradingPaperHandoffEntry, key: string) {
   const cost = record(entry.execution.costPolicy);
-  // Number(null) and Number('') are zero: neither proves a zero-cost policy.
-  if (cost?.[key] == null || cost[key] === '') return null;
-  const rate = Number(cost[key]);
+  // No coercion: null, strings, whitespace, false and arrays are not
+  // attested numeric policy rates. Only an explicit finite number qualifies.
+  const rate = cost?.[key];
   return finite(rate) && rate >= 0 && rate <= 1 ? rate * 100 : null;
 }
 
