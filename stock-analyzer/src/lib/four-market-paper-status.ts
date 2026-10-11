@@ -75,8 +75,7 @@ export function parseFourPaperReadOnlyStatus(raw: unknown): FourPaperReadOnlySta
         || Number(lane.dailyLosingTrades) < 0
         || !Number.isSafeInteger(lane.settledTrades)
         || Number(lane.settledTrades) < 0
-        || lane.blockers.length > 0
-        || (lane.newEntriesAllowed && Number(lane.dailyLosingTrades) >= 5)) {
+        || lane.blockers.length > 0) {
         throw new Error('PAPER_FOUR_MARKET_UNVERIFIED_EQUITY_' + key);
       }
     } else if (lane.operatingCapitalKrw !== null || lane.reserveKrw !== null
