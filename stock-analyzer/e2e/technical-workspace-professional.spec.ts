@@ -30,9 +30,9 @@ test('technical workspace keeps analysis engines lazy and leaves signal/AI chart
   expect(workspace).toContain('<AiChartPage embedded />');
 });
 
-test('technical help is concise and retains the live-trading safety boundary', () => {
+test('technical help is concise and retains the server-gated live-trading boundary', () => {
   const workspace = source('src/pages/technical-workspace.tsx');
   expect(workspace).toContain('검색·차트·백테스트는 읽기·분석 중심 화면');
-  expect(workspace).toContain('실거래는 활성화하지 않습니다.');
+  expect(workspace).toContain('모의매매와 텔레그램은 별도 기능이며 자동매매 Gate를 대신하지 않습니다.');
   expect(workspace).not.toContain('모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.');
 });
