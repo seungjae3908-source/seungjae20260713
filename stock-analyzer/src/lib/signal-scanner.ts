@@ -1,5 +1,8 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { buildSignalScannerRequestUrl } from './signal-scanner-url';
+import { parseSignalScannerRetryAfter } from './scanner-retry-after';
+import { createScannerStaleFallback } from './scanner-stale-fallback';
+import { ScannerBoundedLastGoodCache, scannerSessionCacheKey } from './scanner-session-cache';
 
 export type ScannerAssetClass = 'stock' | 'coin_spot' | 'coin_futures';
 export type ScannerDirection = 'LONG' | 'SHORT' | 'NEUTRAL';
@@ -292,7 +295,7 @@ interface ScannerInFlight {
 }
 
 const scannerInFlight = new Map<string, ScannerInFlight>();
-const scannerLastGood = new Map<string, ScannerResponse>();
+const scannerLastGood = new ScannerBoundedLastGoodCache<ScannerResponse>();
 const scannerRetryUntil = new Map<string, number>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -301,47 +304,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function abortError(): DOMException {
   return new DOMException('Scanner request aborted', 'AbortError');
-}
-
-function fallbackReason(error: SignalScannerRequestError): string {
-  if (error.status === 409) return '동일 조건 분석이 이미 진행 중입니다. 기존 결과를 유지하며 완료를 기다립니다.';
-  if (error.status === 429) {
-    const retry = error.retryAfterSeconds == null ? '' : ` ${error.retryAfterSeconds}초 후`;
-    return `검색 요청 한도를 보호하고 있습니다.${retry} 다음 갱신을 기다립니다.`;
-  }
-  return '시장데이터 공급자 응답이 불안정합니다. 마지막 정상 결과를 유지합니다.';
-}
-
-function asLastGoodFallback(response: ScannerResponse, error: SignalScannerRequestError): ScannerResponse {
-  const reason = fallbackReason(error);
-  return {
-    ...response,
-    cards: response.cards.map((card) => ({
-      ...card,
-      dataState: 'stale',
-      strongSignalEligible: false,
-      warnings: card.warnings.includes(reason) ? card.warnings : [...card.warnings, reason],
-    })),
-    alerts: [],
-    execution: {
-      ...response.execution,
-      partial: true,
-      duplicate: response.execution.duplicate || error.status === 409,
-    },
-    universe: {
-      ...response.universe,
-      partial: true,
-      stale: true,
-    },
-    dataState: 'stale',
-    message: `${response.message} · ${reason}`,
-    refreshIssue: {
-      status: error.status as 409 | 429 | 502,
-      code: error.code,
-      retryAfterSeconds: error.retryAfterSeconds,
-      message: reason,
-    },
-  };
 }
 
 async function requestScannerUpstream(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
@@ -353,9 +315,10 @@ async function requestScannerUpstream(request: SignalScannerRequest, signal: Abo
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const code = isRecord(payload) && typeof payload.error === 'string' ? payload.error : `HTTP_${response.status}`;
-    const retryAfterHeader = Number(response.headers.get('Retry-After'));
-    const retryAfterBody = isRecord(payload) ? Number(payload.retryAfterSeconds) : Number.NaN;
-    const retryAfterSeconds = Number.isFinite(retryAfterHeader) ? retryAfterHeader : Number.isFinite(retryAfterBody) ? retryAfterBody : null;
+    const retryAfterSeconds = parseSignalScannerRetryAfter(
+      response.headers.get('Retry-After'),
+      isRecord(payload) ? payload.retryAfterSeconds : undefined,
+    );
     throw new SignalScannerRequestError(response.status, code, retryAfterSeconds);
   }
   if (!isRecord(payload) || payload.ok !== true || !Array.isArray(payload.cards)) {
@@ -419,8 +382,8 @@ function consumeInFlight(key: string, entry: ScannerInFlight, signal: AbortSigna
   });
 }
 
-export async function fetchSignalScanner(request: SignalScannerRequest, signal: AbortSignal): Promise<ScannerResponse> {
-  const key = buildSignalScannerRequestUrl(request);
+export async function fetchSignalScanner(request: SignalScannerRequest, signal: AbortSignal, memberScope?: string | null): Promise<ScannerResponse> {
+  const key = scannerSessionCacheKey(buildSignalScannerRequestUrl(request), memberScope);
   const existing = scannerInFlight.get(key);
   if (existing) return consumeInFlight(key, existing, signal);
 
@@ -429,7 +392,7 @@ export async function fetchSignalScanner(request: SignalScannerRequest, signal: 
     const remaining = Math.max(1, Math.ceil((retryUntil - Date.now()) / 1000));
     const cached = scannerLastGood.get(key);
     const rateError = new SignalScannerRequestError(429, 'SCAN_RATE_LIMIT_BACKOFF', remaining);
-    if (cached) return asLastGoodFallback(cached, rateError);
+    if (cached) return createScannerStaleFallback(cached, rateError);
     throw rateError;
   }
 
@@ -453,7 +416,7 @@ export async function fetchSignalScanner(request: SignalScannerRequest, signal: 
         }
         if (error.status === 409 || error.status === 429 || error.status === 502) {
           const cached = scannerLastGood.get(key);
-          if (cached) return asLastGoodFallback(cached, error);
+          if (cached) return createScannerStaleFallback(cached, error);
         }
       }
       throw error;
