@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_PINNED_PATHS, SCANNER_REPAIR_SOURCE_SHA,
+import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_PINNED_PATHS, SCANNER_REPAIR_SOURCE_SHA, SCANNER_REPAIR_WORKFLOW_BASE_SHA,
   SCANNER_PROTECTED_AUTHORITY_PATHS, verifyPinnedScannerScope } from '../scripts/scanner-readonly-repair-scope.mjs';
 
 const base = 'b'.repeat(40), blob = 'a'.repeat(40), drift = 'c'.repeat(40);
@@ -60,7 +60,7 @@ test('all exact scanner paths are PR-trigger covered without dropping any Paper 
   assert.ok(workflow.includes('permissions:\n  contents: read'));
   const steps = text => [...text.matchAll(/^      - name: (.+)$/gmu)].map(match => match[1]);
   for (const workflowPath of [path, '.github/workflows/research-workspace-integration-v1.yml']) {
-    const original = git('show', SCANNER_REPAIR_SOURCE_SHA + ':' + workflowPath).replace(/\r\n/gu, '\n');
+    const original = git('show', SCANNER_REPAIR_WORKFLOW_BASE_SHA + ':' + workflowPath).replace(/\r\n/gu, '\n');
     assert.deepEqual(steps(read(workflowPath)), steps(original), workflowPath);
   }
 });
