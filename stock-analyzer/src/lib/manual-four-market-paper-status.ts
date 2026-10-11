@@ -49,7 +49,8 @@ export function parseManualFourMarketStatus(raw:unknown):ManualFourMarketStatus{
     }
   }
   if(raw.canCreate&&(!raw.rlsGuardReady||raw.ready
-    ||MANUAL_FOUR_MARKETS.some(({key})=>raw.markets[key].seedExists))){
+    ||Object.values(raw.markets as Record<string,Record<string,unknown>>)
+      .some(lane=>lane.seedExists===true))){
     throw new Error('MANUAL_PAPER_CREATION_RIGHT_UNVERIFIED');
   }
   return raw as unknown as ManualFourMarketStatus;
