@@ -432,7 +432,7 @@ function verifiedThrownProviderMetrics(error) {
   // Only bounded Scanner's pre-defined numeric error format is accepted.
   // Never export exception text, symbols, URLs or raw provider responses.
   const raw=error instanceof Error?error.message:'';
-  const matched=/^SCAN_PROVIDER_ERROR: completed=(\\d+), providerErrors=(\\d+), workerErrors=(\\d+), timeouts=(\\d+), started=(\\d+)$/u.exec(raw);
+  const matched=/^SCAN_PROVIDER_ERROR: completed=([0-9]+), providerErrors=([0-9]+), workerErrors=([0-9]+), timeouts=([0-9]+), started=([0-9]+)$/u.exec(raw);
   if(!matched)return null;
   const [completed,providerErrors,workerErrors,timeouts,started]=matched.slice(1).map(Number);
   if(![completed,providerErrors,workerErrors,timeouts,started].every(Number.isSafeInteger)
