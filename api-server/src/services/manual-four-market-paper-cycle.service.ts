@@ -228,8 +228,20 @@ export function evaluateManualFourMarketPaperClosedCycle(
   if(s.market!=='crypto_futures'&&c.signedFundingKrw!==0)
     add('PAPER_CYCLE_NONFUTURES_FUNDING_FORBIDDEN');
   if(Array.isArray(o.priorCloseEventIds)
-    &&new Set(o.priorCloseEventIds).size!==o.priorCloseEventIds.length)
+    &&(o.priorCloseEventIds.some(id=>typeof id!=='string'
+      || !/^paper-manual-cycle-v1:[0-9a-f]{64}$/u.test(id))
+      ||new Set(o.priorCloseEventIds).size!==o.priorCloseEventIds.length))
     add('PAPER_CYCLE_LEDGER_DUPLICATE');
+  // Entry collateral includes known commission and full conservative
+  // quoted slippage budget. A highly leveraged order cannot ignore fees
+  // and overuse the remaining virtual capital before its Paper fill.
+  if(Number.isFinite(margin)&&riskAllowed(o.operatingCapitalKrw)
+    &&riskAllowed(s.requestedNotionalKrw)
+    &&riskAllowed(c.entryCommissionRate)
+    &&riskAllowed(c.spreadAndSlippageKrw)
+    &&margin+s.requestedNotionalKrw*c.entryCommissionRate
+      +c.spreadAndSlippageKrw>o.operatingCapitalKrw+0.01)
+    add('PAPER_CYCLE_ENTRY_COSTS_EXCEED_AVAILABLE_CAPITAL');
   if(blockers.length)return blocked(input,blockers);
   const entryPrice=s.side==='SHORT'?e.bid:e.ask;
   const exitPrice=s.side==='SHORT'?x.ask:x.bid;
