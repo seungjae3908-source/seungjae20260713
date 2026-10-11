@@ -23,6 +23,20 @@ const SYMBOL = /^[A-Z0-9][A-Z0-9._:-]{0,39}$/u;
 const DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const SESSION_KINDS = new Set(["REGULAR", "PREMARKET", "AFTERMARKET"]);
 const utc = ms => new Date(ms).toISOString().slice(0, 10);
+// Market-local trading dates, not arbitrary UTC-midnight calendar dates.
+const LOCAL_DATES = Object.freeze({
+  "Asia/Seoul": new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+  }),
+  "America/New_York": new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }),
+});
+function localDay(ms, zone) {
+  const parts = Object.fromEntries(LOCAL_DATES[zone].formatToParts(new Date(ms))
+    .map(x => [x.type, x.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 const fail = (reason) => { throw new TypeError(reason); };
 const safe = values => Object.freeze({
   schemaVersion: "research-minute-archive-window-coverage-v1",
@@ -44,7 +58,7 @@ function parseDate(value) {
     fail("MINUTE_WINDOW_DATE_INVALID");
   return valueMs;
 }
-function validateStockCalendar(market, stockCalendar, startMs, endExclusiveMs) {
+function validateStockCalendar(market, stockCalendar, startDate, endDate) {
   if (!stockCalendar || typeof stockCalendar !== "object"
     || Array.isArray(stockCalendar) || stockCalendar.market !== market
     || !Array.isArray(stockCalendar.sessions)
@@ -52,21 +66,23 @@ function validateStockCalendar(market, stockCalendar, startMs, endExclusiveMs) {
     fail("MINUTE_WINDOW_STOCK_CALENDAR_INVALID");
   const timeZone = market === "KR_STOCK" ? "Asia/Seoul" : "America/New_York";
   const source = stockCalendar.sessions;
-  let previousMs = 0;
+  let previousEndMs = 0;
   const validated = [];
   for (const x of source) {
     if (!x || typeof x !== "object" || Array.isArray(x)
-      || !Number.isSafeInteger(x.startMs) || x.startMs <= previousMs
+      || !Number.isSafeInteger(x.startMs) || x.startMs < previousEndMs
       || x.startMs % 60_000 !== 0 || !Number.isSafeInteger(x.endMs)
       || x.endMs % 60_000 !== 0 || x.endMs <= x.startMs
       || x.endMs - x.startMs > DAY || !SESSION_KINDS.has(x.kind)
       || x.timeZone !== timeZone
-      || typeof x.dayUtc !== "string" || !DATE.test(x.dayUtc)
-      || x.dayUtc !== utc(x.startMs)
-      || x.startMs < startMs || x.startMs >= endExclusiveMs)
+      || typeof x.tradingDateLocal !== "string"
+      || !DATE.test(x.tradingDateLocal)
+      || x.tradingDateLocal !== localDay(x.startMs, timeZone)
+      || x.tradingDateLocal < startDate || x.tradingDateLocal > endDate)
       fail("MINUTE_WINDOW_STOCK_CALENDAR_INVALID");
-    previousMs = x.startMs;
-    validated.push({ dayUtc: x.dayUtc, startMs: x.startMs,
+    previousEndMs = x.endMs;
+    validated.push({ selectionDate: x.tradingDateLocal,
+      tradingDateLocal: x.tradingDateLocal, startMs: x.startMs,
       endMs: x.endMs, kind: x.kind, timeZone: x.timeZone });
   }
   return validated;
@@ -74,12 +90,19 @@ function validateStockCalendar(market, stockCalendar, startMs, endExclusiveMs) {
 function base(market, symbol, window, chunkStartMs, chunkEndExclusiveMs) {
   return {
     market, venue: MARKETS[market], symbol,
-    selectedResearchStartUtc: window.startDate,
-    selectedResearchEndInclusiveUtc: window.endDate,
+    researchDateBasis: market.startsWith("CRYPTO_")
+      ? "UTC_CRYPTO_DAY" : "EXCHANGE_LOCAL_TRADING_DATE",
+    selectedResearchStartDate: window.startDate,
+    selectedResearchEndDate: window.endDate,
+    selectedResearchStartUtc: market.startsWith("CRYPTO_") ? window.startDate : null,
+    selectedResearchEndInclusiveUtc: market.startsWith("CRYPTO_") ? window.endDate : null,
     selectedResearchUtcDayCount: window.requestedUtcDayCount,
-    inspectedStartUtc: utc(chunkStartMs),
-    inspectedEndInclusiveUtc: utc(chunkEndExclusiveMs - DAY),
-    maximumChunkUtcDays: 31,
+    inspectedStartDate: utc(chunkStartMs),
+    inspectedEndInclusiveDate: utc(chunkEndExclusiveMs - DAY),
+    inspectedStartUtc: market.startsWith("CRYPTO_") ? utc(chunkStartMs) : null,
+    inspectedEndInclusiveUtc: market.startsWith("CRYPTO_")
+      ? utc(chunkEndExclusiveMs - DAY) : null,
+    maximumChunkCalendarDays: 31,
     nextCursorDate: chunkEndExclusiveMs < window.endExclusiveMs
       ? utc(chunkEndExclusiveMs) : null,
   };
@@ -123,12 +146,14 @@ export async function auditResearchMinuteArchiveWindowV1({
     ? Array.from({ length: (chunkEndExclusiveMs - chunkStartMs) / DAY },
       (_, i) => {
         const startMs = chunkStartMs + i * DAY;
-        return { dayUtc: utc(startMs), startMs, endMs: startMs + DAY,
+        return { selectionDate: utc(startMs), dayUtc: utc(startMs),
+          startMs, endMs: startMs + DAY,
           kind: "UTC_24H", timeZone: "UTC" };
       })
     : validateStockCalendar(market, stockCalendar,
-      window.startMs, window.endExclusiveMs).filter(x =>
-      x.startMs >= chunkStartMs && x.startMs < chunkEndExclusiveMs);
+      window.startDate, window.endDate).filter(x =>
+      x.tradingDateLocal >= utc(chunkStartMs)
+      && x.tradingDateLocal < utc(chunkEndExclusiveMs));
   if (!isCrypto && selectedSessions.length === 0) {
     return safe({ ...summary, status: "BLOCKED_STOCK_SESSION_CALENDAR_EMPTY",
       requestedSessionCount: null, archivedSessionCount: 0,
@@ -146,7 +171,7 @@ export async function auditResearchMinuteArchiveWindowV1({
   };
   const missingCollectionPlan = [], warnings = [], monthly = Object.create(null);
   for (const session of selectedSessions) {
-    const month = session.dayUtc.slice(0, 7);
+    const month = session.selectionDate.slice(0, 7);
     const bucket = monthly[month] ??= {
       requestedSessions: 0, sourcePresent: 0, sourceLimited: 0,
       missing: 0, revisionConflict: 0, unreadable: 0,
@@ -160,7 +185,7 @@ export async function auditResearchMinuteArchiveWindowV1({
       });
     } catch (error) {
       totals.unreadableSessionCount++; bucket.unreadable++;
-      warnings.push({ dayUtc: session.dayUtc, sessionStartMs: session.startMs,
+      warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
         reason: "ARCHIVED_ORIGINAL_UNREADABLE_OR_INVALID",
         errorCode: String(error?.message ?? "ERROR").slice(0, 100) });
       continue;
@@ -170,18 +195,20 @@ export async function auditResearchMinuteArchiveWindowV1({
         || result.reason === "ARCHIVED_REVISION_NOT_FOUND") {
         totals.missingSessionCount++; bucket.missing++;
         missingCollectionPlan.push({
-          dayUtc: session.dayUtc, sessionStartMs: session.startMs,
+          selectionDate: session.selectionDate, sessionStartMs: session.startMs,
           sessionEndMs: session.endMs, sessionKind: session.kind,
+          ...(isCrypto ? { dayUtc: session.dayUtc }
+            : { tradingDateLocal: session.tradingDateLocal }),
           reason: "MISSING_ORIGINAL_ONE_MINUTE_SESSION",
         });
       } else if (result.reason ===
         "MULTIPLE_SOURCE_REVISIONS_REQUIRE_EXPLICIT_SELECTION") {
         totals.revisionConflictSessionCount++; bucket.revisionConflict++;
-        warnings.push({ dayUtc: session.dayUtc, sessionStartMs: session.startMs,
+        warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
           reason: "REVISIONS_REQUIRE_EXPLICIT_SOURCE_SELECTION" });
       } else {
         totals.unreadableSessionCount++; bucket.unreadable++;
-        warnings.push({ dayUtc: session.dayUtc, sessionStartMs: session.startMs,
+        warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
           reason: "ARCHIVE_BLOCKED", errorCode: String(result.reason).slice(0, 100) });
       }
       continue;
@@ -193,7 +220,7 @@ export async function auditResearchMinuteArchiveWindowV1({
       || result.sessionTimeZone !== session.timeZone
       || result.archiveSessionEndMs !== session.endMs) {
       totals.unreadableSessionCount++; bucket.unreadable++;
-      warnings.push({ dayUtc: session.dayUtc, sessionStartMs: session.startMs,
+      warnings.push({ selectionDate: session.selectionDate, sessionStartMs: session.startMs,
         reason: "ARCHIVE_SESSION_PROVENANCE_MISMATCH" });
       continue;
     }

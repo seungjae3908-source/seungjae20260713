@@ -8,7 +8,10 @@
  *   --output /private/reports/2020-01-01.json
  *
  * Resume at nextCursorDate from previous result with --cursor-date.
- * For stock markets, explicitly supply --stock-calendar /private/sessions.json.
+ * For stock markets, explicitly supply --stock-calendar /private/sessions.json
+ * with {"market":"KR_STOCK","sessions":[{"tradingDateLocal":"2026-09-18",
+ * "startMs":...,"endMs":...,"kind":"PREMARKET","timeZone":"Asia/Seoul"}]}.
+ * Stock selected start/end/cursor are exchange-LOCAL trading dates; crypto UTC.
  * No HTTP/provider download, DB/secret write, order, CI artifact or deployment.
  */
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -101,6 +104,9 @@ export async function runResearchMinuteWindowCliV1(config) {
     { encoding: "utf8", mode: 0o600, flag: "wx" });
   return Object.freeze({
     status: result.status, market: result.market, symbol: result.symbol,
+    researchDateBasis: result.researchDateBasis,
+    inspectedStartDate: result.inspectedStartDate,
+    inspectedEndInclusiveDate: result.inspectedEndInclusiveDate,
     inspectedStartUtc: result.inspectedStartUtc,
     inspectedEndInclusiveUtc: result.inspectedEndInclusiveUtc,
     nextCursorDate: result.nextCursorDate,
