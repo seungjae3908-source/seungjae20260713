@@ -547,6 +547,12 @@ export function v3StalenessHypothesis(health,cycle,file,units){
   if(health?.status==='SNAPSHOT_STALE'){
     if(file.status==='RECENT_PUBLICATION')return 'HTTP_FILE_AGE_DISAGREE';
     if(cycle?.lastResult==='FAILED')return 'CYCLE_FAILED_SUSPECT';
+    // A still-running oneshot is NOT an inactive timer. Distinguish a long
+    // blocked public-provider cycle from a timer that never started.
+    if(cycle?.lastResult==='RUNNING')
+      return cycle?.startedAgeBand==='OVER_60M'
+        ? 'CYCLE_RUNNING_OVER_60M_SUSPECT'
+        : 'CYCLE_RUNNING_WITH_STALE_SNAPSHOT';
     if(units?.timer!=='ACTIVE'||cycle?.startedAgeBand==='OVER_60M')
       return 'TIMER_NOT_RECENT_SUSPECT';
     if(cycle?.lastResult==='SUCCEEDED'
