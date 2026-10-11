@@ -83,7 +83,10 @@ test('malformed Paper admission is rejected even if individual fields look valid
     ...ready.marketCapital,
     crypto_futures: {...settled, dailyLosingTrades:5},
   }};
-  assert.throws(() => parseFourPaperReadOnlyStatus(fifthLoss));
+  const observed=parseFourPaperReadOnlyStatus(fifthLoss);
+  assert.equal(observed.marketCapital.crypto_futures.dailyLosingTrades,5);
+  assert.equal(observed.marketCapital.crypto_futures.newEntriesAllowed,true);
+  assert.equal(summarizeFourPaperReadOnlyStatus(observed),'4시장 계좌·정산·진입 검증됨');
   const unverifiedCount = {...ready, marketCapital:{
     ...ready.marketCapital,
     us_stock: {...settled, settledTrades:undefined},
