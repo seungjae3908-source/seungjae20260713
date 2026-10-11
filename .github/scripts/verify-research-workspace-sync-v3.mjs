@@ -327,6 +327,7 @@ const automaticTradingDriftReviewed=[
  'stock-analyzer/e2e/scanner-chart-broadcast.spec.ts',
  'stock-analyzer/e2e/trade-approval-queue-unavailable.spec.ts',
  'stock-analyzer/e2e/full-product-browser-flow.spec.ts',
+ '.github/tests/production-auto-live-only-release-contract.test.mjs',
  'api-server/src/services/trading-holdings-readonly.service.ts',
  'api-server/src/features/account-readonly/account-readonly.contract.ts',
  'api-server/src/features/account-readonly/providers/kiwoom-readonly.provider.ts',
