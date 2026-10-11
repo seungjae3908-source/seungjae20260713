@@ -17,6 +17,24 @@ const integer = (value) => Number.isSafeInteger(value) && value >= 0;
 const nonNegative = (value) => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
 
+// A full/no-trade classification requires proof that the requested source
+// page was actually completed. A page that silently skips instruments must
+// not be advertised as a completed zero-opportunity scan.
+function pageEvidenceComplete(universe, execution) {
+  if (!integer(universe?.totalCount) || universe.totalCount === 0
+    || !integer(universe.cursor) || universe.cursor >= universe.totalCount
+    || !integer(execution?.requestedCount) || execution.requestedCount === 0
+    || !integer(execution.startedCount) || !integer(execution.completedCount)
+    || execution.startedCount !== execution.requestedCount
+    || execution.completedCount !== execution.requestedCount
+    || execution.partial === true) return false;
+  const end = universe.cursor + execution.requestedCount;
+  if (end > universe.totalCount) return false;
+  if (universe.nextCursor === null) return end === universe.totalCount;
+  return integer(universe.nextCursor) && universe.nextCursor === end
+    && end < universe.totalCount;
+}
+
 export function classifyPublicCycleLaneStatus(response) {
   if (!response || typeof response !== 'object') return 'SEARCH_FAILURE';
   const universe = response.universe;
@@ -34,7 +52,8 @@ export function classifyPublicCycleLaneStatus(response) {
   // A declared partial universe is an acknowledged data-coverage blocker,
   // not proof that ALL providers failed. NEVER silently create a PASS or a
   // no-trade result from excluded/unverified instruments.
-  if (universe.partial === true || execution.partial === true
+  if (!pageEvidenceComplete(universe, execution)) return 'SEARCH_FAILURE';
+  if (universe.partial === true
     || response.dataState === 'untrusted' || response.dataState === 'stale'
     || response.dataState === 'partial') return 'BLOCKED_DATA';
   if (response.dataState !== 'complete') return 'BLOCKED_DATA';
@@ -48,6 +67,8 @@ export function decidePublicCycleCursor({ response, status, cursor }) {
   });
   if (!integer(cursor)) throw new Error('PUBLIC_CYCLE_CURSOR_INVALID');
   if (!response || typeof response !== 'object') return hold('SOURCE_MISSING');
+  if (status !== classifyPublicCycleLaneStatus(response))
+    return hold('STATUS_EVIDENCE_MISMATCH');
   const { universe, execution } = response;
   if (!universe || !execution) return hold('EVIDENCE_MISSING');
   if (status === 'SEARCH_FAILURE') return hold('PROVIDER_FAILURE');
