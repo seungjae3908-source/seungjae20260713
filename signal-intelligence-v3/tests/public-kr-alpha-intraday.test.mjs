@@ -16,11 +16,11 @@ function oneDay(){
 }
 test('Naver day-view proves one 390-minute session, not 391 daily bars',()=>{
  const p=parsePublicKrAlphaOneSession(oneDay(),'0193W0',NOW);
- assert.equal(p.oneMinute.length,390);
- assert.equal(p.fiveMinute.length,78);
+ assert.equal(p.oneMinute.length,380);
+ assert.equal(p.fiveMinute.length,76);
  assert.equal(p.fiveMinute[0].volume,500);
  assert.equal(p.fiveMinute.at(-1).volume,500);
- assert.equal(p.fiveMinute.reduce((n,x)=>n+x.volume,0),39000);
+ assert.equal(p.fiveMinute.reduce((n,x)=>n+x.volume,0),38000);
  assert.equal(p.sourceCloseMarkerPresent,true);
  assert.equal(p.sourceConstituentCoverageVerified,false);
  assert.equal(p.executionAuthority,'NONE');
@@ -28,12 +28,12 @@ test('Naver day-view proves one 390-minute session, not 391 daily bars',()=>{
 test('missing slots, overwritten bars, nonmonotonic volume, ambiguous closing marker all fail closed',()=>{
  const original=oneDay();
  const noSlot={...original,priceInfos:original.priceInfos.filter(x=>x.localDateTime!=='20261009090500')};
- assert.throws(()=>parsePublicKrAlphaOneSession(noSlot,'0193W0',NOW),/INCOMPLETE_SESSION/);
+ assert.throws(()=>parsePublicKrAlphaOneSession(noSlot,'0193W0',NOW),/INCOMPLETE_CONTINUOUS_SESSION/);
  const conflict=oneDay();conflict.priceInfos.push({...conflict.priceInfos[1],currentPrice:101});
  assert.throws(()=>parsePublicKrAlphaOneSession(conflict,'0193W0',NOW),/CONFLICTING_BAR/);
  const volume=oneDay();volume.priceInfos[15].accumulatedTradingVolume=1;
  assert.throws(()=>parsePublicKrAlphaOneSession(volume,'0193W0',NOW),/CUMULATIVE_VOLUME_NONMONOTONIC/);
- const closing=oneDay();closing.priceInfos.at(-1).accumulatedTradingVolume=90000;
+ const closing=oneDay();closing.priceInfos.at(-1).accumulatedTradingVolume=1;
  assert.throws(()=>parsePublicKrAlphaOneSession(closing,'0193W0',NOW),/CLOSING_VOLUME_UNVERIFIED/);
  assert.throws(()=>parsePublicKrAlphaOneSession(original,'005930',NOW),/CODE_UNSAFE/);
  const tomorrow=oneDay();tomorrow.priceInfos[0].localDateTime='20261012090000';
@@ -48,7 +48,7 @@ test('standalone public source cannot query unsupported timeframes or trade endp
  await assert.rejects(feed.getCandles('0193W0','1D'),/TIMEFRAME_UNSUPPORTED/);
  assert.equal(calls,0);
  const minute=await feed.getCandles('0193W0','5m');
- assert.equal(minute.length,78);
+ assert.equal(minute.length,76);
  assert.equal(calls,1);
  assert.equal(feed.fullMarketReady,false);
 });
@@ -89,4 +89,26 @@ test('KRX closing auction 15:20–15:29 is accounted for separately from genuine
  assert.equal(e.outsideBeforeOpen,0);
  assert.equal(e.closingAt1530Present,true);
  assert.equal(e.sourcePricesRedacted,true);
+});
+
+test('observed KRX 15:20-15:29 call-auction gap and 15:31-15:40 excluded after-hours cannot create artificial 1m/5m bars',()=>{
+ const day=oneDay();
+ const source=day.priceInfos.filter(row=>{
+   const clock=Number(row.localDateTime.slice(8,12));
+   return clock<1520||clock>=1530;
+ });
+ for(let minute=31;minute<=40;minute++)source.push({
+  ...source.at(-1),
+  localDateTime:'2026100915'+String(minute).padStart(2,'0')+'00',
+ });
+ const parsed=parsePublicKrAlphaOneSession({code:'0193W0',priceInfos:source},'0193W0',NOW);
+ assert.equal(parsed.oneMinute.length,380);
+ assert.equal(parsed.fiveMinute.length,76);
+ assert.equal(parsed.closingAuctionMinutesAbsent,10);
+ assert.equal(parsed.excludedAfterCloseRows,10);
+ assert.equal(parsed.excludedClosingAuctionMinutes,0);
+ assert.equal(parsed.full390MinuteContinuousTrading,false);
+ assert.equal(parsed.closingAuctionNotUsedForIntradaySignals,true);
+ assert.equal(parsed.sourceSessionContinuityVerified,true);
+ assert.equal(parsed.sourceConstituentCoverageVerified,false);
 });
