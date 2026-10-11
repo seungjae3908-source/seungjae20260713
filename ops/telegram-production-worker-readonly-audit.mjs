@@ -44,6 +44,45 @@ function sanitizedIsoTime(value) {
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? value : null;
 }
 
+
+const BRIEF_STATES=new Set(['NOT_STARTED','DISABLED','RUNNING','STOPPED']);
+const BRIEF_START_CODES=new Set([null,'FLAG_DISABLED','ACTIVATION_REQUIRED','TOKEN_MISSING','ROOMS_MISSING']);
+const BRIEF_DUE_CODES=new Set([
+  'NOT_OBSERVED','BOT_API_ACCEPTED','DEDUPED_ONLY','NOT_CONFIGURED',
+  'DELIVERY_FAILED','NO_ATTEMPTS','LEDGER_UNREADABLE','TICK_FAILED',
+]);
+const BRIEF_COUNTERS=[
+  'lastDuePlans','lastDueAttempted','lastDueDelivered','lastDueDeduped',
+  'lastDueNotConfigured','lastDueFailed',
+];
+function emptyBriefHealth(status){
+  return {status,enabled:false,state:null,startErrorCode:null,
+    lastTickAt:null,tickOk:null,tickFresh:false,lastDueTickAt:null,
+    lastDuePlans:0,lastDueAttempted:0,lastDueDelivered:0,
+    lastDueDeduped:0,lastDueNotConfigured:0,lastDueFailed:0,lastDueCode:null};
+}
+/** Strict public shape. Any extra private payload is discarded. */
+export function sanitizeBriefWorkerHealth(value){
+  if(value==null)return emptyBriefHealth('NOT_AVAILABLE');
+  if(typeof value!=='object'||Array.isArray(value))return emptyBriefHealth('INVALID');
+  if(typeof value.enabled!=='boolean'||!BRIEF_STATES.has(value.state)
+    ||!BRIEF_START_CODES.has(value.startErrorCode)
+    ||!BRIEF_DUE_CODES.has(value.lastDueCode)
+    ||!(value.tickOk===null||typeof value.tickOk==='boolean')
+    ||!(value.lastTickAt===null||sanitizedIsoTime(value.lastTickAt)!==null)
+    ||!(value.lastDueTickAt===null||sanitizedIsoTime(value.lastDueTickAt)!==null)
+    ||!BRIEF_COUNTERS.every(k=>Number.isSafeInteger(value[k])&&value[k]>=0&&value[k]<=10000))
+    return emptyBriefHealth('INVALID');
+  return {
+    status:'PRESENT',enabled:value.enabled,state:value.state,
+    startErrorCode:value.startErrorCode,lastTickAt:sanitizedIsoTime(value.lastTickAt),
+    tickOk:value.tickOk,tickFresh:false,lastDueTickAt:sanitizedIsoTime(value.lastDueTickAt),
+    lastDuePlans:value.lastDuePlans,lastDueAttempted:value.lastDueAttempted,
+    lastDueDelivered:value.lastDueDelivered,lastDueDeduped:value.lastDueDeduped,
+    lastDueNotConfigured:value.lastDueNotConfigured,lastDueFailed:value.lastDueFailed,
+    lastDueCode:value.lastDueCode,
+  };
+}
 function emptyState(status) {
   return {
     status, recordCount: 0, recent24hCount: 0, lastEvidenceAt: null,
@@ -191,6 +230,7 @@ export async function readHealthOnce({ getImpl = httpGet } = {}) {
             deliveryConfirmed: worker.deliveryConfirmed === true,
             lastConfirmedDeliveryAt: sanitizedIsoTime(worker.lastConfirmedDeliveryAt),
             errorCode: sanitizedErrorCode(worker.errorCode),
+            briefWorker:sanitizeBriefWorkerHealth(obj.telegramIntelligenceWorker),
           });
         });
       });
@@ -409,7 +449,7 @@ export async function observeProductionTelegram({
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
-    schemaVersion: 'telegram-production-worker-readonly-v2',
+    schemaVersion: 'telegram-production-worker-readonly-v3',
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
@@ -419,6 +459,7 @@ export async function observeProductionTelegram({
       healthAvailable: false, enabled: false, tickFresh: false, tickOk: false,
       lastTickAt: null, deliveryConfirmed: false, lastConfirmedDeliveryAt: null, errorCode: null,
     },
+    briefWorker:emptyBriefHealth('NOT_CHECKED'),
     marketBrief: emptyState('NOT_CHECKED'),
     signalSubscriber: emptyState('NOT_CHECKED'),
     signalSource: emptySource('NOT_CHECKED'),
@@ -490,6 +531,13 @@ export async function observeProductionTelegram({
       lastConfirmedDeliveryAt: sanitizedIsoTime(result.lastConfirmedDeliveryAt),
       errorCode: sanitizedErrorCode(result.errorCode),
     };
+    receipt.briefWorker=result.briefWorker??emptyBriefHealth('NOT_AVAILABLE');
+    if(receipt.briefWorker.status==='INVALID'){
+      receipt.classification='BRIEF_WORKER_HEALTH_INVALID';return receipt;
+    }
+    const briefTick=Date.parse(receipt.briefWorker.lastTickAt??'');
+    receipt.briefWorker.tickFresh=Number.isFinite(briefTick)
+      && briefTick<=nowMs+5000 && nowMs-briefTick<=360000;
     receipt.marketBrief = state(runtime.TELEGRAM_INTELLIGENCE_STATE_PATH,
       'telegram-intelligence-delivery-state.json', 'market', nowMs);
     receipt.signalSubscriber = state(runtime.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH,

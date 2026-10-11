@@ -126,7 +126,7 @@ jobs:
             'pm2Sha','markerSha','pm2Online','exactDeployedIdentity','pm2StartedAt',
             'morningWindowCoverage',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
-            'roomBindingsValid','personal','marketBrief','signalSubscriber','signalSource',
+            'roomBindingsValid','personal','briefWorker','marketBrief','signalSubscriber','signalSource',
             'signalHealth','signalUnits',
             'proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
@@ -144,12 +144,34 @@ jobs:
             && safeIso(v.lastEvidenceAt)
             && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
             && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
+          const briefKeys=['status','enabled','state','startErrorCode','lastTickAt',
+            'tickOk','tickFresh','lastDueTickAt','lastDuePlans','lastDueAttempted',
+            'lastDueDelivered','lastDueDeduped','lastDueNotConfigured',
+            'lastDueFailed','lastDueCode'];
+          const briefCodes=['NOT_OBSERVED','BOT_API_ACCEPTED','DEDUPED_ONLY',
+            'NOT_CONFIGURED','DELIVERY_FAILED','NO_ATTEMPTS',
+            'LEDGER_UNREADABLE','TICK_FAILED'];
+          const briefValid=b=>b&&Object.keys(b).sort().join()===briefKeys.sort().join()
+            &&['NOT_CHECKED','NOT_AVAILABLE','PRESENT','INVALID'].includes(b.status)
+            &&typeof b.enabled==='boolean'
+            &&(b.state===null||['NOT_STARTED','DISABLED','RUNNING','STOPPED'].includes(b.state))
+            &&(b.startErrorCode===null||['FLAG_DISABLED','ACTIVATION_REQUIRED',
+              'TOKEN_MISSING','ROOMS_MISSING'].includes(b.startErrorCode))
+            &&(b.tickOk===null||typeof b.tickOk==='boolean')
+            &&typeof b.tickFresh==='boolean'
+            &&safeIso(b.lastTickAt)&&safeIso(b.lastDueTickAt)
+            &&[b.lastDuePlans,b.lastDueAttempted,b.lastDueDelivered,
+              b.lastDueDeduped,b.lastDueNotConfigured,b.lastDueFailed]
+               .every(n=>Number.isSafeInteger(n)&&n>=0&&n<=10000)
+            &&(b.lastDueCode===null||briefCodes.includes(b.lastDueCode))
+            &&(b.status!=='PRESENT'||(b.state!==null&&b.lastDueCode!==null));
           if(Object.keys(r).sort().join()!==keys.sort().join()
-            ||r.schemaVersion!=='telegram-production-worker-readonly-v2'
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v3'
             ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)||!safeIso(r.pm2StartedAt)
             ||!['UNKNOWN','NOT_ELAPSED','FULL_WINDOW','PARTIAL_WINDOW','MISSED_WINDOW'].includes(r.morningWindowCoverage)
+            ||!briefValid(r.briefWorker)
             ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
             ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE','HTTP_503',
               'HTTP_ERROR','INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
@@ -211,6 +233,16 @@ jobs:
                 '- Personal worker error code: '+(p.errorCode||'none'),
                 '- Personal last tick: '+(p.lastTickAt||'none'),
                 '- Personal last confirmed delivery: '+(p.lastConfirmedDeliveryAt||'none'),
+                '- Brief worker status/state/tick fresh/due code: '+
+                  [r.briefWorker.status,r.briefWorker.state||'none',
+                   r.briefWorker.tickFresh,r.briefWorker.lastDueCode||'none'].join(' / '),
+                '- Brief last tick/due: '+
+                  [r.briefWorker.lastTickAt||'none',r.briefWorker.lastDueTickAt||'none'].join(' / '),
+                '- Brief plans/attempted/accepted/deduped/unconfigured/failed: '+
+                  [r.briefWorker.lastDuePlans,r.briefWorker.lastDueAttempted,
+                   r.briefWorker.lastDueDelivered,r.briefWorker.lastDueDeduped,
+                   r.briefWorker.lastDueNotConfigured,r.briefWorker.lastDueFailed].join(' / '),
+                '- Worker Bot API acceptance does not establish actual human receipt.',
                 '- Market brief ledger: '+b.status+' / '+b.recordCount+
                     ' recorded / '+b.recent24hCount+' last 24h',
                 '- Market brief latest ledger evidence: '+(b.lastEvidenceAt||'none'),
