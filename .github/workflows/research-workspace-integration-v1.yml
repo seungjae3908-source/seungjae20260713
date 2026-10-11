@@ -52,6 +52,8 @@ on:
       - .github/scripts/verify-research-workspace-sync-v3.mjs
       - .github/scripts/research-center-batch-scope.mjs
       - .github/tests/research-center-batch-scope.test.mjs
+      - .github/scripts/scanner-readonly-repair-scope.mjs
+      - .github/tests/scanner-readonly-repair-scope.test.mjs
       - .github/workflows/research-workspace-integration-v1.yml
 permissions:
   contents: read
@@ -83,6 +85,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           node --test .github/tests/research-center-batch-scope.test.mjs
+          node --test .github/tests/scanner-readonly-repair-scope.test.mjs
           node .github/scripts/verify-research-workspace-sync-v3.mjs "$RUNNER_TEMP/workspace-preservation.json"
       - name: Offline contract, storage and anti-hang regressions
         shell: bash
