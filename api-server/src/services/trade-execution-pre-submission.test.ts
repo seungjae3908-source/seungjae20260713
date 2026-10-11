@@ -729,7 +729,7 @@ test('protected 4-market automatic Paper cost rules are exact, expiring, and nev
     updatedAt: new Date(nowMs).toISOString(),
   };
   const rule = (market: string, exchange: string, fee = 0.05, tax = 0) => ({
-    market, exchange, policyId: 'server-paper-cost-v1:validated-' + market,
+    market, exchange, policyId: 'server-paper-cost-v1:validated-' + market + '-' + exchange,
     feeRatePercent: fee, taxRatePercent: tax,
     effectiveAt: '2026-10-10T00:00:00.000Z',
     expiresAt: '2026-10-12T00:00:00.000Z',
@@ -756,6 +756,9 @@ test('protected 4-market automatic Paper cost rules are exact, expiring, and nev
   assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
     ...rules.slice(0, 3), rule('CRYPTO_SPOT', 'bitget'), rules[4],
   ])), null, 'wrong exchange cannot issue spot tax');
+  assert.equal(protectedAutomaticPaperCostPolicyV1(paper, nowMs, encode([
+    ...rules.slice(0, 3), {...rules[3], policyId: rules[2].policyId}, rules[4],
+  ])), null, 'one policy ID cannot certify two different market rules');
   const issuer = protectedAutomaticPaperCostPolicyV1(paper, nowMs, valid);
   assert.ok(issuer);
   assert.equal(issuer.market, 'CRYPTO_SPOT');
