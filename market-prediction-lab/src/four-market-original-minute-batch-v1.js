@@ -123,8 +123,13 @@ export async function runFourMarketOriginalMinuteBatchV1({
     selectedPageOffset:plan.selectedPageOffset??null,
     selfAttestedRosterDigestSha256:
       plan.selfAttestedRosterDigestSha256??null,
-    nextCursorDate:plan.nextCursorDate??null,
-    nextCursorMemberOffset:plan.nextCursorMemberOffset??null,
+    // A historically blocked stock date (e.g. no independently dated
+    // exchange session) still advances to the NEXT calendar date in a
+    // bounded sweep. It is BLOCKED_DATA, never zero trade opportunities.
+    nextCursorDate:plan.nextCursorDate??(
+      plan.status==="SOURCE_ONLY_PIT_WORK_PAGINATED"
+        ?null:plan.nextChunkCursorDate??null),
+    nextCursorMemberOffset:plan.nextCursorMemberOffset??0,
     sourceTasksRequested:plan.candidateTaskCount??null,
     historicalActiveMembersSelfAttested:
       plan.historicRosterActiveMemberDaysSelfAttested??null};
