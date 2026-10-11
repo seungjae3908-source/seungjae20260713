@@ -197,6 +197,14 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await expect(general).not.toContainText('LIVE_TRADING=false');
     const paperCard = page.getByTestId('research-summary-paper');
     await expect(paperCard).toContainText('모의매매 표본');
+    for (const [id, label] of [
+      ['research', '연구 상태'],
+      ['data', '데이터 수집'],
+      ['paper', '모의매매 표본'],
+      ['profitability', '수익성 검증'],
+    ] as const) {
+      await expect(page.getByTestId(`research-summary-${id}`).getByText(label, { exact: true })).toBeVisible();
+    }
     const scrollBefore = await general.locator('main').evaluate(element => element.scrollTop);
     await paperCard.click();
     await expect(page.getByRole('dialog')).toBeVisible();

@@ -25,6 +25,7 @@ import { automaticPaperWalletBootstrapReadiness } from '../services/member-auto-
 import { encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { liveTradingHoldings, paperTradingHoldings } from '../services/trading-holdings-readonly.service';
 import { emptySnapshot } from '../features/account-readonly/account-readonly.contract';
+import { automaticExecutionReadonlyCredentials } from '../services/automatic-live-position-isolation.service';
 import { buildMemberFourMarketPaperBootstrap } from '../services/admin-four-market-paper-capital.service';
 import { createScannerPaperPlansRouter } from './scanner-paper-plans';
 import { ProductPaperSourceRegistry } from '../services/product-paper-source-registry.service';
@@ -409,6 +410,101 @@ test('manual/AUTO isolation endpoint is owner-scoped, zero-mutation and exposes 
   } finally {
     globalThis.fetch = originalFetch;
     setTradePaperRuntimeRecordsReaderForTests(null);
+    setTradeAutomationRepositoryFactoryForTests(() => repository);
+    await close(server);
+  }
+});
+
+test('execution read-only credential adaptation preserves other providers and rejects ambiguous Kiwoom keys', () => {
+  for (const [provider, raw] of [
+    ['toss', { clientId: 'id', clientSecret: 'secret', accountSeq: 'scope' }],
+    ['upbit', { accessKey: 'id', secretKey: 'secret' }],
+    ['bitget', { apiKey: 'id', secretKey: 'secret', passphrase: 'phrase' }],
+  ] as const) assert.deepEqual(automaticExecutionReadonlyCredentials(provider, raw), raw);
+  const raw = { appKey: 'id', secretKey: ' secret ' };
+  assert.equal(automaticExecutionReadonlyCredentials('kiwoom', raw).appSecret, 'secret');
+  assert.equal('appSecret' in raw, false, 'stored credential object is never mutated');
+  assert.throws(() => automaticExecutionReadonlyCredentials('kiwoom',
+    { appKey: 'id', secretKey: 'one', appSecret: 'different' }), /CREDENTIALS_UNAVAILABLE/);
+});
+
+test('Kiwoom execution-vault keys drive only authenticated read-only snapshots for isolation and holdings', async () => {
+  const originalFetch = globalThis.fetch;
+  const { server, baseUrl } = await startServer(true, 'admin');
+  try {
+    const sources: Record<string, string>[] = [
+      { appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', appSecret: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: 'kiwoom-test-secret', appSecret: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: ' kiwoom-test-secret ', appSecret: 'kiwoom-test-secret ' },
+    ];
+    for (const source of sources) {
+      const local = new InMemoryTradingRepository();
+      await local.saveConnection({ userId: USER, exchange: 'kiwoom', accountMode: 'live', configured: true,
+        encryptedCredentials: encryptTradingCredentials(source), lastVerifiedAt: new Date().toISOString(),
+        lastErrorCode: null, updatedAt: new Date().toISOString() });
+      const savedConnection = await local.getConnection(USER, 'kiwoom');
+      setTradeAutomationRepositoryFactoryForTests(() => local);
+      const calls: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        const url = new URL(String(input));
+        assert.equal(url.origin, 'https://api.kiwoom.com');
+        assert.equal(init?.method, 'POST'); // Kiwoom uses POST for authentication/account reads.
+        calls.push(url.pathname);
+        if (url.pathname === '/oauth2/token') {
+          const auth = JSON.parse(String(init?.body));
+          assert.equal(auth.appkey, 'kiwoom-test-key');
+          assert.equal(auth.secretkey, 'kiwoom-test-secret');
+          return Response.json({ token: 'kiwoom-test-token', expires_dt: '20991231235959', return_code: 0 });
+        }
+        assert.ok(['/api/dostk/acnt', '/api/us/acnt'].includes(url.pathname));
+        assert.ok(['kt00001', 'kt00018', 'ka10075', 'ust21110', 'ust21070', 'ust21050']
+          .includes(new Headers(init?.headers).get('api-id')!));
+        return Response.json({ return_code: 20, return_msg: 'NO_DATA' });
+      }) as typeof fetch;
+      for (const path of ['/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom']) {
+        const response = await originalFetch(baseUrl + '/api/trade-automation' + path);
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(response.status, 200, String(body.error ?? ''));
+        assert.equal(body.ok, true);
+        for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests'])
+          assert.equal(body[key], 0);
+        assert.equal(body.liveTradingAuthorityGranted, false);
+        assert.equal(body.autoTradingAuthorityGranted, false);
+        assert.doesNotMatch(JSON.stringify(body), /kiwoom-test|encryptedCredentials|appKey|secretKey|appSecret/);
+      }
+      assert.equal(calls.length, 14);
+      assert.equal((await local.listOrders(USER)).length, 0);
+      assert.deepEqual(await local.getConnection(USER, 'kiwoom'), savedConnection,
+        'successful account reads must not rewrite the execution vault or verification metadata');
+    }
+    const invalid: Record<string, string>[] = [
+      { appKey: 'kiwoom-test-key' },
+      { secretKey: 'kiwoom-test-secret' },
+      { appKey: 'kiwoom-test-key', secretKey: ' ', appSecret: '' },
+      { appKey: 'kiwoom-test-key', secretKey: 'one', appSecret: 'different' },
+    ];
+    for (const source of invalid) {
+      const local = new InMemoryTradingRepository();
+      const encrypted = encryptTradingCredentials(source);
+      await local.saveConnection({ userId: USER, exchange: 'kiwoom', accountMode: 'live', configured: true,
+        encryptedCredentials: encrypted, lastVerifiedAt: new Date().toISOString(), lastErrorCode: null,
+        updatedAt: new Date().toISOString() });
+      setTradeAutomationRepositoryFactoryForTests(() => local);
+      let calls = 0;
+      globalThis.fetch = (async () => { calls += 1; throw new Error('PROVIDER_MUST_NOT_BE_CALLED'); }) as typeof fetch;
+      for (const path of ['/live-position-isolation/kiwoom', '/holdings?accountMode=live&provider=kiwoom']) {
+        const response = await originalFetch(baseUrl + '/api/trade-automation' + path);
+        assert.equal(response.status, 400);
+        const body = await response.json() as Record<string, unknown>;
+        assert.equal(body.error, 'CREDENTIALS_UNAVAILABLE');
+        assert.doesNotMatch(JSON.stringify(body), /kiwoom-test|encryptedCredentials|appKey|secretKey|appSecret/);
+      }
+      assert.equal(calls, 0);
+      assert.equal((await local.getConnection(USER, 'kiwoom'))!.encryptedCredentials, encrypted);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
     setTradeAutomationRepositoryFactoryForTests(() => repository);
     await close(server);
   }
