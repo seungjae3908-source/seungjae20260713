@@ -1,7 +1,13 @@
 // Exact paths for the requested Research Center batch, not a prefix exemption.
 // Shared execution changes are accepted only byte-for-byte from the integrated
 // Paper repair snapshot; any later edit restores the automatic-trading gate.
-export const PAPER_INTEGRATION_SHA = '09854c1895b1a41f0dfedc9cf1240734c88ac5e3';
+// This merge preserves the original Paper snapshot and current-main manual
+// holdings isolation. Both source ancestors remain required, not just a new pin.
+export const PAPER_INTEGRATION_SHA = 'eba73478039c4d32a611b3139e8519442234c331';
+export const PAPER_INTEGRATION_SOURCE_SHAS = Object.freeze([
+  '09854c1895b1a41f0dfedc9cf1240734c88ac5e3',
+  'af24fe44e286073de29cf31aa1f17fc13a309b28',
+]);
 export const RESEARCH_CENTER_BATCH_PATHS = Object.freeze([
   "stock-analyzer/e2e/professional-command-bar.spec.ts",
   "docs/screenshots/research-center-v2/after-desktop-ai-lab.png",
