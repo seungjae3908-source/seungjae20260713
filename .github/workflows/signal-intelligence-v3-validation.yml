@@ -264,3 +264,42 @@ jobs:
             ${{ runner.temp }}/member-timeframe-public-cycle.log
           retention-days: 30
           if-no-files-found: warn
+
+
+  source-capabilities-public-qa:
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'drift/scanner-stock-roster-v3-integration-20261011' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Exact revision checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run small offline contracts
+        run: node --test signal-intelligence-v3/tests/public-stock-source-capabilities.test.mjs
+      - name: Diagnose a few public read-only sources, never promote result
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-stock-source-capabilities.mjs > "$RUNNER_TEMP/public-stock-sources.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-stock-sources.json"
+          const fs=require('node:fs');
+          const file=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(file.executionAuthority!=='NONE'||file.licensedForPublicRedistribution!==false
+            ||file.fullMarketCoverageProven!==false||file.samples?.length!==5)process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '### Public stock source capacity probe (NOT release approval)\n\n'
+            +file.samples.map(s=>'- '+s.id+': '+s.status+' (HTTP '+(s.httpStatus??'?')+')\n').join('')+'\n');
+          console.log(file.samples.map(s=>s.id+'='+s.status).join(' '));
+          NODE
+      - name: Upload bounded diagnostic metadata only
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-stock-source-capabilities-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/public-stock-sources.json
+          retention-days: 7
+          if-no-files-found: error
