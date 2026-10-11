@@ -161,3 +161,22 @@ Full-profile /health separately marks `snapshotCurrentPageSourceReady=false`
 and `snapshotFresh=false` when source checks fail. This is not whole-roster
 coverage or a Production runtime check. No Bot API send, secret access, user
 order, DB, PM2/systemd or deployment action is authorized in this Draft.
+
+## Draft: safe manual rescan state location and future/invalid-clock guards
+
+The V3 systemd timer sets both the state directory and snapshot path, but
+the server's `/internal/rescan` child previously passed only the snapshot
+path. The public-only producer would therefore resolve `cycle-state.json`
+relative to its executable directory, which could be unwritable in a
+protected server. The child now inherits the exact parent
+`SIGNAL_INTELLIGENCE_STATE_DIR=dirname(STATE_FILE)` and an explicit
+public-only flag, without enabling any trading/private-provider authority.
+A local mock producer verifies all child env fields; it does not call
+actual exchanges or start a real rescan on Staging/Production.
+
+The server also rejects nonnumeric/excessive freshness threshold settings
+and future-dated snapshots more than 5 seconds ahead. A future timestamp
+cannot turn an untrusted V3 signal into a fresh 200. Production runtime
+`SNAPSHOT_STALE` / 503 resolution still requires separately approved
+real read-only systemd/snapshot evidence after deployment; these Draft code
+tests alone do not prove the operational root cause was repaired.
