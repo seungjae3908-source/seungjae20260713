@@ -297,7 +297,7 @@ test('suppresses exact duplicates and applies per-subject cooldown', async () =>
   assert.equal(calls, 1);
 });
 
-test('Telegram outage fails open after a bounded retry and does not expose secrets', async () => {
+test('Telegram transport failure is unconfirmed and cannot retry an ambiguously accepted POST', async () => {
   setFakeConfig();
   let calls = 0;
   globalThis.fetch = async () => {
@@ -313,14 +313,57 @@ test('Telegram outage fails open after a bounded retry and does not expose secre
   });
   assert.deepEqual(result, {
     ok: false,
-    attempts: 2,
+    attempts: 1,
     skipped: 'DELIVERY_FAILED',
-    errorCode: 'TELEGRAM_NETWORK_ERROR',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('ci-bot-token-sentinel'), false);
   assert.equal(serialized.includes('ci-chat-id-sentinel'), false);
+});
+
+
+test('Telegram 429 rejection may be retried once but 500 and invalid acknowledgments cannot', async () => {
+  setFakeConfig();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1
+      ? new Response(JSON.stringify({ ok: false }), { status: 429 })
+      : okResponse();
+  };
+  const accepted = await sendTelegramAlert({ type: 'system_critical', details: 'safe retry only' });
+  assert.deepEqual(accepted, { ok: true, attempts: 2 });
+  assert.equal(calls, 2);
+
+  clearTelegramAlertState();
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response('upstream could have accepted POST', { status: 502 });
+  };
+  const uncertain = await sendTelegramAlert({ type: 'system_critical', details: 'ambiguous server response' });
+  assert.deepEqual(uncertain, {
+    ok: false, attempts: 1, skipped: 'DELIVERY_FAILED',
+    errorCode: 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED',
+  });
+  assert.equal(calls, 1, 'never retry 5xx when Telegram might already have the message');
+
+  clearTelegramAlertState();
+  calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  const missingReceipt = await sendTelegramAlertWithReceipt({
+    type: 'system_critical', details: '200 without Telegram message_id',
+  });
+  assert.equal(missingReceipt.ok, false);
+  if (!missingReceipt.ok) assert.equal(missingReceipt.errorCode, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED');
+  assert.equal(calls, 1);
 });
 
 test('Telegram HTTP 403 is classified safely and is not retried', async () => {
