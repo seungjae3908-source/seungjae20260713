@@ -14,7 +14,12 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
-import { bindPublicStockCandleSource, enforcePublicStockRosterCoverage } from '../src/public-stock-candle-binding.mjs';
+import {
+  bindPublicStockCandleSource,
+  enforcePublicStockRosterCoverage,
+  createPublicStockQualityCounter,
+} from '../src/public-stock-candle-binding.mjs';
+import { evaluateScannerDataQuality } from '../../api-server/src/services/scanner-data-quality.service';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -256,13 +261,31 @@ async function withStockPublicOnly(lane, operation) {
   }
 
   const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
+  const qualityCounter = createPublicStockQualityCounter();
+  const qualityWindow = lane.strategyMode === 'scalping' ? 240
+    : lane.strategyMode === 'swing' ? 320 : 400;
   // StockSignalScanner -> ScannerProviderHealth calls getCandlesMeta, not
   // getCandles. Bind BOTH methods to the same isolated Yahoo-only fetcher
   // so the real scanner cannot bypass this public source via app fallbacks.
   const restoreCandles = bindPublicStockCandleSource(marketData, async (ticker, timeframe = '1D') => {
     const entry = entryByTicker.get(String(ticker).toUpperCase());
     const candidates = yahooProviderCandidates(lane, ticker, entry);
-    return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
+    const candles = await withProviderFallback(candidates,
+      (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
+    // Reuse the very same public candles. Count only bounded quality codes,
+    // never symbols, candle payloads, exception text or extra HTTP requests.
+    if (String(timeframe) === lane.timeframe) {
+      try {
+        qualityCounter.observe(evaluateScannerDataQuality({
+          symbol: 'PUBLIC_SOURCE_DIAGNOSTIC',
+          timeframe: lane.timeframe,
+          candles: candles.slice(-qualityWindow),
+          now: Date.now(),
+          sessionAware: true,
+        }));
+      } catch { qualityCounter.observeError(); }
+    }
+    return candles;
   });
   marketData.getQuote = async (ticker) => {
     const originalTicker = String(ticker).toUpperCase();
@@ -285,7 +308,8 @@ async function withStockPublicOnly(lane, operation) {
     const scanned = await operation();
     // An eligible 4,010-symbol KRX roster does not prove complete
     // coverage when upstream reports 2,837 explained unsupported codes.
-    return enforcePublicStockRosterCoverage(scanned, targetUniverse);
+    const withRosterEvidence = enforcePublicStockRosterCoverage(scanned, targetUniverse);
+    return { ...withRosterEvidence, publicStockQualityDiagnostic: qualityCounter.snapshot() };
   } finally {
     restoreCandles();
     marketData.getQuote = originalQuote;
@@ -445,6 +469,9 @@ async function main() {
         // Coarse aggregate-only source proof; do not expose symbols.
         universeRawTotalCount: response.publicRosterCoverage?.rawTotalCount ?? null,
         universeExplainedExcludedCount: response.publicRosterCoverage?.explainedExcludedCount ?? null,
+        // Diagnostic-only, low-cardinality quality issues for the exact scan.
+        // Its values do not grant a candidate, PASS, cursor or order authority.
+        publicStockQualityDiagnostic: response.publicStockQualityDiagnostic ?? null,
         universeStale: response.universe.stale === true,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
