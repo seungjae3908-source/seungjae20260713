@@ -17,9 +17,15 @@ import {runFourMarketOriginalMinuteReplayV1} from "./four-market-original-minute
  * public/private provider GET, trading/API calls, Paper/Journals/Telegram,
  * autoscheduling, or source correction/backfill is attempted.
  */
-const PAGE_SIZE=31;
-const MAX_PAGES=180;
-const MAX_SESSIONS=5_000;
+// Ten years of stock PRE/REGULAR/AFTER sessions can exceed 5,000
+// separate native archives even for ONE symbol. Explicitly accommodate
+// the documented 10-year user range without relaxing per-file 1m bounds.
+export const ORIGINAL_MINUTE_PERIOD_LIMITS_V1=Object.freeze({
+  indexPageSize:31,maxIndexPages:650,maxSessionsPerSymbol:20_000,
+});
+const PAGE_SIZE=ORIGINAL_MINUTE_PERIOD_LIMITS_V1.indexPageSize;
+const MAX_PAGES=ORIGINAL_MINUTE_PERIOD_LIMITS_V1.maxIndexPages;
+const MAX_SESSIONS=ORIGINAL_MINUTE_PERIOD_LIMITS_V1.maxSessionsPerSymbol;
 const MAX_DATE_DAYS=36_600;
 const SHA=/^[0-9a-f]{64}$/u;
 const sha=x=>createHash("sha256").update(JSON.stringify(x)).digest("hex");
