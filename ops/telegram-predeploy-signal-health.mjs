@@ -28,6 +28,7 @@ const FAILED_OUTCOMES = new Set([
 ]);
 const allowedStatuses = new Set(['VALID_NO_TRADE','CANDIDATES_AVAILABLE']);
 const nonNegative = x => Number.isSafeInteger(x) && x >= 0;
+const SOURCE_CYCLE_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 
 /** All 12 source-backed lanes must have complete, zero-error public samples.
  * A new generatedAt timestamp alone is NOT real source freshness.
@@ -41,6 +42,8 @@ export function verifiedSignalV3Coverage(snapshot) {
   const expected = new Set(MARKETS.flatMap(m =>
     MODES.map(mode=>[m,mode.strategy,mode.timeframe].join('|'))));
   const seen = new Set();
+  const cycleId=snapshot.coverage[0]?.sourceCycleId;
+  if(!SOURCE_CYCLE_ID.test(cycleId??''))return false;
   for(const row of snapshot.coverage) {
     if (!row || typeof row !== 'object')return false;
     const key=[row.market,row.strategy,row.timeframe].join('|');
@@ -63,6 +66,7 @@ export function verifiedSignalV3Coverage(snapshot) {
       && end<=row.totalUniverse
       && row.cursorAfter===(end===row.totalUniverse?0:end);
     if(!validPage
+      ||row.sourceCycleId!==cycleId
       ||!allowedStatuses.has(row.status)
       ||!SOURCES_BY_MARKET[row.market]?.has(row.universeSource)
       ||row.universePartial!==false
@@ -110,6 +114,7 @@ export function classifySignalV3HealthAndSource(health,signals,nowMs=Date.now())
     ||health.executionAuthority!=='NONE'
     ||health.privateTradingApiAllowed!==false||health.realOrderAllowed!==false
     ||health.snapshotReady!==true||health.snapshotFresh!==true
+    ||health.snapshotCurrentPageSourceReady!==true
     ||!Number.isFinite(health.snapshotAgeMs)||health.snapshotAgeMs<0
     ||health.snapshotAgeMs>15*60_000
     ||!/^[a-f0-9]{40}$/u.test(String(health.serviceSha||'')))

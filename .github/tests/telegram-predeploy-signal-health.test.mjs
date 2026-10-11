@@ -15,7 +15,8 @@ const coverage=()=>({
   coverage:['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'].flatMap(market=>
     [{strategy:'SCALPING',timeframe:'15m'},{strategy:'SWING',timeframe:'60m'},
       {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
-      market,...mode,totalUniverse:100,cursorBefore:0,cursorAfter:20,
+      market,...mode,sourceCycleId:'11111111-1111-4111-8111-111111111111',
+      totalUniverse:100,cursorBefore:0,cursorAfter:20,
       lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
       publicExecutionDiagnostic:{state:'PAGE_EXECUTION_COMPLETE',requested:20,
         started:20,completed:20,partial:false,timedOut:false,
@@ -32,6 +33,7 @@ const coverage=()=>({
 const health=()=>({
   ok:true,service:'signal-intelligence-v3',serviceSha:sha,
   snapshotAgeMs:60_000,snapshotReady:true,snapshotFresh:true,
+  snapshotCurrentPageSourceReady:true,
   executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
 });
 const source=()=>({ok:true,serviceSha:sha,executionAuthority:'NONE',
@@ -190,4 +192,17 @@ test('full 12-lane health rejects unchecked, missing, inconsistent or partial pa
   final.coverage[0].cursorAfter=0;
   assert.equal(verifiedSignalV3Coverage(final),true,
     'a documented final page wrapping to zero can still be genuine');
+});
+
+test('mixed source epochs and false current-page health block a code-only release',()=>{
+  const mixed=source();mixed.snapshot.coverage[1].sourceCycleId=
+    '22222222-2222-4222-8222-222222222222';
+  assert.equal(verifiedSignalV3Coverage(mixed.snapshot),false);
+  assert.equal(classifySignalV3HealthAndSource(health(),mixed,now).ok,false);
+  const missing=source();delete missing.snapshot.coverage[0].sourceCycleId;
+  assert.equal(verifiedSignalV3Coverage(missing.snapshot),false);
+  const staleHealth=health();staleHealth.snapshotCurrentPageSourceReady=false;
+  assert.equal(classifySignalV3HealthAndSource(staleHealth,source(),now).ok,false);
+  delete staleHealth.snapshotCurrentPageSourceReady;
+  assert.equal(classifySignalV3HealthAndSource(staleHealth,source(),now).ok,false);
 });

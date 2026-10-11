@@ -12,7 +12,8 @@ const sourceCoverage = () => ({
   coverage:['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'].flatMap(market =>
     [{strategy:'SCALPING',timeframe:'15m'},{strategy:'SWING',timeframe:'60m'},
       {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
-      market,...mode,totalUniverse:100,cursorBefore:0,cursorAfter:20,
+      market,...mode,sourceCycleId:'11111111-1111-4111-8111-111111111111',
+      totalUniverse:100,cursorBefore:0,cursorAfter:20,
       lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
       publicExecutionDiagnostic:{state:'PAGE_EXECUTION_COMPLETE',requested:20,
         started:20,completed:20,partial:false,timedOut:false,
@@ -174,4 +175,12 @@ test('deployment reviewer cannot be shown GO from missing or fabricated scanner 
     rejected(x=>edit(x.signalV3.snapshotCoverage.coverage[0]),
       'SIGNAL_V3_STALE_OR_HTTP_503');
   }
+});
+
+test('human review rejects last-cycle or forged mixed Signal V3 source IDs',()=>{
+  rejected(x=>{x.signalV3.snapshotCoverage.coverage[3].sourceCycleId=
+    '22222222-2222-4222-8222-222222222222';},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
+  rejected(x=>{delete x.signalV3.snapshotCoverage.coverage[0].sourceCycleId;},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
 });
