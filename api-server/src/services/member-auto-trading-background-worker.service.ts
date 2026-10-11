@@ -1647,9 +1647,21 @@ async function executeAutomaticPlan(input: {
   planInput: TradingPlanInput;
   policy: TradingPolicy;
   emergencyStopped: boolean;
+  verifiedPaperFxQuote?: MemberAutoTradingFxQuote;
 }) {
   const automation = new TradeAutomationService(input.repository);
-  const execution = new TradeExecutionService(input.repository);
+  // Only the Paper worker can supply an independently server-read quote.
+  // Live execution remains on the original, independently protected path.
+  const execution = input.planInput.accountMode === 'paper' && input.verifiedPaperFxQuote
+    ? new TradeExecutionService(input.repository, undefined, undefined, {
+      fxQuote: async (market) => {
+        if (input.verifiedPaperFxQuote!.market !== market) {
+          throw new Error('BACKGROUND_PAPER_FX_MARKET_MISMATCH');
+        }
+        return input.verifiedPaperFxQuote!;
+      },
+    })
+    : new TradeExecutionService(input.repository);
   const created = await automation.createPlan(
     input.userId, input.planInput, input.policy, input.emergencyStopped,
   );
@@ -1737,6 +1749,7 @@ async function processAutomaticExit(input: {
     userId: input.member.userId,
     planInput: exitInput,
     policy: input.member.policy,
+    verifiedPaperFxQuote: input.live ? undefined : fx,
     emergencyStopped: input.member.policy.emergencyStopped
       || persistentStop
       || process.env.TRADING_EMERGENCY_STOP === 'true',
@@ -2218,6 +2231,7 @@ export class MemberAutoTradingBackgroundWorker {
                 userId: member.userId,
                 planInput: paperInput,
                 policy: paperEntryPolicy,
+                verifiedPaperFxQuote: fx,
                 emergencyStopped: member.policy.emergencyStopped
                   || persistentStop
                   || process.env.TRADING_EMERGENCY_STOP === 'true',

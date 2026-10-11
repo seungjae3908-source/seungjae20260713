@@ -636,6 +636,11 @@ test('wrong-source or stale server quotes and invalid cost policies cannot mint 
   },nowMs);
   assert.equal(stale.settlementFxEvidence,null);
   assert.equal(stale.taxAmount,null);
+  // A generic US Paper API request is not allowed to make any unsolicited
+  // external FX requests. Only the server's previously verified worker quote
+  // may be used for a foreign-currency Paper settlement.
+  const noImplicitPublicFx=await serverPaperFillCostEvidence(p,100,1,0.15,{},nowMs);
+  assert.equal(noImplicitPublicFx.settlementFxEvidence,null);
 });
 
 test('Paper fill transition persists server-issued tax and FX in canonical order and Journal; other modes cannot', async () => {
