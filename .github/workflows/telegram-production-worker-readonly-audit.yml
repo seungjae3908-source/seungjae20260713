@@ -134,7 +134,7 @@ jobs:
           const safeIso=x=>x===null||(typeof x==='string'
             && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(x)
             && Number.isFinite(Date.parse(x)) && new Date(x).toISOString()===x);
-          const states=new Set(['NOT_CHECKED','ABSENT','EMPTY','PRESENT',
+          const states=new Set(['NOT_CHECKED','ABSENT','EMPTY','PRESENT','UNCONFIRMED_ONLY',
             'NO_VALID_RECEIPTS','UNREADABLE','UNSAFE_FILE','UNSAFE_PATH','INVALID']);
           const kindKeys=['MORNING','KR_CLOSING','US_PREMARKET','WEEKLY'];
           const validState=v=>v && states.has(v.status)
@@ -142,6 +142,10 @@ jobs:
             && Number.isInteger(v.recent24hCount) && v.recent24hCount>=0
             && v.recent24hCount<=v.recordCount
             && safeIso(v.lastEvidenceAt)
+            && Number.isInteger(v.unconfirmedCount) && v.unconfirmedCount>=0 && v.unconfirmedCount<=10000
+            && Number.isInteger(v.unconfirmedRecent24hCount) && v.unconfirmedRecent24hCount>=0
+            && v.unconfirmedRecent24hCount<=v.unconfirmedCount
+            && safeIso(v.lastUnconfirmedAt)
             && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
             && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
           const briefKeys=['status','enabled','state','startErrorCode','lastTickAt',
@@ -220,7 +224,8 @@ jobs:
               'SHA_OR_READ_PATH_MISMATCH_SUSPECT','RECENT_HTTP_AND_FILE',
               'HTTP_FILE_AGE_DISAGREE','CYCLE_FAILED_SUSPECT',
               'TIMER_NOT_RECENT_SUSPECT','RECENT_CYCLE_DID_NOT_PUBLISH_SUSPECT',
-              'STALE_PUBLICATION_UNEXPLAINED','CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED',
+              'CYCLE_RUNNING_OVER_60M_SUSPECT','CYCLE_RUNNING_WITH_STALE_SNAPSHOT',
+               'STALE_PUBLICATION_UNEXPLAINED','CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED',
               'UNRESOLVED'].includes(r.staleCause)
             ||!['NO_DELIVERY_PROOF','PERSISTED_LEDGER_ONLY'].includes(r.proofLevel)
             ||!/^[A-Z_]+$/u.test(String(r.classification))
@@ -277,10 +282,14 @@ jobs:
                 '- Market brief ledger: '+b.status+' / '+b.recordCount+
                     ' recorded / '+b.recent24hCount+' last 24h',
                 '- Market brief latest ledger evidence: '+(b.lastEvidenceAt||'none'),
+                '- Market brief uncertain outcomes (NOT SENT): '+b.unconfirmedCount+
+                  ' / 24h '+b.unconfirmedRecent24hCount+' / latest '+(b.lastUnconfirmedAt||'none'),
                 '- Market kinds recorded: '+JSON.stringify(b.briefKinds),
                 '- Signal subscriber ledger: '+s.status+' / '+s.recordCount+
                     ' recorded / '+s.recent24hCount+' last 24h',
                 '- Signal subscriber latest ledger evidence: '+(s.lastEvidenceAt||'none'),
+                '- Signal subscriber uncertain outcomes (NOT SENT): '+s.unconfirmedCount+
+                  ' / 24h '+s.unconfirmedRecent24hCount+' / latest '+(s.lastUnconfirmedAt||'none'),
                 '- Local signal source GET status/count/safety: '+
                   [r.signalSource.status,r.signalSource.eventCount,r.signalSource.safetyValidated].join(' / '),
                 '- Signal V3 systemd server/timer/cycle: '+

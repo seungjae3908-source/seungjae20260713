@@ -86,6 +86,7 @@ export function sanitizeBriefWorkerHealth(value){
 function emptyState(status) {
   return {
     status, recordCount: 0, recent24hCount: 0, lastEvidenceAt: null,
+    unconfirmedCount: 0, unconfirmedRecent24hCount: 0, lastUnconfirmedAt: null,
     briefKinds: Object.fromEntries(KINDS.map(kind => [kind, 0])),
   };
 }
@@ -102,8 +103,13 @@ export function inspectDeliveryStateText(raw, type, nowMs = Date.now()) {
     return emptyState('INVALID');
   }
   const entries = Object.entries(data.delivered);
-  if (entries.length > 10000) return emptyState('INVALID');
-  const result = emptyState(entries.length ? 'PRESENT' : 'EMPTY');
+  const pending = data.unconfirmed === undefined ? {} : data.unconfirmed;
+  if (!pending || typeof pending !== 'object' || Array.isArray(pending))
+    return emptyState('INVALID');
+  const unconfirmedEntries = Object.entries(pending);
+  if (entries.length + unconfirmedEntries.length > 10000) return emptyState('INVALID');
+  const result = emptyState(entries.length ? 'PRESENT'
+    : unconfirmedEntries.length ? 'UNCONFIRMED_ONLY' : 'EMPTY');
   let newest = 0;
   for (const [key, value] of entries) {
     let kind = null;
@@ -123,6 +129,22 @@ export function inspectDeliveryStateText(raw, type, nowMs = Date.now()) {
     if (time > newest) newest = time;
   }
   result.lastEvidenceAt = newest > 0 ? new Date(newest).toISOString() : null;
+  let lastUnknown = 0;
+  for (const [key, value] of unconfirmedEntries) {
+    const validMarket = type === 'market'
+      && /^telegram-intelligence:(MORNING|KR_CLOSING|US_PREMARKET|WEEKLY):[0-9]{4}-[0-9]{2}-[0-9]{2}:(KR_STOCK_ROOM|US_STOCK_ROOM|CRYPTO_SPOT_ROOM|CRYPTO_FUTURES_ROOM):-100[0-9]{8,15}$/u.test(key);
+    const validSignal = type === 'signal'
+      && key.startsWith('signal-intelligence-v3:') && key.length <= 1024;
+    const when = typeof value === 'string' ? Date.parse(value) : NaN;
+    if ((!validMarket && !validSignal)
+      || Object.prototype.hasOwnProperty.call(data.delivered, key)
+      || !Number.isFinite(when) || when > nowMs + 5000)
+      return emptyState('INVALID');
+    result.unconfirmedCount++;
+    if (when >= nowMs - 24 * 3600_000) result.unconfirmedRecent24hCount++;
+    if (when > lastUnknown) lastUnknown = when;
+  }
+  result.lastUnconfirmedAt = lastUnknown ? new Date(lastUnknown).toISOString() : null;
   if (entries.length > 0 && result.recordCount === 0) result.status = 'NO_VALID_RECEIPTS';
   return result;
 }
