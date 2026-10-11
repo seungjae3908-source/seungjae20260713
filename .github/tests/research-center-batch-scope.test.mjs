@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { PAPER_FORWARD_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
 import { PAPER_INTEGRATION_SHA, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchCenterBatchUi } from '../scripts/research-center-batch-scope.mjs';
 
 const sharedPath = 'api-server/src/services/trade-execution.service.ts';
@@ -81,4 +83,21 @@ test('production membership denial uses the actual basic-info capability and saf
   const config = read('stock-analyzer/playwright.production-comprehensive.config.ts');
   assert.ok(config.includes("trace: 'off'"));
   assert.ok(config.includes("screenshot: 'off'"));
+});
+
+test('extracted Paper allowlist preserves the exact legacy set plus its own data file', () => {
+  assert.equal(PAPER_FORWARD_REVIEWED_PATHS.length, 268);
+  assert.equal(new Set(PAPER_FORWARD_REVIEWED_PATHS).size, 268);
+  const digest = createHash('sha256').update([...PAPER_FORWARD_REVIEWED_PATHS].sort().join('\n')).digest('hex');
+  assert.equal(digest, '7b991a3b55c36ce644a7fdeedb037a7cc80fbfb7732fb1c811e51cf0ddcacd14');
+  for (const path of PAPER_FORWARD_REVIEWED_PATHS) assert.ok(!path.includes('*') && !path.includes('..'));
+});
+
+test('Paper run expressions stay below the GitHub 21000 character limit', () => {
+  const workflow = read('.github/workflows/paper-forward-schedule-validation.yml');
+  for (const block of workflow.split(/\r?\n        run: \|\r?\n/u).slice(1)) {
+    const run = block.split(/\r?\n      (?:- name:|- uses:|[a-z][a-z_-]*:)/u)[0];
+    assert.ok(run.length < 21000, 'oversized run expression: ' + run.length);
+  }
+  assert.ok(workflow.includes('mapfile -t allowed < <(node .github/scripts/paper-forward-reviewed-paths.mjs)'));
 });
