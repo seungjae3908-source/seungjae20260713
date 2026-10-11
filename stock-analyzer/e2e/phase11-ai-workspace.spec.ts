@@ -122,7 +122,7 @@ async function mockWorkspace(page: Page) {
   await page.route('**/api/market/scan**', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(scannerPayload),
+    body: JSON.stringify({ ...scannerPayload, timeframe: new URL(route.request().url()).searchParams.get('timeframe') }),
   }));
   await page.route('**/api/stocks/*/chart**', (route) => route.fulfill({
     status: 200,
@@ -177,7 +177,7 @@ test('desktop technical workspace keeps AI signal scanner, chart broadcast, and 
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
   await expect(page).toHaveURL(/\/__phase11-technical-workspace-e2e$/);
   await expect(page.getByRole('heading', { name: '현재 상태' })).toBeVisible();
-  await expect(page.getByText('000660 · 국내주식 · 1D', { exact: true })).toBeVisible();
+  await expect(page.getByText('000660 · 국내주식 · 4H', { exact: true })).toBeVisible();
 });
 
 test('technical workspace routes auto trading to the canonical surface with zero legacy order mutations', async ({ page }) => {
