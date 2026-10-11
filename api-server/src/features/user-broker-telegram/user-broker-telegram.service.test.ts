@@ -675,3 +675,50 @@ test('source event replay detects historical incorrect AUTO_POLICY attribution i
   );
   assert.equal((await repository.listDeliveries('user-a')).length, 1);
 });
+
+
+test('relink after historical 403 does not replay DEAD_LETTER but permits a new personal delivery', async () => {
+  const { service, repository, transport } = fixture();
+  const first = new Date('2026-08-12T00:00:00.000Z');
+  await link(service, 'user-a', 'chat-old', 'tg-user-a', first);
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_HTTP_403';
+
+  const prior = manualPortfolioEvent({
+    id: 'forbidden-before-relink', userId: 'user-a',
+    symbol: 'AAPL', market: 'US', quantity: 1, price: 220,
+  });
+  const queued = await service.recordEvent(prior, new Date('2026-08-12T00:01:00.000Z'), 'associate');
+  assert.equal(queued.deliveryQueued, true);
+  assert.equal(
+    (await service.processDelivery('user-a', queued.deliveryId!, new Date('2026-08-12T00:02:00.000Z'))).state,
+    'DEAD_LETTER',
+  );
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'REVOKED');
+
+  const relinkedAt = new Date('2026-08-13T00:00:00.000Z');
+  await link(service, 'user-a', 'chat-new', 'tg-user-a', relinkedAt);
+  const recovered = await service.getState('user-a');
+  assert.equal(recovered.telegram.connected, true);
+  assert.equal(recovered.telegram.status, 'ACTIVE');
+  assert.equal(recovered.telegram.recoveryRequired, false);
+  assert.equal(recovered.telegram.recoveryErrorCode, null);
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.state, 'DEAD_LETTER');
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.attempts, 1);
+
+  transport.fail = false;
+  const next = manualPortfolioEvent({
+    id: 'new-after-relink', userId: 'user-a',
+    symbol: 'MSFT', market: 'US', quantity: 1, price: 450,
+  });
+  const pending = await service.recordEvent(next, new Date('2026-08-13T00:01:00.000Z'), 'associate');
+  assert.equal(pending.deliveryQueued, true);
+  assert.equal(
+    (await service.processDelivery('user-a', pending.deliveryId!, new Date('2026-08-13T00:02:00.000Z'))).state,
+    'SENT',
+  );
+  assert.equal((await repository.getDelivery('user-a', queued.deliveryId!))?.state, 'DEAD_LETTER');
+  assert.equal((await repository.listDeliveries('user-a')).length, 2);
+  assert.equal(transport.sent.length, 2);
+  assert.equal(transport.sent[1]?.chatId, 'chat-new');
+});
