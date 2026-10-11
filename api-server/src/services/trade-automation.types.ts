@@ -365,6 +365,23 @@ export type TradingOrder = {
     source: string;
     observedAt: string;
   } | null;
+  /**
+   * Server-certified completed funding ledger for a closed simulated USDT
+   * perpetual. Absence is unknown funding, never an assumed zero. Positive
+   * netFundingKrw is a paid funding cost; negative means received funding.
+   * No public order/HTTP API may independently issue this certificate.
+   */
+  paperFundingSettlementEvidence?: {
+    source: 'SERVER_PAPER_FUNDING_LEDGER_V1';
+    underlyingCurrency: 'USDT';
+    netFundingKrw: number;
+    entryBrokerOrderId: string;
+    exitBrokerOrderId: string;
+    coveredFromAt: string;
+    coveredThroughAt: string;
+    attestedAt: string;
+    complete: true;
+  } | null;
   exchangeCreatedAt?: string | null;
   exchangeUpdatedAt?: string | null;
   cancelable?: boolean | null;

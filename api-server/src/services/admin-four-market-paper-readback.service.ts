@@ -107,6 +107,37 @@ function verifiedClosedPaperPnlKrw(
       sum + (long ? leg.price - weightedEntryPrice
         : weightedEntryPrice - leg.price) * leg.quantity * leg.rate, 0);
   }
+  if (market === 'crypto_futures') {
+    // Maker/taker fee and tax receipts alone are not full cost for an
+    // open-ended perpetual contract. Funding can be paid *or received*
+    // across multiple intervals and currencies. Only a protected backend
+    // ledger certificate covering the entire entry→final-exit position
+    // lifecycle may attest the historical event-FX converted KRW total.
+    // There is deliberately no default zero-funding certificate.
+    const funding = ordersById.get(trade.finalExit.orderId)
+      ?.paperFundingSettlementEvidence;
+    const entryAt = Date.parse(trade.initialEntry.at);
+    const exitAt = Date.parse(trade.finalExit.at);
+    const coveredFromAt = Date.parse(funding?.coveredFromAt ?? '');
+    const coveredThroughAt = Date.parse(funding?.coveredThroughAt ?? '');
+    const attestedAt = Date.parse(funding?.attestedAt ?? '');
+    if (funding?.source !== 'SERVER_PAPER_FUNDING_LEDGER_V1'
+      || funding?.underlyingCurrency !== 'USDT'
+      || funding?.complete !== true
+      || typeof funding.netFundingKrw !== 'number'
+      || !Number.isFinite(funding.netFundingKrw)
+      || funding.entryBrokerOrderId !== trade.initialEntry.orderId
+      || funding.exitBrokerOrderId !== trade.finalExit.orderId
+      || !Number.isFinite(entryAt) || !Number.isFinite(exitAt)
+      || !Number.isFinite(coveredFromAt) || !Number.isFinite(coveredThroughAt)
+      || !Number.isFinite(attestedAt)
+      || Math.abs(coveredFromAt - entryAt) > 5_000
+      || Math.abs(coveredThroughAt - exitAt) > 5_000
+      || attestedAt < exitAt - 5_000 || attestedAt > nowMs + 5_000) {
+      return blocked;
+    }
+    costsKrw += funding.netFundingKrw;
+  }
   const net = grossKrw - costsKrw;
   if (!Number.isFinite(net)) return blocked;
   return Object.freeze({
