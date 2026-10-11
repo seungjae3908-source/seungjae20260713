@@ -50,6 +50,8 @@ jobs:
       - run: pnpm install --frozen-lockfile --prefer-offline
       - name: Six-room/individual Telegram message formatting, 403 and dedupe regressions
         run: pnpm --dir api-server test:telegram
+      - name: V3 current-page public/member fanout, no Bot API mock QA
+        run: node ops/telegram-v3-source-mock-tests.mjs
       - name: Signal Intelligence V3 public-only read/test contracts
         run: |
           set -Eeuo pipefail

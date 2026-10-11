@@ -48,6 +48,8 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Telegram-only service tests (no Browser, no network delivery)
         run: pnpm --dir api-server test:telegram
+      - name: Strict V3 intake and member-watchlist mocked source tests
+        run: node ops/telegram-v3-source-mock-tests.mjs
       - name: Telegram routing, Vault and Staging boundary contracts
         run: |
           node --test \
