@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { lookup as dnsLookup } from 'node:dns';
+import { isIP } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
 import { get as httpGet } from 'node:http';
 
@@ -14,7 +15,7 @@ const STAGING_ROOT = '/srv/seungjae-staging';
 const STAGING_PM2 = 'seungjae-staging';
 export const SAFE_NETWORK_STATUSES = Object.freeze([
   'NOT_CHECKED', 'IPV4_DNS_FAILED', 'IPV4_DNS_TIMEOUT',
-  'IPV4_TLS_READY', 'IPV4_TLS_TIMEOUT',
+  'IPV4_TLS_READY', 'IPV4_TCP_TIMEOUT', 'IPV4_TLS_TIMEOUT',
   'IPV4_TLS_CERT_FAILED', 'IPV4_TLS_CONNECT_FAILED',
 ]);
 export const STAGING_REQUIRED_STATUS = 'STAGING_TELEGRAM_NETWORK_ONLY_PASS';
@@ -27,28 +28,35 @@ function safeSha(value) {
 export async function probeStagingTelegramNetwork({
   lookupImpl = dnsLookup, connectImpl = tlsConnect,
 } = {}) {
-  const dnsStatus = await new Promise(resolve => {
+  // Resolve one IPv4 address and connect to those exact DNS bytes. TLS still
+  // validates api.telegram.org with SNI, never an unverified IP identity.
+  const dnsResult = await new Promise(resolve => {
     let settled = false;
-    const done = code => {
+    const done = value => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(code);
+      resolve(value);
     };
-    const timer = setTimeout(() => done('IPV4_DNS_TIMEOUT'), 4500);
+    const timer = setTimeout(() => done({ status: 'IPV4_DNS_TIMEOUT' }), 4500);
     try {
       lookupImpl('api.telegram.org', { family: 4 }, (error, address, family) => {
-        done(!error && typeof address === 'string' && address.length > 0 && family === 4
-          ? 'IPV4_TLS_PENDING' : 'IPV4_DNS_FAILED');
+        if (error || family !== 4 || typeof address !== 'string' || isIP(address) !== 4) {
+          done({ status: 'IPV4_DNS_FAILED' });
+          return;
+        }
+        done({ status: 'IPV4_TLS_PENDING', address });
       });
     } catch {
-      done('IPV4_DNS_FAILED');
+      done({ status: 'IPV4_DNS_FAILED' });
     }
   });
-  if (dnsStatus !== 'IPV4_TLS_PENDING') return dnsStatus;
+  if (dnsResult.status !== 'IPV4_TLS_PENDING') return dnsResult.status;
   return await new Promise(resolve => {
     let settled = false;
     let socket = null;
+    let tcpConnected = false;
+    const timeoutCode = () => tcpConnected ? 'IPV4_TLS_TIMEOUT' : 'IPV4_TCP_TIMEOUT';
     const done = code => {
       if (settled) return;
       settled = true;
@@ -56,16 +64,17 @@ export async function probeStagingTelegramNetwork({
       if (socket && !socket.destroyed) socket.destroy();
       resolve(code);
     };
-    const timer = setTimeout(() => done('IPV4_TLS_TIMEOUT'), 6500);
+    const timer = setTimeout(() => done(timeoutCode()), 6500);
     try {
       socket = connectImpl({
-        host: 'api.telegram.org', port: 443, servername: 'api.telegram.org',
+        host: dnsResult.address, port: 443, servername: 'api.telegram.org',
         family: 4, autoSelectFamily: false, rejectUnauthorized: true,
         timeout: 6000,
       });
+      socket.once('connect', () => { tcpConnected = true; });
       socket.once('secureConnect', () =>
         done(socket.authorized === true ? 'IPV4_TLS_READY' : 'IPV4_TLS_CERT_FAILED'));
-      socket.once('timeout', () => done('IPV4_TLS_TIMEOUT'));
+      socket.once('timeout', () => done(timeoutCode()));
       socket.once('error', error => {
         const code = String(error?.code ?? error?.cause?.code ?? '');
         done(['CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
@@ -77,7 +86,6 @@ export async function probeStagingTelegramNetwork({
     }
   });
 }
-
 
 /** Read the running *Staging* app's direct-loopback health record.
  * The deploy launcher loads DEPLOY_SHA via Node --env-file=.env.staging,

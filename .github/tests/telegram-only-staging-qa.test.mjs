@@ -97,7 +97,7 @@ test('Staging TLS probe prefers IPv4, validates hostname, and exposes only enums
       done(null, '192.0.2.123', 4);
     },
     connectImpl: config => {
-      assert.equal(config.host, 'api.telegram.org');
+      assert.equal(config.host, '192.0.2.123');
       assert.equal(config.servername, 'api.telegram.org');
       assert.equal(config.port, 443);
       assert.equal(config.family, 4);
@@ -237,4 +237,53 @@ test('Staging QA reports health runtime SHA separately from supervisor environme
   assert.ok(workflow.includes("Actual running Staging app SHA: "));
   assert.ok(workflow.includes("TELEGRAM_STAGING_SCOPE_NOT_READY"));
   assert.ok(!source.includes("http://0.0.0.0"));
+});
+
+
+test('Staging TLS probe uses one DNS lookup, never logs addresses, and classifies phase timeouts', async () => {
+  const cases = [
+    { events: ['timeout'], expected: 'IPV4_TCP_TIMEOUT' },
+    { events: ['connect', 'timeout'], expected: 'IPV4_TLS_TIMEOUT' },
+    { events: ['connect', 'secureConnect'], expected: 'IPV4_TLS_CERT_FAILED' },
+  ];
+  for (const item of cases) {
+    let lookups = 0;
+    let connects = 0;
+    const result = await probeStagingTelegramNetwork({
+      lookupImpl: (host, opts, done) => {
+        assert.equal(host, 'api.telegram.org');
+        assert.equal(opts.family, 4);
+        lookups++;
+        done(null, '198.51.100.7', 4);
+      },
+      connectImpl: config => {
+        connects++;
+        assert.equal(config.host, '198.51.100.7');
+        assert.equal(config.servername, 'api.telegram.org');
+        assert.equal(config.rejectUnauthorized, true);
+        assert.equal(config.autoSelectFamily, false);
+        const socket = new EventEmitter();
+        socket.authorized = false;
+        socket.destroyed = false;
+        socket.destroy = () => { socket.destroyed = true; };
+        queueMicrotask(() => item.events.forEach(event => socket.emit(event)));
+        return socket;
+      },
+    });
+    assert.equal(lookups, 1);
+    assert.equal(connects, 1);
+    assert.equal(result, item.expected);
+    assert.ok(SAFE_NETWORK_STATUSES.includes(result));
+    assert.ok(!JSON.stringify({ result }).includes('198.51.100.7'));
+  }
+});
+
+test('Staging probe fails closed on malformed IPv4 DNS without opening a socket', async () => {
+  for (const address of ['host.example', '127.0.0.1.2', '::1', '']) {
+    const result = await probeStagingTelegramNetwork({
+      lookupImpl: (_host, _opts, done) => done(null, address, 4),
+      connectImpl: () => { throw Error('MUST_NOT_CONNECT'); },
+    });
+    assert.equal(result, 'IPV4_DNS_FAILED');
+  }
 });
