@@ -16,6 +16,7 @@ import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
 import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
+import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
 import {
   bindPublicStockCandleSource,
   enforcePublicStockRosterCoverage,
@@ -509,6 +510,11 @@ async function main() {
     }
   }
 
+  // Persistence of bounded cursor-only counts NEVER means all raw symbols
+  // were covered. Failed/blocked pages are not trusted candidate evidence.
+  state.rosterProgress = accumulatePublicV3RosterProgress(
+    state.rosterProgress,coverage,
+  );
   pruneRetained(state, nowMs);
   const inputs = Object.values(state.retained).map((row) => row.input);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
@@ -523,6 +529,7 @@ async function main() {
     serviceSha: SERVICE_SHA,
     profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,
+    publicCycleRosterProgress: Object.values(state.rosterProgress),
     publicDataOnly: true,
     releaseStateReset: releaseChanged,
   };
@@ -540,6 +547,7 @@ async function main() {
     profile: snapshot.profile,
     releaseStateReset: releaseChanged,
     coverage,
+    publicCycleRosterProgress: Object.values(state.rosterProgress),
     executionAuthority: 'NONE',
   }, null, 2)}\n`);
 }

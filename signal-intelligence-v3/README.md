@@ -314,3 +314,23 @@ and `redirect:'error'` fails closed rather than allowing a downgrade
 or untrusted redirect to replace the KRX roster. Source errors remain
 `partial/stale` via the existing last-good/fallback path; no invented
 tickers or candles, secret/API key, deployment or trading change.
+
+## Draft: cross-cycle bounded eligible-roster page progress
+
+The real V3 publicly observable cycle scans only 20 KR / 20 US / 5
+Spot / 10 Futures instruments per market-strategy batch. A single
+healthy small batch MUST NEVER masquerade as a complete all-symbol
+search. A pure 12-lane `public-v3-roster-progress` counter persists
+**only safe aggregates** in the existing v2 cycle state and snapshot:
+contiguous *eligible cursor* progress, blocked vs data-ready attempted
+pages, held/retried batches, provider exclusions and wrap counts.
+Failure/partial attempts cannot become trusted candidates or
+profitability results. The counter resets if the roster provider or
+source counts change, never stores symbol IDs or OHLCV, and permanently
+asserts `rosterMembershipVerified=false`,
+`fullMarketUniverseCovered=false`, `economicAuthority=NONE`.
+Even a completed 4,010-code eligible KRX traversal cannot claim the
+2,837 excluded raw listed instruments were scanned. Provider source
+membership can change at the same count, so this is **cursor-only
+research progress**, not unique-instrument OOS proof. No new calls
+or runtime/trading privileges.
