@@ -484,6 +484,14 @@ export async function readSignalV3HealthOnce({
             done(emptySignalHealth('INVALID_RESPONSE'));
             return;
           }
+          const shaMismatch = payload.snapshotError === 'SNAPSHOT_SERVICE_SHA_MISMATCH';
+          // Only this exact server-owned enum is projected; never log or
+          // return the raw snapshotError/body, which may contain sensitive text.
+          if (shaMismatch && (payload.snapshotReady !== false
+            || payload.snapshotFresh !== false || payload.snapshotAgeMs !== null)) {
+            done(emptySignalHealth('INVALID_RESPONSE'));
+            return;
+          }
           const ageBand = safeSignalAgeBand(payload.snapshotAgeMs);
           const fresh = payload.snapshotFresh === true
             && Number.isFinite(payload.snapshotAgeMs)
@@ -492,7 +500,8 @@ export async function readSignalV3HealthOnce({
           // data coverage, not necessarily old snapshot or a stopped timer.
           const ageRecent=Number.isFinite(payload.snapshotAgeMs)
             && payload.snapshotAgeMs<=15*60_000;
-          const status = !payload.snapshotReady ? 'SNAPSHOT_MISSING'
+          const status = shaMismatch ? 'SNAPSHOT_SHA_MISMATCH'
+            : !payload.snapshotReady ? 'SNAPSHOT_MISSING'
             : !ageRecent ? 'SNAPSHOT_STALE'
               : payload.snapshotCurrentPageSourceReady===false
                 ? 'SOURCE_DATA_BLOCKED' : fresh ? 'READY' : 'SNAPSHOT_STALE';
@@ -556,6 +565,8 @@ export function readV3SnapshotFile({fsOps=fs,nowMs=Date.now(),
 }
 export function v3StalenessHypothesis(health,cycle,file,units){
   if(health?.status==='NOT_CHECKED')return 'NOT_CHECKED';
+  if(health?.status==='SNAPSHOT_SHA_MISMATCH')
+    return 'SHA_OR_READ_PATH_MISMATCH_SUSPECT';
   if(file?.status==='ABSENT')return 'DEFAULT_FILE_ABSENT';
   if(!['RECENT_PUBLICATION','STALE_PUBLICATION'].includes(file?.status))
     return 'FILE_NOT_VERIFIABLE';
