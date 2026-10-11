@@ -6,6 +6,7 @@ import {
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
   readSignalV3Units, readSignalV3HealthOnce, morningWindowProcessCoverage,
+  sanitizeBriefWorkerHealth,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
 
@@ -145,7 +146,8 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.signalUnits.timer,'ACTIVE');
   assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
   assert.equal(result.morningWindowCoverage,'MISSED_WINDOW');
-  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v2');
+  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v3');
+  assert.equal(result.briefWorker.status,'NOT_AVAILABLE');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
   assert.equal(result.databaseWrites,0);
@@ -179,6 +181,42 @@ test('disabled market, duplicated room, stale production SHA and missing health 
   })).classification,'HEALTH_UNAVAILABLE');
 });
 
+test('scheduled briefing health projection handles old/new app safely without private payload',async()=>{
+  const raw={
+    enabled:true,state:'RUNNING',startErrorCode:null,
+    lastTickAt:new Date(now-30000).toISOString(),tickOk:true,
+    lastDueTickAt:new Date(now-60000).toISOString(),
+    lastDuePlans:2,lastDueAttempted:4,lastDueDelivered:3,
+    lastDueDeduped:1,lastDueNotConfigured:0,lastDueFailed:0,
+    lastDueCode:'BOT_API_ACCEPTED',secret:'PRIVATE_SECRET',chatId:'PRIVATE_CHAT',
+  };
+  const safe=sanitizeBriefWorkerHealth(raw);
+  assert.equal(safe.status,'PRESENT');
+  assert.equal(safe.lastDueDelivered,3);
+  assert.ok(!JSON.stringify(safe).includes('PRIVATE_'));
+  assert.equal(sanitizeBriefWorkerHealth(undefined).status,'NOT_AVAILABLE');
+  assert.equal(sanitizeBriefWorkerHealth({...raw,lastDueDelivered:-1}).status,'INVALID');
+  assert.equal(sanitizeBriefWorkerHealth({...raw,lastTickAt:'SECRET_AS_TIME'}).status,'INVALID');
+  const args={
+    ...safeSignalDiagnostics,mainSha:current,deployedSha:deployed,nowMs:now,
+    snapshot:observed,signalSource:async()=>({status:'READY',eventCount:0,safetyValidated:true}),
+    state:()=>inspectDeliveryStateText(state({}),'market',now),
+  };
+  const receipt=await observeProductionTelegram({
+    ...args,health:async()=>({...await health(),briefWorker:safe}),
+  });
+  assert.equal(receipt.classification,'READ_ONLY_OBSERVATION_COMPLETE');
+  assert.equal(receipt.briefWorker.tickFresh,true);
+  assert.equal(receipt.briefWorker.lastDueDelivered,3);
+  assert.equal(receipt.proofLevel,'NO_DELIVERY_PROOF');
+  const corrupt=await observeProductionTelegram({
+    ...args,health:async()=>({...await health(),
+      briefWorker:sanitizeBriefWorkerHealth({...raw,lastDueFailed:10001})}),
+  });
+  assert.equal(corrupt.classification,'BRIEF_WORKER_HEALTH_INVALID');
+  assert.equal(corrupt.telegramSends,0);
+});
+
 test('loopback health response is restricted to trusted booleans/codes; extra sensitive data dropped',async()=>{
   const getImpl=(url,options,respond)=>{
     assert.equal(url,'http://127.0.0.1:8080/api/health');
@@ -199,6 +237,14 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
           lastConfirmedDeliveryAt:'PRIVATE_SECRET_IN_TIME_FIELD',errorCode:'TELEGRAM_DELIVERY_UNCONFIRMED',
           chatId:'DO_NOT_LOG_CHAT_ID',
         },
+        telegramIntelligenceWorker:{
+          enabled:true,state:'RUNNING',startErrorCode:null,
+          lastTickAt:new Date(now-15000).toISOString(),tickOk:true,
+          lastDueTickAt:new Date(now-60000).toISOString(),
+          lastDuePlans:1,lastDueAttempted:1,lastDueDelivered:0,
+          lastDueDeduped:1,lastDueNotConfigured:0,lastDueFailed:0,
+          lastDueCode:'DEDUPED_ONLY',secret:'PRIVATE_BRIEF_SECRET',
+        },
       })));
       response.emit('end');
     });
@@ -208,10 +254,13 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
   assert.equal(r.nodeSha,deployed);
   assert.equal(r.deliveryConfirmed,false);
   assert.equal(r.lastConfirmedDeliveryAt,null);
+  assert.equal(r.briefWorker.status,'PRESENT');
+  assert.equal(r.briefWorker.lastDueCode,'DEDUPED_ONLY');
   const printed=JSON.stringify(r);
   assert.ok(!printed.includes('PRIVATE_USER_DATA'));
   assert.ok(!printed.includes('DO_NOT_LOG_CHAT_ID'));
   assert.ok(!printed.includes('PRIVATE_SECRET_IN_TIME_FIELD'));
+  assert.ok(!printed.includes('PRIVATE_BRIEF_SECRET'));
 });
 
 test('production receipt rejects non-ISO personal time and preserves only valid UTC evidence',async()=>{

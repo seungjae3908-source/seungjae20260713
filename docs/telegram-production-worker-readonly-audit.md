@@ -108,6 +108,16 @@ the current instance. This richer status supersedes the overlapping #1821
 boolean while preserving its intended read-only diagnosis, alongside the more
 complete V3 HTTP /health and systemd unit statuses in this PR.
 
+## Sanitized market-brief runtime health in v3 receipt
+
+Draft #1823 adds read-only scheduled market-brief worker health to the application's existing loopback health response. This audit projects only fixed worker states and error codes, valid ISO timestamps, and bounded delivery counters. Raw tokens, room IDs, message contents, user rows and provider payloads are not emitted.
+
+- NOT_AVAILABLE means the deployed app has not published the newer worker-health field; the audit remains compatible with that older build without inferring success.
+- PRESENT with a fresh tick shows worker-cycle opportunity only, not persistent ledger evidence or confirmed user receipt.
+- INVALID is fail-closed and cannot be promoted to operational readiness.
+- Worker-reported BOT_API_ACCEPTED is not equivalent to a durable dedupe ledger or human receipt.
+
+An absent ledger plus a fresh worker tick remains an unresolved operational signal. This read-only path does not retry any send or restart a process.
 ## Interpretation
 
 - A market report ledger entry means accepted OR duplicate-suppressed, not proof of a fresh Bot API message. Proof level is PERSISTED_LEDGER_ONLY.
