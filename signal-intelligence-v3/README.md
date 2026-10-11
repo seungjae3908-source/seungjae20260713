@@ -291,3 +291,15 @@ or caching a live KRX master. On failure the existing
 official full-universe totals; stronger authorized listing-by-listing
 reconciliation is still needed. No private KRX/financial API calls,
 session mutation, orders or new service activation.
+
+## KRX date-scoped no-data guard (Draft)
+
+A correct-looking 200 HTTP reply with an empty `OutBlock_1` (for
+example, on a nontrading day or without a permitted service response)
+is now `PROVIDER_DATA_INCOMPLETE`, not official verification of zero
+ETF/ETN/ELW. Duplicated conflicting subtypes or noncanonical codes
+yield `DATE_EVIDENCE_PARTIAL`; the reconciliation consumer remains
+fail-closed and cannot treat such evidence as a verified product source.
+Response byte bounds are checked, no key or source row leaves the
+pure diagnostic receipt. Current application worker still never
+invokes this official adapter unless separately authorized.
