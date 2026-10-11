@@ -396,6 +396,12 @@ const automaticTradingDriftReviewed=[
  'api-server/src/services/trading-risk-engine.service.ts',
  'stock-analyzer/src/components/paper-trading-panel.tsx',
  'stock-analyzer/src/lib/paper-trading.ts',
+ // Exact Paper-local archive and evidence-only review. Shared LIVE/provider
+ // modules, secret reads, and production routes are not scope exceptions.
+ 'stock-analyzer/src/lib/paper-trading-storage.ts',
+ 'stock-analyzer/src/lib/paper-trading-storage.test.ts',
+ 'stock-analyzer/src/lib/paper-trade-review.ts',
+ 'stock-analyzer/src/lib/paper-trade-review.test.ts',
  'ops/deploy-production.sh',
 ];
 // Explicitly reviewed member/TG delivery paths (unrelated to trading execution).
