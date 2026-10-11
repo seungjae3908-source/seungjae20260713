@@ -360,6 +360,36 @@ test('manual Paper uses five closed losing trades per KST day, not LIVE three-lo
   assert.equal(freshDay.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'), false);
 });
 
+test('pending manual limit rechecks five KST losing trades at trigger and never fills after rejection', () => {
+  const pending = place(undefined, {
+    request: {orderType:'limit',requestedPrice:95,stopLossPrice:92,takeProfitPrice1:100,takeProfitPrice2:105},
+    eventId:'paper-pending-before-losses',
+  });
+  assert.equal(pending.order?.status,'pending');
+  const nowFiveLosses = structuredClone(pending.state);
+  nowFiveLosses.journal = Array.from({length:5},(_,i) => ({
+    id:'loss-before-trigger-'+i,status:'closed',closedAt:NOW_ISO,netPnl:-10,
+  } as any));
+  const blocked = process(nowFiveLosses, {open:97,high:98,low:94,close:96},'paper-trigger-after-fifth-loss');
+  assert.equal(blocked.order?.status,'rejected');
+  assert.ok(blocked.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'));
+  assert.equal(blocked.fills.length,0);
+  assert.equal(blocked.state.positions.length,0);
+  assert.equal(blocked.orderSubmitted,false);
+  assert.equal(blocked.exchangeRequestSent,false);
+  const replay = process(blocked.state, {
+    timestamp: NOW.getTime() + 30*60_000,open:97,high:98,low:94,close:96,
+  },'paper-next-candle-no-resurrection');
+  assert.equal(replay.fills.length,0);
+  // Prior-day five losses must not block a valid fill in the next KST day.
+  const newKstDay = process(nowFiveLosses, {
+    timestamp:Date.parse('2026-08-02T15:01:00.000Z'),
+    open:97,high:98,low:94,close:96,
+  },'paper-trigger-next-kst-day');
+  assert.equal(newKstDay.order?.status,'filled');
+  assert.equal(newKstDay.fills.length,1);
+});
+
 test('manual Paper partial closing does not consume the five-trade daily loss budget', () => {
   const state=createPaperTradingState(10_000,NOW);
   state.journal=Array.from({length:5},(_,i)=>({
@@ -549,6 +579,40 @@ test('same candle stop and target uses stop first', () => {
   const result = process(opened.state, { open: 100, high: 106, low: 97, close: 100 }, 'stop-first');
   assert.equal(result.fills[0]?.fillReason, 'stop_loss');
   assert.equal(result.fills.length, 1);
+});
+
+test('TP2 before TP1 respects original 50/50 or 25/25 allocations, with no duplicate fills', () => {
+  for (const allocation of [50,25]) {
+    const opened = place(undefined, {
+      request: {
+        takeProfitPrice1:110,takeProfitPrice2:105,
+        targetClosePercent1:allocation,targetClosePercent2:allocation,
+      },
+      eventId:'reverse-tp-open-'+allocation,
+    });
+    assert.equal(opened.order?.status,'filled');
+    const first = process(opened.state, {
+      open:100,high:106,low:99,close:105,
+    },'reverse-tp2-'+allocation);
+    assert.equal(first.fills.length,1);
+    assert.equal(first.position?.target1Executed,false);
+    assert.equal(first.position?.target2Executed,true);
+    const second = process(first.state, {
+      timestamp:NOW.getTime()+30*60_000,open:106,high:111,low:105,close:110,
+    },'reverse-tp1-'+allocation);
+    assert.equal(second.fills.length,1);
+    if (allocation===50) {
+      assert.equal(second.position?.status,'closed');
+      assert.equal(second.position?.remainingQuantity,0);
+    } else {
+      assert.equal(second.position?.status,'partially_closed');
+      assert.ok(Math.abs(second.position!.remainingQuantity / second.position!.quantity-0.5)<0.001);
+    }
+    const third = process(second.state, {
+      timestamp:NOW.getTime()+45*60_000,open:108,high:112,low:106,close:110,
+    },'reverse-tp-no-repeat-'+allocation);
+    assert.equal(third.fills.length,0);
+  }
 });
 
 test('target allocation above 100 is rejected', () => {
