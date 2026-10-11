@@ -12,10 +12,110 @@ import {
   type AdminPaperMarket,
 } from './admin-four-market-paper-capital.service';
 import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
-import { buildUnifiedTradeJournal } from './unified-trade-journal.service';
+import { buildUnifiedTradeJournal, type TradeLeg, type UnifiedTradeCycle } from './unified-trade-journal.service';
 
 type MarketCapital = ReturnType<typeof projectAdminMarketCapital>
   | ReturnType<typeof projectMemberMarketCapital>;
+/**
+ * Only an actual same-fill Paper cost + FX receipt, durably persisted with
+ * each canonical order, can produce an administrative KRW settlement.
+ * USD cash equities have entry/exit currency exposure. USDT-margined futures
+ * settle native instrument PnL in USDT on close, not FX gain on notional.
+ */
+function verifiedClosedPaperPnlKrw(
+  trade: UnifiedTradeCycle,
+  market: AdminPaperMarket,
+  ordersById: ReadonlyMap<string, TradingOrder>,
+  nowMs: number,
+) {
+  const blocked = {
+    netPnlKrw: Number.NaN,
+    fullCostsVerified: false,
+    closeTimeFxVerified: false,
+  } as const;
+  const currency = market === 'domestic_stock' || market === 'crypto_spot' ? 'KRW'
+    : market === 'us_stock' ? 'USD' : 'USDT';
+  if (trade.status !== 'CLOSED' || trade.currency !== currency
+    || trade.costEvidence.status !== 'READY' || !trade.finalExit) return blocked;
+  const entries: TradeLeg[] = [trade.initialEntry, ...trade.additions];
+  const exits: TradeLeg[] = [...trade.partialExits, trade.finalExit];
+  if (!entries.length || !exits.length) return blocked;
+  const expectedSource = currency === 'KRW' ? 'NATIVE_KRW'
+    : currency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+  const freshnessMs = currency === 'USD' ? 24 * 60 * 60_000
+    : currency === 'USDT' ? 10 * 60_000 : 5 * 60_000;
+  let entryQty = 0;
+  let exitQty = 0;
+  let entryKrw = 0;
+  let exitKrw = 0;
+  let entryNative = 0;
+  let costsKrw = 0;
+  const exitFx: Array<{ quantity: number; price: number; rate: number }> = [];
+  for (const [positionEffect, legs] of [['ENTRY', entries], ['EXIT', exits]] as const) {
+    for (const leg of legs) {
+      const order = ordersById.get(leg.orderId);
+      const evidence = order?.settlementFxEvidence;
+      const at = Date.parse(leg.at);
+      const quoteAt = Date.parse(evidence?.observedAt ?? '');
+      const rate = evidence?.krwPerQuoteCurrency;
+      if (!order || (order.state !== 'FILLED' && order.state !== 'PARTIALLY_FILLED')
+        || !Number.isFinite(at) || at > nowMs + 5_000
+        || !Number.isFinite(quoteAt) || !Number.isFinite(rate)
+        || rate == null || rate <= 0
+        || (currency === 'KRW' && rate !== 1)
+        || evidence?.source !== expectedSource
+        || quoteAt > at + 5_000 || at - quoteAt > freshnessMs
+        || order.feeCurrency?.toUpperCase() !== currency
+        || order.taxCurrency?.toUpperCase() !== currency
+        || typeof order.feeAmount !== 'number'
+        || !Number.isFinite(order.feeAmount) || order.feeAmount < 0
+        || typeof order.taxAmount !== 'number'
+        || !Number.isFinite(order.taxAmount) || order.taxAmount < 0
+        || !Number.isFinite(leg.price) || leg.price <= 0
+        || !Number.isFinite(leg.quantity) || leg.quantity <= 0
+        || typeof leg.fees !== 'number' || !Number.isFinite(leg.fees) || leg.fees < 0
+        || typeof leg.tax !== 'number' || !Number.isFinite(leg.tax) || leg.tax < 0
+        // Journal projections are summaries, never independent cost evidence.
+        // The full-cost settlement must match the immutable canonical order
+        // values, not an understated fee/tax on a displayed trade leg.
+        || Math.abs(leg.fees - order.feeAmount) > 1e-7
+        || Math.abs(leg.tax - order.taxAmount) > 1e-7) {
+        return blocked;
+      }
+      const notional = leg.price * leg.quantity;
+      costsKrw += (leg.fees + leg.tax) * rate;
+      if (positionEffect === 'ENTRY') {
+        entryQty += leg.quantity;
+        entryKrw += notional * rate;
+        entryNative += notional;
+      } else {
+        exitQty += leg.quantity;
+        exitKrw += notional * rate;
+        exitFx.push({ quantity: leg.quantity, price: leg.price, rate });
+      }
+    }
+  }
+  const quantityTolerance = Math.max(1e-9, entryQty * 1e-8);
+  if (!(entryQty > 0) || Math.abs(entryQty - exitQty) > quantityTolerance) return blocked;
+  const long = trade.positionSide === 'LONG';
+  let grossKrw = long ? exitKrw - entryKrw : entryKrw - exitKrw;
+  if (market === 'crypto_futures') {
+    // USDT perpetuals realize price difference in USDT. Do not create
+    // fictitious FX gains on the full notional at the entry date.
+    const weightedEntryPrice = entryNative / entryQty;
+    grossKrw = exitFx.reduce((sum, leg) =>
+      sum + (long ? leg.price - weightedEntryPrice
+        : weightedEntryPrice - leg.price) * leg.quantity * leg.rate, 0);
+  }
+  const net = grossKrw - costsKrw;
+  if (!Number.isFinite(net)) return blocked;
+  return Object.freeze({
+    netPnlKrw: net,
+    fullCostsVerified: true,
+    closeTimeFxVerified: true,
+  });
+}
+
 function quarantined(
   market: AdminPaperMarket, error: string, nowMs: number,
   role: FourMarketPaperWalletRole,
@@ -110,6 +210,26 @@ function fourMarketPaperCapitalReadback(input: {
     // If a new-epoch order has only an unknown plan ID the global guard
     // above quarantines every market before this projection is attempted.
     try {
+      // Alias collisions could otherwise make one canonical order certify a
+      // different displayed fill. Both internal IDs and provider-facing
+      // aliases must be unique within this market's wallet epoch.
+      const ordersByJournalId = new Map<string, TradingOrder>();
+      const canonicalOrderIds = new Set<string>();
+      let journalIdCollision = false;
+      for (const order of scoped.orders) {
+        const journalId = order.exchangeOrderId ?? order.id;
+        if (!order.id || canonicalOrderIds.has(order.id)
+          || !journalId || ordersByJournalId.has(journalId)) {
+          journalIdCollision = true;
+          break;
+        }
+        canonicalOrderIds.add(order.id);
+        ordersByJournalId.set(journalId, order);
+      }
+      if (journalIdCollision) {
+        fallback(code('CANONICAL_ORDER_IDENTITY_COLLISION'));
+        continue;
+      }
       const raw = tradeAutomationJournalPayloadsFromSnapshot(
         input.ownerId, scoped.orders, scoped.plans,
       );
@@ -122,11 +242,7 @@ function fourMarketPaperCapitalReadback(input: {
         && trade.status === 'CLOSED');
       const settlements = closed.map(trade => ({
         id: trade.id, market, closedAt: trade.closedAt ?? '',
-        netPnlKrw: trade.netPnl ?? Number.NaN,
-        fullCostsVerified: trade.costEvidence.status === 'READY'
-          && typeof trade.fees === 'number' && Number.isFinite(trade.fees)
-          && typeof trade.tax === 'number' && Number.isFinite(trade.tax),
-        closeTimeFxVerified: trade.currency === 'KRW',
+        ...verifiedClosedPaperPnlKrw(trade, market, ordersByJournalId, input.nowMs),
       }));
       capital[market] = role === 'admin'
         ? projectAdminMarketCapital(market, settlements, input.nowMs)
