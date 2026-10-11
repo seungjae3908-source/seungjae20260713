@@ -13,6 +13,12 @@ import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/pu
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
+import {
+  classifyPublicCycleLaneStatus,
+  decidePublicCycleCursor,
+  PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
+  parsePublicRetryAfterMs,
+} from '../src/public-cycle-coverage.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
 const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './state');
@@ -32,7 +38,7 @@ const strategyProfiles = Object.freeze([
 const marketProfiles = Object.freeze([
   Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 }),
   Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 }),
-  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20 }),
+  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: PUBLIC_V3_SPOT_STAGE_TWO_LIMIT }),
   Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 }),
 ]);
 const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
@@ -195,7 +201,10 @@ async function withProviderFallback(candidates, operation) {
 
 async function withUpbitPacing(operation) {
   const originalFetch = globalThis.fetch;
-  const schedule = createStartScheduler(130);
+  // Each Research V3 Spot lane consumes multiple candle/context/orderbook
+  // groups per symbol. 130ms bursts were observed receiving Upbit HTTP 429.
+  // Pacing remains public/read-only; rejected responses never become signals.
+  const schedule = createStartScheduler(350);
   globalThis.fetch = async (input, init = {}) => {
     const rawUrl = typeof input === 'string' || input instanceof URL ? String(input) : String(input?.url ?? '');
     let parsed;
@@ -210,8 +219,11 @@ async function withUpbitPacing(operation) {
         lastResponse = response;
         if (response.status !== 429) return response;
         if (attempt < 4) {
-          const retryAfter = Number(response.headers.get('retry-after'));
-          const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 250 * attempt;
+          // Respect HTTP-date as well as numeric Retry-After. Malformed or
+          // >10s cooldowns return the real 429 without guessing or retrying.
+          const providerDelay = parsePublicRetryAfterMs(response.headers.get('retry-after'));
+          if (providerDelay !== null && providerDelay > 10_000) return response;
+          const backoff = Math.max(providerDelay ?? 0, 750 * attempt);
           await sleep(backoff);
         }
       } catch (error) {
@@ -338,12 +350,7 @@ async function scanCrypto(lane, cursor) {
 }
 
 function laneStatus(response) {
-  if (!response) return 'SEARCH_FAILURE';
-  if (response.outcome === 'PROVIDER_FAILURE' || response.outcome === 'REQUEST_TIMEOUT' || response.dataState === 'unavailable') return 'SEARCH_FAILURE';
-  if (response.universe?.partial === true || response.universe?.stale === true || Number(response.universe?.providerErrorCount ?? 0) > 0) return 'SEARCH_FAILURE';
-  if (Number(response.execution?.providerErrorCount ?? 0) > 0 || Number(response.execution?.timeoutCount ?? 0) > 0) return 'SEARCH_FAILURE';
-  if (response.dataState === 'untrusted' || response.dataState === 'stale') return 'BLOCKED_DATA';
-  return response.cards.length ? 'CANDIDATES_AVAILABLE' : 'VALID_NO_TRADE';
+  return classifyPublicCycleLaneStatus(response);
 }
 
 async function main() {
@@ -389,9 +396,15 @@ async function main() {
             cursor,
           };
         }
-        state.cursors[lane.id] = response.universe.nextCursor == null ? 0 : response.universe.nextCursor;
       }
+      const rotation = decidePublicCycleCursor({ response, status, cursor });
+      // Rotation may advance a completed, zero-error PARTIAL/UNTRUSTED batch
+      // for research coverage only. These rows NEVER enter the candidate
+      // adapter or grant Paper/Live entry authority.
+      state.cursors[lane.id] = rotation.nextCursor;
       coverage.push({
+        cursorRotatedBlockedOnly: rotation.blockedObservationOnly,
+        cursorRotationReason: rotation.reason,
         laneId: lane.id,
         market: lane.market,
         strategy: lane.label,
