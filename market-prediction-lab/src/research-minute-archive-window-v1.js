@@ -58,7 +58,7 @@ function parseDate(value) {
     fail("MINUTE_WINDOW_DATE_INVALID");
   return valueMs;
 }
-function validateStockCalendar(market, stockCalendar, startDate, endDate) {
+export function validateResearchStockSessionsForDateV1(market, stockCalendar, startDate, endDate) {
   if (!stockCalendar || typeof stockCalendar !== "object"
     || Array.isArray(stockCalendar) || stockCalendar.market !== market
     || !Array.isArray(stockCalendar.sessions)
@@ -150,7 +150,7 @@ export async function auditResearchMinuteArchiveWindowV1({
           startMs, endMs: startMs + DAY,
           kind: "UTC_24H", timeZone: "UTC" };
       })
-    : validateStockCalendar(market, stockCalendar,
+    : validateResearchStockSessionsForDateV1(market, stockCalendar,
       window.startDate, window.endDate).filter(x =>
       x.tradingDateLocal >= utc(chunkStartMs)
       && x.tradingDateLocal < utc(chunkEndExclusiveMs));
