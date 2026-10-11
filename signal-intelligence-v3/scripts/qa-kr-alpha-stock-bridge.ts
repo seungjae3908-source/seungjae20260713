@@ -7,6 +7,7 @@ import { MarketDataService } from '../../api-server/src/services/market-data.ser
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
 import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-overlay.mjs';
 import { createPublicKrAlphaHistoricalDailyFeed } from '../src/public-kr-alpha-historical-daily.mjs';
+import { publicKrAlphaDailyQuote } from '../src/public-kr-alpha-daily.mjs';
 
 const code='0193W0';
 const source=createPublicKrAlphaHistoricalDailyFeed({timeoutMs:3200});
@@ -34,7 +35,7 @@ try{
     readPublicQuote:async(ticker,entry)=>{
       if(ticker!==code||entry?.publicResearchProvisional!==true)
         throw new Error('KR_ALPHA_INDEX_QUOTE_UNAVAILABLE_CANARY');
-      return source.getQuote(ticker);
+      return publicKrAlphaDailyQuote(ticker,(await source.read(ticker)).candles);
     },
     operation:()=>StockSignalScannerService.scan({
       memberId:'signal-intelligence-v3-public-only',
