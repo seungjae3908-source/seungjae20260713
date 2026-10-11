@@ -93,7 +93,11 @@ export function stageAutomaticPaperV3Epoch(input:Readonly<{
     ||!hex64.test(p.previous_settlement_digest_sha256)
     ||p.proposed_seed_krw!==1_000_000
     ||p.previous_operating_capital_krw!==s.operatingCapitalKrw
-    ||p.previous_locked_reserve_krw!==s.reserveKrw)
+    ||p.previous_locked_reserve_krw!==s.reserveKrw
+    // The minimum-order threshold is tied to the same server quote that
+    // declared the prior round exhausted. A different threshold cannot
+    // manufacture a second 1m wallet from a nearly funded old account.
+    ||p.minimum_entry_krw!==s.verifiedMinimumEntryKrw)
     add('AUTO_PAPER_V3_CAPITAL_PROOF_MISMATCH');
   const observed=Date.parse(p.observed_at);
   if(!Number.isFinite(observed)||!Number.isSafeInteger(s.nowMs)
