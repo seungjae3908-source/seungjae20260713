@@ -1144,7 +1144,7 @@ export function createPaperJournalRouter(
         storedPayloads, automationPayloads,
       );
       const externalReconciliation = reconcileScopedExternalJournalHistory(
-        paperMirrors.payloads, liveHistory.payloads,
+        paperMirrors.payloads, liveHistory.payloads, ownerId,
       );
       const journal = buildUnifiedTradeJournal(
         [...paperMirrors.payloads, ...externalReconciliation.payloads],
