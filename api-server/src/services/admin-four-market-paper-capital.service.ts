@@ -409,13 +409,13 @@ function projectFourMarketPaperCapital(
     dailyLosingTrades,
     settledTrades: seen.size, blockers: Object.freeze([...new Set(errors)]),
     settlementReady: errors.length === 0,
-    // Ordinary losses draw down actual available Paper equity. Never
-    // replenish the 1m seed or stop after a single small loss: five losing
-    // trades or the independent daily realized-loss limit are the blockers.
+    // PAPER-only continuous research: a fifth losing trade, losing streak,
+    // or a negative day never grants/removes simulated entry authority.
+    // The observed daily count/PnL remain intact for research and alerts.
+    // Never auto-replenish seed, borrow reserves or override proof failures:
+    // only independently settled positive operating capital can be spent.
     newEntriesAllowed: errors.length === 0
-      && operatingCapitalKrw > 0
-      && dailyLosingTrades < 5
-      && dailyNetPnlKrw > -(config.marketInitialKrw * 0.05),
+      && operatingCapitalKrw > 0,
     reserveWithdrawalAutomatic: false as const,
   });
 }
