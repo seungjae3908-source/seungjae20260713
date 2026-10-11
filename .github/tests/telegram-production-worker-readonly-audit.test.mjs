@@ -5,7 +5,7 @@ import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
-  readSignalV3Units, readSignalV3HealthOnce,
+  readSignalV3Units, readSignalV3HealthOnce, morningWindowProcessCoverage,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
 
@@ -112,6 +112,18 @@ test('ledger parser fails closed on empty/malformed/future and bounded entries',
   assert.equal(readStateFile('/etc/passwd','ignored.json','market',now).status,'UNSAFE_PATH');
 });
 
+test('Korea morning process coverage is an opportunity, not Telegram delivery proof',()=>{
+  const atNineKst=Date.parse('2026-10-11T00:00:00.000Z');
+  assert.equal(morningWindowProcessCoverage('2026-10-10T22:40:00.000Z',atNineKst),'FULL_WINDOW');
+  assert.equal(morningWindowProcessCoverage('2026-10-10T23:02:00.000Z',atNineKst),'PARTIAL_WINDOW');
+  assert.equal(morningWindowProcessCoverage('2026-10-10T23:11:00.000Z',atNineKst),'MISSED_WINDOW');
+  assert.equal(morningWindowProcessCoverage('2026-10-10T22:40:00.000Z',
+    Date.parse('2026-10-10T23:05:00.000Z')),'NOT_ELAPSED');
+  assert.equal(morningWindowProcessCoverage(null,atNineKst),'UNKNOWN');
+  assert.equal(morningWindowProcessCoverage('INVALID_PRIVATE_TIME',atNineKst),'UNKNOWN');
+  assert.equal(morningWindowProcessCoverage('2026-10-11T00:01:00.000Z',atNineKst),'UNKNOWN');
+});
+
 test('real PM2 flags and recent personal tick are observed without false delivery PASS',async()=>{
   const result=await observeProductionTelegram({
     ...safeSignalDiagnostics,
@@ -132,6 +144,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.signalHealth.status,'READY');
   assert.equal(result.signalUnits.timer,'ACTIVE');
   assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
+  assert.equal(result.morningWindowCoverage,'MISSED_WINDOW');
   assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v2');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);

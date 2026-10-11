@@ -91,6 +91,23 @@ message was delivered. If V3 is inactive or missing, any activation requires
 separate explicit authorization, and restored delivery still requires later
 real persisted receipts and member confirmation.
 
+## Morning 07:50–08:10 KST process opportunity (Draft #1821 consolidated)
+
+The PM2 process start time is compared against the current Korea-date
+morning briefing window using an explicit Asia/Seoul timezone:
+- FULL_WINDOW: current PM2 instance was running by 07:50 and remained present after 08:10.
+- PARTIAL_WINDOW: it started between 07:50 and 08:10.
+- MISSED_WINDOW: it started after the 08:10 deadline.
+- NOT_ELAPSED: the current day's 08:10 KST deadline has not passed.
+- UNKNOWN: no trustworthy PM2 start time or observation time.
+
+All labels mean **opportunity only**. Even FULL_WINDOW does NOT prove worker startup,
+runOnce execution, Bot API acceptance, a ledger write, or actual receipt. A missing
+ledger remains unresolved and earlier PM2 process activity cannot be inferred from
+the current instance. This richer status supersedes the overlapping #1821
+boolean while preserving its intended read-only diagnosis, alongside the more
+complete V3 HTTP /health and systemd unit statuses in this PR.
+
 ## Interpretation
 
 - A market report ledger entry means accepted OR duplicate-suppressed, not proof of a fresh Bot API message. Proof level is PERSISTED_LEDGER_ONLY.

@@ -124,6 +124,7 @@ jobs:
           const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           const keys=['schemaVersion','scope','mainSha','expectedDeployedSha',
             'pm2Sha','markerSha','pm2Online','exactDeployedIdentity','pm2StartedAt',
+            'morningWindowCoverage',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
             'roomBindingsValid','personal','marketBrief','signalSubscriber','signalSource',
             'signalHealth','signalUnits',
@@ -148,6 +149,7 @@ jobs:
             ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)||!safeIso(r.pm2StartedAt)
+            ||!['UNKNOWN','NOT_ELAPSED','FULL_WINDOW','PARTIAL_WINDOW','MISSED_WINDOW'].includes(r.morningWindowCoverage)
             ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
             ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE','HTTP_503',
               'HTTP_ERROR','INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
@@ -201,6 +203,7 @@ jobs:
                 '- Production PM2/marker: '+r.pm2Sha+' / '+r.markerSha,
                 '- PM2 online and exact identity: '+r.pm2Online+' / '+r.exactDeployedIdentity,
                 '- PM2 started at (UTC): '+(r.pm2StartedAt||'unknown'),
+                '- 07:50-08:10 KST process coverage (NOT a send receipt): '+r.morningWindowCoverage,
                 '- Telegram activation/market/personal/6 rooms: '+
                     [r.activationEnabled,r.marketWorkerConfigured,r.personalWorkerConfigured,
                      r.roomBindingsValid].join(' / '),
