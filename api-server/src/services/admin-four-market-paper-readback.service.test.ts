@@ -244,6 +244,29 @@ test('unknown tax and unbound or forged FX cannot mint 1m Paper capital or reser
   }
 });
 
+test('non-finite canonical Paper tax and fee receipts never mint compound capital', () => {
+  const valid = certifiedAutoPaperPair({
+    id:'invalid-amount',exchange:'kiwoom',market:'US',symbol:'AAPL',
+    entrySide:'buy',exitSide:'sell',entryPrice:100,exitPrice:120,
+    entryFx:1400,exitFx:1400,fxSource:'YAHOO:USDKRW=X',
+  });
+  for (const mutation of [
+    {feeAmount:Number.NaN}, {feeAmount:Number.POSITIVE_INFINITY},
+    {taxAmount:Number.NaN}, {taxAmount:Number.POSITIVE_INFINITY},
+  ]) {
+    const orders=valid.orders.map((order,i)=>i===1
+      ? {...order,...mutation} as TradingOrder : order);
+    const state=adminFourMarketPaperCapitalReadback({
+      ownerId:'owner-only',records:records(),plans:valid.plans,orders,nowMs:NOW,
+    });
+    const market=state.marketReadback.us_stock;
+    assert.equal(market.settlementReady,false);
+    assert.equal(market.operatingCapitalKrw,null);
+    assert.equal(market.reserveKrw,null);
+    assert.equal(market.newEntriesAllowed,false);
+  }
+});
+
 test('duplicate broker-facing Paper order identity cannot bind a second fill or mint reserves', () => {
   const valid = certifiedAutoPaperPair({
     id:'alias-collision',exchange:'kiwoom',market:'US',symbol:'AAPL',
