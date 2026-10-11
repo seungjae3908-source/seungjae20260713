@@ -13,7 +13,7 @@ export interface KrEntry {
   assetType: AssetType;
 }
 
-const KRX_URL = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
+export const KRX_FINDER_ENDPOINT = 'https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
 const KRX_REQUEST_TIMEOUT_MS = 15_000;
 
 interface FinderRow {
@@ -60,11 +60,12 @@ function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear()
 async function krxFinder(bld: string, parent?: AbortSignal): Promise<FinderRow[]> {
   const linked = linkedAbortSignal(parent);
   try {
-    const res = await fetch(KRX_URL, {
+    const res = await fetch(KRX_FINDER_ENDPOINT, {
       method: 'POST',
+      redirect: 'error', // never downgrade an official listing master to HTTP
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
+        Referer: 'https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
         'User-Agent': 'Mozilla/5.0',
       },
       body: `bld=${encodeURIComponent(bld)}&mktsel=ALL&searchText=`,
