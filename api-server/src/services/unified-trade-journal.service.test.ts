@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+// Load independent read-only Paper mirror and canonical adapter regressions
+// through an existing registered phase7 test entrypoint.
+import './automatic-paper-journal-mirror.service.test';
+import './trade-automation-unified-journal-adapter.test';
 import {
   AI_EXTERNAL_REVIEW_STATUS,
   JOURNAL_COST_SAFETY,

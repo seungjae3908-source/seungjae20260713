@@ -116,7 +116,7 @@ jobs:
             throw new Error('Comprehensive QA must isolate Telegram readiness behind the explicit opt-in');
           }
           if (!researchSpec.includes("getByTestId('capability-denied')")
-            || !researchSpec.includes('ADMIN_RESEARCH_CENTER_NOT_EVALUATED')) {
+            || !researchSpec.includes('RESEARCH_CENTER_NOT_EVALUATED: Production QA credential lacks canAccessBasicInfo')) {
             throw new Error('Research Center QA must distinguish membership-policy denial from product failure');
           }
           if (!config.includes("trace: 'off'")) {

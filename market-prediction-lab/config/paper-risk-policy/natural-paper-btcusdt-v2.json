@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "paper-risk-policy-human-approval-v1",
+  "recordId": "paper-risk-policy-approval:issue-1555-comment-6107837053",
+  "policyId": "NATURAL_PAPER_BTCUSDT_CRYPTO_FUTURES_V2",
+  "policyVersion": "v2",
+  "source": "REPOSITORY_OWNER_DIRECT_CONVERSATION_RECORDED_BY_CODEX",
+  "approvalIssue": 1555,
+  "approvalCommentId": 6107837053,
+  "approvedBy": "seungjae3908-source",
+  "approvalStatement": "모의매매는 7배니 새기준으로 인정해서 해",
+  "recordedAt": "2026-10-11T10:01:29Z",
+  "supersedesPolicyId": "NATURAL_PAPER_BTCUSDT_CRYPTO_FUTURES_V1",
+  "immutable": true,
+  "changeRule": "NEW_POLICY_VERSION_ONLY_NO_RETROSPECTIVE_MUTATION",
+  "marketScopes": ["CRYPTO_FUTURES"],
+  "directionScopes": ["LONG", "SHORT"],
+  "strategyScopes": [
+    "CRYPTO_FUTURES_SCALP_V1_LONG",
+    "CRYPTO_FUTURES_SCALP_V1_SHORT",
+    "CRYPTO_FUTURES_SWING_V1_LONG",
+    "CRYPTO_FUTURES_SWING_V1_SHORT",
+    "CRYPTO_FUTURES_POSITION_V1_LONG",
+    "CRYPTO_FUTURES_POSITION_V1_SHORT"
+  ],
+  "symbolScopes": ["BTCUSDT"],
+  "riskPercent": 0.5,
+  "requestedLeverage": 7,
+  "maximumLeverage": 7,
+  "marginMode": "isolated",
+  "economicEvidencePolicy": {
+    "futureNaturalPaperOnly": true,
+    "replayCredit": 0,
+    "backfillCredit": 0,
+    "syntheticCredit": 0,
+    "fixtureCredit": 0
+  },
+  "safety": {
+    "liveTrading": false,
+    "autoTrading": false,
+    "realOrderEnabled": false,
+    "privateTradingApiAllowed": false,
+    "executionAuthority": "NONE",
+    "productionDeployAuthority": false,
+    "stagingDeployAuthority": false
+  }
+}
