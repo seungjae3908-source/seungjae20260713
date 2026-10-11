@@ -121,7 +121,9 @@ activate() {
   APP_SHA_BEFORE="$(read_app_sha)"
   PREVIOUS_CURRENT="$(readlink -f "$CURRENT" 2>/dev/null || true)"
   ROLLBACK_ENV="$ROOT/.research-production-env-rollback-$$"
-  declare -a CORE_TIMERS=(
+  # EXIT runs after activate's local scope unwinds. Keep its fixed unit lists
+  # and previous enabled state available to the failure/rollback handler.
+  declare -ga CORE_TIMERS=(
     research-production-fast-historical.timer
     research-production-long-history.timer
     research-production-forward.timer
@@ -129,18 +131,18 @@ activate() {
     research-production-factory-status.timer
     research-production-maintenance.timer
   )
-  declare -a AI_TIMERS=(
+  declare -ga AI_TIMERS=(
     research-production-ai-review.timer
     research-production-video-discovery.timer
     research-production-approved-job-intake.timer
   )
-  declare -a AI_DAEMONS=(
+  declare -ga AI_DAEMONS=(
     research-production-workspace-worker.service
   )
-  declare -a WATCH_SERVICES=(
+  declare -ga WATCH_SERVICES=(
     research-production-market-watch.service
   )
-  declare -a ONESHOT_SERVICES=(
+  declare -ga ONESHOT_SERVICES=(
     research-production@fast-historical.service
     research-production@long-history.service
     research-production@forward.service
@@ -151,7 +153,7 @@ activate() {
     research-production-video-discovery.service
     research-production-approved-job-intake.service
   )
-  declare -A WAS_ENABLED=()
+  declare -gA WAS_ENABLED=()
   for timer in "${CORE_TIMERS[@]}" "${AI_TIMERS[@]}" "${AI_DAEMONS[@]}" "${WATCH_SERVICES[@]}"; do
     if "${SUDO[@]}" systemctl is-enabled --quiet "$timer" 2>/dev/null; then
       WAS_ENABLED["$timer"]=1
