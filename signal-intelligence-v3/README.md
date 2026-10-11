@@ -130,3 +130,19 @@ real futures setting is modified. A new bounded
 deadline and item-failure aggregate counts, never symbols, headers or payloads.
 A new true public run is required to determine whether the constraint solves
 the observed 60m failure; no guarantee of success from mock CI.
+
+## Draft: Crypto "green" candidate batch with invalid-data failures is blocked
+
+A genuine V3 Spot 1D public cycle had `CANDIDATES_AVAILABLE`, zero
+provider/timeouts, and `partial=false`, but its existing Crypto Scanner
+also reported one `invalid_data` failure (a fulfilled worker returning a
+null candidate, potentially because fewer than five candles were available).
+Previously that failure was concealed by the status classifier and the
+research cursor advanced. The isolated V3 classifier now requires an explicit
+failure array. It returns `BLOCKED_DATA` for any invalid-data/item-mapping
+row or `SEARCH_FAILURE` for provider errors/timeouts/malformed items,
+and holds the research cursor rather than silently skipping that symbol.
+Only a fully completed zero-failure source batch may advance and be adapted
+into Signal V3/Paper-ready candidates. No shared member/real execution code
+or profitability/quality threshold is relaxed. Missing candles must be
+verified from a genuine public provider; they cannot be manufactured.
