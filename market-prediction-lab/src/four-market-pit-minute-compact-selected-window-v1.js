@@ -242,7 +242,9 @@ function tradingDatesForChunk(market,w,start,end,stockTradingDates){
   if(stockTradingDates==null) return null;
   if(!Array.isArray(stockTradingDates)||stockTradingDates.length>36600)
     fail("PIT_COMPACT_STOCK_DATES_INVALID");
-  let before=0;
+  // A source calendar may start before the research reader's 1970 window.
+  // Older exchange-local dates are valid ordering context even when not selected.
+  let before=Number.NEGATIVE_INFINITY;
   for(const date of stockTradingDates){
     const ms=parseDay(date);
     // The server keeps ONE archive of exchange-local trading dates for
