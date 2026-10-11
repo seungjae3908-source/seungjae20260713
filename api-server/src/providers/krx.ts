@@ -21,6 +21,23 @@ interface FinderRow {
   codeName?: string;
   marketName?: string;
 }
+/** Finder backends can silently return 200 with an empty/malformed page,
+ * or one of two POSTs can fail while the other succeeds. Never certify a
+ * partial source pair as a whole KRX universe, or cache that as success.
+ * These conservative thresholds are only an outage guard, not market-wide
+ * coverage proof; full roster reconciliation is handled downstream.
+ */
+export function assertKrFinderSourcesReady(stocks: FinderRow[], products: FinderRow[]): void {
+  const validCount = (rows: FinderRow[]) => Array.isArray(rows)
+    ? rows.filter(row=>typeof row?.short_code==='string'
+      && /^[A-Z0-9]{6}$/u.test(row.short_code.trim().toUpperCase())
+      && typeof row.codeName==='string'
+      && row.codeName.trim().length>0).length : 0;
+  // KRX has thousands of stocks and hundreds of securities products.
+  // Fail closed for a missing/cut-off finder without echoing any symbols.
+  if(validCount(stocks)<1000 || validCount(products)<100)
+    throw new Error('KRX_FINDER_SOURCE_PAIR_INCOMPLETE');
+}
 
 function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear(): void } {
   const controller = new AbortController();
@@ -70,6 +87,7 @@ export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
       krxFinder('dbms/comm/finder/finder_stkisu', signal), // all listed stocks
       krxFinder('dbms/comm/finder/finder_secuprodisu', signal), // ETF + ETN products
     ]);
+    assertKrFinderSourcesReady(stocks,products);
     const out: KrEntry[] = [];
     for (const s of stocks) {
       if (!s.short_code || !s.codeName) continue;
