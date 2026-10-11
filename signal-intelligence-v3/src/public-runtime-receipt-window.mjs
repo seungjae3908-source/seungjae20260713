@@ -22,6 +22,10 @@ export function createPublicReadOnlyRuntimeReceipt({
   if(producerSucceeded){
     if(snapshot?.profile?.surface!=='RESEARCH_V3')
       throw Error('PUBLIC_RUNTIME_RECEIPT_RESEARCH_SURFACE_REQUIRED');
+    const generatedAtMs=Date.parse(String(snapshot?.generatedAt??''));
+    if(!Number.isFinite(generatedAtMs)||generatedAtMs<startedAtMs
+      ||generatedAtMs>finishedAtMs)
+      throw Error('PUBLIC_RUNTIME_RECEIPT_OUT_OF_CYCLE_SNAPSHOT');
     health=summarizePublicCycleHealth(snapshot,serviceSha,finishedAtMs);
   }
   const totals=health?.markets??{};

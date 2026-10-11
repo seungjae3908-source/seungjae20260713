@@ -20,7 +20,10 @@ import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-o
 import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } from '../src/public-research-rotation.mjs';
 import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/public-roster-integrity.mjs';
 import {createPublicV3CryptoProviders} from '../src/public-v3-crypto-providers.mjs';
-import {createPublicStockSourceAudit} from '../src/public-stock-source-audit.mjs';
+import {
+  createPublicStockSourceAudit,attachPublicStockSourceAuditToError,
+  readPublicStockSourceAuditFromError,
+} from '../src/public-stock-source-audit.mjs';
 import {choosePublicStockCandles,choosePublicStockQuote} from '../src/public-stock-source-selection.mjs';
 import {createPublicKrAlphaHistoricalDailyFeed} from '../src/public-kr-alpha-historical-daily.mjs';
 import {publicKrAlphaDailyQuote} from '../src/public-kr-alpha-daily.mjs';
@@ -313,7 +316,7 @@ async function withStockPublicOnly(lane, operation) {
       });
     },
     operation: () => operation(targetUniverse),
-  });
+  }).catch((error)=>{throw attachPublicStockSourceAuditToError(error,audit.snapshot());});
   return {...observed,publicStockSourceAudit:audit.snapshot()};
 }
 
@@ -611,6 +614,9 @@ async function main() {
         providerErrors: thrownProviderMetrics?.providerErrors ?? null,
         timeouts: thrownProviderMetrics?.timeouts ?? null,
         thrownProviderMetrics,
+        // Preserve safe counters even when the Scanner throws before a
+        // normal response. Absent counters stay null, never a fake zero.
+        publicStockSourceAudit: readPublicStockSourceAuditFromError(error),
         error: error instanceof Error ? error.message.split(':')[0] : 'UNKNOWN',
       });
     }

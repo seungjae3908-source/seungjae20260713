@@ -57,3 +57,64 @@ export function createPublicStockSourceAudit({now=Date.now}={}){
   });},
  });
 }
+
+
+// Preserve bounded public-source failure buckets even when the stock scanner
+// throws before returning its response. The Error never carries provider
+// bodies, URLs, ticker identities or credentials into exported diagnostics.
+const PUBLIC_STOCK_ERROR_AUDIT=Symbol('public-v3-stock-failure-audit');
+const CANDLE_BUCKET_FIELDS=Object.freeze([
+  'fetched','errors','empty','shortLt20','shortLt40','invalidOhlc',
+  'hasLateOrFuture','lastBarLagGteOneDay','lastBarLagGteFiveDays',
+]);
+const QUOTE_BUCKET_FIELDS=Object.freeze(['fetched','errors','invalidPrice']);
+const FAILURE_BUCKET_FIELDS=Object.freeze(['HTTP_429','HTTP_4XX','HTTP_5XX','TIMEOUT','OTHER']);
+const validCount=x=>Number.isSafeInteger(x)&&x>=0;
+function auditedCounters(input,keys){
+  if(!input||typeof input!=='object'||Array.isArray(input))return null;
+  const output={};
+  for(const key of keys){
+    if(!validCount(input[key]))return null;
+    output[key]=input[key];
+  }
+  return Object.freeze(output);
+}
+function sanitizedStockAudit(input){
+  if(!input||input.version!==PUBLIC_STOCK_SOURCE_AUDIT_VERSION
+    ||input.symbolsRedacted!==true||input.fullMarketVerified!==false
+    ||input.executionAuthority!=='NONE'
+    ||!input.candles||typeof input.candles!=='object')return null;
+  const candles={};
+  for(const tf of TF){
+    const cleaned=auditedCounters(input.candles[tf],CANDLE_BUCKET_FIELDS);
+    if(!cleaned)return null;
+    candles[tf]=cleaned;
+  }
+  const quote=auditedCounters(input.quote,QUOTE_BUCKET_FIELDS);
+  const failures=auditedCounters(input.sanitizedProviderFailures,FAILURE_BUCKET_FIELDS);
+  if(!quote||!failures)return null;
+  // Whitelist and deep-freeze only numerical statistics from our adapter.
+  return Object.freeze({
+    version:PUBLIC_STOCK_SOURCE_AUDIT_VERSION,
+    candles:Object.freeze(candles),quote,
+    sanitizedProviderFailures:failures,
+    symbolsRedacted:true,fullMarketVerified:false,executionAuthority:'NONE',
+  });
+}
+export function attachPublicStockSourceAuditToError(error,audit){
+  if(!(error instanceof Error))return error;
+  const safe=sanitizedStockAudit(audit);
+  if(!safe)return error;
+  try{
+    Object.defineProperty(error,PUBLIC_STOCK_ERROR_AUDIT,{
+      value:safe,enumerable:false,configurable:false,writable:false,
+    });
+  }catch{
+    // A frozen third-party error stays unmodified and fail-closed.
+  }
+  return error;
+}
+export function readPublicStockSourceAuditFromError(error){
+  return error instanceof Error
+    ?sanitizedStockAudit(error[PUBLIC_STOCK_ERROR_AUDIT]):null;
+}
