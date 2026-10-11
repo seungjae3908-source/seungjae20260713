@@ -18,8 +18,12 @@ test('Draft automatic V3 epochs are 4-market, append-only virtual seed STAGED no
     'real_order_enabled','previous_history_preserved',
     'virtual_seed_krw=1000000','locked_reserve_seed_krw=0',
   ])assert.ok(sql.includes(part),part);
-  assert.match(sql,/foreign key\(proposal_id,user_id,owner_role,mode,market,next_round_number,/i);
-  assert.match(sql,/previous_settlement_digest_sha256,ending_cause/i);
+  // Every successor must be bound to the exact historical epoch AND
+  // operating/reserve amounts. Matching only owner+market+digest is unsafe.
+  assert.match(sql,/foreign key\(proposal_id,user_id,owner_role,mode,market,\s*source_epoch_id,next_round_number,/i);
+  assert.match(sql,/previous_settlement_digest_sha256,ending_cause,\s*previous_residual_operating_krw,previous_locked_reserve_krw\)/i);
+  assert.match(sql,/references public\.paper_research_round_proposals\(\s*proposal_id,user_id,owner_role,trading_mode,market,\s*current_epoch_id,next_round_number,/i);
+  assert.match(sql,/previous_settlement_digest_sha256,ending_cause,\s*previous_operating_capital_krw,previous_locked_reserve_krw\s*\)/i);
   assert.match(sql,/unique \(user_id,owner_role,mode,market,source_epoch_id\)/i);
   assert.match(sql,/unique \(user_id,owner_role,mode,market,next_round_number\)/i);
   assert.doesNotMatch(sql,/update\s+public\.paper_accounts/i);

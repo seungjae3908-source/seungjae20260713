@@ -31,6 +31,7 @@ function fixture(market:AdminPaperMarket='crypto_futures',
     },
     verifiedOwner:{
       ownerId:OWNER,accountId:acc,market,
+      strategyId:'user-selected-strategy',
       strategyCandidateId:'validated-research-candidate-01',
       strategyValidatedAtMs:NOW-120_000,
       strategySourceId:'canonical-owner-evidence',
@@ -118,6 +119,10 @@ test('quote source/owner/mode/candidate mismatches, forged wallet or absent RLS 
   blocks(change(fixture(),'selected',{mode:'automatic'}),'PAPER_CYCLE_IDENTITY_INVALID');
   blocks(change(fixture(),'selected',{ownerId:'other-user'}),'PAPER_CYCLE_OWNER_OR_STRATEGY_PROOF_REQUIRED');
   blocks(change(fixture(),'verifiedOwner',{strategyCandidateId:'other'}),
+    'PAPER_CYCLE_OWNER_OR_STRATEGY_PROOF_REQUIRED');
+  blocks(change(fixture(),'selected',{strategyId:'forged-strategy'}),
+    'PAPER_CYCLE_OWNER_OR_STRATEGY_PROOF_REQUIRED');
+  blocks(change(fixture(),'verifiedOwner',{strategyId:'unrelated-strategy'}),
     'PAPER_CYCLE_OWNER_OR_STRATEGY_PROOF_REQUIRED');
   blocks(change(fixture(),'verifiedOwner',{walletReadbackReady:false}),
     'PAPER_CYCLE_OWNER_OR_STRATEGY_PROOF_REQUIRED');
@@ -238,4 +243,20 @@ test('loss recovered before 50/50 compounding; locked reserve never subsidizes f
     requestedNotionalKrw:6_400_000,leverage:7,
   });
   blocks(overMargin,'PAPER_CYCLE_INSUFFICIENT_OPERATING_CAPITAL');
+});
+
+test('manual Paper journal separates entry-price and as-of FX effects without claiming signal causality',()=>{
+  const f=fixture('us_stock');
+  const receipt=evaluateManualFourMarketPaperClosedCycle(change(f,'costs',{
+    exitFxKrwPerQuote:1450,
+  }));
+  assert.equal(receipt.status,'RESEARCH_SIMULATED_CLOSED',String(receipt.blockers));
+  const price=Number(receipt.journal?.priceMovementKrw);
+  const fx=Number(receipt.journal?.fxTranslationKrw);
+  assert.ok(price>0);
+  assert.ok(fx>0);
+  assert.ok(Math.abs(price+fx-receipt.grossPnlKrw!)<=0.02);
+  assert.equal(receipt.journal?.pnlAttributionBasis,'PRICE_FX_COST_ARITHMETIC_ONLY');
+  assert.equal(receipt.journal?.causalImpactProven,false);
+  assert.equal(receipt.actualPaperLedgerWritten,false);
 });
