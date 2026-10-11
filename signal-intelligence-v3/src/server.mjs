@@ -20,7 +20,24 @@ if (!Number.isSafeInteger(MAX_STATE_AGE_MS) || MAX_STATE_AGE_MS < 1000 || MAX_ST
   throw new Error('SIGNAL_INTELLIGENCE_MAX_STATE_AGE_INVALID');
 if (PRODUCER_PATH && (!isAbsolute(PRODUCER_PATH) || !PRODUCER_PATH.endsWith('.mjs'))) throw new Error('SIGNAL_INTELLIGENCE_PRODUCER_PATH_INVALID');
 
-let cache = { mtimeMs: -1, snapshot: null, loadedAt: null, error: 'SNAPSHOT_NOT_READY' };
+const EMPTY_STAT = Object.freeze({mtimeMs:-1,ctimeMs:-1,ino:null,size:null});
+let cache = {...EMPTY_STAT,snapshot:null,loadedAt:null,error:'SNAPSHOT_NOT_READY'};
+function sameSnapshotStat(a,b){
+  return a?.mtimeMs===b?.mtimeMs && a?.ctimeMs===b?.ctimeMs
+    && a?.ino===b?.ino && a?.size===b?.size;
+}
+function safeSnapshotError(error){
+  if(error?.code==='ENOENT')return 'SNAPSHOT_NOT_READY';
+  if(error?.code==='EACCES'||error?.code==='EPERM')
+    return 'SNAPSHOT_READ_PERMISSION_DENIED';
+  if(error?.code==='EISDIR')return 'SNAPSHOT_NOT_A_FILE';
+  if(error instanceof SyntaxError)return 'SNAPSHOT_INVALID_JSON';
+  if(error?.message==='SNAPSHOT_SERVICE_SHA_MISMATCH')
+    return 'SNAPSHOT_SERVICE_SHA_MISMATCH';
+  if(error?.message==='SNAPSHOT_FILE_CHANGED_DURING_READ')
+    return 'SNAPSHOT_FILE_CHANGED_DURING_READ';
+  return 'SNAPSHOT_CONTRACT_OR_READ_FAILED';
+}
 let rescanRunning = false;
 let lastRescanStartedAt = null;
 let lastRescanFinishedAt = null;
@@ -30,20 +47,24 @@ let lastRescanOutcome = null;
 async function loadSnapshot() {
   try {
     const metadata = await stat(STATE_FILE);
-    if (cache.snapshot && cache.mtimeMs === metadata.mtimeMs) return cache;
-    const parsed = JSON.parse(await readFile(STATE_FILE, 'utf8'));
+    if(cache.snapshot && sameSnapshotStat(cache,metadata))return cache;
+    const body=await readFile(STATE_FILE,'utf8');
+    const verified=await stat(STATE_FILE);
+    // Atomic producer rename must not silently swap snapshot in flight.
+    if(!sameSnapshotStat(metadata,verified))
+      throw new Error('SNAPSHOT_FILE_CHANGED_DURING_READ');
+    const parsed=JSON.parse(body);
     assertSignalIntelligenceV3Snapshot(parsed);
     // Never present a previous release's snapshot under this service SHA.
     // The current public producer stamps every snapshot with its exact head.
     if (parsed.serviceSha !== SERVICE_SHA) throw new Error('SNAPSHOT_SERVICE_SHA_MISMATCH');
-    cache = { mtimeMs: metadata.mtimeMs, snapshot: parsed, loadedAt: new Date().toISOString(), error: null };
+    cache = {mtimeMs:verified.mtimeMs,ctimeMs:verified.ctimeMs,ino:verified.ino,size:verified.size,snapshot:parsed,loadedAt:new Date().toISOString(),error:null};
     return cache;
   } catch (error) {
     cache = {
-      mtimeMs: -1,
-      snapshot: null,
-      loadedAt: new Date().toISOString(),
-      error: error instanceof Error ? error.message.split(':')[0] : 'SNAPSHOT_LOAD_FAILED',
+      ...EMPTY_STAT,snapshot:null,loadedAt:new Date().toISOString(),
+      // Never expose raw JSON snippets, filesystem paths or private contents.
+      error:safeSnapshotError(error),
     };
     return cache;
   }
