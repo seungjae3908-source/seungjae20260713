@@ -271,6 +271,11 @@ jobs:
               raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))
           PY
 
+      - name: Verify snapshot republish test stays in the bounded checker
+        shell: bash
+        run: |
+          grep -Fx '  market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js' .github/scripts/check-paper-forward-bounded-diff.sh
+
       - name: Require bounded Paper and four-market backtester diff
         shell: bash
         run: bash .github/scripts/check-paper-forward-bounded-diff.sh
