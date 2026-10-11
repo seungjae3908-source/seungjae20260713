@@ -334,3 +334,19 @@ Even a completed 4,010-code eligible KRX traversal cannot claim the
 membership can change at the same count, so this is **cursor-only
 research progress**, not unique-instrument OOS proof. No new calls
 or runtime/trading privileges.
+
+## Draft: safe cursor recovery after exchange delistings shrink the roster
+
+The V3 cursor is persisted across cycles, while a fresh KRX/Nasdaq/Upbit/
+Bitget roster may become smaller after delistings. The shared scanners
+clamp an out-of-range cursor to the new total and complete zero items;
+without recovery V3 would hold the OLD cursor forever and never reach
+the surviving symbols. `recoverShrunkPublicV3Cursor` now resets only
+when the genuinely public, same-market, nonstale roster has plausible
+size and zero reported provider errors/timeouts. The recovery cycle
+is explicitly `BLOCKED_DATA` /
+`ROSTER_SHRUNK_RESTART_RESEARCH_ONLY`: retains prior research,
+does not adapt or announce candidates, does not claim any roster PASS,
+and does not grant Paper/Live authority. Curated/last-good/stale,
+undersized, malformed and failed source pages may NOT silently rewind.
+No extra requests or private provider operations are introduced.

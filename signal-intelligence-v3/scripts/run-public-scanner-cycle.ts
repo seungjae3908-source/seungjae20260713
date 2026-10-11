@@ -32,6 +32,7 @@ import { evaluateScannerDataQuality } from '../../api-server/src/services/scanne
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
+  recoverShrunkPublicV3Cursor,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
   publicV3CryptoBatchSize,
   summarizePublicV3Execution,
@@ -416,7 +417,14 @@ async function main() {
       const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
-      const status = laneStatus(response);
+      // Delistings may shrink the full eligible roster below the cursor
+      // persisted by a previous cycle. A zero-work clamped page would
+      // otherwise pin this lane forever. Never use a fallback/stale/short
+      // provider page to reset or to mint a new signal.
+      const recovery = recoverShrunkPublicV3Cursor({
+        market:lane.market,cursor,response,
+      });
+      const status = recovery ? 'BLOCKED_DATA' : laneStatus(response);
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
@@ -443,7 +451,8 @@ async function main() {
           };
         }
       }
-      const rotation = decidePublicCycleCursor({ response, status, cursor });
+      const rotation = recovery
+        ?? decidePublicCycleCursor({ response, status, cursor });
       // Rotation may advance a completed, zero-error PARTIAL/UNTRUSTED batch
       // for research coverage only. These rows NEVER enter the candidate
       // adapter or grant Paper/Live entry authority.
