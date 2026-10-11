@@ -132,7 +132,10 @@ export function sameAutomaticPaperV3Epoch(
 ):boolean{
   for(const [key,value] of Object.entries(expected)){
     if(typeof value==='number'){
-      if(!Number.isFinite(Number(found[key]))||Number(found[key])!==value)return false;
+      const got=found[key];
+      if((typeof got!=='number'&&typeof got!=='string')
+        ||(typeof got==='string'&&!got.trim())
+        ||!Number.isFinite(Number(got))||Number(got)!==value)return false;
     }else if(found[key]!==value)return false;
   }
   return true;
