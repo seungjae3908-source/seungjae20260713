@@ -73,7 +73,9 @@ export function partitionAutomaticLiveProviderPositions(
   for (const position of snapshot.positions) {
     if (snapshot.provider === 'upbit' && symbolKey(position.symbol) === 'KRW') continue;
     if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
-    if (Math.abs(position.quantity) <= TOLERANCE) continue;
+    // Even broker dust is protected manual property. Tolerance is for AUTO
+    // reconciliation, never permission to buy into or sell a manual holding.
+    if (position.quantity === 0) continue;
     if (snapshot.provider !== 'bitget' && position.quantity < 0) throw new Error('BACKGROUND_LIVE_CASH_SHORT_POSITION_FORBIDDEN');
     const key = `${position.market.toUpperCase()}:${symbolKey(position.symbol)}`;
     if (!symbolKey(position.symbol) || seen.has(key)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_AMBIGUOUS');
