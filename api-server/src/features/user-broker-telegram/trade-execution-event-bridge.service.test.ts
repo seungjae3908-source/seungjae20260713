@@ -379,9 +379,16 @@ test('four-market Paper simulated entry→reducing exit→canonical Journal→Te
     await trading.appendEvent(eventFixture(exitOrder,
       'four-exit-event-' + index,'ACCEPTED','FILLED','2026-08-12T00:00:04.000Z'));
     const { service, integrationRepository, portfolio, transport } = await linkedService();
+    // A futures Paper recipient requires the real futures entitlement.
+    // Never widen a junior member's permission merely to make a QA mock pass.
+    integrationRepository.setMemberProfile(owner, {
+      status: 'approved', membership_level: 'regular', is_active: true,
+      role: 'user', membership_expires_at: null,
+      permissions_updated_at: '2026-08-12T00:00:00.000Z',
+    });
     const bridge = new TradeExecutionEventBridgeService(trading,service);
-    const syncEntry = await bridge.syncAutomaticOrder(owner,'associate',entryOrder.id);
-    const syncClose = await bridge.syncAutomaticOrder(owner,'associate',exitOrder.id);
+    const syncEntry = await bridge.syncAutomaticOrder(owner,'regular',entryOrder.id);
+    const syncClose = await bridge.syncAutomaticOrder(owner,'regular',exitOrder.id);
     assert.equal(syncEntry.inserted,1,market.broker);
     assert.equal(syncClose.inserted,1,market.broker);
     assert.equal(syncEntry.deliveryQueued,1);
@@ -399,7 +406,7 @@ test('four-market Paper simulated entry→reducing exit→canonical Journal→Te
     const stored=await integrationRepository.listDeliveries(owner);
     assert.equal(stored.filter(x=>x.state==='SENT').length,2);
     assert.equal(transport.sent.length,2);
-    assert.equal((await bridge.syncAutomaticOrder(owner,'associate',exitOrder.id)).inserted,0);
+    assert.equal((await bridge.syncAutomaticOrder(owner,'regular',exitOrder.id)).inserted,0);
     assert.equal((await integrationRepository.listDeliveries(owner)).length,2);
     assert.equal((await trading.listOrders(owner)).length,2);
     await assert.rejects(()=>bridge.syncAutomaticOrder('user-b','associate',exitOrder.id),
