@@ -38,7 +38,8 @@ test('trading workspace keeps Auto and Paper routes separate with compact four-m
   for (const book of ['MANUAL', 'AUTO_REAL', 'AUTO_PAPER']) expect(journal).toContain(book);
   expect(auto).toContain('selectedMarket={market}');
   expect(auto).toContain("initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'");
-  expect(paper).toContain('<AutoTradingPage initialMode="paper" />');
+  expect(paper).toContain('<AutoTradingPage key={search} initialMode="paper"');
+  expect(paper).toContain("paperOrigin={new URLSearchParams(search).get('kind') === 'manual' ? 'manual' : 'automatic'}");
   expect(settings).toContain('selectedMarket?: Market');
   expect(settings).toContain('visibleMarkets');
   expect(settings).toContain('visibleExchanges');
