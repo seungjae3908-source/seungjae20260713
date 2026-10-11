@@ -13,6 +13,7 @@ STAGING_BASE_URL="${STAGING_BASE_URL:-}"
 STAGING_SUPABASE_URL="${STAGING_SUPABASE_URL:-}"
 STAGING_SUPABASE_ANON_KEY="${STAGING_SUPABASE_ANON_KEY:-}"
 STAGING_SUPABASE_SECRET_KEY="${STAGING_SUPABASE_SECRET_KEY:-}"
+STAGING_RELEASE_SCOPE="${STAGING_RELEASE_SCOPE:-automation_research}"
 STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="${STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"
 STAGING_FAILPOINT="${STAGING_FAILPOINT:-}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/seungjae-staging-releases}"
@@ -36,7 +37,12 @@ fail() { echo "[staging] $1" >&2; exit "${2:-1}"; }
 [[ -n "$STAGING_BASE_URL" ]] || fail 'STAGING_BASE_URL is required' 7
 [[ "$STAGING_BASE_URL" != *'lsj119.duckdns.org'* ]] || fail 'production URL is forbidden' 8
 [[ -z "$STAGING_FAILPOINT" || "$STAGING_FAILPOINT" == after-promotion ]] || fail 'unknown staging failpoint' 9
-[[ "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'staging Paper snapshot publisher binding SHA-256 is required' 22
+[[ "$STAGING_RELEASE_SCOPE" == automation_research || "$STAGING_RELEASE_SCOPE" == auto_live ]] || fail 'unknown staging release scope' 21
+if [[ "$STAGING_RELEASE_SCOPE" == automation_research ]]; then
+  [[ "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'staging Paper snapshot publisher binding SHA-256 is required' 22
+else
+  [[ -z "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" ]] || fail 'auto_live staging must not receive a Paper snapshot publisher binding' 22
+fi
 [[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_DIR/paper-forward/paper-state-v2.json" ]] || fail 'staging Paper snapshot path escaped protected state' 23
 
 SUPABASE_VALUE_COUNT=0
@@ -53,7 +59,9 @@ for command_name in git node pnpm pm2 curl flock df awk rsync tar sha256sum sort
 done
 
 mkdir -p "$STAGING_DIR" "$RELEASE_ROOT" "$BACKUP_ROOT" "$STATE_DIR" "$(dirname "$LOCK_FILE")"
-install -d -m 700 "$PAPER_STATE_DIR"
+if [[ "$STAGING_RELEASE_SCOPE" == automation_research ]]; then
+  install -d -m 700 "$PAPER_STATE_DIR"
+fi
 if [[ "${STAGING_LOCK_HELD:-}" != 1 ]]; then
   set +e
   flock --close --nonblock --conflict-exit-code 200 "$LOCK_FILE" env STAGING_LOCK_HELD=1 "$0" "$@"
@@ -144,9 +152,11 @@ write_runtime_env() {
     printf 'APP_ENV=staging\n'
     printf 'DEPLOY_SHA=%s\n' "$deploy_sha"
     printf 'BACKGROUND_WORKERS_ENABLED=false\n'
-    printf 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%s\n' "$PAPER_STATE_SNAPSHOT_PATH"
-    printf 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%s\n' "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
-    printf 'PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=%s\n' "$PAPER_STATE_MAXIMUM_AGE_MS"
+    if [[ "$STAGING_RELEASE_SCOPE" == automation_research ]]; then
+      printf 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%s\n' "$PAPER_STATE_SNAPSHOT_PATH"
+      printf 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%s\n' "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
+      printf 'PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=%s\n' "$PAPER_STATE_MAXIMUM_AGE_MS"
+    fi
     [[ -n "$STAGING_SUPABASE_URL" ]] && printf 'SUPABASE_URL=%s\n' "$STAGING_SUPABASE_URL"
     [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] && printf 'SUPABASE_ANON_KEY=%s\n' "$STAGING_SUPABASE_ANON_KEY"
     [[ -n "$STAGING_SUPABASE_SECRET_KEY" ]] && printf 'SUPABASE_SECRET_KEY=%s\n' "$STAGING_SUPABASE_SECRET_KEY"
@@ -268,19 +278,29 @@ git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
 
 (
   cd "$RELEASE_DIR/api-server"
+  CANARY_ENV=(
+    "PORT=$STAGING_CANARY_PORT"
+    "API_PORT=$STAGING_CANARY_PORT"
+    "NODE_ENV=production"
+    "APP_ENV=staging"
+    "DEPLOY_SHA=$TARGET_SHA"
+    "BACKGROUND_WORKERS_ENABLED=false"
+    "SUPABASE_URL=$STAGING_SUPABASE_URL"
+    "SUPABASE_ANON_KEY=$STAGING_SUPABASE_ANON_KEY"
+    "SUPABASE_SECRET_KEY=$STAGING_SUPABASE_SECRET_KEY"
+  )
+  if [[ "$STAGING_RELEASE_SCOPE" == automation_research ]]; then
+    CANARY_ENV+=(
+      "PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=$PAPER_STATE_SNAPSHOT_PATH"
+      "PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
+      "PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=$PAPER_STATE_MAXIMUM_AGE_MS"
+    )
+  fi
   nohup env \
-    PORT="$STAGING_CANARY_PORT" \
-    API_PORT="$STAGING_CANARY_PORT" \
-    NODE_ENV=production \
-    APP_ENV=staging \
-    DEPLOY_SHA="$TARGET_SHA" \
-    BACKGROUND_WORKERS_ENABLED=false \
-    PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH" \
-    PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
-    PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS="$PAPER_STATE_MAXIMUM_AGE_MS" \
-    SUPABASE_URL="$STAGING_SUPABASE_URL" \
-    SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
-    SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
+    -u PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH \
+    -u PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 \
+    -u PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS \
+    "${CANARY_ENV[@]}" \
     node --enable-source-maps ./dist/index.mjs >"$CANARY_LOG" 2>&1 &
   echo $! > "$RELEASE_DIR/.canary.pid"
 )
