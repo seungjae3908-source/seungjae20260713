@@ -165,7 +165,8 @@ test('simulated reducing FILLED transition persists only server-issued bound fun
   const cert=await issueProtectedPaperFundingCertificate(req(v));
   assert.ok(cert);
   const repository=new InMemoryTradingRepository();
-  const pending={...v.exitOrder,state:'ACCEPTED' as const,exchangeOrderId:null};
+  const pending={...v.exitOrder,state:'ACCEPTED' as const,exchangeOrderId:null,
+    updatedAt:new Date(v.now-60_000).toISOString()};
   await repository.savePlan(v.entryPlan);
   await repository.savePlan(v.exitPlan);
   await repository.saveOrder(v.entryOrder);
@@ -175,9 +176,11 @@ test('simulated reducing FILLED transition persists only server-issued bound fun
     exchangeOrderId:'paper-exit',filledQuantity:2,averageFillPrice:102,
     feeAmount:0.1,feeCurrency:'USDT',
     paperFundingSettlementEvidence:cert,
+    paperFillObservedAt:cert.coveredThroughAt,
   });
   const persisted=await repository.getOrder(OWNER,pending.id);
   assert.equal(persisted?.paperFundingSettlementEvidence?.eventDigest,cert.eventDigest);
+  assert.equal(persisted?.updatedAt,cert.coveredThroughAt);
   const forgedRepo=new InMemoryTradingRepository();
   await forgedRepo.savePlan(v.entryPlan);
   await forgedRepo.savePlan(v.exitPlan);
@@ -189,4 +192,17 @@ test('simulated reducing FILLED transition persists only server-issued bound fun
     paperFundingSettlementEvidence:structuredClone(cert),
   });
   assert.equal((await forgedRepo.getOrder(OWNER,forged.id))?.paperFundingSettlementEvidence??null,null);
+});
+
+test('delayed complete funding history is allowed within a bounded 120s attestation window only', async () => {
+  const v = setup();
+  const afterThirtySeconds = await issueProtectedPaperFundingCertificate(req(v,{
+    exitAtMs: v.now - 30_000,
+  }));
+  assert.ok(afterThirtySeconds);
+  assert.equal(Date.parse(afterThirtySeconds.coveredThroughAt),v.now-30_000);
+  const tooOld = await issueProtectedPaperFundingCertificate(req(v,{
+    exitAtMs: v.now - 121_000,
+  }));
+  assert.equal(tooOld,null);
 });
