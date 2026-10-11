@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './paper-flat-recovery-backend.test';
+import './paper-trade-review.test';
 import { applyPaperTradingAction, createPaperTradingState } from '../../../api-server/src/services/paper-trading-engine.service';
 import { manualCanonicalFixture } from '../../../api-server/src/services/manual-paper-canonical-contract.fixture';
 import { manualPaperEvidenceSha256 } from '../../../api-server/src/services/manual-paper-canonical-contract.service';
