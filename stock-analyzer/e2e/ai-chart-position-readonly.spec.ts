@@ -1476,7 +1476,7 @@ test('AI Chart keeps entry approval and order management available when the sele
 
 
 for (const viewport of [
-  { width: 768, height: 1024, mobileTabs: true },
+  { width: 768, height: 1024, mobileTabs: false },
   { width: 1024, height: 900, mobileTabs: false },
 ] as const) {
   test(`AI Chart cockpit fits ${viewport.width}px without horizontal overflow`, async ({ page, context }) => {
