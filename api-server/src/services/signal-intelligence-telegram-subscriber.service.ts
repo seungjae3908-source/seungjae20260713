@@ -1,7 +1,10 @@
 import path from 'node:path';
 import { constants as fileConstants } from 'node:fs';
-import { lstat, open, mkdir, rename, writeFile } from 'node:fs/promises';
+import { lstat, open, mkdir, rename } from 'node:fs/promises';
 import { logger } from '../lib/logger';
+import {boundedTelegramV3Json,validTelegramV3CurrentSource,
+ verifiedTelegramV3PageCount}
+ from './telegram-v3-current-source.service';
 import {
   telegramMarketRoomChatId,
   telegramMarketRoomForLane,
@@ -39,6 +42,7 @@ type V3Event = {
 
 type V3Snapshot = {
   serviceSha: string;
+  generatedAt: string;
   safety: {
     executionAuthority: 'NONE';
     privateTradingApiAllowed: false;
@@ -53,10 +57,13 @@ type WatchlistDeliverer = typeof deliverMemberWatchlistTelegramForSignal;
 
 export type SignalTelegramSourceStatus = 'NOT_CHECKED' | 'READY' | 'HTTP_503'
   | 'HTTP_ERROR' | 'INVALID_RESPONSE' | 'UNREACHABLE' | 'TIMEOUT'
-  | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED' | 'OVERLAP';
+  | 'UNSAFE_ENDPOINT' | 'LEDGER_UNREADABLE' | 'PROCESSING_FAILED'
+  | 'SOURCE_DATA_BLOCKED' | 'OVERLAP';
 export type SignalTelegramRunResult = {
-  attempted: number; delivered: number; deduped: number;
-  skipped: number; failed: number; sourceStatus: SignalTelegramSourceStatus;
+  attempted: number; delivered: number; queued: number;
+  publicDelivered: number; personalDelivered: number; personalQueued: number;
+  deduped: number; skipped: number; failed: number;
+  sourceStatus: SignalTelegramSourceStatus;
 };
 
 function boundedInterval(value: unknown): number {
@@ -312,9 +319,22 @@ export class SignalIntelligenceTelegramDeliveryState {
 
   async ready(): Promise<void> { await this.load(); }
 
-  async has(key: string): Promise<boolean> {
+  async has(key: string, now = new Date()): Promise<boolean> {
     await this.load();
-    return this.delivered.has(key);
+    if (!key.startsWith('signal-intelligence-v3:') || key.length > 1024
+      || !Number.isFinite(now.getTime())) throw new Error(LEDGER_ERROR);
+    const at = this.delivered.get(key);
+    if (!at) return false;
+    const when = Date.parse(at);
+    // A future-dated receipt is unsafe clock/ledger evidence: never use it
+    // to suppress a real current event or to silently permit a replay.
+    if (!Number.isFinite(when) || when > now.getTime() + 5_000) {
+      this.blocked = true;
+      throw new Error(LEDGER_ERROR);
+    }
+    // The existing 14-day duplicateWindowMs must apply when checking,
+    // not only when a DIFFERENT key happens to be marked and pruned.
+    return when >= now.getTime() - MAX_DELIVERED_AGE_MS;
   }
 
   async mark(key: string, now: Date): Promise<void> {
@@ -329,9 +349,22 @@ export class SignalIntelligenceTelegramDeliveryState {
     try {
       await mkdir(path.dirname(this.file), { recursive: true });
       const temp = `${this.file}.${process.pid}.tmp`;
-      await writeFile(temp,
-        `${JSON.stringify({ version: 1, delivered: Object.fromEntries(next) }, null, 2)}\n`,
-        { encoding: 'utf8', mode: 0o600 });
+      // Never follow a pre-created link at the predictable temp pathname.
+      // E_EXCL blocks a stale/untrusted temp instead of overwriting a
+      // different file. After Bot API success, any write ambiguity
+      // must stop future sends until the ledger is inspected.
+      const fd = await open(temp,
+        fileConstants.O_WRONLY | fileConstants.O_CREAT
+          | fileConstants.O_EXCL | fileConstants.O_NOFOLLOW, 0o600);
+      try {
+        await fd.writeFile(
+          `${JSON.stringify({ version: 1, delivered: Object.fromEntries(next) }, null, 2)}\n`,
+          { encoding: 'utf8' },
+        );
+        await fd.sync();
+      } finally {
+        await fd.close();
+      }
       await rename(temp, this.file);
       this.delivered = next;
     } catch {
@@ -345,11 +378,16 @@ export class SignalIntelligenceTelegramDeliveryState {
 }
 
 function mergePersonalResult(
-  result: { attempted: number; delivered: number; deduped: number; skipped: number; failed: number },
+  result: SignalTelegramRunResult,
   personal: MemberWatchlistTelegramProducerResult,
 ): void {
   result.attempted += personal.attempted;
+  // Durable outbox admission is NOT an accepted Telegram Bot API message.
+  // Keep queued, accepted market sends and personal direct sends distinct.
+  result.queued += personal.queued;
+  result.personalQueued += personal.queued;
   result.delivered += personal.delivered;
+  result.personalDelivered += personal.delivered;
   result.skipped += personal.skipped;
   result.failed += personal.failed;
 }
@@ -365,7 +403,9 @@ export class SignalIntelligenceTelegramSubscriber {
 
   async runOnce(now = new Date()): Promise<SignalTelegramRunResult> {
     const result: SignalTelegramRunResult = {
-      attempted: 0, delivered: 0, deduped: 0, skipped: 0, failed: 0,
+      attempted: 0, delivered: 0, queued: 0,
+      publicDelivered: 0, personalDelivered: 0, personalQueued: 0,
+      deduped: 0, skipped: 0, failed: 0,
       sourceStatus: 'NOT_CHECKED',
     };
     if (this.running) { result.sourceStatus = 'OVERLAP'; return result; }
@@ -376,14 +416,18 @@ export class SignalIntelligenceTelegramSubscriber {
     try {
       const response = await this.fetchImpl(
         resolveSignalIntelligenceTelegramEndpoint(process.env.SIGNAL_INTELLIGENCE_URL),
-        { method: 'GET', signal: controller.signal, headers: { accept: 'application/json' } });
+        { method: 'GET', redirect: 'error', signal: controller.signal,
+          headers: { accept: 'application/json' } });
       if (!response.ok) {
         result.sourceStatus = response.status === 503 ? 'HTTP_503' : 'HTTP_ERROR';
         return result;
       }
       let envelope: V3Envelope;
-      try { envelope = await response.json() as V3Envelope; }
-      catch { result.sourceStatus = 'INVALID_RESPONSE'; return result; }
+      try { envelope = await boundedTelegramV3Json(response) as V3Envelope; }
+      catch {
+        result.sourceStatus = controller.signal.aborted ? 'TIMEOUT' : 'INVALID_RESPONSE';
+        return result;
+      }
       const snapshot = envelope?.snapshot;
       if (envelope?.ok !== true || envelope.executionAuthority !== 'NONE'
         || envelope.serviceSha !== snapshot?.serviceSha
@@ -396,9 +440,22 @@ export class SignalIntelligenceTelegramSubscriber {
       }
       // Preflight must precede member watchlist fan-out as well as public sends.
       await this.store.ready();
+      // Strict current-page evidence before ANY member watchlist or public
+      // Telegram fanout; do not interpret HTTP 200 as a verified source.
+      if (!validTelegramV3CurrentSource(snapshot, now.getTime())) {
+        result.sourceStatus = 'INVALID_RESPONSE';
+        return result;
+      }
       sourceReady = true;
+      if (verifiedTelegramV3PageCount(snapshot)===0) {
+        result.sourceStatus = 'SOURCE_DATA_BLOCKED';
+        return result;
+      }
       result.sourceStatus = 'READY';
       for (const event of snapshot.events) {
+        // The V3 producer also emits STATE_CHANGED and RESCAN_REQUESTED.
+        // They are validated above but must not be sent as entry candidates.
+        if (event.type !== 'NEW_CANDIDATE') continue;
         try {
           const personal = await this.deliverWatchlist({
             type: event.type,
@@ -410,7 +467,9 @@ export class SignalIntelligenceTelegramSubscriber {
             timeframe: event.timeframe,
             direction: event.direction,
             validationTier: event.validationTier,
-            occurredAt: now.toISOString(),
+            // Use the verified publication timestamp, not the polling
+            // clock, for personal event-policy/freshness evidence.
+            occurredAt: snapshot.generatedAt,
           });
           mergePersonalResult(result, personal);
         } catch {
@@ -419,12 +478,15 @@ export class SignalIntelligenceTelegramSubscriber {
 
         const alert = buildSignalIntelligenceTelegramInput(event, snapshot.serviceSha, now);
         if (!alert?.dedupeKey) { result.skipped += 1; continue; }
-        if (await this.store.has(alert.dedupeKey)) { result.deduped += 1; continue; }
+        if (await this.store.has(alert.dedupeKey, now)) { result.deduped += 1; continue; }
         result.attempted += 1;
         const sent = await this.deliver(alert);
         if (sent.ok || sent.skipped === 'DUPLICATE') {
           await this.store.mark(alert.dedupeKey, now);
-          if (sent.ok) result.delivered += 1; else result.deduped += 1;
+          if (sent.ok) {
+            result.delivered += 1;
+            result.publicDelivered += 1;
+          } else result.deduped += 1;
         } else if (sent.skipped === 'NOT_CONFIGURED') result.skipped += 1;
         else result.failed += 1;
       }
@@ -454,11 +516,15 @@ export function startSignalIntelligenceTelegramSubscriber(): { stop(): void } | 
   const tick = async () => {
     const result = await subscriber.runOnce(new Date());
     if (result.sourceStatus !== 'OVERLAP'
-      && (result.sourceStatus !== previousStatus || result.delivered > 0 || result.failed > 0)) {
+      && (result.sourceStatus !== previousStatus || result.delivered > 0
+        || result.queued > 0 || result.failed > 0)) {
       logger.info({
         status: result.sourceStatus, attempted: result.attempted,
-        delivered: result.delivered, deduped: result.deduped,
-        skipped: result.skipped, failed: result.failed,
+        delivered: result.delivered, publicDelivered: result.publicDelivered,
+        personalDelivered: result.personalDelivered,
+        queued: result.queued, personalQueued: result.personalQueued,
+        deduped: result.deduped, skipped: result.skipped,
+        failed: result.failed,
       }, 'signal intelligence Telegram subscriber tick');
     }
     if (result.sourceStatus !== 'OVERLAP') previousStatus = result.sourceStatus;
