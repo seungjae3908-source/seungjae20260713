@@ -283,6 +283,19 @@ jobs:
           node-version: '22'
       - name: Run small offline contracts
         run: node --test signal-intelligence-v3/tests/public-stock-source-capabilities.test.mjs
+      - name: Run public KR alpha daily normalization offline contract
+        run: node --test signal-intelligence-v3/tests/public-kr-alpha-daily.test.mjs
+      - name: Exercise one public KR alphanumeric daily source, no redistributable data
+        run: |
+          node signal-intelligence-v3/scripts/diagnose-kr-alpha-daily.mjs > "$RUNNER_TEMP/public-kr-alpha-daily.json"
+          node - <<'NODE' "$RUNNER_TEMP/public-kr-alpha-daily.json"
+          const fs=require('node:fs');
+          const evidence=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(evidence.executionAuthority!=='NONE'||evidence.wholeKrMarketProven!==false
+            ||evidence.licensedMarketRedistribution!==false
+            ||evidence.intradayAlphanumericSupported!==false)process.exit(1);
+          console.log('KR_ALPHA_DAILY_CANARY '+evidence.alphanumericDailyCanary.result);
+          NODE
       - name: Diagnose a few public read-only sources, never promote result
         run: |
           node signal-intelligence-v3/scripts/diagnose-stock-source-capabilities.mjs > "$RUNNER_TEMP/public-stock-sources.json"
