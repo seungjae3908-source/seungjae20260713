@@ -228,6 +228,7 @@ export async function deriveArchivedResearchTimeframesV1({
   return Object.freeze({
     ...result, archiveSchemaVersion: SCHEMA,
     archiveSourceDigestSha256: digest, archiveRevisionCount: revisions.length,
+    archiveSessionEndMs: source.session.endMs,
     historicalWholeMarketSourceCoverageVerified: false,
     // A derived candle is NOT evidence of an original contemporaneous signal.
     originalScannerEarlyDiscoveryVerified: false,
