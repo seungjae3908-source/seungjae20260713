@@ -381,6 +381,8 @@ export type TradingOrder = {
     coveredThroughAt: string;
     attestedAt: string;
     complete: true;
+    eventCount: number;
+    eventDigest: string;
   } | null;
   exchangeCreatedAt?: string | null;
   exchangeUpdatedAt?: string | null;

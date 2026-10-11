@@ -124,6 +124,9 @@ function verifiedClosedPaperPnlKrw(
     if (funding?.source !== 'SERVER_PAPER_FUNDING_LEDGER_V1'
       || funding?.underlyingCurrency !== 'USDT'
       || funding?.complete !== true
+      || !Number.isSafeInteger(funding.eventCount)
+      || funding.eventCount < 0
+      || !/^[0-9a-f]{64}$/u.test(funding.eventDigest ?? '')
       || typeof funding.netFundingKrw !== 'number'
       || !Number.isFinite(funding.netFundingKrw)
       || funding.entryBrokerOrderId !== trade.initialEntry.orderId

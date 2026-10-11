@@ -208,6 +208,7 @@ function certifiedAutoPaperPair(input: {
         exitBrokerOrderId:plan.id+'-exchange',
         coveredFromAt:start,coveredThroughAt:close,
         attestedAt:close,complete:true,
+        eventCount:0,eventDigest:'a'.repeat(64),
       } : null,
       fills: [], retryCount: 0, nextRetryAt: null, lastErrorCode: null,
     };

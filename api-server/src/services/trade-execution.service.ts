@@ -1,3 +1,4 @@
+import type { PaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import { randomUUID } from 'node:crypto';
 import type {
   MemberAutoTradingFxMarket,
@@ -497,6 +498,12 @@ export type ServerPaperCostEvidenceProviders = Readonly<{
   // There is deliberately NO default tax rate: a missing market policy is
   // unknown, not a fabricated zero-tax receipt.
   costPolicy?: (plan: TradingPlan, nowMs: number) => Promise<ServerPaperCostPolicyV1 | null>;
+  /** Server-owned simulated-only event-level funding receipt. */
+  fundingReceipt?: (scope: Readonly<{
+    entryOrder: TradingOrder; entryPlan: TradingPlan;
+    exitOrder: TradingOrder; exitPlan: TradingPlan;
+    exitAtMs: number;
+  }>) => Promise<PaperFundingCertificate | null>;
 }>;
 
 function paperQuoteMarket(plan: TradingPlan): MemberAutoTradingFxMarket {
@@ -1142,8 +1149,36 @@ export class TradeExecutionService {
               : paperQuoteMarket(plan) === 'CRYPTO_FUTURES' ? 'USDT' : 'KRW',
             taxAmount: null, taxCurrency: null,
             trustedPaperCostPolicyId: null, settlementFxEvidence: null };
+        let fundingReceipt: PaperFundingCertificate | null = null;
+        if (plan.accountMode === 'paper' && plan.executionMode === 'automatic'
+          && plan.exchange === 'bitget' && plan.reduceOnly === true
+          && this.paperCostEvidenceProviders.fundingReceipt) {
+          const refs = Array.isArray(plan.signalReasons)
+            ? plan.signalReasons.filter(x => x.startsWith('AUTO_EXIT_ENTRY_ORDER:')) : [];
+          if (refs.length === 1) {
+            const entryOrder = await this.repository.getOrder(
+              userId, refs[0]!.slice('AUTO_EXIT_ENTRY_ORDER:'.length));
+            const entryPlan = entryOrder
+              ? await this.repository.getPlan(userId, entryOrder.planId) : null;
+            if (entryOrder && entryPlan) {
+              try {
+                fundingReceipt = await this.paperCostEvidenceProviders.fundingReceipt({
+                  entryOrder, entryPlan,
+                  exitOrder: {
+                    ...order, state: 'FILLED', filledQuantity, averageFillPrice,
+                    exchangeOrderId: 'paper-' + order.clientOrderId,
+                  },
+                  exitPlan: plan, exitAtMs: Date.now(),
+                });
+              } catch {
+                // Unknown funding must never mutate or invalidate a safe exit.
+              }
+            }
+          }
+        }
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
+          ...(fundingReceipt ? { paperFundingSettlementEvidence: fundingReceipt } : {}),
           exchangeOrderId: `paper-${order.clientOrderId}`,
           filledQuantity,
           averageFillPrice,

@@ -1,3 +1,4 @@
+import { isProtectedPaperFundingCertificate } from './paper-futures-funding-certificate.service';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertOrderTransition } from './trade-order-state-machine.service';
 import { isRiskReducingExitPlan } from './live-connection-verification.service';
@@ -389,6 +390,31 @@ export class TradeAutomationService {
           && next.feeAmount >= 0) {
           next.taxAmount = metadata.taxAmount;
           next.taxCurrency = nativeCurrency;
+        }
+        // A JSON payload cannot create a funding certificate. Only a server
+        // in-process issuer bound to a real simulated reducing close can do so.
+        const funding = metadata.paperFundingSettlementEvidence;
+        if (paperPlan.exchange === 'bitget'
+          && paperPlan.executionMode === 'automatic'
+          && paperPlan.reduceOnly === true
+          && isProtectedPaperFundingCertificate(funding)
+          && funding.exitBrokerOrderId === next.exchangeOrderId
+          && Number.isSafeInteger(funding.eventCount)
+          && funding.eventCount >= 0
+          && /^[0-9a-f]{64}$/u.test(funding.eventDigest)
+          && Math.abs(Date.parse(funding.coveredThroughAt) - Date.parse(next.updatedAt)) <= 5_000
+          && Date.parse(funding.attestedAt) <= Date.parse(next.updatedAt) + 5_000) {
+          const references = paperPlan.signalReasons.filter(
+            reason => reason.startsWith('AUTO_EXIT_ENTRY_ORDER:'));
+          if (references.length === 1) {
+            const entry = await this.repository.getOrder(
+              order.userId, references[0]!.slice('AUTO_EXIT_ENTRY_ORDER:'.length));
+            if (entry?.state === 'FILLED' && entry.exchange === 'bitget'
+              && entry.exchangeOrderId === funding.entryBrokerOrderId
+              && entry.userId === order.userId) {
+              next.paperFundingSettlementEvidence = Object.freeze({ ...funding });
+            }
+          }
         }
         const quote = metadata.settlementFxEvidence;
         if (quote && typeof quote === 'object' && !Array.isArray(quote)) {
