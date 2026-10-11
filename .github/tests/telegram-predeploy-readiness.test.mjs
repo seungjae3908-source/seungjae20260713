@@ -14,6 +14,9 @@ const sourceCoverage = () => ({
       {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
       market,...mode,totalUniverse:100,cursorBefore:0,cursorAfter:20,
       lastGoodPreserved:false,cursorRotatedBlockedOnly:false,
+      publicExecutionDiagnostic:{state:'PAGE_EXECUTION_COMPLETE',requested:20,
+        started:20,completed:20,partial:false,timedOut:false,
+        providerErrors:0,timeouts:0,failuresObserved:0},
       scannedCards:0,retainedFromBatch:0,
       universeSource:market==='KR_STOCK'?'krx-symbol-master':
         market==='US_STOCK'?'nasdaq-trader-public-directory':
@@ -155,4 +158,20 @@ test('all-markets predeploy source coverage must not fake health from a new time
     'SIGNAL_V3_STALE_OR_HTTP_503');
   rejected(x=>{x.signalV3.lastCycleAgeBand='OVER_60M';},
     'SIGNAL_V3_CYCLE_NOT_PROVEN');
+});
+
+test('deployment reviewer cannot be shown GO from missing or fabricated scanner execution counts',()=>{
+  const edits=[
+    row=>{delete row.publicExecutionDiagnostic;},
+    row=>{row.publicExecutionDiagnostic.state='UNEXPLAINED_PARTIAL';},
+    row=>{row.publicExecutionDiagnostic.started=0;},
+    row=>{row.publicExecutionDiagnostic.completed=0;},
+    row=>{row.publicExecutionDiagnostic.timedOut=true;},
+    row=>{row.publicExecutionDiagnostic.failuresObserved=1;},
+    row=>{row.cursorAfter=99;},
+  ];
+  for(const edit of edits){
+    rejected(x=>edit(x.signalV3.snapshotCoverage.coverage[0]),
+      'SIGNAL_V3_STALE_OR_HTTP_503');
+  }
 });
