@@ -229,3 +229,19 @@ test("a fixed SWEEP sidecar alone shows historical price-label evidence but neve
     assert.equal(out.actualMarketWideOpportunityCount,null);
   }finally{rmSync(folder,{recursive:true,force:true});}
 });
+
+test("a BLOCKED newer SWEEP sidecar revokes a legacy positive SWEEP rather than resurrecting stale labels",async()=>{
+  const folder=root();
+  try{
+    save(folder,sweep());
+    save(folder,{...sweep(),status:"BLOCKED_DATA",
+      sourceOnlyObservedPriceEventLabels:null},market+".SWEEP.json");
+    const got=await read({root:folder,market});
+    assert.equal(got.available,false);
+    assert.equal(got.report,null);
+    assert.equal(got.reason,"OFFLINE_MODEL_BLOCKED_OR_INCOMPLETE");
+    assert.equal(got.actualMarketWideOpportunityCount,null);
+    assert.equal(got.paperAdmissionAllowed,false);
+    assert.equal(got.executionAuthority,"NONE");
+  }finally{rmSync(folder,{recursive:true,force:true});}
+});
