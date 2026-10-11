@@ -67,6 +67,35 @@ test('real registry DSL on new closed candle may report observation but never Pa
   assert.equal(JSON.stringify(row).includes('selectedParameters'),false);
   noAuthority(row);
 });
+test('same closed bar keeps one ID across quote repoll, provider failover and warmup corrections',()=>{
+  const original=input({
+    evaluatedAtMs:NOW+90_000,
+    publicEvidence:{...input().publicEvidence,asOfMs:NOW+20_000},
+  });
+  const first=observeRegisteredFormulaClosedCandleV1(original);
+  const repeat=observeRegisteredFormulaClosedCandleV1({
+    ...original,evaluatedAtMs:NOW+120_000,
+    publicEvidence:{...original.publicEvidence,source:'BACKUP_PUBLIC',asOfMs:NOW+45_000},
+    candles:original.candles.map((bar,i)=>i===0?{...bar,volume:bar.volume+1}:bar),
+  });
+  assert.equal(first.status,'OBSERVED_CLOSED_CANDLE_SIGNAL');
+  assert.equal(repeat.status,'OBSERVED_CLOSED_CANDLE_SIGNAL');
+  assert.equal(first.observationId,repeat.observationId);
+  assert.equal(first.observedSignalAtMs,repeat.observedSignalAtMs);
+  noAuthority(first);
+  noAuthority(repeat);
+
+  // The next legitimately completed bar must have a distinct ID.
+  const next=observeRegisteredFormulaClosedCandleV1({
+    ...original,evaluatedAtMs:NOW+STEP+90_000,
+    publicEvidence:{...original.publicEvidence,asOfMs:NOW+STEP+20_000},
+    candles:original.candles.map(bar=>({...bar,timestamp:bar.timestamp+STEP})),
+  });
+  assert.equal(next.status,'OBSERVED_CLOSED_CANDLE_SIGNAL');
+  assert.notEqual(next.observationId,first.observationId);
+  assert.equal(next.observedSignalAtMs,NOW+STEP);
+  noAuthority(next);
+});
 test('no rules matched means NO_SIGNAL instead of positive simulated profitability',()=>{
   const row=observeRegisteredFormulaClosedCandleV1(input({
     candles:candles([100,100,100,100,100,100],[100,100,100,100,100,100]),
