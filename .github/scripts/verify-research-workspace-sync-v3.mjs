@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { SCANNER_REPAIR_PATHS, SCANNER_REPAIR_SOURCE_SHA, verifyPinnedScannerScope, createScannerBlobReader } from './scanner-readonly-repair-scope.mjs';
 import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchOnlyNavigationDiff } from './research-center-batch-scope.mjs';
 const MAIN=process.env.EXPECTED_BASE_SHA;
 const OWNER='adfcb23baf956bcaa025f0846313faf8db7a4e4a';
@@ -427,6 +428,7 @@ const memberTelegramReviewed=[
  'stock-analyzer/e2e/telegram-signal-followup-persistence.spec.ts',
 ];
 const allowed=new Set([
+ ...SCANNER_REPAIR_PATHS,
  ...RESEARCH_CENTER_BATCH_PATHS,
  ...original,
  ...added,
@@ -442,6 +444,8 @@ const allowed=new Set([
  ...memberTelegramReviewed,
 ]);
 const changed=git('diff','--name-only',MAIN,'HEAD').split('\n').filter(Boolean);
+const pinnedScannerRepair=verifyPinnedScannerScope(changed,MAIN,createScannerBlobReader(changed,MAIN));
+if(pinnedScannerRepair.length>0)git('merge-base','--is-ancestor',SCANNER_REPAIR_SOURCE_SHA,'HEAD');
 // The personal Telegram member-profile reads share a repository with automatic
 // execution. Do not require automatic-trading deployment gates for ONLY the
 // proven expiry/permissions read patch and additive membership regression
@@ -514,6 +518,7 @@ if(preservedPaperIntegration.length>0){
   for(const sourceSha of PAPER_INTEGRATION_SOURCE_SHAS)git('merge-base','--is-ancestor',sourceSha,PAPER_INTEGRATION_SHA);
 }
 const automaticTradingChanged=changed.filter((p)=>automaticTradingDriftReviewed.includes(p)
+ &&!pinnedScannerRepair.includes(p)
  &&!isPersonalTelegramMembershipOnlyChange(p)&&!preservedPaperIntegration.includes(p)
  &&!isResearchOnlyNavigationDiff(p,git('diff','--unified=0',MAIN,'HEAD','--',p)));
 if(automaticTradingChanged.length>0){
@@ -718,6 +723,13 @@ const protectedPathExceptions=new Map([
    ? new Set(['packages/member-access/src/index.js','packages/member-access/src/index.d.ts'])
    : new Set()],
 ]);
+// Only these exact, byte-pinned generated artifacts share Scanner internals.
+// Runtime source/config and all execution approvals remain protected.
+for(const path of pinnedScannerRepair)if([
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs',
+ 'market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json',
+].includes(path))
+ protectedPathExceptions.get('market-prediction-lab').add(path);
 for(const p of protectedPaths){
  const exceptions=protectedPathExceptions.get(p);
  if(exceptions){
@@ -732,6 +744,7 @@ for(const p of protectedPaths){
  if(git('rev-parse',`HEAD:${p}`)!==git('rev-parse',`${MAIN}:${p}`))throw new Error('PROTECTED_PATH_CHANGED:'+p);
 }
 const proof={schemaVersion:'workspace-main-preservation-v3',head:git('rev-parse','HEAD'),main:MAIN,previousOwner:OWNER,
+  pinnedScannerRepair,scannerScopeGrantsTradingApproval:false,
   preservedPaperIntegrationSha:PAPER_INTEGRATION_SHA,preservedPaperIntegration,
   reviewedChangedPaths:changed,researchCenterIntegrationReviewed:researchCenterChanged,protectedPaths,
   protectedPathExceptions:Object.fromEntries([...protectedPathExceptions].map(([key,value])=>[key,[...value]])),
