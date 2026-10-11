@@ -16,6 +16,7 @@ function output(status,values={}){
     status,selectedForReview:0,reviewedFromCurrentRoster:0,
     trustedPublicData:0,watchSideAgreed:0,
     dataBlocked:0,sourceError:0,staleWatchEvidenceSkipped:0,
+    publicRequestCountUnmeasured:0,
     observedPublicHttpRequests:0,
     publicRequestCountProven:true,
     skippedCursorSymbols:0,
@@ -43,6 +44,7 @@ function wellFormed(reviews){
 }
 function trusted(review,resp){
   const market=review.market==='CRYPTO_SPOT'?'UPBIT_KRW':'BITGET_USDT_FUTURES';
+  const source=review.market==='CRYPTO_SPOT'?'upbit-public':'bitget-public';
   const x=resp?.execution,u=resp?.universe;
   if(resp?.ok!==true||resp?.market!==market
     ||resp?.orderSubmitted!==false||resp?.exchangeRequestSent!==false
@@ -50,11 +52,12 @@ function trusted(review,resp){
     ||!x||!u||x.requestedCount!==1||x.startedCount!==1
     ||x.completedCount!==1||x.providerErrorCount!==0||x.timeoutCount!==0
     ||x.partial!==false||x.timedOut!==false||x.cancelled!==false
-    ||u.partial!==false||u.stale!==false||!safe(u.totalCount)
-    ||u.totalCount===0||!Array.isArray(resp.cards)
+    ||u.partial!==false||u.stale!==false||u.source!==source||!safe(u.totalCount)
+    ||u.totalCount===0||!Array.isArray(resp.cards)||resp.cards.length!==1
     ||!Array.isArray(resp.failures)||resp.failures.length!==0)
     return null;
-  const card=resp.cards.find(v=>v?.symbol===review.symbol);
+  const card=resp.cards[0];
+  if(card?.symbol!==review.symbol)return null;
   if(!card||card.dataState!=='complete'
     ||card.dataQuality?.state!=='TRUSTED'
     ||card.dataQuality?.strongSignalAllowed!==true
@@ -70,7 +73,7 @@ export async function runV3OutOfCursorResearch(
   if(!wellFormed(reviews)||typeof scanOne!=='function'
     ||!Number.isSafeInteger(nowMs)||nowMs<=0)
     return output('REJECTED_UNSAFE_REVIEW_INPUT');
-  let reviewed=0,good=0,agree=0,blocked=0,errors=0,requests=0,stale=0;
+  let reviewed=0,good=0,agree=0,blocked=0,errors=0,requests=0,stale=0,unmeasured=0;
   for(const row of reviews){
     // A fresh event at the start of a long 12-lane V3 cycle can expire.
     // Never consume an old 'hot' symbol as a live Stage-2 research priority.
@@ -79,14 +82,16 @@ export async function runV3OutOfCursorResearch(
     }
     let receipt;
     try{receipt=await scanOne(row);}catch{
-      errors+=1;continue;
+      // A thrown callback may have already sent public HTTP requests.
+      // Never present a guessed zero as an audited exact request count.
+      errors+=1;unmeasured+=1;continue;
     }
     // The caller owns HTTP routing/counter instrumentation. A failure to
     // measure resource use cannot silently become a clean Stage-2 audit.
     if(!safe(receipt?.httpRequests)||receipt.httpRequests===0
       ||receipt.httpRequests>V3_OFFPAGE_RESEARCH_MAX.maxObservedPublicHttpCallsPerSymbol
       ||receipt.requestCountMeasured!==true){
-      errors+=1;continue;
+      errors+=1;unmeasured+=1;continue;
     }
     requests+=receipt.httpRequests;
     if(receipt?.scannerFailed===true||!receipt.response){
@@ -104,6 +109,10 @@ export async function runV3OutOfCursorResearch(
     trustedPublicData:good,watchSideAgreed:agree,
     dataBlocked:blocked,sourceError:errors,
     staleWatchEvidenceSkipped:stale,
-    observedPublicHttpRequests:requests,
+    // Unknown calls are null, not invented zero; the completion counters
+    // remain a conservative research-only fail-closed report.
+    observedPublicHttpRequests:unmeasured===0?requests:null,
+    publicRequestCountProven:unmeasured===0,
+    publicRequestCountUnmeasured:unmeasured,
   });
 }
