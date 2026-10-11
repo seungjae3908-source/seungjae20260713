@@ -9,6 +9,8 @@ export const PAPER_INTEGRATION_SOURCE_SHAS = Object.freeze([
   'af24fe44e286073de29cf31aa1f17fc13a309b28',
 ]);
 export const RESEARCH_CENTER_BATCH_PATHS = Object.freeze([
+  "market-prediction-lab/config/paper-risk-policy/natural-paper-btcusdt-v2.json",
+  "market-prediction-lab/tests/paper-risk-policy-human-approval-v2.test.js",
   "stock-analyzer/e2e/professional-command-bar.spec.ts",
   "docs/screenshots/research-center-v2/after-desktop-ai-lab.png",
   "docs/screenshots/research-center-v2/after-desktop-paper.png",
