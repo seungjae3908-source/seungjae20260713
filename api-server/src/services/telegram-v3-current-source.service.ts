@@ -33,7 +33,7 @@ export function validTelegramV3CurrentSource(value:unknown,nowMs=Date.now()):boo
  if(!EPOCH.test(epoch??''))return false;
  for(const raw of lanes){
   const row=OBJ(raw),id=row?.laneId;
-  if(!STR(id,50)||!IDS.includes(id)||lookup.has(id)||row?.sourceCycleId!==epoch
+  if(!row||!STR(id,50)||!IDS.includes(id)||lookup.has(id)||row.sourceCycleId!==epoch
     ||!STATUSES.has(row.status))return false;
   lookup.set(id,row);
  }

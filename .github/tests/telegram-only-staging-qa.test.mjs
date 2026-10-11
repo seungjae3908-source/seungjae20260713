@@ -28,7 +28,11 @@ test('scope contains exactly Telegram service test targets and an explicit test 
   assert.equal(pkg.scripts['test:telegram'], 'node ./test.mjs telegram');
   assert.ok(runner.includes('telegram: ['));
   const group = runner.slice(runner.indexOf('  telegram: ['), runner.indexOf('  search: ['));
-  assert.equal((group.match(/\.test\.ts/g) || []).length, 11);
+  assert.equal((group.match(/\.test\.ts/g) || []).length, 13);
+  // Telegram-only V3 source intake and subscriber are required members of
+  // this scoped QA, not a substitute for release-wide security/full CI.
+  assert.ok(group.includes('telegram-v3-current-source.service.test.ts'));
+  assert.ok(group.includes('signal-intelligence-telegram-subscriber.service.test.ts'));
   assert.ok(group.includes('src/services/telegram-notification.service.test.ts'));
   assert.ok(group.includes('src/services/telegram-market-brief.service.test.ts'));
   assert.ok(group.includes('user-broker-telegram/user-broker-telegram.service.test.ts'));
