@@ -174,6 +174,7 @@ test('manual second profitable ongoing round cannot hide prior bankruptcy in com
 test('manual round refuses open exposure, pending order and forged current account identity', () => {
   const storage=new MemoryStorage();
   const old=createLocalPaperState(10_000,NOW);
+  old.account.cashBalance=0; old.account.equity=0; old.account.availableMargin=0;
   savePaperState(storage,old);
   const open={...old,positions:[{status:'open',remainingQuantity:1}] as any};
   assert.throws(()=>startNextLocalManualPaperRound(storage,open,
@@ -182,6 +183,7 @@ test('manual round refuses open exposure, pending order and forged current accou
   assert.throws(()=>startNextLocalManualPaperRound(storage,pending,
     MANUAL_PAPER_NEXT_ROUND_CONFIRMATION),/미체결 주문/);
   const forged=createLocalPaperState(10_000,new Date(NOW.getTime()+5_000));
+  forged.account.cashBalance=0;forged.account.equity=0;forged.account.availableMargin=0;
   assert.throws(()=>startNextLocalManualPaperRound(storage,forged,
     MANUAL_PAPER_NEXT_ROUND_CONFIRMATION),/다른 화면에서/);
   assert.equal(getManualPaperRoundSummary(storage).completedRounds,0);
@@ -189,6 +191,7 @@ test('manual round refuses open exposure, pending order and forged current accou
 test('a failed manual round state write can retry the SAME archived next round without multiplying capital', () => {
   const storage=new MemoryStorage();
   const state=createLocalPaperState(10_000,NOW);
+  state.account.cashBalance=0;state.account.equity=0;state.account.availableMargin=0;
   savePaperState(storage,state);
   const original=storage.setItem.bind(storage);
   let failOnce=true;
