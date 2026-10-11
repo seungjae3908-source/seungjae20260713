@@ -24,7 +24,11 @@ test("Paper repair checks out the exact command SHA before loading local provena
   assert.match(workflow.slice(provenanceIndex), /\.github\/scripts\/current-main-ci-provenance\.cjs/u);
 });
 
-test("Paper validation owns the checkout regression test path", () => {
+test("Paper validation and the extracted exact-path checker jointly own the checkout regression test", async () => {
   const testPath = ".github/tests/pr-exact-head-paper-repair-checkout.test.mjs";
-  assert.equal(validation.split(testPath).length - 1, 2);
+  const bounded = await readFile(".github/scripts/check-paper-forward-bounded-diff.sh", "utf8");
+  // One exact PR trigger and one exact bounded allowlist entry, no blanket bypass.
+  assert.equal(validation.split(testPath).length - 1, 1);
+  assert.equal(bounded.split(testPath).length - 1, 1);
+  assert.match(validation, /run: bash \.github\/scripts\/check-paper-forward-bounded-diff\.sh/u);
 });
