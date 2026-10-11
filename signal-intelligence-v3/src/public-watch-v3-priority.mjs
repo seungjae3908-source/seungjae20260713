@@ -26,7 +26,8 @@ export function emptyV3WatchHandoff(status='DISABLED'){
     status,priorities:Object.freeze([]),
     report:Object.freeze({schemaVersion:'public-v3-stage-one-watch-handoff-v1',
       status,byMarket,verifiedWatchCandidates:0,priorityReviewCandidates:0,
-      exactResearchSourceValidated:false,fullMarketCoverageProven:false,
+      exactResearchSourceValidated:false,currentWatchReadyMarketCount:0,
+      fullMarketCoverageProven:false,
       stageTwoOutsideCursorInjected:false,additionalProviderRequests:0,
       oosPassProven:false,executionAuthority:'NONE',tradingSignalCount:0}),
   });
@@ -147,7 +148,10 @@ export function verifyV3WatchHandoff(raw,events,{
       byMarket,verifiedWatchCandidates:latest.size,
       priorityReviewCandidates:limited.length,
       exactResearchSourceValidated:true,
-      fullMarketCoverageProven:validated.marketCoverageCount===4,
+      // A current roster of four READY feeds is NOT independent listed,
+      // delisted, licensed or historical full-market coverage evidence.
+      currentWatchReadyMarketCount:validated.marketCoverageCount,
+      fullMarketCoverageProven:false,
       stageTwoOutsideCursorInjected:false,
       additionalProviderRequests:0,oosPassProven:false,
       executionAuthority:'NONE',tradingSignalCount:0,
