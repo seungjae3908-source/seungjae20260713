@@ -88,3 +88,22 @@ Any other main history or SHA fails closed before Production mutation.
 This one-time exception must receive separate release-control code review
 before Ready/Merge, then requires protected Production human approval.
 No SQL migrations or direct Telegram Bot API sends are part of the path.
+
+## Persisted runtime ledgers: rollout and rollback must not delete them
+
+Telegram market briefing and Signal V3 subscriber use `/opt/stock-app/.runtime/`
+by default for durable sent-message deduplication receipts. The earlier generic
+`sync_source_tree` used `rsync --delete` without protecting this directory.
+Deploying an app archive that does not contain the existing `.runtime` could
+therefore remove delivery receipts and increase duplicate-send risk.
+
+The shared deployment sync now excludes `.runtime/` from **all three** uses:
+Production-to-backup, promoted-source-to-Production and backup-to-Production
+rollback. This preserves the existing live receipt directory in place rather
+than overwriting it with a stale backup. Secret env files, PM2 process settings,
+and trading gates retain their separate protections.
+
+A deterministic regression test checks both the ledger default paths and the
+`rsync --delete` exclusion, plus verifies that this workflow pins the exact
+reviewed deployment script's Git blob SHA. This change is Draft-only until
+reviewed, verified and explicitly authorized for merging/deployment.

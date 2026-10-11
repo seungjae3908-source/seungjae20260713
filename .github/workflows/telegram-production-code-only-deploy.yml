@@ -260,7 +260,7 @@ jobs:
               'api-server/src/services/telegram-notification.service.test.ts':'e2b7250649ae5cc5deaf1e0500d93f5d9d0d0f1f',
               'docs/telegram-production-worker-readonly-audit.md':'9958f8c214c5bfebf6fa1127c24cd19f0de14d16',
               'ops/telegram-production-worker-readonly-audit.mjs':'9fbb173a41b15c561c34388e1c8b9d014163e2ea',
-              'ops/deploy-production.sh':'9e39633c553100c9c5d3b0d8cd151785895ffb78',
+              'ops/deploy-production.sh':'d21093e3db372b0266aabbc2b0837e6e1c3eaa12',
             };
             for(const [path,sha] of Object.entries(pinnedFiles)){
               const result=await github.rest.repos.getContent({
@@ -324,7 +324,7 @@ jobs:
           # archived application bytes come exclusively from the older TARGET_SHA.
           git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$OPERATOR_SHA"
           operator_blob="$(git -C "$SOURCE_DIR" rev-parse "$OPERATOR_SHA:ops/deploy-production.sh")"
-          [[ "$operator_blob" == "9e39633c553100c9c5d3b0d8cd151785895ffb78" ]] || exit 1
+          [[ "$operator_blob" == "d21093e3db372b0266aabbc2b0837e6e1c3eaa12" ]] || exit 1
           git -C "$SOURCE_DIR" show "$OPERATOR_SHA:ops/deploy-production.sh" > "$SOURCE_DIR/ops/deploy-telegram-operator.sh"
           chmod 700 "$SOURCE_DIR/ops/deploy-telegram-operator.sh"
           BASH_ENV="$SOURCE_DIR/ops/production-verification-diagnostics.sh" \
