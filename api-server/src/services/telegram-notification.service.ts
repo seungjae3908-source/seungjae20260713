@@ -264,6 +264,10 @@ function prune(now: number): void {
   for (const [key, value] of deliveredAtByCooldownKey) {
     if (value < oldest) deliveredAtByCooldownKey.delete(key);
   }
+  const uncertainOldest = now - 14 * 24 * 60 * 60_000;
+  for (const [key, value] of unconfirmedAtByHash) {
+    if (value < uncertainOldest) unconfirmedAtByHash.delete(key);
+  }
 }
 
 export function clearTelegramAlertState(): void {
