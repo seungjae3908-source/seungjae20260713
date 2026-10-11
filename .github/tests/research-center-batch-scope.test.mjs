@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { PAPER_FORWARD_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
-import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchCenterBatchUi } from '../scripts/research-center-batch-scope.mjs';
+import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchCenterBatchUi, isResearchOnlyNavigationDiff } from '../scripts/research-center-batch-scope.mjs';
 
 const sharedPath = 'api-server/src/services/trade-execution.service.ts';
 const blob = 'a'.repeat(40);
@@ -37,6 +37,18 @@ test('repinned merge requires both original Paper and current-main safety ancest
   ]);
   const source = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
   assert.ok(source.includes("for(const sourceSha of PAPER_INTEGRATION_SOURCE_SHAS)git('merge-base','--is-ancestor',sourceSha,PAPER_INTEGRATION_SHA)"));
+});
+
+test('research navigation substitutions never exempt another Trading edit', () => {
+  const before = "      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },";
+  const after = before.replace('canManageMembers', 'canAccessBasicInfo');
+  const diff = '--- a/file\n+++ b/file\n@@ -1 +1 @@\n-' + before + '\n+' + after;
+  const file = 'stock-analyzer/src/lib/app-navigation.ts';
+  assert.equal(isResearchOnlyNavigationDiff(file, diff), true);
+  assert.equal(isResearchOnlyNavigationDiff(file, diff + '\n+  liveTrading: true,'), false);
+  assert.equal(isResearchOnlyNavigationDiff(file, diff.replace('canAccessBasicInfo', 'canPlaceOrders')), false);
+  assert.equal(isResearchOnlyNavigationDiff(file, ''), false);
+  assert.equal(isResearchOnlyNavigationDiff('stock-analyzer/src/pages/auto-trading.tsx', diff), false);
 });
 
 test('missing, empty or unreadable pinned blobs fail closed', () => {
