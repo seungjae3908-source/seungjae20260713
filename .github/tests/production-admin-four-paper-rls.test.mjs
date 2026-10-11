@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -41,4 +41,38 @@ test('sanitized migration attestation accepts exact SHA only and no user row wri
       assert.notEqual(verify('--artifact',file).status,0);
     }
   } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+
+test('member RLS and admin RLS share the same atomic protected transaction, never a second unapproved deploy', () => {
+  const runner = readFileSync('ops/apply-production-admin-four-paper-rls.mjs','utf8');
+  const workflow = readFileSync('.github/workflows/production-deploy.yml','utf8');
+  const prerequisite = runner.indexOf('memberPreflightSql,');
+  const admin = runner.indexOf('  migration,', prerequisite);
+  const member = runner.indexOf('  memberMigration,', admin);
+  const verifyAdmin = runner.indexOf('  verifySql,', member);
+  const verifyMember = runner.indexOf('  memberVerifySql,', verifyAdmin);
+  assert.ok(prerequisite > 0 && admin > prerequisite && member > admin
+    && verifyAdmin > member && verifyMember > verifyAdmin);
+  assert.match(runner, /PRODUCTION_MEMBER_V2_ADMIN_GUARD_REQUIRED/);
+  assert.match(runner, /PRODUCTION_MEMBER_V2_RLS_GUARD_UNVERIFIED/);
+  assert.match(runner, /PRODUCTION_MEMBER_V2_WALLET_ROWS_MUTATED/);
+  assert.match(runner, /admin_four_paper_wallet_rls_guard_ready\(\)/);
+  assert.match(runner, /four_market_paper_wallet_rls_guard_ready\(\)/);
+  assert.match(workflow, /api-server\/supabase\/migrations\/2026101001_member_four_market_paper_wallet_guard\.sql/);
+  assert.match(workflow, /node ops\/verify-production-admin-four-paper-rls\.mjs --artifact/);
+});
+
+test('wrong Production project credential fails before opening a DB connection or printing secrets', () => {
+  const wrong = spawnSync(process.execPath, ['ops/apply-production-admin-four-paper-rls.mjs'], {
+    encoding:'utf8',
+    env: {
+      PATH:process.env.PATH??'',
+      APPROVED_TARGET_SHA:TARGET_SHA,
+      PROD_DATABASE_URL:'postgresql://postgres:DO_NOT_LOG_PASSWORD@wrong.example.net:5432/postgres',
+    },
+  });
+  assert.notEqual(wrong.status,0);
+  assert.match(wrong.stderr,/CREDENTIAL_OR_MIGRATION_SOURCE_INVALID/);
+  assert.doesNotMatch(wrong.stdout+wrong.stderr,/DO_NOT_LOG_PASSWORD|wrong\.example\.net/);
 });
