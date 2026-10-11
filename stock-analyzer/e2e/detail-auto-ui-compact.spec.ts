@@ -20,18 +20,18 @@ test('stock detail removes long primary guidance and blocking skeleton UI', () =
   expect(detail).not.toContain('현재가 정보를 불러오지 못했습니다.');
 });
 
-test('trading workspace unifies auto, paper, four markets, journal and selected-market settings', () => {
+test('trading workspace keeps Auto and Paper routes separate with compact four-market controls', () => {
   const auto = source('src/pages/auto-trading.tsx');
   const paper = source('src/pages/paper-trading.tsx');
   const settings = source('src/components/trade-automation-settings.tsx');
   const journal = source('src/components/unified-trade-journal-panel.tsx');
 
   expect(auto).toContain("title={initialMode === 'paper' ? '모의매매' : '자동매매'}");
-  expect(auto).toContain('data-testid="trading-mode-tabs"');
-  expect(auto).toContain('자동매매</SegmentedButton>');
-  expect(auto).toContain('모의매매</SegmentedButton>');
+  expect(auto).not.toContain('data-testid="trading-mode-tabs"');
+  expect(auto).toContain('data-testid="trading-market-select"');
   for (const label of ['국내주식', '미국주식', '코인현물', '코인선물']) expect(auto).toContain(label);
-  for (const label of ['대시보드', '포지션·주문', '매매일지', '설정']) expect(auto).toContain(label);
+  for (const label of ['상태', '주문', '일지', '설정']) expect(auto).toContain(label);
+  expect(auto).toContain('data-testid="auto-trading-rehearsal-settings"');
   expect(auto).not.toContain("forcedSource={mode === 'auto' ? 'APP_AUTO' : 'APP_PAPER'}");
   expect(auto).toContain('title="매매일지"');
   for (const label of ['직접매매', '자동매매', '자동모의매매']) expect(journal).toContain(label);
@@ -52,9 +52,7 @@ for (const width of [360, 390, 412, 430]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto('/__phase12-trade-automation-e2e');
 
-    await expect(page.getByTestId('trading-mode-tabs')).toBeVisible();
-    await expect(page.getByTestId('trading-mode-auto')).toContainText('자동매매');
-    await expect(page.getByTestId('trading-mode-paper')).toContainText('모의매매');
+    await expect(page.getByTestId('trading-market-select')).toBeVisible();
 
     const safety = page.getByTestId('auto-trading-safety-summary');
     await expect(safety).toBeVisible();
@@ -63,9 +61,7 @@ for (const width of [360, 390, 412, 430]) {
     await expect(safety).toContainText('불필요');
     await expect(safety).toContainText('위험검사');
 
-    for (const market of ['domestic_stock', 'us_stock', 'crypto_spot', 'crypto_futures']) {
-      await expect(page.getByTestId(`trading-market-${market}`)).toBeVisible();
-    }
+    await expect(page.getByTestId('trading-market-domestic_stock')).toBeHidden();
 
     const overflow = await page.evaluate(() => ({
       viewport: window.innerWidth,
