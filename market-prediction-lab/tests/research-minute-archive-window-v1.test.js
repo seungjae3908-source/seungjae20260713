@@ -416,3 +416,35 @@ test("stock CLI private calendar scope is checked and sources never public", asy
     assert.equal(saved.trueMarketWideRecall, null);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("stored multi-year stock sessions validate globally but only selected local day is audited", async () => {
+  for(const market of ["KR_STOCK","US_STOCK"]){
+    const root=tmp();
+    try{
+      const zone=market==="KR_STOCK"?"Asia/Seoul":"America/New_York";
+      const stamp=market==="KR_STOCK"?"2026-09-18T00:00:00Z":"2026-09-18T13:30:00Z";
+      const prior=market==="KR_STOCK"?"2015-01-05T00:00:00Z":"2015-01-05T14:30:00Z";
+      const future=market==="KR_STOCK"?"2028-01-03T00:00:00Z":"2028-01-03T14:30:00Z";
+      const session=(date,utc)=>{
+        const startMs=Date.parse(utc);
+        return {tradingDateLocal:date,startMs,endMs:startMs+30*MIN,
+          kind:"REGULAR",timeZone:zone};
+      };
+      const stockCalendar={market,sessions:[
+        session("2015-01-05",prior),
+        session("2026-09-18",stamp),
+        session("2028-01-03",future),
+      ]};
+      const report=await audit(inputs(root,market,"2026-09-18","2026-09-18",{stockCalendar}));
+      assert.equal(report.requestedSessionCount,1);
+      assert.equal(report.missingSessionCount,1);
+      assert.equal(report.archivedSessionCount,0);
+      assert.equal(report.stockCalendarIndependentlyVerified,false);
+      assert.equal(report.trueMarketWideRecall,null);
+      const reversed={...stockCalendar,sessions:stockCalendar.sessions.toReversed()};
+      await assert.rejects(()=>audit(inputs(root,market,"2026-09-18","2026-09-18",
+        {stockCalendar:reversed})),/MINUTE_WINDOW_STOCK_CALENDAR_INVALID/);
+    }finally{rmSync(root,{recursive:true,force:true});}
+  }
+});

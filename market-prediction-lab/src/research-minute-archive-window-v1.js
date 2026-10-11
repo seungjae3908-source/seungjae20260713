@@ -67,7 +67,9 @@ export function validateResearchStockSessionsForDateV1(market, stockCalendar, st
     fail("MINUTE_WINDOW_STOCK_CALENDAR_INVALID");
   const timeZone = market === "KR_STOCK" ? "Asia/Seoul" : "America/New_York";
   const source = stockCalendar.sessions;
-  let previousEndMs = 0;
+  // Validate the complete multi-year exchange calendar, then select only
+  // the requested local dates. Never treat unrelated stored sessions as errors.
+  let previousEndMs = Number.NEGATIVE_INFINITY;
   const validated = [];
   for (const x of source) {
     if (!x || typeof x !== "object" || Array.isArray(x)
@@ -78,15 +80,15 @@ export function validateResearchStockSessionsForDateV1(market, stockCalendar, st
       || x.timeZone !== timeZone
       || typeof x.tradingDateLocal !== "string"
       || !DATE.test(x.tradingDateLocal)
-      || x.tradingDateLocal !== localDay(x.startMs, timeZone)
-      || x.tradingDateLocal < startDate || x.tradingDateLocal > endDate)
+      || x.tradingDateLocal !== localDay(x.startMs, timeZone))
       fail("MINUTE_WINDOW_STOCK_CALENDAR_INVALID");
     previousEndMs = x.endMs;
     validated.push({ selectionDate: x.tradingDateLocal,
       tradingDateLocal: x.tradingDateLocal, startMs: x.startMs,
       endMs: x.endMs, kind: x.kind, timeZone: x.timeZone });
   }
-  return validated;
+  return validated.filter(x => x.tradingDateLocal >= startDate
+    && x.tradingDateLocal <= endDate);
 }
 function base(market, symbol, window, chunkStartMs, chunkEndExclusiveMs) {
   return {
