@@ -270,6 +270,50 @@ test('market watch readback passes only bounded public aggregate counts', () => 
   assert.equal(factory.lightweightMarketWatch.status, 'PARTIAL');
   assert.equal(factory.lightweightMarketWatch.marketCoverageCount, 2);
 });
+
+test('watch cap diagnostics are bounded, aggregate-only, and legacy missing counters stay unknown', () => {
+  const base = marketWatch();
+  const legacy = sanitizeMarketWatchReadback(base);
+  assert.equal(legacy.status, 'PARTIAL');
+  assert.equal(legacy.markets[2]?.sourceCappedCount, null);
+  assert.equal(legacy.markets[2]?.candidateCappedCount, null);
+  const withCaps = {
+    ...base,
+    markets: base.markets.map((m, i) => i === 2 ? {
+      ...m, status: 'PARTIAL_TICKERS', listedCount: 20,
+      observedCount: 15, newCandidates: 12,
+      sourceCappedCount: 3, qualifyingCandidateCount: 14,
+      candidateCappedCount: 2, privateTicker: 'DO_NOT_PROJECT_TICKER',
+    } : m),
+    marketCoverageCount: 1,
+  };
+  const good = sanitizeMarketWatchReadback(withCaps);
+  assert.equal(good.status, 'PARTIAL');
+  assert.equal(good.markets[2]?.sourceCappedCount, 3);
+  assert.equal(good.markets[2]?.qualifyingCandidateCount, 14);
+  assert.equal(good.markets[2]?.candidateCappedCount, 2);
+  assert.equal(good.markets[3]?.candidateCappedCount, null);
+  assert.equal(JSON.stringify(good).includes('DO_NOT_PROJECT_TICKER'), false);
+  assert.equal(good.paperExecutionProven, false);
+  assert.equal(good.executionAuthority, 'NONE');
+  for (const invalid of [
+    // 20 listed - 15 observed = at most 5 unprocessed; 6 is forged.
+    { sourceCappedCount: 6 }, { sourceCappedCount: -1 },
+    { sourceCappedCount: '3' }, { sourceCappedCount: true },
+    { qualifyingCandidateCount: 13 }, { candidateCappedCount: 9000 },
+  ]) {
+    const row = { ...withCaps.markets[2], ...invalid };
+    assert.equal(sanitizeMarketWatchReadback({
+      ...withCaps, markets: withCaps.markets.map((m, i) => i === 2 ? row : m),
+    }).status, 'INVALID');
+  }
+  const partial = { ...withCaps.markets[2] } as Record<string, unknown>;
+  delete partial.candidateCappedCount;
+  assert.equal(sanitizeMarketWatchReadback({
+    ...withCaps, markets: withCaps.markets.map((m, i) => i === 2 ? partial : m),
+  }).status, 'INVALID');
+});
+
 test('coarse sample study cannot claim economic success, infinite counts or orders', () => {
   const base = marketWatch();
   assert.equal(sanitizeMarketWatchReadback({
@@ -284,6 +328,57 @@ test('coarse sample study cannot claim economic success, infinite counts or orde
   assert.equal(sanitizeMarketWatchReadback({
     ...base, prospectiveSampleStudy: { ...base.prospectiveSampleStudy, status: 'OOS_PASS' },
   }).status, 'INVALID');
+});
+
+test('watcher source health states and staleness must agree with observed four-market feeds', () => {
+  const base = marketWatch();
+  const allBlocked = base.markets.map((row) => ({
+    ...row, source: 'NONE', status: 'BLOCKED_PUBLIC_FEED_MISSING',
+    listedCount: 0, observedCount: 0, newCandidates: 0,
+  }));
+  // A consumer may not present active partial coverage if all sources are blocked.
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'PARTIAL', marketCoverageCount: 0, markets: allBlocked,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'BLOCKED_DATA', marketCoverageCount: 0, markets: allBlocked,
+  }).status, 'BLOCKED_DATA');
+  // Even with four READY markets, a forged PARTIAL flag is not an allowed
+  // alternate label for full coverage.
+  const allReady = base.markets.map((row) => ({
+    ...row, source: 'VERIFIED_PUBLIC_FEED', status: 'READY',
+    listedCount: 15, observedCount: 15, newCandidates: 0,
+  }));
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'PARTIAL', marketCoverageCount: 4, markets: allReady,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'OBSERVING', marketCoverageCount: 4, markets: allReady,
+  }).status, 'OBSERVING');
+  for (const impossible of ['BLOCKED_DATA', 'HOLD', 'THROTTLED'] as const) {
+    assert.equal(sanitizeMarketWatchReadback({ ...base, status: impossible }).status, 'INVALID',
+      impossible + ' cannot report operating feeds');
+  }
+  // The source contract does not allow a READY market with no observed quotes.
+  const fakeReady = base.markets.map((row, index) => index === 2 ? {
+    ...row, listedCount: 0, observedCount: 0, newCandidates: 0,
+  } : row);
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, markets: fakeReady,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'PARTIAL', ageMs: 420_000,
+  }).status, 'INVALID');
+  assert.equal(sanitizeMarketWatchReadback({
+    ...base, status: 'STALE', ageMs: 30_000,
+  }).status, 'INVALID');
+  const stale = sanitizeMarketWatchReadback({
+    ...base, status: 'STALE', ageMs: 420_000,
+  });
+  assert.equal(stale.status, 'STALE');
+  assert.equal(stale.executionAuthority, 'NONE');
+  assert.equal(stale.profitabilityProven, false);
+  assert.equal(stale.oosProven, false);
 });
 
 function watchCadence() {

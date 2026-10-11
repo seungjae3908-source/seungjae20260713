@@ -351,6 +351,193 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
   });
 }
 
+test('four-market watch shows partial live public sources and blocked stock feeds without trade claims', async ({ page }) => {
+  const data = overview();
+  Object.assign(data, {
+    dataFactory: {
+      lightweightMarketWatch: {
+        contract: 'lightweight-market-watch-readback/v1',
+        status: 'PARTIAL', present: true, researchSha: RESEARCH_SHA,
+        observedAt: Date.parse(NOW), ageMs: 30_000, marketCoverageCount: 1,
+        markets: [
+          { market: 'KR_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'US_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC',
+            listedCount: 6, observedCount: 6, newCandidates: 1 },
+          { market: 'CRYPTO_FUTURES', status: 'PARTIAL_TICKERS', source: 'BITGET_PUBLIC',
+            listedCount: 8, observedCount: 5, newCandidates: 0 },
+        ],
+        cyclesToday: 8, candidatesToday: 1, cyclesSinceRelease: 8,
+        prospectiveSampleStudy: null,
+        continuous24hProven: false, formulaCandidateProduced: false,
+        oosProven: false, paperExecutionProven: false,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      },
+    },
+  });
+  const { assertClean } = await installAdmin(page, data);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openExpertResearch(page);
+  const panel = page.getByTestId('research-market-watch');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('research-market-watch-status')).toContainText('일부 시장만 수집');
+  await expect(panel).toContainText('1/4시장');
+  await expect(panel).toContainText('국내주식');
+  await expect(panel).toContainText('미국주식');
+  await expect(panel).toContainText('데이터 미연결');
+  await expect(panel).toContainText('코인현물');
+  await expect(panel).toContainText('시세 6/6');
+  await expect(panel).toContainText('코인선물');
+  await expect(panel).toContainText('일부 수집');
+  await expect(page.getByTestId('research-market-watch-boundary')).toContainText('실주문 권한은 없습니다');
+  await expectNoHorizontalOverflow(page);
+  await assertClean();
+});
+
+
+test('bounded source and candidate overflow stays observation-only; legacy missing counts remain unknown', async ({ page }) => {
+  const data = overview();
+  Object.assign(data, {
+    dataFactory: {
+      lightweightMarketWatch: {
+        contract: 'lightweight-market-watch-readback/v1',
+        status: 'PARTIAL', present: true, researchSha: RESEARCH_SHA,
+        observedAt: Date.parse(NOW), ageMs: 30_000, marketCoverageCount: 1,
+        markets: [
+          { market: 'KR_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'US_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC_TICKERS',
+            listedCount: 15, observedCount: 15, newCandidates: 12,
+            sourceCappedCount: 0, qualifyingCandidateCount: 14, candidateCappedCount: 2 },
+          { market: 'CRYPTO_FUTURES', status: 'PARTIAL_TICKERS', source: 'BITGET_PUBLIC_TICKERS',
+            listedCount: 18, observedCount: 15, newCandidates: 0,
+            sourceCappedCount: 3, qualifyingCandidateCount: 0, candidateCappedCount: 0 },
+        ],
+        cyclesToday: 8, candidatesToday: 12, cyclesSinceRelease: 8,
+        continuous24hProven: false, formulaCandidateProduced: false,
+        oosProven: false, paperExecutionProven: false,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      },
+    },
+  });
+  const { assertClean } = await installAdmin(page, data);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openExpertResearch(page);
+  await expect(page.getByTestId('research-market-watch-cap-CRYPTO_SPOT')).toContainText('후보 출력 상한 제외 2건');
+  await expect(page.getByTestId('research-market-watch-cap-CRYPTO_FUTURES')).toContainText('원천 상한 제외 3건');
+  await expect(page.getByTestId('research-market-watch-cap-KR_STOCK')).toContainText('원천 상한 제외 미측정');
+  await expect(page.getByTestId('research-market-watch-cap-warning')).toContainText('전체 시장 급등락 누락률');
+  await expect(page.getByTestId('research-market-watch-boundary')).toContainText('실주문 권한은 없습니다');
+  await expectNoHorizontalOverflow(page);
+  await assertClean();
+});
+
+test('a stale public feed never appears as currently collecting in research UI', async ({ page }) => {
+  const data = overview();
+  Object.assign(data, {
+    dataFactory: {
+      lightweightMarketWatch: {
+        contract: 'lightweight-market-watch-readback/v1',
+        status: 'STALE', present: true, researchSha: RESEARCH_SHA,
+        observedAt: Date.parse(NOW) - 420_000, ageMs: 420_000,
+        marketCoverageCount: 1,
+        markets: [
+          { market: 'KR_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'US_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+            listedCount: 0, observedCount: 0, newCandidates: 0 },
+          { market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC',
+            listedCount: 6, observedCount: 6, newCandidates: 1 },
+          { market: 'CRYPTO_FUTURES', status: 'PARTIAL_TICKERS', source: 'BITGET_PUBLIC',
+            listedCount: 8, observedCount: 5, newCandidates: 0 },
+        ],
+        cyclesToday: 8, candidatesToday: 1, cyclesSinceRelease: 8,
+        prospectiveSampleStudy: null,
+        continuous24hProven: false, formulaCandidateProduced: false,
+        oosProven: false, paperExecutionProven: false,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      },
+    },
+  });
+  const { assertClean } = await installAdmin(page, data);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openExpertResearch(page);
+  const panel = page.getByTestId('research-market-watch');
+  await expect(page.getByTestId('research-market-watch-status')).toContainText('최근 수집 중단');
+  await expect(panel).toContainText('이전 기록 · 수집 중단');
+  await expect(panel).toContainText('데이터 미연결');
+  await expect(panel.getByText('시세 수집', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('research-market-watch-boundary')).toContainText('24시간 연속 가동');
+  await expectNoHorizontalOverflow(page);
+  await assertClean();
+});
+
+test('market-watch overview polls every two minutes while visible and fails stale on overview read error', async ({ page }) => {
+  const data = overview();
+  const watch = {
+    contract: 'lightweight-market-watch-readback/v1',
+    status: 'PARTIAL', present: true, researchSha: RESEARCH_SHA,
+    observedAt: Date.parse(NOW), ageMs: 30_000, marketCoverageCount: 1,
+    markets: [
+      { market: 'KR_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+        listedCount: 0, observedCount: 0, newCandidates: 0 },
+      { market: 'US_STOCK', status: 'BLOCKED_STOCK_FEED_MISSING', source: 'NONE',
+        listedCount: 0, observedCount: 0, newCandidates: 0 },
+      { market: 'CRYPTO_SPOT', status: 'READY', source: 'UPBIT_PUBLIC',
+        listedCount: 6, observedCount: 6, newCandidates: 0 },
+      { market: 'CRYPTO_FUTURES', status: 'PARTIAL_TICKERS', source: 'BITGET_PUBLIC',
+        listedCount: 8, observedCount: 5, newCandidates: 0 },
+    ],
+    cyclesToday: 8, candidatesToday: 1, cyclesSinceRelease: 8,
+    prospectiveSampleStudy: null,
+    continuous24hProven: false, formulaCandidateProduced: false,
+    oosProven: false, paperExecutionProven: false,
+    profitabilityProven: false, executionAuthority: 'NONE',
+  };
+  Object.assign(data, { dataFactory: { lightweightMarketWatch: watch } });
+  const { assertClean } = await installAdmin(page, data);
+  let reads = 0;
+  let failNext = false;
+  await page.route('**/api/admin/research/overview', (route) => {
+    reads++;
+    if (failNext) return fulfill(route, { error: 'RESEARCH_DASHBOARD_UNAVAILABLE' });
+    if (reads >= 2) {
+      watch.status = 'STALE';
+      watch.observedAt = Date.parse(NOW) - 420_000;
+      watch.ageMs = 420_000;
+    }
+    return fulfill(route, data);
+  });
+  // Advance only the page's virtual clock; no waiting for two real minutes,
+  // timers/server deployment/private provider calls or economic evidence.
+  await page.clock.install({ time: new Date(NOW) });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openExpertResearch(page);
+  const panel = page.getByTestId('research-market-watch');
+  const status = page.getByTestId('research-market-watch-status');
+  await expect(status).toContainText('일부 시장만 수집');
+  await page.clock.fastForward(121_000);
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+  await expect(status).toContainText('최근 수집 중단');
+  await expect(panel).toContainText('데이터 미연결');
+  await expect(panel).toContainText('이전 기록 · 수집 중단');
+
+  // Failed refresh with previous cached data must not restore the old
+  // "actively observing" label or invent successful collection.
+  failNext = true;
+  await page.getByRole('button', { name: '연구센터 새로고침' }).click();
+  await expect(page.getByTestId('research-error-state')).toBeVisible();
+  await expect(status).toContainText('최근 조회 실패 · 이전 기록');
+  await expect(panel).toContainText('데이터 미연결');
+  await expect(panel.getByText('시세 수집', { exact: true })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+  await assertClean();
+});
+
 test('24-hour public cadence readback is visible but never advertised as proven server uptime', async ({ page }) => {
   const value = overview();
   Object.assign(value, {

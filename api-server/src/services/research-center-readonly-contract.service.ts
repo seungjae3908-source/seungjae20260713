@@ -797,19 +797,54 @@ export function sanitizeMarketWatchReadback(value: unknown) {
     const newCandidates = watchSafeCount(row?.newCandidates, 13);
     const blocked = typeof status === 'string' && WATCH_BLOCKED_SOURCE.test(status);
     const healthy = typeof status === 'string' && WATCH_HEALTHY_SOURCE.has(status);
+    // Missing legacy source-cap proof is UNKNOWN, never a measured zero.
+    const capKeys = ['sourceCappedCount', 'qualifyingCandidateCount', 'candidateCappedCount'] as const;
+    const capPresent = capKeys.map((key) => row != null && Object.hasOwn(row, key));
+    const capAllPresent = capPresent.every(Boolean);
+    const capAnyPresent = capPresent.some(Boolean);
+    const capAllNull = capAllPresent && capKeys.every((key) => row?.[key] === null);
+    const sourceCappedCount = capAllPresent && !capAllNull
+      ? watchSafeCount(row?.sourceCappedCount, 30_001) : null;
+    const qualifyingCandidateCount = capAllPresent && !capAllNull
+      ? watchSafeCount(row?.qualifyingCandidateCount, 8_001) : null;
+    const candidateCappedCount = capAllPresent && !capAllNull
+      ? watchSafeCount(row?.candidateCappedCount, 8_001) : null;
+    const capValid = !capAnyPresent || capAllNull || (
+      capAllPresent && sourceCappedCount !== null
+      && qualifyingCandidateCount !== null && candidateCappedCount !== null
+      && listedCount !== null && observedCount !== null && newCandidates !== null
+      && sourceCappedCount <= listedCount - observedCount
+      && qualifyingCandidateCount <= observedCount
+      && qualifyingCandidateCount === newCandidates + candidateCappedCount
+      && !(status === 'READY' && sourceCappedCount > 0)
+      && !(blocked && (sourceCappedCount > 0 || qualifyingCandidateCount > 0))
+    );
+    if (!capValid) return null;
     if (!row || row.market !== WATCH_MARKETS[index]
       || typeof source !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/u.test(source)
       || !(blocked || healthy) || (blocked && source !== 'NONE')
       || (healthy && source === 'NONE') || listedCount == null
       || observedCount == null || newCandidates == null || observedCount > listedCount
       || newCandidates > observedCount || row.executionAuthority !== 'NONE'
-      || (status === 'READY' && listedCount !== observedCount)
+      || (status === 'READY' && (observedCount === 0 || listedCount !== observedCount))
       || (blocked && (newCandidates !== 0 || observedCount !== 0))) return null;
-    return { market: WATCH_MARKETS[index], status, source, listedCount, observedCount, newCandidates };
+    return {
+      market: WATCH_MARKETS[index], status, source, listedCount, observedCount, newCandidates,
+      sourceCappedCount, qualifyingCandidateCount, candidateCappedCount,
+    };
   });
+  const readyCount = rows.filter((row) => row?.status === 'READY').length;
+  const usableCount = rows.filter((row) => row != null && WATCH_HEALTHY_SOURCE.has(row.status)).length;
+  // Mirror the exact Research Dashboard readback. A forged or outdated
+  // PARTIAL/BLOCKED_DATA/HOLD projection must not pretend that a market feed
+  // is currently operating; STALE requires an aged observation.
   if (rows.some((row) => row == null)
-    || rows.filter((row) => row?.status === 'READY').length !== coverage
-    || (v.status === 'OBSERVING' && coverage !== 4)) {
+    || readyCount !== coverage
+    || (v.status === 'OBSERVING' && coverage !== 4)
+    || (v.status === 'PARTIAL' && (usableCount === 0 || coverage === 4))
+    || (v.status === 'BLOCKED_DATA' && usableCount !== 0)
+    || ((v.status === 'HOLD' || v.status === 'THROTTLED') && usableCount !== 0)
+    || (v.status === 'STALE' ? ageMs <= 360_000 : ageMs > 360_000)) {
     return emptyMarketWatch('INVALID', true);
   }
   return {
