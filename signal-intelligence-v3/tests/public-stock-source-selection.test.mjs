@@ -43,7 +43,7 @@ test('HTTP 429 and 418 are fail-closed and never retried or sent to alternate sy
  }
 });
 test('invalid Yahoo OHLC and conflicting duplicate series produce no synthetic price',()=>{
- const corrupted=inspectPublicStockCandles([bar(),{...bar(),close:103}], '15m',NOW);
+ const corrupted=inspectPublicStockCandles([bar(),{...bar(),close:101.5}], '15m',NOW);
  assert.equal(corrupted.rejected,true);
  assert.equal(corrupted.conflictingDuplicateBars,1);
  assert.equal(corrupted.candles.length,0);
