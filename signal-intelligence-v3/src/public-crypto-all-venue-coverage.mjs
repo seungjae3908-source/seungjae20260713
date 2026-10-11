@@ -122,8 +122,9 @@ export function inspectPublicCryptoAllVenueSnapshots({
      })];
  })));
  const missingMarketSet=input===null||invalidOrOtherQuotePairCount>0
-   ||Object.values(upbit).some(x=>!x.observedRosterTickerParity)
-   ||Object.values(bitget).some(x=>!x.observedRosterTickerParity);
+   ||Object.values(upbit).some(x=>x.status!=='OBSERVED_ROSTER_TICKER_PARITY_ONLY')
+   ||Object.values(bitget).some(x=>x.status!=='OBSERVED_ROSTER_TICKER_PARITY_ONLY'
+     ||x.nonNormalContractCount>0);
  const statuses=Object.fromEntries(
    Object.entries(sourceOutcomes??{}).filter(([key,val])=>
       /^[A-Z0-9_]{2,35}$/u.test(key)&&
