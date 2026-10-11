@@ -85,8 +85,8 @@ export type ManualPaperFourMarketCycleInput=Readonly<{
 export type ManualPaperFourMarketCycle=Readonly<{
   status:'RESEARCH_SIMULATED_CLOSED'|'BLOCKED';
   blockers:readonly string[];
-  market:AdminPaperMarket;
-  side:ManualPaperMarketSide;
+  market:AdminPaperMarket|null;
+  side:ManualPaperMarketSide|null;
   mode:'manual';
   closedCycleId:string|null;
   grossPnlKrw:number|null;
