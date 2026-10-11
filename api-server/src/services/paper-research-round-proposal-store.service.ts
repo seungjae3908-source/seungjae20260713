@@ -142,8 +142,12 @@ export function samePaperRoundProposalEvidence(
     'next_round_number','proposed_seed_krw','previous_operating_capital_krw',
     'previous_locked_reserve_krw',
   ] as const;
-  if(!sameNumbers.every(key=>Number.isFinite(Number(existing[key]))
-      && Number(existing[key])===expected[key]))return false;
+  if(!sameNumbers.every(key=>{
+    const actual=existing[key];
+    return (typeof actual==='number'
+        ||(typeof actual==='string'&&actual.trim().length>0))
+      &&Number.isFinite(Number(actual))&&Number(actual)===expected[key];
+  }))return false;
   if((existing.minimum_entry_krw===null)!==(expected.minimum_entry_krw===null))return false;
   if(expected.minimum_entry_krw!==null &&
     (!Number.isFinite(Number(existing.minimum_entry_krw))
