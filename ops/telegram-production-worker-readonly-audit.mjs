@@ -44,6 +44,25 @@ function sanitizedIsoTime(value) {
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value ? value : null;
 }
 
+export function safePm2StartedAt(value, nowMs = Date.now()) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || !Number.isFinite(nowMs)
+    || value < Date.UTC(2025, 0, 1) || value > nowMs + 5000) return null;
+  return new Date(value).toISOString();
+}
+
+export function morningWindowElapsedWithCurrentProcess(startedAt, nowMs = Date.now()) {
+  if (typeof startedAt !== 'string' || !Number.isFinite(nowMs)) return false;
+  const startedMs = Date.parse(startedAt);
+  if (!Number.isFinite(startedMs)) return false;
+  const values = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(nowMs)).filter(x => x.type !== 'literal')
+    .map(x => [x.type, x.value]));
+  const endOfMorningUtc = Date.UTC(Number(values.year), Number(values.month) - 1,
+    Number(values.day), -1, 10); // 08:10 KST.
+  return startedMs <= endOfMorningUtc && nowMs >= endOfMorningUtc;
+}
+
 function emptyState(status) {
   return {
     status, recordCount: 0, recent24hCount: 0, lastEvidenceAt: null,
@@ -208,15 +227,75 @@ function emptySource(status) {
 /** Only the signal subscriber's loopback, GET-only public/evidence endpoint.
  * Never return event contents, symbols, member IDs, strategy text or prices.
  */
+function safeSignalTarget(sourceUrl) {
+  let target;
+  try { target = new URL(sourceUrl); } catch { return null; }
+  if (target.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(target.hostname)
+    || target.pathname !== '/v1/signals' || target.search || target.hash
+    || target.username || target.password) return null;
+  return target;
+}
+
+// Bounded, loopback-only public /health inspection. Never return response body.
+export async function readSignalHealthOnce({
+  sourceUrl = process.env.SIGNAL_INTELLIGENCE_URL?.trim() || 'http://127.0.0.1:8790/v1/signals',
+  getImpl = httpGet,
+} = {}) {
+  const target = safeSignalTarget(sourceUrl);
+  if (!target) return { status: 'UNSAFE_ENDPOINT' };
+  target.pathname = '/health';
+  return await new Promise(resolve => {
+    let finished = false;
+    let request = null;
+    const done = status => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve({ status });
+    };
+    const timer = setTimeout(() => { request?.destroy?.(); done('UNREACHABLE'); }, 4500);
+    try {
+      request = getImpl(target, { method: 'GET', timeout: 4000 }, response => {
+        if (response.statusCode !== 200) {
+          response.resume?.();
+          done('HTTP_UNAVAILABLE');
+          return;
+        }
+        const chunks = [];
+        let total = 0;
+        response.on('data', chunk => {
+          total += chunk.length;
+          if (total > 32768) { response.destroy?.(); done('INVALID_RESPONSE'); return; }
+          chunks.push(chunk);
+        });
+        response.on('error', () => done('UNREACHABLE'));
+        response.on('end', () => {
+          let value = null;
+          try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch {}
+          if (value?.ok !== true || value?.service !== 'signal-intelligence-v3'
+            || !safeSha(value.serviceSha)
+            || value.executionAuthority !== 'NONE'
+            || value.privateTradingApiAllowed !== false || value.realOrderAllowed !== false
+            || typeof value.snapshotReady !== 'boolean'
+            || typeof value.snapshotFresh !== 'boolean') {
+            done('INVALID_RESPONSE');
+          } else if (!value.snapshotReady) done('MISSING_SNAPSHOT');
+          else if (!value.snapshotFresh) done('STALE_SNAPSHOT');
+          else done('READY');
+        });
+      });
+      request.on('timeout', () => request.destroy());
+      request.on('error', () => done('UNREACHABLE'));
+    } catch { done('UNREACHABLE'); }
+  });
+}
+
 export async function readSignalSourceOnce({
   sourceUrl = process.env.SIGNAL_INTELLIGENCE_URL?.trim() || 'http://127.0.0.1:8790/v1/signals',
   getImpl = httpGet,
 } = {}) {
-  let target;
-  try { target = new URL(sourceUrl); } catch { return emptySource('UNSAFE_ENDPOINT'); }
-  if (target.protocol !== 'http:' || !['127.0.0.1','localhost','[::1]'].includes(target.hostname)
-    || target.pathname !== '/v1/signals' || target.search || target.hash
-    || target.username || target.password) return emptySource('UNSAFE_ENDPOINT');
+  const target = safeSignalTarget(sourceUrl);
+  if (!target) return emptySource('UNSAFE_ENDPOINT');
   return await new Promise(resolve => {
     let finished = false;
     let req = null;
@@ -262,13 +341,15 @@ export async function observeProductionTelegram({
   health = readHealthOnce,
   state = readStateFile,
   signalSource = readSignalSourceOnce,
+  signalHealth = readSignalHealthOnce,
   nowMs = Date.now(),
 } = {}) {
   const receipt = {
-    schemaVersion: 'telegram-production-worker-readonly-v1',
+    schemaVersion: 'telegram-production-worker-readonly-v2',
     scope: 'PRODUCTION_TELEGRAM_READ_ONLY',
     mainSha: safeSha(mainSha), expectedDeployedSha: safeSha(deployedSha),
     pm2Sha: null, markerSha: null, pm2Online: false, exactDeployedIdentity: false,
+    pm2StartedAt: null, morningWindowElapsedWithCurrentProcess: false,
     activationEnabled: false, marketWorkerConfigured: false, personalWorkerConfigured: false,
     roomBindingsValid: false, personal: {
       healthAvailable: false, enabled: false, tickFresh: false, tickOk: false,
@@ -277,6 +358,7 @@ export async function observeProductionTelegram({
     marketBrief: emptyState('NOT_CHECKED'),
     signalSubscriber: emptyState('NOT_CHECKED'),
     signalSource: emptySource('NOT_CHECKED'),
+    signalHealth: { status: 'NOT_CHECKED' },
     proofLevel: 'NO_DELIVERY_PROOF',
     classification: 'NOT_STARTED',
     telegramSends: 0, databaseWrites: 0, pm2Restarts: 0,
@@ -307,6 +389,9 @@ export async function observeProductionTelegram({
               : 'PRODUCTION_IDENTITY_MISMATCH';
       return receipt;
     }
+    receipt.pm2StartedAt = safePm2StartedAt(runtime.pm_uptime, nowMs);
+    receipt.morningWindowElapsedWithCurrentProcess =
+      morningWindowElapsedWithCurrentProcess(receipt.pm2StartedAt, nowMs);
     const ids = ROOM_KEYS.map(key => String(runtime[key] ?? '').trim());
     receipt.roomBindingsValid = ids.every(id => /^-100[0-9]{8,15}$/u.test(id))
       && new Set(ids).size === ROOM_KEYS.length;
@@ -345,6 +430,7 @@ export async function observeProductionTelegram({
       'telegram-intelligence-delivery-state.json', 'market', nowMs);
     receipt.signalSubscriber = state(runtime.SIGNAL_INTELLIGENCE_TELEGRAM_STATE_PATH,
       'signal-intelligence-telegram-state.json', 'signal', nowMs);
+    receipt.signalHealth = await signalHealth({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
     receipt.signalSource = await signalSource({ sourceUrl: runtime.SIGNAL_INTELLIGENCE_URL });
     // Saved state is dedupe-or-delivery evidence, never Bot API confirmation.
     receipt.proofLevel = receipt.marketBrief.recordCount > 0
