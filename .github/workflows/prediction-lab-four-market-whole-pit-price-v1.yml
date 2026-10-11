@@ -41,6 +41,9 @@ on:
       - market-prediction-lab/src/pit-native-crypto-minute-backfill-v1.js
       - market-prediction-lab/scripts/pit-native-crypto-minute-backfill-v1.mjs
       - market-prediction-lab/tests/pit-native-crypto-minute-backfill-v1.test.js
+      - market-prediction-lab/src/four-market-pit-minute-gap-queue-v1.js
+      - market-prediction-lab/scripts/plan-four-market-pit-minute-gaps-v1.mjs
+      - market-prediction-lab/tests/four-market-pit-minute-gap-queue-v1.test.js
       - market-prediction-lab/src/timeframes.js
       - market-prediction-lab/src/four-market-pit-daily-ledger-v1.js
       - market-prediction-lab/scripts/audit-four-market-pit-receipt-ledger-v1.mjs
@@ -97,6 +100,7 @@ jobs:
           node --test market-prediction-lab/tests/four-market-pit-minute-archive-join-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-minute-day-ledger-v1.test.js
           node --test market-prediction-lab/tests/pit-native-crypto-minute-backfill-v1.test.js
+          node --test market-prediction-lab/tests/four-market-pit-minute-gap-queue-v1.test.js
           node --test market-prediction-lab/tests/upbit-spot-history.test.js
           node --test market-prediction-lab/tests/venue-native-pit-daily-intake-v1.test.js
           node --test market-prediction-lab/tests/krx-dated-roster-public-read-v1.test.js
