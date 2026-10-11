@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { linkedLegacyTelegramWatchlistOwner } from './member-watchlist.service';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
@@ -142,6 +143,27 @@ test('mixed rescan/new-candidate and state-change V3 events do not suppress real
    else process.env.TELEGRAM_US_STOCK_CHAT_ID=beforeUs;
    await rm(dir,{recursive:true,force:true});
  }
+});
+
+test('personal Telegram fallback reads only owner-linked, market-consistent legacy watchlists',()=>{
+ const owner='12345678-1234-1234-1234-123456789abc';
+ const row={member_id:owner,device_id:'DEVICE_ONLY_MUST_NOT_GRANT_ACCESS',
+   market:'KR',ticker:'005930',asset_type:'stockKR'};
+ assert.equal(linkedLegacyTelegramWatchlistOwner(row,'KR_STOCK','005930'),owner);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,member_id:null},'KR_STOCK','005930'),null);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,member_id:''},'KR_STOCK','005930'),null);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,member_id:'device:1'},'KR_STOCK','005930'),null);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,market:'UNKNOWN'},'KR_STOCK','005930'),null,
+   'six-digit ticker must not grant market identity when stored market is unknown');
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,market:'US'},'KR_STOCK','005930'),null);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,asset_type:'stockUS'},'KR_STOCK','005930'),null);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,ticker:'000660'},'KR_STOCK','005930'),null);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,market:'US',asset_type:'stockUS',ticker:'AAPL'},
+   'US_STOCK','AAPL'),owner);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,market:'SPOT',asset_type:'cryptoSpot',ticker:'KRW-BTC'},
+   'CRYPTO_SPOT','KRW-BTC'),owner);
+ assert.equal(linkedLegacyTelegramWatchlistOwner({...row,market:'FUTURES',asset_type:'cryptoFutures',ticker:'BTCUSDT'},
+   'CRYPTO_FUTURES','BTCUSDT'),owner);
 });
 
 test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 proof cannot send',()=>{
