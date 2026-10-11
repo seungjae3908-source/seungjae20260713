@@ -322,6 +322,9 @@ const automaticTradingDriftReviewed=[
  // remain mandatory when either runtime or receipt validation changes.
  '.github/scripts/verify-production-preactivation-evidence.cjs',
  'api-server/src/services/automatic-live-position-isolation.service.ts',
+ 'stock-analyzer/e2e/production-account-readonly-live-qa-diagnostic.ts',
+ 'stock-analyzer/e2e/production-account-readonly-live-qa.spec.ts',
+ 'stock-analyzer/e2e/support/safe-api-diagnostic.test.ts',
  '.github/scripts/production-postdeploy-qa-evidence.cjs',
  '.github/scripts/production-postdeploy-qa-evidence.test.cjs',
  '.github/tests/production-telegram-active-readiness.test.mjs',
