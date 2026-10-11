@@ -133,3 +133,45 @@ test('pinned deployment script Git blob always matches reviewed branch bytes',()
     .update(deploy,'utf8').digest('hex');
   assert.equal(wf.split(actual).length-1,2);
 });
+
+
+test('strict new predeploy runtime veto executes before every code-only Production write',()=>{
+  const stage=wf.indexOf('Block release without two recent Staging Telegram network successes');
+  const v3=wf.indexOf('Block release on stale Signal V3 or public endpoint HTTP 503');
+  const mutation=wf.indexOf('Deploy exact code using existing canary, PM2 and rollback script');
+  assert.ok(stage>=0&&v3>stage&&mutation>v3);
+  const protectedSection=wf.slice(v3,mutation);
+  for(const exact of [
+    'TELEGRAM_PREDEPLOY_STAGING_TLS_NOT_STABLE',
+    'TELEGRAM_PREDEPLOY_SIGNAL_V3_NOT_READY',
+    'TELEGRAM_PREDEPLOY_SIGNAL_V3_FRESH_PASS',
+    'investment-signal-intelligence-v3-cycle.timer',
+    "const health=await read('/health')",
+    "const result=await read('/v1/signals')",
+    'health.snapshotFresh!==true',
+    'health.snapshotAgeMs>900000',
+    'result.ok!==true',
+    'result.snapshot?.safety?.executionAuthority',
+    'readOnly prior Production',
+  ].slice(0,-1))assert.ok(wf.includes(exact),exact);
+  assert.ok(protectedSection.includes("http.get('http://127.0.0.1:8790'"));
+  assert.ok(protectedSection.includes('StrictHostKeyChecking=yes'));
+  assert.ok(!protectedSection.includes("req.method='POST'"));
+  assert.ok(!protectedSection.includes('systemctl start'));
+  assert.ok(!protectedSection.includes('systemctl restart'));
+  assert.ok(!protectedSection.includes('pm2 restart'));
+  assert.ok(!protectedSection.includes('sendMessage'));
+});
+
+test('Staging network gate needs two bounded independent green receipts, not latest green only',()=>{
+  const stage=wf.slice(wf.indexOf('Block release without two recent Staging Telegram network successes'),
+    wf.indexOf('Require pinned Production SSH credentials and host identity'));
+  assert.ok(stage.includes("workflow_id:'telegram-only-staging-qa.yml'"));
+  assert.ok(stage.includes("event:'issue_comment'"));
+  assert.ok(stage.includes("r.conclusion!=='skipped'"));
+  assert.ok(stage.includes('recent.length>=2&&green.length===recent.length'));
+  assert.ok(stage.includes('now-Date.parse(green[0].created_at)<=10*60_000'));
+  assert.ok(stage.includes('>=5*60_000'));
+  assert.ok(stage.includes('<=30*60_000'));
+  assert.ok(!stage.includes('workflow_dispatch'));
+});
