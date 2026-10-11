@@ -191,10 +191,13 @@ test('Automation/Paper/Research/Backtester scoped Staging only', async ({ page }
   await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('body')).not.toBeEmpty();
   await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
-  await expect(page.getByText(/자동매매|모의매매|자동 거래/i).first()).toBeVisible({ timeout: 20_000 });
-  await page.getByTestId('trading-mode-paper').click();
+  await expect(page.getByTestId('auto-trading-page')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('trading-mode-paper')).toHaveCount(0);
+  await page.goto('/paper-trading', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('paper-trading-shell')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('paper-trading-dashboard')).toBeVisible({ timeout: 20_000 });
-  await page.getByTestId('trading-mode-auto').click();
+  await page.goto('/auto-trading', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('auto-trading-page')).toBeVisible({ timeout: 20_000 });
   await page.getByTestId('trading-section-settings').click();
   await page.getByTestId('trading-section-journal').click();
   await expect(page.getByTestId('trading-workspace-journal')).toBeVisible({ timeout: 20_000 });

@@ -252,13 +252,6 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
         icon: 'chart',
         capability: 'canAccessBacktests',
       },
-      {
-        id: 'paper-trading',
-        href: APP_ROUTES.paperTrading,
-        label: '모의매매',
-        icon: 'power',
-        capability: 'canAccessPaperTrading',
-      },
     ],
   },
   {
