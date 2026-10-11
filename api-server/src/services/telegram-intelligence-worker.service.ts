@@ -42,6 +42,7 @@ type PersistedState = {
 export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceStateStore {
   private loaded = false;
   private blocked = false;
+  private loading: Promise<void> | null = null;
   private delivered = new Map<string, string>();
   private unconfirmed = new Map<string, string>();
 
@@ -50,7 +51,15 @@ export class FileTelegramIntelligenceStateStore implements TelegramIntelligenceS
   private async ensureLoaded(): Promise<void> {
     if (this.blocked) throw new Error('TELEGRAM_INTELLIGENCE_LEDGER_UNREADABLE');
     if (this.loaded) return;
-    this.loaded = true;
+    if (this.loading) return this.loading;
+    this.loading = this.initializeLedger();
+    try {
+      await this.loading;
+      this.loaded = true;
+    } finally { this.loading = null; }
+  }
+
+  private async initializeLedger(): Promise<void> {
     let originalLedgerObserved = false;
     try {
       const details = await lstat(this.statePath);
