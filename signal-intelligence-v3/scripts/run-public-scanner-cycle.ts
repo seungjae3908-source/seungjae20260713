@@ -287,7 +287,7 @@ async function withStockPublicOnly(lane, operation) {
       }
       const symbols = yahooProviderCandidates(lane, ticker, entry);
       const candles=await choosePublicStockCandles({
-        symbols,timeframe,now:Date.now(),preferAtLeast:20,
+        symbols,timeframe,market:lane.market,now:Date.now(),preferAtLeast:20,
         load:(symbol,tf)=>yahoo.getCandles(symbol,tf),
         onSource:(rows)=>audit.recordCandles(timeframe,rows),
         onError:(error)=>audit.candleError(timeframe,error),
@@ -306,7 +306,7 @@ async function withStockPublicOnly(lane, operation) {
       }
       const symbols = yahooProviderCandidates(lane, ticker, entry);
       return choosePublicStockQuote({
-        symbols,now:Date.now(),
+        symbols,timeframe:lane.timeframe,now:Date.now(),
         load:(symbol)=>yahoo.getQuote(symbol),
         onSource:(quote)=>audit.recordQuote(quote),
         onError:(error)=>audit.quoteError(error),
