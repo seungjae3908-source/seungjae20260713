@@ -1,0 +1,316 @@
+name: Telegram Code-Only Production Deploy (no DB migrations or proof sends)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/telegram-production-code-only-deploy.yml
+      - .github/tests/telegram-production-code-only-deploy.test.mjs
+      - ops/telegram-production-code-only-scope.mjs
+      - docs/telegram-production-code-only-deploy.md
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    name: Validate Telegram code-only deployment and scope guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test .github/tests/telegram-production-code-only-deploy.test.mjs
+
+  protected-telegram-code-only:
+    name: Owner-protected Telegram code-only production deploy and read-only checks
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 1555 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control — Rollover 2026-10-02' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-code-only-production ')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 75
+    concurrency:
+      group: stock-app-production-live
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+      statuses: read
+    env:
+      TARGET_SHA: ''
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse exact owner-only SHA
+        id: target
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const match=/^\/run-telegram-code-only-production ([0-9a-f]{40})$/u.exec(
+            String(process.env.BODY || '').trim());
+          if(!match) throw Error('TELEGRAM_CODE_ONLY_EXACT_SHA_REQUIRED');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'sha='+match[1]+'\n');
+          NODE
+
+      - name: Require exact main and post-merge full-CI provenance
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const {evaluatePostMergeStatusProvenance,inspectPostMergeStatusEvidence}
+              =require(process.env.GITHUB_WORKSPACE+'/api-server/scripts/release-candidate-provenance.cjs');
+            const target=process.env.EXPECTED_SHA;
+            const main=(await github.rest.repos.getBranch({
+              owner:context.repo.owner,repo:context.repo.repo,branch:'main',
+            })).data.commit.sha;
+            if(main!==target){core.setFailed('TELEGRAM_RELEASE_MAIN_MOVED');return;}
+            const statuses=await github.paginate(github.rest.repos.listCommitStatusesForRef,{
+              owner:context.repo.owner,repo:context.repo.repo,ref:target,per_page:100,
+            });
+            const evidence=inspectPostMergeStatusEvidence(statuses);
+            if(!evidence.ok){core.setFailed('TELEGRAM_POSTMERGE_PROVENANCE_MISSING');return;}
+            const run=(await github.rest.actions.getWorkflowRun({
+              owner:context.repo.owner,repo:context.repo.repo,run_id:evidence.runId,
+            })).data;
+            const verified=evaluatePostMergeStatusProvenance({
+              targetSha:target,currentMainSha:main,statuses,run,
+            });
+            if(!verified.ok)core.setFailed('TELEGRAM_POSTMERGE_PROVENANCE_REJECTED');
+
+      - name: Require exact-main successful PostgreSQL auth and Staging verdict
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const sha=process.env.EXPECTED_SHA;
+            const runs=await github.paginate(github.rest.actions.listWorkflowRunsForRepo,{
+              owner:context.repo.owner,repo:context.repo.repo,
+              head_sha:sha,branch:'main',per_page:100,
+            });
+            const pairs=[
+              {name:'Staging PostgreSQL Auth Gate',event:'issue_comment',
+                path:'.github/workflows/staging-postgres-auth-gate.yml',
+                artifact:'staging-postgres-auth-'+sha},
+              {name:'Staging Readiness',event:'workflow_dispatch',
+                path:'.github/workflows/staging-readiness.yml',
+                artifact:'staging-verdict-'+sha},
+            ];
+            for(const item of pairs){
+              const matching=runs.filter(run=>run.name===item.name
+                && run.event===item.event && run.path===item.path
+                && run.head_sha===sha && run.head_branch==='main'
+                && run.status==='completed' && run.conclusion==='success');
+              let evidence=false;
+              for(const run of matching){
+                const response=await github.rest.actions.listWorkflowRunArtifacts({
+                  owner:context.repo.owner,repo:context.repo.repo,run_id:run.id,per_page:100,
+                });
+                if((response.data.artifacts||[]).some(a=>a.name===item.artifact
+                  && a.expired!==true && a.workflow_run?.head_sha===sha)){
+                  evidence=true;break;
+                }
+              }
+              if(!evidence){core.setFailed('TELEGRAM_EXACT_STAGING_EVIDENCE_MISSING:'+item.name);return;}
+            }
+
+      - name: Require pinned Production SSH credentials and host identity
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Read-only prior Production PM2 identity and zero-trading gates
+        id: previous
+        run: |
+          set -Eeuo pipefail
+          previous="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" \
+            'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs=require('node:fs');
+          const {execFileSync}=require('node:child_process');
+          const rows=JSON.parse(execFileSync('pm2',['jlist'],{
+            encoding:'utf8',timeout:10000,maxBuffer:20000000,
+          }));
+          const matched=Array.isArray(rows)?rows.filter(p=>p?.name==='stock-app'):[];
+          if(matched.length!==1)throw Error('TELEGRAM_PM2_RUNTIME_NOT_UNIQUE');
+          const env=matched[0].pm2_env||{};
+          const sha=String(env.DEPLOY_SHA||'');
+          const marker=fs.readFileSync('/opt/stock-app/.deploy/current-sha','utf8').trim();
+          if(!/^[a-f0-9]{40}$/.test(sha)||marker!==sha||env.status!=='online'
+            ||env.pm_cwd!=='/opt/stock-app'
+            ||env.pm_exec_path!=='/opt/stock-app/api-server/dist/index.mjs')
+            throw Error('TELEGRAM_PREDEPLOY_SHA_OR_PM2_MISMATCH');
+          const tradingKeys=[
+            'LIVE_TRADING','AUTO_TRADING','REAL_ORDER_ENABLED',
+            'PRIVATE_TRADING_API_ALLOWED','ORDER_EXECUTION_ENABLED',
+            'LIVE_TRADING_ACTIVATION_APPROVED','SPOT_LIVE_LIMITED_ACTIVATION_APPROVED',
+            'LIVE_AUTOMATIC_TRADING_ENABLED','MEMBER_AUTO_TRADING_BACKGROUND_ENABLED',
+            'MEMBER_AUTO_TRADING_LIVE_BACKGROUND_ENABLED',
+            'MEMBER_AUTO_TRADING_PAPER_ONLY_ENABLED','FUTURES_LIVE_LIMITED_ACTIVATION_APPROVED',
+            'BITGET_FUTURES_LIVE_ORDER_ENABLED','CRYPTO_AUTO_LEGACY_EXECUTION_ENABLED',
+            'CRYPTO_AUTO_TRADE_ENABLED','BITGET_AUTO_TRADE_ENABLED','BITGET_LIVE_ORDER_ENABLED',
+            'UPBIT_LIVE_ORDER_ENABLED','KIWOOM_LIVE_ORDER_ENABLED','TOSS_LIVE_ORDER_ENABLED',
+          ];
+          if(tradingKeys.some(k=>env[k]==='true')
+            ||String(env.executionAuthority||'NONE').toUpperCase()!=='NONE')
+            throw Error('TELEGRAM_PRODUCTION_TRADING_AUTHORITY_ACTIVE');
+          if(env.LIVE_TELEGRAM_ACTIVATION_APPROVED!=='true'
+            ||env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED!=='true'
+            ||env.PERSONAL_TELEGRAM_WORKER_ENABLED!=='true')
+            throw Error('TELEGRAM_EXISTING_ACTIVATION_NOT_PROVEN');
+          const roomKeys=[
+            'TELEGRAM_KR_STOCK_CHAT_ID','TELEGRAM_US_STOCK_CHAT_ID',
+            'TELEGRAM_CRYPTO_SPOT_CHAT_ID','TELEGRAM_CRYPTO_FUTURES_CHAT_ID',
+            'TELEGRAM_PERSONAL_HOLDINGS_CHAT_ID','TELEGRAM_AUTO_TRADING_CHAT_ID',
+          ];
+          const ids=roomKeys.map(k=>String(env[k]||'').trim());
+          if(ids.some(v=>!/^(-100)[0-9]{8,15}$/.test(v))
+            ||new Set(ids).size!==6)throw Error('TELEGRAM_SIX_ROOM_ISOLATION_FAILED');
+          console.log(sha);
+          NODE
+          REMOTE
+          )"
+          [[ "$previous" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          echo "sha=$previous" >> "$GITHUB_OUTPUT"
+
+      - name: Reject unrelated files between actual Production and exact main
+        uses: actions/github-script@v7
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const {pathToFileURL}=require('node:url');
+            const module=await import(pathToFileURL(
+              process.env.GITHUB_WORKSPACE+'/ops/telegram-production-code-only-scope.mjs').href);
+            const response=await github.rest.repos.compareCommits({
+              owner:context.repo.owner,repo:context.repo.repo,
+              base:process.env.PREVIOUS_SHA,head:process.env.EXPECTED_SHA,per_page:100,
+            });
+            const verdict=module.classifyTelegramCodeOnlyDiff(response.data);
+            if(!verdict.ok){core.setFailed(verdict.code);return;}
+            core.info('TELEGRAM_CODE_ONLY_SOURCE_SCOPE_PASS; files='+verdict.changedFileCount);
+
+      - name: Deploy exact code using existing canary, PM2 and rollback script
+        env:
+          APPROVED_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$APPROVED_SHA" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          LIVE_DIR=/opt/stock-app
+          SOURCE_DIR="$(mktemp -d /tmp/stock-app-telegram-only.XXXXXX)"
+          trap 'rm -rf -- "$SOURCE_DIR"' EXIT
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$SOURCE_DIR"
+          git -C "$SOURCE_DIR" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          resolved="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD^{commit})"
+          [[ "$resolved" == "$TARGET_SHA" ]]
+          git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
+          test -f "$SOURCE_DIR/ops/deploy-production.sh"
+          test -f "$SOURCE_DIR/ops/production-verification-diagnostics.sh"
+          BASH_ENV="$SOURCE_DIR/ops/production-verification-diagnostics.sh" \
+            SOURCE_DIR="$SOURCE_DIR" LIVE_DIR="$LIVE_DIR" PM2_NAME=stock-app LIVE_PORT=8080 \
+            CANARY_PORT=18081 DATA_PROBE_PATH=/api/healthz/data-plane \
+            PUBLIC_BASE_URL=https://lsj119.com \
+            bash "$SOURCE_DIR/ops/deploy-production.sh" "$TARGET_SHA"
+          REMOTE
+
+      - name: Read back exact Production application and worker health, no message send
+        env:
+          APPROVED_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'EXPECTED_SHA=%q' "$APPROVED_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env node -" <<'NODE'
+          const fs=require('node:fs');
+          const {execFileSync}=require('node:child_process');
+          const http=require('node:http');
+          const expected=process.env.EXPECTED_SHA;
+          const states=JSON.parse(execFileSync('pm2',['jlist'],{
+            encoding:'utf8',timeout:10000,maxBuffer:20000000,
+          })).filter(x=>x.name==='stock-app');
+          if(states.length!==1||states[0].pm2_env?.status!=='online'
+            ||states[0].pm2_env?.DEPLOY_SHA!==expected)
+            throw Error('TELEGRAM_POSTDEPLOY_RUNTIME_MISMATCH');
+          const marker=fs.readFileSync('/opt/stock-app/.deploy/current-sha','utf8').trim();
+          if(marker!==expected)throw Error('TELEGRAM_POSTDEPLOY_MARKER_MISMATCH');
+          const req=http.get('http://127.0.0.1:8080/api/health',{timeout:5000},res=>{
+            let text='';res.on('data',c=>{text+=c;if(text.length>131072)res.destroy();});
+            res.on('end',()=>{
+              let obj;try{obj=JSON.parse(text);}catch{throw Error('TELEGRAM_HEALTH_INVALID');}
+              if(res.statusCode!==200||obj?.ok!==true
+                ||obj.processDeploySha!==expected||obj.deployMarkerSha!==expected
+                ||obj.identityMatch!==true
+                ||obj.telegramIntelligenceWorker?.state!=='RUNNING')
+                throw Error('TELEGRAM_POSTDEPLOY_WORKER_NOT_RUNNING');
+              console.log('TELEGRAM_CODE_ONLY_DEPLOY_READBACK_OK; no Bot API proof send');
+            });
+          });
+          req.on('error',()=>{process.exitCode=1;});
+          req.on('timeout',()=>req.destroy());
+          NODE
+
+      - name: Record sanitized code-only deployment evidence
+        if: ${{ success() }}
+        uses: actions/github-script@v7
+        env:
+          APPROVED_SHA: ${{ steps.target.outputs.sha }}
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner:context.repo.owner,repo:context.repo.repo,issue_number:1555,
+              body:[
+                'TELEGRAM CODE-ONLY PRODUCTION DEPLOY — APP CODE APPLIED',
+                '- Source SHA: '+process.env.PREVIOUS_SHA,
+                '- Exact new PM2/main SHA: '+process.env.APPROVED_SHA,
+                '- Existing deployment canary and rollback: passed',
+                '- No Production SQL migration, Bot API test send or webhook change by this workflow.',
+                '- No trading gate elevation or new order action.',
+                '- Telegram runtime health: RUNNING; actual user receipt NOT verified.',
+                '- Separate approved /run-telegram-worker-readonly is needed for persisted ledgers and V3 freshness.',
+                '- GitHub Run: '+context.runId,
+              ].join('\n'),
+            });
