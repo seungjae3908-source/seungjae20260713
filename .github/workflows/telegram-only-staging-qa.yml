@@ -163,6 +163,7 @@ jobs:
           const r = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const expected = [
             'schemaVersion','scope','targetSha','pm2Sha','markerSha','pm2Online',
+            'runtimeSha','healthMarkerSha','healthIdentityMatch',
             'networkPath','classification','botIdentityVerified',
             'roomPostingVerified','telegramSends','financialMutations',
             'stagingDeployed','productionDeployed','secretValuesRecorded',
@@ -175,7 +176,9 @@ jobs:
             || r.schemaVersion !== 'telegram-only-staging-readonly-v1'
             || r.scope !== 'TELEGRAM_ONLY_STAGING_NETWORK'
             || r.targetSha !== process.argv[3]
-            || ![r.pm2Sha,r.markerSha].every(x => x === null || /^[0-9a-f]{40}$/u.test(x))
+            || ![r.pm2Sha,r.markerSha,r.runtimeSha,r.healthMarkerSha]
+              .every(x => x === null || /^[0-9a-f]{40}$/u.test(x))
+            || typeof r.healthIdentityMatch !== 'boolean'
             || typeof r.pm2Online !== 'boolean'
             || !safe.includes(r.networkPath)
             || !/^[A-Z_]+$/u.test(String(r.classification))
@@ -203,8 +206,11 @@ jobs:
               body: [
                 'TELEGRAM-ONLY STAGING QA (NO DEPLOY / NO SEND)',
                 '- Exact main: ' + v.targetSha,
-                '- Staging PM2 SHA: ' + (v.pm2Sha || 'unverified'),
+                '- PM2 supervisor env SHA: ' + (v.pm2Sha || 'not exported to supervisor'),
+                '- Actual running Staging app SHA: ' + (v.runtimeSha || 'unverified'),
                 '- Staging marker SHA: ' + (v.markerSha || 'unverified'),
+                '- Health marker SHA / identity match: ' +
+                  (v.healthMarkerSha || 'unverified') + ' / ' + String(v.healthIdentityMatch),
                 '- Staging PM2 online: ' + String(v.pm2Online),
                 '- Token-free Telegram IPv4/TLS: ' + v.networkPath,
                 '- Network-only classification: ' + v.classification,
@@ -226,7 +232,11 @@ jobs:
           if (r.classification !== 'STAGING_TELEGRAM_NETWORK_ONLY_PASS'
             || r.networkPath !== 'IPV4_TLS_READY'
             || r.pm2Online !== true
-            || r.targetSha !== r.pm2Sha || r.pm2Sha !== r.markerSha) {
+            || r.healthIdentityMatch !== true
+            || r.targetSha !== r.runtimeSha
+            || r.runtimeSha !== r.markerSha
+            || r.markerSha !== r.healthMarkerSha
+            || (r.pm2Sha !== null && r.pm2Sha !== r.runtimeSha)) {
             console.error('TELEGRAM_STAGING_SCOPE_NOT_READY');
             console.error('Safe classification: ' + r.classification);
             console.error('Safe network code: ' + r.networkPath);

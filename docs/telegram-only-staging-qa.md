@@ -24,9 +24,15 @@ requires them.** The full-application gate retains its existing settings.
    The job uses only the protected `staging` environment and the
    `STAGING_SSH_*` secrets. It inspects only PM2 process
    `seungjae-staging` and its deploy marker under
-   `/srv/seungjae-staging`, then performs a token-free IPv4 DNS/TLS 443
-   handshake with `api.telegram.org`. A stale Staging SHA, offline PM2 or
-   blocked TLS route produces a failed job, with a sanitized receipt on #1555.
+   `/srv/seungjae-staging`. The live app SHA is checked against its fixed
+   direct-loopback `http://127.0.0.1:18083/api/health`, because the Staging
+   launcher uses `node --env-file=.env.staging` and therefore PM2 supervisor
+   environment metadata may not expose `DEPLOY_SHA`. Full health bodies are
+   never published; only sanitized revision and boolean identity fields are
+   retained. The job then performs a token-free IPv4 DNS/TLS 443 handshake
+   with `api.telegram.org`. A stale live Staging SHA, offline PM2, inconsistent
+   health/marker revision or blocked TLS route produces a failed job, with a
+   sanitized receipt on #1555.
    **No Staging deployment is performed by this QA.**
 
 This stage check proves **network reachability only**: a TLS handshake is
