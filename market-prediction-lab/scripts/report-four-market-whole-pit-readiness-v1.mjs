@@ -15,6 +15,8 @@ import {fileURLToPath} from "node:url";
 import {auditFourMarketHistoricalWholeUniverseV1,
  WHOLE_MARKET_BENCHMARK_WINDOW_V1}
  from "../src/four-market-whole-pit-price-coverage-v1.js";
+import {selectedCryptoUtcDaysV1,resolveSelectedResearchWindowV1}
+ from "../src/research-selected-window-v1.js";
 // Exactly the fixed 3-year daily benchmark period used by the existing
 // run-us-daily-opportunity-scanner-3y-v1.py, NOT the six-symbol 2026-10-09 QA.
 // A UTC calendar date is not proof that every contract was live/tradable.
@@ -24,19 +26,20 @@ export const THREE_YEAR_UTC_DATE_SCOPE_V1=Object.freeze({
   originalDailyBenchmarkInclusiveEndDate:"2026-09-25",
 });
 export function fixedHistoricalCryptoUtcDatesV1(){
- const days=[];
- for(let ts=THREE_YEAR_UTC_DATE_SCOPE_V1.startMs;
-     ts<THREE_YEAR_UTC_DATE_SCOPE_V1.endExclusiveMs;ts+=86_400_000)
-   days.push(ts);
- if(days.length!==WHOLE_MARKET_BENCHMARK_WINDOW_V1.expectedCryptoUtcDayCount)
+ const dates=selectedCryptoUtcDaysV1();
+ if(dates.CRYPTO_SPOT.length!==
+     WHOLE_MARKET_BENCHMARK_WINDOW_V1.expectedCryptoUtcDayCount)
    throw new Error("PIT_CRYPTO_HISTORY_DATE_COUNT_INVALID");
- return {
-   CRYPTO_SPOT:[...days],CRYPTO_FUTURES:[...days],
- };
+ return {CRYPTO_SPOT:[...dates.CRYPTO_SPOT],
+   CRYPTO_FUTURES:[...dates.CRYPTO_FUTURES]};
+}
+export function selectedHistoricalCryptoUtcDatesV1(researchWindow){
+ return selectedCryptoUtcDaysV1(researchWindow);
 }
 export function reportFourWholePITReadinessV1(raw=null){
- // One or six selected symbols on one date are never the 3-year denominator.
- const fixed=fixedHistoricalCryptoUtcDatesV1();
+ // Selected dates are user-controlled; null retains the old regression only.
+ const selected=resolveSelectedResearchWindowV1(raw?.researchWindow??null);
+ const fixed=selectedHistoricalCryptoUtcDatesV1(raw?.researchWindow??null);
  if(raw!=null&&(typeof raw!=="object"||Array.isArray(raw)))
    throw new TypeError("PIT_BENCHMARK_SOURCE_NOT_AN_OBJECT");
  const submitted=raw?.requestedTradingDaysByMarket??{};
@@ -54,8 +57,11 @@ export function reportFourWholePITReadinessV1(raw=null){
  const audit=auditFourMarketHistoricalWholeUniverseV1({
    requestedTradingDaysByMarket:{...submitted,...fixed},
    dailyReceiptsByMarket:raw?.dailyReceiptsByMarket??{},
+   researchWindow:raw?.researchWindow??null,
  });
  return Object.freeze({...audit,
+   selectedResearchStartUtc:selected.startDate,
+   selectedResearchEndInclusiveUtc:selected.endDate,
    partialCallerCryptoCalendarIgnored:overridden,
  });
 }

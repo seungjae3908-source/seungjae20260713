@@ -1,5 +1,7 @@
 import {createHash} from "node:crypto";
 import {auditHistoricalPITVenueUniverseV1} from "./historical-pit-venue-universe-gate-v1.js";
+import {resolveSelectedResearchWindowV1,RESEARCH_WINDOW_MAX_UTC_DAYS_V1}
+ from "./research-selected-window-v1.js";
 
 /**
  * Source-coverage gate for the user's ACTUAL four venues and their historical
@@ -210,14 +212,18 @@ export function auditWholeVenuePITDailyCoverageV1({
 }
 export function auditFourMarketHistoricalWholeUniverseV1({
   requestedTradingDaysByMarket={},dailyReceiptsByMarket={},
+  researchWindow=null,
 }={}){
   if(!object(requestedTradingDaysByMarket)||!object(dailyReceiptsByMarket))
     throw new TypeError("WHOLE_FOUR_MARKET_INPUT_INVALID");
   const results={};
-  const benchmark=WHOLE_MARKET_BENCHMARK_WINDOW_V1;
+  // Explicit user-selected range. Null keeps the legacy 3-year regression.
+  const selectedWindow=resolveSelectedResearchWindowV1(researchWindow);
+  const benchmark=selectedWindow;
   for(const market of MARKETS){
     const days=requestedTradingDaysByMarket[market];
-    if(!Array.isArray(days)||!days.length||days.length>1100
+    if(!Array.isArray(days)||!days.length
+       ||days.length>RESEARCH_WINDOW_MAX_UTC_DAYS_V1
        ||days.some((d,i)=>!dayValid(d)||(i>0&&d<=days[i-1]))){
       results[market]={
         ...blocked(market,"HISTORICAL_TRADING_SESSION_CALENDAR_NOT_CONNECTED"),
@@ -242,10 +248,13 @@ export function auditFourMarketHistoricalWholeUniverseV1({
     }
     const crypto=market==="CRYPTO_SPOT"||market==="CRYPTO_FUTURES";
     const exactCryptoCalendar=crypto&&
-      days.length===benchmark.expectedCryptoUtcDayCount&&
+      days.length===benchmark.requestedUtcDayCount&&
       days.every((day,i)=>day===benchmark.startMs+i*DAY);
     const calendarStatus=crypto
-      ?(exactCryptoCalendar?"FULL_1096_UTC_DAYS":"PARTIAL_FIXED_CRYPTO_UTC_CALENDAR")
+      ?(exactCryptoCalendar
+        ?(selectedWindow.selectedByUser?"FULL_SELECTED_UTC_DAYS":"FULL_1096_UTC_DAYS")
+        :(selectedWindow.selectedByUser
+          ?"PARTIAL_SELECTED_UTC_CALENDAR":"PARTIAL_FIXED_CRYPTO_UTC_CALENDAR"))
       :"STOCK_EXCHANGE_SESSION_CALENDAR_UNVERIFIED";
     const receipts=dailyReceiptsByMarket[market];
     const input=object(receipts)?receipts:{};
@@ -355,6 +364,10 @@ export function auditFourMarketHistoricalWholeUniverseV1({
       MARKETS.every(m=>results[m].benchmarkPeriodSourceAttestedPriceJoined===true),
     fixedBenchmarkStartUtc:"2023-09-26",
     fixedBenchmarkEndInclusiveUtc:"2026-09-25",
+    selectedResearchStartUtc:selectedWindow.startDate,
+    selectedResearchEndInclusiveUtc:selectedWindow.endDate,
+    selectedResearchUtcDayCount:selectedWindow.requestedUtcDayCount,
+    researchRangeSelectionMode:selectedWindow.selectionMode,
     historicalFullMarketOpportunityDenominatorVerified:false,
     historicalScannerRecall:null,actualFillCount:null,
     trueMarketWideRecall:null,netProfitPct:null,OOSPassCount:0,

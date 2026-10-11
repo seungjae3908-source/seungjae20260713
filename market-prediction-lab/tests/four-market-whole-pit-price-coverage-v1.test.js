@@ -392,3 +392,66 @@ test("one short-span PIT archive substituted into full 1096-day series never pro
  assert.equal(result.actualMarketWideOpportunityCount,null);
  assert.equal(result.trueMarketWideRecall,null);
 });
+
+test("user-selected 5 UTC days including leap-day replace the old fixed 3y crypto calendar",()=>{
+ const picked={startDate:"2020-02-27",endDate:"2020-03-02"};
+ const r=reportFourWholePITReadinessV1({researchWindow:picked,
+   requestedTradingDaysByMarket:{CRYPTO_SPOT:[START]}});
+ assert.equal(r.selectedResearchStartUtc,"2020-02-27");
+ assert.equal(r.selectedResearchEndInclusiveUtc,"2020-03-02");
+ assert.equal(r.selectedResearchUtcDayCount,5);
+ assert.equal(r.researchRangeSelectionMode,"USER_SELECTED");
+ for(const m of ["CRYPTO_SPOT","CRYPTO_FUTURES"]){
+  assert.equal(r.markets[m].requestedTradingDays,5);
+  assert.equal(r.markets[m].sourceAttestedPriceJoinedDays,0);
+  assert.equal(r.markets[m].blockedReasonCounts
+   .PIT_DATED_HISTORICAL_PIT_ROSTER_NOT_CONNECTED,5);
+  assert.equal(r.markets[m].benchmarkCalendarStatus,"FULL_SELECTED_UTC_DAYS");
+  assert.equal(r.markets[m].actualMarketWideOpportunityCount,null);
+ }
+ assert.equal(r.partialCallerCryptoCalendarIgnored.CRYPTO_SPOT,true);
+ assert.equal(r.markets.KR_STOCK.requestedTradingDays,null);
+ assert.equal(r.trueMarketWideRecall,null);
+ assert.equal(r.profitabilityProven,false);
+});
+test("calendar selection outside 3-year example is allowed, no invented history",()=>{
+ const r=reportFourWholePITReadinessV1({
+  researchWindow:{startDate:"2027-01-01",endDate:"2027-01-02"},
+ });
+ assert.equal(r.selectedResearchUtcDayCount,2);
+ assert.equal(r.markets.CRYPTO_SPOT.requestedTradingDays,2);
+ assert.equal(r.markets.CRYPTO_FUTURES.requestedTradingDays,2);
+ assert.equal(r.markets.CRYPTO_SPOT.sourceAttestedPriceJoinedDays,0);
+ assert.equal(r.actualFillCount,null);
+ assert.equal(r.historicalFullMarketOpportunityDenominatorVerified,false);
+});
+test("custom one-day real research scope does not become 3-year proof from fixture",()=>{
+ const period={startDate:"2025-02-03",endDate:"2025-02-03"};
+ const a=four({
+  researchWindow:period,
+  requestedTradingDaysByMarket:{CRYPTO_SPOT:[START]},
+  dailyReceiptsByMarket:{
+    CRYPTO_SPOT:{[String(START)]:source("CRYPTO_SPOT")},
+  },
+ });
+ assert.equal(a.markets.CRYPTO_SPOT.requestedTradingDays,1);
+ assert.equal(a.markets.CRYPTO_SPOT.sourceAttestedPriceJoinedDays,1);
+ assert.equal(a.markets.CRYPTO_SPOT.fixtureJoinedDays,1);
+ assert.equal(a.markets.CRYPTO_SPOT.benchmarkCalendarStatus,"FULL_SELECTED_UTC_DAYS");
+ assert.equal(a.markets.CRYPTO_SPOT.benchmarkPeriodSourceAttestedPriceJoined,false);
+ assert.equal(a.selectedResearchStartUtc,period.startDate);
+ assert.equal(a.selectedResearchEndInclusiveUtc,period.endDate);
+ assert.equal(a.actualFillCount,null);
+ assert.equal(a.trueMarketWideRecall,null);
+});
+test("invalid date / inverted range / half-supplied range cannot run the scanner",()=>{
+ for(const range of [
+  {startDate:"2025-02-30",endDate:"2025-03-01"},
+  {startDate:"2025-03-01",endDate:"2025-02-28"},
+  {startDate:"2025-01-01"},
+  {endDate:"2025-01-01"},
+ ]){
+  assert.throws(()=>reportFourWholePITReadinessV1({researchWindow:range}),
+    /RESEARCH_WINDOW/);
+ }
+});
