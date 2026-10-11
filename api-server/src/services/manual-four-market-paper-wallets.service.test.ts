@@ -71,7 +71,9 @@ test('reserved manual market namespace blocks forged noncanonical IDs in generic
   assert.equal(isManualPaperWalletId('manual-paper-member-v1:unknown'),false);
   assert.equal(isReservedManualPaperWalletNamespace('manual-paper-member-v1:unknown'),true);
   assert.equal(isReservedManualPaperWalletNamespace('manual-paper-admin-v1:crypto_futures'),true);
-  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-something-else'),false);
+  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-something-else'),true);
+  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-member-v2:us_stock'),true);
+  assert.equal(isReservedManualPaperWalletNamespace('manual-paper-unknown-v1:us_stock'),true);
   assert.equal(isReservedManualPaperWalletNamespace('automatic-paper-member-v2:crypto_spot'),false);
   const forged=snapshot('member');
   const extra={...forged[0],id:'manual-paper-member-v1:unknown'};
