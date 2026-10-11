@@ -29,6 +29,7 @@ on:
       - market-prediction-lab/src/research-minute-archive-v1.js
       - market-prediction-lab/scripts/research-minute-archive-v1.mjs
       - market-prediction-lab/tests/research-minute-archive-v1.test.js
+      - market-prediction-lab/tests/research-minute-archive-index-v1.test.js
       - market-prediction-lab/src/research-minute-archive-window-v1.js
       - market-prediction-lab/scripts/research-minute-archive-window-v1.mjs
       - market-prediction-lab/tests/research-minute-archive-window-v1.test.js
@@ -124,6 +125,7 @@ jobs:
           node --test market-prediction-lab/tests/research-minute-to-multiframe-v1.test.js
           node --test market-prediction-lab/tests/research-multitimeframe-cli-v1.test.js
           node --test market-prediction-lab/tests/research-minute-archive-v1.test.js
+          node --test market-prediction-lab/tests/research-minute-archive-index-v1.test.js
           node --test market-prediction-lab/tests/research-minute-archive-window-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-minute-archive-join-v1.test.js
           node --test market-prediction-lab/tests/four-market-pit-minute-day-ledger-v1.test.js
