@@ -1023,6 +1023,14 @@ export class TradeExecutionService {
   private async assertAutomaticLiveEntryAuthorized(userId: string, plan: TradingPlan) {
     if (plan.accountMode !== 'live' || plan.executionMode !== 'automatic'
       || isRiskReducingExitPlan(plan)) return;
+    await this.assertAutomaticLiveEntryControls(userId, plan);
+    await this.assertAutomaticLivePositionIsolation(userId, plan);
+    // Private reads can take time. Recheck revocable authority and member caps
+    // AFTER them, rather than trusting a pre-read arm/policy decision.
+    await this.assertAutomaticLiveEntryControls(userId, plan);
+  }
+
+  private async assertAutomaticLiveEntryControls(userId: string, plan: TradingPlan) {
     // A provider-side margin/leverage mutation is still a financial mutation,
     // even if no order POST follows. Enforce this before EACH mutable call,
     // and recheck after preflight at the actual order intent boundary.
@@ -1051,7 +1059,6 @@ export class TradeExecutionService {
     if (!await liveEntryArmPresent()) {
       throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
-    await this.assertAutomaticLivePositionIsolation(userId, plan);
   }
 
   private async assertAutomaticLivePositionIsolation(userId: string, plan: TradingPlan) {
@@ -1070,6 +1077,9 @@ export class TradeExecutionService {
     await this.assertAutomaticLiveEntryAuthorized(order.userId, risk.plan);
     if (isRiskReducingExitPlan(risk.plan)) {
       await this.assertAutomaticLivePositionIsolation(order.userId, risk.plan);
+      if (risk.plan.accountMode === 'live' && (risk.plan.executionMode === 'automatic'
+        || risk.plan.signalReasons.some((reason) => reason.startsWith('AUTO_EXIT_ENTRY_PLAN:')))
+        && !await liveEntryArmPresent()) throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY');
     }
     const submissionAttemptId = randomUUID();
     order.submissionStartedAt = new Date().toISOString();
