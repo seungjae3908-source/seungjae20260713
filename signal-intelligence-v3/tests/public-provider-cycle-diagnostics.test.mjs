@@ -166,3 +166,18 @@ test('provider HTTP errors and data-quality missing bars receive different top-l
   assert.equal(d.rows.find(x=>x.market==='CRYPTO_SPOT').status,'DATA_QUALITY_BLOCKED');
   assert.equal(d.rows.find(x=>x.market==='US_STOCK').status,'PROVIDER_BLOCKED');
 });
+
+test('global lane deadline is separately visible even with zero item timeout counters',()=>{
+ const s=snapshot();
+ const futures=s.coverage.find(x=>x.market==='CRYPTO_FUTURES'&&x.strategy==='SWING');
+ futures.status='SEARCH_FAILURE';
+ futures.providerErrors=0;futures.timeouts=0;
+ futures.batchDeadlineExceeded=true;futures.partialExecution=true;
+ const out=inspectExactPublicProviderCycle(s,SHA,NOW);
+ const row=out.rows.find(x=>x.market==='CRYPTO_FUTURES');
+ assert.equal(row.status,'BATCH_DEADLINE_BLOCKED');
+ assert.equal(row.providerErrorCount,0);
+ assert.equal(row.timeoutCount,0);
+ assert.equal(row.lanes[1].batchDeadlineExceeded,true);
+ assert.ok(out.releaseReadiness.blockers.includes('MARKET_CRYPTO_FUTURES_BATCH_DEADLINE_BLOCKED'));
+});

@@ -73,6 +73,8 @@ function statusFor(rows) {
     || Number(row.publicProviderFailureSummary?.categories?.INVALID_DATA ?? 0) > 0
     || Number(row.publicProviderFailureSummary?.categories?.SYMBOL_MAPPING ?? 0) > 0))
     return 'DATA_QUALITY_BLOCKED';
+  if (rows.some(row => row.batchDeadlineExceeded === true))
+    return 'BATCH_DEADLINE_BLOCKED';
   if (rows.some(row => row.status === 'SEARCH_FAILURE')) return 'SEARCH_FAILURE_UNKNOWN';
   if (rows.some(row => row.status === 'BLOCKED_DATA')) return 'PARTIAL_OR_UNTRUSTED';
   return 'CURRENT_BATCHES_ONLY';
@@ -125,6 +127,8 @@ export function inspectExactPublicProviderCycle(snapshot, expectedSha, nowMs = D
         completedCount:count(row.completedCount)?row.completedCount:null,
         insufficientDataCount:count(row.insufficientDataCount)?row.insufficientDataCount:null,
         invalidDataFailureCount:count(row.invalidDataFailureCount)?row.invalidDataFailureCount:null,
+        batchDeadlineExceeded:row.batchDeadlineExceeded===true,
+        partialExecution:row.partialExecution===true,
         publicProviderFailureSummary: row.publicProviderFailureSummary &&
           row.publicProviderFailureSummary.symbolsRedacted === true &&
           typeof row.publicProviderFailureSummary === 'object'

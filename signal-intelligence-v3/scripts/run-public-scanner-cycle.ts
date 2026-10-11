@@ -14,7 +14,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
-import { getPublicScannerProfileSet } from '../src/public-scanner-profiles.mjs';
+import { getPublicScannerProfileSet, PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT } from '../src/public-scanner-profiles.mjs';
 import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-overlay.mjs';
 import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } from '../src/public-research-rotation.mjs';
 import {
@@ -45,7 +45,7 @@ const marketProfiles = Object.freeze([
   Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: PUBLIC_PROFILE_MODE === 'MEMBER_UI' ? 10 : 20 }),
   Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: PUBLIC_PROFILE_MODE === 'MEMBER_UI' ? 10 : 20 }),
   Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: PUBLIC_V3_SPOT_STAGE_TWO_LIMIT }),
-  Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: PUBLIC_PROFILE_MODE === 'MEMBER_UI' ? 10 : 20 }),
+  Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT }),
 ]);
 const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
   ...market,
@@ -458,6 +458,10 @@ async function main() {
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
+        // Overall 12-second budget may expire even with 0 per-item timeouts.
+        // This must not be labeled as an unexplained successful zero-error scan.
+        batchDeadlineExceeded: response.execution.timedOut === true,
+        partialExecution: response.execution.partial === true,
         // Only bounded reason classes from the SAME already completed cycle.
         // This emits no symbol, raw body, URL, token or extra network call.
         publicProviderFailureSummary: summarizePublicProviderFailureReasons(response.failures),
@@ -483,6 +487,8 @@ async function main() {
         insufficientDataCount: null,
         invalidDataFailureCount: null,
         status: 'SEARCH_FAILURE',
+        batchDeadlineExceeded: null,
+        partialExecution: null,
         leverage: { evaluated: 0, available: 0, blocked: 0, unavailable: 0 },
         lastGoodPreserved: true,
         error: error instanceof Error ? error.message.split(':')[0] : 'UNKNOWN',
