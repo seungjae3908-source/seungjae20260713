@@ -1,4 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import type {
+  MemberAutoTradingFxMarket,
+  MemberAutoTradingFxQuote,
+} from './member-auto-trading-fx.service';
+import { resolveMemberAutoTradingKrwRate } from './member-auto-trading-fx.service';
+
 import type { TradingRepository } from './trade-automation.repository';
 import {
   TradeAutomationService,
@@ -474,6 +480,102 @@ export function paperSimulatedCostAmount(
   return Number.isFinite(amount) && amount >= 0 ? amount : null;
 }
 
+/** This evidence source runs only in the server-side simulated fill lane. */
+export type ServerPaperCostPolicyV1 = Readonly<{
+  source: 'SERVER_PAPER_COST_POLICY_V1';
+  policyId: string;
+  market: MemberAutoTradingFxMarket;
+  exchange: TradingPlan['exchange'];
+  feeRatePercent: number;
+  taxRatePercent: number;
+  effectiveAt: string;
+  expiresAt: string;
+}>;
+export type ServerPaperCostEvidenceProviders = Readonly<{
+  // The built-in default reader uses public price quotes, never account keys.
+  fxQuote?: (market: MemberAutoTradingFxMarket, options?: { nowMs?: number }) => Promise<MemberAutoTradingFxQuote>;
+  // There is deliberately NO default tax rate: a missing market policy is
+  // unknown, not a fabricated zero-tax receipt.
+  costPolicy?: (plan: TradingPlan, nowMs: number) => Promise<ServerPaperCostPolicyV1 | null>;
+}>;
+
+function paperQuoteMarket(plan: TradingPlan): MemberAutoTradingFxMarket {
+  if (plan.exchange === 'upbit') return 'CRYPTO_SPOT';
+  if (plan.exchange === 'bitget') return 'CRYPTO_FUTURES';
+  const us = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(
+    String(plan.market).toUpperCase(),
+  ) || ['NASDAQ', 'NYSE', 'AMEX'].includes(String(plan.stockExchange ?? '').toUpperCase());
+  return us ? 'US_STOCK' : 'KR_STOCK';
+}
+
+export async function serverPaperFillCostEvidence(
+  plan: TradingPlan,
+  price: number,
+  quantity: number,
+  estimatedFeePercent: number | null | undefined,
+  providers: ServerPaperCostEvidenceProviders = {},
+  nowMs = Date.now(),
+) {
+  const market = paperQuoteMarket(plan);
+  const currency = market === 'KR_STOCK' || market === 'CRYPTO_SPOT' ? 'KRW'
+    : market === 'US_STOCK' ? 'USD' : 'USDT';
+  const expectedFxSource = currency === 'KRW' ? 'NATIVE_KRW'
+    : currency === 'USD' ? 'YAHOO:USDKRW=X' : 'UPBIT:KRW-USDT';
+  const maxAgeMs = currency === 'USD' ? 86_400_000 : currency === 'USDT' ? 600_000 : 300_000;
+  let costPolicy: ServerPaperCostPolicyV1 | null = null;
+  if (plan.accountMode === 'paper' && providers.costPolicy) {
+    try {
+      const value = await providers.costPolicy(plan, nowMs);
+      const validAt = value ? Date.parse(value.effectiveAt) : Number.NaN;
+      const until = value ? Date.parse(value.expiresAt) : Number.NaN;
+      if (value?.source === 'SERVER_PAPER_COST_POLICY_V1'
+        && /^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(value.policyId)
+        && value.market === market && value.exchange === plan.exchange
+        && Number.isFinite(validAt) && validAt <= nowMs
+        && Number.isFinite(until) && until >= nowMs
+        && typeof value.feeRatePercent === 'number'
+        && Number.isFinite(value.feeRatePercent) && value.feeRatePercent >= 0
+        && value.feeRatePercent <= 100
+        && typeof value.taxRatePercent === 'number'
+        && Number.isFinite(value.taxRatePercent) && value.taxRatePercent >= 0
+        && value.taxRatePercent <= 100) costPolicy = value;
+    } catch { /* absent policy cannot certify a Paper tax */ }
+  }
+  const feeAmount = paperSimulatedCostAmount(
+    price, quantity, costPolicy?.feeRatePercent ?? estimatedFeePercent,
+  );
+  const taxAmount = costPolicy ? paperSimulatedCostAmount(
+    price, quantity, costPolicy.taxRatePercent,
+  ) : null;
+  let settlementFxEvidence: TradingOrder['settlementFxEvidence'] = null;
+  if (plan.accountMode === 'paper') {
+    try {
+      const fx = await (providers.fxQuote ?? resolveMemberAutoTradingKrwRate)(market, { nowMs });
+      const observedMs = Date.parse(fx.observedAt);
+      if (fx.market === market && fx.stale === false && fx.source === expectedFxSource
+        && typeof fx.krwPerQuoteCurrency === 'number'
+        && Number.isFinite(fx.krwPerQuoteCurrency) && fx.krwPerQuoteCurrency > 0
+        && (currency !== 'KRW' || fx.krwPerQuoteCurrency === 1)
+        && Number.isFinite(observedMs)
+        && observedMs <= nowMs + 5_000 && nowMs - observedMs <= maxAgeMs) {
+        settlementFxEvidence = Object.freeze({
+          krwPerQuoteCurrency: fx.krwPerQuoteCurrency,
+          source: expectedFxSource,
+          observedAt: new Date(observedMs).toISOString(),
+        });
+      }
+    } catch { /* a provider outage leaves FX unverified and settlement blocked */ }
+  }
+  return Object.freeze({
+    feeAmount,
+    feeCurrency: currency,
+    taxAmount,
+    taxCurrency: taxAmount == null ? null : currency,
+    trustedPaperCostPolicyId: taxAmount == null ? null : costPolicy?.policyId ?? null,
+    settlementFxEvidence,
+  });
+}
+
 export class TradeExecutionService {
   private automation: TradeAutomationService;
   private recovery: TradeOrderRecoveryService;
@@ -486,6 +588,7 @@ export class TradeExecutionService {
       (resolve) => setTimeout(resolve, delayMs),
     ),
     private tossTokens: Pick<TossTokenManager, 'token'> = processTossTokenManager(),
+    private readonly paperCostEvidenceProviders: ServerPaperCostEvidenceProviders = {},
   ) {
     this.automation = new TradeAutomationService(repository);
     this.recovery = new TradeOrderRecoveryService(repository);
@@ -934,19 +1037,36 @@ export class TradeExecutionService {
         const metadata = this.riskMetadata(risk, false);
         const { filledQuantity, averageFillPrice } = paperFill(plan, risk.snapshot);
         await this.automation.transition(order, 'ACCEPTED', 'PAPER_BROKER_ACCEPTED', metadata);
-        // Missing quote or risk-policy cost is NOT a proven zero fee.
-        const feeAmount = paperSimulatedCostAmount(
-          averageFillPrice, filledQuantity, risk.snapshot.estimatedFeePercent,
-        );
-        const feeCurrency = plan.exchange === 'upbit' || plan.market === 'KR'
-          ? 'KRW'
-          : plan.exchange === 'bitget' ? 'USDT' : 'USD';
+        // Always obtain non-native Paper FX from a *server-owned* public
+        // quote at fill time; never promote a client/entry-time FX snapshot.
+        // A tax/fee cost policy is separately issued by trusted server code,
+        // and absent policy evidence remains unknown rather than zero.
+        const cost = plan.accountMode === 'paper'
+          ? await serverPaperFillCostEvidence(
+            plan, averageFillPrice, filledQuantity,
+            risk.snapshot.estimatedFeePercent, this.paperCostEvidenceProviders,
+          )
+          : { feeAmount: paperSimulatedCostAmount(
+              averageFillPrice, filledQuantity, risk.snapshot.estimatedFeePercent,
+            ), feeCurrency: paperQuoteMarket(plan) === 'US_STOCK' ? 'USD'
+              : paperQuoteMarket(plan) === 'CRYPTO_FUTURES' ? 'USDT' : 'KRW',
+            taxAmount: null, taxCurrency: null,
+            trustedPaperCostPolicyId: null, settlementFxEvidence: null };
         return this.automation.transition(order, 'FILLED', 'PAPER_BROKER_FILLED', {
           ...metadata,
           exchangeOrderId: `paper-${order.clientOrderId}`,
           filledQuantity,
           averageFillPrice,
-          ...(feeAmount == null ? {} : { feeAmount, feeCurrency }),
+          ...(cost.feeAmount == null ? {} : {
+            feeAmount: cost.feeAmount, feeCurrency: cost.feeCurrency,
+          }),
+          ...(cost.taxAmount == null ? {} : {
+            taxAmount: cost.taxAmount,
+            taxCurrency: cost.taxCurrency,
+            trustedPaperCostPolicyId: cost.trustedPaperCostPolicyId,
+          }),
+          ...(cost.settlementFxEvidence
+            ? { settlementFxEvidence: cost.settlementFxEvidence } : {}),
         });
       }
 
