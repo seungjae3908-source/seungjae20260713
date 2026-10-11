@@ -277,13 +277,44 @@ export function clearTelegramAlertState(): void {
   unconfirmedAtByHash.clear();
 }
 
-function retryDelay(response: Response, attempt: number): number {
-  const retryAfter = response.headers.get('retry-after');
-  const seconds = retryAfter == null ? Number.NaN : Number(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(MAX_RETRY_DELAY_MS, Math.round(seconds * 1000));
+/** A Telegram HTTP 429 is an explicit rejection. Respect BOTH the HTTP
+ * Retry-After header and Bot API ResponseParameters.retry_after. If the
+ * server requires longer than the bounded retry budget, return control to
+ * the caller without an early replay or a long-held worker slot.
+ */
+async function retryDelay(response: Response, attempt: number): Promise<number | null> {
+  const hints: number[] = [];
+  const rawHeader = response.headers.get('retry-after');
+  if (rawHeader !== null) {
+    const header = rawHeader.trim();
+    const seconds = /^(?:0|[1-9]\\d*)(?:\\.\\d+)?$/u.test(header)
+      ? Number(header) : Number.NaN;
+    const fromDate = /GMT$/iu.test(header) ? Date.parse(header) : Number.NaN;
+    hints.push(Number.isFinite(seconds) && seconds >= 0
+      ? Math.ceil(seconds * 1000)
+      : Number.isFinite(fromDate) ? Math.max(0, fromDate - Date.now()) : Number.POSITIVE_INFINITY);
   }
-  return Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
+  const length = response.headers.get('content-length');
+  // An oversized/untrusted error body cannot authorize an immediate retry.
+  const bounded = length === null || (/^\\d+$/u.test(length) && Number(length) <= 4096);
+  if (bounded) {
+    try {
+      const payload: unknown = await response.clone().json();
+      const params = payload && typeof payload === 'object'
+        ? (payload as { parameters?: { retry_after?: unknown } }).parameters : undefined;
+      if (params && typeof params === 'object' && 'retry_after' in params) {
+        const seconds = params.retry_after;
+        hints.push(typeof seconds === 'number' && Number.isSafeInteger(seconds) && seconds >= 0
+          ? seconds * 1000 : Number.POSITIVE_INFINITY);
+      }
+    } catch { /* Absent/unreadable optional error JSON is not a success signal. */ }
+  } else {
+    hints.push(Number.POSITIVE_INFINITY);
+  }
+  const delay = hints.length > 0
+    ? Math.max(...hints) : Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
+  return Number.isFinite(delay) && delay >= 0 && delay <= MAX_RETRY_DELAY_MS
+    ? Math.ceil(delay) : null;
 }
 
 function safePhoto(input: TelegramPhotoAttachment | undefined): TelegramPhotoAttachment | null {
@@ -362,12 +393,13 @@ async function sendOnce(
 
     // HTTP 429 means rejected; a 5xx can occur after Telegram accepts a POST.
     // Never retry a possibly accepted non-idempotent sendMessage.
-    const retryable = response.status === 429;
-    if (retryable && attempt < MAX_RETRIES) {
-      const delay = retryDelay(response, attempt);
-      clearTimeout(timeout);
-      await sleep(delay);
-      return sendOnce(botToken, destination, text, input, attempt + 1);
+    if (response.status === 429 && attempt < MAX_RETRIES) {
+      const delay = await retryDelay(response, attempt);
+      if (delay !== null) {
+        clearTimeout(timeout);
+        await sleep(delay);
+        return sendOnce(botToken, destination, text, input, attempt + 1);
+      }
     }
     if (!response.ok) {
       return {
@@ -589,10 +621,12 @@ export async function editTelegramMessage(input: {
       // An ambiguous POST can already have applied remotely; delayed replay
       // could restore a stale order button. Retry only explicit HTTP 429.
       if (response.status === 429 && attempt < MAX_RETRIES) {
-        const delay = retryDelay(response, attempt);
-        clearTimeout(timeout);
-        await sleep(delay);
-        return run(attempt + 1);
+        const delay = await retryDelay(response, attempt);
+        if (delay !== null) {
+          clearTimeout(timeout);
+          await sleep(delay);
+          return run(attempt + 1);
+        }
       }
       if (!response.ok) {
         return response.status >= 500

@@ -286,6 +286,57 @@ test('Telegram edit retries an explicit HTTP 429 once but no other rejected requ
   assert.equal(calls, 2);
 });
 
+test('Telegram flood retry_after is honored without an early send or edit replay', async () => {
+  setFakeConfig();
+  for (const variant of ['bot_wait', 'header_wait'] as const) {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return variant === 'bot_wait'
+        ? new Response(JSON.stringify({ ok: false, error_code: 429,
+            parameters: { retry_after: 90 } }), {
+            status: 429, headers: { 'Content-Type': 'application/json' },
+          })
+        : new Response(JSON.stringify({ ok: false, error_code: 429,
+            parameters: { retry_after: 0 } }), {
+            status: 429, headers: { 'retry-after': '30', 'Content-Type': 'application/json' },
+          });
+    };
+    clearTelegramAlertState();
+    assert.deepEqual(await sendTelegramAlert({
+      type: 'system_critical', details: `flood-control-${variant}`,
+    }), { ok: false, attempts: 1, skipped: 'DELIVERY_FAILED',
+      errorCode: 'TELEGRAM_HTTP_429' });
+    assert.equal(calls, 1, 'send must respect flood-control wait longer than two seconds');
+
+    calls = 0;
+    assert.deepEqual(await editTelegramMessage({
+      destinationChatId: 'ci-chat-id-sentinel',
+      messageId: 77, messageKind: 'TEXT',
+      text: '주문 링크 삭제 상태 유지', buttons: [],
+    }), { ok: false, attempts: 1, skipped: 'DELIVERY_FAILED' });
+    assert.equal(calls, 1, 'edit must not replay before flood-control wait expires');
+  }
+});
+
+test('Telegram 429 with a zero-second Bot API retry hint can retry once', async () => {
+  setFakeConfig();
+  clearTelegramAlertState();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1
+      ? new Response(JSON.stringify({ ok: false, error_code: 429,
+          parameters: { retry_after: 0 } }), {
+          status: 429, headers: { 'Content-Type': 'application/json' },
+        }) : okResponse();
+  };
+  assert.deepEqual(await sendTelegramAlert({
+    type: 'system_critical', details: 'short flood-retry',
+  }), { ok: true, attempts: 2 });
+  assert.equal(calls, 2);
+});
+
 test('long signal updates preserve Telegram HTML tags, entities, and stale-button revocation', async () => {
   setFakeConfig();
   const calls: Array<Record<string, unknown>> = [];
