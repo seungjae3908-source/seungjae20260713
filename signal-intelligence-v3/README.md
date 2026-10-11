@@ -275,3 +275,19 @@ listed security is actively tradable, provide 15m/60m intraday candles,
 or grant a market-wide V3 PASS / Paper / LIVE permission. Any
 nonmatch/conflict stays UNKNOWN/CONFLICT. Do not enable without a
 separately approved KRX service application and read-only key source.
+
+## Draft: never cache a one-sided KRX finder response as full-market roster
+
+The existing KRX public master loads stocks and securities products
+using TWO independent finder POSTs. It silently returned `[]` for a
+failed/malformed finder and let the other successful page represent the
+whole exchange, poisoning the normal 24-hour universe cache.
+`assertKrFinderSourcesReady` now requires plausible nonempty volume
+and well-formed listing rows from BOTH finder sources before building
+or caching a live KRX master. On failure the existing
+`ScannerUniverseService` last-good or curated fallback paths remain
+`partial/stale`, not full scan successes. The conservative minima
+(1,000 stocks / 100 products) are a **source-outage guard**, not proof of
+official full-universe totals; stronger authorized listing-by-listing
+reconciliation is still needed. No private KRX/financial API calls,
+session mutation, orders or new service activation.

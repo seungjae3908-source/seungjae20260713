@@ -6,6 +6,7 @@ import type { SignalContext } from '../sample/accumulation';
 import type { Candle, Quote } from '../sample/types';
 import { MarketDataService } from './market-data.service';
 import { scannerUniverseCoveragePartial } from './scanner-universe.service';
+import { assertKrFinderSourcesReady } from '../providers/krx';
 import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   ScanProviderUnavailableError,
@@ -475,4 +476,24 @@ test('public KRX listed exclusions are never silently reported as complete roste
   assert.equal(scannerUniverseCoveragePartial(4010,6847,0),true);
   assert.equal(scannerUniverseCoveragePartial(NaN,4010,0),true);
   assert.equal(scannerUniverseCoveragePartial(0,0,0),false);
+});
+
+test('KRX stock and securities-product source pages must BOTH be complete enough', () => {
+  const stocks=Array.from({length:1200},(_,i)=>({
+    short_code:String(i).padStart(6,'0'),codeName:'STOCK',
+  }));
+  const products=Array.from({length:120},(_,i)=>({
+    short_code:'A'+String(i).padStart(5,'0'),codeName:'ETP',
+  }));
+  assert.doesNotThrow(()=>assertKrFinderSourcesReady(stocks,products));
+  assert.throws(()=>assertKrFinderSourcesReady([],products),/KRX_FINDER_SOURCE_PAIR_INCOMPLETE/);
+  assert.throws(()=>assertKrFinderSourcesReady(stocks,[]),/KRX_FINDER_SOURCE_PAIR_INCOMPLETE/);
+  assert.throws(()=>assertKrFinderSourcesReady(stocks,products.slice(0,50)),
+    /KRX_FINDER_SOURCE_PAIR_INCOMPLETE/);
+  const malformed=products.map(x=>({...x,short_code:'INVALID',codeName:''}));
+  assert.throws(()=>assertKrFinderSourcesReady(stocks,malformed),
+    /KRX_FINDER_SOURCE_PAIR_INCOMPLETE/);
+  assert.throws(()=>assertKrFinderSourcesReady(stocks,
+    Array.from({length:200},()=>({short_code:'PRIVATE_VALUE',codeName:''}))),
+    /KRX_FINDER_SOURCE_PAIR_INCOMPLETE/);
 });
