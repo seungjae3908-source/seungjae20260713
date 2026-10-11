@@ -20,6 +20,7 @@ import {
   MemberAutoTradingBackgroundWorker,
   liveBackgroundEnabled,
   memberAutoTradingWorkerMode,
+  costPercent,
   marketMapping,
   resolveMemberStockBroker,
   readMemberAutoTradingBackgroundRuntimeHealth,
@@ -2737,4 +2738,19 @@ test('blank live strategy allowlist is never wildcard authorization for a real o
   assert.equal(automaticLiveStrategyAllowlisted({
     enabledStrategies: undefined as never,
   }, 'safe-canonical-setup'), false);
+});
+
+test('Cost missing is not an allowed zero-rate estimate in automatic Paper handoff', () => {
+  const shape = (value: unknown) => ({
+    execution: { costPolicy: value },
+  }) as Parameters<typeof costPercent>[0];
+  assert.equal(costPercent(shape({commissionRate:0}), 'commissionRate'), 0);
+  assert.equal(costPercent(shape({commissionRate:0.001}), 'commissionRate'), 0.1);
+  for (const cost of [
+    undefined, null, {}, {commissionRate:null}, {commissionRate:''},
+    {commissionRate:NaN}, {commissionRate:Infinity}, {commissionRate:-0.1},
+    {commissionRate:1.1},
+  ]) {
+    assert.equal(costPercent(shape(cost), 'commissionRate'), null);
+  }
 });
