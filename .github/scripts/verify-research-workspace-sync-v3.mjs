@@ -421,6 +421,11 @@ const memberTelegramReviewed=[
 // Exact Paper-only integration additions reviewed from Draft #1836/#1839/#1840.
 // NO wildcard: original LIVE/Production/RLS/research guards remain enabled.
 const paperFourModeIntegrationReviewed=[
+ 'api-server/src/services/automatic-paper-v3-epoch.service.ts',
+ 'api-server/src/services/automatic-paper-v3-epoch.service.test.ts',
+ 'api-server/src/services/automatic-paper-v3-epoch-migration.test.ts',
+ 'api-server/supabase/migrations/2026101104_paper_research_round_wallet_epochs.sql',
+
  'api-server/src/services/manual-four-market-paper-cycle.service.ts',
  'api-server/src/services/manual-four-market-paper-cycle.service.test.ts',
  'api-server/src/routes/manual-four-market-paper-wallets.smoke.test.ts',
