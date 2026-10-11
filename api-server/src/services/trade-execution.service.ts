@@ -508,6 +508,84 @@ function paperQuoteMarket(plan: TradingPlan): MemberAutoTradingFxMarket {
   return us ? 'US_STOCK' : 'KR_STOCK';
 }
 
+
+/**
+ * A protected, explicit Paper-only simulated cost schedule. Research handoffs,
+ * UI payloads, old fills and trading snapshots have zero tax-policy authority.
+ *
+ * Only a protected server environment may provide MEMBER_AUTO_PAPER_COST_RULES_V1
+ * as JSON: {contract:"member-auto-paper-cost-rules/v1",rules:[{
+ *   market:"CRYPTO_SPOT",exchange:"upbit",
+ *   policyId:"server-paper-cost-v1:<approved-id>",
+ *   feeRatePercent:0.05,taxRatePercent:0,
+ *   effectiveAt:"2026-10-10T00:00:00.000Z",
+ *   expiresAt:"2026-10-12T00:00:00.000Z"
+ * }]}.
+ * The above illustrative percentages are NOT defaults or Production rates.
+ * Without explicit, valid, current evidence, tax stays unknown and full-cost
+ * settlement remains blocked. No settings or deployment are changed here.
+ */
+export function protectedAutomaticPaperCostPolicyV1(
+  plan: TradingPlan,
+  nowMs = Date.now(),
+  configText: string | undefined = process.env.MEMBER_AUTO_PAPER_COST_RULES_V1,
+): ServerPaperCostPolicyV1 | null {
+  if (plan.accountMode !== 'paper' || plan.executionMode !== 'automatic'
+    || !Number.isFinite(nowMs) || nowMs <= 0
+    || typeof configText !== 'string'
+    || configText.length < 2 || configText.length > 8192) return null;
+  let value: unknown;
+  try { value = JSON.parse(configText); } catch { return null; }
+  if (!isRecord(value) || value.contract !== 'member-auto-paper-cost-rules/v1'
+    || !Array.isArray(value.rules) || value.rules.length > 8) return null;
+  const allowed: Record<MemberAutoTradingFxMarket, readonly TradingExchange[]> = {
+    KR_STOCK: ['toss', 'kiwoom'],
+    US_STOCK: ['kiwoom'],
+    CRYPTO_SPOT: ['upbit'],
+    CRYPTO_FUTURES: ['bitget'],
+  };
+  const seen = new Set<string>();
+  const matches: ServerPaperCostPolicyV1[] = [];
+  for (const candidate of value.rules) {
+    if (!isRecord(candidate) || typeof candidate.market !== 'string'
+      || !Object.prototype.hasOwnProperty.call(allowed, candidate.market)
+      || typeof candidate.exchange !== 'string'
+      || !allowed[candidate.market as MemberAutoTradingFxMarket].includes(candidate.exchange as TradingExchange)
+      || typeof candidate.policyId !== 'string'
+      || !/^server-paper-cost-v1:[a-zA-Z0-9_.:-]{1,96}$/u.test(candidate.policyId)
+      || typeof candidate.feeRatePercent !== 'number'
+      || !Number.isFinite(candidate.feeRatePercent)
+      || candidate.feeRatePercent < 0 || candidate.feeRatePercent > 100
+      || typeof candidate.taxRatePercent !== 'number'
+      || !Number.isFinite(candidate.taxRatePercent)
+      || candidate.taxRatePercent < 0 || candidate.taxRatePercent > 100
+      || typeof candidate.effectiveAt !== 'string'
+      || typeof candidate.expiresAt !== 'string') return null;
+    const from = Date.parse(candidate.effectiveAt);
+    const until = Date.parse(candidate.expiresAt);
+    if (!Number.isFinite(from) || !Number.isFinite(until) || from >= until
+      || new Date(from).toISOString() !== candidate.effectiveAt
+      || new Date(until).toISOString() !== candidate.expiresAt) return null;
+    const identity = String(candidate.market) + ':' + String(candidate.exchange);
+    if (seen.has(identity)) return null; // Ambiguous overlapping rules are unsafe.
+    seen.add(identity);
+    if (candidate.market !== paperQuoteMarket(plan)
+      || candidate.exchange !== plan.exchange
+      || from > nowMs || until < nowMs) continue;
+    matches.push(Object.freeze({
+      source: 'SERVER_PAPER_COST_POLICY_V1' as const,
+      policyId: candidate.policyId,
+      market: candidate.market as MemberAutoTradingFxMarket,
+      exchange: candidate.exchange as TradingExchange,
+      feeRatePercent: candidate.feeRatePercent,
+      taxRatePercent: candidate.taxRatePercent,
+      effectiveAt: candidate.effectiveAt,
+      expiresAt: candidate.expiresAt,
+    }));
+  }
+  return matches.length === 1 ? matches[0]! : null;
+}
+
 export async function serverPaperFillCostEvidence(
   plan: TradingPlan,
   price: number,
