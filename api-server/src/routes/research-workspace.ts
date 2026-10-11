@@ -80,8 +80,15 @@ export function createResearchWorkspaceRouter(): IRouter {
     const markets = new Set<ResearchPITMarket>([
       'KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES',
     ]);
-    const validDate = (value: unknown): value is string =>
-      typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const dateMs = (value: unknown): number | null => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+      const ms = Date.parse(value + 'T00:00:00.000Z');
+      return Number.isSafeInteger(ms)
+        && new Date(ms).toISOString().slice(0, 10) === value ? ms : null;
+    };
+    const startMs = dateMs(startDate);
+    const endMs = dateMs(endDate);
+    const cursorMs = cursorDate == null ? null : dateMs(cursorDate);
     const chunkDays = chunkDaysInput == null ? 7 :
       typeof chunkDaysInput === 'string'
         && /^(?:[1-9]|[12][0-9]|3[01])$/.test(chunkDaysInput)
@@ -89,8 +96,9 @@ export function createResearchWorkspaceRouter(): IRouter {
     if (Object.keys(query).some(key => !allowed.has(key))
       || typeof market !== 'string'
       || !markets.has(market as ResearchPITMarket)
-      || !validDate(startDate) || !validDate(endDate)
-      || (cursorDate != null && !validDate(cursorDate))
+      || startMs == null || endMs == null || startMs > endMs
+      || (cursorDate != null && (
+        cursorMs == null || cursorMs < startMs || cursorMs > endMs))
       || !Number.isSafeInteger(chunkDays) || chunkDays < 1 || chunkDays > 31) {
       return res.status(400).json({
         schemaVersion: 'research-pit-minute-coverage-readonly-v1',
