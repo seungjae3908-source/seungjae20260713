@@ -52,6 +52,10 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   let lastPosition: PaperPosition | null = null;
 
   for (const order of state.orders.filter((item) => item.status === 'pending' && item.symbol === candle.symbol)) {
+    // A completed historical OHLC bar may have started before the order was
+    // submitted. Its intrabar high/low cannot authorize a later entry.
+    const submittedAtMs = Date.parse(order.submittedAt);
+    if (!Number.isFinite(submittedAtMs) || candle.timestamp <= submittedAtMs) continue;
     const trigger = pendingOrderTrigger(order, candle);
     if (!trigger) continue;
     try {
@@ -69,6 +73,9 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
   }
 
   for (const position of state.positions.filter((item) => item.status !== 'closed' && item.symbol === candle.symbol)) {
+    // Do not retroactively liquidate or take profit on pre-entry OHLC.
+    const openedAtMs = Date.parse(position.openedAt);
+    if (!Number.isFinite(openedAtMs) || candle.timestamp <= openedAtMs) continue;
     position.currentPrice = candle.close;
     updateExcursions(position, candle.high, candle.low);
     // Conservative intrabar ordering: a hypothetical 1..125x isolated
