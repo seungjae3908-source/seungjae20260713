@@ -244,6 +244,15 @@ function fourMarketPaperCapitalReadback(input: {
       openedAtMs: wallet.openedAtMs, nowMs: input.nowMs,
     });
     if (!scoped.valid) { fallback(code('WALLET_EPOCH_INVALID')); continue; }
+    // Production contains historical TRADING_CORE_QA_CANARY fills. An
+    // automated canary that appears *after* a new wallet epoch must NEVER
+    // become a member's full-cost PASS, trading capital or 50/50 reserve.
+    // Quarantine its market; do not silently hide new-epoch test exposure.
+    if (scoped.plans.some(plan =>
+      String(plan.strategyId ?? '').trim().toUpperCase() === 'TRADING_CORE_QA_CANARY')) {
+      fallback(code('QA_CANARY_IS_NOT_SETTLEMENT_EVIDENCE'));
+      continue;
+    }
     if (scoped.orders.some(order => ['FILLED','PARTIALLY_FILLED'].includes(order.state)
       && (!(order.filledQuantity > 0) || !(Number(order.averageFillPrice) > 0)))) {
       fallback(code('FILL_EXECUTION_EVIDENCE_INCOMPLETE')); continue;
