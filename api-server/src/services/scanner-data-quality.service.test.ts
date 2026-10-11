@@ -37,6 +37,49 @@ test('clean candles pass the gate and allow strong signals', () => {
   assert.equal(result.issues.length, 0);
 });
 
+test('ISO Z and explicit offsets preserve their instant rather than being parsed as KST', () => {
+  for (const format of [(ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z'),
+    (ms: number) => new Date(ms).toISOString().replace('Z', '+00:00')]) {
+    const rows = candles().map((row) => ({ ...row, time: format(Number(row.time)) }));
+    const result = evaluateScannerDataQuality({ symbol: 'BTC', timeframe: '5m', candles: rows, now: NOW });
+    assert.equal(result.state, 'TRUSTED');
+    assert.equal(result.lastTimestamp, new Date(NOW - 5 * 60_000).toISOString());
+  }
+});
+
+test('future evidence fails closed even if its OHLC and volume are valid', () => {
+  const rows = candles();
+  rows.at(-1)!.time = NOW + 5 * 60_000;
+  const result = evaluateScannerDataQuality({ symbol: 'BTC', timeframe: '5m', candles: rows, now: NOW });
+  assert.equal(result.state, 'DATA_UNTRUSTED');
+  assert.equal(result.strongSignalAllowed, false);
+  assert.ok(codes(result).has('FUTURE_TIMESTAMP'));
+});
+
+test('one long hole counts missing bars instead of looking like one minor warning', () => {
+  const rows = candles(100).map((row, index) => ({
+    ...row, time: Number(row.time) - (index < 50 ? 100 * 5 * 60_000 : 0),
+  }));
+  const result = evaluateScannerDataQuality({ symbol: 'BTC', timeframe: '5m', candles: rows, now: NOW });
+  assert.equal(result.state, 'DATA_UNTRUSTED');
+  assert.equal(result.issues.find((issue) => issue.code === 'MISSING_CANDLE')?.severity, 'blocking');
+});
+
+test('sorting inside validation cannot certify a reversed input used by EMA/RSI', () => {
+  const result = evaluateScannerDataQuality({ symbol: 'BTC', timeframe: '5m', candles: candles().reverse(), now: NOW });
+  assert.equal(result.state, 'DATA_UNTRUSTED');
+  assert.ok(codes(result).has('OUT_OF_ORDER_CANDLE'));
+});
+
+test('a six-hour same-session hole is not excused as an overnight stock closure', () => {
+  const rows = candles().map((row, index) => ({ ...row,
+    time: Date.parse(index < 20 ? '2026-08-10T00:00:00Z' : '2026-08-10T06:00:00Z') + index * 5 * 60_000,
+  }));
+  const result = evaluateScannerDataQuality({ symbol: '005930', timeframe: '5m', candles: rows,
+    now: Date.parse('2026-08-10T10:00:00Z'), sessionAware: true, sessionTimeZone: 'Asia/Seoul' });
+  assert.equal(result.issues.find((issue) => issue.code === 'MISSING_CANDLE')?.severity, 'blocking');
+});
+
 test('stale, duplicate, missing, invalid OHLC and volume become DATA_UNTRUSTED', () => {
   const staleRows = candles(20).map((row) => ({ ...row, time: Number(row.time) - 60 * 60_000 }));
   const stale = evaluateScannerDataQuality({ symbol: 'BTC', timeframe: '5m', candles: staleRows, now: NOW });

@@ -67,6 +67,8 @@ export interface ScannerDataQualitySummary {
   issues: Array<{
     code:
       | 'STALE_TIMESTAMP'
+      | 'FUTURE_TIMESTAMP'
+      | 'OUT_OF_ORDER_CANDLE'
       | 'MISSING_CANDLE'
       | 'DUPLICATE_CANDLE'
       | 'INVALID_OHLC'

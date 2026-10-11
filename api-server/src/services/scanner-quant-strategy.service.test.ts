@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ScannerQualityCandle } from './scanner-data-quality.service';
+import { buildScannerIndicatorSnapshot, scannerRsi, scannerAtr, scannerAdx, scannerVwap } from './scanner-indicator-library.service';
 import {
   runScannerQuantStrategy,
   SCALPING_LIMITS,
@@ -188,4 +189,59 @@ test('DATA_UNTRUSTED caps score and always blocks strong signals', () => {
   assert.ok(result.score <= 49);
   assert.equal(result.strongSignalEligible, false);
   assert.notEqual(result.grade, 'S');
+});
+
+test('breakout levels exclude the bar being evaluated and flat RSI is neutral', () => {
+  const rows = trendCandles(21);
+  const priorHigh = Math.max(...rows.slice(0, -1).map((row) => row.high));
+  rows.at(-1)!.close = priorHigh + 1;
+  rows.at(-1)!.high = priorHigh + 2;
+  const snapshot = buildScannerIndicatorSnapshot(rows);
+  assert.equal(snapshot.resistance20, priorHigh);
+  assert.ok(snapshot.close! > snapshot.resistance20!);
+  assert.equal(scannerRsi(Array(30).fill(100)), 50);
+  assert.equal(buildScannerIndicatorSnapshot(rows.slice(-20)).resistance20, null);
+});
+
+test('RSI/ATR retain Wilder history and ADX smooths DX instead of returning a one-window DX', () => {
+  assert.ok(Math.abs(scannerRsi([100, 102, 101, 103, 102], 3)! - 61.53846153846154) < 1e-10);
+  const rows = [100, 102, 101, 103, 102, 104].map((close, index) => ({
+    time: NOW - (6 - index) * 60_000, open: close, high: close + 1, low: close - 1, close, volume: 1,
+  }));
+  assert.ok(Math.abs(scannerAtr(rows.slice(0, 5), 3)! - 22 / 9) < 1e-10);
+  assert.equal(scannerAdx(rows.slice(0, 5), 3), null, 'ADX requires two-period warmup');
+  // Initial two-bar DM sums=(2,1). Smoothed DX=(200/3,700/33,170/3).
+  const expectedAdx = (200 / 3 + 700 / 33 + 170 / 3) / 3;
+  assert.ok(Math.abs(scannerAdx(rows, 3)! - expectedAdx) < 1e-10);
+});
+
+test('session VWAP resets on the exchange-local date instead of depending on the entire downloaded history', () => {
+  const row = (time: string, close: number): ScannerQualityCandle => ({ time, open: close, high: close, low: close, close, volume: 100 });
+  const kr = [row('20260810153000', 10), row('20260811090000', 100), row('20260811090500', 120)];
+  assert.equal(scannerVwap(kr, 'Asia/Seoul'), 110);
+  const us = [row('2026-08-10T20:00:00Z', 10), row('2026-08-11T13:30:00Z', 100), row('2026-08-11T13:35:00Z', 120)];
+  assert.equal(scannerVwap(us, 'America/New_York'), 110);
+  assert.equal(scannerVwap([row('2026-08-10T23:59:00Z', 10), row('2026-08-11T00:00:00Z', 100)], 'UTC'), 100);
+});
+
+test('all futures strategies score bearish evidence in SHORT direction without relaxing gates', () => {
+  const rows = Array.from({ length: 160 }, (_, index) => {
+    const close = 200 - index * 0.5;
+    return { time: NOW - (160 - index) * 5 * 60_000,
+      open: close + 1, high: close + 1, low: close - 1, close,
+      volume: index === 159 ? 400 : 100 };
+  });
+  for (const mode of ['scalping', 'swing', 'position'] as const) {
+    const base = { ...input('swing', rows), mode, allowShort: true, riskScore: 10, spreadPercent: 0.01 };
+    const result = runScannerQuantStrategy(base);
+    assert.equal(result.direction, 'SHORT', mode);
+    assert.ok(result.factors.trend < 50 && result.factors.momentum < 50, mode);
+    assert.equal(result.strongSignalEligible, true, `${mode}: ${result.score}`);
+    assert.notEqual(result.grade, 'S', 'AI NOT_RUN cannot grant S');
+    assert.equal(runScannerQuantStrategy({ ...base, allowShort: false }).direction, 'NEUTRAL');
+    assert.equal(runScannerQuantStrategy({ ...base, riskScore: 90 }).strongSignalEligible, false);
+    assert.equal(runScannerQuantStrategy({ ...base, dataQuality: {
+      ...trustedQuality, state: 'DATA_UNTRUSTED', strongSignalAllowed: false,
+    } }).strongSignalEligible, false);
+  }
 });

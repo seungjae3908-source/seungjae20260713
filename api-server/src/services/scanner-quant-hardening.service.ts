@@ -132,9 +132,12 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     marketClosed: input.marketClosed,
     tradingHalt: input.tradingHalt,
     sessionAware: input.sessionAware,
+    sessionTimeZone: input.card.market === 'US' ? 'America/New_York' : 'Asia/Seoul',
   });
   const contextCandles = input.contextCandles?.length ? input.contextCandles : input.candles;
   const quant = runScannerQuantStrategy({
+    sessionTimeZone: input.card.assetClass === 'stock'
+      ? input.card.market === 'US' ? 'America/New_York' : 'Asia/Seoul' : 'UTC',
     mode: strategyMode,
     timeframe: input.timeframe,
     candles: input.candles,
