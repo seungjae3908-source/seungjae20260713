@@ -30,6 +30,7 @@ test('a fully consumed 4-market Paper round proposes a new unique automatic roun
     }));
     assert.equal(expired.status,'EXHAUSTED');
     assert.equal(expired.eligibleForNewRound,true);
+    assert.equal(expired.endingCause,'ZERO_EQUITY');
     assert.equal(expired.nextAction,'AUTO_RESEARCH_ROUND_PROPOSAL');
     assert.equal(expired.nextSeedKrw,1_000_000);
     assert.equal(expired.mayUsePriorReserve,false);
@@ -47,6 +48,7 @@ test('manual bankruptcy only recommends a button, never auto-creates capital', (
     verifiedMinimumEntryKrw:10_000,
   }));
   assert.equal(expired.status,'EXHAUSTED');
+  assert.equal(expired.endingCause,'BELOW_VERIFIED_MINIMUM');
   assert.equal(expired.nextAction,'MANUAL_OWNER_CONFIRMATION');
   assert.equal(expired.financialMutationAllowed,false);
 });
@@ -106,13 +108,33 @@ test('idempotent new-round proposals cannot double-inject or merge different mar
 });
 test('multi-round loss and bankruptcy history remains visible instead of reporting only winning round', () => {
   const summary=summarizePaperResearchRounds([
-    {market:'crypto_spot',mode:'automatic',initialKrw:1_000_000,realizedNetPnlKrw:-1_000_000,exhausted:true},
-    {market:'crypto_spot',mode:'automatic',initialKrw:1_000_000,realizedNetPnlKrw:200_000,exhausted:false},
-    {market:'us_stock',mode:'automatic',initialKrw:1_000_000,realizedNetPnlKrw:700_000,exhausted:false},
+    {market:'crypto_spot',mode:'automatic',initialKrw:1_000_000,realizedNetPnlKrw:-1_000_000,
+      exhausted:true,bankrupt:true,finalOperatingCapitalKrw:0},
+    {market:'crypto_spot',mode:'automatic',initialKrw:1_000_000,realizedNetPnlKrw:200_000,
+      exhausted:false,bankrupt:false,finalOperatingCapitalKrw:1_100_000},
+    {market:'us_stock',mode:'automatic',initialKrw:1_000_000,realizedNetPnlKrw:700_000,
+      exhausted:false,bankrupt:false,finalOperatingCapitalKrw:1_350_000},
   ],'crypto_spot','automatic');
   assert.equal(summary.totalSeedKrw,2_000_000);
   assert.equal(summary.totalNetPnlKrw,-800_000);
   assert.equal(summary.bankruptcies,1);
   assert.equal(summary.netReturnOnAllIssuedSeedPercent,-40);
   assert.equal(summary.reserveTransfers,0);
+});
+
+test('round with small verified residual is not misreported as bankrupt',()=>{
+  const partial=summarizePaperResearchRounds([{
+    market:'crypto_spot',mode:'manual',initialKrw:1_000_000,
+    realizedNetPnlKrw:-999_000,exhausted:true,
+    bankrupt:false,finalOperatingCapitalKrw:1_000,
+  }],'crypto_spot','manual');
+  assert.equal(partial.bankruptcies,0);
+  assert.equal(partial.exhaustedRounds,1);
+  assert.equal(partial.retainedFinalCapitalKrw,1000);
+  assert.equal(partial.totalNetPnlKrw,-999000);
+  assert.throws(()=>summarizePaperResearchRounds([{
+    market:'crypto_spot',mode:'manual',initialKrw:1_000_000,
+    realizedNetPnlKrw:-999_000,exhausted:true,
+    bankrupt:true,finalOperatingCapitalKrw:1_000,
+  }],'crypto_spot','manual'),/INVALID/);
 });
