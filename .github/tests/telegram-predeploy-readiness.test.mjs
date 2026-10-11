@@ -6,6 +6,21 @@ import { evaluateTelegramPredeploy, REQUIRED_CI_CONTEXTS,
 const now = Date.parse('2026-10-11T03:45:00.000Z');
 const sha = 'a'.repeat(40);
 const serviceSha = 'b'.repeat(40);
+const sourceCoverage = () => ({
+  publicDataOnly:true,
+  profile:{fullStrategyCoverage:true},
+  coverage:['KR_STOCK','US_STOCK','CRYPTO_SPOT','CRYPTO_FUTURES'].flatMap(market =>
+    [{strategy:'SCALPING',timeframe:'15m'},{strategy:'SWING',timeframe:'60m'},
+      {strategy:'MID_LONG',timeframe:'1D'}].map(mode=>({
+      market,...mode,totalUniverse:100,scannedCards:0,retainedFromBatch:0,
+      universeSource:market==='KR_STOCK'?'krx-symbol-master':
+        market==='US_STOCK'?'nasdaq-trader-public-directory':
+          market==='CRYPTO_SPOT'?'upbit-public':'bitget-public',
+      universePartial:false,universeStale:false,
+      responseDataState:'complete',status:'VALID_NO_TRADE',
+      universeProviderErrors:0,providerErrors:0,timeouts:0,
+    }))),
+});
 const at = offset => new Date(now-offset).toISOString();
 const valid = () => ({
   sourceSha:sha,
@@ -18,6 +33,7 @@ const valid = () => ({
       {checkedAt:at(60_000),code:'IPV4_TLS_READY',sha,runId:12344,protectedReceipt:true}]},
   signalV3:{serviceSha,healthStatus:'READY',getHttpStatus:200,
     snapshotReady:true,snapshotFresh:true,snapshotAgeMs:60_000,
+    snapshotCoverage:sourceCoverage(),
     serverUnit:'ACTIVE',timerUnit:'ACTIVE',lastCycleResult:'SUCCEEDED',
     lastCycleAt:at(60_000)},
   stagingDryRun:{headSha:sha,exactMockOnly:true,
@@ -121,4 +137,20 @@ test('invalid clocks, timestamps and untrusted evidence do not auto-approve',()=
     'TELEGRAM_TLS_RELIABILITY_NOT_PROVEN');
   rejected(x=>{x.readOnlyPermissions.checkedAt='2025-01-01T00:00:00Z';},
     'TELEGRAM_READ_ONLY_PERMISSIONS_NOT_PROVEN');
+});
+
+
+test('all-markets predeploy source coverage must not fake health from a new timestamp',()=>{
+  rejected(x=>{x.signalV3.snapshotCoverage.coverage[0].status='SEARCH_FAILURE';},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
+  rejected(x=>{x.signalV3.snapshotCoverage.coverage[0].universePartial=true;},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
+  rejected(x=>{x.signalV3.snapshotCoverage.coverage[0].timeouts=2;},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
+  rejected(x=>{x.signalV3.snapshotCoverage.coverage[0].providerErrors=1;},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
+  rejected(x=>{x.signalV3.snapshotCoverage.coverage.pop();},
+    'SIGNAL_V3_STALE_OR_HTTP_503');
+  rejected(x=>{x.signalV3.lastCycleAgeBand='OVER_60M';},
+    'SIGNAL_V3_CYCLE_NOT_PROVEN');
 });
