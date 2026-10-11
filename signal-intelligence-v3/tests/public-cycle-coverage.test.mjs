@@ -111,3 +111,56 @@ test('a complete last page wraps, without pretending first-page or all-universe 
   }).nextCursor,0);
   assert.throws(()=>decidePublicCycleCursor({response:evidence,status:'VALID_NO_TRADE',cursor:-1}),/CURSOR_INVALID/);
 });
+
+test('fallback or unknown stock roster is never promoted to verified no-trade or signal', () => {
+  const verified = result({
+    outcome: 'VALID_ZERO_SIGNAL',
+    dataState: 'complete',
+    universe: { ...result().universe, partial: false },
+  });
+  assert.equal(classifyPublicCycleLaneStatus(verified), 'VALID_NO_TRADE');
+  for (const source of ['curated-fallback', 'last-good-cache', 'unknown', null]) {
+    const response = { ...verified, universe: { ...verified.universe, source } };
+    const status = classifyPublicCycleLaneStatus(response);
+    assert.equal(status, 'BLOCKED_DATA', String(source));
+    const cursor = decidePublicCycleCursor({ response, status, cursor: 0 });
+    assert.equal(cursor.nextCursor, 0);
+    assert.equal(cursor.reason, 'BLOCKED_WITHOUT_PROVEN_ROSTER');
+  }
+});
+
+test('explicit mapping, quality and render errors cannot become zero-trade coverage', () => {
+  const healthy = result({
+    dataState: 'complete', cards: [],
+    universe: { ...result().universe, partial: false },
+  });
+  for (const outcome of [
+    'UNIVERSE_EMPTY', 'SYMBOL_MAPPING_FAILURE',
+    'DATA_QUALITY_REJECT', 'FRONTEND_RENDER_FAILURE',
+    'PROVIDER_FAILURE', 'REQUEST_TIMEOUT',
+  ]) {
+    const response = { ...healthy, outcome };
+    const status = classifyPublicCycleLaneStatus(response);
+    assert.equal(status, 'SEARCH_FAILURE', outcome);
+    assert.equal(decidePublicCycleCursor({ response, status, cursor: 0 }).nextCursor, 0);
+  }
+  // Legitimate completed business filtering is still a valid zero-signal page.
+  assert.equal(classifyPublicCycleLaneStatus({
+    ...healthy, outcome: 'FILTER_TOO_STRICT',
+  }), 'VALID_NO_TRADE');
+});
+
+test('contradictory card count and declared outcome fail closed without candidate promotion', () => {
+  const healthy = result({
+    dataState: 'complete', cards: [],
+    universe: { ...result().universe, partial: false },
+  });
+  for (const response of [
+    { ...healthy, outcome: 'CANDIDATES_AVAILABLE' },
+    { ...healthy, outcome: 'VALID_ZERO_SIGNAL', cards: [{ symbol: '005930', direction: 'LONG' }] },
+  ]) {
+    const status = classifyPublicCycleLaneStatus(response);
+    assert.equal(status, 'SEARCH_FAILURE');
+    assert.equal(decidePublicCycleCursor({ response, status, cursor: 0 }).nextCursor, 0);
+  }
+});
