@@ -3,6 +3,8 @@ import {isAbsolute,resolve} from "node:path";
 import {planFourMarketPITReplayWorkV1} from "./four-market-pit-replay-work-queue-v1.js";
 import {runFourMarketOriginalMinuteReplayV1} from "./four-market-original-minute-replay-v1.js";
 import {auditFourMarketOriginalMinuteOpportunityV1} from "./four-market-original-minute-opportunities-v1.js";
+import {listArchivedResearchMinuteSessionsV1}
+  from "./research-minute-archive-v1.js";
 
 /**
  * One bounded OFFLINE read-only page: full dated PIT roster planning ->
@@ -95,12 +97,15 @@ export async function runFourMarketOriginalMinuteBatchV1({
   timeframe="5m",direction="LONG",thresholdPercents=[3,5,10],
   initialCapitalKRW=1_000_000,leverage=1,riskFraction=0.01,
   fxRateKRWPerQuote=null,costModel={},strategy={},inspectOpportunities=true,
+  discoverArchivedSessions=false,
 }={}){
   if(typeof root!=="string"||!isAbsolute(root)||resolve(root)!==root
     ||!Number.isSafeInteger(asOfMs)||asOfMs<=0
     ||!METHODS.includes(direction)
     ||(market!=="CRYPTO_FUTURES"&&direction!=="LONG")
-    ||typeof inspectOpportunities!=="boolean")
+    ||typeof inspectOpportunities!=="boolean"
+    ||typeof discoverArchivedSessions!=="boolean"
+    ||(discoverArchivedSessions&&sourceSessions.length!==0))
     fail("ORIGINAL_BATCH_SCOPE_OR_SIDE_INVALID");
   if(manifest==null)
     return safe({market,reason:"HISTORICAL_FULL_PIT_ROSTER_NOT_CONNECTED",
@@ -144,7 +149,33 @@ export async function runFourMarketOriginalMinuteBatchV1({
       taskRows.push(blockedRow(task,task.status));
       continue;
     }
-    const sessions=matchSourceForTask(task,index);
+    let sessions=matchSourceForTask(task,index);
+    if(discoverArchivedSessions){
+      let listing;
+      try{
+        listing=await listArchivedResearchMinuteSessionsV1({
+          root,market,symbol:task.symbol,
+          researchWindow:{startDate:task.date,endDate:task.date},
+          maxSessions:MAX_SESSION_COUNT_PER_DATE,
+        });
+      }catch{
+        blockedSourceTasks++;
+        taskRows.push(blockedRow(task,"PRIVATE_NATIVE_SESSION_INDEX_UNSAFE"));
+        continue;
+      }
+      if(listing.status!=="LOCAL_ORIGINAL_SESSION_INDEX_PAGE_ONLY"
+        ||listing.nextCursorStartMs!==null){
+        blockedSourceTasks++;
+        taskRows.push(blockedRow(task,
+          listing.reason??"PRIVATE_NATIVE_SESSION_INDEX_INCOMPLETE"));
+        continue;
+      }
+      sessions=listing.sourceSessions.map(row=>({
+        date:row.date,startMs:row.startMs,endMs:row.endMs,
+        kind:row.kind,zone:row.zone,
+        sourceDigestSha256:row.sourceDigestSha256,
+      }));
+    }
     if(sessions.length===0){
       blockedSourceTasks++;
       taskRows.push(blockedRow(task,"PRIVATE_NATIVE_1M_SOURCE_SESSIONS_ABSENT"));

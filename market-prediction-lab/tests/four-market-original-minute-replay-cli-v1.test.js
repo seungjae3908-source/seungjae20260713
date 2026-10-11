@@ -4,6 +4,8 @@ import {mkdtempSync,writeFileSync,readFileSync,statSync,chmodSync,
   symlinkSync,rmSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
+import {createHash} from "node:crypto";
+import {persistResearchMinuteSessionV1} from "../src/research-minute-archive-v1.js";
 import {digestPITMembershipRowsV1} from "../src/historical-pit-venue-universe-gate-v1.js";
 import {parseOriginalReplayArgsV1 as parse,runOriginalReplayPrivateJobV1 as run}
   from "../scripts/run-four-market-original-minute-replay-v1.mjs";
@@ -156,6 +158,49 @@ test("private BATCH job checks historical PIT/source work without advancing to D
   assert.equal(result.paperAdmissionAllowed,false);
   assert.equal(result.providerGETCount,0);
   assert.equal(result.profitabilityProven,false);
+  assert.equal(statSync(out).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+
+test("private BATCH automatically discovers retained 1m sessions without a caller-written source index",async()=>{
+ const root=dir(),input=join(root,"auto-input.json"),out=join(root,"auto-batch.json");
+ try{
+  const sourceId="TEST_NATIVE_PRIVATE_1M";
+  const minuteBars=Array.from({length:1440},(_,i)=>{
+    const p=i===80?111:100;
+    return {market:"CRYPTO_SPOT",venue:"UPBIT_KRW",
+      symbol:"KRW-BTC",sourceId,
+      timestampMs:D+i*60_000,availableAtMs:D+(i+1)*60_000,
+      open:100,high:Math.max(100,p)+0.1,
+      low:99.9,close:p,volume:100+i};
+  });
+  const source={market:"CRYPTO_SPOT",venue:"UPBIT_KRW",symbol:"KRW-BTC",
+    sourceId,session:{startMs:D,endMs:D+DAY,
+      kind:"UTC_24H",timeZone:"UTC",
+      calendarSourceId:"TEST_PRIVATE_UTC_DAY_NOT_INDEPENDENT_PROOF"},
+    minuteBars,sourceMinuteRowsSha256:createHash("sha256")
+      .update(JSON.stringify(minuteBars)).digest("hex"),
+    asOfMs:D+DAY};
+  await persistResearchMinuteSessionV1({root,source});
+  writePrivate(input,{mode:"BATCH",root,market:"CRYPTO_SPOT",
+    manifest:roster(),sourceSessions:[],discoverArchivedSessions:true,
+    researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+    asOfMs:D+5*DAY,timeframe:"5m",direction:"LONG",
+    thresholdPercents:[3,5,10],
+  });
+  const result=await run({input,output:out});
+  assert.equal(result.mode,"BATCH");
+  assert.equal(result.status,"SOURCE_ONLY_REPLAY_PAGE_INSPECTED");
+  const report=JSON.parse(readFileSync(out,"utf8"));
+  assert.equal(report.inspectedSourceTasks,1);
+  assert.equal(report.blockedSourceTasks,0);
+  assert.equal(report.sourceOnlyEventLabels,3);
+  assert.equal(report.fullMarketOpportunityDenominatorVerified,false);
+  assert.equal(report.actualMarketWideOpportunityCount,null);
+  assert.equal(report.paperAdmissionAllowed,false);
+  assert.equal(report.profitabilityProven,false);
+  assert.equal(report.executionAuthority,"NONE");
   assert.equal(statSync(out).mode&0o077,0);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
