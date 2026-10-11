@@ -253,6 +253,35 @@ test('signal source probe accepts only loopback safe GET and emits counts, never
   })).status,'UNSAFE_ENDPOINT');
 });
 
+test('HTTP 503 from loopback V3 is not misreported as a network outage',async()=>{
+  const fake=(code)=> (target, opts, done) => {
+    assert.equal(target.pathname,'/v1/signals');
+    assert.equal(opts.method,'GET');
+    const req=new EventEmitter();
+    req.destroy=()=>{};
+    queueMicrotask(()=>{
+      const res=new EventEmitter();
+      res.statusCode=code;
+      res.resume=()=>{};
+      done(res);
+    });
+    return req;
+  };
+  const missing=await readSignalSourceOnce({
+    sourceUrl:'http://127.0.0.1:8790/v1/signals',getImpl:fake(503)
+  });
+  assert.deepEqual(missing,{status:'HTTP_503',eventCount:0,safetyValidated:false});
+  const badHttp=await readSignalSourceOnce({
+    sourceUrl:'http://127.0.0.1:8790/v1/signals',getImpl:fake(502)
+  });
+  assert.equal(badHttp.status,'HTTP_ERROR');
+  const refused=await readSignalSourceOnce({
+    sourceUrl:'http://127.0.0.1:8790/v1/signals',
+    getImpl:()=>{throw new Error('ECONNREFUSED');}
+  });
+  assert.equal(refused.status,'UNREACHABLE');
+});
+
 test('protected workflow is owner-only and never sends, deploys or restarts',()=>{
   const w=fs.readFileSync('.github/workflows/telegram-production-worker-readonly-audit.yml','utf8');
   const src=fs.readFileSync('ops/telegram-production-worker-readonly-audit.mjs','utf8');
