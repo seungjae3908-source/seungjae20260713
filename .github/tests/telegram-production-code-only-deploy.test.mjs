@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { classifyTelegramCodeOnlyDiff, TELEGRAM_CODE_ONLY_ALLOWED_FILES } from
+import { classifyTelegramCodeOnlyDiff, TELEGRAM_CODE_ONLY_ALLOWED_FILES,
+  TELEGRAM_VERIFIED_APP_TARGET_SHA, TELEGRAM_INTERVENING_AUTO_MERGE_SHA } from
   '../../ops/telegram-production-code-only-scope.mjs';
 
 const wf=fs.readFileSync('.github/workflows/telegram-production-code-only-deploy.yml','utf8');
@@ -35,6 +36,25 @@ test('only a strict bounded Telegram app-code diff can be deployed',()=>{
     files:[...compare().files,{filename:'ops/telegram-production-code-only-scope.mjs',status:'removed'}]}).ok,false);
 });
 
+test('pinned ancestor excludes later automatic-trading code and old mode stays strict',()=>{
+  assert.equal(TELEGRAM_VERIFIED_APP_TARGET_SHA,'ceade3d9fb4cbb4bfcea42d548233aec79653e92');
+  assert.equal(TELEGRAM_INTERVENING_AUTO_MERGE_SHA,'67c198a8358e22626495d7c7a5b239e9a40e7c0a');
+  const appOnly=validFiles.filter(x=>x!=='ops/deploy-production.sh'
+    &&x!=='.github/workflows/telegram-production-code-only-deploy.yml');
+  assert.deepEqual(classifyTelegramCodeOnlyDiff(compare(appOnly),{pinnedAncestor:true}),{
+    ok:true,code:'TELEGRAM_CODE_ONLY_SCOPE_PASS',changedFileCount:3,
+  });
+  assert.equal(classifyTelegramCodeOnlyDiff(compare(appOnly)).ok,false);
+  assert.equal(classifyTelegramCodeOnlyDiff(compare([...appOnly,
+    'api-server/src/services/member-auto-trading-background-worker.service.ts']),
+    {pinnedAncestor:true}).ok,false);
+  for(const requirement of [
+    'TELEGRAM_PINNED_ANCESTOR_RELEASE_LINEAGE_CHANGED',
+    'autoCommit.data.parents[0].sha!==target',
+    'operatorCommit.data.parents[0].sha!==autoMerge',
+    'ops/deploy-telegram-operator.sh',
+  ]) assert.ok(wf.includes(requirement),requirement);
+});
 test('only finite whitelisted paths are accepted',()=>{
   assert.equal(TELEGRAM_CODE_ONLY_ALLOWED_FILES.length,new Set(TELEGRAM_CODE_ONLY_ALLOWED_FILES).size);
   for(const p of TELEGRAM_CODE_ONLY_ALLOWED_FILES)assert.ok(!p.includes('..'));
@@ -66,7 +86,7 @@ test('protected owner-only production workflow cannot run sends or migrations',(
     "github.event.comment.author_association == 'OWNER'",
     "github.event.issue.number == 1555",
     "startsWith(github.event.comment.body, '/run-telegram-code-only-production ')",
-    'Require exact main and post-merge full-CI provenance',
+    'Require only the immutably pinned Telegram ancestor with full-CI provenance',
     'Require exact-main successful PostgreSQL auth and Staging verdict',
     'Reject unrelated files between actual Production and exact main',
     'TELEGRAM_PINNED_RELEASE_SOURCE_CHANGED',
