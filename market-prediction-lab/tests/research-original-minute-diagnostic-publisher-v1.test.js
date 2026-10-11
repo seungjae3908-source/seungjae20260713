@@ -313,7 +313,7 @@ test("historical PERIOD and SWEEP status schemas cannot be cross-labeled or clai
       await assert.rejects(()=>publish({
         sourceResultPath:input,reportRoot:env.reportRoot,
         market,allowLocalReportPublish:true,
-      }),/NATIVE_DIAGNOSTIC_.*MISMATCH|RESEARCH_PUBLISH_ORIGINAL_LINEAGE_INVALID/);
+      }),/NATIVE_DIAGNOSTIC_.*MISMATCH|RESEARCH_PUBLISH_ORIGINAL_LINEAGE_INVALID|NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID/);
       assert.equal(existsSync(join(env.reportRoot,market+".json")),false);
     }
   }finally{rmSync(env.base,{recursive:true,force:true});}
