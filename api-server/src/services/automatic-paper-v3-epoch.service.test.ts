@@ -98,6 +98,8 @@ test('strict owner role, market, exact proposal digest and existence checks prev
     'AUTO_PAPER_V3_OWNER_MODE_EPOCH_MISMATCH');
   fail(s,{proposal:{...p,previous_locked_reserve_krw:0}},
     'AUTO_PAPER_V3_CAPITAL_PROOF_MISMATCH');
+  fail(s,{proposal:{...p,minimum_entry_krw:1000}},
+    'AUTO_PAPER_V3_CAPITAL_PROOF_MISMATCH');
 });
 test('open risk/locked funds/stale settlement/insufficient residual proof never become second funded epoch',()=>{
   const s=snap();
