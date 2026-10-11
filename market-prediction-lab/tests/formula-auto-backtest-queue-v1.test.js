@@ -226,6 +226,42 @@ test('queue persists immutable audit results and repeated processing is idempote
   assert.deepEqual(repeatedFiles, resultFiles);
 });
 
+test('tampered cached results cannot forge PASS, change identity or acquire execution authority', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-cache-guard-'));
+  const inbox = join(root, 'formula-backtest', 'inbox');
+  await import('node:fs/promises').then(({ mkdir }) => mkdir(inbox, { recursive: true }));
+  await writeFile(join(inbox, 'candidate.json'), JSON.stringify(queueItem()), { mode: 0o600 });
+  const researchCodeSha = 'f'.repeat(40);
+  const first = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  assert.equal(first.paperRegisteredCount, 0);
+  const file = (await readdir(join(root, 'formula-backtest', 'results'))).find((name) => name.endsWith('.json'));
+  assert.ok(file);
+  const path = join(root, 'formula-backtest', 'results', file);
+  const safe = JSON.parse(await readFile(path, 'utf8'));
+  assert.equal(safe.state, 'HOLD');
+  for (const mutation of [
+    { state: 'PASS', researchSurvivorCount: 1 },
+    { itemDigest: '0'.repeat(64) },
+    { formulaId: 'SUBSTITUTED_FORMULA' },
+    { executionAuthority: 'LIVE' },
+    { queuedAt: '2000-01-01T00:00:00.000Z' },
+    { liveTrading: true },
+  ]) {
+    await writeFile(path, JSON.stringify({ ...safe, ...mutation }), { mode: 0o600 });
+    await assert.rejects(
+      processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha }),
+      /FORMULA_QUEUE_CACHED_RESULT_UNSAFE/,
+    );
+    const registry = JSON.parse(await readFile(
+      join(root, 'latest', 'formula-paper-strategy-registry.json'), 'utf8'));
+    assert.equal(registry.entryCount, 0);
+  }
+  await writeFile(path, JSON.stringify(safe), { mode: 0o600 });
+  const repeated = await processFormulaAutoBacktestQueueV1({ stateRoot: root, researchCodeSha });
+  assert.equal(repeated.paperRegisteredCount, 0);
+  assert.equal(repeated.counts.HOLD, 1);
+});
+
 test('bounded queue rotates across older files without starvation and preserves durable results', async () => {
   const root = await mkdtemp(join(tmpdir(), 'formula-auto-backtest-rotation-'));
   const inbox = join(root, 'formula-backtest', 'inbox');
