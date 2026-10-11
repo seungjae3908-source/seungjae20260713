@@ -490,3 +490,49 @@ test('verified USD equity and USDT perpetual closures feed Paper 4-market risk o
     assert.equal(missing.ready,false);
   }
 });
+
+
+test('post-wallet QA canary Paper fills never create capital or 50/50 reserve, other markets remain isolated', () => {
+  const qa = certifiedAutoPaperPair({
+    id:'qa-campaign-spot',exchange:'upbit',market:'KRW',symbol:'BTC',
+    entrySide:'buy',exitSide:'sell',entryPrice:100_000,exitPrice:120_000,
+    entryFx:1,exitFx:1,fxSource:'NATIVE_KRW',
+  });
+  const status=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only', records:records(),
+    plans:qa.plans.map(plan=>({
+      ...plan,strategyId:'TRADING_CORE_QA_CANARY',
+    })), orders:qa.orders, nowMs:NOW,
+  });
+  const spot=status.marketReadback.crypto_spot;
+  assert.equal(spot.settlementReady,false);
+  assert.equal(spot.operatingCapitalKrw,null);
+  assert.equal(spot.reserveKrw,null);
+  assert.equal(spot.newEntriesAllowed,false);
+  assert.ok(spot.blockers.includes('ADMIN_PAPER_QA_CANARY_IS_NOT_SETTLEMENT_EVIDENCE'));
+  for(const market of ['domestic_stock','us_stock','crypto_futures'] as const){
+    assert.equal(status.marketReadback[market].settlementReady,true);
+    assert.equal(status.marketReadback[market].reserveKrw,0);
+  }
+});
+test('pre-wallet QA canary remains immutable history and never pollutes fresh market epoch', () => {
+  const old=certifiedAutoPaperPair({
+    id:'qa-prior-spot',exchange:'upbit',market:'KRW',symbol:'BTC',
+    entrySide:'buy',exitSide:'sell',entryPrice:100_000,exitPrice:120_000,
+    entryFx:1,exitFx:1,fxSource:'NATIVE_KRW',
+  });
+  const earlier=new Date(NOW-900_000).toISOString();
+  const plans=old.plans.map(plan=>({
+    ...plan,strategyId:'TRADING_CORE_QA_CANARY',
+    createdAt:earlier,updatedAt:earlier,
+  }));
+  const orders=old.orders.map(order=>({
+    ...order,createdAt:earlier,updatedAt:earlier,
+  }));
+  const status=adminFourMarketPaperCapitalReadback({
+    ownerId:'owner-only',records:records(),plans,orders,nowMs:NOW,
+  });
+  assert.equal(status.marketReadback.crypto_spot.settlementReady,true);
+  assert.equal(status.marketReadback.crypto_spot.operatingCapitalKrw,1_000_000);
+  assert.equal(status.marketReadback.crypto_spot.reserveKrw,0);
+});
