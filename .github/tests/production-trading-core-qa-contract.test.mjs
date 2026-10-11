@@ -320,7 +320,9 @@ test('Admin V2 Paper Worker revalidates DB wallet and canonical-order guard befo
   assert.ok(worker.includes('fourMarketPaperDatabaseGuardReady?(): Promise<boolean>'));
   assert.ok(worker.includes("this.client.rpc('admin_four_paper_wallet_rls_guard_ready')"));
   assert.ok(worker.includes("this.client.rpc('four_market_paper_wallet_rls_guard_ready')"));
-  assert.ok(worker.includes('let entryProjectionHealthy = adminWalletDbGuardReady'));
+  assert.ok(worker.includes('let entryProjectionHealthy = liveModeRequested'));
+  assert.ok(worker.includes(': adminWalletDbGuardReady && await syncExecutionProjection();'));
+  assert.ok(worker.includes('if (!adminWalletDbGuardReady && !liveModeRequested)'));
   assert.ok(worker.includes('const guard = this.source.fourMarketPaperDatabaseGuardReady'));
   assert.ok(worker.includes('guarded = await guard?.call(this.source) === true'));
   assert.ok(sql.includes('to authenticated, service_role;'));
