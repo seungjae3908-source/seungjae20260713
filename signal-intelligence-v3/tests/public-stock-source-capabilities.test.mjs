@@ -8,6 +8,7 @@ test('KR alphanumeric price/daily shapes and US chart are classified without gra
  assert.equal(price.licensedFullMarketAuthority,false);
  const chart=summarizePublicProbePayload('KR_ALPHA_DAILY',{priceInfos:[{price:11240}]});
  assert.equal(chart.discoveredCount,1);
+ assert.deepEqual(chart.firstDailyRowKeys,['price']);
  const stock=summarizePublicProbePayload('US_AAPL_5M',{chart:{result:[{
    timestamp:[Date.now()/1000],indicators:{quote:[{close:[100,105]}]},
  }]}});

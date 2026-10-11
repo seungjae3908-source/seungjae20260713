@@ -28,6 +28,7 @@ export function summarizePublicProbePayload(id,payload) {
   const result=Array.isArray(obj?.chart?.result)?obj.chart.result[0]:null;
   const stamps=Array.isArray(result?.timestamp)?result.timestamp:[];
   const quotes=Array.isArray(result?.indicators?.quote)?result.indicators.quote[0]:null;
+  const firstInfo=infos?.find(row=>row&&typeof row==='object'&&!Array.isArray(row))??null;
   const closes=Array.isArray(quotes?.close)?quotes.close.filter(v=>Number.isFinite(v)&&v>0):[];
   const hasPrice=quote&&['nowPrice','closePrice','price'].some(k=>
     typeof obj?.[k]==='number'||(typeof obj?.[k]==='string'&&obj[k].length>0));
@@ -35,6 +36,7 @@ export function summarizePublicProbePayload(id,payload) {
   const latest=stamps.length?Number(stamps.at(-1))*1000:null;
   return Object.freeze({
     id, payloadJsonObject:obj!==null,rootKeys:probeKeys(obj),
+    firstDailyRowKeys:chart?probeKeys(firstInfo):[],
     discoveredCount:chart?(infos?.length??null):yahoo?closes.length:null,
     hasPriceBoolean:quote?Boolean(hasPrice):null,
     latestTimestampValid:yahoo?Number.isFinite(latest)&&latest>0&&latest<=Date.now()+300000:null,
