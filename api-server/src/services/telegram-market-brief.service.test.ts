@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildTelegramMarketBriefInput, type TelegramMarketBriefSnapshot } from './telegram-market-brief.service';
+import {
+  buildTelegramMarketBriefInput, boundedTelegramBriefRead,
+  type TelegramMarketBriefSnapshot,
+} from './telegram-market-brief.service';
 
 const leaders=Array.from({length:6},(_,i)=>({
   name:'관찰종목'+(i+1),symbol:'T'+(i+1),changePercent:2.5,
@@ -51,4 +54,20 @@ test('weekly brief refuses to synthesize returns and gives an explicit unavailab
     now:new Date('2026-10-05T00:00:00Z'),snapshot,
   });
   assert.match(input.details||'',/\[주간 성과\]\n1주 누적 수익률: N\/A/u);
+});
+
+test('a hung optional public theme or market-room source cannot stall Telegram scheduled delivery',async()=>{
+  let reads=0;
+  const never=await boundedTelegramBriefRead<string>(()=>{
+    reads++;
+    return new Promise<string>(()=>{});
+  },15);
+  assert.equal(never,null);
+  assert.equal(reads,1);
+  assert.equal(await boundedTelegramBriefRead(async()=> 'SAFE_PUBLIC_DATA',15),
+    'SAFE_PUBLIC_DATA');
+  assert.equal(await boundedTelegramBriefRead(async()=>{
+    throw new Error('SECRET_TOKEN_IN_PROVIDER_MESSAGE');
+  },15),null);
+  assert.equal(await boundedTelegramBriefRead(async()=> 'unexpected',0),null);
 });

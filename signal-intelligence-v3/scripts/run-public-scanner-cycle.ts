@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
@@ -13,6 +14,34 @@ import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/pu
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
+import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
+import { currentPagePublication } from '../src/public-v3-current-page-gate.mjs';
+import {accumulatePublicV3RosterProgress} from '../src/public-v3-roster-progress.mjs';
+import {
+  bindPublicStockCandleSource,
+  enforcePublicStockRosterCoverage,
+  createPublicStockQualityCounter,
+  withPublicStockProviderFallback,
+} from '../src/public-stock-candle-binding.mjs';
+import {publicYahooProviderCandidates} from '../src/public-yahoo-symbol-candidates.mjs';
+import {
+  createPublicStockSessionGapAudit,
+  summarizePublicKrExclusions,
+} from '../src/public-stock-session-diagnostics.mjs';
+import { evaluateScannerDataQuality } from '../../api-server/src/services/scanner-data-quality.service';
+import {
+  classifyPublicCycleLaneStatus,
+  decidePublicCycleCursor,
+  recoverShrunkPublicV3Cursor,
+  PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
+  publicV3CryptoBatchSize,
+  summarizePublicV3Execution,
+  parsePublicRetryAfterMs,
+  publicUpbitGroupForUrl,
+  createPublicUpbitGroupPacer,
+  publicBitgetMarketEndpoint,
+  createPublicBitgetMarketPacer,
+} from '../src/public-cycle-coverage.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
 const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './state');
@@ -32,7 +61,7 @@ const strategyProfiles = Object.freeze([
 const marketProfiles = Object.freeze([
   Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 }),
   Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 }),
-  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: 20 }),
+  Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: PUBLIC_V3_SPOT_STAGE_TWO_LIMIT }),
   Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 }),
 ]);
 const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
@@ -92,22 +121,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createStartScheduler(minIntervalMs) {
-  let tail = Promise.resolve();
-  let nextStartAt = 0;
-  return async (operation) => {
-    let release;
-    const previous = tail;
-    tail = new Promise((resolve) => { release = resolve; });
-    await previous;
-    const delayMs = Math.max(0, nextStartAt - Date.now());
-    if (delayMs > 0) await sleep(delayMs);
-    nextStartAt = Date.now() + minIntervalMs;
-    release();
-    return operation();
-  };
-}
-
 async function fetchText(url) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -159,64 +172,48 @@ async function usPublicUniverse() {
   return usPublicUniversePromise;
 }
 
-function yahooProviderCandidates(lane, ticker, entry) {
-  const clean = String(ticker ?? '').trim().toUpperCase();
-  if (!clean) return [];
-  if (lane.market === 'KR_STOCK' && /^\d{6}$/u.test(clean)) {
-    const exchange = String(entry?.exchange ?? '').toUpperCase();
-    const kosdaq = /KOSDAQ|코스닥/u.test(exchange);
-    const primary = `${clean}.${kosdaq ? 'KQ' : 'KS'}`;
-    const alternate = `${clean}.${kosdaq ? 'KS' : 'KQ'}`;
-    return [primary, alternate];
-  }
-  if (lane.market === 'US_STOCK') {
-    const canonical = /^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean) ? clean.replace(/\./gu, '-') : clean;
-    const candidates = [canonical];
-    if (canonical.includes('-')) candidates.push(canonical.replace(/-/gu, '.'));
-    return [...new Set(candidates)];
-  }
-  return [clean];
+// Isolated module helpers: exact exchange routing and fail-closed empty candles.
+function yahooProviderCandidates(lane,ticker,entry){
+  return publicYahooProviderCandidates(lane.market,ticker,entry);
 }
-
-async function withProviderFallback(candidates, operation) {
-  let lastError;
-  for (const candidate of candidates) {
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await operation(candidate);
-      } catch (error) {
-        lastError = error;
-        if (attempt < 3) await sleep(150 * attempt);
-      }
-    }
-  }
-  throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
+async function withProviderFallback(candidates,operation){
+  return withPublicStockProviderFallback(candidates,operation,{pause:sleep});
 }
 
 async function withUpbitPacing(operation) {
   const originalFetch = globalThis.fetch;
-  const schedule = createStartScheduler(130);
+  // Official public Quotation rate limits are separated by IP/group.
+  // Only Research V3 uses this pacing: shared member, Forward, futures,
+  // Paper worker timeouts and trading authority are unchanged.
+  const pacer = createPublicUpbitGroupPacer();
   globalThis.fetch = async (input, init = {}) => {
     const rawUrl = typeof input === 'string' || input instanceof URL ? String(input) : String(input?.url ?? '');
-    let parsed;
-    try { parsed = new URL(rawUrl); } catch { return originalFetch(input, init); }
-    if (parsed.hostname !== 'api.upbit.com') return originalFetch(input, init);
+    const group = publicUpbitGroupForUrl(rawUrl);
+    if (group === null) return originalFetch(input, init);
+    const signal = init?.signal ?? (typeof input === 'object' ? input?.signal : undefined);
 
     let lastError;
     let lastResponse;
     for (let attempt = 1; attempt <= 4; attempt += 1) {
+      if (signal?.aborted) throw signal.reason ?? new Error('UPBIT_PUBLIC_V3_ABORTED');
       try {
-        const response = await schedule(() => originalFetch(input, init));
+        const response = await pacer.schedule(group, () => originalFetch(input, init), signal);
         lastResponse = response;
-        if (response.status !== 429) return response;
-        if (attempt < 4) {
-          const retryAfter = Number(response.headers.get('retry-after'));
-          const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 250 * attempt;
-          await sleep(backoff);
+        if (response.status === 418) {
+          // Public IP ban: block this group's queued calls; never retry 418.
+          pacer.cooldown(group, 10_000);
+          return response;
         }
+        if (response.status !== 429) return response;
+        // Provider cooldown applies to the whole public group, not just
+        // the individual caller; unknown/long cooldowns fail closed.
+        const providerDelay = parsePublicRetryAfterMs(response.headers.get('retry-after'));
+        const backoff = Math.max(providerDelay ?? 0, 750 * attempt);
+        pacer.cooldown(group, Math.min(backoff, 10_000));
+        if (providerDelay !== null && providerDelay > 10_000) return response;
       } catch (error) {
         lastError = error;
-        if (init?.signal?.aborted) throw error;
+        if (signal?.aborted) throw error;
         if (attempt < 4) await sleep(250 * attempt);
       }
     }
@@ -229,7 +226,6 @@ async function withUpbitPacing(operation) {
 async function withStockPublicOnly(lane, operation) {
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
-  const originalCandles = marketData.getCandles;
   const originalQuote = marketData.getQuote;
   const originalUniverseGet = universe.get;
 
@@ -251,11 +247,34 @@ async function withStockPublicOnly(lane, operation) {
   }
 
   const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
-  marketData.getCandles = async (ticker, timeframe = '1D') => {
+  const qualityCounter = createPublicStockQualityCounter();
+  const sessionGapAudit = createPublicStockSessionGapAudit(lane.market, lane.timeframe);
+  const qualityWindow = lane.strategyMode === 'scalping' ? 240
+    : lane.strategyMode === 'swing' ? 320 : 400;
+  // StockSignalScanner -> ScannerProviderHealth calls getCandlesMeta, not
+  // getCandles. Bind BOTH methods to the same isolated Yahoo-only fetcher
+  // so the real scanner cannot bypass this public source via app fallbacks.
+  const restoreCandles = bindPublicStockCandleSource(marketData, async (ticker, timeframe = '1D') => {
     const entry = entryByTicker.get(String(ticker).toUpperCase());
     const candidates = yahooProviderCandidates(lane, ticker, entry);
-    return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
-  };
+    const candles = await withProviderFallback(candidates,
+      (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
+    // Reuse the very same public candles. Count only bounded quality codes,
+    // never symbols, candle payloads, exception text or extra HTTP requests.
+    if (String(timeframe) === lane.timeframe) {
+      sessionGapAudit.observe(candles.slice(-qualityWindow));
+      try {
+        qualityCounter.observe(evaluateScannerDataQuality({
+          symbol: 'PUBLIC_SOURCE_DIAGNOSTIC',
+          timeframe: lane.timeframe,
+          candles: candles.slice(-qualityWindow),
+          now: Date.now(),
+          sessionAware: true,
+        }));
+      } catch { qualityCounter.observeError(); }
+    }
+    return candles;
+  });
   marketData.getQuote = async (ticker) => {
     const originalTicker = String(ticker).toUpperCase();
     const entry = entryByTicker.get(originalTicker);
@@ -273,8 +292,20 @@ async function withStockPublicOnly(lane, operation) {
     return originalUniverseGet.call(universe, market, signal, deadlineMs);
   };
 
-  try { return await operation(); } finally {
-    marketData.getCandles = originalCandles;
+  try {
+    const scanned = await operation();
+    // An eligible 4,010-symbol KRX roster does not prove complete
+    // coverage when upstream reports 2,837 explained unsupported codes.
+    const withRosterEvidence = enforcePublicStockRosterCoverage(scanned, targetUniverse);
+    return {
+      ...withRosterEvidence,
+      publicStockQualityDiagnostic: qualityCounter.snapshot(),
+      publicStockSessionDiagnostic: sessionGapAudit.snapshot(),
+      publicKrExclusionDiagnostic: lane.market === 'KR_STOCK'
+        ? summarizePublicKrExclusions(targetUniverse) : null,
+    };
+  } finally {
+    restoreCandles();
     marketData.getQuote = originalQuote;
     universe.get = originalUniverseGet;
   }
@@ -306,7 +337,7 @@ async function scanCryptoRaw(lane, cursor) {
     timeframe: lane.timeframe,
     condition: 'trend',
     cursor,
-    batchSize: lane.batchSize,
+    batchSize: publicV3CryptoBatchSize(lane.scannerMarket,lane.batchSize),
   });
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
   const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
@@ -332,18 +363,40 @@ async function scanCryptoRaw(lane, cursor) {
   });
 }
 
+
+async function withBitgetPublicPacing(operation) {
+  const originalFetch = globalThis.fetch;
+  const pacer = createPublicBitgetMarketPacer();
+  globalThis.fetch = async (input, init = {}) => {
+    const rawUrl = typeof input === 'string' || input instanceof URL
+      ? String(input) : String(input?.url ?? '');
+    const endpoint = publicBitgetMarketEndpoint(rawUrl);
+    if (endpoint === null) return originalFetch(input, init);
+    const signal = init?.signal ?? (typeof input === 'object' ? input?.signal : undefined);
+    // Bitget public market has a shared IP budget. Serializing request starts
+    // (not responses) to 10/sec protects 1D after earlier 15m/60m scans.
+    const response = await pacer.schedule(() => originalFetch(input, init), signal);
+    if (response.status === 429 || response.status === 418) {
+      // Never turn an exchange rejection into a success and never retry to
+      // pass. A provider cooldown applies to all subsequent V3 market reads.
+      const retryAfter = parsePublicRetryAfterMs(response.headers.get('retry-after'));
+      const cooldown = retryAfter == null ? 1000
+        : Number.isFinite(retryAfter) ? Math.max(1000, retryAfter) : 30000;
+      pacer.cooldown(Math.min(30000, cooldown));
+    }
+    return response;
+  };
+  try { return await operation(); } finally { globalThis.fetch = originalFetch; }
+}
+
 async function scanCrypto(lane, cursor) {
   if (lane.scannerMarket === 'spot') return withUpbitPacing(() => scanCryptoRaw(lane, cursor));
+  if (lane.scannerMarket === 'futures') return withBitgetPublicPacing(() => scanCryptoRaw(lane, cursor));
   return scanCryptoRaw(lane, cursor);
 }
 
 function laneStatus(response) {
-  if (!response) return 'SEARCH_FAILURE';
-  if (response.outcome === 'PROVIDER_FAILURE' || response.outcome === 'REQUEST_TIMEOUT' || response.dataState === 'unavailable') return 'SEARCH_FAILURE';
-  if (response.universe?.partial === true || response.universe?.stale === true || Number(response.universe?.providerErrorCount ?? 0) > 0) return 'SEARCH_FAILURE';
-  if (Number(response.execution?.providerErrorCount ?? 0) > 0 || Number(response.execution?.timeoutCount ?? 0) > 0) return 'SEARCH_FAILURE';
-  if (response.dataState === 'untrusted' || response.dataState === 'stale') return 'BLOCKED_DATA';
-  return response.cards.length ? 'CANDIDATES_AVAILABLE' : 'VALID_NO_TRADE';
+  return classifyPublicCycleLaneStatus(response);
 }
 
 async function main() {
@@ -354,6 +407,7 @@ async function main() {
   const persistedSnapshot = await readJson(SNAPSHOT_FILE, null);
   const previousSnapshot = !releaseChanged && persistedSnapshot?.serviceSha === SERVICE_SHA ? persistedSnapshot : null;
   const nowMs = Date.now();
+  const sourceCycleId = randomUUID(); // new each cycle, including wrapped cursors
   pruneRetained(state, nowMs);
 
   const coverage = [];
@@ -363,7 +417,14 @@ async function main() {
       const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
-      const status = laneStatus(response);
+      // Delistings may shrink the full eligible roster below the cursor
+      // persisted by a previous cycle. A zero-work clamped page would
+      // otherwise pin this lane forever. Never use a fallback/stale/short
+      // provider page to reset or to mint a new signal.
+      const recovery = recoverShrunkPublicV3Cursor({
+        market:lane.market,cursor,response,
+      });
+      const status = recovery ? 'BLOCKED_DATA' : laneStatus(response);
       let adapted = [];
       let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
       if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
@@ -383,16 +444,24 @@ async function main() {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
           state.retained[retainedKey(input)] = {
-            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor } },
+            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor, sourceCycleId } },
             expiresAt: card?.expiresAt ?? fallbackExpiry(lane, nowMs),
             laneId: lane.id,
             cursor,
           };
         }
-        state.cursors[lane.id] = response.universe.nextCursor == null ? 0 : response.universe.nextCursor;
       }
+      const rotation = recovery
+        ?? decidePublicCycleCursor({ response, status, cursor });
+      // Rotation may advance a completed, zero-error PARTIAL/UNTRUSTED batch
+      // for research coverage only. These rows NEVER enter the candidate
+      // adapter or grant Paper/Live entry authority.
+      state.cursors[lane.id] = rotation.nextCursor;
       coverage.push({
+        cursorRotatedBlockedOnly: rotation.blockedObservationOnly,
+        cursorRotationReason: rotation.reason,
         laneId: lane.id,
+        sourceCycleId,
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -401,6 +470,20 @@ async function main() {
         totalUniverse: response.universe.totalCount,
         universeSource: response.universe.source ?? null,
         universePartial: response.universe.partial === true,
+        // Coarse aggregate-only source proof; do not expose symbols.
+        universeRawTotalCount: response.publicRosterCoverage?.rawTotalCount ?? null,
+        universeExplainedExcludedCount: response.publicRosterCoverage?.explainedExcludedCount ?? null,
+        // Diagnostic-only, low-cardinality quality issues for the exact scan.
+        // Its values do not grant a candidate, PASS, cursor or order authority.
+        publicStockQualityDiagnostic: response.publicStockQualityDiagnostic ?? null,
+        // Diagnostic-only: distinguish regular hours vs other gap candidates.
+        // This does NOT waive MISSING_CANDLE or create a verified signal.
+        publicStockSessionDiagnostic: response.publicStockSessionDiagnostic ?? null,
+        publicKrExclusionDiagnostic: response.publicKrExclusionDiagnostic ?? null,
+        // The prior futures 60m SEARCH_FAILURE reported 0 provider errors
+        // while hiding incomplete started/completed work. Preserve the exact
+        // execution accounting without any private provider payload.
+        publicExecutionDiagnostic: summarizePublicV3Execution(response),
         universeStale: response.universe.stale === true,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
@@ -410,12 +493,16 @@ async function main() {
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
+        // Only bounded reason classes from the SAME already completed cycle.
+        // This emits no symbol, raw body, URL, token or extra network call.
+        publicProviderFailureSummary: summarizePublicProviderFailureReasons(response.failures),
         leverage: leverageDiagnostics,
         lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });
     } catch (error) {
       coverage.push({
         laneId: lane.id,
+        sourceCycleId,
         market: lane.market,
         strategy: lane.label,
         timeframe: lane.timeframe,
@@ -432,14 +519,26 @@ async function main() {
     }
   }
 
+  // Persistence of bounded cursor-only counts NEVER means all raw symbols
+  // were covered. Failed/blocked pages are not trusted candidate evidence.
+  state.rosterProgress = accumulatePublicV3RosterProgress(
+    state.rosterProgress,coverage,
+  );
   pruneRetained(state, nowMs);
   const inputs = Object.values(state.retained).map((row) => row.input);
   const baseSnapshot = runSignalIntelligenceV3(inputs, { previousSnapshot });
+  // Retained earlier research rows remain inspectable in rows/stateById,
+  // but only the exact verified current source page can publish fresh lists
+  // or Telegram candidate events. An invalid receipt returns empty outputs.
+  const publication = currentPagePublication(baseSnapshot, coverage);
   const snapshot = {
     ...baseSnapshot,
+    lists: publication.lists,
+    events: publication.events,
     serviceSha: SERVICE_SHA,
     profile: { strategies: ['SCALPING', 'SWING', 'MID_LONG'], timeframes: ['15m', '60m', '1D'], fullStrategyCoverage: true },
     coverage,
+    publicCycleRosterProgress: Object.values(state.rosterProgress),
     publicDataOnly: true,
     releaseStateReset: releaseChanged,
   };
@@ -457,6 +556,7 @@ async function main() {
     profile: snapshot.profile,
     releaseStateReset: releaseChanged,
     coverage,
+    publicCycleRosterProgress: Object.values(state.rosterProgress),
     executionAuthority: 'NONE',
   }, null, 2)}\n`);
 }

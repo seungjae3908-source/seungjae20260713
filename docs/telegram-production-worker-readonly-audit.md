@@ -132,3 +132,78 @@ Replit and Replit Agent are prohibited. The audit requires separate code-review/
 and a protected production-environment approval for each invocation. No Staging/Production app
 deployment, LIVE/AUTO authority change, financial action, Telegram send, database write or PM2 restart
 is authorized by running this audit.
+
+
+## Cycle last-exit evidence — Draft diagnostic enhancement (no activation)
+Last Production Telegram read-only QA showed V3 server/timer ACTIVE,
+the oneshot cycle INACTIVE and a stale public snapshot. An INACTIVE
+oneshot **can mean successful completion** and does not distinguish a recent
+provider failure from a timer that has never fired.
+
+The owner-protected, exact-SHA read-only QA will additionally inspect
+only the fixed `investment-signal-intelligence-v3-cycle.service` using
+`systemctl show` with five selected properties: LoadState, ActiveState,
+Result, ExecMainStatus and ExecMainStartTimestampMonotonic. It never
+invokes systemctl start/restart/enable, journalctl, POST/rescan,
+Bot API sends or DB operations. The receipt includes only safe enum
+unitState/lastResult, a bounded exitCode or null, and hasStarted boolean.
+No raw stdout, commands, process env, private paths or provider data
+are printed. `NOT_OBSERVED` or `UNKNOWN` remains inconclusive.
+
+This narrows `SNAPSHOT_STALE` diagnosis but does NOT prove a recent
+successful cycle, resume missing snapshots, loosen 15-minute freshness,
+publish unsafe signals or certify Telegram delivery. The change is
+Draft-only, not to be merged before pinned rollout #1828 or the
+immutable Production application lineage would change.
+
+
+## 2026-10-11 bounded last-cycle and snapshot age diagnostics (Draft v5)
+The existing `systemctl show` result did not distinguish a successful but hours-old
+oneshot from one that completed recently. The read-only auditor now compares its
+fixed monotonic start value only to `/proc/uptime` from the same Linux host; the
+result is an allowed coarse age band (`UNDER_5M`, `UNDER_15M`, `UNDER_60M`,
+`OVER_60M`, `UNKNOWN`) rather than raw timestamps, `/proc` contents or service
+metadata. A successful but old cycle **does not** prove a fresh snapshot.
+The fixed local `/health` snapshot age is likewise classified into a safe band,
+and `snapshotFresh=true` with an age over 15 minutes can no longer be reported
+as READY. Missing/malformed age blocks the green claim; unrelated raw errors,
+logs, prices, symbols, room IDs and secrets remain excluded.
+
+These are Draft-only contract/observability improvements, not a diagnosis of
+live cycle failure until owner-protected Production read-only QA is separately
+approved and executed after a separately approved merge. No restart, forced
+rescan, Telegram sends, DB writes or trading actions occur in this Draft.
+
+## Draft v6: fixed-path V3 publication health and systemd cycle correlation
+
+Owner-protected Production read-only QA additionally reads only the
+default public state file, with a fixed canonical path, `O_NOFOLLOW`,
+file-descriptor based check, and a 4 MiB cap. It emits only whitelisted
+age bands, source SHA and safe failure labels; no symbols, OHLCV, tokens,
+users, or file paths are returned. It distinguishes timer-old,
+producer-failed, recent-cycle-but-stale-file, and HTTP/file disagreement.
+An absent default path does NOT prove no custom state directory exists.
+This is a Draft diagnostic, not real remediation; a new exact-head
+owner-approved protected Production QA is needed after a separately
+approved merge. No operations on PM2, DB, systemd, Telegram or trades.
+
+## Draft v7: distinguish Signal V3 current-page data blocking from age staleness
+
+The Signal V3 server defines `snapshotFresh=false` BOTH for truly
+age-expired snapshots AND for recent publications whose current data
+pages are incomplete. Previous Telegram Production read-only
+diagnostics incorrectly labeled both conditions `SNAPSHOT_STALE`,
+which could falsely attribute a data-provider coverage gap to the
+systemd timer, writer or state-file age.
+
+The new read-only health projection consumes only the existing safe
+`snapshotCurrentPageSourceReady` boolean. A recent snapshot with
+`snapshotCurrentPageSourceReady=false` reports
+`SOURCE_DATA_BLOCKED` and, if the local file is also recent,
+`CURRENT_PAGE_SOURCE_COVERAGE_BLOCKED`. A truly old snapshot still
+reports `SNAPSHOT_STALE`; a contradictory response declaring itself
+fresh while its current source is blocked is invalid. Older server
+revisions without this field remain subject to the original safe
+classification. Runtime actions remain **zero**: no Telegram sends,
+rescan/POST, systemd/PM2 mutation, secret read, database writes,
+orders or deployments. New statuses remain strict NO-GO.
