@@ -371,11 +371,10 @@ function percentChange(from: number, to: number): number {
   return from ? ((to - from) / Math.abs(from)) * 100 : 0;
 }
 
-function scanTimeframe(value: unknown, market: string): ScannerTimeframe {
+function scanTimeframe(value: unknown, _market: string): ScannerTimeframe {
   const normalized = String(value ?? '1D') === '1H' ? '60m' : String(value ?? '1D');
-  if (String(market).toUpperCase() === 'US' && normalized === '4H') {
-    throw new Error('SCAN_TIMEFRAME_UNSUPPORTED:US:4H');
-  }
+  // The stock provider derives US 4H from session-aligned hourly bars.
+  // Rejecting it here prevented the UI's default swing search from running.
   return isScannerTimeframe(normalized) ? normalized : '1D';
 }
 

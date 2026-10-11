@@ -56,6 +56,9 @@ function scannerSuccess(label: string): Response {
     timeframe: '5m',
     cards: [{
       signalId: `signal-${label}`,
+      symbol: '005930', name: 'fixture', price: 100, score: 85,
+      matched: [], notMatched: [], unverified: [], evidence: [],
+      pricePlan: { entryZone: null, stopLoss: null, invalidation: null, targets: [], riskReward: null },
       dataState: 'complete',
       strongSignalEligible: true,
       warnings: [],
@@ -362,6 +365,40 @@ test('502 provider failure keeps last-good as stale degraded evidence without st
     assert.match(fallback.refreshIssue?.message ?? '', /공급자 응답이 불안정/);
     assert.equal(fallback.alerts.length, 0);
   });
+});
+
+test('a missing Retry-After header uses body backoff rather than silently coercing null to zero', async () => {
+  await withMockFetch(async () => new Response(JSON.stringify({ error: 'RATE_LIMIT', retryAfterSeconds: 9 }), { status: 429 }), async () => {
+    await assert.rejects(fetchSignalScanner(scannerRequest(901), new AbortController().signal),
+      (error: unknown) => typeof error === 'object' && error !== null && 'retryAfterSeconds' in error && error.retryAfterSeconds === 9);
+  });
+});
+
+test('malformed success and wrong-market responses cannot become scanner data', async () => {
+  for (const patch of [{ execution: null }, { market: 'US' }, { timeframe: '1D' }, { cards: [{}] }]) {
+    await withMockFetch(async () => {
+      const valid = await scannerSuccess('malformed').json();
+      return new Response(JSON.stringify({ ...valid, ...patch }), { status: 200 });
+    }, async () => {
+      await assert.rejects(fetchSignalScanner(scannerRequest(902), new AbortController().signal), /SCANNER_RESPONSE_INVALID/);
+    });
+  }
+});
+
+test('last-good cache is bounded by age and never reused across member identities', async () => {
+  const originalNow = Date.now;
+  let now = originalNow();
+  Date.now = () => now;
+  try {
+    let calls = 0;
+    await withMockFetch(async () => ++calls === 1 ? scannerSuccess('owner') : new Response('{}', { status: 502 }), async () => {
+      const request = { ...scannerRequest(903), cacheOwner: 'member-A' };
+      await fetchSignalScanner(request, new AbortController().signal);
+      await assert.rejects(fetchSignalScanner({ ...request, cacheOwner: 'member-B' }, new AbortController().signal));
+      now += 5 * 60_000 + 1;
+      await assert.rejects(fetchSignalScanner(request, new AbortController().signal));
+    });
+  } finally { Date.now = originalNow; }
 });
 
 test('QueryClient wraps only scanner queries with the TanStack AbortSignal', () => {

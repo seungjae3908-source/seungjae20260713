@@ -56,6 +56,7 @@ export const POSITION_LIMITS: Readonly<ScannerStrategyLimits> = Object.freeze({
 });
 
 export interface ScannerQuantStrategyInput {
+  sessionTimeZone?: string;
   mode: ScannerStrategyMode;
   timeframe: string;
   candles: ScannerQualityCandle[];
@@ -187,8 +188,15 @@ function positionFactors(primary: ScannerIndicatorSnapshot, context: ScannerIndi
   };
 }
 
-function weightedScore(factors: ScannerQuantFactors, weights: Record<keyof ScannerQuantFactors, number>): number {
-  return Math.round(clamp((Object.keys(weights) as Array<keyof ScannerQuantFactors>).reduce((sum, key) => sum + factors[key] * weights[key] / 100, 0)));
+function alignedDirectionalScore(value: number, direction: ScannerSignalDirection): number {
+  return direction === 'SHORT' ? 100 - value : value;
+}
+function weightedScore(factors: ScannerQuantFactors, weights: Record<keyof ScannerQuantFactors, number>, direction: ScannerSignalDirection): number {
+  const directional = new Set<keyof ScannerQuantFactors>(['technical', 'trend', 'momentum', 'marketRegime']);
+  return Math.round(clamp((Object.keys(weights) as Array<keyof ScannerQuantFactors>).reduce((sum, key) => {
+    const value = directional.has(key) ? alignedDirectionalScore(factors[key], direction) : factors[key];
+    return sum + value * weights[key] / 100;
+  }, 0)));
 }
 function inferDirection(factors: ScannerQuantFactors, primary: ScannerIndicatorSnapshot, context: ScannerIndicatorSnapshot, allowShort: boolean): ScannerSignalDirection {
   const longBias = (factors.trend + factors.momentum + factors.marketRegime + factors.technical) / 4;
@@ -217,22 +225,25 @@ function gradeFor(score: number, factors: ScannerQuantFactors, input: ScannerQua
   const sEligible = score >= limits.sGradeScore && hasIndependentSignalEvidence(factors, direction)
     && input.dataQuality.state === 'TRUSTED' && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= 90
     && (input.riskScore ?? 101) <= limits.sGradeMaxRiskScore && factors.liquidity >= 70 && factors.volatility >= 60
-    && factors.marketRegime >= 70 && aiValidation.status === 'PASS';
+    && alignedDirectionalScore(factors.marketRegime, direction) >= 70 && aiValidation.status === 'PASS';
   if (sEligible) return 'S'; if (score >= 78) return 'A'; if (score >= 68) return 'B'; if (score >= 55) return 'C'; return 'D';
 }
 
 export function runScannerQuantStrategy(input: ScannerQuantStrategyInput): ScannerQuantStrategyResult {
-  const primary = buildScannerIndicatorSnapshot(input.candles);
-  const context = buildScannerIndicatorSnapshot(input.contextCandles.length ? input.contextCandles : input.candles);
+  const primary = buildScannerIndicatorSnapshot(input.candles, input.sessionTimeZone ?? 'UTC');
+  const context = buildScannerIndicatorSnapshot(input.contextCandles.length ? input.contextCandles : input.candles, input.sessionTimeZone ?? 'UTC');
   const aiValidation = input.aiValidation ?? DEFAULT_AI_VALIDATION;
   const factors = input.mode === 'scalping' ? scalpingFactors(primary, context, input) : input.mode === 'position' ? positionFactors(primary, context, input) : swingFactors(primary, context, input);
   const limits = limitsFor(input.mode);
-  let score = weightedScore(factors, weightsFor(input.mode));
+  const direction = inferDirection(factors, primary, context, input.allowShort);
+  // Keep raw bullish/bearish factors for direction and policy overlays, but
+  // score evidence in the selected direction. Otherwise SHORT can never
+  // reach the strong-signal threshold even with perfect bearish evidence.
+  let score = weightedScore(factors, weightsFor(input.mode), direction);
   if (input.dataQuality.state === 'DEGRADED') score = Math.min(score, 74);
   if (input.dataQuality.state === 'DATA_UNTRUSTED') score = Math.min(score, 49);
   if (aiValidation.status === 'VETO') score = Math.min(score, 49);
   if (aiValidation.status === 'PARTIAL') score = Math.min(score, 79);
-  const direction = inferDirection(factors, primary, context, input.allowShort);
   const independentSignalEvidence = hasIndependentSignalEvidence(factors, direction);
   const strongSignalEligible = direction !== 'NEUTRAL' && independentSignalEvidence && score >= limits.strongScore
     && input.dataQuality.state !== 'DATA_UNTRUSTED' && input.dataQuality.strongSignalAllowed && input.dataQuality.score >= limits.minDataQualityScore

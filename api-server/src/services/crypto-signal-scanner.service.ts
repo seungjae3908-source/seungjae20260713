@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { runBoundedWorkPool } from '../lib/bounded-work-pool';
+import { CryptoPublicRequestGate } from '../lib/crypto-public-request-gate';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import {
@@ -23,6 +24,8 @@ const ITEM_TIMEOUT_MS = 3_500;
 const CONCURRENCY = 5;
 const MAX_BATCH_SIZE = 40;
 const CACHE_TTL_MS = 5 * 60_000;
+const upbitRequestGate = new CryptoPublicRequestGate(150);
+const bitgetRequestGate = new CryptoPublicRequestGate(100);
 
 type CryptoMarket = 'spot' | 'futures';
 type CryptoCondition = 'trend' | 'volume' | 'breakout' | 'pullback';
@@ -179,7 +182,8 @@ function linkedSignal(parent: AbortSignal | undefined, timeoutMs: number): { sig
     timeoutMs,
   );
   const abort = () => controller.abort(parent?.reason);
-  parent?.addEventListener('abort', abort, { once: true });
+  if (parent?.aborted) abort();
+  else parent?.addEventListener('abort', abort, { once: true });
   return {
     signal: controller.signal,
     clear() {
@@ -191,11 +195,18 @@ function linkedSignal(parent: AbortSignal | undefined, timeoutMs: number): { sig
 
 async function fetchJson<T>(url: string, signal?: AbortSignal, timeoutMs = ITEM_TIMEOUT_MS): Promise<T> {
   const linked = linkedSignal(signal, timeoutMs);
+  const gate = new URL(url).origin === UPBIT_BASE ? upbitRequestGate : bitgetRequestGate;
   try {
+    await gate.admit(linked.signal);
     const response = await fetch(url, {
       headers: { Accept: 'application/json', 'User-Agent': 'seungjae-signal-scanner/1.0' },
       signal: linked.signal,
     });
+    if (response.status === 429) {
+      const rawRetry = response.headers.get('Retry-After');
+      const retry = rawRetry == null ? Number.NaN : Number(rawRetry);
+      gate.backoff(Number.isFinite(retry) && retry >= 0 ? retry * 1000 : 2000);
+    }
     if (!response.ok) throw new Error(`HTTP_${response.status}`);
     return await response.json() as T;
   } finally {
@@ -203,23 +214,21 @@ async function fetchJson<T>(url: string, signal?: AbortSignal, timeoutMs = ITEM_
   }
 }
 
-function normalizeCandles(rows: CryptoCandle[], now: number): CryptoCandle[] {
-  const futureLimit = now + 60_000;
-  const map = new Map<number, CryptoCandle>();
-  for (const row of rows) {
-    if (!Number.isFinite(row.time) || row.time <= 0 || row.time > futureLimit) continue;
-    if (![row.open, row.high, row.low, row.close].every((value) => Number.isFinite(value) && value > 0)) continue;
-    if (!Number.isFinite(row.volume) || row.volume < 0) continue;
-    map.set(row.time, {
-      ...row,
-      high: Math.max(row.high, row.open, row.close),
-      low: Math.min(row.low, row.open, row.close),
-      quoteVolume: row.quoteVolume != null && Number.isFinite(row.quoteVolume) && row.quoteVolume >= 0
-        ? row.quoteVolume
-        : null,
-    });
-  }
-  return [...map.values()].sort((left, right) => left.time - right.time);
+export function normalizeCryptoScannerCandles(rows: CryptoCandle[], now: number, timeframe: CryptoTimeframe): CryptoCandle[] {
+  const interval = timeframe === '1D' ? 86_400_000 : timeframe === '4H' ? 14_400_000
+    : timeframe === '60m' ? 3_600_000 : Number.parseInt(timeframe, 10) * 60_000;
+  // Exclude only the live, unfinished bucket. Preserve duplicate/corrupt/future
+  // evidence for the quality gate; repairing OHLC or deduplicating hid outages.
+  return rows.filter((row) => !Number.isFinite(row.time) || row.time <= 0
+    || row.time > now || row.time + interval <= now)
+    .map((row) => ({ ...row }))
+    .sort((left, right) => left.time - right.time);
+}
+
+export function upbitScannerCandleTimestamp(value: unknown): number {
+  const utc = text(value);
+  if (!utc) return Number.NaN;
+  return Date.parse(/[zZ]$|[+-]\d{2}:?\d{2}$/.test(utc) ? utc : `${utc}Z`);
 }
 
 function spotCandlePath(symbol: string, timeframe: CryptoTimeframe): string {
@@ -343,15 +352,16 @@ const defaultProviders: CryptoScannerProviders = {
   async getCandles(market, symbol, timeframe, signal) {
     if (market === 'spot') {
       const rows = await fetchJson<UpbitCandleRow[]>(`${UPBIT_BASE}${spotCandlePath(symbol, timeframe)}`, signal);
-      return normalizeCandles(rows.map((row) => ({
-        time: finite(row.timestamp) ?? Date.parse(text(row.candle_date_time_utc)),
+      return normalizeCryptoScannerCandles(rows.map((row) => ({
+        // timestamp is the last trade time; the UTC field is the bar's start.
+        time: upbitScannerCandleTimestamp(row.candle_date_time_utc),
         open: finite(row.opening_price) ?? Number.NaN,
         high: finite(row.high_price) ?? Number.NaN,
         low: finite(row.low_price) ?? Number.NaN,
         close: finite(row.trade_price) ?? Number.NaN,
         volume: finite(row.candle_acc_trade_volume) ?? Number.NaN,
         quoteVolume: finite(row.candle_acc_trade_price),
-      })), Date.now());
+      })), Date.now(), timeframe);
     }
     const payload = await fetchJson<BitgetEnvelope<unknown[]>>(
       `${BITGET_BASE}/api/v2/mix/market/candles?symbol=${encodeURIComponent(symbol)}&productType=${BITGET_PRODUCT_TYPE}&granularity=${encodeURIComponent(bitgetGranularity(timeframe))}&limit=200`,
@@ -373,7 +383,7 @@ const defaultProviders: CryptoScannerProviders = {
         quoteVolume: finite(raw[6]),
       });
     }
-    return normalizeCandles(candles, Date.now());
+    return normalizeCryptoScannerCandles(candles, Date.now(), timeframe);
   },
   async getSpread(market, ticker, signal) {
     if (market === 'futures') return { bid: ticker.bid, ask: ticker.ask };
@@ -876,8 +886,11 @@ export function createCryptoSignalScannerService(
       // cursor, without relaxing provider timeouts or Forward admission gates.
       const effectiveMaxBatchSize = forwardPublicSpot ? 5 : MAX_BATCH_SIZE;
       const batchSize = Math.max(5, Math.min(effectiveMaxBatchSize, requestedBatchSize));
-      const cursor = Math.max(0, Math.min(universe.rows.length, Math.floor(request.cursor) || 0));
-      const batch = universe.rows.slice(cursor, cursor + batchSize);
+      // Cursor position cannot depend on changing 24h volume ranks. Refresh
+      // ticker values freely, but keep the same symbol order across pages.
+      const orderedRows = [...universe.rows].sort((left, right) => left.symbol.localeCompare(right.symbol));
+      const cursor = Math.max(0, Math.min(orderedRows.length, Math.floor(request.cursor) || 0));
+      const batch = orderedRows.slice(cursor, cursor + batchSize);
       const nextCursor = cursor + batch.length < universe.rows.length ? cursor + batch.length : null;
       const work = await runBoundedWorkPool(
         batch,

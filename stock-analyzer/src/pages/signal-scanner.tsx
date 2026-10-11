@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAssetMode } from '@/lib/asset-mode';
+import { useAuth } from '@/lib/auth';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import {
   selectionQuery,
@@ -541,6 +542,7 @@ function SignalDetailPanel({
 export default function SignalScannerPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
   const assetMode = useAssetMode();
+  const auth = useAuth();
   const analysisSelection = useAnalysisSelection();
   const initialView: ScannerView = assetMode.asset === 'coin'
     ? assetMode.coinMarket === 'futures' ? 'FUTURES' : 'SPOT'
@@ -570,6 +572,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const stockView = view === 'KR' || view === 'US';
   const batchSize = stockView ? 100 : 24;
   const profileRequest = useMemo<SignalScannerRequest>(() => ({
+    cacheOwner: auth.user?.id ?? 'anonymous',
     assetClass: stockView ? 'stock' : view === 'SPOT' ? 'coin_spot' : 'coin_futures',
     market: view === 'KR' ? 'KR' : view === 'US' ? 'US' : view === 'SPOT' ? 'UPBIT' : 'BITGET',
     strategy,
@@ -580,7 +583,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
     batchSize,
     minimumScore: 55,
     maximumRiskScore: 70,
-  }), [batchSize, cursor, profile.timeframe, stockView, strategy, view]);
+  }), [auth.user?.id, batchSize, cursor, profile.timeframe, stockView, strategy, view]);
   const request = useMemo<SignalScannerRequest>(
     () => embedded ? { ...profileRequest, timeframe: embeddedTimeframe } : profileRequest,
     [embedded, embeddedTimeframe, profileRequest],
@@ -626,6 +629,9 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
   useEffect(() => {
     lastGeneratedAt.current = null;
+    dataRef.current = null;
+    displayedRequestKey.current = null;
+    setData(null);
     setSelectedSignalId(null);
     setDetailOpen(false);
     setShowOrderPreparation(false);
@@ -667,7 +673,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
         }
         const message = requestErrorMessage(error);
         setErrorMessage(message);
-        if (error instanceof SignalScannerRequestError && [409, 429, 502].includes(error.status) && dataRef.current) {
+        if (error instanceof SignalScannerRequestError && [409, 429, 502].includes(error.status)
+          && dataRef.current && displayedRequestKey.current === requestKey) {
           setStatus('partial');
           return;
         }
