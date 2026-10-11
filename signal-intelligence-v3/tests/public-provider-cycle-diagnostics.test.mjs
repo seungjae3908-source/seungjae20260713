@@ -181,3 +181,20 @@ test('global lane deadline is separately visible even with zero item timeout cou
  assert.equal(row.lanes[1].batchDeadlineExceeded,true);
  assert.ok(out.releaseReadiness.blockers.includes('MARKET_CRYPTO_FUTURES_BATCH_DEADLINE_BLOCKED'));
 });
+
+test('same-cycle public stock candle depth evidence cannot be mistaken for source-wide market acceptance',()=>{
+ const shot=snapshot();
+ const lane=shot.coverage.find(x=>x.market==='US_STOCK'&&x.strategy==='SCALPING');
+ lane.publicStockSourceAudit={
+  version:'public-stock-source-audit-v1',symbolsRedacted:true,
+  quote:{fetched:10,errors:0,invalidPrice:0},
+  candles:{'5m':{fetched:10,empty:2,shortLt20:3,shortLt40:4,lastBarLagGteOneDay:10}},
+  sanitizedProviderFailures:{HTTP_429:0,OTHER:0},
+  accountIdentifier:'must-not-propagate',
+ };
+ const result=inspectExactPublicProviderCycle(shot,SHA,NOW);
+ const audit=result.rows.find(x=>x.market==='US_STOCK').lanes[0].publicStockSourceAudit;
+ assert.equal(audit.candles['5m'].empty,2);
+ assert.equal(audit.fullMarketVerified,false);
+ assert.equal(JSON.stringify(audit).includes('accountIdentifier'),false);
+});
