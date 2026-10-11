@@ -467,7 +467,8 @@ test.describe('production auth session and AI chart route', () => {
     await expect(page.getByTestId('capability-denied')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
-    await expect(page.getByText('auth-stock-fixture', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+    await expect(page.getByTestId('chart-data-provider')).toContainText('auth-stock-fixture');
 
     await navigateSpa(page, '/account');
     await expect(page.getByRole('main').getByText(USERS[0].displayName, { exact: true })).toBeVisible();

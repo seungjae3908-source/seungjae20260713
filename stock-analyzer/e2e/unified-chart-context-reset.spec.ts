@@ -141,7 +141,8 @@ async function installMocks(page: Page) {
 async function openChart(page: Page) {
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
   await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
-  await expect(page.getByText('context-reset-kr-5m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-5m');
   await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
   await expect(page.getByRole('button', { name: '갱신 일시정지', exact: true })).toBeVisible();
 }
@@ -211,7 +212,8 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
 
   await page.getByTestId('timeframe-15m').click();
   await expect(page).toHaveURL(/timeframe=15m/);
-  await expect(page.getByText('context-reset-kr-15m', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-15m');
   await expectLatestCandle(page, BASE_TIME + 23 * STEP_SECONDS);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
@@ -232,7 +234,8 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await symbolInput.fill('000660');
   await page.getByTestId('apply-chart-symbol').click();
   await expect(page).toHaveURL(/ticker=000660/);
-  await expect(page.getByText('context-reset-kr-000660', { exact: false })).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toBeVisible();
+  await expect(page.getByTestId('chart-data-provider')).toContainText('context-reset-kr-000660');
   await expectLatestCandle(page, BASE_TIME + (DOUBLE_TOP.length - 1) * STEP_SECONDS);
   const secondOverlay = page.getByTestId('chart-pattern-overlay');
   await expect(secondOverlay).toHaveCount(1);
