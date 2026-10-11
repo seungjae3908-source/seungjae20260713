@@ -335,11 +335,48 @@ test('weekly loss limit is enforced', () => {
   assert.ok(result.order?.rejectionCodes.includes('WEEKLY_LOSS_LIMIT'));
 });
 
-test('consecutive loss limit is enforced', () => {
+test('manual Paper uses five closed losing trades per KST day, not LIVE three-loss streak', () => {
   const state = createPaperTradingState(10_000, NOW);
   state.riskState.consecutiveLosses = 3;
-  const result = place(state);
-  assert.ok(result.order?.rejectionCodes.includes('CONSECUTIVE_LOSS_LIMIT'));
+  const makeLoss = (id: number, closedAt = NOW_ISO, status = 'closed') => ({
+    id: 'manual-loss-' + id, closedAt, status, netPnl: -1,
+  } as any);
+  state.journal = Array.from({length:4}, (_,i)=>makeLoss(i));
+  const four = place(state);
+  assert.equal(four.order?.rejectionCodes.includes('CONSECUTIVE_LOSS_LIMIT'), false);
+  assert.equal(four.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'), false);
+  const fiveState = createPaperTradingState(10_000, NOW);
+  fiveState.journal = [...state.journal,makeLoss(4)];
+  const fifth = place(fiveState);
+  assert.ok(fifth.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'));
+  assert.equal(fifth.orderSubmitted,false);
+  assert.equal(fifth.exchangeRequestSent,false);
+  const previousDay = createPaperTradingState(10_000, NOW);
+  previousDay.journal = fiveState.journal.map((row)=>({
+    ...row,closedAt:new Date(NOW.getTime() - 24*60*60_000).toISOString(),
+  }));
+  const freshDay = place(previousDay);
+  assert.equal(freshDay.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'), false);
+});
+
+test('manual Paper partial closing does not consume the five-trade daily loss budget', () => {
+  const state=createPaperTradingState(10_000,NOW);
+  state.journal=Array.from({length:5},(_,i)=>({
+    id:'partial-loss-'+i,status:'partially_closed',closedAt:NOW_ISO,netPnl:-100,
+  } as any));
+  const allowed=place(state);
+  assert.equal(allowed.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
+});
+
+test('manual Paper 5-loss gate respects KST midnight rather than UTC midnight', () => {
+  const now=new Date('2026-08-02T15:00:00.000Z'); // 2026-08-03 00:00 KST
+  const state=createPaperTradingState(10_000,now);
+  state.journal=Array.from({length:5},(_,i)=>({
+    id:'prior-kst-loss-'+i,status:'closed',
+    closedAt:'2026-08-02T14:59:59.000Z',netPnl:-1,
+  } as any));
+  const result=place(state,{at:now});
+  assert.equal(result.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
 });
 
 test('mark price computes long unrealized pnl', () => {

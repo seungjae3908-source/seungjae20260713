@@ -20,6 +20,7 @@ export class PaperTradingError extends Error {
 export const MODE = 'paper-only' as const;
 export const MAX_PROCESSED_EVENTS = 500;
 export const MARKET_FRESHNESS_MS = 60_000;
+export const MANUAL_PAPER_DAILY_LOSS_TRADES_LIMIT = 5 as const;
 export const CONTRACT_FRESHNESS_MS = 20 * 60_000;
 export const EPSILON = 1e-8;
 
@@ -64,6 +65,25 @@ export function weekKey(at: Date) {
   const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const week = Math.ceil((((date.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+/** Count closed losing manual simulation trades in Korea-local calendar time.
+ * Never share this five-loss Paper rule with LIVE/provider risk policy.
+ * A partly closed position is not double-counted until final close.
+ */
+export function manualPaperLosingTradesToday(state: PaperTradingState, now: Date): number {
+  const shiftKst = (ms: number) => new Date(ms + 9 * 60 * 60_000).toISOString().slice(0,10);
+  const nowMs = now.getTime();
+  const day = shiftKst(nowMs);
+  return state.journal.filter((row) => {
+    const closedAt = Date.parse(row.closedAt ?? '');
+    return row.status === 'closed'
+      && Number.isFinite(closedAt)
+      && closedAt <= nowMs + 5_000
+      && shiftKst(closedAt) === day
+      && typeof row.netPnl === 'number'
+      && Number.isFinite(row.netPnl) && row.netPnl < 0;
+  }).length;
 }
 
 export function normalizedRiskState(state: PaperRiskState, at: Date): PaperRiskState {
@@ -310,7 +330,10 @@ export function buildRiskInput(
     contractRulesStatus: rulesStatus,
     dailyRealizedPnl: state.riskState.dailyRealizedPnl,
     weeklyRealizedPnl: state.riskState.weeklyRealizedPnl,
-    consecutiveLosses: state.riskState.consecutiveLosses,
+    // LIVE's 3-loss streak guard does not govern this hypothetical manual
+    // simulation. Its own KST-day five-losing-trades gate is checked at
+    // simulated order admission, without changing shared LIVE risk policy.
+    consecutiveLosses: 0,
     openExposure: openExposure(state),
     sameDirectionExposure: sameDirectionExposure(state, request.side),
     dataStatus: marketStatus,
