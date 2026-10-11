@@ -10,6 +10,8 @@ import {runFourMarketOriginalMinuteBatchV1 as batch}
   from "../src/four-market-original-minute-batch-v1.js";
 import {runFourMarketOriginalMinutePeriodV1 as period}
   from "../src/four-market-original-minute-period-v1.js";
+import {runFourMarketOriginalMinuteSweepV1 as sweep}
+  from "../src/four-market-original-minute-sweep-v1.js";
 
 const DAY=86_400_000,MIN=60_000;
 const D=Date.parse("2026-09-18T00:00:00Z");
@@ -261,5 +263,114 @@ test("per-symbol whole-period archive refuses manually spoofed source indexes an
    assert.equal(none.modeledReturnPercent,null);
    assert.equal(none.profitabilityProven,false);
    assert.equal(none.executionAuthority,"NONE");
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+
+test("whole-venue PIT page sweep resumes exactly across old delisted and 2 active source symbols",async()=>{
+ const folder=temp(),market="CRYPTO_SPOT",cfg=input(market,folder);
+ const {sourceSessions,discoverArchivedSessions,...base}=cfg;
+ try{
+   for(const symbol of MARKETS[market].symbols)
+     await persistResearchMinuteSessionV1({root:folder,
+       source:session(market,symbol)});
+   const args={...base,sourceSessions:[],discoverArchivedSessions:true,
+     pageBudget:1,memberPageSize:2};
+   const first=await sweep(args);
+   assert.equal(first.status,"BLOCKED_DATA");
+   assert.equal(first.localPageTraversalReachedEnd,false);
+   assert.equal(first.pageCountSelfAttested,1);
+   assert.equal(first.sourceOnlyCompletePages,1);
+   assert.equal(first.sourceBlockedPages,0);
+   assert.equal(first.sourceOnlyObservedPriceEventLabels,null);
+   assert.equal(first.nextCursorDate,"2026-09-18");
+   assert.equal(first.nextMemberOffset,2);
+   assert.equal(first.resume.previousPageCount,1);
+   assert.equal(first.resume.previousSourceEventCount,3);
+   assert.equal(first.actualMarketWideOpportunityCount,null);
+   assert.equal(first.profitabilityProven,false);
+   assert.equal(first.executionAuthority,"NONE");
+   const second=await sweep({...args,resume:first.resume});
+   assert.equal(second.status,"LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY");
+   assert.equal(second.localPageTraversalReachedEnd,true);
+   assert.equal(second.pageCountSelfAttested,2);
+   assert.equal(second.sourceOnlyCompletePages,2);
+   assert.equal(second.sourceBlockedPages,0);
+   assert.equal(second.sourceTasksSelfAttested,2);
+   assert.equal(second.sourceOnlyObservedPriceEventLabels,6);
+   assert.equal(second.nextCursorDate,null);
+   assert.equal(second.nextMemberOffset,null);
+   assert.equal(second.resume,null);
+   assert.equal(second.fullPeriodEconomicReturnPercent,null);
+   assert.equal(second.fullPeriodNetPnlKRW,null);
+   assert.equal(second.actualFillCount,null);
+   assert.equal(second.trueMarketWideRecall,null);
+   assert.equal(second.profitabilityProven,false);
+   assert.equal(second.paperAdmissionAllowed,false);
+   assert.equal(second.providerGETCount,0);
+   assert.equal(second.executionAuthority,"NONE");
+   await assert.rejects(()=>sweep({...args,resume:first.resume,
+     memberPageSize:1}),/ORIGINAL_SWEEP_RESUME_SCOPE_OR_COUNTER_INVALID/);
+   await assert.rejects(()=>sweep({...args,resume:first.resume,
+     costModel:{...cfg.costModel,entryFeeRate:0.003}}),
+     /ORIGINAL_SWEEP_RESUME_SCOPE_OR_COUNTER_INVALID/);
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+test("sweep visits later PIT pages but nulls all aggregate opportunities if one source is absent",async()=>{
+ const folder=temp(),market="CRYPTO_SPOT",cfg=input(market,folder);
+ const {sourceSessions,discoverArchivedSessions,...base}=cfg;
+ try{
+   await persistResearchMinuteSessionV1({root:folder,
+     source:session(market,MARKETS[market].symbols[0])});
+   const result=await sweep({...base,sourceSessions:[],
+     discoverArchivedSessions:true,pageBudget:8,memberPageSize:2});
+   assert.equal(result.status,"BLOCKED_DATA");
+   assert.equal(result.localPageTraversalReachedEnd,true);
+   assert.equal(result.pageCountSelfAttested,2);
+   assert.equal(result.sourceOnlyCompletePages,1);
+   assert.equal(result.sourceBlockedPages,1);
+   assert.equal(result.sourceOnlyObservedPriceEventLabels,null);
+   assert.equal(result.fullPeriodEconomicReturnPercent,null);
+   assert.equal(result.actualMarketWideOpportunityCount,null);
+   assert.equal(result.resume,null);
+   assert.equal(result.profitabilityProven,false);
+   assert.equal(result.executionAuthority,"NONE");
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+test("stock weekend-like calendar gaps never synthesize 1m bars or pretend an all-market source PASS",async()=>{
+ const folder=temp(),market="KR_STOCK",cfg=input(market,folder);
+ const {sourceSessions,discoverArchivedSessions,...base}=cfg;
+ try{
+   const result=await sweep({...base,sourceSessions:[],
+     discoverArchivedSessions:true,
+     researchWindow:{startDate:"2026-09-18",endDate:"2026-09-20"},
+     pageBudget:8,memberPageSize:20});
+   assert.equal(result.status,"BLOCKED_DATA");
+   assert.equal(result.localPageTraversalReachedEnd,true);
+   assert.equal(result.pageCountSelfAttested,3);
+   assert.equal(result.sourceBlockedPages,3);
+   assert.equal(result.sourceOnlyObservedPriceEventLabels,null);
+   assert.equal(result.actualMarketWideOpportunityCount,null);
+   assert.equal(result.trueMarketWideRecall,null);
+   assert.equal(result.profitabilityProven,false);
+   assert.equal(result.paperAdmissionAllowed,false);
+   assert.equal(result.executionAuthority,"NONE");
+ }finally{rmSync(folder,{recursive:true,force:true});}
+});
+test("missing independent roster stops a bounded sweep rather than spinning on one cursor",async()=>{
+ const folder=temp(),market="CRYPTO_FUTURES",cfg=input(market,folder);
+ const {sourceSessions,discoverArchivedSessions,...base}=cfg;
+ try{
+   const result=await sweep({...base,manifest:null,
+     sourceSessions:[],discoverArchivedSessions:true,pageBudget:6});
+   assert.equal(result.status,"BLOCKED_DATA");
+   assert.equal(result.reason,"UNRESUMABLE_HISTORIC_PIT_OR_CALENDAR_SOURCE_MISSING");
+   assert.equal(result.visitedPagesThisInvocation,1);
+   assert.equal(result.localPageTraversalReachedEnd,false);
+   assert.equal(result.resume,null);
+   assert.equal(result.sourceOnlyObservedPriceEventLabels,null);
+   assert.equal(result.profitabilityProven,false);
+   await assert.rejects(()=>sweep({...base,pageBudget:9}),
+     /ORIGINAL_SWEEP_PAGE_RESOURCE_BUDGET_INVALID/);
  }finally{rmSync(folder,{recursive:true,force:true});}
 });

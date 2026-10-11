@@ -225,3 +225,47 @@ test("private BATCH automatically discovers retained 1m sessions without a calle
   assert.equal(statSync(periodOutput).mode&0o077,0);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("private SWEEP CLI resumably traverses dated PIT identities without fabricating absent native minutes",async()=>{
+ const root=dir(),firstIn=join(root,"sweep-1.json"),
+   firstOut=join(root,"sweep-1-result.json"),
+   secondIn=join(root,"sweep-2.json"),
+   secondOut=join(root,"sweep-2-result.json");
+ try{
+  const scope={mode:"SWEEP",root,market:"CRYPTO_SPOT",
+    manifest:roster(),sourceSessions:[],discoverArchivedSessions:true,
+    researchWindow:{startDate:"2026-09-18",endDate:"2026-09-18"},
+    asOfMs:D+5*DAY,memberPageSize:1,pageBudget:1,
+    direction:"LONG",timeframe:"5m"};
+  writePrivate(firstIn,scope);
+  const job1=await run({input:firstIn,output:firstOut});
+  assert.equal(job1.mode,"SWEEP");
+  assert.equal(job1.status,"BLOCKED_DATA");
+  const first=JSON.parse(readFileSync(firstOut,"utf8"));
+  assert.equal(first.pageCountSelfAttested,1);
+  assert.equal(first.localPageTraversalReachedEnd,false);
+  assert.equal(first.sourceOnlyObservedPriceEventLabels,null);
+  assert.equal(first.resume.previousPageCount,1);
+  assert.equal(first.resume.nextMemberOffset,1);
+  writePrivate(secondIn,{...scope,resume:first.resume});
+  const job2=await run({input:secondIn,output:secondOut});
+  assert.equal(job2.status,"BLOCKED_DATA");
+  const second=JSON.parse(readFileSync(secondOut,"utf8"));
+  assert.equal(second.pageCountSelfAttested,2);
+  assert.equal(second.sourceBlockedPages,1);
+  assert.equal(second.localPageTraversalReachedEnd,true);
+  assert.equal(second.resume,null);
+  assert.equal(second.sourceOnlyObservedPriceEventLabels,null);
+  assert.equal(second.fullPeriodEconomicReturnPercent,null);
+  assert.equal(second.actualMarketWideOpportunityCount,null);
+  assert.equal(second.actualFillCount,null);
+  assert.equal(second.trueMarketWideRecall,null);
+  assert.equal(second.profitabilityProven,false);
+  assert.equal(second.paperAdmissionAllowed,false);
+  assert.equal(second.providerGETCount,0);
+  assert.equal(second.executionAuthority,"NONE");
+  assert.equal(statSync(firstOut).mode&0o077,0);
+  assert.equal(statSync(secondOut).mode&0o077,0);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
