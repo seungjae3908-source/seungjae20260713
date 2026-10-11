@@ -118,7 +118,8 @@ test('source freshness requires exactly 12 complete pages and correct market ros
   const variant=receipt();
   variant[3]={...variant[3],universeSource:'bitget-public'};
   assert.equal(currentPublicV3CycleReady(variant),false);
-  assert.deepEqual(currentPagePublication(input(),variant).events,[]);
+  assert.equal(currentPagePublication(input(),variant).events.some(e=>e.id==='verified'),false,
+    'a wrong US provider must not publish the US candidate; healthy other markets may remain');
   const partial=receipt();partial[0].universePartial=true;
   assert.equal(currentPublicV3CycleReady(partial),false);
   const blocked=receipt();blocked[2].status='BLOCKED_DATA';
