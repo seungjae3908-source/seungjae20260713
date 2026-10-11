@@ -24,6 +24,8 @@ import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
+  publicV3CryptoBatchSize,
+  summarizePublicV3Execution,
   parsePublicRetryAfterMs,
   publicUpbitGroupForUrl,
   createPublicUpbitGroupPacer,
@@ -343,7 +345,7 @@ async function scanCryptoRaw(lane, cursor) {
     timeframe: lane.timeframe,
     condition: 'trend',
     cursor,
-    batchSize: lane.batchSize,
+    batchSize: publicV3CryptoBatchSize(lane.scannerMarket,lane.batchSize),
   });
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
   const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
@@ -472,6 +474,10 @@ async function main() {
         // Diagnostic-only, low-cardinality quality issues for the exact scan.
         // Its values do not grant a candidate, PASS, cursor or order authority.
         publicStockQualityDiagnostic: response.publicStockQualityDiagnostic ?? null,
+        // The prior futures 60m SEARCH_FAILURE reported 0 provider errors
+        // while hiding incomplete started/completed work. Preserve the exact
+        // execution accounting without any private provider payload.
+        publicExecutionDiagnostic: summarizePublicV3Execution(response),
         universeStale: response.universe.stale === true,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,

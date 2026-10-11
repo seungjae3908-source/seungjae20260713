@@ -115,3 +115,18 @@ The diagnostic window matches the Scanner mode's recent quality window
 requests and omits all symbols, timestamps, OHLCV rows and raw exception
 messages. It is diagnostic evidence only, never a trading signal, PASS or
 excuse to bypass incomplete roster coverage.
+
+## Draft: Bitget Futures V3 public-only 60m incomplete-batch budget
+
+A live-public 20-instrument 60m futures batch returned `SEARCH_FAILURE`,
+`responseDataState=partial`, 0 provider errors and 0 timeouts.
+The scanner supports 12s total and Bitget V3 has a conservative public
+IP-group request pacer, so a partial batch may reflect unstarted or unfinished
+work instead of HTTP failures. V3-only Futures stage-2 is now capped at 10
+instruments per run, preserving the full 820-symbol discovery roster and
+cursor rotation by the actual requested count. No shared member, Paper or
+real futures setting is modified. A new bounded
+`publicExecutionDiagnostic` records requested, started, completed,
+deadline and item-failure aggregate counts, never symbols, headers or payloads.
+A new true public run is required to determine whether the constraint solves
+the observed 60m failure; no guarantee of success from mock CI.
