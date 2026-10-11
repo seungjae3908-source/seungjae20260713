@@ -344,3 +344,29 @@ test("private file CLI creates one bounded report, rejects overwrites and symlin
     }finally{rmSync(link,{force:true});}
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("PIT minute join accepts multi-year stock sessions without mixing another local date",async()=>{
+  for(const market of ["KR_STOCK","US_STOCK"]){
+    const root=temp(),m=fixture(market);
+    try{
+      const start=market==="KR_STOCK"?START:Date.parse("2026-09-18T13:30:00Z");
+      const original=source(market,DETAILS[market].symbols[0],start);
+      const cal=calendar(market,[original],"2026-09-18");
+      const extra=(date,iso)=>{
+        const startMs=Date.parse(iso);
+        return {tradingDateLocal:date,startMs,endMs:startMs+30*M,
+          kind:"REGULAR",timeZone:DETAILS[market].zone};
+      };
+      cal.sessions.unshift(extra("2015-01-05",
+        market==="KR_STOCK"?"2015-01-05T00:00:00Z":"2015-01-05T14:30:00Z"));
+      cal.sessions.push(extra("2028-01-03",
+        market==="KR_STOCK"?"2028-01-03T00:00:00Z":"2028-01-03T14:30:00Z"));
+      const result=await audit(req(root,market,m,{stockCalendar:cal}));
+      assert.equal(result.inspectedMemberCount,2);
+      assert.equal(result.expectedHistoricalActiveMembers,2);
+      assert.equal(result.memberSourceStatuses[0].sourceSessionCount,1);
+      assert.equal(result.executionAuthority,"NONE");
+    }finally{rmSync(root,{recursive:true,force:true});}
+  }
+});

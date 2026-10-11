@@ -1,4 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import {
+  checkedPITSelection, collectPITMinuteCoveragePeriod, isValidPITCoverageResponse,
+  type PITSelection,
+} from '../src/lib/research-pit-minute-coverage-period';
 
 const USER = '99999999-9999-4999-8999-999999999999';
 const AUTH_KEY = 'sb-127-auth-token';
@@ -252,7 +256,7 @@ test('copilot entry keeps the established button contract', async ({ page }) => 
 });
 
 
-test('admin historical 1m coverage read carries session auth and paginates an arbitrary multi-year selection', async ({ page }) => {
+test('admin historical 1m coverage reads and aggregates the full selected period with authenticated bounded pages', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installRuntime(page);
   const reads: Array<{ method: string; token: string; market: string | null; start: string | null; end: string | null; cursor: string | null; hasPath: boolean }> = [];
@@ -269,7 +273,7 @@ test('admin historical 1m coverage read carries session auth and paginates an ar
       hasPath: [...url.searchParams.keys()].some(key => /path|root|file|token|secret|provider/i.test(key)),
     });
     const second = url.searchParams.get('cursorDate') != null;
-    const firstDate = second ? '2016-01-08' : '2016-01-01';
+    const firstDate = second ? '2016-02-01' : '2016-01-01';
     await fulfill(route, {
       schemaVersion: 'research-pit-minute-coverage-readonly-v1',
       available: true,
@@ -281,8 +285,8 @@ test('admin historical 1m coverage read carries session auth and paginates an ar
         status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
         reason: 'MISSING_HISTORICAL_MINUTE_DATE_RECEIPT',
         inspectedStartDate: firstDate,
-        inspectedEndDate: second ? '2016-01-14' : '2016-01-07',
-        nextCursorDate: second ? null : '2016-01-08',
+        inspectedEndDate: second ? '2016-02-09' : '2016-01-31',
+        nextCursorDate: second ? null : '2016-02-01',
         expectedHistoricalTradingDays: 5,
         missingSourceDays: 4,
         partialSourceDays: 1,
@@ -291,7 +295,7 @@ test('admin historical 1m coverage read carries session auth and paginates an ar
         sourceMinuteRows: 120,
         dailyReadiness: [
           { date: firstDate, status: 'BLOCKED_DATA', originalMinuteRows: null },
-          { date: second ? '2016-01-11' : '2016-01-04',
+          { date: second ? '2016-02-04' : '2016-01-04',
             status: 'INCOMPLETE_SOURCE_ATTESTED_DAY_MINUTE_INVENTORY',
             originalMinuteRows: 120 },
         ],
@@ -309,18 +313,17 @@ test('admin historical 1m coverage read carries session auth and paginates an ar
   await expect(panel).toBeVisible();
   await panel.getByLabel('과거 데이터 시장').selectOption('US_STOCK');
   await panel.getByLabel('과거 데이터 시작일').fill('2016-01-01');
-  await panel.getByLabel('과거 데이터 종료일').fill('2026-10-01');
-  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
-  await expect(panel).toContainText('2016-01-01 ~ 2016-01-07');
+  await panel.getByLabel('과거 데이터 종료일').fill('2016-02-09');
+  await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
+  await expect(panel).toContainText('전체 조회 구간: 2016-01-01 ~ 2016-02-09');
   await expect(panel).toContainText('누락된 날짜');
   await expect(panel).toContainText('사후 수집 분봉');
   await expect(panel).toContainText('최초 신호 탐지·OOS·실체결·수익성 미검증');
-  await panel.getByRole('button', { name: /다음 기간 조회/ }).click();
-  await expect(panel).toContainText('2016-01-08 ~ 2016-01-14');
+  await expect(panel).toContainText('확인된 구간: 2/2');
   expect(reads).toHaveLength(2);
   expect(reads.map(r => [r.method, r.market, r.start, r.end, r.cursor, r.hasPath])).toEqual([
-    ['GET', 'US_STOCK', '2016-01-01', '2026-10-01', null, false],
-    ['GET', 'US_STOCK', '2016-01-01', '2026-10-01', '2016-01-08', false],
+    ['GET', 'US_STOCK', '2016-01-01', '2016-02-09', null, false],
+    ['GET', 'US_STOCK', '2016-01-01', '2016-02-09', '2016-02-01', false],
   ]);
   expect(reads.every(r => r.token.startsWith('Bearer '))).toBe(true);
 });
@@ -344,12 +347,12 @@ test('historical 1m coverage UI fails closed after 403 or an unsafe response, wi
   await page.getByRole('button', { name: '상세', exact: true }).click();
   await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
-  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
   await expect(panel.getByRole('alert')).toContainText('관리자 권한이 필요한 자료입니다.');
   await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
   mockKind = 'unsafe';
   await panel.getByLabel('과거 데이터 시장').selectOption('US_STOCK');
-  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
   await expect(panel.getByRole('alert')).toContainText('검증되지 않은 응답은 표시하지 않습니다.');
   await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
 });
@@ -388,12 +391,109 @@ test('same-window admin recheck revokes previously displayed source totals after
   await page.getByRole('button', { name: '상세', exact: true }).click();
   await page.getByRole('tab', { name: '검증 리포트', exact: true }).click();
   const panel = page.getByTestId('research-pit-minute-coverage');
-  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await panel.getByLabel('과거 데이터 시작일').fill('2026-09-18');
+  await panel.getByLabel('과거 데이터 종료일').fill('2026-09-19');
+  await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
   await expect(panel).toContainText('240');
   await expect(panel.getByText('보관된 1분봉')).toBeVisible();
-  await panel.getByRole('button', { name: '원본 보유 현황 조회' }).click();
+  await panel.getByRole('button', { name: '선택 기간 전체 조회' }).click();
   await expect(panel.getByRole('alert')).toContainText('관리자 권한이 필요한 자료입니다.');
   await expect(panel.getByText('보관된 1분봉')).toHaveCount(0);
   await expect(panel.getByText('240', { exact: true })).toHaveCount(0);
   expect(calls).toBe(2);
+});
+
+
+test('full ten-year PIT inventory uses bounded GET planning and never implies market-wide trade PASS', async () => {
+  const selection = {
+    market: 'CRYPTO_SPOT' as const, startDate: '2016-01-01',
+    endDate: '2025-12-31', cursorDate: null,
+  };
+  const plan = checkedPITSelection(selection);
+  expect(plan.pages).toBeGreaterThan(110);
+  let calls = 0, active = 0, peak = 0;
+  let lastProgress = [0, 0];
+  const reader = async (request: PITSelection) => {
+    calls += 1; active += 1; peak = Math.max(peak, active);
+    await Promise.resolve();
+    const from = request.cursorDate ?? request.startDate;
+    const fromMs = Date.parse(from + 'T00:00:00Z');
+    const toMs = Math.min(Date.parse(request.endDate + 'T00:00:00Z'),
+      fromMs + 30 * 86_400_000);
+    const to = new Date(toMs).toISOString().slice(0, 10);
+    const next = toMs < Date.parse(request.endDate + 'T00:00:00Z')
+      ? new Date(toMs + 86_400_000).toISOString().slice(0, 10) : null;
+    active -= 1;
+    return {
+      schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+      available: true, status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+      reason: 'TEST_ONLY_INCOMPLETE_SOURCE',
+      profitabilityProven: false, executionAuthority: 'NONE',
+      report: {
+        status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+        reason: 'TEST_ONLY_INCOMPLETE_SOURCE',
+        inspectedStartDate: from, inspectedEndDate: to, nextCursorDate: next,
+        expectedHistoricalTradingDays: 1, locallyCompleteMinuteSourceDays: 0,
+        missingSourceDays: 1, partialSourceDays: 0,
+        sourceMinuteRows: 0, retrospectiveMinuteRows: 0, dailyReadiness: [],
+        originalScannerAsOfEvidenceVerified: false,
+        fullMarketOpportunityDenominatorVerified: false,
+        profitabilityProven: false, executionAuthority: 'NONE',
+      },
+    };
+  };
+  const result = await collectPITMinuteCoveragePeriod(
+    selection, reader, undefined, (done, total) => { lastProgress = [done, total]; },
+  );
+  expect(calls).toBe(plan.pages);
+  expect(peak).toBeLessThanOrEqual(3);
+  expect(lastProgress).toEqual([plan.pages, plan.pages]);
+  expect(result.report?.checkedPageCount).toBe(plan.pages);
+  expect(result.report?.inspectedStartDate).toBe(selection.startDate);
+  expect(result.report?.inspectedEndDate).toBe(selection.endDate);
+  expect(result.report?.missingSourceDays).toBe(plan.pages);
+  expect(result.report?.originalScannerAsOfEvidenceVerified).toBe(false);
+  expect(result.report?.fullMarketOpportunityDenominatorVerified).toBe(false);
+  expect(result.profitabilityProven).toBe(false);
+  expect(result.executionAuthority).toBe('NONE');
+});
+
+test('PIT period parser rejects incorrect counters, untrusted statuses and wrong next cursor', async () => {
+  const selection = {
+    market: 'US_STOCK' as const, startDate: '2026-09-18',
+    endDate: '2026-09-19', cursorDate: null,
+  };
+  const base = {
+    schemaVersion: 'research-pit-minute-coverage-readonly-v1',
+    available: true, status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+    reason: 'SOURCE_PARTIAL', profitabilityProven: false, executionAuthority: 'NONE',
+    report: {
+      status: 'INCOMPLETE_OR_BLOCKED_COMPACT_PIT_MINUTE_DATE_CHUNK',
+      reason: 'SOURCE_PARTIAL', inspectedStartDate: '2026-09-18',
+      inspectedEndDate: '2026-09-19', nextCursorDate: null,
+      expectedHistoricalTradingDays: 2, locallyCompleteMinuteSourceDays: 0,
+      missingSourceDays: 2, partialSourceDays: 0, sourceMinuteRows: 0,
+      retrospectiveMinuteRows: 0, dailyReadiness: [],
+      originalScannerAsOfEvidenceVerified: false,
+      fullMarketOpportunityDenominatorVerified: false,
+      profitabilityProven: false, executionAuthority: 'NONE',
+    },
+  };
+  expect(isValidPITCoverageResponse(base)).toBe(true);
+  expect(isValidPITCoverageResponse({
+    ...base, report: { ...base.report, sourceMinuteRows: -1 },
+  })).toBe(false);
+  expect(isValidPITCoverageResponse({
+    ...base, report: { ...base.report, dailyReadiness: [
+      { date: '2026-09-18', status: 'BLOCKED_DATA', originalMinuteRows: Number.NaN },
+    ] },
+  })).toBe(false);
+  expect(isValidPITCoverageResponse({
+    ...base, report: { ...base.report, executionAuthority: 'LIVE' },
+  })).toBe(false);
+  await expect(collectPITMinuteCoveragePeriod(
+    selection, async () => ({ ...base, report: {
+      ...base.report, nextCursorDate: '2026-09-19',
+    } }),
+  )).rejects.toThrow('다음 페이지');
 });

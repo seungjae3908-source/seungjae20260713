@@ -73,10 +73,13 @@ function requireStockCalendar(market, stockTradingDates, w) {
   if (!Array.isArray(stockTradingDates)
     || stockTradingDates.length > 36600)
     throw new TypeError("PIT_MINUTE_WINDOW_STOCK_CALENDAR_INVALID");
-  let prior=-1;
+  // Preserve the archive's full sorted/unique exchange-local calendar.
+  // Downstream consumes only the requested chunk and never assumes that
+  // absent dates prove an exchange holiday or zero opportunity.
+  let prior=Number.NEGATIVE_INFINITY;
   for(const date of stockTradingDates) {
     const ms=dayMs(date);
-    if (ms<=prior || ms<w.startMs || ms>=w.endExclusiveMs)
+    if (ms<=prior)
       throw new TypeError("PIT_MINUTE_WINDOW_STOCK_CALENDAR_INVALID");
     prior=ms;
   }

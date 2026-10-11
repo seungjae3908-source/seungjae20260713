@@ -297,3 +297,28 @@ test("private CLI day ledger handles complete index, file privacy and immutable 
       /PIT_MINUTE_DAY_CLI_OPTION_INVALID/);
   }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("full-day ledger filters out old and future sessions from the archived stock calendar",async()=>{
+  for(const market of ["KR_STOCK","US_STOCK"]){
+    const root=temp(),m=make(market);
+    try{
+      const cal=dateSessions(market);
+      const zone=POLICY[market][1];
+      const session=(date,ts)=>{
+        const startMs=Date.parse(ts);
+        return {tradingDateLocal:date,startMs,endMs:startMs+30*MINUTE,
+          kind:"REGULAR",timeZone:zone};
+      };
+      cal.sessions.unshift(session("2015-01-05",
+        market==="KR_STOCK"?"2015-01-05T00:00:00Z":"2015-01-05T14:30:00Z"));
+      cal.sessions.push(session("2028-01-03",
+        market==="KR_STOCK"?"2028-01-03T00:00:00Z":"2028-01-03T14:30:00Z"));
+      const part=await pages(root,market,m,cal);
+      const summary=aggregate(market,m,part,cal);
+      assert.equal(summary.inspectedPITMemberCount,25);
+      assert.equal(summary.executionAuthority,"NONE");
+      assert.equal(summary.fullMarketOpportunityDenominatorVerified,false);
+    }finally{rmSync(root,{recursive:true,force:true});}
+  }
+});
