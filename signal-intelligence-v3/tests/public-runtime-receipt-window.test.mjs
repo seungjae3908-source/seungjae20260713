@@ -89,3 +89,13 @@ test('ref identity, source authority, bad clock or duplicate receipts are reject
     serviceSha:SHA,asOfMs:START+86400000,
   }),/UNTRUSTED/);
 });
+
+test('stale or future prior-cycle snapshot cannot be credited as a new successful receipt',()=>{
+ assert.throws(()=>receipt(START,{snapshot:snapshot(START-120000)}),
+  /PUBLIC_RUNTIME_RECEIPT_OUT_OF_CYCLE_SNAPSHOT/);
+ assert.throws(()=>receipt(START,{snapshot:snapshot(START+5000)}),
+  /PUBLIC_RUNTIME_RECEIPT_OUT_OF_CYCLE_SNAPSHOT/);
+ const failure=receipt(START,{snapshot:null,producerSucceeded:false});
+ assert.equal(failure.producerSucceeded,false);
+ assert.equal(failure.status,'PRODUCER_OR_SNAPSHOT_FAILED');
+});
