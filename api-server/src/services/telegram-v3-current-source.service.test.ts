@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
-import {validTelegramV3CurrentSource,boundedTelegramV3Json}
+import {validTelegramV3CurrentSource,boundedTelegramV3Json,verifiedTelegramV3PageCount}
  from './telegram-v3-current-source.service';
 import {
  SignalIntelligenceTelegramSubscriber,SignalIntelligenceTelegramDeliveryState,
@@ -60,6 +60,18 @@ test('current 12-lane V3 current-page proof permits only a valid market candidat
  const shot=fixture();
  assert.equal(validTelegramV3CurrentSource(shot,NOW),true);
  assert.equal(validTelegramV3CurrentSource({...shot,events:[]},NOW),true);
+ assert.equal(verifiedTelegramV3PageCount(shot),1);
+ const blocked=fixture();
+ blocked.events.length=0;
+ blocked.coverage[4].status='BLOCKED_DATA';
+ blocked.coverage[4].lastGoodPreserved=true;
+ blocked.coverage[4].cursorRotatedBlockedOnly=true;
+ blocked.coverage[4].responseDataState='untrusted';
+ blocked.coverage[4].universePartial=true;
+ assert.equal(validTelegramV3CurrentSource(blocked,NOW),true,
+   'the empty snapshot contract is structurally safe');
+ assert.equal(verifiedTelegramV3PageCount(blocked),0,
+   'structural safety must not be reported as fresh signal-source health');
 });
 test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 proof cannot send',()=>{
  const mutate=(change:(x:ReturnType<typeof fixture>)=>void)=>{

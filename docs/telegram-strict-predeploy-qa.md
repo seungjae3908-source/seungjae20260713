@@ -193,3 +193,26 @@ the existing total `delivered` meaning. No chat IDs, symbols,
 tokens or member details appear in telemetry. Existing personal
 delivery/retry/dedupe code and the authoritative Paper/live runtime
 are unmodified. All tests use local mock senders; no Bot API calls.
+
+## 2026-10-11 — Telegram source truth + bounded rich scheduled brief
+
+The Signal V3 subscriber can receive a structurally valid zero-event,
+all-BLOCKED_DATA twelve-lane snapshot. It now classifies this as
+`SOURCE_DATA_BLOCKED` (0 sends), NOT `READY`. A genuine verified
+one-lane/no-trade source still reports READY even when other markets
+are blocked. This distinguishes "HTTP healthy" from "current source
+eligible" without fabricating signals or opening trading permissions.
+If an AbortSignal aborts while decoding a bounded 200 body, this is
+TIMEOUT, not INVALID_RESPONSE. Personal watchlist policy timestamps
+are now the verified V3 snapshot generation time, rather than the
+subscriber polling time, to prevent misleading freshness.
+
+Separately, optional KR/US theme lookup was previously not bound by
+the market brief's 8-second AbortController, so one hung
+`getSectorPopular` promise could stall a scheduled market Telegram
+briefing indefinitely. `boundedTelegramBriefRead` now bounds each
+market-room and sector result to eight seconds, returns null/N/A for
+unavailable evidence and lets other room data proceed. Provider
+exception messages are reduced to fixed safe codes, never raw token/
+URL/PII material. Offline tests use a deliberate never-resolving
+promise and throwing source, not network calls or actual Bot API sends.
