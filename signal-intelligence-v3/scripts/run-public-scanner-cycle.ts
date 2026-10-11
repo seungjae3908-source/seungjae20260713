@@ -41,10 +41,10 @@ if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_S
 
 const strategyProfiles = getPublicScannerProfileSet(PUBLIC_PROFILE_MODE);
 const marketProfiles = Object.freeze([
-  Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: 20 }),
-  Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: 20 }),
+  Object.freeze({ prefix: 'KR', market: 'KR_STOCK', scannerMarket: 'KR', batchSize: PUBLIC_PROFILE_MODE === 'MEMBER_UI' ? 10 : 20 }),
+  Object.freeze({ prefix: 'US', market: 'US_STOCK', scannerMarket: 'US', batchSize: PUBLIC_PROFILE_MODE === 'MEMBER_UI' ? 10 : 20 }),
   Object.freeze({ prefix: 'SPOT', market: 'CRYPTO_SPOT', scannerMarket: 'spot', batchSize: PUBLIC_V3_SPOT_STAGE_TWO_LIMIT }),
-  Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: 20 }),
+  Object.freeze({ prefix: 'FUTURES', market: 'CRYPTO_FUTURES', scannerMarket: 'futures', batchSize: PUBLIC_PROFILE_MODE === 'MEMBER_UI' ? 10 : 20 }),
 ]);
 const lanes = Object.freeze(marketProfiles.flatMap((market) => strategyProfiles.map((strategy) => Object.freeze({
   ...market,
@@ -443,6 +443,13 @@ async function main() {
         responseDataState: response.dataState ?? null,
         scannedCards: response.cards.length,
         retainedFromBatch: adapted.length,
+        requestedCount: Number(response.execution.requestedCount ?? 0),
+        startedCount: Number(response.execution.startedCount ?? 0),
+        completedCount: Number(response.execution.completedCount ?? 0),
+        // A task may finish technically while its candles are insufficient.
+        insufficientDataCount: Number(response.execution.insufficientDataCount ?? 0),
+        invalidDataFailureCount: Array.isArray(response.failures)
+          ? response.failures.filter((failure) => failure.reason === 'invalid_data').length : null,
         status,
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
@@ -464,6 +471,11 @@ async function main() {
         totalUniverse: null,
         scannedCards: 0,
         retainedFromBatch: 0,
+        requestedCount: null,
+        startedCount: null,
+        completedCount: null,
+        insufficientDataCount: null,
+        invalidDataFailureCount: null,
         status: 'SEARCH_FAILURE',
         leverage: { evaluated: 0, available: 0, blocked: 0, unavailable: 0 },
         lastGoodPreserved: true,
