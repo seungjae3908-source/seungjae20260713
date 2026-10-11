@@ -369,6 +369,10 @@ export class TradeAutomationService {
     // Paper FILLED transition. Ordinary Live, manual and mock executions
     // cannot use this metadata to make an unverified Paper profit.
     if (toState === 'FILLED' && reason === 'PAPER_BROKER_FILLED') {
+      // A caller may supply an old/corrupted serialized order. Never inherit
+      // a stored funding certificate on a new simulated fill. It must be
+      // reissued in-process, bound to this exact terminal exit.
+      next.paperFundingSettlementEvidence = null;
       const paperPlan = await this.repository.getPlan(order.userId, order.planId);
       if (paperPlan?.accountMode === 'paper' && paperPlan.exchange === order.exchange) {
         const usMarket = ['US', 'USD', 'US_STOCK', 'NASDAQ', 'NYSE', 'AMEX'].includes(
