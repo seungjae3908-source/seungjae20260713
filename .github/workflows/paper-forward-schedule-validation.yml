@@ -267,6 +267,10 @@ on:
       - api-server/test.mjs
       - stock-analyzer/src/components/paper-trading-panel.tsx
       - stock-analyzer/src/lib/paper-trading.ts
+      - stock-analyzer/src/lib/paper-trading-storage.ts
+      - stock-analyzer/src/lib/paper-trading-storage.test.ts
+      - stock-analyzer/src/lib/paper-trade-review.ts
+      - stock-analyzer/src/lib/paper-trade-review.test.ts
       - .github/scripts/verify-research-workspace-sync-v3.mjs
   push:
     branches:
@@ -609,6 +613,11 @@ jobs:
             api-server/test.mjs
             stock-analyzer/src/components/paper-trading-panel.tsx
             stock-analyzer/src/lib/paper-trading.ts
+            # Exact manual Paper archive/analytics files, no shared LIVE extension.
+            stock-analyzer/src/lib/paper-trading-storage.ts
+            stock-analyzer/src/lib/paper-trading-storage.test.ts
+            stock-analyzer/src/lib/paper-trade-review.ts
+            stock-analyzer/src/lib/paper-trade-review.test.ts
             .github/scripts/verify-research-workspace-sync-v3.mjs
           )
           test "${#changed[@]}" -ge 1
@@ -625,7 +634,7 @@ jobs:
             }
             if [[ "$path" == stock-analyzer/* ]]; then
               case "$path" in
-                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts|stock-analyzer/src/components/paper-trading-panel.tsx|stock-analyzer/src/lib/paper-trading.ts) ;;
+                stock-analyzer/src/components/backtest-research-panel.tsx|stock-analyzer/src/lib/backtest.ts|stock-analyzer/src/lib/excel-export.ts|stock-analyzer/src/pages/phase5-backtest-e2e.tsx|stock-analyzer/e2e/phase5-backtest.spec.ts|stock-analyzer/e2e/backtester-korean-result-ui.spec.ts|stock-analyzer/e2e/production-automatic-paper-activation.spec.ts|stock-analyzer/playwright.production-automatic-paper-activation.config.ts|stock-analyzer/src/components/paper-trading-panel.tsx|stock-analyzer/src/lib/paper-trading.ts|stock-analyzer/src/lib/paper-trading-storage.ts|stock-analyzer/src/lib/paper-trading-storage.test.ts|stock-analyzer/src/lib/paper-trade-review.ts|stock-analyzer/src/lib/paper-trade-review.test.ts) ;;
                 *)
                   echo "Unexpected Paper-facing UI change: $path" >&2
                   exit 1
