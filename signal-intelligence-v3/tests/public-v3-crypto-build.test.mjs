@@ -38,6 +38,9 @@ test('only an exact upstream scanner source can be transformed; Paper source sta
   assert.ok(isolated.includes('publicV3Rows.slice(cursor, cursor + batchSize)'));
   assert.ok(isolated.includes("request.memberId === 'signal-intelligence-v3-public-only'"));
   assert.ok(!source.includes('stablePublicV3CryptoRows'));
+  assert.ok(isolated.includes('normalizeV3UpbitCandles(rows, {'));
+  assert.ok(!source.includes('normalizeV3UpbitCandles'));
+  assert.ok(source.includes('time: finite(row.timestamp)'), 'member and Paper code is untouched');
   assert.throws(()=>patchV3CryptoScannerSource(isolated),/BUILD_CONTRACT_INVALID/);
   assert.throws(()=>patchV3CryptoScannerSource('broken'),/BUILD_CONTRACT_INVALID/);
 });
