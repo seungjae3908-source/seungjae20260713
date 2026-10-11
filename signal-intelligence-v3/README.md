@@ -395,3 +395,18 @@ Exact source-marker and one-module-build assertions fail closed if the
 underlying scanner changes; offline tests cover rank flips, duplicate
 symbols and unchanged shared source. No private API, order, Telegram
 send, deployment or service mutation is introduced.
+
+## Bitget V3-only public symbol regression
+
+A real-public producer run of the isolated V3 builder surfaced an
+overstrict test-only regex for futures ticker strings: it rejected
+legitimate upstream ticker formats before scanning, producing
+three `FUTURES_* SEARCH_FAILURE` lanes. The public stable sorter now
+preserves all nonempty, trimmed bounded upstream identities (including
+exchange-defined punctuation) while rejecting duplicates, controls,
+oversized or empty IDs. It never returns ticker IDs in diagnostics.
+Only this V3-specific helper changed: main/Paper/LIVE scanner source,
+market-symbol mapping, trading rank and order authority remain intact.
+The next real public validation must show futures pages are no longer
+blocked by `PUBLIC_V3_CRYPTO_ROSTER_INVALID`; mock tests alone do not
+close that real provider requirement.
