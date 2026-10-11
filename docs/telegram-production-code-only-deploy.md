@@ -48,3 +48,15 @@ deployment as a workaround. Replit / Replit Agent never used. No new LIVE/AUTO
 trading authority is granted; no orders, transfers or withdrawals are made.
 
 Central Hub #1102; Release Control #1555.
+
+## Canary background-worker isolation safety hardening
+
+The generic deploy script now sets `BACKGROUND_WORKERS_ENABLED=false` **only on the
+temporary canary Node process**. This prevents recovery, market scanning, scheduled
+Telegram notifications, Paper or other workers from executing within canary before
+the approved code is promoted. The Production PM2 restart environment does not set
+this variable; the previous Production worker policy is preserved. If any live or
+Paper trading execution flag is enabled, the existing pre-deploy gate refuses
+promotion. The scoped deployment workflow also pins the exact SHA of this shared
+script, so unreviewed edits fail closed. No SQL migrations or Bot API proof sends
+are included in the code-only workflow.
