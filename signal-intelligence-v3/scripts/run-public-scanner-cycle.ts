@@ -5,7 +5,7 @@ import path from 'node:path';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
 import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
 import { StockSignalScannerService } from '../../api-server/src/services/stock-signal-scanner.service';
-import { CryptoSignalScannerService } from '../../api-server/src/services/crypto-signal-scanner.service';
+import { createCryptoSignalScannerService } from '../../api-server/src/services/crypto-signal-scanner.service';
 import { CryptoPricePrecisionService } from '../../api-server/src/services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../../api-server/src/services/scanner-candidate-ranking.service';
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
@@ -19,6 +19,7 @@ import { getPublicScannerProfileSet, PUBLIC_V3_FUTURES_STAGE_TWO_LIMIT } from '.
 import { withReadOnlyStockProviderOverlay } from '../src/public-stock-provider-overlay.mjs';
 import { resolvePublicResearchDataRetry, advancePublicResearchIndexProgress } from '../src/public-research-rotation.mjs';
 import {decidePublicRosterContinuity,hashPublicStockSourceRoster} from '../src/public-roster-integrity.mjs';
+import {createPublicV3CryptoProviders} from '../src/public-v3-crypto-providers.mjs';
 import {
   classifyPublicCycleLaneStatus,
   PUBLIC_V3_SPOT_STAGE_TWO_LIMIT,
@@ -302,8 +303,13 @@ async function scanStock(lane, cursor) {
   });
 }
 
+// Independent source adapter leaves canonical/member/Forward/Paper
+// CryptoSignalScannerService and its pinned executable bundle unchanged.
+const V3_CRYPTO_PROVIDERS = createPublicV3CryptoProviders();
+const V3_CRYPTO_SCANNER = createCryptoSignalScannerService(V3_CRYPTO_PROVIDERS);
 async function scanCryptoRaw(lane, cursor) {
-  const scanned = await CryptoSignalScannerService.scan({
+  V3_CRYPTO_PROVIDERS.clearLastRosterDigest(lane.scannerMarket);
+  const scanned = await V3_CRYPTO_SCANNER.scan({
     memberId: MEMBER_ID,
     market: lane.scannerMarket,
     strategyMode: lane.strategyMode,
@@ -312,6 +318,7 @@ async function scanCryptoRaw(lane, cursor) {
     cursor,
     batchSize: lane.batchSize,
   });
+  const observedRosterDigest = V3_CRYPTO_PROVIDERS.readLastRosterDigest(lane.scannerMarket);
   const aligned = await CryptoPricePrecisionService.align(lane.scannerMarket, scanned);
   const ranking = rankScannerCandidates({ cards: aligned.cards, market: aligned.market, strategy: lane.strategyMode, limit: 10 });
   const cards = ranking.cards
@@ -321,6 +328,9 @@ async function scanCryptoRaw(lane, cursor) {
       : card.direction === 'LONG' || card.direction === 'SHORT');
   return withScannerCanonicalActions({
     ...aligned,
+    // V3-only source roster identity. It is never a verified live quote,
+    // Paper authority, or permission for automatic trading.
+    universe: {...aligned.universe, rosterDigest: observedRosterDigest},
     cards,
     execution: {
       ...aligned.execution,
