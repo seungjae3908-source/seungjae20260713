@@ -165,6 +165,37 @@ jobs:
               if(!evidence){core.setFailed('TELEGRAM_EXACT_STAGING_EVIDENCE_MISSING:'+item.name);return;}
             }
 
+      # Staging Readiness alone cannot prove Telegram IPv4/TLS stability.
+      - name: Block release without two recent Staging Telegram network successes
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+        with:
+          script: |
+            const sha=process.env.EXPECTED_SHA;
+            const response=await github.rest.actions.listWorkflowRuns({
+              owner:context.repo.owner,repo:context.repo.repo,
+              workflow_id:'telegram-only-staging-qa.yml',
+              branch:'main',event:'issue_comment',per_page:100,
+            });
+            const now=Date.now();
+            const relevant=(response.data.workflow_runs||[])
+              .filter(r=>r.head_sha===sha&&r.event==='issue_comment'
+                &&r.conclusion!=='skipped')
+              .sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at));
+            const recent=relevant.filter(r=>Number.isFinite(Date.parse(r.created_at))
+              &&now>=Date.parse(r.created_at)
+              &&now-Date.parse(r.created_at)<=30*60_000);
+            const green=recent.filter(r=>r.status==='completed'&&r.conclusion==='success');
+            const stable=recent.length>=2&&green.length===recent.length
+              &&now-Date.parse(green[0].created_at)<=10*60_000
+              &&Date.parse(green[0].created_at)
+                -Date.parse(green.at(-1).created_at)>=5*60_000;
+            if(!stable){
+              core.setFailed('TELEGRAM_PREDEPLOY_STAGING_TLS_NOT_STABLE');return;
+            }
+            core.info('TELEGRAM_PREDEPLOY_STAGING_NETWORK_PASS');
+
       - name: Require pinned Production SSH credentials and host identity
         run: |
           set -Eeuo pipefail
@@ -231,6 +262,67 @@ jobs:
           )"
           [[ "$previous" =~ ^[a-f0-9]{40}$ ]] || exit 1
           echo "sha=$previous" >> "$GITHUB_OUTPUT"
+
+      # Read-only, fail-closed V3 check before any Production mutation.
+      - name: Block release on stale Signal V3 or public endpoint HTTP 503
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'node -' <<'NODE'
+          const http=require('node:http');
+          const {execFileSync}=require('node:child_process');
+          const fail=()=>{throw Error('TELEGRAM_PREDEPLOY_SIGNAL_V3_NOT_READY');};
+          const active=unit=>{
+            try{
+              const s=execFileSync('systemctl',[
+                'show','--no-pager','--property=LoadState,ActiveState',unit
+              ],{encoding:'utf8',timeout:3500,maxBuffer:4096,
+                stdio:['ignore','pipe','pipe']});
+              return /^LoadState=loaded$/mu.test(s)&&/^ActiveState=active$/mu.test(s);
+            }catch{return false;}
+          };
+          const read=route=>new Promise((resolve,reject)=>{
+            const req=http.get('http://127.0.0.1:8790'+route,{timeout:5000},res=>{
+              if(res.statusCode!==200){res.resume();reject(Error('HTTP_NOT_READY'));return;}
+              const chunks=[];let size=0;
+              res.on('data',c=>{
+                size+=c.length;if(size>1_048_576){req.destroy(Error('TOO_LARGE'));return;}
+                chunks.push(c);
+              });
+              res.on('error',()=>reject(Error('READ_ERROR')));
+              res.on('end',()=>{
+                try{resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));}
+                catch{reject(Error('JSON_INVALID'));}
+              });
+            });
+            req.on('timeout',()=>req.destroy(Error('TIMEOUT')));
+            req.on('error',()=>reject(Error('UNREACHABLE')));
+          });
+          (async()=>{
+            if(!active('investment-signal-intelligence-v3.service')
+              ||!active('investment-signal-intelligence-v3-cycle.timer'))fail();
+            const health=await read('/health');
+            if(health.ok!==true||health.service!=='signal-intelligence-v3'
+              ||health.executionAuthority!=='NONE'
+              ||health.privateTradingApiAllowed!==false||health.realOrderAllowed!==false
+              ||health.snapshotReady!==true||health.snapshotFresh!==true
+              ||!Number.isFinite(health.snapshotAgeMs)
+              ||health.snapshotAgeMs<0||health.snapshotAgeMs>900000
+              ||!/^[a-f0-9]{40}$/u.test(String(health.serviceSha||'')))fail();
+            const result=await read('/v1/signals');
+            if(result.ok!==true||result.serviceSha!==health.serviceSha
+              ||result.executionAuthority!=='NONE'
+              ||result.snapshot?.safety?.executionAuthority!=='NONE'
+              ||result.snapshot?.safety?.privateTradingApiAllowed!==false
+              ||result.snapshot?.safety?.realOrderAllowed!==false
+              ||!Array.isArray(result.snapshot.events))fail();
+            console.log('TELEGRAM_PREDEPLOY_SIGNAL_V3_FRESH_PASS');
+          })().catch(()=>{
+            console.error('TELEGRAM_PREDEPLOY_SIGNAL_V3_NOT_READY');
+            process.exitCode=1;
+          });
+          NODE
 
       - name: Reject unrelated files between actual Production and exact main
         uses: actions/github-script@v7
