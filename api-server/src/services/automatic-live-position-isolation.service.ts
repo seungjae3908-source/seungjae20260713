@@ -2,6 +2,7 @@ import type { CanonicalAccountSnapshot, CanonicalPosition, AccountProvider } fro
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { TradingRepository } from './trade-automation.repository';
 import type { TradingOrder, TradingPlan } from './trade-automation.types';
+import { decryptTradingCredentials } from './trade-credential-vault.service';
 
 export const AUTOMATIC_LIVE_POSITION_ISOLATION_POLICY = 'manual-protected-auto-ledger-v1';
 const TOLERANCE = 1e-8;
@@ -143,18 +144,30 @@ export function assertAutomaticLiveTargetIsolation(snapshot: CanonicalAccountSna
     || snapshot.provider !== 'bitget' && plan.side !== 'sell') throw new Error('REDUCE_ONLY_SIDE_INVALID');
 }
 
+/** Execution stores secretKey; the Kiwoom read-only provider uses appSecret. No vault write. */
+export function automaticExecutionReadonlyCredentials(provider: AccountProvider, raw: Record<string, string>) {
+  if (provider !== 'kiwoom') return raw;
+  const appSecret = typeof raw.appSecret === 'string' ? raw.appSecret.trim() : '';
+  const secretKey = typeof raw.secretKey === 'string' ? raw.secretKey.trim() : '';
+  if (appSecret && secretKey && appSecret !== secretKey) throw new Error('CREDENTIALS_UNAVAILABLE');
+  return { ...raw, appSecret: appSecret || secretKey };
+}
+
 /** Uses the execution connection's encrypted vault, with a transport restricted to reads. */
 export async function readAutomaticLiveExecutionAccount(repository: TradingRepository, userId: string, provider: AccountProvider) {
-  const readers = createVaultBackedAccountReaders({ repositoryFactory: (owner) => ({
-    async get(requester, requestedProvider) {
-      if (owner !== userId || requester !== owner || requestedProvider !== provider) throw new Error('ACCOUNT_READONLY_USER_SCOPE_MISMATCH');
-      const connection = await repository.getConnection(userId, provider);
-      if (!connection || connection.accountMode !== 'live') return null;
-      return { ...connection, provider, userId, encryptedCredentials: connection.encryptedCredentials ?? null };
-    },
-    async save() { throw new Error('READONLY_REQUEST_REJECTED'); },
-    async remove() { throw new Error('READONLY_REQUEST_REJECTED'); },
-  }) });
+  const readers = createVaultBackedAccountReaders({
+    decryptCredentials: (envelope) => automaticExecutionReadonlyCredentials(provider, decryptTradingCredentials(envelope)),
+    repositoryFactory: (owner) => ({
+      async get(requester, requestedProvider) {
+        if (owner !== userId || requester !== owner || requestedProvider !== provider) throw new Error('ACCOUNT_READONLY_USER_SCOPE_MISMATCH');
+        const connection = await repository.getConnection(userId, provider);
+        if (!connection || connection.accountMode !== 'live') return null;
+        return { ...connection, provider, userId, encryptedCredentials: connection.encryptedCredentials ?? null };
+      },
+      async save() { throw new Error('READONLY_REQUEST_REJECTED'); },
+      async remove() { throw new Error('READONLY_REQUEST_REJECTED'); },
+    }),
+  });
   return readers[provider]!({ userId, accessToken: 'server-execution-readonly' });
 }
 
