@@ -349,21 +349,26 @@ test('insufficient margin is rejected', () => {
   assert.ok(result.order?.rejectionCodes.includes('INSUFFICIENT_MARGIN') || result.order?.status === 'rejected');
 });
 
-test('daily loss limit is enforced', () => {
+test('manual Paper daily drawdown is a warning, not a loss-only trading stop', () => {
   const state = createPaperTradingState(10_000, NOW);
-  state.riskState.dailyRealizedPnl = -100;
+  state.riskState.dailyRealizedPnl = -1_000;
   const result = place(state);
-  assert.ok(result.order?.rejectionCodes.includes('DAILY_LOSS_LIMIT'));
+  assert.equal(result.order?.status,'filled',JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.order?.rejectionCodes.includes('DAILY_LOSS_LIMIT'),false);
+  assert.ok(result.warnings.includes('PAPER_RESEARCH_DAILY_DRAWDOWN_10PCT_OBSERVED'));
+  assert.equal(result.orderSubmitted,false);
+  assert.equal(result.exchangeRequestSent,false);
 });
 
-test('weekly loss limit is enforced', () => {
+test('manual Paper weekly loss remains recorded but is not a new-entry stop', () => {
   const state = createPaperTradingState(10_000, NOW);
-  state.riskState.weeklyRealizedPnl = -300;
+  state.riskState.weeklyRealizedPnl = -3_000;
   const result = place(state);
-  assert.ok(result.order?.rejectionCodes.includes('WEEKLY_LOSS_LIMIT'));
+  assert.equal(result.order?.status,'filled',JSON.stringify(result.order?.rejectionCodes));
+  assert.equal(result.order?.rejectionCodes.includes('WEEKLY_LOSS_LIMIT'),false);
 });
 
-test('manual Paper uses five closed losing trades per KST day, not LIVE three-loss streak', () => {
+test('manual Paper observes five KST closed losses but keeps simulating without LIVE streak rules', () => {
   const state = createPaperTradingState(10_000, NOW);
   state.riskState.consecutiveLosses = 3;
   const makeLoss = (id: number, closedAt = NOW_ISO, status = 'closed') => ({
@@ -376,7 +381,9 @@ test('manual Paper uses five closed losing trades per KST day, not LIVE three-lo
   const fiveState = createPaperTradingState(10_000, NOW);
   fiveState.journal = [...state.journal,makeLoss(4)];
   const fifth = place(fiveState);
-  assert.ok(fifth.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'));
+  assert.equal(fifth.order?.status,'filled',JSON.stringify(fifth.order?.rejectionCodes));
+  assert.equal(fifth.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
+  assert.ok(fifth.warnings.includes('PAPER_RESEARCH_FIVE_LOSSES_OBSERVED'));
   assert.equal(fifth.orderSubmitted,false);
   assert.equal(fifth.exchangeRequestSent,false);
   const previousDay = createPaperTradingState(10_000, NOW);
@@ -387,7 +394,7 @@ test('manual Paper uses five closed losing trades per KST day, not LIVE three-lo
   assert.equal(freshDay.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'), false);
 });
 
-test('pending manual limit rechecks five KST losing trades at trigger and never fills after rejection', () => {
+test('pending manual entry triggers after five KST losses and still cannot double-fill', () => {
   const pending = place(undefined, {
     request: {orderType:'limit',requestedPrice:95,stopLossPrice:92,takeProfitPrice1:100,takeProfitPrice2:105},
     eventId:'paper-pending-before-losses',
@@ -397,16 +404,16 @@ test('pending manual limit rechecks five KST losing trades at trigger and never 
   nowFiveLosses.journal = Array.from({length:5},(_,i) => ({
     id:'loss-before-trigger-'+i,status:'closed',closedAt:NOW_ISO,netPnl:-10,
   } as any));
-  const blocked = process(nowFiveLosses, {open:97,high:98,low:94,close:96},'paper-trigger-after-fifth-loss');
-  assert.equal(blocked.order?.status,'rejected');
-  assert.ok(blocked.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'));
-  assert.equal(blocked.fills.length,0);
-  assert.equal(blocked.state.positions.length,0);
-  assert.equal(blocked.orderSubmitted,false);
-  assert.equal(blocked.exchangeRequestSent,false);
-  const replay = process(blocked.state, {
+  const triggered = process(nowFiveLosses, {open:97,high:98,low:94,close:96},'paper-trigger-after-fifth-loss');
+  assert.equal(triggered.order?.status,'filled',JSON.stringify(triggered.order?.rejectionCodes));
+  assert.equal(triggered.fills.length,1);
+  assert.equal(triggered.state.positions.length,1);
+  assert.ok(triggered.order?.warnings.includes('PAPER_RESEARCH_FIVE_LOSSES_OBSERVED'));
+  assert.equal(triggered.orderSubmitted,false);
+  assert.equal(triggered.exchangeRequestSent,false);
+  const replay = process(triggered.state, {
     timestamp: NOW.getTime() + 30*60_000,open:97,high:98,low:94,close:96,
-  },'paper-next-candle-no-resurrection');
+  },'paper-next-candle-no-double-fill');
   assert.equal(replay.fills.length,0);
   // Prior-day five losses must not block a valid fill in the next KST day.
   const newKstDay = process(nowFiveLosses, {
@@ -417,7 +424,7 @@ test('pending manual limit rechecks five KST losing trades at trigger and never 
   assert.equal(newKstDay.fills.length,1);
 });
 
-test('manual Paper partial closing does not consume the five-trade daily loss budget', () => {
+test('manual Paper partial losses stay analytics-only, not fake fully-closed losses', () => {
   const state=createPaperTradingState(10_000,NOW);
   state.journal=Array.from({length:5},(_,i)=>({
     id:'partial-loss-'+i,status:'partially_closed',closedAt:NOW_ISO,netPnl:-100,
@@ -426,7 +433,7 @@ test('manual Paper partial closing does not consume the five-trade daily loss bu
   assert.equal(allowed.order?.rejectionCodes.includes('MANUAL_PAPER_DAILY_5_LOSSES_LIMIT'),false);
 });
 
-test('manual Paper daily realized-loss budget resets at KST midnight without touching LIVE settings', () => {
+test('manual Paper daily realized-loss observation resets at KST midnight, not LIVE settings', () => {
   const before=new Date('2026-08-02T14:59:00.000Z');
   const after=new Date('2026-08-02T15:01:00.000Z');
   // Risk dates are derived from the simulated KST trading calendar.
@@ -441,7 +448,7 @@ test('manual Paper daily realized-loss budget resets at KST midnight without tou
   assert.equal(normalized.weeklyRealizedPnl,0);
 });
 
-test('manual Paper 5-loss gate respects KST midnight rather than UTC midnight', () => {
+test('manual Paper closed-loss observation respects KST midnight rather than UTC midnight', () => {
   const now=new Date('2026-08-02T15:00:00.000Z'); // 2026-08-03 00:00 KST
   const state=createPaperTradingState(10_000,now);
   state.journal=Array.from({length:5},(_,i)=>({
@@ -1129,4 +1136,24 @@ test('manual 125x mark-price liquidation is idempotent and invalid non-integer l
       /1~125/,
     );
   }
+});
+
+test('manual Paper keeps capital and market safeguards when count-based loss gates are observational', () => {
+  const zero = createPaperTradingState(10_000, NOW);
+  zero.account.cashBalance = 0;
+  zero.account.equity = 0;
+  zero.account.availableMargin = 0;
+  zero.riskState.dailyRealizedPnl = -10_000;
+  zero.riskState.weeklyRealizedPnl = -10_000;
+  zero.riskState.consecutiveLosses = 99;
+  const blocked = place(zero, {eventId:'no-new-trade-at-zero-equity'});
+  assert.notEqual(blocked.order?.status,'filled');
+  assert.equal(blocked.fills.length,0);
+  assert.ok(blocked.order?.rejectionCodes.includes('INVALID_ACCOUNT_BALANCE') ||
+    blocked.order?.rejectionCodes.includes('INSUFFICIENT_MARGIN'));
+  const stale = createPaperTradingState(10_000,NOW);
+  stale.riskState.consecutiveLosses=99;
+  const noData = place(stale,{market:{status:'delayed'},eventId:'bad-market-still-blocked'});
+  assert.notEqual(noData.order?.status,'filled');
+  assert.ok(noData.order?.rejectionCodes.includes('DATA_NOT_LIVE'));
 });
