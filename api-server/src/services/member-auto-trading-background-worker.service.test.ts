@@ -2160,6 +2160,9 @@ test('same-account manual assets cannot be entered or exited by AUTO, while a se
     assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol }), /MANUAL_ASSET_PROTECTED/);
     assert.throws(() => assertAutomaticLiveTargetIsolation(snapshot, [], { ...plan, symbol, side: 'sell', reduceOnly: true }), /MANUAL_ASSET_PROTECTED/);
   }
+  const dust = { ...snapshot, positions: snapshot.positions!.map((row) => row.symbol === 'BTC'
+    ? { ...row, quantity: 1e-9, availableQuantity: 1e-9 } : row) };
+  assert.throws(() => assertAutomaticLiveTargetIsolation(dust, [], { ...plan, symbol: 'KRW-BTC' }), /MANUAL_ASSET_PROTECTED/);
   const order = { planId: plan.id, userId: plan.userId, exchange: plan.exchange,
     state: 'SUBMITTED', filledQuantity: 0 } as import('./trade-automation.types').TradingOrder;
   assert.deepEqual(canonicalAutomaticLivePositions([plan], [order]), [], 'pending intent is not ownership');
