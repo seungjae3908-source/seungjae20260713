@@ -80,6 +80,27 @@ test('verified Stage-1 events reprioritize only an existing V3 crypto cursor pag
   installV3WithinPageWatchPriority(null);
   assert.deepEqual(prioritizeV3CurrentCryptoPage(page,'spot'),page);
 });
+test('four current READY watch feeds cannot invent all-market or OOS proof',()=>{
+  const src=fixture(),a=event(),b=event({market:'CRYPTO_FUTURES',
+    symbol:'ETHUSDT',direction:'DOWN',movePercent:-2});
+  for(const row of src.markets){
+    if(row.market==='KR_STOCK'||row.market==='US_STOCK'){
+      row.status='READY';row.source=row.market==='KR_STOCK'
+        ?'KRX_DOCUMENTED_PUBLIC':'US_LICENSED_PUBLIC';
+      row.listedCount=2;row.observedCount=2;
+    }
+  }
+  src.status='OBSERVING_ALL_FOUR';
+  const result=verifyV3WatchHandoff(src,[a,b],{
+    nowMs:NOW,expectedResearchSha:SHA,
+  });
+  assert.equal(result.status,'VALIDATED');
+  assert.equal(result.report.currentWatchReadyMarketCount,4);
+  assert.equal(result.report.fullMarketCoverageProven,false);
+  assert.equal(result.report.oosPassProven,false);
+  assert.equal(result.report.tradingSignalCount,0);
+});
+
 test('bad digest, wrong market, stale tick, unsafe authority and count mismatch fail closed',()=>{
   const a=event(),b=event({market:'CRYPTO_FUTURES',symbol:'ETHUSDT',
     direction:'DOWN',movePercent:-2});
