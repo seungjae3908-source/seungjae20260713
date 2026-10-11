@@ -54,6 +54,31 @@ test("public API outage differs from implementation and parsing errors",()=>{
   assert.equal(classifyPublicSourceFailure(new Error("UPBIT_HISTORY_HTTP_451")),"BLOCKED_DATA");
   assert.equal(classifyPublicSourceFailure(new Error("BITGET_HISTORY_RANGE_INCOMPLETE")),"BLOCKED_DATA");
   assert.equal(classifyPublicSourceFailure(new TypeError("undefined is not a function")),"UNEXPECTED_CODE_FAILURE");
+  assert.equal(classifyPublicSourceFailure(Object.assign(new Error("request expired"), { code: "UPBIT_HISTORY_TIMEOUT" })), "BLOCKED_DATA");
+  assert.equal(classifyPublicSourceFailure(Object.assign(new Error("conflicting page"), { code: "BITGET_HISTORY_DUPLICATE_CONFLICT" })), "BLOCKED_DATA");
+  assert.equal(classifyPublicSourceFailure(Object.assign(new TypeError("unknown implementation failure"), { code: "UPBIT_HISTORY_UNEXPECTED_BUG" })), "UNEXPECTED_CODE_FAILURE");
+  assert.equal(classifyPublicSourceFailure(new SyntaxError("invalid local configuration")), "UNEXPECTED_CODE_FAILURE");
+});
+
+test("typed raw-candle failures become per-market blocked receipts, unknown code failures still throw", async () => {
+  const { startMs } = HISTORICAL_SAMPLE_WINDOW_V1;
+  const result = await probeNativeMinuteHistoricalV1({
+    upbitFetch: async () => ({ ok: true, status: 200, json: async () => [{
+      timestamp: startMs, opening_price: 100, high_price: 101, low_price: 99,
+      trade_price: 100, candle_acc_trade_volume: 1,
+    }] }),
+    bitgetClient: { get: async () => ({ code: "00000", data: [[String(startMs), "100", "101", "99", "100", null]] }) },
+  });
+  assert.equal(result.sourceStatus, "BLOCKED_DATA");
+  assert.equal(result.markets.CRYPTO_SPOT.reason, "UPBIT_HISTORY_INVALID_CANDLE_BOUNDARY");
+  assert.equal(result.markets.CRYPTO_FUTURES.candleCount, null);
+  assert.equal(result.observedSourceCount, 0);
+  assert.equal(result.profitabilityProven, false);
+  const defect = Object.assign(new ReferenceError("collector implementation defect"), { code: "BITGET_HISTORY_UNKNOWN_DEFECT" });
+  await assert.rejects(() => probeNativeMinuteHistoricalV1({
+    upbitFetch: async () => { throw defect; },
+    bitgetClient: { get: async () => { throw new Error("must not continue after code defect"); } },
+  }), (error) => error === defect);
 });
 
 test("two provider outages leave all 4 markets BLOCKED_DATA, never zero PnL",async()=>{
