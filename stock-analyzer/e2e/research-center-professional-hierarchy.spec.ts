@@ -527,6 +527,9 @@ test('admin private 1m model summary uses one authenticated GET and revocation h
       actualFillCount: null, OOSPassCount: 0,
       profitabilityProven: false, executionAuthority: 'NONE',
       paperAdmissionAllowed: false, orderSubmitted: false, realOrders: false,
+      reportPublishedAtMs: Date.parse('2026-10-10T12:00:00Z'),
+      publicationAgeStatus: 'LOCAL_PUBLICATION_ONLY',
+      publicationTimeIndependentlyAttested: false,
       report: {
         kind: 'PERIOD', status: 'SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY',
         selectedStartDate: '2025-10-01', selectedEndDate: '2026-09-30',
@@ -550,6 +553,7 @@ test('admin private 1m model summary uses one authenticated GET and revocation h
   await expect(panel).toContainText('AAPL');
   await expect(panel).toContainText('3.25%');
   await expect(panel).toContainText('독립 OOS 미검증');
+  await expect(panel).toContainText('결과 발행 시각(서버 로컬 기록)');
   await expect(panel).toContainText('실제 수익성 미증명');
   expect(reads).toHaveLength(1);
   expect(reads[0]).toMatchObject({

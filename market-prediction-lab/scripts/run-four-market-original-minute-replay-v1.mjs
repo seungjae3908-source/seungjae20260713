@@ -17,15 +17,18 @@ import {runFourMarketOriginalMinuteSweepV1} from
   "../src/four-market-original-minute-sweep-v1.js";
 import {importStockNativeMinuteOfflineV1} from
   "../src/stock-native-minute-offline-intake-v1.js";
+import {publishResearchOriginalMinuteDiagnosticV1} from
+  "../src/research-original-minute-diagnostic-publisher-v1.js";
 
 /**
  * ONE private local research job per invocation. No background timers,
  * no data-provider HTTP, no Paper orders, no LIVE execution, no DB.
  * PLAN / REPLAY / PERIOD / OPPORTUNITIES / BATCH / SWEEP remain READ-ONLY.
- * STOCK_IMPORT is the sole explicitly opted-in OFFLINE immutable archive
- * writer, limited to caller-provided KR/US original 1m plus PIT/session and
- * local retention-rights evidence. It never touches trading systems.
- * Result output 0600, create-only, never overwritten.
+ * STOCK_IMPORT writes opted-in locally licensed original KR/US 1m to an
+ * immutable private archive. PUBLISH explicitly publishes only a SANITIZED
+ * completed PERIOD/SWEEP summary into an admin-configured 0700 report root;
+ * replacement requires separate consent. Neither touches trading systems.
+ * CLI audit result output is 0600, create-only, never overwritten.
  */
 const fail=x=>{throw new TypeError(x);};
 const PRIVATE_FILE_MAX=8*1024*1024,OUT_MAX=2*1024*1024;
@@ -67,7 +70,7 @@ async function readPrivate(path){
     try{data=JSON.parse(raw);}catch{fail("RESEARCH_REPLAY_INPUT_JSON_INVALID");}
     refuseCredentials(data);
     if(!data||typeof data!=="object"||Array.isArray(data)
-      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP","STOCK_IMPORT"].includes(data.mode))
+      ||!["PLAN","REPLAY","PERIOD","OPPORTUNITIES","BATCH","SWEEP","STOCK_IMPORT","PUBLISH"].includes(data.mode))
       fail("RESEARCH_REPLAY_INPUT_MODE_INVALID");
     return data;
   }finally{await file?.close();}
@@ -109,15 +112,24 @@ export async function runOriginalReplayPrivateJobV1({input,output}={}){
             ?await runFourMarketOriginalMinuteSweepV1(task)
             :mode==="STOCK_IMPORT"
               ?await importStockNativeMinuteOfflineV1(task)
-              :await runFourMarketOriginalMinuteReplayV1(task);
+              :mode==="PUBLISH"
+                ?await publishResearchOriginalMinuteDiagnosticV1(task)
+                :await runFourMarketOriginalMinuteReplayV1(task);
   if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
     ||result.realOrders!==false||result.actualFillCount!==null
     ||result.trueMarketWideRecall!==null)
     fail("RESEARCH_REPLAY_NO_TRADING_AUTHORITY_REQUIRED");
   await writePrivate(output,result);
-  return Object.freeze({mode,readOnly:true,outputWritten:true,
-    status:result.status,executionAuthority:"NONE",
-    profitabilityProven:false,orderSubmitted:false});
+  return Object.freeze({
+    mode,
+    readOnly:mode!=="STOCK_IMPORT"&&mode!=="PUBLISH",
+    localOnlyWrite:mode==="STOCK_IMPORT"
+      ?result.physicalArchiveRetained===true
+      :mode==="PUBLISH"?result.published===true:false,
+    outputWritten:true,status:result.status,
+    executionAuthority:"NONE",profitabilityProven:false,
+    orderSubmitted:false,
+  });
 }
 if(process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url){
   runOriginalReplayPrivateJobV1(parseOriginalReplayArgsV1(process.argv.slice(2)))
