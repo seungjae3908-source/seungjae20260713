@@ -1694,6 +1694,7 @@ async function processAutomaticExit(input: {
     fx,
     reason: initialReason,
     remainingQuantity: input.position.remainingQuantity,
+    nowMs: input.now.getTime(),
   });
   let privateRequests = 0;
 
