@@ -40,6 +40,11 @@ test('only an exact upstream scanner source can be transformed; Paper source sta
   assert.ok(!source.includes('stablePublicV3CryptoRows'));
   assert.ok(isolated.includes('normalizeV3UpbitCandles(rows, {'));
   assert.ok(isolated.includes('prioritizeV3CurrentCryptoPage(publicV3Rows.slice('));
+  assert.ok(isolated.includes("preflightOnly = request.memberId === 'signal-intelligence-v3-priority-preflight-public-only'"));
+  assert.ok(isolated.includes('preflightOnly && batch.length!==1'));
+  assert.ok(isolated.includes('PUBLIC_V3_PRIORITY_REVIEW_ROSTER_NOT_VERIFIED'));
+  assert.ok(isolated.includes("? request.prioritySymbol : ''"));
+  assert.ok(!source.includes('prioritySymbol'));
   assert.ok(!source.includes('prioritizeV3CurrentCryptoPage'));
   assert.ok(!source.includes('normalizeV3UpbitCandles'));
   assert.ok(isolated.includes('const DEADLINE_MS = 16_000;'));
