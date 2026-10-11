@@ -7,20 +7,21 @@ import {
 import {
  runV3OutOfCursorResearch,V3_OFFPAGE_RESEARCH_MAX,
 } from '../src/public-watch-v3-offpage-research.mjs';
+const OBS=Date.parse('2026-10-12T00:10:00.000Z');
 const watch={
  status:'PARTIAL_SOURCE',
  priorities:[
   {market:'CRYPTO_SPOT',symbol:'BTC',direction:'UP',score:2,
-    watchEventId:'a'.repeat(64),status:'RESEARCH_OBSERVATION_ONLY',
+    watchEventId:'a'.repeat(64),sourceAtMs:OBS-60_000,status:'RESEARCH_OBSERVATION_ONLY',
     executionAuthority:'NONE'},
   {market:'CRYPTO_SPOT',symbol:'ETH',direction:'UP',score:1,
-    watchEventId:'b'.repeat(64),status:'RESEARCH_OBSERVATION_ONLY',
+    watchEventId:'b'.repeat(64),sourceAtMs:OBS-60_000,status:'RESEARCH_OBSERVATION_ONLY',
     executionAuthority:'NONE'},
   {market:'CRYPTO_FUTURES',symbol:'XRPUSDT',direction:'DOWN',score:1.5,
-    watchEventId:'c'.repeat(64),status:'RESEARCH_OBSERVATION_ONLY',
+    watchEventId:'c'.repeat(64),sourceAtMs:OBS-60_000,status:'RESEARCH_OBSERVATION_ONLY',
     executionAuthority:'NONE'},
   {market:'KR_STOCK',symbol:'005930',direction:'UP',score:2,
-    watchEventId:'d'.repeat(64),status:'RESEARCH_OBSERVATION_ONLY',
+    watchEventId:'d'.repeat(64),sourceAtMs:OBS-60_000,status:'RESEARCH_OBSERVATION_ONLY',
     executionAuthority:'NONE'},
  ]};
 function response(symbol,market,dir){
@@ -76,7 +77,7 @@ test('untrusted, wrong instrument, missing HTTP evidence and network failure are
  installV3WithinPageWatchPriority(watch);
  const reviews=selectV3OutOfCursorResearch(watch);
  const bad=await runV3OutOfCursorResearch(reviews,{
-  enabled:true,scanOne:async row=>({
+  enabled:true,nowMs:OBS,scanOne:async row=>({
    httpRequests:2,requestCountMeasured:true,
    response:response('OTHER',row.market,'SHORT'),
   }),
@@ -85,12 +86,12 @@ test('untrusted, wrong instrument, missing HTTP evidence and network failure are
  assert.equal(bad.dataBlocked,2);
  assert.equal(bad.status,'RESEARCH_SOURCE_PARTIAL');
  const network=await runV3OutOfCursorResearch(reviews,{
-  enabled:true,scanOne:async()=>{throw Error('sensitive token never return');},
+  enabled:true,nowMs:OBS,scanOne:async()=>{throw Error('sensitive token never return');},
  });
  assert.equal(network.sourceError,2);
  assert.ok(!JSON.stringify(network).includes('sensitive'));
  const fabricated=await runV3OutOfCursorResearch(reviews,{
-  enabled:true,scanOne:async row=>({httpRequests:0,response:response(
+  enabled:true,nowMs:OBS,scanOne:async row=>({httpRequests:0,response:response(
     row.symbol,row.market,'LONG')}),
  });
  assert.equal(fabricated.sourceError,2);
@@ -108,11 +109,25 @@ test('review is off unless explicitly activated; malformed duplicate/stock short
  assert.equal(V3_OFFPAGE_RESEARCH_MAX.total,2);
  const bad=[good[0],good[0]];
  assert.equal((await runV3OutOfCursorResearch(bad,{
-  enabled:true,scanOne:async()=>{throw Error('MUST_NOT_RUN');},
+  enabled:true,nowMs:OBS,scanOne:async()=>{throw Error('MUST_NOT_RUN');},
  })).status,'REJECTED_UNSAFE_REVIEW_INPUT');
  const wrong=[{...good[0],market:'KR_STOCK',direction:'DOWN'}];
  assert.equal((await runV3OutOfCursorResearch(wrong,{
-  enabled:true,scanOne:async()=>{throw Error('MUST_NOT_RUN');},
+  enabled:true,nowMs:OBS,scanOne:async()=>{throw Error('MUST_NOT_RUN');},
  })).status,'REJECTED_UNSAFE_REVIEW_INPUT');
+ installV3WithinPageWatchPriority(null);
+});
+
+test('a watch receipt expires during a long 12-lane scan without any late HTTP calls',async()=>{
+ installV3WithinPageWatchPriority(watch);
+ const reviews=selectV3OutOfCursorResearch(watch);
+ let count=0;
+ const out=await runV3OutOfCursorResearch(reviews,{enabled:true,
+  nowMs:OBS+400_000,scanOne:async()=>{count++;throw Error('must not run');},
+ });
+ assert.equal(count,0);
+ assert.equal(out.staleWatchEvidenceSkipped,2);
+ assert.equal(out.observedPublicHttpRequests,0);
+ assert.equal(out.status,'RESEARCH_SOURCE_PARTIAL');
  installV3WithinPageWatchPriority(null);
 });
