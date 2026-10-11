@@ -5,7 +5,8 @@ import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
-  readSignalV3Units, readSignalV3HealthOnce, morningWindowProcessCoverage,
+  readSignalV3Units, readSignalV3HealthOnce, readSignalV3CycleResult,
+  morningWindowProcessCoverage,
   sanitizeBriefWorkerHealth,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
@@ -42,6 +43,7 @@ const safeSignalDiagnostics={
   signalHealth:async()=>({status:'READY',serviceSha:deployed,
     snapshotReady:true,snapshotFresh:true}),
   signalUnits:()=>({server:'ACTIVE',timer:'ACTIVE',cycle:'INACTIVE'}),
+  signalCycle:()=>({unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true}),
 };
 const health=async()=>({
   nodeSha:deployed,markerSha:deployed,identityMatch:true,
@@ -146,7 +148,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.signalUnits.timer,'ACTIVE');
   assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
   assert.equal(result.morningWindowCoverage,'MISSED_WINDOW');
-  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v3');
+  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v4');
   assert.equal(result.briefWorker.status,'NOT_AVAILABLE');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
@@ -445,4 +447,35 @@ test('protected workflow is owner-only and never sends, deploys or restarts',()=
   for(const forbidden of ['sendTelegramAlert','writeFileSync','writeFile(','unlinkSync(','spawnSync(','fetch(']){
     assert.ok(!src.includes(forbidden),forbidden);
   }
+});
+
+
+test('Signal V3 oneshot read-only result distinguishes inactive success, failed and no run',()=>{
+  const requested=[];
+  const fake=output=>(command,args)=>{
+    requested.push(args);
+    assert.equal(command,'systemctl');
+    assert.deepEqual(args,[
+      'show','--no-pager',
+      '--property=LoadState,ActiveState,Result,ExecMainStatus,ExecMainStartTimestampMonotonic',
+      'investment-signal-intelligence-v3-cycle.service',
+    ]);
+    return output+'\nEnvironment=PRIVATE_SECRET_DO_NOT_LEAK\n';
+  };
+  const ok=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=12345678')});
+  assert.deepEqual(ok,{unitState:'INACTIVE',lastResult:'SUCCEEDED',exitCode:0,hasStarted:true});
+  const bad=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=failed\nResult=exit-code\nExecMainStatus=1\nExecMainStartTimestampMonotonic=12345678')});
+  assert.deepEqual(bad,{unitState:'FAILED',lastResult:'FAILED',exitCode:1,hasStarted:true});
+  const never=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=0')});
+  assert.deepEqual(never,{unitState:'INACTIVE',lastResult:'NOT_OBSERVED',exitCode:null,hasStarted:false});
+  const running=readSignalV3CycleResult({execImpl:fake(
+    'LoadState=loaded\nActiveState=active\nResult=success\nExecMainStatus=0\nExecMainStartTimestampMonotonic=12345678')});
+  assert.equal(running.lastResult,'RUNNING');
+  assert.equal(requested.length,4);
+  assert.ok(!JSON.stringify([ok,bad,never,running]).includes('PRIVATE_SECRET'));
+  assert.deepEqual(readSignalV3CycleResult({execImpl:()=>{throw Error('HIDDEN_PATH')}}),
+    {unitState:'UNAVAILABLE',lastResult:'UNKNOWN',exitCode:null,hasStarted:false});
 });
