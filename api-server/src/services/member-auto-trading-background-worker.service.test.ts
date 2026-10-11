@@ -7,6 +7,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InMemoryTradingRepository } from './trade-automation.repository';
+import { tradeAutomationJournalPayloadsFromSnapshot } from './trade-automation-unified-journal-adapter';
 import { automaticLiveExecutionEnabled } from './trade-automation.service';
 import {
   DEFAULT_TRADING_POLICY,
@@ -2754,4 +2755,56 @@ test('Cost missing is not an allowed zero-rate estimate in automatic Paper hando
     {commissionRate:1.1}, {commissionRate:' '}, {commissionRate:'0'},
     {commissionRate:false}, {commissionRate:[]}, {commissionRate:{}},
   ]) assert.equal(costPercent(shape(cost), 'commissionRate'), null);
+});
+
+
+test('automatic Paper worker persists cost-policy tax/fee/FX receipts while missing policy stays blocked', async () => {
+  const nowMs = Date.now();
+  const prior = process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+  const serverOnly = JSON.stringify({
+    contract: 'member-auto-paper-cost-rules/v1',
+    rules: [{
+      market: 'CRYPTO_SPOT', exchange: 'upbit',
+      policyId: 'server-paper-cost-v1:worker-scope-fixture',
+      feeRatePercent: 0.05, taxRatePercent: 0,
+      effectiveAt: new Date(nowMs - 60_000).toISOString(),
+      expiresAt: new Date(nowMs + 60_000).toISOString(),
+    }],
+  });
+  try {
+    const repository = new InMemoryTradingRepository();
+    await repository.savePolicy(USER, policy());
+    process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = serverOnly;
+    const ready = await withFetchMock(() =>
+      new MemberAutoTradingBackgroundWorker(source(repository, nowMs)).runOnce(new Date(nowMs)));
+    assert.equal(ready.createdPlans, 1);
+    assert.equal(ready.filledOrders, 1);
+    assert.equal(ready.privateTradingRequests, 0);
+    assert.equal(ready.liveOrders, 0);
+    const orders = await repository.listOrders(USER);
+    const plans = await repository.listPlans(USER);
+    assert.equal(orders.length, 1);
+    assert.equal(orders[0]?.state, 'FILLED');
+    assert.equal(orders[0]?.taxAmount, 0);
+    assert.equal(orders[0]?.taxCurrency, 'KRW');
+    assert.ok((orders[0]?.feeAmount ?? -1) > 0);
+    assert.equal(orders[0]?.feeCurrency, 'KRW');
+    assert.equal(orders[0]?.settlementFxEvidence?.source, 'NATIVE_KRW');
+    const journal = tradeAutomationJournalPayloadsFromSnapshot(USER, orders, plans);
+    assert.equal(journal[0]?.tax, 0);
+    assert.ok((journal[0]?.fees ?? -1) > 0);
+    const withoutPolicy = new InMemoryTradingRepository();
+    await withoutPolicy.savePolicy(USER, policy());
+    delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+    const missing = await withFetchMock(() =>
+      new MemberAutoTradingBackgroundWorker(source(withoutPolicy, nowMs)).runOnce(new Date(nowMs)));
+    assert.equal(missing.createdPlans, 1);
+    assert.equal(missing.liveOrders, 0);
+    const [unverified] = await withoutPolicy.listOrders(USER);
+    assert.equal(unverified?.taxAmount ?? null, null,
+      'a missing protected rule cannot mint an apparent zero-tax receipt');
+  } finally {
+    if (prior === undefined) delete process.env.MEMBER_AUTO_PAPER_COST_RULES_V1;
+    else process.env.MEMBER_AUTO_PAPER_COST_RULES_V1 = prior;
+  }
 });

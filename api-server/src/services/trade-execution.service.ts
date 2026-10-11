@@ -545,6 +545,7 @@ export function protectedAutomaticPaperCostPolicyV1(
     CRYPTO_FUTURES: ['bitget'],
   };
   const seen = new Set<string>();
+  const policyIds = new Set<string>();
   const matches: ServerPaperCostPolicyV1[] = [];
   for (const candidate of value.rules) {
     if (!isRecord(candidate) || typeof candidate.market !== 'string'
@@ -567,8 +568,10 @@ export function protectedAutomaticPaperCostPolicyV1(
       || new Date(from).toISOString() !== candidate.effectiveAt
       || new Date(until).toISOString() !== candidate.expiresAt) return null;
     const identity = String(candidate.market) + ':' + String(candidate.exchange);
-    if (seen.has(identity)) return null; // Ambiguous overlapping rules are unsafe.
+    if (seen.has(identity) || policyIds.has(candidate.policyId)) return null;
+    // Identical per-broker policy IDs cannot establish an exact cost lineage.
     seen.add(identity);
+    policyIds.add(candidate.policyId);
     if (candidate.market !== paperQuoteMarket(plan)
       || candidate.exchange !== plan.exchange
       || from > nowMs || until < nowMs) continue;
