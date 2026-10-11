@@ -9,6 +9,8 @@ import {planFourMarketPITReplayWorkV1} from
   "../src/four-market-pit-replay-work-queue-v1.js";
 import {auditFourMarketOriginalMinuteOpportunityV1} from
   "../src/four-market-original-minute-opportunities-v1.js";
+import {runFourMarketOriginalMinuteBatchV1} from
+  "../src/four-market-original-minute-batch-v1.js";
 
 /**
  * ONE PRIVATE read-only source job per invocation. No background timers,
@@ -55,7 +57,7 @@ async function readPrivate(path){
     try{data=JSON.parse(raw);}catch{fail("RESEARCH_REPLAY_INPUT_JSON_INVALID");}
     refuseCredentials(data);
     if(!data||typeof data!=="object"||Array.isArray(data)
-      ||!["PLAN","REPLAY","OPPORTUNITIES"].includes(data.mode))
+      ||!["PLAN","REPLAY","OPPORTUNITIES","BATCH"].includes(data.mode))
       fail("RESEARCH_REPLAY_INPUT_MODE_INVALID");
     return data;
   }finally{await file?.close();}
@@ -89,7 +91,9 @@ export async function runOriginalReplayPrivateJobV1({input,output}={}){
     ?planFourMarketPITReplayWorkV1(task)
     :mode==="OPPORTUNITIES"
       ?await auditFourMarketOriginalMinuteOpportunityV1(task)
-      :await runFourMarketOriginalMinuteReplayV1(task);
+      :mode==="BATCH"
+        ?await runFourMarketOriginalMinuteBatchV1(task)
+        :await runFourMarketOriginalMinuteReplayV1(task);
   if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
     ||result.realOrders!==false||result.actualFillCount!==null
     ||result.trueMarketWideRecall!==null)
