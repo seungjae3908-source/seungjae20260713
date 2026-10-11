@@ -65,7 +65,7 @@ assert(
   'the isolated staging runtime must disable background workers during release validation',
 );
 assert(
-  deployScript.includes('BACKGROUND_WORKERS_ENABLED=false \\\n'),
+  deployScript.includes('"BACKGROUND_WORKERS_ENABLED=false"'),
   'the isolated staging canary must disable background workers during release validation',
 );
 
@@ -74,8 +74,14 @@ assert(
   'snapshot-v2 publisher binding must enter through one explicit staging-only digest input',
 );
 assert(
-  deployScript.includes("[[ \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\" =~ ^[0-9a-f]{64}$ ]]"),
+  deployScript.includes('STAGING_RELEASE_SCOPE="${STAGING_RELEASE_SCOPE:-automation_research}"')
+    && deployScript.includes('if [[ "$STAGING_RELEASE_SCOPE" == automation_research ]]')
+    && deployScript.includes("[[ \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\" =~ ^[0-9a-f]{64}$ ]]"),
   'snapshot-v2 publisher binding must fail closed unless it is a lowercase SHA-256 digest',
+);
+assert(
+  deployScript.includes("[[ -z \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\" ]] || fail 'auto_live staging must not receive a Paper snapshot publisher binding'"),
+  'auto_live Staging must fail closed if a Paper publisher binding crosses the scope boundary',
 );
 assert(
   deployScript.includes('PAPER_STATE_DIR="$STATE_DIR/paper-forward"'),
@@ -93,8 +99,8 @@ for (const marker of [
   "printf 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%s\\n' \"$PAPER_STATE_SNAPSHOT_PATH\"",
   "printf 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%s\\n' \"$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256\"",
   "printf 'PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=%s\\n' \"$PAPER_STATE_MAXIMUM_AGE_MS\"",
-  'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH"',
-  'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"',
+  '"PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=$PAPER_STATE_SNAPSHOT_PATH"',
+  '"PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"',
 ]) {
   assert(deployScript.includes(marker), `snapshot-v2 runtime binding is missing marker: ${marker}`);
 }
