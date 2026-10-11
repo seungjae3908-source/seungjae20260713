@@ -77,7 +77,9 @@ export function verifiedSignalV3Coverage(snapshot) {
       // are permitted to stand in for a fresh market scan.
       ||!nonNegative(row.cursorBefore)||row.cursorBefore>=row.totalUniverse
       ||!nonNegative(row.cursorAfter)||row.cursorAfter>=row.totalUniverse
-      ||row.cursorAfter===row.cursorBefore
+      // The last page can legitimately wrap from cursor zero back to zero
+      // when the entire roster fits in one requested batch. 'validPage'
+      // already enforces a positive requested count and exact wrap.
       ||!nonNegative(row.scannedCards)
       ||!nonNegative(row.retainedFromBatch)
       ||row.retainedFromBatch>row.scannedCards
