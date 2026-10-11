@@ -36,3 +36,22 @@ Replit/Replit Agent prohibited. No real message sends, no database mutations, no
 - The modified code-only Production workflow retains the separate protected production approval and all previous exact-main, immutable-blob, six-room, no-LIVE, canary, backup and rollback gates; it now fails closed earlier if the latest protected Staging network QA set is unstable or current Signal V3 health/source is stale.
 - No new Telegram release may proceed based only on CI 6/6 or previously successful Staging Readiness. Two independently timed Staging TLS success receipts and fresh V3 signal must be observed at actual runtime before asking for Production approval.
 - The complete pure GO/NO-GO manifest evaluator still requires provenance-verified collection of actual Staging dry-run, read-only bot permissions and V3 cycle receipts. This wiring is a follow-up task and MUST not be mislabeled finished just because a unit test passed.
+
+
+## Additional false-green fixes (Draft)
+The verifier now refuses a newly stamped Signal V3 snapshot unless all twelve
+canonical market × strategy × timeframe coverage lanes are individually
+source-backed, complete, non-partial, and have zero provider/timeouts. It
+rejects stale, missing, duplicated and malformed coverage even when `/health`
+claims READY and HTTP 200. A successful oneshot result must also be recent,
+not merely marked success in systemd history.
+
+The Production protected code-only gate now streams a **read-only** helper from
+the exact operator checkout over SSH to the server without writing files.
+It performs only fixed `systemctl show`, read of Linux `/proc/uptime` and
+bounded localhost GET `/health` and `/v1/signals`, then emits a fixed PASS/NO-GO
+code. No raw signals or secret environment contents are output. This remains
+an operator-only, previous-release-lineage-specific workflow; it does not
+constitute a reusable authorized deployment path or finish the signed full
+GO/NO-GO manifest provenance collector. User production approval is still
+required after all blockers are resolved.
