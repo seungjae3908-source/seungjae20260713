@@ -73,6 +73,77 @@ test('current 12-lane V3 current-page proof permits only a valid market candidat
  assert.equal(verifiedTelegramV3PageCount(blocked),0,
    'structural safety must not be reported as fresh signal-source health');
 });
+test('mixed rescan/new-candidate and state-change V3 events do not suppress real candidate or send informational events',async()=>{
+ const mixed:any=fixture();
+ mixed.rows[0].ai={rescanRequested:true};
+ const buy=mixed.events[0];
+ mixed.events=[{
+   type:'RESCAN_REQUESTED',id:buy.id,market:buy.market,symbol:buy.symbol,
+   strategy:buy.strategy,timeframe:buy.timeframe,direction:buy.direction,
+   state:'CANDIDATE',validationTier:buy.validationTier,
+ },buy];
+ assert.equal(validTelegramV3CurrentSource(mixed,NOW),true,
+   'one V3 source can request a rescan and publish a new candidate together');
+ const transition:any=fixture();
+ transition.rows[0].reasons=[];
+ transition.events=[{
+   type:'STATE_CHANGED',id:buy.id,market:buy.market,symbol:buy.symbol,
+   strategy:buy.strategy,timeframe:buy.timeframe,direction:buy.direction,
+   state:'CANDIDATE',previousState:'NO_TRADE',reasons:[],
+   validationTier:buy.validationTier,
+ }];
+ assert.equal(validTelegramV3CurrentSource(transition,NOW),true);
+ const forged:any=structuredClone(mixed);
+ forged.rows[0].ai.rescanRequested=false;
+ assert.equal(validTelegramV3CurrentSource(forged,NOW),false,
+   'a rescan event requires the corresponding V3 row to request a rescan');
+ const unexpected:any=structuredClone(mixed);
+ unexpected.events[0].type='PRIVILEGED_ORDER';
+ assert.equal(validTelegramV3CurrentSource(unexpected,NOW),false);
+ const inconsistent:any=structuredClone(transition);
+ inconsistent.events[0].previousState='CANDIDATE';
+ assert.equal(validTelegramV3CurrentSource(inconsistent,NOW),false);
+
+ const dir=await mkdtemp(path.join(tmpdir(),'telegram-v3-mixed-'));
+ const beforeUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const beforeUs=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ let active=mixed,publicSends=0,personalAttempts=0;
+ try{
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const subscriber=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(path.join(dir,'safe.json')),
+     async()=>{publicSends++;return {ok:true as const,attempts:1};},
+     async()=>new Response(JSON.stringify({
+       ok:true,serviceSha:SHA,executionAuthority:'NONE',snapshot:active,
+     }),{status:200}),
+     async()=>{personalAttempts++;return {
+       eligible:true,matched:1,attempted:1,delivered:0,queued:1,
+       deduped:0,skipped:0,failed:0,reason:'COMPLETE' as const,
+     };},
+   );
+   const result=await subscriber.runOnce(new Date(NOW));
+   assert.equal(result.sourceStatus,'READY');
+   assert.equal(result.publicDelivered,1);
+   assert.equal(result.personalQueued,1);
+   assert.equal(publicSends,1);
+   assert.equal(personalAttempts,1);
+   active=transition;
+   const statusOnly=await subscriber.runOnce(new Date(NOW));
+   assert.equal(statusOnly.sourceStatus,'READY');
+   assert.equal(statusOnly.delivered,0);
+   assert.equal(statusOnly.queued,0);
+   assert.equal(publicSends,1);
+   assert.equal(personalAttempts,1);
+ }finally{
+   if(beforeUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=beforeUrl;
+   if(beforeUs===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=beforeUs;
+   await rm(dir,{recursive:true,force:true});
+ }
+});
+
 test('stale/future, cross-cycle, wrong-market, blocked/replayed or failed V3 proof cannot send',()=>{
  const mutate=(change:(x:ReturnType<typeof fixture>)=>void)=>{
    const x=fixture();change(x);return validTelegramV3CurrentSource(x,NOW);
