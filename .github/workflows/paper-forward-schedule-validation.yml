@@ -250,6 +250,14 @@ on:
       - research-production/src/research-dataset-snapshot-store.mjs
       - research-production/test/research-canonical-dataset-component.test.mjs
       - research-production/test/research-dataset-snapshot-store.test.mjs
+      - api-server/src/routes/manual-four-market-paper-wallets.smoke.test.ts
+      - api-server/src/routes/manual-four-market-paper-wallets.ts
+      - api-server/src/services/admin-four-market-paper-capital.service.test.ts
+      - api-server/src/services/manual-four-market-paper-wallet-migration.test.ts
+      - api-server/src/services/manual-four-market-paper-wallets.service.test.ts
+      - api-server/src/services/manual-four-market-paper-wallets.service.ts
+      - api-server/src/services/paper-journal-supabase.repository.ts
+      - api-server/supabase/migrations/2026101101_manual_four_market_paper_wallet_guard.sql
   push:
     branches:
       - agent/paper-forward-schedule-activation-v1
@@ -574,6 +582,14 @@ jobs:
             stock-analyzer/src/pages/phase5-backtest-e2e.tsx
             stock-analyzer/e2e/backtester-korean-result-ui.spec.ts
             stock-analyzer/src/lib/excel-export.ts
+            api-server/src/routes/manual-four-market-paper-wallets.smoke.test.ts
+            api-server/src/routes/manual-four-market-paper-wallets.ts
+            api-server/src/services/admin-four-market-paper-capital.service.test.ts
+            api-server/src/services/manual-four-market-paper-wallet-migration.test.ts
+            api-server/src/services/manual-four-market-paper-wallets.service.test.ts
+            api-server/src/services/manual-four-market-paper-wallets.service.ts
+            api-server/src/services/paper-journal-supabase.repository.ts
+            api-server/supabase/migrations/2026101101_manual_four_market_paper_wallet_guard.sql
           )
           test "${#changed[@]}" -ge 1
           test "${#changed[@]}" -le "${#allowed[@]}"
