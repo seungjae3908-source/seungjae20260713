@@ -55,3 +55,63 @@ test('a missing OHLC evidence, unsafe cursor advance, candidate promotion or pro
   assert.throws(()=>assertBlockedKrPublicResearchCoverage(report),/KR_PUBLIC_/);
  }
 });
+
+test('genuine bounded public provider failure remains SEARCH_FAILURE and cannot fabricate missing-market evidence',()=>{
+ const report=fixture();
+ for(const row of report.coverage.slice(0,2)){
+  row.status='SEARCH_FAILURE';
+  row.error='SCAN_PROVIDER_ERROR';
+  row.rosterVerified=false;
+  row.cursorAfter=row.cursorBefore;
+  row.scannedCards=0;
+  row.retainedFromBatch=0;
+  row.requestedCount=null;
+  row.startedCount=null;
+  row.completedCount=null;
+  row.providerErrors=10;
+  row.timeouts=0;
+  row.lastGoodPreserved=true;
+  row.thrownProviderMetrics={
+   completed:0,providerErrors:10,workerErrors:0,timeouts:0,started:10,
+   sourceFailureConfirmed:true,fullMarketVerified:false,
+  };
+  delete row.publicStockSourceAudit;
+  delete row.cursorRotatedBlockedOnly;
+ }
+ const result=assertBlockedKrPublicResearchCoverage(report);
+ assert.equal(result.releaseReady,false);
+ assert.equal(result.krWholeUniverseVerified,false);
+ assert.equal(result.lanes[0].result,'PROVIDER_FAILED_CURSOR_HELD');
+ assert.equal(result.lanes[1].sourceProviderErrors,10);
+ assert.equal(result.lanes[2].result,'BAD_CANDLE_PAGE_HELD');
+ assert.equal(result.lanes.every(l=>l.cursorHeld),true);
+});
+test('missing or altered provider failure evidence fails closed rather than passing green',()=>{
+ const cases=[
+  r=>{r.status='CANDIDATES_AVAILABLE'},
+  r=>{r.cursorAfter=20},
+  r=>{r.thrownProviderMetrics.sourceFailureConfirmed=false},
+  r=>{r.thrownProviderMetrics.started=0},
+  r=>{r.thrownProviderMetrics.fullMarketVerified=true},
+  r=>{r.thrownProviderMetrics.providerErrors=1},
+  r=>{r.thrownProviderMetrics.completed=1},
+  r=>{r.lastGoodPreserved=false},
+  r=>{r.requestedCount=20},
+ ];
+ for(const change of cases){
+  const report=fixture();const row=report.coverage[0];
+  Object.assign(row,{
+   status:'SEARCH_FAILURE',error:'SCAN_PROVIDER_ERROR',rosterVerified:false,
+   cursorAfter:0,requestedCount:null,startedCount:null,completedCount:null,
+   providerErrors:10,timeouts:0,
+   thrownProviderMetrics:{
+    completed:0,providerErrors:10,workerErrors:0,timeouts:0,started:10,
+    sourceFailureConfirmed:true,fullMarketVerified:false,
+   },
+  });
+  delete row.publicStockSourceAudit;
+  delete row.cursorRotatedBlockedOnly;
+  change(row);
+  assert.throws(()=>assertBlockedKrPublicResearchCoverage(report),/KR_PUBLIC_/);
+ }
+});
