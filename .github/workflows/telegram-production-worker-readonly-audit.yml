@@ -124,9 +124,10 @@ jobs:
           const r=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           const keys=['schemaVersion','scope','mainSha','expectedDeployedSha',
             'pm2Sha','markerSha','pm2Online','exactDeployedIdentity',
+            'pm2StartedAt','morningWindowElapsedWithCurrentProcess',
             'activationEnabled','marketWorkerConfigured','personalWorkerConfigured',
             'roomBindingsValid','personal','marketBrief','signalSubscriber','signalSource',
-            'proofLevel','classification','telegramSends','databaseWrites',
+            'signalHealth','proofLevel','classification','telegramSends','databaseWrites',
             'pm2Restarts','financialMutations','secretValuesRecorded'];
           const safeSha=x=>x===null||/^[0-9a-f]{40}$/u.test(x);
           const safeIso=x=>x===null||(typeof x==='string'
@@ -143,10 +144,16 @@ jobs:
             && Object.keys(v.briefKinds||{}).sort().join()===kindKeys.sort().join()
             && Object.values(v.briefKinds).every(n=>Number.isInteger(n)&&n>=0&&n<=10000);
           if(Object.keys(r).sort().join()!==keys.sort().join()
-            ||r.schemaVersion!=='telegram-production-worker-readonly-v1'
+            ||r.schemaVersion!=='telegram-production-worker-readonly-v2'
             ||r.scope!=='PRODUCTION_TELEGRAM_READ_ONLY'
             ||r.mainSha!==process.argv[3]||r.expectedDeployedSha!==process.argv[4]
             ||!safeSha(r.pm2Sha)||!safeSha(r.markerSha)
+            ||!safeIso(r.pm2StartedAt)
+            ||typeof r.morningWindowElapsedWithCurrentProcess!=='boolean'
+            ||Object.keys(r.signalHealth||{}).sort().join()!=='status'
+            ||!['NOT_CHECKED','READY','MISSING_SNAPSHOT','STALE_SNAPSHOT',
+                 'UNREACHABLE','HTTP_UNAVAILABLE','INVALID_RESPONSE','UNSAFE_ENDPOINT']
+                .includes(r.signalHealth.status)
             ||!validState(r.marketBrief)||!validState(r.signalSubscriber)
             ||!r.signalSource ||!['NOT_CHECKED','READY','UNREACHABLE',
               'INVALID_RESPONSE','UNSAFE_ENDPOINT'].includes(r.signalSource.status)
@@ -186,6 +193,9 @@ jobs:
                 '- Exact main: '+r.mainSha,
                 '- Production PM2/marker: '+r.pm2Sha+' / '+r.markerSha,
                 '- PM2 online and exact identity: '+r.pm2Online+' / '+r.exactDeployedIdentity,
+                '- PM2 process started at: '+(r.pm2StartedAt||'unknown'),
+                '- Morning 07:50-08:10 KST window elapsed with this process: '+
+                   r.morningWindowElapsedWithCurrentProcess,
                 '- Telegram activation/market/personal/6 rooms: '+
                     [r.activationEnabled,r.marketWorkerConfigured,r.personalWorkerConfigured,
                      r.roomBindingsValid].join(' / '),
@@ -200,10 +210,12 @@ jobs:
                 '- Signal subscriber ledger: '+s.status+' / '+s.recordCount+
                     ' recorded / '+s.recent24hCount+' last 24h',
                 '- Signal subscriber latest ledger evidence: '+(s.lastEvidenceAt||'none'),
+                '- V3 source /health classification: '+r.signalHealth.status,
                 '- Local signal source GET status/count/safety: '+
                   [r.signalSource.status,r.signalSource.eventCount,r.signalSource.safetyValidated].join(' / '),
                 '- Classification: '+r.classification+'; proof level: '+r.proofLevel,
                 '- State entries mean accepted-or-deduped, not confirmed Bot API delivery.',
+                '- Observation success is NOT market, subscriber, or personal send proof.',
                 '- Telegram sends / database writes / PM2 restarts / financial changes: 0 / 0 / 0 / 0',
                 '- Chat IDs, user identities, tokens and secret values disclosed: false',
                 '- GitHub Run: '+context.runId,
