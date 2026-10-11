@@ -75,19 +75,20 @@ async function readPrivate(path){
     return data;
   }finally{await file?.close();}
 }
-async function writePrivate(path,value){
+async function reservePrivateOutput(path){
   await checkParent(path);
+  // Reservation is FIRST, before any optional STOCK_IMPORT or PUBLISH
+  // mutation. Repeated job outputs fail EEXIST without changing archives or
+  // administrator reports. A crashed invocation leaves a 0600 sentinel
+  // requiring manual review rather than invisible duplicate execution.
+  return open(path,constants.O_WRONLY|constants.O_CREAT
+    |constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+}
+async function completeReservedOutput(file,value){
   const raw=JSON.stringify(value)+"\n";
   if(Buffer.byteLength(raw)>OUT_MAX)fail("RESEARCH_REPLAY_RESULT_TOO_LARGE");
-  let file,created=false;
-  try{
-    file=await open(path,"wx",0o600);created=true;
-    await file.writeFile(raw,"utf8");await file.sync();
-    return {outputWritten:true,privateMode:"0600"};
-  }catch(error){
-    if(created){await file?.close();file=null;await unlink(path);}
-    throw error;
-  }finally{await file?.close();}
+  await file.writeFile(raw,"utf8");
+  await file.sync();
 }
 export function parseOriginalReplayArgsV1(argv){
   if(!Array.isArray(argv)||argv.length!==4
@@ -97,39 +98,48 @@ export function parseOriginalReplayArgsV1(argv){
   return {input:argv[1],output:argv[3]};
 }
 export async function runOriginalReplayPrivateJobV1({input,output}={}){
-  if(!input||!output||input===output)fail("RESEARCH_REPLAY_INPUT_OUTPUT_DISTINCT_REQUIRED");
+  if(!input||!output||input===output)
+    fail("RESEARCH_REPLAY_INPUT_OUTPUT_DISTINCT_REQUIRED");
   const job=await readPrivate(input);
   const {mode,...task}=job;
-  const result=mode==="PLAN"
-    ?planFourMarketPITReplayWorkV1(task)
-    :mode==="OPPORTUNITIES"
-      ?await auditFourMarketOriginalMinuteOpportunityV1(task)
-      :mode==="BATCH"
-        ?await runFourMarketOriginalMinuteBatchV1(task)
-        :mode==="PERIOD"
-          ?await runFourMarketOriginalMinutePeriodV1(task)
-          :mode==="SWEEP"
-            ?await runFourMarketOriginalMinuteSweepV1(task)
-            :mode==="STOCK_IMPORT"
-              ?await importStockNativeMinuteOfflineV1(task)
-              :mode==="PUBLISH"
-                ?await publishResearchOriginalMinuteDiagnosticV1(task)
-                :await runFourMarketOriginalMinuteReplayV1(task);
-  if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
-    ||result.realOrders!==false||result.actualFillCount!==null
-    ||result.trueMarketWideRecall!==null)
-    fail("RESEARCH_REPLAY_NO_TRADING_AUTHORITY_REQUIRED");
-  await writePrivate(output,result);
-  return Object.freeze({
-    mode,
-    readOnly:mode!=="STOCK_IMPORT"&&mode!=="PUBLISH",
-    localOnlyWrite:mode==="STOCK_IMPORT"
-      ?result.physicalArchiveRetained===true
-      :mode==="PUBLISH"?result.published===true:false,
-    outputWritten:true,status:result.status,
-    executionAuthority:"NONE",profitabilityProven:false,
-    orderSubmitted:false,
-  });
+  const outputFile=await reservePrivateOutput(output);
+  let completed=false;
+  try{
+    const result=mode==="PLAN"
+      ?planFourMarketPITReplayWorkV1(task)
+      :mode==="OPPORTUNITIES"
+        ?await auditFourMarketOriginalMinuteOpportunityV1(task)
+        :mode==="BATCH"
+          ?await runFourMarketOriginalMinuteBatchV1(task)
+          :mode==="PERIOD"
+            ?await runFourMarketOriginalMinutePeriodV1(task)
+            :mode==="SWEEP"
+              ?await runFourMarketOriginalMinuteSweepV1(task)
+              :mode==="STOCK_IMPORT"
+                ?await importStockNativeMinuteOfflineV1(task)
+                :mode==="PUBLISH"
+                  ?await publishResearchOriginalMinuteDiagnosticV1(task)
+                  :await runFourMarketOriginalMinuteReplayV1(task);
+    if(result.executionAuthority!=="NONE"||result.profitabilityProven!==false
+      ||result.realOrders!==false||result.actualFillCount!==null
+      ||result.trueMarketWideRecall!==null)
+      fail("RESEARCH_REPLAY_NO_TRADING_AUTHORITY_REQUIRED");
+    await completeReservedOutput(outputFile,result);
+    completed=true;
+    return Object.freeze({
+      mode,
+      readOnly:mode!=="STOCK_IMPORT"&&mode!=="PUBLISH",
+      localOnlyWrite:mode==="STOCK_IMPORT"
+        ?result.physicalArchiveRetained===true
+        :mode==="PUBLISH"?result.published===true:false,
+      outputWritten:true,status:result.status,
+      executionAuthority:"NONE",profitabilityProven:false,
+      orderSubmitted:false,
+    });
+  }finally{
+    await outputFile.close();
+    if(!completed)await unlink(output).catch(()=>{});
+  }
 }
 if(process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url){
   runOriginalReplayPrivateJobV1(parseOriginalReplayArgsV1(process.argv.slice(2)))
