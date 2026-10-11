@@ -246,8 +246,17 @@ test('manual research preview rejects different authenticated evidence owner and
   }finally{await invalid.close()}
   const junior=await server({previewEnabled:true,previewEvidence:cycleEvidence,tier:'associate'});
   try{
+    // Associate users have canAccessPaperTrading. Do not leak/require the
+    // separate live-futures permission for purely simulated Paper preview.
     const r=await post(junior.host+cyclePath,selection);
-    assert.equal(r.status,403);
-    assert.equal((await r.json()).code,'MANUAL_PAPER_FUTURES_CAPABILITY_REQUIRED');
+    assert.equal(r.status,200);
+    const result=await r.json();
+    assert.equal(result.previewOnly,true);
+    assert.equal(result.exchangeRequestSent,false);
+    assert.equal(junior.state.writes,0);
   }finally{await junior.close()}
+  const pending=await server({previewEnabled:true,previewEvidence:cycleEvidence,tier:'pending'});
+  try{
+    assert.equal((await post(pending.host+cyclePath,selection)).status,403);
+  }finally{await pending.close()}
 });
