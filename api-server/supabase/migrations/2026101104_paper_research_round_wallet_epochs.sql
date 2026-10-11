@@ -17,7 +17,8 @@ $readiness$;
 -- from being recycled to create a virtual epoch.
 alter table public.paper_research_round_proposals
   add constraint paper_v3_exact_proposal_binding unique (
-    proposal_id,user_id,owner_role,trading_mode,market,next_round_number
+    proposal_id,user_id,owner_role,trading_mode,market,next_round_number,
+    previous_settlement_digest_sha256,ending_cause
   );
 
 create table public.paper_research_round_wallet_epochs (
@@ -50,9 +51,14 @@ create table public.paper_research_round_wallet_epochs (
   actual_paper_worker_attached boolean not null check(actual_paper_worker_attached=false),
   created_from_verified_receipt boolean not null check(created_from_verified_receipt=true),
   created_at timestamptz not null default now(),
-  foreign key(proposal_id,user_id,owner_role,mode,market,next_round_number)
+  -- DB-level foreign key binds BOTH immutable economic evidence fields
+  -- to the proposal; another market or an altered bankruptcy claim cannot
+  -- reuse a genuine 1m virtual seed receipt.
+  foreign key(proposal_id,user_id,owner_role,mode,market,next_round_number,
+    previous_settlement_digest_sha256,ending_cause)
     references public.paper_research_round_proposals(
-      proposal_id,user_id,owner_role,trading_mode,market,next_round_number
+      proposal_id,user_id,owner_role,trading_mode,market,next_round_number,
+      previous_settlement_digest_sha256,ending_cause
     ) on update restrict on delete restrict,
   constraint paper_v3_ending_evidence_check check (
     (ending_cause='ZERO_EQUITY' and previous_residual_operating_krw=0)
