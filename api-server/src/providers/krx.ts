@@ -13,13 +13,30 @@ export interface KrEntry {
   assetType: AssetType;
 }
 
-const KRX_URL = 'http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
+export const KRX_FINDER_ENDPOINT = 'https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd';
 const KRX_REQUEST_TIMEOUT_MS = 15_000;
 
 interface FinderRow {
   short_code?: string;
   codeName?: string;
   marketName?: string;
+}
+/** Finder backends can silently return 200 with an empty/malformed page,
+ * or one of two POSTs can fail while the other succeeds. Never certify a
+ * partial source pair as a whole KRX universe, or cache that as success.
+ * These conservative thresholds are only an outage guard, not market-wide
+ * coverage proof; full roster reconciliation is handled downstream.
+ */
+export function assertKrFinderSourcesReady(stocks: FinderRow[], products: FinderRow[]): void {
+  const validCount = (rows: FinderRow[]) => Array.isArray(rows)
+    ? rows.filter(row=>typeof row?.short_code==='string'
+      && /^[A-Z0-9]{6}$/u.test(row.short_code.trim().toUpperCase())
+      && typeof row.codeName==='string'
+      && row.codeName.trim().length>0).length : 0;
+  // KRX has thousands of stocks and hundreds of securities products.
+  // Fail closed for a missing/cut-off finder without echoing any symbols.
+  if(validCount(stocks)<1000 || validCount(products)<100)
+    throw new Error('KRX_FINDER_SOURCE_PAIR_INCOMPLETE');
 }
 
 function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear(): void } {
@@ -43,11 +60,12 @@ function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear()
 async function krxFinder(bld: string, parent?: AbortSignal): Promise<FinderRow[]> {
   const linked = linkedAbortSignal(parent);
   try {
-    const res = await fetch(KRX_URL, {
+    const res = await fetch(KRX_FINDER_ENDPOINT, {
       method: 'POST',
+      redirect: 'error', // never downgrade an official listing master to HTTP
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
+        Referer: 'https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
         'User-Agent': 'Mozilla/5.0',
       },
       body: `bld=${encodeURIComponent(bld)}&mktsel=ALL&searchText=`,
@@ -70,6 +88,7 @@ export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
       krxFinder('dbms/comm/finder/finder_stkisu', signal), // all listed stocks
       krxFinder('dbms/comm/finder/finder_secuprodisu', signal), // ETF + ETN products
     ]);
+    assertKrFinderSourcesReady(stocks,products);
     const out: KrEntry[] = [];
     for (const s of stocks) {
       if (!s.short_code || !s.codeName) continue;
@@ -82,8 +101,11 @@ export async function getKrUniverse(signal?: AbortSignal): Promise<KrEntry[]> {
     }
     for (const p of products) {
       if (!p.short_code || !p.codeName) continue;
-      // Everything in the securities-product finder is an ETF/ETN; if the name
-      // doesn't self-identify, default to ETF rather than mislabeling as STOCK.
+      // The securities-product finder does not supply a normalized subtype.
+      // This fallback is a legacy display heuristic, NOT exchange-verified
+      // proof that an unidentified product is an ETF rather than ETN/ELW/etc.
+      // The V3 roster diagnostics expose this uncertainty and block any
+      // assertion that such an eligible-only scan covers all KRX instruments.
       let at = classifyAssetType(p.codeName, 'KR');
       if (at === 'STOCK' || at === 'ADR' || at === 'REIT') at = 'ETF';
       out.push({

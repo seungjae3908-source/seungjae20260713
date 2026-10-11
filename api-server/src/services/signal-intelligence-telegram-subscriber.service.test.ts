@@ -95,3 +95,58 @@ test('V3 HTTP 503 and unsafe source remain distinct with zero Telegram sends',as
     else process.env.SIGNAL_INTELLIGENCE_URL=before;
   }
 });
+
+test('a 14-day V3 Telegram dedupe receipt expires even without any other send', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'signal-tg-ttl-'));
+  try {
+    const file = path.join(dir, 'receipt.json');
+    const key = 'signal-intelligence-v3:' + 'a'.repeat(40)
+      + ':NEW_CANDIDATE:US_STOCK|AAPL|SWING|60m|BUY::CANDIDATE';
+    const start = new Date('2026-09-01T00:00:00.000Z');
+    const ttlMs = 14 * 24 * 60 * 60_000;
+    const state = new SignalIntelligenceTelegramDeliveryState(file);
+    await state.mark(key, start);
+    assert.equal(await state.has(key, new Date(start.getTime() + ttlMs - 1)), true);
+    assert.equal(await state.has(key, new Date(start.getTime() + ttlMs + 1)), false);
+    const reopened = new SignalIntelligenceTelegramDeliveryState(file);
+    assert.equal(await reopened.has(key, new Date(start.getTime() + ttlMs + 1)), false);
+    // The expiration check is read-only; it does not erase the historical
+    // receipt or infer that a new Signal V3 source event is trustworthy.
+    const before = await readFile(file, 'utf8');
+    await reopened.has(key, new Date(start.getTime() + ttlMs + 2));
+    assert.equal(await readFile(file, 'utf8'), before);
+    const future = new SignalIntelligenceTelegramDeliveryState(file);
+    await assert.rejects(future.has(key, new Date(start.getTime() - 60_000)),
+      /LEDGER_UNREADABLE/);
+    await assert.rejects(future.has(key, new Date(start.getTime() + ttlMs + 1)),
+      /LEDGER_UNREADABLE/, 'future ledger evidence blocks the instance');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('V3 Telegram ledger never writes through a preexisting temporary symlink', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'signal-telegram-trap-'));
+  try {
+    const ledger = path.join(directory, 'delivered.json');
+    const unrelated = path.join(directory, 'private-note.txt');
+    const trap = `${ledger}.${process.pid}.tmp`;
+    const prior = 'SENSITIVE_LOCAL_FILE_MUST_NOT_CHANGE';
+    await writeFile(unrelated, prior, 'utf8');
+    await symlink(unrelated, trap);
+    const state = new SignalIntelligenceTelegramDeliveryState(ledger);
+    const key='signal-intelligence-v3:'+'a'.repeat(40)
+      +':NEW_CANDIDATE:US_STOCK|AAPL|SWING|60m|BUY::CANDIDATE';
+    const when=new Date('2026-10-11T06:00:00.000Z');
+    await assert.rejects(state.mark(key,when),
+      /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/);
+    assert.equal(await readFile(unrelated,'utf8'),prior,
+      'preexisting temporary symlink must never overwrite an unrelated file');
+    await assert.rejects(state.mark(key,when),
+      /SIGNAL_INTELLIGENCE_TELEGRAM_LEDGER_UNREADABLE/,
+      'blocked process cannot attempt another send after ambiguous persistence');
+    assert.equal(await readFile(unrelated,'utf8'),prior);
+  } finally {
+    await rm(directory,{recursive:true,force:true});
+  }
+});

@@ -133,3 +133,40 @@ test('pinned deployment script Git blob always matches reviewed branch bytes',()
     .update(deploy,'utf8').digest('hex');
   assert.equal(wf.split(actual).length-1,2);
 });
+
+
+test('strict predeploy reads vetted Signal V3 module before any Production mutation',()=>{
+  const stage=wf.indexOf('Block release without two recent Staging Telegram network successes');
+  const v3=wf.indexOf('Block release on stale Signal V3 or public endpoint HTTP 503');
+  const mutation=wf.indexOf('Deploy exact code using existing canary, PM2 and rollback script');
+  assert.ok(stage>=0&&v3>stage&&mutation>v3);
+  const section=wf.slice(v3,mutation);
+  assert.ok(section.includes('TELEGRAM_PREDEPLOY_REMOTE_READONLY=true'));
+  assert.ok(section.includes('< ops/telegram-predeploy-signal-health.mjs'));
+  assert.ok(section.includes('StrictHostKeyChecking=yes'));
+  for (const forbidden of [
+    'pm2 restart','systemctl restart','systemctl start',
+    'sendMessage','psql ', 'setWebhook','LIVE_TRADING=true',
+  ])assert.ok(!section.includes(forbidden),forbidden);
+  const mod=fs.readFileSync('ops/telegram-predeploy-signal-health.mjs','utf8');
+  assert.ok(mod.includes('verifiedSignalV3Coverage'));
+  assert.ok(mod.includes("http://127.0.0.1:8790"));
+  assert.ok(mod.includes("'/v1/signals'"));
+  assert.ok(mod.includes("'investment-signal-intelligence-v3-cycle.timer'"));
+  assert.ok(mod.includes('SIGNAL_V3_FRESH_PASS'));
+  assert.ok(wf.includes("'ops/telegram-predeploy-signal-health.mjs':'832b8883cacf39617f3a08cfd7dd765aaa2ff2cf'"));
+  assert.ok(wf.includes("['ops/deploy-production.sh',"));
+});
+
+test('Staging network gate needs two bounded independent green receipts, not latest green only',()=>{
+  const stage=wf.slice(wf.indexOf('Block release without two recent Staging Telegram network successes'),
+    wf.indexOf('Require pinned Production SSH credentials and host identity'));
+  assert.ok(stage.includes("workflow_id:'telegram-only-staging-qa.yml'"));
+  assert.ok(stage.includes("event:'issue_comment'"));
+  assert.ok(stage.includes("r.conclusion!=='skipped'"));
+  assert.ok(stage.includes('recent.length>=2&&green.length===recent.length'));
+  assert.ok(stage.includes('now-Date.parse(green[0].created_at)<=10*60_000'));
+  assert.ok(stage.includes('>=5*60_000'));
+  assert.ok(stage.includes('<=30*60_000'));
+  assert.ok(!stage.includes('workflow_dispatch'));
+});
