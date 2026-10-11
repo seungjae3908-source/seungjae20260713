@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { assertSignalIntelligenceV3Snapshot, SIGNAL_INTELLIGENCE_V3_POLICY } from './engine.mjs';
 import { currentPublicV3CycleReady } from './public-v3-current-page-gate.mjs';
+import {v3PublicCycleLockCommand,V3_PUBLIC_CYCLE_CONFLICT_EXIT} from './public-cycle-singleflight.mjs';
 
 const HOST = process.env.SIGNAL_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.SIGNAL_INTELLIGENCE_PORT || 8790);
@@ -24,6 +25,7 @@ let rescanRunning = false;
 let lastRescanStartedAt = null;
 let lastRescanFinishedAt = null;
 let lastRescanExitCode = null;
+let lastRescanOutcome = null;
 
 async function loadSnapshot() {
   try {
@@ -77,7 +79,9 @@ function triggerPublicRescan() {
   rescanRunning = true;
   lastRescanStartedAt = new Date().toISOString();
   lastRescanExitCode = null;
-  const child = spawn(process.execPath, [PRODUCER_PATH], {
+  lastRescanOutcome = 'RUNNING';
+  const locked = v3PublicCycleLockCommand(STATE_FILE, PRODUCER_PATH);
+  const child = spawn(locked.command, locked.args, {
     cwd: dirname(PRODUCER_PATH),
     env: {
       ...process.env,
@@ -96,12 +100,16 @@ function triggerPublicRescan() {
     rescanRunning = false;
     lastRescanFinishedAt = new Date().toISOString();
     lastRescanExitCode = Number.isInteger(code) ? code : -1;
+    lastRescanOutcome = lastRescanExitCode===V3_PUBLIC_CYCLE_CONFLICT_EXIT
+      ? 'ALREADY_RUNNING_IN_TIMER_OR_ANOTHER_RESCAN'
+      : lastRescanExitCode===0 ? 'COMPLETED' : 'PROCESS_FAILED';
     cache.mtimeMs = -1;
   });
   child.once('error', () => {
     rescanRunning = false;
     lastRescanFinishedAt = new Date().toISOString();
     lastRescanExitCode = -1;
+    lastRescanOutcome = 'SPAWN_FAILED';
   });
   return { started: true };
 }
@@ -137,6 +145,11 @@ const server = createServer(async (req, res) => {
     const ageMs = state.snapshot ? snapshotAgeMs(state.snapshot) : null;
     const sourceComplete = state.snapshot?.profile?.fullStrategyCoverage === true
       ? currentPublicV3CycleReady(state.snapshot.coverage) : null;
+    const clockReady = ageMs != null && ageMs <= MAX_STATE_AGE_MS;
+    const dataBlocker = !state.snapshot ? (state.error ?? 'SNAPSHOT_NOT_READY')
+      : !clockReady ? 'SNAPSHOT_AGE_EXPIRED'
+      : sourceComplete===false ? 'CURRENT_SOURCE_PAGES_BLOCKED'
+      : sourceComplete===null ? 'FULL_STRATEGY_SOURCE_NOT_VERIFIED' : null;
     return json(res, 200, {
       ok: true,
       service: 'signal-intelligence-v3',
@@ -146,12 +159,14 @@ const server = createServer(async (req, res) => {
       port: PORT,
       snapshotReady: Boolean(state.snapshot),
       snapshotAgeMs: ageMs,
-      snapshotFresh: ageMs != null && ageMs <= MAX_STATE_AGE_MS
-        && sourceComplete !== false,
+      snapshotFresh: clockReady && sourceComplete !== false,
+      snapshotClockReady: clockReady,
+      snapshotPublicationReady: clockReady && sourceComplete===true,
+      snapshotBlockedReason: dataBlocker,
       // Current-page health is separate from full-roster historical coverage.
       snapshotCurrentPageSourceReady: sourceComplete,
       snapshotError: state.error,
-      rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode },
+      rescan: { running: rescanRunning, lastStartedAt: lastRescanStartedAt, lastFinishedAt: lastRescanFinishedAt, lastExitCode: lastRescanExitCode, lastOutcome: lastRescanOutcome },
       executionAuthority: 'NONE',
       privateTradingApiAllowed: false,
       realOrderAllowed: false,
