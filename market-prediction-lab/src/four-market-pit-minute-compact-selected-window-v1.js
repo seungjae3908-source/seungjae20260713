@@ -37,7 +37,7 @@ const own=(obj,key)=>Object.prototype.hasOwnProperty.call(obj,key);
 const fail=(why)=>{throw new TypeError(why);};
 const safe=fields=>Object.freeze({
   schemaVersion:"four-market-pit-minute-compact-selected-window-v1",
-  ...fields,sourceInventoryOnly:true,
+  ...fields,sourceInventoryOnly:true,sourceReadinessOnly:true,
   compactDayReceiptSelfChecksumNotTrustedSignature:true,
   historicalPITUniverseIndependentlyAuthenticated:false,
   historicalOneMinuteSourceIndependentlyAuthenticated:false,
