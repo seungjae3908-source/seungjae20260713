@@ -4,7 +4,7 @@ export const WATCH_CAPACITY_POLICY = Object.freeze({
   diskFloorBytes: 5 * 1024 ** 3,
   maxFileBytes: 64 * 1024 ** 2,
   maxDays: 366,
-  categories: ['events', 'outcomes', 'cadence'],
+  categories: ['events', 'outcomes', 'cadence', 'capped'],
 });
 const valid = v => Number.isSafeInteger(v) && v >= 0;
 function validUtcDay(day) {
@@ -15,7 +15,8 @@ function validUtcDay(day) {
     && new Date(at).toISOString().slice(0,10) === day;
 }
 export function summarizeWatchStorageCapacity({ files, diskFreeBytes, nowUtcDay }) {
-  if (!Array.isArray(files) || files.length > WATCH_CAPACITY_POLICY.maxDays * 3
+  if (!Array.isArray(files)
+    || files.length > WATCH_CAPACITY_POLICY.maxDays * WATCH_CAPACITY_POLICY.categories.length
     || !valid(diskFreeBytes) || !validUtcDay(nowUtcDay))
     throw new Error('WATCH_CAPACITY_INPUT_INVALID');
   const seen = new Set(), sizeByDate = new Map(), cadenceDays = new Set();
