@@ -263,7 +263,10 @@ test("stock without independently supplied local session dates does not certify 
     /PIT_COMPACT_CRYPTO_STOCK_DATES_FORBIDDEN/);
 });
 test("a long-term stock trading calendar may extend beyond a short selected period",()=>{
-  const dates=["2025-12-31","2026-01-12","2026-09-18","2026-09-21","2027-01-04"];
+  // Real long-lived server calendars may include pre-1970 context.
+  // It must not block an otherwise valid user-selected modern period.
+  const dates=["1965-01-04","2025-12-31","2026-01-12",
+    "2026-09-18","2026-09-21","2027-01-04"];
   const w={startDate:"2026-09-18",endDate:"2026-09-21"};
   const x=range({market:"US_STOCK",researchWindow:w,
     stockTradingDates:dates,chunkCalendarDays:31,dayReceipts:[]});
