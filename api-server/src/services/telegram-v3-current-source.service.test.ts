@@ -210,6 +210,61 @@ test('bounded source reader rejects oversized or malformed source JSON',async()=
  await assert.rejects(boundedTelegramV3Json(new Response('{}',{
    headers:{'content-length':'10000000'}})),/BODY_LIMIT/);
 });
+test('uncertain V3 public alert is never replayed after process restart or mislabeled delivered', async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'telegram-v3-uncertain-'));
+ const ledger=path.join(dir,'signal-dedupe.json');
+ const beforeUrl=process.env.SIGNAL_INTELLIGENCE_URL;
+ const beforeUs=process.env.TELEGRAM_US_STOCK_CHAT_ID;
+ let publicSends=0;
+ const mockedFeed=async()=>new Response(JSON.stringify({
+   ok:true,serviceSha:SHA,executionAuthority:'NONE',snapshot:fixture(),
+ }),{status:200});
+ const noMember=async()=>({
+   eligible:false,matched:0,attempted:0,delivered:0,queued:0,skipped:0,failed:0,
+   reason:'DISABLED' as const,
+ });
+ try {
+   process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
+   process.env.TELEGRAM_US_STOCK_CHAT_ID='-10083004999999';
+   const first=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(ledger),
+     async()=>{publicSends++;return {ok:false as const,attempts:1,
+       skipped:'OUTCOME_UNCONFIRMED' as const,
+       errorCode:'TELEGRAM_SEND_OUTCOME_UNCONFIRMED'};},
+     mockedFeed,noMember,
+   );
+   const at=new Date(NOW);
+   const attempt=await first.runOnce(at);
+   assert.equal(attempt.sourceStatus,'READY');
+   assert.equal(attempt.attempted,1);
+   assert.equal(attempt.delivered,0);
+   assert.equal(attempt.deduped,0);
+   assert.equal(attempt.failed,1);
+   assert.equal(publicSends,1);
+   const stored=JSON.parse(await (await import('node:fs/promises')).readFile(ledger,'utf8'));
+   assert.equal(Object.keys(stored.delivered).length,0);
+   assert.equal(Object.keys(stored.unconfirmed).length,1);
+   const restarted=new SignalIntelligenceTelegramSubscriber(
+     new SignalIntelligenceTelegramDeliveryState(ledger),
+     async()=>{publicSends++;throw Error('MUST_NOT_RESEND_AMBIGUOUS_POST');},
+     mockedFeed,noMember,
+   );
+   const repeat=await restarted.runOnce(at);
+   assert.equal(repeat.sourceStatus,'READY');
+   assert.equal(repeat.attempted,0);
+   assert.equal(repeat.delivered,0);
+   assert.equal(repeat.deduped,0);
+   assert.equal(repeat.failed,1);
+   assert.equal(publicSends,1);
+ }finally{
+   if(beforeUrl===undefined)delete process.env.SIGNAL_INTELLIGENCE_URL;
+   else process.env.SIGNAL_INTELLIGENCE_URL=beforeUrl;
+   if(beforeUs===undefined)delete process.env.TELEGRAM_US_STOCK_CHAT_ID;
+   else process.env.TELEGRAM_US_STOCK_CHAT_ID=beforeUs;
+   await rm(dir,{recursive:true,force:true});
+ }
+});
+
 test('public room and member watchlist receive only current verified V3 candidate, never stale replay',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'telegram-v3-current-'));
  const beforeUrl=process.env.SIGNAL_INTELLIGENCE_URL;
