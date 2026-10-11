@@ -52,7 +52,7 @@ test('read-only two-market review verifies one real current-roster response each
  const reviews=selectV3OutOfCursorResearch(watch);
  let calls=0;
  const out=await runV3OutOfCursorResearch(reviews,{
-  enabled:true,
+  enabled:true,nowMs:OBS,
   scanOne:async row=>{
    calls++;
    return {httpRequests:row.market==='CRYPTO_SPOT'?4:2,
