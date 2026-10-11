@@ -356,6 +356,30 @@ test('Telegram delivery retries are bounded and end in dead letter without chang
   assert.equal(transport.sent.length, 3);
 });
 
+test('uncertain Telegram POST stops persistent personal outbox retry without revoking a valid connection', async () => {
+  const { service, repository, transport } = fixture();
+  transport.fail = true;
+  transport.errorCode = 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED';
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'ambiguous-response', userId: 'user-a', symbol: 'BTC',
+    market: 'spot', quantity: 0.01, price: 100000000,
+  });
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:01:00.000Z'), 'associate');
+  const first = await service.processDelivery('user-a', queued.deliveryId!,
+    new Date('2026-08-12T00:01:01.000Z'));
+  assert.equal(first.state, 'DEAD_LETTER');
+  assert.equal(transport.sent.length, 1);
+  const stored = await repository.getDelivery('user-a', queued.deliveryId!);
+  assert.equal(stored?.lastErrorCode, 'TELEGRAM_SEND_OUTCOME_UNCONFIRMED');
+  assert.equal(stored?.nextRetryAt, null);
+  assert.equal(stored?.attempts, 1);
+  assert.equal((await repository.getTelegramConnection('user-a'))?.status, 'ACTIVE');
+  assert.equal((await service.processDelivery('user-a', queued.deliveryId!,
+    new Date('2026-08-12T00:05:00.000Z'))).processed, false);
+  assert.equal(transport.sent.length, 1);
+});
+
 test('Telegram 403 is permanent, dead-letters once, and revokes the stale personal connection', async () => {
   const { service, repository, transport } = fixture();
   transport.fail = true;
