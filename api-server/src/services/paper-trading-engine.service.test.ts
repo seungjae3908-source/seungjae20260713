@@ -16,6 +16,7 @@ import {
 } from './paper-trading-engine.service.js';
 import type { RiskEngineInput } from './trading-risk-engine.service.js';
 import { manualCanonicalFixture } from './manual-paper-canonical-contract.fixture';
+import { dayKey, normalizedRiskState } from './paper-trading-core.service';
 import { MANUAL_PAPER_CANONICAL_FIELDS, manualPaperEvidenceSha256 } from './manual-paper-canonical-contract.service';
 import { settleFourMarketPaperSample } from '../../../market-prediction-lab/src/four-market-paper-settlement-v1.js';
 
@@ -371,11 +372,12 @@ test('manual Paper partial closing does not consume the five-trade daily loss bu
 test('manual Paper daily realized-loss budget resets at KST midnight without touching LIVE settings', () => {
   const before=new Date('2026-08-02T14:59:00.000Z');
   const after=new Date('2026-08-02T15:01:00.000Z');
-  const { normalizedRiskState, dayKey } = require('./paper-trading-core.service');
+  // Risk dates are derived from the simulated KST trading calendar.
   assert.equal(dayKey(before),'2026-08-02');
   assert.equal(dayKey(after),'2026-08-03');
   const state=createPaperTradingState(10_000,before);
   state.riskState.dailyRealizedPnl=-100;
+  state.riskState.weeklyRealizedPnl=-300;
   const normalized=normalizedRiskState(state.riskState,after);
   assert.equal(normalized.dailyRealizedPnl,0);
   assert.equal(normalized.dayKey,'2026-08-03');
