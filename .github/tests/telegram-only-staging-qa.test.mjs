@@ -306,6 +306,19 @@ test('Staging rejects private, loopback, CGNAT, documentation and multicast DNS 
     assert.equal(connects,0);
     assert.ok(!JSON.stringify(result).includes(ip));
   }
+  // Previously 192.0.0.1 and 192.0.0.9 escaped the partial
+  // special-purpose exclusion despite not being Telegram edge IPs.
+  for(const ip of ['192.0.0.1','192.0.0.8','192.0.0.9','192.0.0.10',
+    '192.0.0.254','192.0.2.250']){
+    assert.equal(isPublicTelegramIpv4(ip),false,ip);
+    let connected=0;
+    const result=await probeStagingTelegramNetwork({
+      lookupImpl:(_h,_o,cb)=>cb(null,ip,4),
+      connectImpl:()=>{connected++;throw Error('MUST_NOT_CONNECT');},
+    });
+    assert.equal(result,'IPV4_DNS_UNSAFE_ADDRESS');
+    assert.equal(connected,0);
+  }
   assert.equal(isPublicTelegramIpv4('149.154.166.110'),true);
 });
 
