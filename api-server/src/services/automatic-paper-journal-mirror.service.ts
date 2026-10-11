@@ -116,3 +116,93 @@ export function reconcileCanonicalPaperJournalMirrors(
     }),
   });
 }
+
+/**
+ * Provider history may reuse order IDs across brokers and account scopes.
+ * Never use brokerOrderId alone to erase a historical row, and never treat
+ * a simulated APP_PAPER or shadow execution as a real brokerage fill.
+ * We only suppress a second, identical, fully scoped real-order snapshot.
+ */
+const LIVE_HISTORY_SOURCES = new Set([
+  'APP_AUTO', 'TOSS_API', 'UPBIT_API', 'BITGET_API', 'KIWOOM_API',
+]);
+function verifiedLiveKey(payload: Payload): string | null {
+  if (payload.recordType !== 'unified_trade_order'
+    || !LIVE_HISTORY_SOURCES.has(String(payload.source))) return null;
+  const parts = [
+    payload.broker, payload.market, payload.accountIdMasked,
+    payload.brokerOrderId,
+  ];
+  if (parts.some((value) => !nonempty(value))
+    || !(payload.accountIdMasked as string).includes('****')
+    || (payload.accountIdMasked as string).includes('UNAVAILABLE')) return null;
+  return JSON.stringify(parts);
+}
+function exactEconomicDuplicate(existing: Payload, external: Payload): boolean {
+  for (const key of ['symbol','side','positionSide','positionEffect','currency']) {
+    if (existing[key] !== external[key]) return false;
+  }
+  if (existing.status !== external.status
+    || !positive(existing.filledQuantity) || !positive(external.filledQuantity)
+    || !equalNumber(existing.filledQuantity,external.filledQuantity)
+    || !positive(existing.averageFillPrice) || !positive(external.averageFillPrice)
+    || !equalNumber(existing.averageFillPrice,external.averageFillPrice)) return false;
+  // A provider-supplied fee/tax receipt must not be hidden by an
+  // incomplete or conflicting cached projection.
+  for (const key of ['fees','tax']) {
+    if (typeof external[key] === 'number' && Number.isFinite(external[key])) {
+      if (typeof existing[key] !== 'number' || !Number.isFinite(existing[key])
+        || !equalNumber(existing[key], external[key])) return false;
+    }
+  }
+  return true;
+}
+export function reconcileScopedExternalJournalHistory(
+  known: readonly Payload[], external: readonly Payload[],
+): Readonly<{ payloads: readonly Payload[]; audit: Readonly<{
+  contract: string;
+  suppressedVerifiedDuplicateCount: number;
+  retainedExternalCount: number;
+  financialMutationCount: 0;
+  executionAuthority: 'NONE';
+}> }> {
+  if (!Array.isArray(known) || !Array.isArray(external)
+    || known.length > 5000 || external.length > 5000)
+    throw new Error('JOURNAL_EXTERNAL_SCOPE_BATCH_INVALID');
+  const knownByScope = new Map<string, Payload[]>();
+  for (const payload of known) {
+    if (!object(payload)) throw new Error('JOURNAL_EXTERNAL_KNOWN_PAYLOAD_INVALID');
+    const key = verifiedLiveKey(payload);
+    if (!key) continue;
+    const group = knownByScope.get(key) ?? [];
+    group.push(payload);
+    knownByScope.set(key, group);
+  }
+  let suppressed=0;
+  const retained: Payload[]=[];
+  for (const payload of external) {
+    if (!object(payload)) throw new Error('JOURNAL_EXTERNAL_PAYLOAD_INVALID');
+    const key=verifiedLiveKey(payload);
+    const candidates=key ? knownByScope.get(key) ?? [] : [];
+    for (const previous of candidates) {
+      // Same provider/account/order cannot be silently relabeled as a
+      // different instrument/side. A mismatch blocks this journal read.
+      if (previous.symbol !== payload.symbol || previous.side !== payload.side
+        || previous.currency !== payload.currency)
+        throw new Error('JOURNAL_EXTERNAL_SCOPE_IDENTITY_CONFLICT');
+    }
+    if (candidates.some((previous)=>exactEconomicDuplicate(previous,payload))) {
+      suppressed++;
+    } else retained.push(payload);
+  }
+  return Object.freeze({
+    payloads:Object.freeze(retained),
+    audit:Object.freeze({
+      contract:'journal-external-scoped-dedup/v1',
+      suppressedVerifiedDuplicateCount:suppressed,
+      retainedExternalCount:retained.length,
+      financialMutationCount:0 as const,
+      executionAuthority:'NONE' as const,
+    }),
+  });
+}
