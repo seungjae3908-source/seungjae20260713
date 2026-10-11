@@ -118,6 +118,54 @@ export function createPublicUpbitGroupPacer({
   });
 }
 
+
+// Single conservative IP market-data request lane for V3 public Bitget reads.
+// The official market candle endpoint permits up to 20 requests/second per IP;
+// use <=10 starts/second to leave headroom, with no member/Forward/Paper changes.
+export const PUBLIC_V3_BITGET_MARKET_INTERVAL_MS = 100;
+export function publicBitgetMarketEndpoint(rawUrl) {
+  let url;
+  try { url = new URL(rawUrl); } catch { return null; }
+  if (url.hostname !== 'api.bitget.com') return null;
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || url.hash)
+    throw new Error('PUBLIC_V3_BITGET_UNSAFE_ENDPOINT');
+  if (!/^\/api\/v2\/mix\/market\/(?:tickers|candles|contracts|query-position-lever)$/u.test(url.pathname))
+    throw new Error('PUBLIC_V3_BITGET_UNSAFE_ENDPOINT');
+  return 'public-market';
+}
+
+export function createPublicBitgetMarketPacer({
+  now = Date.now,
+  wait = abortableGroupWait,
+} = {}) {
+  let nextStartAt = 0;
+  let tail = Promise.resolve();
+  return Object.freeze({
+    async schedule(operation, signal) {
+      const previous = tail;
+      let unlock;
+      tail = new Promise(resolve => { unlock = resolve; });
+      await previous;
+      try {
+        if (signal?.aborted) throw abortReason(signal);
+        while (now() < nextStartAt) {
+          await wait(nextStartAt - now(), signal);
+          if (signal?.aborted) throw abortReason(signal);
+        }
+        nextStartAt = now() + PUBLIC_V3_BITGET_MARKET_INTERVAL_MS;
+      } finally {
+        unlock();
+      }
+      return operation();
+    },
+    cooldown(delayMs) {
+      if (!Number.isFinite(delayMs) || delayMs < 0)
+        throw new Error('PUBLIC_V3_BITGET_COOLDOWN_INVALID');
+      nextStartAt = Math.max(nextStartAt, now() + Math.ceil(delayMs));
+    },
+  });
+}
+
 // A full/no-trade classification requires proof that the requested source
 // page was actually completed. A page that silently skips instruments must
 // not be advertised as a completed zero-opportunity scan.
