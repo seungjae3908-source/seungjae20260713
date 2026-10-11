@@ -6,6 +6,20 @@ import type { Candle } from '../sample/types';
 
 const NOW = Date.parse('2026-08-08T03:30:00.000Z');
 
+test('failed separate context cannot silently reuse primary bars as higher-timeframe confirmation', () => {
+  const result = applyScannerQuantHardening({ card: candidate(), timeframe: '5m',
+    candles: freshCandles(), contextCandles: [], strategyMode: 'scalping', now: NOW,
+    sessionAware: false });
+  assert.equal(result.strongSignalEligible, false);
+  assert.equal(result.dataQuality?.strongSignalAllowed, false);
+  assert.notEqual(result.dataQuality?.state, 'TRUSTED');
+  assert.ok(result.unverified.includes('상위 시간봉 근거'));
+  assert.equal(result.pricePlan.entryZone, null);
+  assert.equal(result.pricePlan.stopLoss, null);
+  assert.ok(result.warnings.includes('CONTEXT_TIMEFRAME_EVIDENCE_UNAVAILABLE'));
+  assert.ok(!['S', 'A'].includes(result.signalGrade!));
+});
+
 function staleCandles(): Candle[] {
   return Array.from({ length: 80 }, (_, index) => {
     const close = 100 + index * 0.05;
