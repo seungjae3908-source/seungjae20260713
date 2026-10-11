@@ -126,20 +126,23 @@ test("wrong venue identity, fabricated PASS/trading, wrong dates, positive BLOCK
       {modeledReturnPercent:Number.NaN},
       {modeledNetPnlKRW:Infinity},
       {status:"BLOCKED_DATA"},
+      {status:"LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY"},
+      {sourceModelDigestSha256:"BAD_SHA"},
     ]){
       save(folder,{...period(),...modified});
       await assert.rejects(()=>read({root:folder,market}),
-        /NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID|NATIVE_DIAGNOSTIC_PERIOD_VALUES_INVALID/);
+        /NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID|NATIVE_DIAGNOSTIC_PERIOD_VALUES_INVALID|NATIVE_DIAGNOSTIC_PERIOD_STATUS_SCHEMA_MISMATCH/);
     }
     for(const modified of [
       {sourceBlockedPages:1},
       {localPageTraversalReachedEnd:false},
       {sourceOnlyObservedPriceEventLabels:-1},
+      {status:"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY"},
       {status:"BLOCKED_DATA"},
     ]){
       save(folder,{...sweep(),...modified});
       await assert.rejects(()=>read({root:folder,market}),
-        /NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID|NATIVE_DIAGNOSTIC_SWEEP_VALUES_INVALID/);
+        /NATIVE_DIAGNOSTIC_PRIVATE_MODEL_CONTRACT_INVALID|NATIVE_DIAGNOSTIC_SWEEP_VALUES_INVALID|NATIVE_DIAGNOSTIC_SWEEP_STATUS_SCHEMA_MISMATCH/);
     }
   }finally{rmSync(folder,{recursive:true,force:true});}
 });

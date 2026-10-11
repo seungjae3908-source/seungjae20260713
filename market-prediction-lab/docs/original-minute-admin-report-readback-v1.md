@@ -32,6 +32,8 @@ node market-prediction-lab/scripts/run-four-market-original-minute-replay-v1.mjs
 ```
 
 - `--output` must be a new name. CLI exclusively reserves it before any optional local STOCK_IMPORT or PUBLISH mutation to avoid a report being changed when the audit output already exists.
+- **Repeated publication of the identical immutable source/model evidence is denied**, even if the JSON file has different whitespace or extra private fields. A genuinely new result needs a changed reviewed model summary or immutable original-source lineage SHA, not a newer clock alone. The source-model digest stays in the private fixed report and is not disclosed to the browser.
+- Existing market report files for another venue are invalid and cannot be overwritten as if they belonged to the requested market.
 - Existing market report replacement separately requires `allowReplaceExisting:true`, and local publication timestamp must advance. Writers serialize with a create-only private per-market lock; a crashed stale lock requires manual investigation.
 - The publisher uses private temporary files and an atomic same-directory rename, never in-place overwrite; invalid existing files, symlinks, hardlinks, private path ownership failures, fake OOS/actual-fill/Paper flags and malformed input fail closed.
 - Blocked results may explicitly replace a positive model to revoke a stale summary. Report timestamp is local publication time, **not historical signal availability**. The UI marks reports older than seven days.

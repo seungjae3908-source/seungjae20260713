@@ -123,14 +123,28 @@ test("no explicit permission or overwrite approval means NO mutation, and replac
       nowImpl:()=>ts});
     assert.equal(outdated.reason,"STALE_OR_DUPLICATED_REPORT_PUBLICATION_TIME");
     assert.equal(readFileSync(join(env.reportRoot,market+".json"),"utf8"),before);
-    const updated=await publish({sourceResultPath:file,
+    const duplicate=await publish({sourceResultPath:file,
       reportRoot:env.reportRoot,market,
       allowLocalReportPublish:true,allowReplaceExisting:true,
       nowImpl:()=>ts+1});
+    assert.equal(duplicate.published,false);
+    assert.equal(duplicate.reason,
+      "PREVIOUSLY_PUBLISHED_SOURCE_MODEL_NOT_NEW_EVIDENCE");
+    assert.equal(readFileSync(join(env.reportRoot,market+".json"),"utf8"),before);
+    // Fresh modeled evidence: changed model figures, not just a new clock.
+    source(env.privateDir,{...period(market),
+      modeledTradeCount:13,modeledReturnPercent:4.1,
+      modeledNetPnlKRW:41000});
+    const updated=await publish({sourceResultPath:file,
+      reportRoot:env.reportRoot,market,
+      allowLocalReportPublish:true,allowReplaceExisting:true,
+      nowImpl:()=>ts+2});
     assert.equal(updated.published,true);
     assert.equal(updated.reportReplaced,true);
     const now=JSON.parse(readFileSync(join(env.reportRoot,market+".json"),"utf8"));
-    assert.equal(now.reportPublishedAtMs,ts+1);
+    assert.equal(now.reportPublishedAtMs,ts+2);
+    assert.equal(now.modeledTradeCount,13);
+    assert.match(now.sourceModelDigestSha256,/^[a-f0-9]{64}$/u);
     assert.equal(now.executionAuthority,"NONE");
     assert.equal(existsSync(join(env.reportRoot,"."+market+".publish.lock")),false);
   }finally{rmSync(env.base,{recursive:true,force:true});}
@@ -225,5 +239,80 @@ test("old local publication stays visibly stale, not passed off as recent market
     assert.equal(r.reportPublishedAtMs,ts);
     assert.equal(r.profitabilityProven,false);
     assert.equal(r.executionAuthority,"NONE");
+  }finally{rmSync(env.base,{recursive:true,force:true});}
+});
+
+
+test("republishing identical modeled result under different formatting or extra private data cannot refresh its local age",async()=>{
+  const env=setup(),market="US_STOCK";
+  try{
+    const original=source(env.privateDir,period(market),"source-one.json");
+    const ts=Date.now()-8*86_400_000;
+    const first=await publish({sourceResultPath:original,
+      reportRoot:env.reportRoot,market,
+      allowLocalReportPublish:true,nowImpl:()=>ts});
+    assert.equal(first.published,true);
+    const before=readFileSync(join(env.reportRoot,market+".json"),"utf8");
+    const reformatted=join(env.privateDir,"source-two.json");
+    writeFileSync(reformatted,JSON.stringify({
+      privateVendorAccount:"SHOULD_NOT_LEAK",...period(market),
+    },null,2),{mode:0o600});
+    const denied=await publish({sourceResultPath:reformatted,
+      reportRoot:env.reportRoot,market,
+      allowLocalReportPublish:true,allowReplaceExisting:true});
+    assert.equal(denied.reason,
+      "PREVIOUSLY_PUBLISHED_SOURCE_MODEL_NOT_NEW_EVIDENCE");
+    assert.equal(denied.published,false);
+    assert.equal(readFileSync(join(env.reportRoot,market+".json"),"utf8"),before);
+    const stillStale=await read({root:env.reportRoot,market});
+    assert.equal(stillStale.publicationAgeStatus,"OLDER_THAN_7_DAYS");
+    assert.equal(stillStale.publicationTimeIndependentlyAttested,false);
+    // A new source lineage is meaningful evidence, even with same returns.
+    source(env.privateDir,{...period(market),
+      sourceSessionIndexDigestSha256:"a".repeat(64)},"source-three.json");
+    const accepted=await publish({
+      sourceResultPath:join(env.privateDir,"source-three.json"),
+      reportRoot:env.reportRoot,market,allowLocalReportPublish:true,
+      allowReplaceExisting:true,
+    });
+    assert.equal(accepted.published,true);
+    const fresh=await read({root:env.reportRoot,market});
+    assert.equal(fresh.available,true);
+    assert.equal(fresh.publicationAgeStatus,"LOCAL_PUBLICATION_ONLY");
+    assert.equal(fresh.profitabilityProven,false);
+    assert.equal(fresh.paperAdmissionAllowed,false);
+  }finally{rmSync(env.base,{recursive:true,force:true});}
+});
+test("market file with another valid venue cannot be overwritten as if it belonged to selected market",async()=>{
+  const env=setup(),market="CRYPTO_SPOT";
+  try{
+    const target=source(env.reportRoot,period("US_STOCK"),market+".json");
+    const before=readFileSync(target,"utf8");
+    const input=source(env.privateDir,period(market));
+    await assert.rejects(()=>publish({
+      sourceResultPath:input,reportRoot:env.reportRoot,
+      market,allowLocalReportPublish:true,allowReplaceExisting:true,
+    }),/RESEARCH_PUBLISH_EXISTING_REPORT_MARKET_MISMATCH/);
+    assert.equal(readFileSync(target,"utf8"),before);
+    assert.equal(existsSync(join(env.reportRoot,"."+market+".publish.lock")),false);
+  }finally{rmSync(env.base,{recursive:true,force:true});}
+});
+test("historical PERIOD and SWEEP status schemas cannot be cross-labeled or claim new lineage with invalid SHA",async()=>{
+  const env=setup(),market="CRYPTO_FUTURES";
+  try{
+    const input=source(env.privateDir,period(market));
+    for(const invalid of [
+      {...period(market),
+        status:"LOCAL_HISTORIC_SOURCE_PAGES_TRAVERSED_RESEARCH_ONLY"},
+      {...sweep(market),status:"SOURCE_ONLY_MULTI_SESSION_PERIOD_REPLAY"},
+      {...period(market),sourceSessionIndexDigestSha256:"not-a-sha"},
+    ]){
+      source(env.privateDir,invalid);
+      await assert.rejects(()=>publish({
+        sourceResultPath:input,reportRoot:env.reportRoot,
+        market,allowLocalReportPublish:true,
+      }),/NATIVE_DIAGNOSTIC_.*MISMATCH|RESEARCH_PUBLISH_ORIGINAL_LINEAGE_INVALID/);
+      assert.equal(existsSync(join(env.reportRoot,market+".json")),false);
+    }
   }finally{rmSync(env.base,{recursive:true,force:true});}
 });
