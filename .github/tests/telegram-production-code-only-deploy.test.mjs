@@ -49,8 +49,10 @@ test('only release canary suppresses background workers; live PM2 is not disable
   assert.ok(canary.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=false'));
   assert.ok(canary.includes('BACKGROUND_WORKERS_ENABLED=false'));
   assert.equal((deploy.match(/BACKGROUND_WORKERS_ENABLED=false/g)||[]).length,1);
-  const restart=deploy.slice(deploy.indexOf('restart_application_preserving_telegram()'),
-    deploy.indexOf('listener_pids()',deploy.indexOf('restart_application_preserving_telegram()')));
+  const restartBegin=deploy.indexOf('restart_application_preserving_telegram() {');
+  const restartEnd=deploy.indexOf('\n}\n',restartBegin);
+  assert.ok(restartBegin>=0&&restartEnd>restartBegin);
+  const restart=deploy.slice(restartBegin,restartEnd);
   assert.ok(!restart.includes('BACKGROUND_WORKERS_ENABLED=false'));
   assert.ok(deploy.includes('assert_live_trading_inactive_before_deploy'));
 });
