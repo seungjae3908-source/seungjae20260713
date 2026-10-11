@@ -1,3 +1,4 @@
+import './paper-futures-funding-certificate.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
