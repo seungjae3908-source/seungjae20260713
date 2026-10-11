@@ -10,7 +10,8 @@ import {runFourMarketOriginalMinuteReplayV1 as rawReplay}
   from "../src/four-market-original-minute-replay-v1.js";
 import {runFourMarketOriginalMinuteBatchV1 as batch}
   from "../src/four-market-original-minute-batch-v1.js";
-import {runFourMarketOriginalMinutePeriodV1 as period}
+import {runFourMarketOriginalMinutePeriodV1 as period,
+  ORIGINAL_MINUTE_PERIOD_LIMITS_V1 as PERIOD_LIMITS}
   from "../src/four-market-original-minute-period-v1.js";
 import {runFourMarketOriginalMinuteSweepV1 as sweep}
   from "../src/four-market-original-minute-sweep-v1.js";
@@ -451,4 +452,13 @@ test("newly listed crypto requires source only AFTER listing; an unproven first 
    assert.equal(r.profitabilityProven,false);
    assert.equal(r.executionAuthority,"NONE");
  }finally{rmSync(folder,{recursive:true,force:true});}
+});
+
+
+test("explicit 10-year stock PRE/REGULAR/AFTER archive count fits bounded index memory budget",()=>{
+  assert.equal(PERIOD_LIMITS.indexPageSize,31);
+  assert.ok(PERIOD_LIMITS.maxSessionsPerSymbol>=10*260*4);
+  assert.ok(PERIOD_LIMITS.maxIndexPages*PERIOD_LIMITS.indexPageSize
+    >=PERIOD_LIMITS.maxSessionsPerSymbol);
+  assert.ok(PERIOD_LIMITS.maxSessionsPerSymbol<=40_000);
 });
