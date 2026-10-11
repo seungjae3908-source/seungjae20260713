@@ -135,7 +135,7 @@ async function inspectAutomaticPaperAccount(signal?: AbortSignal): Promise<Autom
 }
 
 type TradingMarket = 'domestic_stock' | 'us_stock' | 'crypto_spot' | 'crypto_futures';
-type TradingSection = 'dashboard' | 'orders' | 'journal' | 'rehearsal' | 'settings';
+type TradingSection = 'dashboard' | 'orders' | 'journal' | 'settings';
 
 type AutoTradingPageProps = {
   fixture?: TradeAutomationFixture;
@@ -157,10 +157,9 @@ const MARKETS: Array<{
 ];
 
 const SECTIONS: Array<{ value: TradingSection; label: string }> = [
-  { value: 'dashboard', label: '대시보드' },
-  { value: 'orders', label: '포지션·주문' },
-  { value: 'journal', label: '매매일지' },
-  { value: 'rehearsal', label: '리허설' },
+  { value: 'dashboard', label: '상태' },
+  { value: 'orders', label: '주문' },
+  { value: 'journal', label: '일지' },
   { value: 'settings', label: '설정' },
 ];
 
@@ -242,7 +241,7 @@ function SegmentedButton({
       onClick={onClick}
       data-testid={testId}
       className={[
-        'min-h-11 min-w-0 rounded-xl border px-3 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+        'min-h-10 min-w-0 rounded-lg border px-2.5 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40',
         active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-foreground',
       ].join(' ')}
     >
@@ -258,12 +257,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   const userId = auth.user?.id ?? auth.profile?.id ?? '';
   const testFixtureAccess = Boolean(fixture);
   const canAuto = testFixtureAccess || auth.can('canAccessAutoTrading');
-  const canPaper = testFixtureAccess || auth.can('canAccessPaperTrading');
   const canJournalSync = testFixtureAccess || auth.can('canAccessJournalSync');
   const canFutures = testFixtureAccess || auth.can('canAccessFutures');
   const canPlaceOrders = testFixtureAccess || auth.can('canPlaceOrders');
   const canManagePilot = testFixtureAccess || auth.can('canManageMembers');
-  const [mode, setMode] = useState<TradingMode>(initialMode);
+  const mode = initialMode;
   const initialRouteState = useMemo(tradingRouteState, []);
   const [market, setMarket] = useState<TradingMarket>(initialRouteState.market);
   const [section, setSection] = useState<TradingSection>(initialRouteState.section);
@@ -288,17 +286,13 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   );
 
   useEffect(() => {
-    if (mode === 'auto' && !canAuto && canPaper) setMode('paper');
-    if (mode === 'paper' && !canPaper && canAuto) setMode('auto');
-  }, [canAuto, canPaper, mode]);
-
-  useEffect(() => {
     const next = tradingRouteState();
     setMarket(next.market === 'crypto_futures' && !canFutures ? 'domestic_stock' : next.market);
     setSection(next.section);
   }, [canFutures, location]);
 
   useEffect(() => {
+    if (mode !== 'paper') return;
     if (fixture) {
       setRuntimeStatus(fixture);
       setRuntimeLoading(false);
@@ -342,6 +336,11 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
   }, [canAuto, fixture]);
 
   useEffect(() => {
+    if (mode !== 'paper') {
+      setAutoPaperPreflight(null);
+      setAutoPaperStatus('restricted');
+      return;
+    }
     if (fixture) {
       setAutoPaperPreflight(null);
       setAutoPaperStatus('fixture');
@@ -379,10 +378,10 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       }
     });
     return () => controller.abort();
-  }, [userId, canAuto, canJournalSync, fixture, canManagePilot]);
+  }, [userId, canAuto, canJournalSync, fixture, canManagePilot, mode]);
 
   useEffect(() => {
-    if (fixture || !userId || !canAuto || !canJournalSync) {
+    if (mode !== 'paper' || fixture || !userId || !canAuto || !canJournalSync) {
       setAutoPaperRuntimeReadiness(null);
       setAutoPaperRuntimeError(false);
       return;
@@ -410,7 +409,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     void refresh();
     const timer = window.setInterval(() => void refresh(), 60_000);
     return () => { window.clearInterval(timer); controller.abort(); };
-  }, [userId, canAuto, canJournalSync, fixture, autoPaperRuntimeRefresh]);
+  }, [userId, canAuto, canJournalSync, fixture, autoPaperRuntimeRefresh, mode]);
 
   async function prepareAutomaticPaperAccount(isolateLegacy = false) {
     const expectedStatus = isolateLegacy ? 'blocked' : 'missing';
@@ -491,10 +490,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     ?? runtimeStatus?.liveExecutionReadiness?.[selectedProvider];
   const providerVerified = liveReadiness?.providerVerified === true;
   const autoWorker = runtimeStatus?.autoTradingBackground;
-  const telegramWorker = runtimeStatus?.userTelegramDelivery;
   const runtimeNowMs = runtimeClockMs;
   const autoWorkerFresh = runtimeHealthFresh(autoWorker?.lastTickAt, runtimeNowMs);
-  const telegramWorkerFresh = runtimeHealthFresh(telegramWorker?.lastTickAt, runtimeNowMs);
   const automaticRuntimeReady = liveStrategyConfigured
     && autoWorker?.enabled === true
     && autoWorker.liveModeRequested === true
@@ -505,16 +502,6 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
     && autoWorker.liveEntryWarmupComplete === true
     && autoWorker.liveEntriesArmed === true
     && autoWorker.globalEmergencyStopActive === false;
-  const telegramProofMs = Date.parse(telegramWorker?.lastConfirmedDeliveryAt ?? '');
-  const telegramProofFresh = Number.isFinite(telegramProofMs)
-    && telegramProofMs <= runtimeNowMs + 5_000
-    && runtimeNowMs - telegramProofMs <= 24 * 60 * 60_000;
-  const telegramRuntimeReady = telegramWorker?.enabled === true
-    && telegramWorker.tickOk === true
-    && telegramWorker.deliveryConfirmed === true
-    && telegramProofFresh
-    && telegramWorkerFresh
-    && telegramWorker.errorCode == null;
   const liveAuthorityLabel = runtimeLoading
     ? '확인 중'
     : runtimeReadError
@@ -535,25 +522,15 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
                 ? '자동 워커 상태 지연'
                 : autoWorker.liveEntriesArmed !== true
                   ? '안전대기 · Arm 준비 중'
-                  : !telegramWorkerFresh
-                    ? 'Telegram 상태 지연'
-                    : !telegramRuntimeReady
-                      ? 'Telegram 전달 점검 필요'
-                      : automaticRuntimeReady
-                        ? '자동 실거래 작동 준비됨'
-                        : '자동 워커 점검 필요';
+                : automaticRuntimeReady
+                  ? '자동 실거래 작동 준비됨'
+                  : '자동 워커 점검 필요';
   const lastOrder = runtimeStatus?.lastOrderByMarket?.[market] ?? (fixture ? runtimeStatus?.lastOrder ?? null : null);
   const marketActivity = runtimeStatus?.marketActivityByMarket?.[market] ?? null;
   const emergencyStopped = runtimeStatus?.emergencyStopped === true;
   const newEntriesStopped = policy?.newEntriesStopped === true;
   const effectiveEntryStopped = emergencyStopped || newEntriesStopped;
-
-  const changeMode = (next: TradingMode) => {
-    if (next === 'auto' && !canAuto) return;
-    if (next === 'paper' && !canPaper) return;
-    setMode(next);
-    setSection('dashboard');
-  };
+  const showLegacyPaperReadinessInsideAutoDashboard = mode === 'paper';
 
   const dashboard = mode === 'auto' ? (
     <div className="space-y-3">
@@ -613,7 +590,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           <StatusItem
             label="실거래 권한"
             value={liveAuthorityLabel}
-            tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady && telegramRuntimeReady ? 'ok' : 'warn'}
+            tone={!runtimeReadError && liveReadiness?.readyForAutomaticOrderEvaluation === true && automaticRuntimeReady ? 'ok' : 'warn'}
           />
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="auto-trading-market-activity">
@@ -624,6 +601,15 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         </div>
       </section>
 
+      {showLegacyPaperReadinessInsideAutoDashboard ? <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="optional-paper-readiness"
+      >
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-xs font-semibold [&::-webkit-details-marker]:hidden">
+          <span>선택 기능 · 모의매매 준비 상태</span>
+          <span aria-hidden className="text-muted-foreground">실자동매매와 독립 ⌄</span>
+        </summary>
+        <div className="space-y-3 border-t border-card-border p-3 sm:p-4">
       {canManagePilot && !fixture ? (
         <AdminFourMarketPaperPanel />
       ) : (
@@ -728,6 +714,8 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
           </p>
         </section>
       ) : null}
+        </div>
+      </details> : null}
     </div>
   ) : (
     <section className="rounded-2xl border border-card-border bg-card p-4" data-testid="paper-trading-dashboard">
@@ -822,12 +810,23 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       </details>
       <details
         className="rounded-2xl border border-card-border bg-card"
-        data-testid="auto-trading-telegram-settings"
-        open
+        data-testid="auto-trading-rehearsal-settings"
       >
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
-          <span>알림 · 텔레그램</span>
-          <span aria-hidden className="text-muted-foreground">⌄</span>
+          <span>전략 리허설</span>
+          <span aria-hidden className="text-muted-foreground">선택 기능 ⌄</span>
+        </summary>
+        <div className="border-t border-card-border p-3 sm:p-4">
+          <FormulaAiAutoRehearsalPanel />
+        </div>
+      </details>
+      <details
+        className="rounded-2xl border border-card-border bg-card"
+        data-testid="auto-trading-telegram-settings"
+      >
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between px-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+          <span>선택 알림 · 텔레그램</span>
+          <span aria-hidden className="text-muted-foreground">자동매매와 독립 ⌄</span>
         </summary>
         <div className="border-t border-card-border p-3 sm:p-4">
           <UserBrokerTelegramPanel />
@@ -880,9 +879,7 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
       ? orders
       : section === 'journal'
         ? journal
-        : section === 'rehearsal'
-          ? <FormulaAiAutoRehearsalPanel />
-          : settings;
+        : settings;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground" data-testid={initialMode === 'paper' ? 'paper-trading-shell' : 'auto-trading-page'}>
@@ -892,26 +889,39 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
         ? 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4'
         : 'min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-[calc(6rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4'}>
         <div className="mx-auto w-full max-w-6xl space-y-3" data-testid="auto-trading-responsive-layout">
-          <div className="grid grid-cols-2 gap-2" data-testid="trading-mode-tabs">
-            <SegmentedButton active={mode === 'auto'} disabled={!canAuto} onClick={() => changeMode('auto')} testId="trading-mode-auto">자동매매</SegmentedButton>
-            <SegmentedButton active={mode === 'paper'} disabled={!canPaper} onClick={() => changeMode('paper')} testId="trading-mode-paper">모의매매</SegmentedButton>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="매매 시장 선택" data-testid="trading-market-tabs">
-            {MARKETS.map((item) => (
-              <SegmentedButton
-                key={item.value}
-                active={market === item.value}
-                disabled={item.value === 'crypto_futures' && !canFutures}
-                onClick={() => setMarket(item.value)}
-                testId={'trading-market-' + item.value}
+          <div className="rounded-xl border border-card-border bg-card p-2.5 sm:p-3" data-testid="trading-market-tabs">
+            <label className="flex items-center gap-3 sm:hidden">
+              <span className="shrink-0 text-xs font-semibold text-muted-foreground">시장</span>
+              <select
+                aria-label="매매 시장 선택"
+                data-testid="trading-market-select"
+                value={market}
+                onChange={(event) => setMarket(event.target.value as TradingMarket)}
+                className="min-h-10 min-w-0 flex-1 rounded-lg border border-card-border bg-background px-3 text-sm font-semibold"
               >
-                {item.label}
-              </SegmentedButton>
-            ))}
+                {MARKETS.map((item) => (
+                  <option key={item.value} value={item.value} disabled={item.value === 'crypto_futures' && !canFutures}>
+                    {item.label} · {item.provider}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="hidden grid-cols-4 gap-2 sm:grid" aria-label="매매 시장 선택">
+              {MARKETS.map((item) => (
+                <SegmentedButton
+                  key={item.value}
+                  active={market === item.value}
+                  disabled={item.value === 'crypto_futures' && !canFutures}
+                  onClick={() => setMarket(item.value)}
+                  testId={'trading-market-' + item.value}
+                >
+                  {item.label}
+                </SegmentedButton>
+              ))}
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
+          <div className="grid grid-cols-4 gap-1.5" aria-label="매매 화면 선택" data-testid="trading-section-tabs">
             {SECTIONS.map((item) => (
               <SegmentedButton key={item.value} active={section === item.value} onClick={() => setSection(item.value)} testId={'trading-section-' + item.value}>
                 {item.label}
@@ -925,7 +935,9 @@ export default function AutoTradingPage({ fixture, embedded = false, initialMode
             <div className="flex items-start gap-2">
               <BookOpenCheck className="mt-0.5 h-4 w-4 shrink-0" />
               <p className="break-keep leading-5">
-                자동매매와 모의매매는 같은 4시장 UI와 매매일지를 사용하지만 실행 권한은 분리됩니다. LIVE/AUTO/REAL/Private API Gate는 이 UI 변경으로 켜지지 않습니다.
+                {mode === 'auto'
+                  ? '이 화면은 자동매매 상태와 설정만 표시합니다. 모의매매·텔레그램은 실자동매매 Gate의 필수조건이 아니며, 실제 주문은 서버의 LIVE/AUTO 안전검사를 통과한 경우에만 실행됩니다.'
+                  : '모의매매는 실제 거래소 주문을 전송하지 않으며, 실자동매매 권한과 분리됩니다.'}
               </p>
             </div>
           </section>

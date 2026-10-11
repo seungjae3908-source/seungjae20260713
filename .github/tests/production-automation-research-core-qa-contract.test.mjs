@@ -32,7 +32,7 @@ test('dedicated release command selects scoped Staging and only the four request
     'evidence_scope=trading_core',
     'production-postdeploy-activation-ready-',
   ]) assert.ok(deploy.includes(marker), marker);
-  assert.ok(deploy.includes("inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'automation_research'"));
+  assert.ok(deploy.includes("inputs.qa_scope == 'full' || inputs.qa_scope == 'trading_core' || inputs.qa_scope == 'auto_live' || inputs.qa_scope == 'automation_research'"));
 });
 
 test('browser contract covers Auto, Paper, Research and Backtester without financial authority', () => {
@@ -43,7 +43,8 @@ test('browser contract covers Auto, Paper, Research and Backtester without finan
     "'/api/admin/research/overview'",
     "'/api/backtests/run'",
     "page.goto('/auto-trading'",
-    "getByTestId('trading-mode-paper')",
+    "page.goto('/paper-trading'",
+    "getByTestId('paper-trading-shell')",
     "getByTestId('trading-workspace-journal')",
     "page.goto('/research-center'",
     "page.goto('/backtests'",
