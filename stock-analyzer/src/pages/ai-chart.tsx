@@ -778,7 +778,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         <div className="mt-3 space-y-3">{evidenceOpen && <>{intelligencePanel}<Suspense fallback={null}><LazyFuturesPublicContextPanel selection={selection} /></Suspense><ContextCard selection={selection} analysis={analysis} /></>}</div>
       </details>
     </div>
-  ) : emptyState;
+  ) : null;
   const dashboard = externalPositionController && hasSelection ? (
     <section data-testid="ai-chart-trading-dashboard" className="min-w-0 space-y-3">
       <div className="flex items-center justify-between gap-2 px-1"><h2 className="text-sm font-black">매매 대시보드</h2><span className="text-xs text-muted-foreground">주문은 원통화 · 최종 확인 필요</span></div>
@@ -857,8 +857,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         <ResponsiveTabs value={mobileTab} options={MOBILE_CHART_TABS} onChange={setMobileTab} ariaLabel="AI 차트 모바일 보기" testId="ai-chart-mobile-tabs" compact fluid />
       </div>}
       <main data-testid="ai-chart-workspace" className="mx-auto grid w-full max-w-[1680px] items-start gap-3 p-3 md:grid-cols-[minmax(0,1fr)_280px] md:p-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <section data-testid="ai-chart-mobile-chart" hidden={mobile && mobileTab !== 'chart'} className="min-w-0 space-y-3">{chart}{dashboard}</section>
-        <aside className="min-w-0 space-y-3 md:sticky md:top-20">
+        <section data-testid="ai-chart-mobile-chart" hidden={hasSelection && mobile && mobileTab !== 'chart'} className="min-w-0 space-y-3">{chart}{dashboard}</section>
+        <aside hidden={!hasSelection} className="min-w-0 space-y-3 md:sticky md:top-20">
           <div data-testid="ai-chart-mobile-judgment" hidden={mobile && mobileTab !== 'summary'}>{details}</div>
           <div data-testid="ai-chart-mobile-live" hidden={mobile && mobileTab !== 'live'}><AiChartLivePanel key={`${selection.market}:${selection.ticker}:${selection.timeframe}`} snapshot={visibleLiveSnapshot} /></div>
         </aside>

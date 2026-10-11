@@ -7,6 +7,20 @@ async function mock(page: Page) {
   await page.route('**/api/stocks/*/candles**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ticker: 'AAPL', timeframe: '1m', provider: 'TEST_ONLY', updatedAt: new Date(end * 1000).toISOString(), candles: Array.from({ length: 90 }, (_, i) => ({ time: end - (89 - i) * 60, open: 100, high: 101, low: 99, close: 100, volume: 1000, isClosed: true })) }) }));
   await page.route('**/api/market/fx', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quotes: [{ currency: 'USD', krwRate: 1400, source: 'TEST_ONLY', asOf: new Date().toISOString(), quality: 'DELAYED' }], missing: [], fetchedAt: new Date().toISOString() }) }));
 }
+
+test('empty selection has one prompt across all three mobile tabs and cannot submit orders', async ({ page }) => {
+  const mutations: string[] = [];
+  page.on('request', request => { if (request.method() !== 'GET' && request.url().includes('/api/trade-automation')) mutations.push(request.url()); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mock(page); await page.goto('/ai-chart');
+  for (const name of ['차트', '현재 판단', 'AI 생중계']) {
+    await page.getByTestId('ai-chart-mobile-tabs').getByRole('tab', { name, exact: true }).click();
+    await expect(page.getByTestId('ai-chart-empty-selection')).toHaveCount(1);
+    await expect(page.getByTestId('ai-chart-empty-selection')).toBeVisible();
+    await expect(page.getByTestId('chart-manual-order')).toHaveCount(0);
+  }
+  expect(mutations).toEqual([]);
+});
 for (const width of [360, 390, 430, 768, 820, 1024, 1440]) {
   test(`responsive ${width}: chart, judgment, live feed and dashboard stay unclipped`, async ({ page }) => {
     const errors: string[] = []; const http: string[] = []; const mutations: string[] = [];

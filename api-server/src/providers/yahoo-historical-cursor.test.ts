@@ -41,7 +41,11 @@ test('Yahoo older history actually sends period1/period2 to public hosts and exc
     assert.equal(rows.length, 2);
     assert.deepEqual(rows.map((row) => Date.parse(String(row.time))),
       [before - 2 * 86_400_000, before - 86_400_000]);
-    assert.ok(queries.length >= 1);
+    assert.equal(queries.length, 1);
+    // Wait past the hedge delay: a completed request must never spawn an
+    // orphan read that can pollute a subsequent route or instrument lookup.
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(queries.length, 1, 'cancelled delayed hedge must not contact another provider');
     for (const url of queries) {
       assert.ok(url.pathname.endsWith('/AAPL'));
       assert.equal(url.searchParams.get('interval'), '1d');

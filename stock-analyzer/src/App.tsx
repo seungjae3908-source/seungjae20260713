@@ -27,13 +27,11 @@ import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError 
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
-// Keep the landing page eager. Rankings and recommendations are not part of
-// the authenticated AI Chart cold-start graph, so load their code only when
-// the user actually navigates to those routes.
+import RecommendationsPage from '@/pages/recommendations';
+// Preserve the release contract's eager recommendations route. Rankings can
+// load on demand without entering the authenticated AI Chart cold-start graph.
 const loadMarketRankingsPage = () => import('@/pages/search');
 const MarketRankingsPage = lazy(loadMarketRankingsPage);
-const loadRecommendationsPage = () => import('@/pages/recommendations');
-const RecommendationsPage = lazy(loadRecommendationsPage);
 
 const loadWatchlistPage = () => import('@/pages/watchlist');
 const WatchlistPage = lazy(loadWatchlistPage);
