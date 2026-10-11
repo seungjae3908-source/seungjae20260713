@@ -435,6 +435,8 @@ test('holdings connect only actual canonical AUTO fills to stored entry evidence
   assert.deepEqual(result.items[0]!.entryEvidence!.reasons, ['거래량 증가', '돌파 조건 충족']);
   assert.equal(result.items[0]!.entryEvidence!.signalId, 'stored-signal');
   assert.equal(result.items[0]!.entryEvidence!.protectionStatus, 'UNKNOWN');
+  assert.equal(liveTradingHoldings(snapshot, [plan], [{ ...order, averageFillPrice: null }])
+    .items[0]!.entryEvidence!.entryPrice, null, 'unknown canonical fill price is not the broker average');
   assert.equal(result.items[1]!.ownership, 'MANUAL');
   assert.equal(result.items[1]!.entryEvidence, null);
   const mixed = liveTradingHoldings({ ...snapshot, positions: [{ ...position, quantity: 2 }] }, [plan], [order]);
