@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { PAPER_FORWARD_REVIEWED_PATHS } from '../scripts/paper-forward-reviewed-paths.mjs';
-import { PAPER_INTEGRATION_SHA, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchCenterBatchUi } from '../scripts/research-center-batch-scope.mjs';
+import { PAPER_INTEGRATION_SHA, PAPER_INTEGRATION_SOURCE_SHAS, RESEARCH_CENTER_BATCH_PATHS, isPreservedPaperIntegrationPath, isResearchCenterBatchUi } from '../scripts/research-center-batch-scope.mjs';
 
 const sharedPath = 'api-server/src/services/trade-execution.service.ts';
 const blob = 'a'.repeat(40);
@@ -28,6 +28,15 @@ test('shared Paper repair is accepted only from the pinned immutable snapshot', 
 
 test('a one-byte equivalent blob identity change restores the automatic-trading gate', () => {
   assert.equal(isPreservedPaperIntegrationPath(sharedPath, (ref) => ref === 'HEAD' ? 'b'.repeat(40) : blob), false);
+});
+
+test('repinned merge requires both original Paper and current-main safety ancestry', () => {
+  assert.deepEqual(PAPER_INTEGRATION_SOURCE_SHAS, [
+    '09854c1895b1a41f0dfedc9cf1240734c88ac5e3',
+    'af24fe44e286073de29cf31aa1f17fc13a309b28',
+  ]);
+  const source = read('.github/scripts/verify-research-workspace-sync-v3.mjs');
+  assert.ok(source.includes("for(const sourceSha of PAPER_INTEGRATION_SOURCE_SHAS)git('merge-base','--is-ancestor',sourceSha,PAPER_INTEGRATION_SHA)"));
 });
 
 test('missing, empty or unreadable pinned blobs fail closed', () => {
