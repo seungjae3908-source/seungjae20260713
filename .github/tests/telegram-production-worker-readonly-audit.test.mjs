@@ -5,6 +5,7 @@ import {
   inspectDeliveryStateText, readStateFile, observeProductionTelegram,
   safeSha, readHealthOnce, readSignalSourceOnce,
   canonicalPm2Paths, resolveSafeTelegramStatePath,
+  readSignalV3Units, readSignalV3HealthOnce,
 } from '../../ops/telegram-production-worker-readonly-audit.mjs';
 import { EventEmitter } from 'node:events';
 
@@ -25,6 +26,7 @@ const rooms={
 };
 const runtime={
   ...rooms,
+  pm_uptime: now - 90000,
   TELEGRAM_INTELLIGENCE_WORKER_ENABLED:'true',
   PERSONAL_TELEGRAM_WORKER_ENABLED:'true',
   LIVE_TELEGRAM_ACTIVATION_APPROVED:'true',
@@ -35,6 +37,11 @@ const observed=()=>({
   runtime,pm2Sha:deployed,markerSha:deployed,online:true,
   canonicalCwd:true,canonicalEntrypoint:true,
 });
+const safeSignalDiagnostics={
+  signalHealth:async()=>({status:'READY',serviceSha:deployed,
+    snapshotReady:true,snapshotFresh:true}),
+  signalUnits:()=>({server:'ACTIVE',timer:'ACTIVE',cycle:'INACTIVE'}),
+};
 const health=async()=>({
   nodeSha:deployed,markerSha:deployed,identityMatch:true,
   enabled:true,tickOk:false,lastTickAt:new Date(now-30_000).toISOString(),
@@ -107,6 +114,7 @@ test('ledger parser fails closed on empty/malformed/future and bounded entries',
 
 test('real PM2 flags and recent personal tick are observed without false delivery PASS',async()=>{
   const result=await observeProductionTelegram({
+    ...safeSignalDiagnostics,
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,health,
     signalSource:async()=>({status:'READY',eventCount:0,safetyValidated:true}),
@@ -121,6 +129,10 @@ test('real PM2 flags and recent personal tick are observed without false deliver
   assert.equal(result.proofLevel,'PERSISTED_LEDGER_ONLY');
   assert.equal(result.marketBrief.recordCount,1);
   assert.equal(result.signalSource.status,'READY');
+  assert.equal(result.signalHealth.status,'READY');
+  assert.equal(result.signalUnits.timer,'ACTIVE');
+  assert.equal(result.pm2StartedAt,new Date(now-90000).toISOString());
+  assert.equal(result.schemaVersion,'telegram-production-worker-readonly-v2');
   assert.equal(result.telegramSends,0);
   assert.equal(result.pm2Restarts,0);
   assert.equal(result.databaseWrites,0);
@@ -133,6 +145,7 @@ test('real PM2 flags and recent personal tick are observed without false deliver
 
 test('disabled market, duplicated room, stale production SHA and missing health fail closed',async()=>{
   const testCase=async changes=>observeProductionTelegram({
+    ...safeSignalDiagnostics,
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:()=>({...observed(),...changes}),
     health,
@@ -147,6 +160,7 @@ test('disabled market, duplicated room, stale production SHA and missing health 
   assert.equal((await testCase({runtime:duplicates})).classification,'TELEGRAM_CONFIGURATION_BLOCKED');
   assert.equal((await testCase({runtime:{...runtime,BACKGROUND_WORKERS_ENABLED:'false'}})).classification,'TELEGRAM_CONFIGURATION_BLOCKED');
   assert.equal((await observeProductionTelegram({
+    ...safeSignalDiagnostics,
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,health:async()=>null,
   })).classification,'HEALTH_UNAVAILABLE');
@@ -189,6 +203,7 @@ test('loopback health response is restricted to trusted booleans/codes; extra se
 
 test('production receipt rejects non-ISO personal time and preserves only valid UTC evidence',async()=>{
   const bad=await observeProductionTelegram({
+    ...safeSignalDiagnostics,
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,
     health:async()=>({...await health(),deliveryConfirmed:true,
@@ -201,6 +216,7 @@ test('production receipt rejects non-ISO personal time and preserves only valid 
   assert.ok(!JSON.stringify(bad).includes('PRIVATE_SECRET_MASQUERADING_AS_DATE'));
   const validTimestamp=new Date(now-60_000).toISOString();
   const good=await observeProductionTelegram({
+    ...safeSignalDiagnostics,
     mainSha:current,deployedSha:deployed,nowMs:now,
     snapshot:observed,
     health:async()=>({...await health(),deliveryConfirmed:true,
@@ -280,6 +296,70 @@ test('HTTP 503 from loopback V3 is not misreported as a network outage',async()=
     getImpl:()=>{throw new Error('ECONNREFUSED');}
   });
   assert.equal(refused.status,'UNREACHABLE');
+});
+
+test('fixed systemd Signal V3 statuses are whitelisted and no service actions occur',()=>{
+  const requested=[];
+  const execImpl=(command,args)=>{
+    assert.equal(command,'systemctl');
+    assert.deepEqual(args.slice(0,3),
+      ['show','--no-pager','--property=LoadState,ActiveState']);
+    requested.push(args[3]);
+    if (args[3].endsWith('-cycle.timer')) return 'LoadState=loaded\nActiveState=active\nSecret=HIDDEN';
+    if (args[3].endsWith('-cycle.service')) return 'LoadState=loaded\nActiveState=inactive\n';
+    return 'LoadState=not-found\nActiveState=inactive\n';
+  };
+  const statuses=readSignalV3Units({execImpl});
+  assert.deepEqual(statuses,{server:'NOT_FOUND',timer:'ACTIVE',cycle:'INACTIVE'});
+  assert.deepEqual(requested,[
+    'investment-signal-intelligence-v3.service',
+    'investment-signal-intelligence-v3-cycle.timer',
+    'investment-signal-intelligence-v3-cycle.service',
+  ]);
+  assert.ok(!JSON.stringify(statuses).includes('HIDDEN'));
+  assert.deepEqual(readSignalV3Units({execImpl:()=>{throw new Error('secret');}}),
+    {server:'UNAVAILABLE',timer:'UNAVAILABLE',cycle:'UNAVAILABLE'});
+});
+
+test('V3 health only classifies safe loopback snapshot status and never copies error contents',async()=>{
+  const responseFor=(status,ready,fresh)=>(target,opts,respond)=>{
+    assert.equal(target.protocol,'http:');
+    assert.equal(target.hostname,'127.0.0.1');
+    assert.equal(target.pathname,'/health');
+    assert.equal(opts.method,'GET');
+    const req=new EventEmitter(); req.destroy=()=>{};
+    queueMicrotask(()=>{
+      const res=new EventEmitter();
+      res.statusCode=status;
+      res.resume=()=>{};
+      respond(res);
+      if(status===200){
+        res.emit('data',Buffer.from(JSON.stringify({
+          ok:true,service:'signal-intelligence-v3',serviceSha:deployed,
+          bindHost:'127.0.0.1',snapshotReady:ready,snapshotFresh:fresh,
+          executionAuthority:'NONE',privateTradingApiAllowed:false,realOrderAllowed:false,
+          snapshotError:'PRIVATE_DO_NOT_PUBLISH',secret:'PRIVATE_TOKEN',
+        })));
+        res.emit('end');
+      }
+    });
+    return req;
+  };
+  const ready=await readSignalV3HealthOnce({getImpl:responseFor(200,true,true)});
+  assert.deepEqual(ready,{status:'READY',serviceSha:deployed,snapshotReady:true,snapshotFresh:true});
+  const stale=await readSignalV3HealthOnce({getImpl:responseFor(200,true,false)});
+  assert.equal(stale.status,'SNAPSHOT_STALE');
+  const missing=await readSignalV3HealthOnce({getImpl:responseFor(200,false,false)});
+  assert.equal(missing.status,'SNAPSHOT_MISSING');
+  const notReady=await readSignalV3HealthOnce({getImpl:responseFor(503,false,false)});
+  assert.equal(notReady.status,'HTTP_503');
+  const refused=await readSignalV3HealthOnce({getImpl:()=>{throw Error('SECRET_ON_ERROR')}});
+  assert.equal(refused.status,'UNREACHABLE');
+  assert.equal((await readSignalV3HealthOnce({
+    sourceUrl:'http://untrusted.example/v1/signals',
+    getImpl:()=>{throw Error('SHOULD_NOT_QUERY')},
+  })).status,'UNSAFE_ENDPOINT');
+  assert.ok(!JSON.stringify(ready).includes('PRIVATE'));
 });
 
 test('protected workflow is owner-only and never sends, deploys or restarts',()=>{
