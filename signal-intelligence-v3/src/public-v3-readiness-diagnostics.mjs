@@ -12,7 +12,11 @@ function blank(){
   return {examined:0,candidate:0,noTrade:0,abstain:0,dataBlocked:0,
     dataNotReady:0,quantNotEligible:0,profitNotEligible:0,
     riskNotReady:0,utilityMissing:0,canonicalProofAbsent:0,
-    identityMissing:0,costPolicyMissing:0};
+    identityMissing:0,costPolicyMissing:0,
+    backtestEvidenceMissing:0,backtestLineageMismatch:0,
+    backtestOosOrWalkForwardMissing:0,backtestFullCostIncomplete:0,
+    backtestPointInTimeUnproven:0,backtestSamplesInvalid:0,
+    backtestNetUnproven:0};
 }
 export function summarizeV3EconomicReadiness(rows){
   if(!Array.isArray(rows)||rows.length>100_000)
@@ -38,6 +42,20 @@ export function summarizeV3EconomicReadiness(rows){
     if(blockers.includes(PROOFS[0]))target.identityMissing+=1;
     if(blockers.includes(PROOFS[1]))target.canonicalProofAbsent+=1;
     if(blockers.includes(PROOFS[2]))target.costPolicyMissing+=1;
+    if(blockers.includes('BACKTEST_QUALITY_VERIFICATION_REQUIRED'))
+      target.backtestEvidenceMissing+=1;
+    if(blockers.includes('BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED'))
+      target.backtestLineageMismatch+=1;
+    if(blockers.includes('BACKTEST_OOS_AND_WALK_FORWARD_EVIDENCE_REQUIRED'))
+      target.backtestOosOrWalkForwardMissing+=1;
+    if(blockers.includes('BACKTEST_ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED'))
+      target.backtestFullCostIncomplete+=1;
+    if(blockers.includes('BACKTEST_PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED'))
+      target.backtestPointInTimeUnproven+=1;
+    if(blockers.includes('BACKTEST_OOS_WALK_FORWARD_SAMPLE_EVIDENCE_REQUIRED'))
+      target.backtestSamplesInvalid+=1;
+    if(blockers.includes('BACKTEST_NET_ECONOMIC_EVIDENCE_REQUIRED'))
+      target.backtestNetUnproven+=1;
   }
   for(const target of Object.values(byMarket))Object.freeze(target);
   return Object.freeze({

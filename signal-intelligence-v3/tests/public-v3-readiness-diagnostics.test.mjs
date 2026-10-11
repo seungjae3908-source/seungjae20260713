@@ -45,3 +45,27 @@ test('invalid market and unknown state cannot masquerade as complete diagnostic'
   assert.throws(()=>summarizeV3EconomicReadiness([row({state:'EXECUTE'})]),/ROW_INVALID/);
   assert.equal(summarizeV3EconomicReadiness([]).totalRows,0);
 });
+
+test('backtest lineage, OOS and full-cost blockers are diagnosed without any false PASS',()=>{
+ const report=summarizeV3EconomicReadiness([row({
+  provenance:{profitBlockers:[
+   'BACKTEST_EXACT_CANDIDATE_LINEAGE_REQUIRED',
+   'BACKTEST_OOS_AND_WALK_FORWARD_EVIDENCE_REQUIRED',
+   'BACKTEST_ALL_IN_COST_AND_SLIPPAGE_EVIDENCE_REQUIRED',
+   'BACKTEST_PIT_AND_SURVIVORSHIP_GUARDS_REQUIRED',
+   'BACKTEST_OOS_WALK_FORWARD_SAMPLE_EVIDENCE_REQUIRED',
+   'BACKTEST_NET_ECONOMIC_EVIDENCE_REQUIRED',
+   'SUPER_SECRET_USER_TRADING_ACCOUNT',
+  ]},
+ })]);
+ const x=report.byMarket.CRYPTO_SPOT;
+ assert.equal(x.backtestLineageMismatch,1);
+ assert.equal(x.backtestOosOrWalkForwardMissing,1);
+ assert.equal(x.backtestFullCostIncomplete,1);
+ assert.equal(x.backtestPointInTimeUnproven,1);
+ assert.equal(x.backtestSamplesInvalid,1);
+ assert.equal(x.backtestNetUnproven,1);
+ assert.equal(report.oosPassProven,false);
+ assert.equal(report.economicAuthority,'NONE');
+ assert.equal(JSON.stringify(report).includes('SUPER_SECRET'),false);
+});
