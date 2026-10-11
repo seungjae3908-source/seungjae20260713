@@ -114,9 +114,9 @@ jobs:
               const map=byRun.get(m[1]);
               if(!map.has(s.context))map.set(s.context,s.state);
             }
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo,{
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns,{
               owner:context.repo.owner,repo:context.repo.repo,
-              head_sha:target,per_page:100,
+              workflow_id:'futures-public-network-smoke.yml',branch:'main',per_page:100,
             });
             const exact = runs.filter(run=>run.head_sha.toLowerCase()===target
               && run.path==='.github/workflows/futures-public-network-smoke.yml'
