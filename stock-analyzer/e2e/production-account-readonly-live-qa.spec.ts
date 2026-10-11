@@ -380,7 +380,7 @@ test('Production real-account read-only providers return fresh connected snapsho
   expect(credentialStatus?.liveTradingEnabled).toBe(false);
   expect(credentialStatus?.autoTradingEnabled).toBe(false);
 
-  const runtimeState = await page.evaluate(async ({ token }) => {
+  const runtimeState = await page.evaluate(async ({ token, requirePositionIsolation }) => {
     const read = async (url: string) => {
       const response = await fetch(url, {
         headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
@@ -390,12 +390,32 @@ test('Production real-account read-only providers return fresh connected snapsho
       if (!response.ok) throw new Error(`READONLY_RUNTIME_STATE_HTTP_${response.status}`);
       return response.json() as Promise<unknown>;
     };
-    const [orders, approvalQueue] = await Promise.all([
+    const [orders, approvalQueue, ...positionIsolation] = await Promise.all([
       read('/api/trade-automation/orders'),
       read('/api/trade-automation/approval-queue'),
+      ...(requirePositionIsolation ? ['bitget', 'kiwoom', 'toss', 'upbit']
+        .map((provider) => read(`/api/trade-automation/live-position-isolation/${provider}`)) : []),
     ]);
-    return { orders, approvalQueue };
-  }, { token: accessToken! }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot };
+    return { orders, approvalQueue, positionIsolation };
+  }, { token: accessToken!, requirePositionIsolation: !recoveryDisableAudit }) as { orders: LocalOrderSnapshot; approvalQueue: ApprovalQueueSnapshot;
+    positionIsolation: Array<Record<string, unknown>> };
+
+  for (const proof of runtimeState.positionIsolation) {
+    expect(proof.ok).toBe(true);
+    expect(proof.policyVersion).toBe('manual-protected-auto-ledger-v1');
+    expect(proof.ready).toBe(true);
+    expect(proof.fresh).toBe(true);
+    expect(proof.ambiguousPositionCount).toBe(0);
+    expect(proof.manualEntryBlocked).toBe(true);
+    expect(proof.canonicalExitOnly).toBe(true);
+    expect(Number.isSafeInteger(proof.manualProtectedPositionCount)).toBe(true);
+    expect(Number(proof.manualProtectedPositionCount)).toBeGreaterThanOrEqual(0);
+    expect(Number.isSafeInteger(proof.automaticOwnedPositionCount)).toBe(true);
+    expect(Number(proof.automaticOwnedPositionCount)).toBeGreaterThanOrEqual(0);
+    for (const key of ['orderRequests', 'cancelRequests', 'amendRequests', 'transferRequests', 'withdrawalRequests']) expect(proof[key]).toBe(0);
+    expect(proof.liveTradingAuthorityGranted).toBe(false);
+    expect(proof.autoTradingAuthorityGranted).toBe(false);
+  }
 
   expect(runtimeState.orders.ok).toBe(true);
   expect(runtimeState.orders.orderSubmitted).toBe(false);
@@ -501,6 +521,7 @@ test('Production real-account read-only providers return fresh connected snapsho
       reconciliation: reconciliationPassed ? 'PASS' : 'FAIL',
       reconciliationPassed,
       automaticWarmupPositions: summarizeAutomaticWarmupPositions(snapshot),
+      automaticPositionIsolation: runtimeState.positionIsolation.find((proof) => proof.provider === provider),
       diagnosticReadAccepted: snapshot !== undefined && providerReadErrorAccepted(
         provider,
         typeof snapshot.errorCode === 'string' ? snapshot.errorCode : null,

@@ -21,6 +21,7 @@ const telegramWorker = read('api-server/src/features/user-broker-telegram/user-b
 const telegramWorkerTest = read('api-server/src/features/user-broker-telegram/user-broker-telegram.service.test.ts');
 const liveConnectionVerification = read('api-server/src/services/live-connection-verification.service.ts');
 const liveExecution = read('api-server/src/services/trade-execution.service.ts');
+const positionIsolation = read('api-server/src/services/automatic-live-position-isolation.service.ts');
 const apiIndex = read('api-server/src/index.ts');
 const autoTradingPage = read('stock-analyzer/src/pages/auto-trading.tsx');
 const autoTradingSettings = read('stock-analyzer/src/components/trade-automation-settings.tsx');
@@ -306,10 +307,7 @@ for (const token of [
   "const required: readonly TradingExchange[] = ['toss', 'kiwoom', 'upbit', 'bitget'];",
   'liveAllFourConnectionVerificationReady(policy, connections, nowMs)',
   'liveProviderSnapshotReadyForAutomaticWarmup',
-  "snapshot.openOrders.length > 0",
-  "snapshot.positionMode !== 'one_way_mode'",
-  "String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated'",
-  "leverage < 2 || leverage > 7",
+  'assertAutomaticLiveSnapshotIsolation(snapshot, owned, maximumLeverage)',
   "this.readLiveAccountSnapshot(userId, provider)",
   '&& liveSnapshotsReady',
   'paperReadEnabled = true',
@@ -368,7 +366,17 @@ requireText(liveEntryArm, 'nowMs >= activateNotBeforeMs', 'AUTO_GATE_WORKER_ARM_
 requireText(liveEntryArm, 'member-auto-trading-live-entry-arm-v1', 'AUTO_GATE_WORKER_ARM_SCHEMA_MISSING');
 requireText(paperWorker, 'if (!await liveEntryArmPresent())', 'AUTO_GATE_WORKER_REARM_MISSING');
 requireText(paperWorker, "liveExitsSuppressedByPolicy", 'AUTO_GATE_STOPPED_LIVE_POSITION_VISIBILITY_MISSING');
-requireText(paperWorker, "'BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED'", 'AUTO_GATE_PROVIDER_UNTRACKED_POSITION_BLOCK_MISSING');
+requireText(paperWorker, 'canonicalAutomaticLivePositions(runtime.plans, runtime.orders)', 'AUTO_GATE_CANONICAL_POSITION_OWNERSHIP_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_MANUAL_ASSET_PROTECTED'", 'AUTO_GATE_MANUAL_ASSET_PROTECTION_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_POSITION_QUANTITY_DRIFT'", 'AUTO_GATE_MIXED_POSITION_BLOCK_MISSING');
+requireText(positionIsolation, "'BACKGROUND_LIVE_CANONICAL_EXIT_OWNERSHIP_REQUIRED'", 'AUTO_GATE_CANONICAL_EXIT_PROOF_MISSING');
+for (const token of ["snapshot.openOrders.length !== 0", "snapshot.positionMode !== 'one_way_mode'",
+  "position.marginMode !== 'isolated'", 'position.leverage! < 2 || position.leverage! > maximumLeverage']) {
+  requireText(positionIsolation, token, 'AUTO_GATE_ISOLATION_PROVIDER_SAFETY_MISSING');
+}
+requireText(liveExecution, 'await this.assertAutomaticLivePositionIsolation(userId, plan);', 'AUTO_GATE_SUBMISSION_POSITION_RECHECK_MISSING');
+requireText(workflow, '--require-automatic-position-isolation', 'AUTO_GATE_POSITION_ISOLATION_RECEIPT_MISSING');
+requireText(preactivationEvidence, 'assertAutomaticPositionIsolationReceipt(account)', 'AUTO_GATE_POSITION_ISOLATION_VERIFIER_MISSING');
 requireText(liveExecution, "throw new Error('AUTOMATIC_LIVE_ENTRY_ARM_NOT_READY')", 'AUTO_GATE_PROVIDER_ARM_MISSING');
 requireText(liveExecution, 'await this.assertAutomaticLiveEntryAuthorized(userId, risk.plan);', 'AUTO_GATE_BITGET_MUTATION_ARM_GUARD_MISSING');
 requireText(liveExecution, "'AUTOMATIC_ENTRY_POLICY_REVOKED'", 'AUTO_GATE_AUTO_ORIGIN_POLICY_REVOCATION_GUARD_MISSING');
@@ -560,6 +568,7 @@ console.log(JSON.stringify({
   liveEntryTwoPhaseArm: true,
   startupWarmupProofRequired: true,
   sameTickRiskRefreshRequired: true,
+  manualAssetIsolationRequired: true,
   executionProjectionFailClosed: true,
   zeroMutationActivationRehearsal: true,
   postArmExactShaReadbackRequired: true,

@@ -6,6 +6,11 @@ import { createSupabaseTradingRepository, safeConnections, type TradingRepositor
 import { automaticLiveExecutionEnabled, liveExecutionEnabled, TradeAutomationService } from '../services/trade-automation.service';
 import { TradeCancelReconciliationService } from '../services/trade-cancel-reconciliation.service';
 import { TradeExecutionService } from '../services/trade-execution.service';
+import {
+  canonicalAutomaticLivePositions,
+  readAutomaticLiveExecutionAccount,
+  automaticLiveIsolationReceipt,
+} from '../services/automatic-live-position-isolation.service';
 import { TradeOrderAmendmentService } from '../services/trade-order-amendment.service';
 import { TradeExecutionLedgerProjectionService } from '../services/trade-execution-ledger-projection.service';
 import {
@@ -1334,6 +1339,27 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
     }
     return errorResponse(res, error);
   }
+});
+
+router.get('/live-position-isolation/:provider', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    if (!req.member || !hasCapability(req.member, 'canPlaceOrders')
+      || !hasCapability(req.member, 'canAccessAutoTrading')) {
+      return res.status(403).json({ ok: false, error: 'MEMBER_ORDER_CAPABILITY_REQUIRED' });
+    }
+    const provider = String(req.params.provider) as AccountProvider;
+    if (!EXCHANGES.has(provider) || provider === 'bitget' && !hasCapability(req.member, 'canAccessFutures')) {
+      return res.status(403).json({ ok: false, error: 'ACCOUNT_PROVIDER_CAPABILITY_REQUIRED' });
+    }
+    const { userId, repository } = context(req);
+    const [snapshot, plans, orders] = await Promise.all([
+      readAutomaticLiveExecutionAccount(repository, userId, provider),
+      repository.listPlans(userId), repository.listOrders(userId),
+    ]);
+    return res.json({ ok: true, ...automaticLiveIsolationReceipt(snapshot,
+      canonicalAutomaticLivePositions(plans, orders), maximumBitgetLeverage(req)) });
+  } catch (error) { return errorResponse(res, error); }
 });
 
 router.get('/execution-ledger', async (req: AuthenticatedRequest, res) => {
