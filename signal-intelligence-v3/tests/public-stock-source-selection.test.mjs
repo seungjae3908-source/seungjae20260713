@@ -103,3 +103,38 @@ test('unusable source chart does not create a candidate and quote invalidity is 
   load:async()=>({price:Number.NaN,updatedAt:'unknown'}),
  }),/QUOTE_UNTRUSTED/);
 });
+
+test('research KR 1D candle is held until completed 15:30 KST session',()=>{
+ const candle=bar('2026-10-12T00:00:00.000Z');
+ const mid=inspectPublicStockCandles([candle],'1D',Date.parse('2026-10-12T05:00:00Z'),'KR_STOCK');
+ assert.equal(mid.incompleteBarsExcluded,1);
+ assert.equal(mid.candles.length,0);
+ const done=inspectPublicStockCandles([candle],'1D',Date.parse('2026-10-12T06:31:00Z'),'KR_STOCK');
+ assert.equal(done.candles.length,1);
+});
+test('research US daily candle honors NY 16:00 market close across DST',()=>{
+ for(const [stamp,early,closed] of [
+  ['2026-10-12T13:30:00Z','2026-10-12T19:59:00Z','2026-10-12T20:01:00Z'],
+  ['2026-11-16T14:30:00Z','2026-11-16T20:59:00Z','2026-11-16T21:01:00Z'],
+ ]) {
+  assert.equal(inspectPublicStockCandles([bar(stamp)],'1D',Date.parse(early),'US_STOCK').candles.length,0);
+  assert.equal(inspectPublicStockCandles([bar(stamp)],'1D',Date.parse(closed),'US_STOCK').candles.length,1);
+ }
+});
+test('research public quote refuses undated and stale records, but accepts recent weekend daily',async()=>{
+ for(const updatedAt of [undefined,'2026-09-01T00:00:00Z']){
+  await assert.rejects(choosePublicStockQuote({
+   symbols:['AAPL'],timeframe:'1D',now:NOW,
+   load:async()=>({price:100,updatedAt}),
+  }),/PUBLIC_STOCK_QUOTE_UNTRUSTED/);
+ }
+ await assert.rejects(choosePublicStockQuote({
+  symbols:['AAPL'],timeframe:'15m',now:NOW,
+  load:async()=>({price:100,updatedAt:'2026-10-10T00:00:00Z'}),
+ }),/PUBLIC_STOCK_QUOTE_UNTRUSTED/);
+ const q=await choosePublicStockQuote({
+  symbols:['AAPL'],timeframe:'1D',now:NOW,
+  load:async()=>({price:100,updatedAt:'2026-10-10T00:00:00Z'}),
+ });
+ assert.equal(q.price,100);
+});
