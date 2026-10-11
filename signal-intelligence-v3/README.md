@@ -89,3 +89,17 @@ This binding fix alone does not prove the three existing KR/US
 timeframe/session coverage. Retain the strict no-signal/NO-GO state until
 fresh source-backed real provider runs pass. No member Scanner, Paper,
 production application, order or account code is modified by this Draft.
+
+## Draft: KRX public roster exclusion is not verified all-symbol coverage
+
+The public KRX inventory can explicitly exclude thousands of unsupported
+alphanumeric listings while still reporting a fully attempted **eligible**
+batch. These are distinct concepts. The Signal V3 stock producer now
+propagates `rawTotalCount` and `explainedExcludedCount` into a
+fail-closed `universe.partial` lane, together with aggregate counts only.
+A truly incomplete source cannot be promoted from
+`VALID_NO_TRADE` to full four-market coverage by merely rotating its
+research-only cursor. This does not exclude an eligible stock from future
+research, does not suppress provider errors, and never creates a trading
+candidate or economic credit from the omitted stocks. Resolving complete
+KR coverage requires a provider capability for the excluded symbols.

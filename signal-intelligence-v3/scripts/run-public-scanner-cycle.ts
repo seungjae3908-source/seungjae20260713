@@ -14,7 +14,7 @@ import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 import { summarizePublicProviderFailureReasons } from '../src/public-provider-cycle-diagnostics.mjs';
-import { bindPublicStockCandleSource } from '../src/public-stock-candle-binding.mjs';
+import { bindPublicStockCandleSource, enforcePublicStockRosterCoverage } from '../src/public-stock-candle-binding.mjs';
 import {
   classifyPublicCycleLaneStatus,
   decidePublicCycleCursor,
@@ -281,7 +281,12 @@ async function withStockPublicOnly(lane, operation) {
     return originalUniverseGet.call(universe, market, signal, deadlineMs);
   };
 
-  try { return await operation(); } finally {
+  try {
+    const scanned = await operation();
+    // An eligible 4,010-symbol KRX roster does not prove complete
+    // coverage when upstream reports 2,837 explained unsupported codes.
+    return enforcePublicStockRosterCoverage(scanned, targetUniverse);
+  } finally {
     restoreCandles();
     marketData.getQuote = originalQuote;
     universe.get = originalUniverseGet;
@@ -437,6 +442,9 @@ async function main() {
         totalUniverse: response.universe.totalCount,
         universeSource: response.universe.source ?? null,
         universePartial: response.universe.partial === true,
+        // Coarse aggregate-only source proof; do not expose symbols.
+        universeRawTotalCount: response.publicRosterCoverage?.rawTotalCount ?? null,
+        universeExplainedExcludedCount: response.publicRosterCoverage?.explainedExcludedCount ?? null,
         universeStale: response.universe.stale === true,
         universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         responseDataState: response.dataState ?? null,
