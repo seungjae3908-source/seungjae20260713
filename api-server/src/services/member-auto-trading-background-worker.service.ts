@@ -66,6 +66,13 @@ import { persistMemberAutoTradingPaperPositionBridge } from './member-auto-tradi
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import type { AccountProvider, CanonicalAccountSnapshot } from '../features/account-readonly/account-readonly.contract';
 import {
+  canonicalAutomaticLivePositions,
+  partitionAutomaticLiveProviderPositions,
+  assertAutomaticLiveSnapshotIsolation,
+  assertAutomaticLiveTargetIsolation,
+  type AutomaticLiveOwnedPosition,
+} from './automatic-live-position-isolation.service';
+import {
   readTradeAutomationJournalPayloads,
   tradeAutomationJournalPayloadsFromSnapshot,
 } from './trade-automation-unified-journal-adapter';
@@ -581,6 +588,23 @@ function recentMovePercent(entry: MemberAutoTradingPaperHandoffEntry, observedAt
     throw new Error('BACKGROUND_ONE_MINUTE_MOVE_EVIDENCE_REQUIRED');
   }
   return (midpoint - reference) / reference * 100;
+}
+
+export function automaticTradingStoredEntryReasons(entry: MemberAutoTradingPaperHandoffEntry): string[] {
+  // Capture observed context at plan creation, not a retrospective AI explanation.
+  const learning = record(entry.signal.learningSnapshot);
+  const observedReasons = Array.isArray(learning?.reasons)
+    ? learning.reasons.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      .slice(0, 10).map(value => value.trim().slice(0, 300)) : [];
+  const reasons = [
+    ...observedReasons,
+    '진입 전략: ' + entry.identity.strategyId + ' · 버전 ' + entry.identity.strategyVersion,
+    '신호 방향: ' + entry.identity.direction + ' · 주기 ' + entry.identity.timeframe,
+  ];
+  if (entry.identity.regime) reasons.push('진입 당시 시장 국면: ' + entry.identity.regime);
+  if (finite(entry.riskEvidence.actualRiskPercent)) reasons.push('진입 당시 검증 위험비율: ' + entry.riskEvidence.actualRiskPercent + '%');
+  if (finite(entry.riskEvidence.riskReward1)) reasons.push('진입 당시 목표 1 손익비: ' + entry.riskEvidence.riskReward1);
+  return reasons;
 }
 
 function exitPlan(entry: MemberAutoTradingPaperHandoffEntry) {
@@ -1389,6 +1413,7 @@ function buildPlanInput(
     reduceOnly: false,
     invalidateAction: 'hold',
     signalReasons: [
+      ...automaticTradingStoredEntryReasons(entry),
       accountMode === 'live' ? 'CANONICAL_LIVE_AUTO_CANDIDATE' : 'CANONICAL_PAPER_HANDOFF',
       ...(member.policy.pilotStage === 'formula-ai-exception'
         ? formulaAiReviewReasonsForLive(entry, nowMs) : []),
@@ -1506,49 +1531,22 @@ function tradeMarketForPlan(plan: TradingPlan): MemberAutoTradingPaperHandoffEnt
 }
 
 /**
- * Unmatched external holdings cannot be valued from automatic plan notional.
- * Refuse a new Live entry rather than assuming zero external exposure. Exit
- * tracking is separately protected and must not depend on this entry guard.
+ * Existing manual assets remain protected, not adopted as AUTO positions.
+ * Unknown quantities and mixed manual/AUTO ownership still fail closed.
  */
 export function assertCanonicalLiveProviderPositions(
   snapshot: Pick<CanonicalAccountSnapshot, 'provider' | 'positions'>,
-  plans: readonly TradingPlan[],
+  owned: readonly AutomaticLiveOwnedPosition[],
 ) {
-  if (!Array.isArray(snapshot.positions)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITIONS_UNAVAILABLE');
-  for (const position of snapshot.positions) {
-    // Upbit publishes the KRW settlement cash balance in positions, but
-    // KRW is not an open coin exposure and is checked independently as cash.
-    if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
-    if (!finite(position.quantity)) throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_QUANTITY_UNAVAILABLE');
-    if (Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
-    const matching = plans.filter((plan) =>
-      plan.exchange === snapshot.provider
-      && normalizedSymbol(plan.symbol) === normalizedSymbol(position.symbol));
-    if (matching.length === 0) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
-    const declaredSide = String(position.side ?? '').trim().toLowerCase();
-    if (declaredSide && matching.some((plan) => plan.exchange === 'bitget')
-      && !matching.some((plan) => plan.exchange === 'bitget' && plan.side === declaredSide)) {
-      throw new Error('BACKGROUND_LIVE_PROVIDER_POSITION_SIDE_MISMATCH');
-    }
-  }
+  return partitionAutomaticLiveProviderPositions(snapshot, owned);
 }
 export function liveProviderSnapshotReadyForAutomaticWarmup(
   snapshot: CanonicalAccountSnapshot,
-  plans: readonly TradingPlan[],
+  owned: readonly AutomaticLiveOwnedPosition[],
+  maximumLeverage = 7,
 ) {
   try {
-    if (!snapshot.connected || snapshot.status !== 'CONNECTED' || snapshot.stale || snapshot.errorCode != null) return false;
-    if (!Array.isArray(snapshot.positions) || !Array.isArray(snapshot.openOrders) || snapshot.openOrders.length > 0) return false;
-    assertCanonicalLiveProviderPositions(snapshot, plans);
-    if (snapshot.provider === 'bitget') {
-      if (snapshot.positionMode !== 'one_way_mode') return false;
-      for (const position of snapshot.positions) {
-        if (!finite(position.quantity) || Math.abs(position.quantity) <= POSITION_QUANTITY_TOLERANCE) continue;
-        if (String(position.marginMode ?? '').trim().toLowerCase() !== 'isolated') return false;
-        const leverage = Number(position.leverage);
-        if (!Number.isInteger(leverage) || leverage < 2 || leverage > 7) return false;
-      }
-    }
+    assertAutomaticLiveSnapshotIsolation(snapshot, owned, maximumLeverage);
     return true;
   } catch {
     return false;
@@ -1591,15 +1589,17 @@ async function liveJournalRiskState(
   // A pending order is NOT proof of an owned broker position. Bind provider
   // holdings only to canonically filled/partially-filled entry quantities,
   // and fail closed until ambiguous fills are reconciled.
-  const livePlans = trackedAutomaticPositions(runtime, 'live').map((row) => row.plan);
-  assertCanonicalLiveProviderPositions(snapshot, livePlans);
-  const liveBySymbol = new Map(livePlans.map((plan) => [normalizedSymbol(plan.symbol), plan]));
+  const owned = canonicalAutomaticLivePositions(runtime.plans, runtime.orders);
+  const { automaticOwned } = assertCanonicalLiveProviderPositions(snapshot, owned);
+  const livePlans = owned.map((row) => row.plan);
+  const liveBySymbol = new Map(livePlans.filter((plan) => plan.exchange === snapshot.provider)
+    .map((plan) => [normalizedSymbol(plan.symbol), plan]));
   let unrealizedKrw = 0;
-  for (const position of snapshot.positions ?? []) {
+  for (const position of automaticOwned) {
     if (snapshot.provider === 'upbit' && normalizedSymbol(position.symbol) === 'KRW') continue;
     if (!finite(position.quantity) || Math.abs(position.quantity!) <= POSITION_QUANTITY_TOLERANCE) continue;
     const matched = liveBySymbol.get(normalizedSymbol(position.symbol));
-    if (!matched) throw new Error('BACKGROUND_LIVE_EXTERNAL_POSITION_UNRECONCILED');
+    if (!matched) throw new Error('BACKGROUND_LIVE_CANONICAL_OWNERSHIP_AMBIGUOUS');
     if (!finite(position.unrealizedPnl)) continue;
     const fx = await fxFor(tradeMarketForPlan(matched));
     unrealizedKrw += position.unrealizedPnl! * fx.krwPerQuoteCurrency;
@@ -1634,6 +1634,9 @@ async function buildLivePlanInput(input: {
   fxCache: Map<string, MemberAutoTradingFxQuote>;
   nowMs: number;
 }): Promise<TradingPlanInput> {
+  assertAutomaticLiveTargetIsolation(input.snapshot,
+    canonicalAutomaticLivePositions(input.runtime.plans, input.runtime.orders),
+    input.paperInput as TradingPlan);
   const exposure = exposureState(input.runtime, input.member.policy, input.entry, input.nowMs, 'live');
   const readOnlyAvailableBalance = availableBalanceKrw(input.snapshot, input.entry.identity.market, input.fx);
   const risk = await liveJournalRiskState(
@@ -1670,10 +1673,9 @@ async function buildLivePlanInput(input: {
       strategyExposureKrw: exposure.strategyExposureKrw,
       assetClassExposureKrw: exposure.assetClassExposureKrw,
       openRiskKrw: exposure.openRiskKrw,
-      openPositionCount: Math.max(
-        exposure.openPositionCount,
-        (input.snapshot.positions ?? []).filter((row) => finite(row.quantity) && Math.abs(row.quantity!) > 0).length,
-      ),
+      // Manual holdings do not consume AUTO position slots or inflate AUTO PnL.
+      // Cash buying power remains broker-authoritative and excludes their value.
+      openPositionCount: exposure.openPositionCount,
       dailyOrderCount: exposure.dailyOrderCount,
       assetExposurePercent: exposure.assetExposurePercent,
       existingPositionSide: exposure.existingPositionSide,
@@ -2375,6 +2377,8 @@ export class MemberAutoTradingBackgroundWorker {
                 ...liveSeed,
                 marketSnapshot: {
                   ...livePreview.snapshot,
+                  accountValueKrw: Math.min(livePreview.snapshot.accountValueKrw,
+                    liveSeed.marketSnapshot.accountValueKrw),
                   dailyPnlPercent: liveSeed.marketSnapshot.dailyPnlPercent,
                   weeklyPnlPercent: liveSeed.marketSnapshot.weeklyPnlPercent,
                   consecutiveLosses: liveSeed.marketSnapshot.consecutiveLosses,
@@ -2679,18 +2683,15 @@ export class SupabaseMemberAutoTradingBackgroundSource implements MemberAutoTrad
       repository.listPlans(userId),
       repository.listOrders(userId),
     ]);
-    const livePlans = trackedAutomaticPositions({
-      plans,
-      orders,
-      paperWalletOpenedAtMs: null,
-      snapshotObservedAtMs: nowMs,
-    }, 'live').map((row) => row.plan);
+    const owned = canonicalAutomaticLivePositions(plans, orders);
     const liveSnapshots = await Promise.all(
       (['toss', 'kiwoom', 'upbit', 'bitget'] as const)
         .map((provider) => this.readLiveAccountSnapshot(userId, provider)),
     );
     const liveSnapshotsReady = liveSnapshots.every((snapshot) =>
-      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, livePlans));
+      liveProviderSnapshotReadyForAutomaticWarmup(snapshot, owned,
+        maximumSingleEntryKrw === PRODUCTION_ADMIN_MAX_SINGLE_ENTRY_KRW
+          ? PRODUCTION_ADMIN_MAX_BITGET_LEVERAGE : PRODUCTION_MEMBER_MAX_BITGET_LEVERAGE));
     return hasCapability(profile, 'canAccessAutoTrading')
       && hasCapability(profile, 'canPlaceOrders')
       && hasCapability(profile, 'canAccessFutures')

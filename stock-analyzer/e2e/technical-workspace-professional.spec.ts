@@ -9,7 +9,7 @@ function source(relativePath: string) {
 test('technical workspace wrapper keeps one professional naming and typography contract', () => {
   const workspace = source('src/pages/technical-workspace.tsx');
 
-  for (const label of ['AI 검색기', 'AI 차트', '백테스트', '자동매매']) {
+  for (const label of ['AI 검색기', 'AI 차트', '백테스트', '기술매매']) {
     expect(workspace).toContain(`label: '${label}'`);
   }
   expect(workspace).not.toContain("label: '승인형 주문'");
