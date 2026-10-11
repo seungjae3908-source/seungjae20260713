@@ -62,7 +62,8 @@ test('V3 corrupt state prevents member and public sends even with valid source e
       new SignalIntelligenceTelegramDeliveryState(file),
       async()=>{marketSends++;return {ok:true as const,attempts:1};},
       async()=>new Response(JSON.stringify(fake),{status:200}),
-      async()=>{memberSends++;return {attempted:0,delivered:0,deduped:0,skipped:0,failed:0};});
+      async()=>{memberSends++;return {eligible:false,matched:0,attempted:0,delivered:0,queued:0,
+        skipped:0,failed:0,reason:'DISABLED' as const};});
     assert.equal((await service.runOnce()).sourceStatus,'LEDGER_UNREADABLE');
     assert.equal((await service.runOnce()).sourceStatus,'LEDGER_UNREADABLE');
     assert.equal(marketSends,0); assert.equal(memberSends,0);
@@ -81,7 +82,8 @@ test('V3 HTTP 503 and unsafe source remain distinct with zero Telegram sends',as
     new SignalIntelligenceTelegramDeliveryState('/nonexistent-test-ledger-v3.json'),
     async()=>{sends++;return {ok:true as const,attempts:1};},
     async()=>new Response('',{status:503}),
-    async()=>({attempted:0,delivered:0,deduped:0,skipped:0,failed:0}));
+    async()=>({eligible:false,matched:0,attempted:0,delivered:0,queued:0,
+      skipped:0,failed:0,reason:'DISABLED' as const}));
   try {
     process.env.SIGNAL_INTELLIGENCE_URL='http://127.0.0.1:8790/v1/signals';
     assert.equal((await service.runOnce()).sourceStatus,'HTTP_503');
