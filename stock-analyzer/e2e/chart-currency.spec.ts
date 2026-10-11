@@ -16,3 +16,15 @@ test('missing, expired, malformed and future FX never become zero or one-to-one 
   }
   expect(formatChartMoney(100, 'US', 'KRW', [], now)).toBe('환율 미제공');
 });
+
+test('USD prices retain cents while small native prices and USDT remain truthful', () => {
+  expect(formatChartMoney(523, 'US')).toBe('$523.00');
+  expect(formatChartMoney(523.45, 'US')).toBe('$523.45');
+  expect(formatChartMoney(0, 'US')).toBe('$0.00');
+  expect(formatChartMoney(0.00000123, 'US')).toBe('$0.00000123');
+  expect(formatChartMoney(523, 'BITGET')).toBe('523 USDT');
+  expect(formatChartMoney(0.00000123, 'BITGET')).toBe('0.00000123 USDT');
+  expect(formatChartMoney(523, 'KR')).toBe('523원');
+  expect(formatChartMoney(0.00000123, 'UPBIT')).toBe('0.00000123원');
+  expect(formatChartMoney(null, 'US')).toBe('미제공');
+});
