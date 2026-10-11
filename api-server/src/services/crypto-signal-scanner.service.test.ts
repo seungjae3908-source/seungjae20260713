@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createCryptoSignalScannerService,
+  CryptoPublicRequestGate,
   normalizeCryptoScannerCandles,
   upbitScannerCandleTimestamp,
   type CryptoCandle,
@@ -15,7 +16,6 @@ import {
 } from './crypto-williams-atr-scanner-overlay.service';
 import { resolveScannerCanonicalPaperIdentity } from './scanner-canonical-paper-identity.service';
 import { evaluateScannerDataQuality } from './scanner-data-quality.service';
-import { CryptoPublicRequestGate } from '../lib/crypto-public-request-gate';
 
 const now = () => Date.now();
 
