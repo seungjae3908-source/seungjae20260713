@@ -64,6 +64,33 @@ rebuild data, restart systemd/PM2, deliver Telegram messages, change account
 permissions or submit trades. Another protected QA approval will be needed
 after an independently approved merge before making an operational claim.
 
+## Signal V3 process, timer, health and scheduled-brief evidence
+The preceding read-only audit showed a fresh personal delivery worker tick but no
+confirmed member SENT event, no on-disk market or signal Telegram dedupe receipts,
+and a Signal V3 endpoint whose HTTP failure classification was insufficient.
+With only those facts, it is unsafe to label the V3 daemon down, the snapshot stale,
+or the Telegram delivery path broken.
+
+The owner-protected one-shot V2 diagnostic now also reads the three fixed systemd
+units (V3 server, five-minute public scanner timer, scanner oneshot). Only safe status
+labels ACTIVE, INACTIVE, FAILED, NOT_FOUND, UNKNOWN or UNAVAILABLE are reported.
+A separate bounded loopback GET /health on the same configured Signal V3 source
+validates the public-only, no-trading health envelope and returns only status,
+validated service SHA and booleans for snapshotReady/snapshotFresh. The health
+error text, provider events, account data and raw systemd metadata are discarded.
+
+It also reports the sanitized PM2 process start time. A missing market briefing
+ledger is not, by itself, proof of a failed scheduled brief: an after-window PM2
+restart or a worker that has not attempted a due report can produce ABSENT.
+The actual scheduled slot and uptime must be compared without attributing
+a fabricated send receipt.
+
+Read-only service inspection and GET health cannot activate systemd, populate an
+absent research snapshot, create a trading signal, or prove that a Telegram
+message was delivered. If V3 is inactive or missing, any activation requires
+separate explicit authorization, and restored delivery still requires later
+real persisted receipts and member confirmation.
+
 ## Interpretation
 
 - A market report ledger entry means accepted OR duplicate-suppressed, not proof of a fresh Bot API message. Proof level is PERSISTED_LEDGER_ONLY.
