@@ -194,6 +194,33 @@ test('long limit fills when completed candle low reaches limit', () => {
   assert.equal(result.fills[0]?.fillReason, 'limit');
 });
 
+test('historical OHLC before manual order/position cannot retroactively trigger or exit', () => {
+  const pending=place(undefined,{request:{
+    orderType:'limit',requestedPrice:95,stopLossPrice:92,
+    takeProfitPrice1:100,takeProfitPrice2:105,
+  },eventId:'historical-pending'});
+  assert.equal(pending.order?.status,'pending');
+  const preOrder = process(pending.state, {
+    timestamp:NOW.getTime()-15*60_000,open:95,high:98,low:94,close:96,
+  }, 'historical-pre-order');
+  assert.equal(preOrder.order,null);
+  assert.equal(preOrder.fills.length,0);
+  assert.equal(preOrder.state.orders[0].status,'pending');
+  const valid = process(preOrder.state, {
+    timestamp:NOW.getTime()+15*60_000,open:95,high:98,low:94,close:96,
+  }, 'historical-valid-order');
+  assert.equal(valid.order?.status,'filled');
+
+  const entered = place(undefined,{eventId:'historical-open'});
+  assert.equal(entered.position?.status,'open');
+  const beforeEntry=process(entered.state, {
+    timestamp:NOW.getTime()-15*60_000,open:80,high:105,low:79,close:99,
+  },'historical-pre-position');
+  assert.equal(beforeEntry.fills.length,0);
+  assert.equal(beforeEntry.state.positions[0].status,'open');
+  assert.equal(beforeEntry.state.positions[0].currentPrice,entered.position?.currentPrice);
+});
+
 test('short limit fills when completed candle high reaches limit', () => {
   const pending = place(undefined, { request: { side: 'short', orderType: 'limit', requestedPrice: 105, stopLossPrice: 108, takeProfitPrice1: 100, takeProfitPrice2: 98 }, risk: { side: 'short' } });
   const result = process(pending.state, { open: 103, high: 106, low: 102, close: 104 });
